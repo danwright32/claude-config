@@ -54,6 +54,7 @@ import {
   nameFromVariable,
   editWouldNotApply,
   outputTrusted,
+  freshTemp,
   inScratchpad,
   namesScratchpad,
   joinedOnly,
@@ -67,6 +68,8 @@ import {
   unsure,
   unreadable,
   commentOnlyChange,
+  logicOnlyChange,
+  autoPassWhy,
   shellUnread,
   bracketsOpen,
   namedByIssue,
@@ -319,6 +322,68 @@ test('#1832: only a substitution running git rev-parse alone is trusted to name 
     'app/page.tsx',
   ])
     expect([w, outputTrusted(w)]).toEqual([w, false])
+})
+
+// #2171, Dan, 2026-11-04 (picker answer: trust bare mktemp the way git rev-parse is trusted): a write
+// to a variable alone whose every value is `$(mktemp)` or `$(mktemp -d)` names a new file outside every
+// screen path. Nothing else is trusted, and nothing at all where the command could make mktemp print
+// another name or give the variable another value.
+test('#2171: only a variable every assignment gives bare mktemp or mktemp -d names a fresh file', () => {
+  for (const [word, values, command] of [
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx'],
+    ['${T}', ['$(mktemp)'], 'T=$(mktemp); wc -l $(ls app/page.tsx) > ${T}'],
+    ['$D', ['$(mktemp -d)'], 'D=$(mktemp -d); cp app/page.tsx "$D"'],
+    ['$T', ['$(mktemp)'], 'T="$(mktemp)"; git show HEAD:app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)', '$(mktemp -d)'], 'T=$(mktemp); T=$(mktemp -d); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)'], 'export T=$(mktemp); cat app/page.tsx > "$T"'],
+  ] as const)
+    expect([command, freshTemp(word, [...values], command)]).toEqual([command, true])
+  for (const [word, values, command] of [
+    // Any other value, or a flag or template that chooses where the file goes.
+    ['$T', ['$(head -1 list)'], 'ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"'],
+    ['$OUT', ['$(ls app/*.tsx|head -1)'], 'OUT=$(ls app/*.tsx|head -1); echo x > "$OUT"'],
+    ['$T', ['$(mktemp -t x)'], 'T=$(mktemp -t x); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp app/x.XXXX)'], 'T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp -p app)'], 'T=$(mktemp -p app); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)', '$(head -1 list)'], 'T=$(mktemp); T=$(head -1 list); echo x > "$T"'],
+    ['$T', ['`mktemp`'], 'T=`mktemp`; cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp; echo app/page.tsx)'], 'T=$(mktemp; echo app/page.tsx); echo x > "$T"'],
+    // The command can make mktemp print a name in a screen folder.
+    ['$T', ['$(mktemp)'], 'TMPDIR=app T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'export TMPDIR=/w/slate/app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"'],
+    ['$T', ['$(mktemp)'], 'mktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'function mktemp { echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "alias mktemp='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'hash -p ./bin/fake mktemp; T=$(mktemp); echo x > "$T"'],
+    // zsh takes a quoted or escaped function name, and a function or a name set through its table.
+    ['$T', ['$(mktemp)'], '"mktemp"(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'm\\ktemp(){ echo app/page.tsx; }; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "functions[mktemp]='echo app/page.tsx'; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'path=(./bin $path); T=$(mktemp); echo x > "$T"'],
+    // zsh's lowercase path array is PATH, so every way of setting it is held too.
+    ['$T', ['$(mktemp)'], 'path+=(./bin); T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'path[1]=./bin; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'typeset path; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'typeset -a path=(./bin); T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'read -A path < list; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'set -A path ./bin; T=$(mktemp); echo x > "$T"'],
+    // A quoted, escaped or run time name for TMPDIR or PATH.
+    ['$T', ['$(mktemp)'], 'export TMP"DIR"=app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], "export $'TMP\\x44IR'=app; T=$(mktemp); echo x > \"$T\""],
+    ['$T', ['$(mktemp)'], 'V=TMP; export ${V}DIR=app; T=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'printf -v "$V" app; T=$(mktemp); echo x > "$T"'],
+    // An assignment of the variable the reader did not give, a prefix one dropped before a command.
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T=app/page.tsx : ; echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=.tsx; echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T+=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=$(mktemp); echo x > "$T"'],
+    ['$T', ['$(mktemp)'], 'T=$(mktemp); T[0]=app/page.tsx; echo x > "$T"'],
+    // A word that is more than the variable alone, or no values.
+    ['$T/a', ['$(mktemp)'], 'T=$(mktemp); cat app/page.tsx > "$T/a"'],
+    ['$T', [], 'cat app/page.tsx > "$T"'],
+  ] as const)
+    expect([command, freshTemp(word, [...values], command)]).toEqual([command, false])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
@@ -1815,6 +1880,72 @@ test('#1341: in TSX, a JSX comment is a comment, and JSX text or a quoted prop s
   expect(commentOnlyChange(text, noted, true)).toBe(false)
   expect(commentOnlyChange(noted, text, true)).toBe(false)
   expect(commentOnlyChange(noted, noted.replace('who', 'whom'), true)).toBe(true)
+})
+
+// #2294: Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip". An app's React
+// screen file changed only in its logic is let through by the guard's own reading of the edit, never by
+// a session saying so; anything that can be text, a look or a class on screen is still held.
+const OFFERS_PAGE = `import { useState } from 'react'
+import { Card } from '@/components/card'
+
+// The offers a person was made.
+export default function Page({ offers }: { offers: Offer[] }) {
+  const [open, setOpen] = useState(false)
+  const visible = offers.filter(o => o.active)
+  if (!visible) return null
+  return (
+    <Card>
+      <h1>Your offers</h1>
+      {visible.map(o => <Row key={o.id} offer={o} />)}
+    </Card>
+  )
+}
+`
+test('#2294: a logic only change to an app screen file passes; text, JSX, styles, numbers, booleans, comments, style or side effect imports and a swapped import are held', () => {
+  const logic = (from: string, to: string) => {
+    const after = OFFERS_PAGE.replace(from, to)
+    expect(after).not.toBe(OFFERS_PAGE)
+    return logicOnlyChange(OFFERS_PAGE, after)
+  }
+  const imported = "import { Card } from '@/components/card'\nimport { byDate } from '@/lib/sort'\n"
+  // Let through: a condition, a new import from a new module with its use, a type renamed.
+  expect(logic('o => o.active)', 'o => o.active && !o.expired)')).toBe(true)
+  expect(logic("import { Card } from '@/components/card'\n", imported)).toBe(true)
+  expect(logicOnlyChange(OFFERS_PAGE, OFFERS_PAGE.replace("import { Card } from '@/components/card'\n", imported).replace('o.active)', 'o.active).sort(byDate)'))).toBe(true)
+  expect(logic('offers: Offer[]', 'offers: OfferRow[]')).toBe(true)
+  expect(logic('if (!visible) return null', 'if (!visible.length) return null')).toBe(true)
+  // Held: an import swapped for another, which may change a component.
+  expect(logic("'@/components/card'", "'@/components/card2'")).toBe(false)
+  // Held: a number, a boolean, a comment, a string, an error's message.
+  expect(logic('o => o.active)', 'o => o.active).slice(0, 5)')).toBe(false)
+  expect(logic('useState(false)', 'useState(true)')).toBe(false)
+  expect(logic('// The offers a person was made.', '// The offers made to a person.')).toBe(false)
+  expect(logic('o => o.active)', "o => o.status === 'active')")).toBe(false)
+  expect(logic('if (!visible) return null', "if (!visible) throw new Error('No offers')")).toBe(false)
+  // Held: a style file or a side effect import, which change the page with no word on it.
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport './page.css'\n")).toBe(false)
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport '@/lib/polyfill'\n")).toBe(false)
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport styles from './page.module.scss'\n")).toBe(false)
+  // Held: a line naming a look, a class helper or a colour.
+  expect(logic('  const visible', '  const styles = pick(offers)\n  const visible')).toBe(false)
+  expect(logic('  const visible', '  const k = cn(offers)\n  const visible')).toBe(false)
+  expect(logic('  const visible', '  const tone = offers.length ? good : bad\n  const visible')).toBe(false)
+  // Held: JSX touched, even only in an expression inside it; a template literal.
+  expect(logic('<h1>Your offers</h1>', '<h2>Your offers</h2>')).toBe(false)
+  expect(logic('key={o.id}', 'key={o.ref}')).toBe(false)
+  expect(logic('  const visible', '  const k = `${a}${b}`\n  const visible')).toBe(false)
+  // Held: a text the reader cannot follow, before or after.
+  expect(logic('o => o.active)', "o => o.active, 'open)")).toBe(false)
+  const broken = OFFERS_PAGE.replace('</Card>', '')
+  expect(logicOnlyChange(broken, broken.replace('o.active)', 'o.active && o.live)'))).toBe(false)
+  // No change at all is not judged as one.
+  expect(logicOnlyChange(OFFERS_PAGE, OFFERS_PAGE)).toBe(false)
+})
+
+test('#2294: an automatic pass says what it let through and why, citing the issue', () => {
+  const why = autoPassWhy(['src/app/offers/page.tsx'])
+  expect(why).toContain('src/app/offers/page.tsx')
+  expect(why).toContain('#2294')
 })
 
 test('#1576: a mod hook file a shell write cannot be judged after, since it could not be read first, is said so with why', () => {

@@ -3303,6 +3303,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L847. A deliberate refusal expressed as a failed build, job or deploy is read by every watcher of that thing as breakage, so they retry it and alert with the wrong cause; give the refusal a marker those watchers recognise, in the same change that introduces it.** (project-enrollment-tracker#2023, 2026-11-06)
+  SHORT: A refusal shipped as a failed build is retried and misreported by every watcher; give it a marker they recognise in the same change.
 - **L838. A component that runs inside someone else's page (an embed, a widget, a script tag) must report its own failures, timeouts and slow loads included and not only thrown errors, back to your own system, because a failure surfaced only to the host page lands in the host's analytics, which nobody on your side watches.** (slate#4456, 2026-11-01)
   SHORT: An embed reports its own failures, timeouts included, to your system: one surfaced only to the host lands in analytics nobody of yours watches.
 - **L837. An alert raised about one part of a subject must clear when that part recovers: a part that cannot be measured yet (past a horizon, not synced) is 'could not tell' for itself only, because letting it hold the whole subject's alert open means the alert never clears and its all clear never posts.** (slate#4449, 2026-11-01)

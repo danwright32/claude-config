@@ -1343,6 +1343,131 @@ want_code 2 "#2028 when the merge cannot be worked out, the whole push is judged
 in_call "$JUDGE_LOG/call.1" "BIG_MAIN_MARKER" "when the merge cannot be worked out, main's change is judged too"
 want_stderr "could not set apart" "#2028 the refusal says why main's changes were judged"
 
+# --- claude-config#2258: a mod's byte identical copy of a mod-kit helper is tested by mod-kit ------
+# Every mod keeps copies of mod-kit's helpers at payload/mods/<mod>/hooks/mod-kit/, and the gate
+# refused a new mod for them alone (slack-alert-guard, 2026-11-04, for hold.ts and skew.ts). A copy
+# whose bytes and mode match payload/mods/mod-kit/hooks/<same name> in the tree the push delivers,
+# and which a test under payload/mods/mod-kit/tests/ in that tree imports, is counted as tested.
+# Anything short of that is judged as before, and each narrowing is seen to refuse here.
+mk_modkit_repo() {   # -> a repo whose remote holds mod-kit's hold.ts and its test, and deliver.ts untested
+  local w; w="$(mk_repo)"
+  (
+    cd "$w" || exit 1
+    mkdir -p payload/mods/mod-kit/hooks payload/mods/mod-kit/tests
+    printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/hold.ts
+    printf 'export const DELIVER = 1\n' > payload/mods/mod-kit/hooks/deliver.ts
+    printf "import { HOLD } from '../hooks/hold.ts'\ntest('hold', () => expect(HOLD).toBe(1))\n" > payload/mods/mod-kit/tests/hold.test.ts
+    git add payload
+    git commit -qm "mod-kit"
+    git push -q
+  ) >/dev/null 2>&1
+  printf '%s' "$w"
+}
+# put_copy <repo> <helper> <content> [commit message]: writes the new mod's copy, committed when a
+# message is given.
+put_copy() {
+  (
+    cd "$1" || exit 1
+    mkdir -p payload/mods/newmod/hooks/mod-kit
+    printf '%b' "$3" > "payload/mods/newmod/hooks/mod-kit/$2"
+    if [ -n "${4:-}" ]; then git add "payload/mods/newmod/hooks/mod-kit/$2"; git commit -qm "$4"; fi
+  ) >/dev/null 2>&1
+}
+call_has() {   # <file> <text> <label>
+  if [ -f "$1" ] && grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was not shown $2"; fi
+}
+call_lacks() {   # <file> <text> <label>
+  if [ -f "$1" ] && ! grep -qF -- "$2" "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 $3: the judge was shown $2 (or never called)"; fi
+}
+COPY=payload/mods/newmod/hooks/mod-kit
+
+# The issue's push: a new mod carrying only an identical copy goes through, with no judge called,
+# and the record names the copy it counted.
+JUDGE_LOG="$TMPROOT/judge-log-2258a"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "new mod"
+# The control: the copy really is in the commit, so the allow below is not an empty push.
+if git -C "$W" cat-file -e "HEAD:$COPY/hold.ts" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no copy"; fi
+STUB_CLAUDE_LOG="$JUDGE_LOG" HK_ID=t-2258a run_hook "$W" "git push"
+want_code 0 "#2258 a new mod whose mod-kit copy is byte identical goes through"
+want_row t-2258a nosource "#2258 the identical copy is recorded" "$COPY/hold.ts"
+if [ "$(calls_in "$JUDGE_LOG")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2258 a push of identical copies alone called the judge"; fi
+
+# One byte different: refused as untested, naming the copy, exactly as before.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy differing by one byte is still refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the differing copy"
+
+# Identical, but no mod-kit test imports that helper: refused.
+W="$(mk_modkit_repo)"; put_copy "$W" deliver.ts 'export const DELIVER = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy of a helper no mod-kit test imports is still refused"
+
+# Identical, but the same push deletes mod-kit's test: the tree the push delivers has none, so refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && git rm -q payload/mods/mod-kit/tests/hold.test.ts && git add "$COPY/hold.ts" && git commit -qm "copy, drop test" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy is refused when the push removes mod-kit's test of it"
+
+# Identical bytes under another mode (made executable): refused, since it is not the same file.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && chmod +x "$COPY/hold.ts" && git add "$COPY/hold.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 an identical copy under a different mode is still refused"
+
+# A mod-kit test importing the helper without its extension, in double quotes, counts the same.
+W="$(mk_modkit_repo)"
+( cd "$W" && printf 'export const BARE = 1\n' > payload/mods/mod-kit/hooks/bare.ts \
+  && printf 'import { BARE } from "../hooks/bare"\n' > payload/mods/mod-kit/tests/bare.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "bare helper" && git push -q ) >/dev/null 2>&1
+put_copy "$W" bare.ts 'export const BARE = 1\n' "new mod"
+run_hook "$W" "git push"
+want_code 0 "#2258 an identical copy of a helper imported without its extension goes through"
+
+# A symbolic link in mod-kit's hooks is not a helper file, even when the copy is the same link.
+W="$(mk_modkit_repo)"
+( cd "$W" && ln -s hold.ts payload/mods/mod-kit/hooks/alias.ts \
+  && printf "import { HOLD } from '../hooks/alias.ts'\n" > payload/mods/mod-kit/tests/alias.test.ts \
+  && git add payload/mods/mod-kit && git commit -qm "alias" && git push -q \
+  && mkdir -p "$COPY" && ln -s hold.ts "$COPY/alias.ts" && git add "$COPY/alias.ts" && git commit -qm "new mod" ) >/dev/null 2>&1
+if [ "$(git -C "$W" ls-tree HEAD -- "$COPY/alias.ts" | cut -c1-6)" = 120000 ]; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: #2258 the fixture committed no link copy"; fi
+run_hook "$W" "git push"
+want_code 2 "#2258 a copy of a symbolic link in mod-kit's hooks is still refused"
+
+# mod-kit's own hooks/mod-kit folder is not a copy of anything.
+W="$(mk_modkit_repo)"
+( cd "$W" && mkdir -p payload/mods/mod-kit/hooks/mod-kit && printf 'export const HOLD = 1\n' > payload/mods/mod-kit/hooks/mod-kit/hold.ts \
+  && git add payload/mods/mod-kit/hooks/mod-kit/hold.ts && git commit -qm "self copy" ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#2258 a file under mod-kit's own hooks/mod-kit is not counted as a copy"
+
+# Compared in the tree the push DELIVERS: the committed copy differs, and the command's own commit
+# makes it identical, so it goes through; and the other way round it is refused.
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 2\n' "wrong copy"
+put_copy "$W" hold.ts 'export const HOLD = 1\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm fix && git push"
+want_code 0 "#2258 a copy the command's commit makes identical goes through"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n' "right copy"
+put_copy "$W" hold.ts 'export const HOLD = 3\n'
+run_hook "$W" "git add $COPY/hold.ts && git commit -qm drift && git push"
+want_code 2 "#2258 a copy the command's commit makes differ is refused"
+want_stderr "$COPY/hold.ts" "#2258 the refusal names the copy the commit made differ"
+
+# Beside the mod's own code and test: the judge is still called, on the mod's own change, and is
+# never shown the counted copy among the source files or in the diff.
+JUDGE_LOG="$TMPROOT/judge-log-2258b"; mkdir -p "$JUDGE_LOG"
+W="$(mk_modkit_repo)"; put_copy "$W" hold.ts 'export const HOLD = 1\n'
+( cd "$W" && mkdir -p payload/mods/newmod/tests \
+  && printf 'export const OWN_MOD_MARKER = 1\n' > payload/mods/newmod/hooks/index.ts \
+  && printf "import { OWN_MOD_MARKER } from '../hooks/index.ts'\n" > payload/mods/newmod/tests/index.test.ts \
+  && git add payload/mods/newmod && git commit -qm "new mod with code" ) >/dev/null 2>&1
+STUB_CLAUDE_LOG="$JUDGE_LOG" STUB_CLAUDE_OUT="$PASS_JSON" run_hook "$W" "git push"
+want_code 0 "#2258 a mod with its own tested code and an identical copy passes"
+call_has "$JUDGE_LOG/call.1" "payload/mods/newmod/hooks/index.ts" "the mod's own code is judged"
+call_lacks "$JUDGE_LOG/call.1" "$COPY/hold.ts" "the counted copy is left out of what the judge reads"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

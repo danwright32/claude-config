@@ -2824,7 +2824,7 @@ test('a switch from another session that cannot be applied is logged, and taken 
   expect(w.modes.some(m => m.includes('AWAY'))).toBe(false)
   // Through the failure reporting the check already has, never silently.
   expect(w.logs.filter(l => l.startsWith('scope-modes: the away or home switch check failed: '))).toEqual([
-    'scope-modes: the away or home switch check failed: scope-modes: $.state.set: state store unavailable',
+    'scope-modes: the away or home switch check failed: state store unavailable',
   ])
   refusing.on = false
   await clock.advance(MIN)
@@ -2856,7 +2856,7 @@ test('a record that cannot be read is said once, never read as a switch (L215)',
   expect(w.modes).toEqual([])
   // The engine names the call it denied ahead of the reason, as it does for every denied read.
   expect(w.toasts.filter(t => t.includes('away or home'))).toEqual([
-    `Scope modes could not read the away or home switch typed in another session (scope-modes: $.fs.read: EACCES: permission denied, open '${PLACE}'), so a switch typed there may not reach this one. Later failures go to the debug log.`,
+    `Scope modes could not read the away or home switch typed in another session (the file could not be read: permission denied (${PLACE})), so a switch typed there may not reach this one. Later failures go to the debug log.`,
   ])
 })
 
@@ -4127,7 +4127,7 @@ test('a morning that went in but could not be marked done is put to Dan once, an
   // Recorded as put by a write of its own, which went in, so a reload does not put it again either.
   expect(s.writes.filter(x => x.key === 'morningPut').map(x => x.value)).toEqual([{ generation: 'g0', calls: [] }])
   expect(w.toasts.filter(t => MARK_SAID.test(t))).toEqual([
-    "The morning summary went in, but this session could not record it as done (scope-modes: $.state.set: state store unavailable). It is not put to you again.",
+    "The morning summary went in, but this session could not record it as done (state store unavailable). It is not put to you again.",
   ])
 })
 
@@ -4144,7 +4144,7 @@ test('a morning that could not be recorded as put at all says a reload may put i
   await clock.settle()
   expect(morningOf(w).length).toBe(1)
   expect(w.toasts.filter(t => MARK_SAID.test(t))).toEqual([
-    "The morning summary went in, but this session could not record it as done (scope-modes: $.state.set: state store unavailable). It is not put to you again, unless this session reloads its mods, which may put it once more.",
+    "The morning summary went in, but this session could not record it as done (state store unavailable). It is not put to you again, unless this session reloads its mods, which may put it once more.",
   ])
 })
 
@@ -5709,7 +5709,7 @@ test('/wake puts what the overnight check found first, in the reply and the note
   })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: scope-modes: \$\.fs\.stat[^)]*ENOENT\)\. The night's report is at /)
+  expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
   const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
   // Written before the night's end note, so the final render puts them at the top of the report.
   expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])
@@ -6936,7 +6936,7 @@ test("a patch that cannot be read is said, and the files the same call wrote by 
   expect(await call($ as never, bash('echo x > app.ts && git apply /tmp/fix.patch', 'g1'))).toBe('ran')
   const said = w.toasts.filter(t => t.includes('the patch this call applied'))
   expect(said.length).toBe(1)
-  expect(said[0]).toMatch(/^Scope modes could not tell which files the patch this call applied changed \(.*EACCES: permission denied, open '\/tmp\/fix\.patch'\), so winding down may not count them as this session's\. Later failures go to the debug log\.$/)
+  expect(said[0]).toMatch(/^Scope modes could not tell which files the patch this call applied changed \(the file could not be read: permission denied \(\/tmp\/fix\.patch\)\), so winding down may not count them as this session's\. Later failures go to the debug log\.$/)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
 })

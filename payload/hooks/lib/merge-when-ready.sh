@@ -181,7 +181,8 @@
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
 # measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+# MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE (honoured only with HOOK_TESTS_RUNNING=1,
+# claude-config#2231), MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
 # check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
@@ -201,7 +202,10 @@ CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
 DESIGN_GATE="${MWR_DESIGN_GATE:-$MWR_HOOKS/design-score-gate.sh}"
 VERIFY_GATE="${MWR_VERIFY_GATE:-$MWR_HOOKS/require-verification-run.sh}"
 CLOSING_GATE="${MWR_CLOSING_GATE:-$MWR_HOOKS/check-closing-merge.sh}"
-WORK_NAMES_GATE="${MWR_WORK_NAMES_GATE:-$MWR_HOOKS/check-work-names-merge.sh}"
+# The privacy gate is named from the environment only under the test marker (claude-config#2231): a
+# script named there that answers nothing would stand in for it on every merge this helper makes.
+WORK_NAMES_GATE="$MWR_HOOKS/check-work-names-merge.sh"
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${MWR_WORK_NAMES_GATE:-}" ] && WORK_NAMES_GATE="$MWR_WORK_NAMES_GATE"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
