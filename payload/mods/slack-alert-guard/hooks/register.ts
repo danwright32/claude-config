@@ -178,7 +178,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     }
     // Every file read in this search, so a file listed at two levels is read once and counted once.
     const texts = new Map<string, string>()
-    const budget = (rels: string[], _could: string) => {
+    const budget = (rels: string[]) => {
       const reads = texts.size + rels.filter(r => !texts.has(r)).length
       if (reads > MOST_READ) end(MAYBE)
     }
@@ -240,13 +240,13 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     let level = [templateRel]
     for (let hop = 0; ; hop++) {
       const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
-      budget(rels, sends)
+      budget(rels)
       for (const rel of rels) {
         const text = await textOf(rel, sends)
         if (inScope(rel, text) && slackMarked(text) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
       }
       const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
-      budget(links, handsOnTo)
+      budget(links)
       const next: string[] = []
       const users: { rel: string; text: string }[] = []
       for (const rel of links) {
