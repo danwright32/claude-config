@@ -20,9 +20,11 @@ Two routes are judged:
     npm test) is followed through the nearest package.json, pre and post scripts included, and
     judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
-    judged the same way (claude-config#2318). A file a script is handed as data (shaped like data,
+    judged the same way (claude-config#2318); an import written in a JavaScript or TypeScript comment
+    is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
-    is handed (claude-config#2362). The one script let through is /nudge, at
+    is handed (claude-config#2362), whether the script runs through its interpreter or by its own
+    path with the interpreter its #! names (claude-config#2400). The one script let through is /nudge, at
     skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
     like any other script that posts.
 
@@ -83,8 +85,131 @@ JS_BANG = re.compile(r"^#!.*\b(node|nodejs|deno|bun|tsx|ts-node)\b")
 # The .js a TypeScript ESM file writes for its own sibling, which is a .ts on disk.
 JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx": (".tsx",)}
 # Every way a module names another: import ... from 'x', export ... from 'x', import 'x', import('x'),
-# require('x'). Read from the text, comments included, which can only refuse more.
+# require('x'). Read from the code with its comments blanked (js_code): an import written in a comment
+# is an example, and following it refused every suite importing a harness that shows one (#2397).
 IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# What can stand before a / that opens a regex literal rather than divides: punctuation, or a keyword.
+JS_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
+JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void",
+                  "throw", "yield", "await", "of"}
+
+
+def js_code(text):
+    """A JavaScript or TypeScript file's text with each // and /* */ comment blanked to spaces, its
+    newlines kept, so an import shown in a comment is not read as one (claude-config#2397, the rule
+    the alert guard got in #2368: a script is read by the code it runs, never a comment).
+
+    Strings, template literals (with the code inside each ${...}) and regex literals are stepped
+    over, so a // or /* inside one (a URL, a pattern) opens nothing. Every misreading is bounded on
+    the side of reading more: a quote left open ends at its line, and a block comment that never
+    closes is left as code, since node refuses that file and a /* misread from a pattern must not
+    hide every import after it."""
+    out = list(text)
+    n = len(text)
+    i = 0
+    if text.startswith("#!"):
+        i = text.find("\n") if "\n" in text else n
+    braces = []  # for each ${ entered, the { depth of its code, so its } returns to the template
+    depth = 0
+    last = ""  # the last code character that was not blank, or the word it ends, for regex or divide
+
+    def blank(a, b):
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    def template(k):
+        """Step through a template literal's text from k; the index after its closing backtick, or the
+        index of a ${ (its code is read as code), or n."""
+        while k < n:
+            c = text[k]
+            if c == "\\":
+                k += 2
+            elif c == "`":
+                return k + 1, False
+            elif c == "$" and text.startswith("${", k):
+                return k + 2, True
+            else:
+                k += 1
+        return n, False
+
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            i += 1
+            continue
+        if c == "/" and text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            blank(i, end)
+            i = end
+            continue
+        if c == "/" and text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            if end < 0:
+                break  # never closed: left as code
+            blank(i, end + 2)
+            i = end + 2
+            continue
+        if c in "'\"":
+            k = i + 1
+            while k < n and text[k] not in (c, "\n"):
+                k += 2 if text[k] == "\\" else 1
+            i = k + 1
+            last = c
+            continue
+        if c == "`":
+            i, entered = template(i + 1)
+            if entered:
+                braces.append(depth)
+                depth += 1
+                last = "{"
+            else:
+                last = "`"
+            continue
+        if c == "/" and (last == "" or last in JS_REGEX_AFTER or last in JS_REGEX_WORDS):
+            k, klass = i + 1, False
+            while k < n and text[k] != "\n":
+                ch = text[k]
+                if ch == "\\":
+                    k += 2
+                    continue
+                if ch == "[":
+                    klass = True
+                elif ch == "]":
+                    klass = False
+                elif ch == "/" and not klass:
+                    break
+                k += 1
+            if k < n and text[k] == "/":
+                i = k + 1
+                last = "/regex"
+                continue
+            # No closing / on the line: a divide after all.
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if braces and depth == braces[-1]:
+                braces.pop()
+                i, entered = template(i + 1)
+                if entered:
+                    braces.append(depth)
+                    depth += 1
+                    last = "{"
+                else:
+                    last = "`"
+                continue
+        if c.isalnum() or c in "_$":
+            k = i
+            while k < n and (text[k].isalnum() or text[k] in "_$"):
+                k += 1
+            last = text[i:k]
+            i = k
+            continue
+        last = c
+        i += 1
+    return "".join(out)
 # A Python script's imports are followed the same way: a script is Python by its .py, its #!, or a
 # python interpreter running a file with no extension.
 PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
@@ -289,7 +414,7 @@ class Judge:
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list."""
         if kind == "js":
-            for m in IMPORT_SPEC.finditer(text):
+            for m in IMPORT_SPEC.finditer(js_code(text)):
                 spec = m.group(2)
                 if "${" in spec:
                     continue
@@ -677,7 +802,18 @@ class Judge:
         if "/" in words[0]:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"
-            return self.script(words[0], d, depth, False)
+            # Its arguments are read as they are for the interpreter its #! names, so `./post.mjs
+            # msg.json` is judged as `node post.mjs msg.json` is (claude-config#2400): the script
+            # first, then each file it is handed, the data files by what the script does with them.
+            path = self.resolve(words[0], d)
+            try:
+                with open(path, "rb") as f:
+                    first = f.readline(512).decode("utf-8", "replace")
+            except OSError:
+                return self.script(words[0], d, depth, False)
+            shell = path.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
+            lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
+            return self.every_file([words[0]] + words, d, depth, shell, lang)
         return None
 
     def every_file(self, words, d, depth, shell_hint, lang=None):

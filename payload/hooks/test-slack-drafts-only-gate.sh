@@ -356,6 +356,50 @@ else
   says "the refusal names the module it could not read" "sealed.ts"
 fi
 chmod 644 "$T/imp/sealed.ts"
+# An import written in a comment is an example, not code node runs (claude-config#2397). Measured
+# 2026-11-07: a test harness whose header comment shows how to import it, from the suites' folder,
+# was read as importing ./lib/harness.ts from its own folder, which is not there, so every suite
+# importing the harness was refused. The fixture is that shape: a suite in scripts/, the harness in
+# scripts/lib/, and no scripts/lib/lib/.
+mkdir -p "$T/imp/cmt/scripts/lib"
+printf '%s\n' '// A tiny test harness. Use it from a suite like this:' \
+  '//   import { assert, finish } from "./lib/harness.ts";' \
+  '/* or, the older way:' \
+  '   const { assert } = require("./lib/old-harness.js");' \
+  '*/' \
+  '/**' \
+  ' * import { finish } from "./lib/finish.ts";' \
+  ' */' \
+  'export const assert = (ok: boolean) => { if (!ok) throw new Error("failed"); };' \
+  'export const finish = () => console.log("done"); // import "./lib/trailing.ts"' > "$T/imp/cmt/scripts/lib/harness.ts"
+printf '%s\n' 'import { assert, finish } from "./lib/harness.ts";' 'assert(true);' 'finish();' > "$T/imp/cmt/scripts/test-lane.ts"
+run_bash "node $T/imp/cmt/scripts/test-lane.ts"
+allowed "a suite whose harness shows an example import in its comments"
+run_bash "cd $T/imp/cmt && node --experimental-strip-types scripts/test-lane.ts"
+allowed "the same suite run from the repository root"
+# The controls: a real import of a missing module beside those comments is still refused, and so is
+# one after a string, a template or a regex holding // (a URL is not a comment opening), or after a
+# block comment closed earlier on its line.
+printf '%s\n' '// import { a } from "./lib/example.ts";' 'import { gone } from "./not-here";' 'gone();' > "$T/imp/cmt/real.ts"
+run_bash "node $T/imp/cmt/real.ts"
+refused "a real import of a missing module below a commented example"
+says "that refusal names the real import" "./not-here"
+for line in 'const u = "https://example.com/a"; import { gone } from "./not-here";' \
+  "const u = 'https://example.com/a'; import { gone } from \"./not-here\";" \
+  'const u = `https://example.com/${1}`; import { gone } from "./not-here";' \
+  'const r = /https?:\/\//; import { gone } from "./not-here";' \
+  'const s = "/*"; import { gone } from "./not-here"; const e = "*/";' \
+  '/* a note */ import { gone } from "./not-here";' \
+  'const x = 1 / 2; import { gone } from "./not-here"; const y = 3 / 4;'; do
+  printf '%s\n' "$line" > "$T/imp/cmt/url.ts"
+  run_bash "node $T/imp/cmt/url.ts"
+  refused "a real import of a missing module on a line holding: ${line:0:40}"
+done
+# A block comment that never closes is not trusted as a comment: node refuses to parse the file, and
+# a misread one must not hide the imports after it.
+printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/cmt/open.ts"
+run_bash "node $T/imp/cmt/open.ts"
+refused "an import after a block comment that never closes"
 # Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
 # lies beyond is unseen, so it is refused; a short chain of the same shape passes.
 mkdir -p "$T/imp/chain" "$T/imp/short"
@@ -556,6 +600,29 @@ run_bash "python3 $T/ds/runner.py $T/ds/job.txt"
 refused "a Python script that runs the file it is handed, which posts"
 run_bash "python3 $T/ds/count.py $T/alert.py"
 refused "a script file handed to another script is still read, since a wrapper may run it"
+# A script run by its own path has the files it is handed read as one run through its interpreter
+# does, the interpreter taken from its #! line (claude-config#2400): `./post.mjs msg.json` was let
+# through while `node post.mjs msg.json` was refused.
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/post.mjs"; } > "$T/ds/post-direct.mjs"
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/post.mjs"; } > "$T/ds/post-node"
+{ printf '%s\n' '#!/usr/bin/env python3'; cat "$T/ds/post.py"; } > "$T/ds/post-python"
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/titles.js"; } > "$T/ds/titles-direct"
+{ printf '%s\n' '#!/usr/bin/env python3'; cat "$T/ds/count.py"; } > "$T/ds/count-direct"
+chmod +x "$T/ds/post-direct.mjs" "$T/ds/post-node" "$T/ds/post-python" "$T/ds/titles-direct" "$T/ds/count-direct"
+for runs in "$T/ds/post-direct.mjs $T/ds/msg.json" "cd $T/ds && ./post-direct.mjs msg.json" \
+  "$T/ds/post-node $T/ds/msg.json" "cd $T/ds && ./post-python msg.json"; do
+  run_bash "$runs"
+  refused "a sending script run by its own path, handed a data file naming the endpoint: $runs"
+  says "that refusal names the data file, run as: $runs" "msg.json"
+done
+# The controls: the same scripts through their interpreter are refused as before, and a script run by
+# its own path that only reads what it is handed still passes.
+run_bash "node $T/ds/post-node $T/ds/msg.json"
+refused "the extensionless node script through node, handed a data file naming the endpoint"
+for reads in "$T/ds/titles-direct $T/ds/issues.json" "cd $T/ds && ./count-direct session.jsonl"; do
+  run_bash "$reads"
+  allowed "a script run by its own path reading a data file that names an endpoint: $reads"
+done
 
 echo "slack drafts only: /nudge is the one script let through"
 
