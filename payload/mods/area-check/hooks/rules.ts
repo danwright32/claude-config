@@ -86,7 +86,9 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
 /**
  * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
  * a path, judged as that file's first edit would be (`tree` where the write may reach every file
- * under it, so each one there that could be held is judged too, `heldUnder` choosing them), or a write
+ * under it, so each one there that could be held is judged too, `heldUnder` choosing them; a path
+ * without `tree` that the disk says is a folder is judged the same way, at most FOLDER_JUDGE_MAX files
+ * one by one, #2321), or a write
  * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
  */
