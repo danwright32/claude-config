@@ -41,6 +41,11 @@ const WRITES: Record<string, unknown> = {
   'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
   'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }], changes: [], unnamed: [] },
   'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true }], changes: [], unnamed: [] },
+  // #2320: a double quoted regex ending in a dollar sign the shell leaves as text, and three words a script is handed that the shell expands.
+  'python3 probe.py "^foo.*bar$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '^foo.*bar$', unexpanded: true }] }] },
+  'python3 probe.py "$OUT/big.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$OUT/big.ts' }] }] },
+  "python3 probe.py x$'y'": { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'x$y' }] }] },
+  'python3 probe.py "$(': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$(' }] }] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -568,6 +573,19 @@ test('a shell command whose file cannot be read is held saying so, may only proc
   expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
   // Another command is decided on its own.
   expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
+})
+
+test('a script handed a double quoted regex ending in a dollar sign the shell leaves as text runs unjudged; one handed a word the shell expands is held (#2320)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, 'python3 probe.py "^foo.*bar$"')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  const expanded: [string, string][] = [['python3 probe.py "$OUT/big.ts"', '$OUT/big.ts'], ["python3 probe.py x$'y'", 'x$y'], ['python3 probe.py "$(', '$(']]
+  for (const [i, [c, word]] of expanded.entries()) {
+    const why = refusal(await bash($ as never, w, c, {}, `b${i + 2}`))
+    expect([c, why.includes('cannot be read'), why.includes(word)]).toEqual([c, true, true])
+  }
+  expect(w.passed).toEqual(['Bash python3 probe.py "^foo.*bar$"'])
 })
 
 test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
