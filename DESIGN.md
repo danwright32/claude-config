@@ -262,7 +262,10 @@ alive. Both halves were watched failing before they passed.
 
 Every suite in the repo arms it, and `test-suite-deadline.sh` fails on one that does not, listing
 the suites from the runner's own discovery so the scan and the runner cannot disagree about what a
-suite is (claude-config#465). Arming was left to each suite for one release and only the reproduced
+suite is (claude-config#465). Since claude-config#2330 the push asks the same question first:
+`scanners-before-push.sh` judges each `test-*.sh` a push adds or changes, as the push delivers it,
+through `lib/suite-arms-check.sh`, which `test-suite-deadline.sh` also calls, so a suite pushed
+without a deadline is refused in seconds rather than found in CI. Arming was left to each suite for one release and only the reproduced
 suite had it, which is the shape L621 describes: a behaviour each site has to opt into is a
 convention until something fails on the site that did not. A fixture that copies a suite into a
 throwaway tree now carries `lib/suite-deadline.sh` and `lib/kill-tree.sh` with it, because the copy
@@ -1535,6 +1538,34 @@ prose. The domain rule tries every way of putting one or two hyphens back into t
 hashes, so the login is never written down. `tests/test-work-names-tree.sh` reads the real block,
 printing only its count, so an edit to CLAUDE.md that breaks it fails a suite before it is
 installed rather than refusing every public write on both Macs.
+
+GitHub writes made inside a script (#2183). On 2026-11-03 a scrub made 239 GitHub edits as gh calls
+inside a Python script, and the gate judged none of them: a PreToolUse hook sees the Bash command,
+which was a python command. Reading scripts for gh calls cannot be made complete (a script builds
+its arguments at run time), so the rule moved to where every gh call passes: `hooks/bin/gh`, a guard
+named gh, which `gh-guard-path.sh` puts first on PATH at SessionStart by writing an export to
+`CLAUDE_ENV_FILE`. Measured on Claude Code 2.1.318 before building: that export is first on PATH for
+every Bash command, inside a subagent's too, while a mod's bin folder is appended last and so can
+never shadow gh. The guard runs the same module (`--gh <real> -- <args>`), so the rule has one
+implementation; it refuses with exit 1, withholding the name it matched because a script's error
+output can land in a log, and otherwise execs the real gh, its exit code and its standard input
+unchanged (a body piped in is copied to a temporary file, judged, and handed on). Any exception
+refuses. Both modes take the guard off PATH at import, or the gate's own gh reads would start the
+gate again.
+
+A session that started before the guard was installed has no guard in front, and the command hook
+cannot see its scripts' writes. Two ways were weighed: refuse every script that might make one, or
+keep that session's checks exactly as they were and tell it. Refusing would stop
+`merge-when-ready.sh`, a script, and so every merge on both Macs until each session restarted, for
+a gap that closes by itself as sessions restart; telling refuses nothing fewer than before, so it
+weakens no control. The hook tells such a session once (a stamp per session id, with
+`hook_allow_notice` from `lib/hook-notice.sh`), recognising a guarded session by its env file
+holding the guard's export; a refusal does not use the notice up. Gh aliases (Dan, on #2183) are
+judged as what they expand to, read from `gh alias list`. The guard refuses an alias whose list it
+cannot read (cannot tell); the command hook passes it as it always did, consistent with keeping an
+unguarded session's checks unchanged, and in a guarded session the guard refuses it when it runs.
+Not covered, and said so: gh run by its absolute path, a script that rewrites PATH, curl or an API
+library, and gh extensions.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
