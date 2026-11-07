@@ -489,6 +489,32 @@ test('only the installed helper, only its note, and only with a home known: ever
   expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
 })
 
+// #2255: `python3 probe.py 'src/*.ts'`, as mod-kit's reader answers it with cwd /w/app (measured
+// 2026-11-05): a pattern whose every pattern character is quoted, which the shell matched against no file.
+const QUOTED = { word: 'src/*.ts', folder: '/w/app/src', quoted: true as const }
+const probe = (args: object[], tool?: true) => ({ ...NONE, runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', ...(tool ? { tool } : {}), args }] }) as Parameters<typeof shellTargets>[0]
+
+test('a quoted pattern handed to a script file is judged as the one file its characters name (#2255)', () => {
+  expect(shellTargets(probe([QUOTED]))).toEqual([{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+  // Prose holding a wildcard and a question mark, matched in the folder the command runs in.
+  expect(shellTargets(probe([{ word: 'every *.ts file, why?', folder: '/w/app', quoted: true }]))).toEqual([{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?' }])
+  // Anything else the command writes is judged beside it: `python3 probe.py 'src/*.ts' > src/big.ts`.
+  expect(shellTargets({ ...probe([QUOTED]), files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+})
+
+test('a pattern the shell or a tool may expand, a group, and one reaching across folders stay unread (#2255)', () => {
+  const unread = (t: ShellTarget[]) => t.filter(x => 'unread' in x).map(x => x.word)
+  // Unquoted: the shell matches it against the folder's files.
+  expect(unread(shellTargets(probe([{ word: 'src/*.ts', folder: '/w/app/src' }])))).toEqual(['src/*.ts'])
+  // Handed to a tool, which expands its own operands (#1815).
+  expect(unread(shellTargets(probe([QUOTED], true)))).toEqual(['src/*.ts'])
+  // A group, and a pattern in a folder part, whose one name the folder does not give.
+  expect(unread(shellTargets(probe([{ word: '{a,b}.ts', folder: '/w/app', quoted: true }])))).toEqual(['{a,b}.ts'])
+  expect(unread(shellTargets(probe([{ word: 'src/*/big.ts', folder: '/w/app/src', quoted: true }])))).toEqual(['src/*/big.ts'])
+  // A value filled in as the command runs: `python3 probe.py "$OUT/*.ts"`.
+  expect(unread(shellTargets(probe([{ word: '$OUT/*.ts' }])))).toEqual(['$OUT/*.ts'])
+})
+
 test('a repository could hold a file only when something there would: a fast growing file, or a structural issue at a held priority naming a file', () => {
   const issue = (n: number, priority: string | null, structural = ['tech-debt'], refs = ['src/a.ts']) => ({ n, structural, priority, refs })
   expect(couldHold({ issues: [], own: [], top: [] })).toBe(false)

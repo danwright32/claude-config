@@ -157,6 +157,93 @@ out="$(rank "$(list "$(issue 5 '' priority-p2 enhancement)" "$(issue 6 '' priori
 same "a listing that reached its limit exits 3" 3 "$code"
 has "a truncated listing says to raise the limit" "raise" "$out"
 
+# The recently touched files signal (claude-config#2300): among structural issues tied on every
+# other rule, prefer the one whose named files the recent merged pull requests keep changing, which
+# #1505 asked for and its first build left out. It sits above oldest first and below every other
+# rule, so it only ever reorders ties. Its inputs are the issue bodies and a merged pull request
+# list with files, written to a file the way gh prints it.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/rank-next-issues-test.XXXXXXXX")"
+trap 'rm -rf "$SCRATCH"' EXIT
+# One issue with a body: issue_body <number> <body> <label>...
+issue_body(){
+  local n="$1" body="$2"; shift 2
+  local labels="" l
+  for l in "$@"; do labels="$labels${labels:+,}{\"name\":\"$l\"}"; done
+  printf '{"number":%s,"title":"Issue %s","labels":[%s],"milestone":null,"body":"%s"}' "$n" "$n" "$labels" "$body"
+}
+# One merged pull request as gh prints it: pr <number> <path>...
+pr(){
+  local n="$1" files="" f; shift
+  for f in "$@"; do files="$files${files:+,}{\"path\":\"$f\",\"additions\":1,\"deletions\":0}"; done
+  printf '{"number":%s,"files":[%s]}' "$n" "$files"
+}
+merged="$SCRATCH/merged.json"
+list "$(pr 900 payload/hooks/hot.sh)" "$(pr 901 payload/hooks/hot.sh payload/hooks/warm.sh)" \
+  "$(pr 902 payload/hooks/hot.sh payload/hooks/lib/one.sh)" "$(pr 903 payload/hooks/warm.sh)" \
+  "$(pr 904 payload/mods/a/hooks/rules.ts payload/mods/b/hooks/rules.ts)" > "$merged"
+
+# The case the signal exists for: two p3 structural issues tied on every rule. Oldest first offers
+# #20, whose file nothing has touched; the signal offers #21, whose file three merges changed.
+tied="$(list "$(issue_body 10 '' priority-p1 bug)" "$(issue_body 11 '' priority-p2 enhancement)" \
+  "$(issue_body 12 '' priority-p2 enhancement)" "$(issue_body 20 'Split payload/hooks/cold.sh' tech-debt priority-p3)" \
+  "$(issue_body 21 'Split `payload/hooks/hot.sh` into two' tech-debt priority-p3)")"
+out="$(rank "$tied")"
+same "without a merged list the tied structural issues stay oldest first" "#10 #11 #20" "$(picks "$out")"
+has "without a merged list the signal says it is off" "TOUCHED off" "$out"
+out="$(rank "$tied" --touched "$merged")"; code=$?
+same "a ranking with a merged list succeeds" 0 "$code"
+same "the slot takes the tied structural issue whose file recent merges keep changing" "#10 #11 #21" "$(picks "$out")"
+has "the pick says how many recent merges changed its files" "touched by 3 recent merges" "$(printf '%s\n' "$out" | grep '^PICK 3 ')"
+has "the TOUCHED line names the issue and its count" "TOUCHED #21 (3)" "$out"
+
+# More merges beats fewer; a merge changing two named files counts once.
+out="$(rank "$(list "$(issue_body 30 'payload/hooks/warm.sh' refactor priority-p3)" \
+  "$(issue_body 31 'payload/hooks/hot.sh and payload/hooks/lib/one.sh' refactor priority-p3)" \
+  "$(issue_body 32 '' refactor priority-p3)")" --touched "$merged" --count 9)"
+same "three merges outrank two, then oldest first" "#31 #30 #32" "$(picks "$out")"
+has "an issue naming two files counts a merge changing both once" "TOUCHED #31 (3), #30 (2)" "$out"
+
+# It never crosses an existing rule: priority, user-facing, the milestone and bug all still win.
+out="$(rank "$(list "$(issue_body 40 'payload/hooks/hot.sh' tech-debt priority-p3)" \
+  "$(issue_body 41 '' tech-debt priority-p3 user-facing)" "$(issue_body 42 '' tech-debt priority-p3 bug)" \
+  "$(issue_body 43 '' tech-debt priority-p2)")" --touched "$merged" --count 9)"
+same "a hot file never lifts an issue past a higher level, user-facing or a bug" "#43 #41 #42 #40" "$(picks "$out")"
+# Only structural issues: #1505 asked for structural work on churning files, not for everything.
+out="$(rank "$(list "$(issue_body 50 '' enhancement priority-p2)" "$(issue_body 51 'payload/hooks/hot.sh' enhancement priority-p2)")" \
+  --touched "$merged" --count 9)"
+same "a hot file does not reorder issues that are not structural" "#50 #51" "$(picks "$out")"
+
+# Which names count. An installed path (~/.claude/hooks/...) is the payload file, and a sentence's
+# full stop is not part of a path. A bare file name, or a partial path that fits two changed files,
+# could be any of several files, so it counts for nothing rather than guessing.
+out="$(rank "$(list "$(issue_body 60 'Fix ~/.claude/hooks/lib/one.sh.' tech-debt priority-p3)" \
+  "$(issue_body 59 'hot.sh is too long' tech-debt priority-p3)" \
+  "$(issue_body 58 'Both hooks/rules.ts files' tech-debt priority-p3)")" --touched "$merged" --count 9)"
+same "an installed path counts; a bare name and an ambiguous partial path do not" "#60 #58 #59" "$(picks "$out")"
+has "an installed path with a full stop after it is matched" "TOUCHED #60 (1)" "$out"
+out="$(rank "$(list "$(issue_body 59 'hot.sh is too long' tech-debt priority-p3)")" --touched "$merged")"
+has "no structural issue naming a changed file is said, with how many were looked at" "TOUCHED none of 1 structural" "$out"
+
+# A merged list that cannot be read is refused, never ranked as if nothing were touched (L10).
+printf 'not json' > "$SCRATCH/bad.json"
+out="$(rank "$tied" --touched "$SCRATCH/bad.json")"; code=$?
+same "a merged list that is not JSON exits 2" 2 "$code"
+has "a merged list that is not JSON is named" "UNREADABLE" "$out"
+: > "$SCRATCH/empty.json"
+out="$(rank "$tied" --touched "$SCRATCH/empty.json")"; code=$?
+same "an empty merged list file (gh failed) exits 2" 2 "$code"
+has "an empty merged list file is named" "UNREADABLE" "$out"
+printf '[{"number":1}]' > "$SCRATCH/nofiles.json"
+out="$(rank "$tied" --touched "$SCRATCH/nofiles.json")"; code=$?
+same "a merged list without files exits 2" 2 "$code"
+has "a merged list without files is named" "UNREADABLE" "$out"
+out="$(rank "$tied" --touched "$SCRATCH/missing.json")"; code=$?
+same "a merged list that does not exist exits 2" 2 "$code"
+has "a merged list that does not exist is named" "UNREADABLE" "$out"
+out="$(rank "$(list "$(issue 20 '' tech-debt priority-p3)")" --touched "$merged")"; code=$?
+same "an issue list without bodies, given a merged list, exits 2" 2 "$code"
+has "an issue list without bodies says to list them with body" "body" "$out"
+
 # The structural spellings are the area check's own list (mods/area-check, STRUCTURAL_LABELS), so
 # the issue a session is told to restructure is the one /next-issue brings forward. Read from the
 # mod's file, so a spelling added there fails here first (L370).

@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { READ_SCRIPT, ROTATE_BYTES, ROTATE_SCRIPT, SETTLE_MINUTES, rotationStamp } from '../hooks/prline.ts'
+import { READ_SCRIPT, ROTATE_BYTES, ROTATE_SCRIPT, SETTLE_MINUTES, mayActOnPr, rotationStamp } from '../hooks/prline.ts'
 import { SWEEP_MS } from '../hooks/rules.ts'
 import { APP, DIR, ERRORS, KIT, LOG, REASON, SLACK, T0, bash, decide, decidedLine, edit, ghLists, refusal, said, world, type R } from './world.ts'
 
@@ -327,17 +327,61 @@ test('with no decisions on the branch the command passes without reading the bod
   expect(reads(w)).toBe(1)
 })
 
-test("the check's own failure lets the command through with one dim line, kept in the error file", KIT, async ($, on) => {
+// The check's own failure holds a pull request command, as every guard's failure holds its call
+// (#2148, #2173): a merge is the last check there is, and the one at merge time runs the same code on
+// this Mac only, so it is no backstop for a description never checked.
+test("the check's own failure holds gh pr create and gh pr merge, naming why, kept in the error file; the command never runs", KIT, async ($, on) => {
   const w = world($, on)
   seedAB(w)
   w.ctl.branchThrows = true
-  const cmd = 'gh pr create --title T --body x'
+  for (const [i, cmd] of ['gh pr create --title T --body x', 'gh pr merge 5 --squash', 'bash /Users/dan/.claude/hooks/lib/merge-when-ready.sh 5 --squash'].entries()) {
+    const why = refusal(await bash($ as never, w, cmd, {}, `f${i}`))
+    expect(why).toContain('The area check refused this pull request command')
+    expect(why).toContain('git could not be asked')
+    expect(why).toContain('errors.jsonl')
+    expect(ranBash(w, cmd)).toBe(false)
+  }
+  expect(w.records('/Users/dan/.claude-area-check/errors.jsonl').length).toBe(3)
+  // The refusal is what is said: never a dim line saying it went ahead unchecked.
+  expect(w.logs.some(l => l.includes('unchecked'))).toBe(false)
+})
+
+test("the check's own failure on a command that holds no pull request command lets it through with one dim line, as before", KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.pipelineThrows = true
+  const cmd = 'gh issue create --title T --body x'
   const r = await bash($ as never, w, cmd)
   expect(refusal(r)).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
-  expect(w.logs.some(l => l.includes('pull request'))).toBe(true)
+  expect(w.logs.some(l => l.includes('could not check the pull request command') && l.includes('unchecked'))).toBe(true)
   expect(w.records('/Users/dan/.claude-area-check/errors.jsonl').length).toBe(1)
-  expect(said(r)).not.toContain('Area check:')
+  // The control: the same failure under a gh pr create holds it.
+  const pr = 'gh pr create --title T --body x'
+  expect(refusal(await bash($ as never, w, pr, {}, 'b2'))).toContain('the pipeline could not be read')
+  expect(ranBash(w, pr)).toBe(false)
+})
+
+test('the hook failing before its check holds a pull request command through its catch, and passes any other', KIT, async ($, on) => {
+  const w = world($, on)
+  seedAB(w)
+  w.ctl.cwdThrows = true
+  const pr = 'gh pr merge 5 --squash'
+  const why = refusal(await bash($ as never, w, pr))
+  expect(why).toContain('The area check refused this pull request command')
+  // The engine names why the session folder could not be had (the test's hook failing leaves nothing
+  // to answer it); the refusal carries that reason, never the fallback's "unknown failure".
+  expect(why).toContain('session.cwd')
+  expect(why).not.toContain('unknown failure')
+  expect(ranBash(w, pr)).toBe(false)
+  const other = 'gh issue list'
+  expect(refusal(await bash($ as never, w, other, {}, 'b2'))).toBe('')
+  expect(ranBash(w, other)).toBe(true)
+})
+
+test('a command could hold a pull request command when its words name gh pr create, edit or merge, or the merge helper', () => {
+  for (const c of ['gh pr create --title T', 'cd x && gh pr merge 5', 'gh  pr edit 5 --body-file b.md', 'bash ~/.claude/hooks/lib/merge-when-ready.sh 5']) expect(mayActOnPr(c)).toBe(true)
+  for (const c of ['gh issue create --title T', 'gh pr view 5', 'gh pr list', 'gh api repos/dan/app']) expect(mayActOnPr(c)).toBe(false)
 })
 
 test('a decision with more than 1 MiB of other decisions after it is still asked for (#2143)', KIT, async ($, on) => {

@@ -3506,6 +3506,32 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
 
+### What #2294 changed, 2026-11-05
+
+Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip. If you're confident that
+nothing on screen changes don't ask me to make a decision and just skip design rounds
+automatically". The same day a skip question for #2173 said "Nothing on screen changes" of an edit
+adding a refusal Dan reads, so confidence comes from the guard's own reading, never the session's.
+
+- **What passes.** An Edit, MultiEdit, Write or git put back to an app's React screen file (a .tsx or
+  .jsx file that is no mod's hook file) that rules.ts `logicOnlyChange` reads as logic only: on the
+  lines the change touches, no JSX, no string but a module's name, no template literal, no colour
+  and no word a look is spelled in (`APP_LOOK_WORDS`: class, style, theme, colour, size, icon and
+  the like, read on each part of a camelCase name); across the whole file every comment, string,
+  JSX element, number and true or false the same, in order; no stylesheet or bare import coming or
+  going and no import swapped for another. Only when every file the call waits on passes so.
+- **What it leaves.** Nothing asked and no card. `auto:<the call's key>` in the mod's store holds a
+  `DesignRoundAutoPass`: kind `no-screen-change`, when, the tool, the files, the issue it would have
+  waited on, why (rules.ts `autoPassWhy`) and the call. Nothing reads it to let a call through.
+- **What stays held.** A mod's hook file (its own readings, #1138 to #2161, decide it, and a
+  message's words there are asked about, which keeps the #2173 shape held); any string, comment or
+  number change anywhere in an app file; a call also changing a file that is held for any other
+  reason; an issue whose answers or checkout cannot be read; text the reader cannot follow; and a
+  pass whose record cannot be written, which is held and asked about as before.
+- **Known risk.** Logic decides which element renders, so a condition changed (`a > 0` to `a >= 0`)
+  can show or hide something with no text changing. The issue allows logic; what Dan reads and how
+  it looks are what is held.
+
 ### What #2261 changed, 2026-11-05
 
 - **The guard says when it recorded an answer.** Its store is private, so nothing else could tell
@@ -4003,10 +4029,21 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   whole. The gap: a line found elsewhere in the command, such as the title, passes too.
 - **When a fact cannot be read.** A log that cannot be read refuses the command, never reads as no
   decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
-  not answering for a merge) lets it through, and the check's own failure lets the command through
-  with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
+  not answering for a merge) lets it through. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+- **When the check itself fails (#2173, 2026-11-05).** The check's own failure (a throw, the
+  deadline, or the hook failing before its `try`, answered by the registration catch through
+  `neverThrows`) holds a command that could be a pull request one, as every guard's failure holds
+  its call since #2148: `mayActOnPr` in `hooks/prline.ts` asks whether its words hold `gh pr
+  create`, `gh pr edit`, `gh pr merge` or the merge helper, and `checkFailedRefusal` names why and
+  that the error is kept in `errors.jsonl`. It was let through with a dim line until then, on the
+  reasoning that a check at merge time would catch what was missed; it cannot, since a merge is the
+  last check there is, it runs the same code (a fault that fails one fails both), and it reads this
+  Mac's log only, so a merge from the other Mac, the web or GitHub's auto merge is never checked.
+  The same check already refused when its log could not be read, and a false hold costs one refused
+  command that names why. Any other command (`gh issue create`, `gh pr view`) cannot be one it
+  refuses, so it goes ahead with one dim line kept in the error file, as before.
 
 ### The weekly line and escalation, built 2026-11-05 (#1511)
 

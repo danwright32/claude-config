@@ -141,19 +141,33 @@ check_eq "#1478 control: with no python3 a command naming no wrapper passes in s
 LONE="$WORKDIR/lone"; mkdir -p "$LONE/lib"
 cp "$HOOK" "$LONE/"
 # Only the library each step names is missing: lib/whole-number.sh is there throughout (#1948).
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" whole-number.sh || bad "#2204 whole-number.sh could not be installed beside the lone hook"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" whole-number.sh script-run-words.sh || bad "#2204 whole-number.sh could not be installed beside the lone hook"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/push-scope.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1478 and names the missing file" "lib/push-scope.sh" "$out"
 # And the same for lib/whole-number.sh, which reads the ledger's size (#1948).
 LONEW="$WORKDIR/lone-whole"; mkdir -p "$LONEW/lib"
 cp "$HOOK" "$LONEW/"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONEW/lib" push-scope.sh shell-words.py || bad "#2147 the hook helpers could not be installed into $LONEW/lib"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONEW/lib" push-scope.sh shell-words.py script-run-words.sh || bad "#2147 the hook helpers could not be installed into $LONEW/lib"
 out="$(payload "bash -c 'git push'" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1948 with lib/whole-number.sh missing a wrapper beside git is refused" "2" "$rc"
 check "#1948 and names the missing file" "lib/whole-number.sh" "$out"
 out="$(payload "git status" | bash "$LONEW/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1948 control: with lib/whole-number.sh missing a command naming no wrapper passes in silence" "0|" "$rc|$out"
+# And with lib/script-run-words.sh missing, the text filter in front of the reader (claude-config#2301):
+# no filter is never "names no wrapper", so the reader judges every command naming git, gh or rtk.
+NOSRW="$WORKDIR/no-filter"; mkdir -p "$NOSRW/lib"
+cp "$HOOK" "$NOSRW/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$NOSRW/lib" push-scope.sh shell-words.py whole-number.sh hook-notice.sh || bad "#2301 the hook helpers could not be installed into $NOSRW/lib"
+rm -f "$NOSRW/lib/script-run-words.sh"
+out="$(payload "bash -c 'git push'" | bash "$NOSRW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#2301 with lib/script-run-words.sh missing a readable wrapper beside git still passes, judged by the reader" "0" "$rc"
+out="$(payload 'bash -c "$CMD" && git status' | bash "$NOSRW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#2301 with lib/script-run-words.sh missing an unreadable wrapper beside git is still refused" "2" "$rc"
+out="$(payload "./build.sh && git push" | bash "$NOSRW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#2301 and so is a script run by its path" "2" "$rc"
+out="$(payload "git status" | bash "$NOSRW/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#2301 control: with lib/script-run-words.sh missing a plain git command passes in silence" "0|" "$rc|$out"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE/lib" push-scope.sh || bad "#2204 push-scope.sh could not be installed beside the lone hook"
 out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 with lib/shell-words.py missing it is refused" "2" "$rc"
@@ -353,9 +367,12 @@ check_eq "#1610 control: that reader still passes a plain note" "0" "$rc"
 #
 # The guard answers most commands from the payload's text before the reader loads (RUNS_FILE_*), and
 # a script run that text misses would pass unread, so every case refused here is also refused by a
-# copy of the guard with no reader beside it: there, only reaching the reader can refuse.
-LONE1623="$WORKDIR/lone1623"; mkdir -p "$LONE1623"
+# copy of the guard with no reader beside it: there, only reaching the reader can refuse. The text
+# filter itself (lib/script-run-words.sh, claude-config#2301) is beside it, since it is what is held
+# to being a superset here.
+LONE1623="$WORKDIR/lone1623"; mkdir -p "$LONE1623/lib"
 cp "$HOOK" "$LONE1623/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE1623/lib" script-run-words.sh || bad "#2301 script-run-words.sh could not be installed beside the lone hook"
 refused_file(){ # refused_file <name> <command> <the script file the refusal names>
   judge "$2"
   check_eq "#1623 refused: $1" "2" "$rc"
