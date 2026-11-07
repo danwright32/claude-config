@@ -6221,9 +6221,12 @@ MultiEdit there that adds message text, changes it or takes it away is refused. 
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a `_test`
 or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send nothing,
 so neither is held nor read as a sender; a string handed to a query builder call (`.select(`,
-`.eq(`, `.order(` and the like, at any argument), a database select list, and a code template a
-program writes out are not message text; and a file in no git repository, as a scratchpad script
-is, is let through even when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in from a realistic
+`.eq(`, `.order(` and the like, at any argument), a database select list, a SQL statement or
+fragment, and a code template a program writes out are not message text; in a CI workflow only what
+a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
+run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
+other run commands; and a file in no git repository, as a scratchpad script is, is let through even
+when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
 kept in the mod's store by the exact wording, never by the file, so the same wording repeated in
@@ -6237,7 +6240,9 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A template whose own file has no Slack marker (a code file, or a text template
 such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
 git repository sends it: one that carries a Slack marker and names the template by its path, a
-relative import, or its python module, outside a comment. The card and refusal name that sender. A
+relative import, or its python module, on a line that imports or reads it (a path it only names,
+as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
+sender. A
 copy builder (a module named for its copy, such as `outage-copy.ts` or `alertCopy.ts`) is held
 too when a file that imports it also imports a Slack send helper, and the card names that file as
 the sender. The search is one `git grep` for files holding both the template's name and the word

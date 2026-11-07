@@ -5,6 +5,8 @@ import {
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
+  ciMessages,
+  ciWorkflow,
   copyBuilder,
   editedText,
   handsOn,
@@ -209,6 +211,68 @@ test('an approval may carry a placeholder the code writes as text, and still not
   expect(renderedProblem('Run the job with ${name} set', added, ['${name}'])).toBeUndefined()
   expect(renderedProblem('Run the job with ${name} set', added)).toContain('${name}')
   expect(renderedProblem('Run the job with ${other} set', added, ['${name}'])).toContain('${other}')
+})
+
+test('a sender that names a file without importing or reading it does not refer to it (Dan item 1)', () => {
+  expect(refersTo('scripts/deploy.sh', 'git add package.json CHANGELOG.md\ngit commit -m release\n', 'package.json')).toBe(false)
+  expect(refersTo('scripts/deploy.ts', 'const tracked = ["package.json", "lib/templates/deploy.ts"]\n', 'package.json')).toBe(false)
+  expect(refersTo('scripts/deploy.ts', 'await run(`cp lib/templates/deploy.ts dist/`)\n', 'lib/templates/deploy.ts')).toBe(false)
+  // Importing it, requiring it, or reading it still refers to it.
+  expect(refersTo('scripts/deploy.ts', "const pkg = require('../package.json')\n", 'package.json')).toBe(true)
+  expect(refersTo('scripts/deploy.sh', 'BODY=$(cat lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
+  expect(refersTo('scripts/deploy.sh', 'BODY=$(< lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
+})
+
+test('a SQL statement or fragment is not message text, and a sentence that opens with a SQL word still is (Dan item 2)', () => {
+  for (const s of [
+    "SELECT id, starts_at FROM bookings WHERE status = 'late'",
+    'select b.id, count(*) from bookings b group by b.id',
+    'insert into bookings (id, status) values ($1, $2)',
+    'update bookings set status = $1 where id = $2',
+    'delete from bookings where id = $1',
+    'with late as (select id from bookings) select * from late',
+    "where status = 'late' and paid is false",
+    'create index bookings_status on bookings (status)',
+  ])
+    expect(isMessage(s)).toBe(false)
+  for (const s of ['Select a plan from the list', 'Update the deploy settings before Friday', 'Deploy failed from main', 'Order by Friday or we miss the window', 'Delete the old branch when the deploy is done'])
+    expect(isMessage(s)).toBe(true)
+})
+
+test('a CI workflow is read for the text a Slack step posts, never its names, needs, descriptions or plain run commands (Dan item 1)', () => {
+  const wf = [
+    'name: Deploy the site',
+    'on:',
+    '  workflow_dispatch:',
+    '    inputs:',
+    '      environment:',
+    '        description: The environment to deploy to',
+    'jobs:',
+    '  build:',
+    '    name: Build the site',
+    '    steps:',
+    '      - name: Install dependencies',
+    '        run: npm ci && npm run build',
+    '  notify:',
+    '    needs: [ build, test ]',
+    '    steps:',
+    '      - name: Post to Slack',
+    '        uses: slackapi/slack-github-action@v1',
+    '        with:',
+    '          payload: |',
+    '            {"text": "Deploy of ${{ github.sha }} finished"}',
+    '        env:',
+    '          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}',
+    '      - name: Page on failure',
+    "        run: curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
+    '      - name: Summary',
+    '        env:',
+    '          MESSAGE: Release notes are ready',
+    '',
+  ].join('\n')
+  expect(ciWorkflow('.github/workflows/deploy.yml')).toBe(true)
+  expect(ciWorkflow('config/locales/en.yml')).toBe(false)
+  expect(wordingOf(ciMessages(wf))).toEqual(['Deploy of ${{ github.sha }} finished', 'Deploy failed on main', 'Release notes are ready'])
 })
 
 test('a sender naming a template only in a comment does not refer to it', () => {

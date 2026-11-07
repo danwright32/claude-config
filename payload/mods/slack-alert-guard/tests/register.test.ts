@@ -262,6 +262,81 @@ test('a file a test only names is not held: a deploy test naming package.json le
   expect(w.ran.length).toBe(1)
 })
 
+test('a file a Slack sender only names, never imports or reads, is not held (Dan item 1)', withKit, async ($, on) => {
+  const PKG = '/w/app/package.json'
+  const DEPLOY = '/w/app/scripts/deploy.ts'
+  const w = world($, on, {
+    files: {
+      [PKG]: '{ "scripts": { "build": "next build" } }\n',
+      [DEPLOY]: "import { notifySlack } from '../lib/alert'\nawait run('git add package.json CHANGELOG.md')\nawait notifySlack(`Released ${version}`)\n",
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: PKG, old_string: '"next build"', new_string: '"next build && npm run lint"' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The sender's own wording is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DEPLOY, old_string: 'Released ${version}', new_string: 'Released ${version} to production' }))).toContain('Released ${version} to production')
+})
+
+// Dan item 1, the real shape: a workflow that posts to Slack. Only what a Slack step posts is held.
+const WORKFLOW = '/w/app/.github/workflows/deploy.yml'
+const WORKFLOW_TEXT = [
+  'name: Deploy the site',
+  'on:',
+  '  workflow_dispatch:',
+  '    inputs:',
+  '      environment:',
+  '        description: The environment to deploy to',
+  'jobs:',
+  '  build:',
+  '    name: Build the site',
+  '    steps:',
+  '      - name: Install dependencies',
+  '        run: npm ci && npm run build',
+  '  notify:',
+  '    needs: [ build, test ]',
+  '    steps:',
+  '      - name: Post to Slack',
+  '        uses: slackapi/slack-github-action@v1',
+  '        with:',
+  '          payload: |',
+  '            {"text": "Deploy of ${{ github.sha }} finished"}',
+  '        env:',
+  '          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}',
+  "      - name: Page on failure",
+  "        run: curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
+  '',
+].join('\n')
+
+test("a Slack sending workflow's step names, job names, needs lists, input descriptions and run commands pass (Dan item 1)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [WORKFLOW]: WORKFLOW_TEXT } })
+  const edits: [string, string][] = [
+    ['Install dependencies', 'Install the dependencies'],
+    ['Build the site', 'Build the whole site'],
+    ['[ build, test ]', '[ build, test, lint ]'],
+    ['The environment to deploy to', 'The environment this deploys to'],
+    ['npm ci && npm run build', 'npm ci && npm run build && npm test'],
+    ['Deploy the site', 'Deploy the site now'],
+  ]
+  for (const [from, to] of edits) expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: from, new_string: to }))).toBe('')
+  expect(w.ran.length).toBe(edits.length)
+})
+
+test("what a workflow's Slack step posts is still held: its payload text and a Slack curl's message", withKit, async ($, on) => {
+  const w = world($, on, { files: { [WORKFLOW]: WORKFLOW_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: 'finished"}', new_string: 'finished cleanly"}' }))).toContain('Deploy of ${{ github.sha }} finished cleanly')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: 'Deploy failed on main', new_string: 'Deploy failed on main again' }))).toContain('Deploy failed on main again')
+  expect(w.ran).toEqual([])
+})
+
+test('a SQL string in a Slack sender passes when it is not handed to a query builder call, and the alert beside it is still held (Dan item 2)', withKit, async ($, on) => {
+  const JOB = '/w/app/lib/late.ts'
+  const text = "import { notifySlack } from './alert'\nconst LATE = \"SELECT id, starts_at FROM bookings WHERE status = 'late'\"\nexport const run = async () => {\n  const rows = await pool.query(LATE)\n  await notifySlack(`${rows.length} bookings are late`)\n}\n"
+  const w = world($, on, { files: { [JOB]: text } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: "WHERE status = 'late'\"", new_string: "WHERE status = 'late' AND paid IS FALSE\"" }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'bookings are late`', new_string: 'bookings are late today`' }))).toContain('${rows.length} bookings are late today')
+})
+
 test('database query strings in a Slack sender pass, and an alert sentence in the same file is still held', withKit, async ($, on) => {
   const ROUTE = '/w/app/lib/cron.ts'
   const text = 'import { notifySlack } from "./alert"\nexport const run = async () => {\n  const { data } = await db.from("bookings").select("id, starts_at").eq("status", "late")\n  await notifySlack(`Booking ${data[0].id} is late`)\n}\n'
@@ -374,6 +449,27 @@ test('more files could send a template than the guard reads: the edit is held wi
   await ask($, w, why, APPROVE)
   expect(refusalOf(await call($, RETEMPLATE))).toBe('')
   expect(w.ran.length).toBe(1)
+})
+
+test('the real shapes over the limit: a page gaining a metadata title is held with an id Dan approves; a deploy doc gaining bullets is a doc and passes', withKit, async ($, on) => {
+  const PAGE = '/w/app/src/app/login/page.tsx'
+  const DOC = '/w/app/DEPLOY.md'
+  const many: Record<string, string> = {}
+  for (let i = 0; i < 452; i++) many[`/w/app/src/app/area${i}/page.tsx`] = `// slack page for area ${i}\nexport default function Page${i}() { return null }\n`
+  // Markdown that names the page and Slack is never counted as a sender.
+  for (let i = 0; i < 50; i++) many[`/w/app/docs/notes${i}.md`] = 'The login page posts to hooks.slack.com\n'
+  const w = world($, on, { files: { ...many, [PAGE]: 'export default function Login() { return null }\n', [DOC]: '# Deploy\n\n- Set the region\n' } })
+  const edit = { tool: 'Edit', file_path: PAGE, old_string: 'export default', new_string: 'export const metadata = { title: "Sign in" };\nexport default' }
+  const why = refusalOf(await call($, edit))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain('"Sign in"')
+  expect(idIn(why)).toBeDefined()
+  await ask($, w, why, APPROVE, { rendered: 'Sign in' })
+  // Approved, the same edit goes through: a retry is never refused the same way again.
+  expect(refusalOf(await call($, edit))).toBe('')
+  const bullets = '- Set the region\n- Set DATABASE_URL to the pooled address\n- Set SENTRY_DSN for errors\n- Set SLACK_WEBHOOK_URL for deploy notices\n'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DOC, old_string: '- Set the region\n', new_string: bullets }))).toBe('')
+  expect(w.ran.length).toBe(2)
 })
 
 test('an approval can carry a placeholder the code writes as text', withKit, async ($, on) => {

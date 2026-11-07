@@ -185,6 +185,10 @@ const importedModules = (text: string): string[] => {
   return out
 }
 
+// A line that imports a file or reads its text: an import, require, from or export line, an include
+// or load, a call that opens, reads or renders a file, cat, a shell source line, or $(< file).
+const READS = /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file)\s*\(|\$\(\s*<|^\s*\.\s+\S/
+
 /**
  * Whether a sender's text names a template's path, both given relative to the repository root.
  * Read as a path (a token holding a slash, or a file name with the template's extension): a
@@ -211,7 +215,13 @@ export const refersTo = (senderRel: string, text: string, templateRel: string): 
       return n >= 2 || (whole && n === m.length)
     })
   }
-  for (const raw of lower.match(/[\w@~$.\/-]+/g) ?? []) {
+  // Only a line that imports or reads a file can bring its text to a send; a path a sender only
+  // names (git add package.json, a list of tracked files) brings nothing (Dan's item 1, #2371).
+  const reading = lower
+    .split('\n')
+    .filter(l => READS.test(l))
+    .join('\n')
+  for (const raw of reading.match(/[\w@~$.\/-]+/g) ?? []) {
     const tok = raw.replace(/\.+$/, '')
     const ext = tok.includes('/') ? undefined : extOf(tok)
     const named = ext !== undefined && tExt !== undefined && (ext === tExt || (JS.has(ext) && JS.has(tExt)))
@@ -427,8 +437,61 @@ const CODE_SIGNS = [
 /** Whether a string is code a program writes out (#2361): two or more signs of code in it. */
 export const codeText = (s: string): boolean => CODE_SIGNS.filter(r => r.test(s)).length >= 2
 
-/** Whether a string is message text: prose, and neither a select list nor code. */
-export const isMessage = (s: string): boolean => isProse(s) && !selectList(s) && !codeText(s)
+// A SQL select list item: a column, a function call, a cast, an alias.
+const SQL_ITEM = '[\\w.*"`]+(\\([^()]*\\))?(\\s*::\\s*\\w+)?(\\s+as\\s+[\\w"`]+)?'
+const SQL_SHAPES = [
+  new RegExp(`^\\s*\\(?\\s*select\\s+(distinct\\s+)?${SQL_ITEM}(\\s*,\\s*${SQL_ITEM})*\\s+from\\s+\\S`, 'i'),
+  /^\s*insert\s+into\s+[\w."`]+\s*(\(|values\b|select\b|default\b)/i,
+  /^\s*update\s+[\w."`]+\s+set\s+[\w"`]+\s*=/i,
+  /^\s*delete\s+from\s+[\w."`]+(\s+where\b|\s*;?\s*$)/i,
+  /^\s*with\s+(recursive\s+)?\w+\s+as\s*\(/i,
+  /^\s*(create|alter|drop)\s+(or\s+replace\s+)?(unique\s+)?(table|index|view|function|trigger|policy|schema|type|extension)\b/i,
+  /^\s*(where|and|or|join|left\s+join|inner\s+join|order\s+by|group\s+by|having|on\s+conflict|returning)\s+[\w."`]+\s*(=|<>|!=|<=|>=|<|>|\s+is\s+(not\s+)?(null|true|false)\b|\s+in\s*\(|\s+i?like\b|\s+between\b|\s+on\b|\s+(asc|desc)\b|,)/i,
+]
+/** Whether a string is a SQL statement or a fragment of one (#2364, #2371): a database's words, never a person's. */
+export const sqlText = (s: string): boolean => SQL_SHAPES.some(r => r.test(s))
+
+/** Whether a string is message text: prose, and neither a select list, code, nor SQL. */
+export const isMessage = (s: string): boolean => isProse(s) && !selectList(s) && !codeText(s) && !sqlText(s)
+
+/** Whether a file is a CI workflow, whose names, needs, descriptions and commands a pipeline runs rather than posts. */
+export const ciWorkflow = (path: string): boolean =>
+  /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/.test(path) || /(^|\/)\.gitlab-ci\.ya?ml$/.test(path) || /(^|\/)\.circleci\/config\.ya?ml$/.test(path) || /(^|\/)bitbucket-pipelines\.ya?ml$/.test(path)
+
+// The keys whose value is text a step posts: a Slack action's payload or message, a message env value.
+const MESSAGE_KEY = /(^|[-_.])(text|message|msg|title|pretext|fallback|payload|blocks|body|summary|content|subject|footer|header)$/i
+
+/**
+ * The text a CI workflow can post (Dan's item 1, #2371): the value of a message key (a Slack step's
+ * payload, text or message, a MESSAGE env value), each string inside a JSON payload, and the strings
+ * of a run command that itself posts to Slack (a curl to a webhook), a JSON body's strings included.
+ * Step and job names, needs lists, input descriptions and every other run command are left out.
+ */
+export const ciMessages = (text: string): string[] => {
+  const lines = text.split('\n')
+  const out: string[] = []
+  const strings = (t: string): string[] => stringsOf(t, true).flatMap(s => [s.text, ...(s.text.trimStart().startsWith('{') ? literalsOf(s.text, true) : [])])
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)(-\s+)?([\w.-]+):(?:\s+(.*))?$/.exec(lines[i] as string)
+    if (!m) continue
+    const indent = (m[1] as string).length + (m[2] ?? '').length
+    const key = m[3] as string
+    const raw = (m[4] ?? '').trim()
+    let value = raw
+    if (/^[|>][-+]?\d*$/.test(raw)) {
+      const block: string[] = []
+      while (i + 1 < lines.length && (!(lines[i + 1] as string).trim() || /^\s*/.exec(lines[i + 1] as string)![0].length > indent)) block.push(lines[++i] as string)
+      value = block.join('\n').trim()
+    }
+    if (!value) continue
+    if (MESSAGE_KEY.test(key)) {
+      if (value.startsWith('{') || value.startsWith('[')) out.push(...literalsOf(value, true))
+      else if (/^["']/.test(value)) out.push(...literalsOf(value, true))
+      else out.push(value)
+    } else if (key === 'run' && slackMarked(value)) out.push(...strings(value))
+  }
+  return out
+}
 
 /** The message text among a file's literals, each kept as often as it appears. */
 export const wordingOf = (literals: string[]): string[] => literals.filter(isMessage)
