@@ -262,7 +262,10 @@ alive. Both halves were watched failing before they passed.
 
 Every suite in the repo arms it, and `test-suite-deadline.sh` fails on one that does not, listing
 the suites from the runner's own discovery so the scan and the runner cannot disagree about what a
-suite is (claude-config#465). Arming was left to each suite for one release and only the reproduced
+suite is (claude-config#465). Since claude-config#2330 the push asks the same question first:
+`scanners-before-push.sh` judges each `test-*.sh` a push adds or changes, as the push delivers it,
+through `lib/suite-arms-check.sh`, which `test-suite-deadline.sh` also calls, so a suite pushed
+without a deadline is refused in seconds rather than found in CI. Arming was left to each suite for one release and only the reproduced
 suite had it, which is the shape L621 describes: a behaviour each site has to opt into is a
 convention until something fails on the site that did not. A fixture that copies a suite into a
 throwaway tree now carries `lib/suite-deadline.sh` and `lib/kill-tree.sh` with it, because the copy
