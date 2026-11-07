@@ -22768,10 +22768,24 @@ out_606h="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANG" SYNC
 _mh=$(( SECONDS - _mh0 ))
 check "#606 a hanging claude does not hold the pull for its whole hang" "[ '$_mh' -lt \$(( _mhang / 2 )) ]"
 check "#606 and the pull says the check did not answer in time" "line_has \"\$out_606h\" 'could not check' 'within'"
-# The same bound holds the per mod validation, which is the other question asked.
+# The same bound holds the per mod validation, which is the other question asked. One bound covers
+# both calls, so with a 1s bound the LIST had to answer inside 1s before the validation was reached:
+# at load 9.79 on 2026-11-06 it did not, the pull said the list timed out, and no mod was named (#2091, reproduced
+# by slowing the list past the bound). So the clock is SET rather than waited out (L290): the bound
+# is far longer than the list can take, and the validation stub reads the alarm it inherited across
+# exec (proving SYNC_CLAUDE_CHECK_TIMEOUT reached it, not no bound and not the 30s default) and then
+# fires it at once, which is what the bound does to a validation that hangs.
 MDHANGV="$WORK/mods-hanging-validate"
-printf '#!/bin/bash\ncase "$1 $2" in "plugin list") echo "[{\\"id\\":\\"alpha-mod@inline\\",\\"enabled\\":true}]" ;; "plugin validate") exec sleep 60 ;; esac\n' > "$MDHANGV"; chmod +x "$MDHANGV"
-out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+cat > "$MDHANGV" <<'HANGV'
+#!/bin/bash
+case "$1 $2" in
+  "plugin list") echo '[{"id":"alpha-mod@inline","enabled":true}]' ;;
+  "plugin validate") exec perl -e 'my $left = alarm 0; if ($left <= 60) { print "error: bound left ${left}s\n"; exit 3 } kill "ALRM", $$; sleep 60' ;;
+esac
+HANGV
+chmod +x "$MDHANGV"
+out_606hv="$(CLAUDE_HOME="$MDHB" SYNC_REPO="$MDBB" SYNC_CLAUDE_BIN="$MDHANGV" SYNC_CLAUDE_CHECK_TIMEOUT=120 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#606 hanging validation pull: $out_606hv"
 check "#606 a hanging validation is stopped and named for its mod" "line_has \"\$out_606hv\" 'alpha-mod' 'within'"
 # The match is on the `<name>@inline` id measured on 2.1.288. A list with no inline plugin at all is
 # either every mod failing to load or a renamed format, and nothing here can tell which: one line
