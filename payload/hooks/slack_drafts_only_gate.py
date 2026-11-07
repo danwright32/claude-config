@@ -693,29 +693,36 @@ class Judge:
         an argument the script reads, not code the program runs, so text in it naming an endpoint is
         not a send. It is still read when the script can act on it as more than data (acts): sending a
         request, whose address the file can hold, or running code, which the file can be."""
-        script, acts = None, None
+        # Which of the files read as code is the script is the same option table question, so a data
+        # file is judged against ALL of them, wherever each stands: in `node --require ./a.js post.mjs
+        # msg.json` the script is post.mjs, not the first file (lessons review, 2026-11-07).
+        code, data = [], []
         for w in words[1:]:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
                 continue
             path = self.resolve(w, d)
-            if script and os.path.isfile(path) and self.data_shaped(path):
-                if acts is None:
-                    acts = self.acts(script[1], d, shell_hint, lang) or ""
-                if not acts:
-                    continue  # data the script reads; it neither sends nor runs what it is handed
-                try:
-                    with open(path, "rb") as f:
-                        hit = MARKER.search(f.read(MAX_FILE).decode("utf-8", "replace"))
-                except OSError:
-                    continue  # unreadable to us is unreadable to the script that would read it
-                if hit:
-                    return f"the script {script[0]} {acts}, and is handed {w}, which names {hit.group(0)}"
+            if not os.path.isfile(path):
+                continue
+            if code and self.data_shaped(path):
+                data.append((w, path))
                 continue
             reason = self.script(w, d, depth, shell_hint, lang)
             if reason:
                 return reason
-            if script is None and os.path.isfile(path):
-                script = (w, path)
+            code.append((w, path))
+        for w, path in data:
+            try:
+                with open(path, "rb") as f:
+                    hit = MARKER.search(f.read(MAX_FILE).decode("utf-8", "replace"))
+            except OSError:
+                continue  # unreadable to us is unreadable to the script that would read it
+            if not hit:
+                continue
+            for script_word, script_path in code:
+                acts = self.acts(script_path, d, shell_hint, lang)
+                if acts:
+                    return f"the script {script_word} {acts}, and is handed {w}, which names {hit.group(0)}"
+            # Data every script beside it only reads; none sends or runs what it is handed.
         return None
 
     @staticmethod

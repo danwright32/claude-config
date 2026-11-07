@@ -529,6 +529,10 @@ printf '%s\n' 'const fs = require("fs");' 'const m = JSON.parse(fs.readFileSync(
 run_bash "node $T/ds/post.mjs $T/ds/msg.json"
 refused "a script that sends a request, handed a data file naming the endpoint"
 says "that refusal names the data file" "msg.json"
+# A file read as code before the script (an option's value) must not stand in for the script when
+# judging what the script does with its data (lessons review, 2026-11-07).
+run_bash "node --require $T/ds/titles.js $T/ds/post.mjs $T/ds/msg.json"
+refused "a sending script behind an option's file value, handed a data file naming the endpoint"
 printf '%s\n' 'import json, sys, urllib.request' 'm = json.load(open(sys.argv[1]))' \
   'urllib.request.urlopen(urllib.request.Request(m["url"], data=m["text"].encode()))' > "$T/ds/post.py"
 run_bash "python3 $T/ds/post.py $T/ds/msg.json"
