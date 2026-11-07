@@ -2,7 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ANSWER_MS, DEADLINE_MS, DECIDE_TOOL, ISSUE_LIMIT, ISSUES_TTL_MS, SWEEP_MS, UNREAD_TTL_MS } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
-import { APP, ERRORS, HOME, ISSUES, KIT, OLD_QKEY, QKEY, REASON, SHA, SLACK, T0, askDan, bash, decide, edit, ghLists, refusal, said, world, type R } from './world.ts'
+import { APP, ERRORS, HOME, ISSUES, KIT, OLD_QKEY, QKEY, REASON, SHA, SLACK, T0, TRACKED, askDan, bash, decide, edit, ghLists, refusal, said, world, type Issue, type R } from './world.ts'
 
 // What mod-kit's reader of a shell command ($.modkit.writes) answered for each command these tests
 // send, measured from the real reader with cwd /w/app (#2142). The world answers $.modkit.writes
@@ -34,6 +34,13 @@ const WRITES: Record<string, unknown> = {
   'echo hi > "$OUT/a729192.ts"': { files: [{ word: '$OUT/a729192.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a729192.ts' }] },
   "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'src', path: '/w/app/src', edits: true, tree: true }], changes: [], unnamed: [] },
   "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
+  // #2321: a folder handed to a script, or a copy's folder destination, named by its path alone.
+  'python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'python3 rewrite.py docs': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'docs', path: '/w/app/docs' }] }] },
+  'python3 rewrite.py gen': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'gen', path: '/w/app/gen' }] }] },
+  'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
+  'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }], changes: [], unnamed: [] },
+  'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true }], changes: [], unnamed: [] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -604,8 +611,15 @@ test('a write chained with a findings note is still judged, and a copy of the he
   const w = world($, on)
   expect(refusal(await bash($ as never, w, `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`))).toContain('which writes src/lib/slack.ts')
   expect(refusal(await bash($ as never, w, `${NOTE} && echo hi > "$OUT/big.ts"`, {}, 'b2'))).toContain('$OUT/big.ts')
-  expect(refusal(await bash($ as never, w, COPY_NOTE, {}, 'b3'))).toContain('cannot be read')
-  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('$RECORD')
+  // Each is handed `.`, the checkout itself, so since #2321 it is held first for the held files under it;
+  // once that file is decided, the append is still held for its unreadable word.
+  expect(refusal(await bash($ as never, w, COPY_NOTE, {}, 'b3'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('which writes src/big.ts.')
+  await decide($ as never, { call: 'b4', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, APPEND, {}, 'b5'))
+  expect(why).toContain('which writes src/lib/slack.ts.')
+  await decide($ as never, { call: 'b5', decision: 'proceed', reason: REASON })
+  expect(refusal(await bash($ as never, w, APPEND, {}, 'b6'))).toContain('$RECORD')
 })
 
 // #2142 lessons review: a write reaching a whole folder (find -exec over it, git putting a folder
@@ -640,6 +654,84 @@ test('a write reaching a folder whose files cannot be listed is held as unread, 
   expect(why).toContain('src reaches every file under it')
   expect(why).toContain('cannot be listed')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src', decision: 'held' })
+})
+
+// #2321: a folder handed to a script, or a folder a copy lands in, reaches every file under it, as a
+// write marked `tree` does: mod-kit names it by its path alone, so the disk says it is a folder.
+const SCRIPT_SRC = 'python3 rewrite.py src/'
+// gen/f1.ts .. gen/fN.ts on the default branch, with an open structural issue naming gen/f1.ts, so
+// every file in gen is one the area check could hold.
+const GEN_ISSUE: Issue = { number: 50, title: 'Untangle the generator', body: 'gen/f1.ts does everything', labels: [{ name: 'tech-debt' }, { name: 'priority-p2' }] }
+const genWorld = ($: unknown, on: Parameters<typeof world>[1], n: number) => {
+  const w = world($, on, { issues: [...ISSUES, GEN_ISSUE] })
+  w.ctl.folders.push(`${APP}/gen`)
+  const gen = Array.from({ length: n }, (_, i) => `gen/f${i + 1}.ts`)
+  w.ctl.tracked = [TRACKED, ...gen].join('\n')
+  for (const g of gen) w.files[`${APP}/${g}`] = 'x'
+  return w
+}
+
+test('a script handed a folder holding a held file is held, naming the file, and goes ahead once each is decided (#2321)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, SCRIPT_SRC))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b2'))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).toContain('#41 (p2, tech-debt)')
+  await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b3')).result).toBe('done')
+  expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
+})
+
+test('a script handed a folder holding no held file, or a folder not on the disk, runs judging no file (#2321)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, 'python3 rewrite.py docs')).result).toBe('done')
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a recursive copy into a folder holding a held file is held, naming the file: rsync, and cp -R into dir/. (#2321)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, 'rsync -a lib/ src/'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, 'cp -R lib/. src/', {}, 'b2'))).toContain('which writes src/big.ts.')
+})
+
+test('a script handed a folder whose files cannot be listed is held as unread, saying why (#2321)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.slowLogOnce = true
+  const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: SCRIPT_SRC } as never)
+  await w.clock.advance(DEADLINE_MS + 1000)
+  const why = refusal((await p) as R)
+  expect(why).toContain('src/ reaches every file under it')
+  expect(why).toContain('cannot be listed')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/', decision: 'held' })
+})
+
+test('a script handed a path whose kind cannot be read is held as unread, since it may be a folder (#2321)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.statFails.push(`${APP}/src/locked`)
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
+  expect(why).toContain('src/locked may be a folder')
+  expect(why).toContain('permission denied')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/locked', decision: 'held' })
+})
+
+test('a folder holding 25 files that could be held has each judged one by one, naming the file (#2321)', KIT, async ($, on) => {
+  const w = genWorld($, on, 25)
+  expect(refusal(await bash($ as never, w, 'python3 rewrite.py gen'))).toContain('which writes gen/f1.ts.')
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a folder holding 26 files that could be held is held whole as unread, judging none one by one, and runs once decided (#2321)', KIT, async ($, on) => {
+  const w = genWorld($, on, 26)
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py gen'))
+  expect(why).toContain('gen reaches every file under it, and 26 files under it could be held, more than the 25 the area check judges one by one')
+  expect(why).toContain('gen/f1.ts')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
 })
 
 test("a subagent's shell write is held for itself, where its loop is known", KIT, async ($, on) => {

@@ -629,9 +629,10 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
   // `shown`, where the caller knows it, is the word as the command spells it (#752).
-  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true }, shown?: string) => {
-    // Where a find -exec's {} stood, the write reaches every file under that folder (#760).
-    const tree = foundRoots.includes(word)
+  const add = (word: string, path: string | undefined, extra?: { sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }, shown?: string) => {
+    // Where a find -exec's {} stood, the write reaches every file under that folder (#760), as does
+    // a copy of what a folder holds (#2372).
+    const tree = foundRoots.includes(word) || !!extra?.tree
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const key = path ?? `word:${word}`
     // A path written twice is kept once, a tree on either keeping the tree, as a change does.
@@ -944,6 +945,17 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
         // The word keeps the folder as written, so one reached through a variable still says so (#752).
         const folder = (asWritten.get(into) ?? into).replace(/\/+$/, '')
         for (const s of sources) add(`${into.replace(/\/+$/, '')}/${baseOf(s)}`, intoPath ? `${intoPath}/${baseOf(s)}` : undefined, { sources: absAll([s]) }, `${folder}/${baseOf(s)}`)
+      }
+      // macOS cp (BSD) copies what a source ending in a slash holds into the destination, and makes
+      // the destination as that copy where it does not exist, so either way the write reaches every
+      // file under the destination: a tree, as a find -exec's folder is (#2372). GNU cp takes the
+      // slash as nothing; which cp runs is not in the words, so the folder under its own name, read
+      // above, is kept beside the tree. BSD cp has no -t, so a copy given one is GNU's, read above.
+      if (name === 'cp' && copied && typeof intoOpt !== 'string') {
+        const dest = (into ?? ops[ops.length - 1]) as string
+        const contents = sources.filter(s => s.endsWith('/'))
+        const word = dest.replace(/\/+$/, '') || '/'
+        if (contents.length) add(word, abs(dest), { sources: absAll(contents), tree: true }, (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/')
       }
       // mv takes each source away whole: a folder with everything under it, as rm -r does (the
       // collision guard's reading, lessons review of #691).
