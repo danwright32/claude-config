@@ -757,6 +757,43 @@ test('a write the reader cannot follow is held when the command names a look cha
   expect(w.ran.length).toBe(1)
 })
 
+// #2171, Dan, 2026-11-04: a write to a variable every assignment gives bare `mktemp` or `mktemp -d`
+// names a new file outside every screen path, so a command reading a screen file into one runs. Every
+// other way the variable may name a screen file is still held, each listed, so a looser guard shows
+// which case it lets through.
+test('#2171: a write to a bare mktemp file runs beside a screen file read, and every other unfollowed write is held', withKit, async ($, on) => {
+  world($, on)
+  for (const command of [
+    'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; diff "$T" app/page.tsx',
+    'cd /w/slate && T=$(mktemp); wc -l $(ls app/page.tsx) > "$T"',
+    'cd /w/slate && T="$(mktemp)"; cat app/page.tsx > ${T}',
+    'cd /w/slate && D=$(mktemp -d); git show HEAD:app/page.tsx > "$D"',
+  ])
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  const passed: string[] = []
+  for (const command of [
+    'cd /w/slate && ls app/*.tsx > list; T=$(head -1 list); echo x > "$T"',
+    'cd /w/slate && OUT=$(ls app/*.tsx | head -1); echo x > "$OUT"',
+    'cd /w/slate && T=$(mktemp -t x); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp app/x.XXXX); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp -p app); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); T=$(head -1 list); cat app/page.tsx > "$T"',
+    'cd /w/slate && TMPDIR=app T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && PATH=./bin:$PATH; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && path=(./bin $path); T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && path+=(./bin); T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && typeset path; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && mktemp(){ echo app/page.tsx; }; T=$(mktemp); cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); T=app/page.tsx : ; cat app/page.tsx > "$T"',
+    'cd /w/slate && wc -l $(ls app/page.tsx) > "$(mktemp)"',
+    'cd /w/slate && T=`mktemp`; cat app/page.tsx > "$T"',
+    'cd /w/slate && T=$(mktemp); read T < list; cat app/page.tsx > "$T"',
+    'cd /w/slate && cat app/page.tsx > "$T"',
+  ])
+    if (!refusalOf(await call($, { tool: 'Bash', command }))) passed.push(command)
+  expect(passed).toEqual([])
+})
+
 test('shell writes to a look changing file are caught: redirects, sed in place, copies, removals and inline scripts', withKit, async ($, on) => {
   const w = world($, on)
   for (const command of [

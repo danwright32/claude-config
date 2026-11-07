@@ -88,10 +88,12 @@ REFUSING=(
 
 # Never refuses: rtk-rewrite.sh rewrites a command for rtk and passes every one through, and
 # lessons-advisory.sh hands the push its matching lessons as context and exits 0 by design (its
-# header: "ADVISORY, never blocking").
+# header: "ADVISORY, never blocking"). read-only-query-allow.sh only approves a read or says
+# nothing, so a crash or a timeout must leave the call to the usual check, never refuse it (#2343).
 ADVISORY=(
   rtk-rewrite.sh
   lessons-advisory.sh
+  read-only-query-allow.sh
 )
 
 . "$DIR/lib/settings-file.sh" 2>/dev/null || { echo "FAIL: lib/settings-file.sh is missing beside this suite"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
