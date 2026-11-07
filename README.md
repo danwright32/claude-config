@@ -179,9 +179,18 @@ alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook
 and leaves it to the guard. A session started before this was installed, or one whose PATH does not
 carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
 not checked until a new session starts: refusing those scripts instead would stop
-`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
-covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
-extensions.
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Programs gh starts
+itself (#2207): the real gh runs with the guard first on PATH, so a gh that a shell alias's command,
+a pager, an editor or git runs is judged too; a gh extension (by name, through an alias, or with
+`gh extension exec`), the Copilot CLI that `gh copilot` starts, and an alias naming another alias
+(which gh 2.89.0 does not expand) are refused, since an extension or the Copilot CLI can write to
+GitHub with no gh in between. Text gh posts that is not on its command line (#2326), for a public
+repository, in the hook and the guard alike: `--editor` is refused, and so is `gh pr create --fill`
+unless both a title and a body are given; `gh pr create` with no `--head` is judged with what it may
+push (the branch's name and the messages of the commits no remote holds); `gh repo create --push`
+with the whole history it sends, unless the new repository is private or internal; and `gh repo
+sync` into a public repository from a `--source` that is not public is refused. Still not covered:
+gh run by its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -1647,7 +1656,12 @@ new and the refusal says why.
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
-(claude-config#851). It updates the branch, starts the new head's lessons review alongside its
+(claude-config#851). For a log of the run, add `--log=<file>` rather than piping it into `tee`: a
+background command reports its pipeline's last exit, so `... 2>&1 | tee <log>` reads as exit 0
+however the helper ended, and on 2026-11-05 ten helpers stopped by a network outage were each
+reported "completed (exit code 0)", the same as a merge (claude-config#2304). With `--log` the
+helper appends what it says to the file itself, beside its own output, and ends the file with its
+exit and what it means. It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
@@ -1793,9 +1807,14 @@ than three hours, and three of them each ran out with it still moving and were q
 at the back. So it counts only time in which nothing ahead advanced (the turn passing to another
 ticket, or one ahead leaving), a run keeps its place while the line moves, and it says once, when it
 passes the budget, that it is keeping its place and why. It stops as "nothing ahead of it in line has
-moved for 3h" when the line stood still, and as the ceiling, "its 9h ceiling in line
-(`MWR_LINE_MAX_SECONDS`), with the line still moving", when a line that keeps moving has still not
-reached it in nine hours (room for about 27 merges of 20 minutes; a setting). While it waits in line
+moved for 3h" when the line stood still. A line that keeps moving never ends a run (claude-config#2351):
+the nine hour ceiling #1697 also put on the whole wait, counted from the run's start, ended 11 helpers
+1 to 3 places from the front on 2026-11-06 with the line still moving, and each ran again at the back
+behind about 20 others, so the pull requests that had waited longest merged last. That ceiling is gone,
+and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks it took in line up to
+each move of the line. A wait still ends: nobody can join a line ahead of a run, so it can move only as
+many times as there were pull requests ahead, and the line standing still for three hours ends it.
+While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
 still taken at once: a line of 15 waiters read once a minute was about 900 of the account's 5,000
@@ -1804,9 +1823,10 @@ decided by the line budget alone while it waits (claude-config#1975): on 2026-10
 passed over, kept its place in a line that was still moving, and stopped in the same second "at the
 end of its 180m deadline from taking the turn", because the deadline went on counting while it
 waited. Now the deadline counts only time a run holds the turn, it takes the turn back with what it
-has not held, and its time in line, which the ceiling measures, leaves out the time it held the
-turn. Neither budget restarts, so a run still lasts at most twelve hours: nine in line and three
-holding the turn. And
+has not held, and its time in line leaves out the time it held the turn. Time holding the turn is
+at most the three hour deadline; time in line has no fixed longest since claude-config#2351, ending
+only when the line stands still for its line budget, so a run behind a very long moving line can
+outlast is-it-live's 24 hour window for a background merge. And
 each time the turn comes to a run it first reads how long the repository's recent check runs took
 (the longest of the ten most recent heads among its latest successful pull request runs, each head
 timed from its first run created to its last finished; claude-config's took 15 to 23 minutes on
@@ -1827,7 +1847,19 @@ made and then failed before GitHub's answer arrived (a reset, a read timeout, a 
 "lost the connection to GitHub N times"; neither as GitHub refusing or being unable to show
 something. "error connecting to" stopped #1640 at 41 minutes on 2026-10-24, and `dial tcp ...:
 connect: can't assign requested address` (no local port left to connect from) stopped #1732 at once
-on 2026-10-25, with #1675 installed, because only the first wording was known. The gate's own reads are asked again the same way,
+on 2026-10-25, with #1675 installed, because only the first wording was known. When every try of
+those four failed on the network, the helper does not stop: it keeps asking every 20 seconds,
+saying "Waiting on the network" with how long about every two minutes, and carries on where it was
+once GitHub answers, for up to `MWR_NET_WAIT_SECONDS` (3600, a setting) from when the read began,
+after which it stops saying how long it waited (claude-config#2303). On 2026-11-05 an outage of
+about 40 minutes stopped all ten queued helpers after their four tries. A round with any answer
+GitHub gave in it, its server failing or a refused sign in included, stops as before. The merge
+itself is never asked again blindly: when GitHub answers it "Something went wrong while executing
+your query", the pull request is read back first, a merge that landed is reported as merged, and one
+still open at the same head goes round again `MWR_MERGE_RETRY_SECONDS` (120) later, where every gate
+is asked again and the merge is pinned to the head they allow, `MWR_MERGE_TRIES` (3) times in all,
+then stops naming the error (claude-config#2289; on 2026-11-05 that answer stopped one merge three
+times in three minutes, and a run five minutes later merged it). The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
 and a gate whose read the network failed on every try refuses in those same words, never as GitHub
 refusing or not answering (claude-config#1728).
@@ -5526,9 +5558,11 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the longest the helper can run, its nine
-hour ceiling in line for a turn plus its three hour deadline from taking it, #1697, a ratio the
-helper's suite checks, #1271, #1604) and owed once GitHub says it merged. That question is mod-kit's
+each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with
+the line standing still plus its three hour deadline from taking the turn, a ratio the helper's
+suite checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run
+behind a very long moving line can outlast it) and owed once GitHub says it merged. That question
+is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
 command named, else the one GitHub's link for the pull request named when the helper started (in the
