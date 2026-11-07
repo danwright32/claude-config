@@ -1564,8 +1564,21 @@ holding the guard's export; a refusal does not use the notice up. Gh aliases (Da
 judged as what they expand to, read from `gh alias list`. The guard refuses an alias whose list it
 cannot read (cannot tell); the command hook passes it as it always did, consistent with keeping an
 unguarded session's checks unchanged, and in a guarded session the guard refuses it when it runs.
-Not covered, and said so: gh run by its absolute path, a script that rewrites PATH, curl or an API
-library, and gh extensions.
+Not covered, and said so: gh run by its absolute path, a script that rewrites PATH, and curl or an
+API library.
+
+Programs gh starts itself (#2207). The guard first took itself off PATH so its own reads reached the
+real gh, and handed the real gh that PATH, so a gh a shell alias's command ran was the real one,
+unjudged. Measured on gh 2.89.0 in an isolated config folder: a shell alias's command and an
+extension both get gh's own PATH unchanged, and gh expands an alias one level only (an alias naming
+another fails as an unknown command). So the real gh now gets the guard back first on PATH (bin/gh
+puts it there for the commands it lets skip the judge too), which covers a gh run by a shell alias,
+a pager, an editor, a browser command, git or its hooks. What the guard cannot stand in front of is
+refused: an extension (a word that is neither gh's own command nor an alias, an alias to one, or
+`gh extension exec`), since a compiled extension calls the API with no gh at all; `gh copilot`, which
+starts the Copilot CLI, an agent that writes to GitHub itself; and an alias naming another alias, as
+cannot tell. gh's own commands are listed with every other name gh answers to, read from 2.89.0's
+help, so a short name such as `gh cs` is never taken for an extension.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

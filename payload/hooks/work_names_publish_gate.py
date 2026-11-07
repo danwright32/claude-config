@@ -59,7 +59,12 @@ does not put the guard first on PATH, keeps exactly the checks it had: refusing 
 stop merge-when-ready.sh, so every merge on both Macs, until each session restarted. The command
 hook tells it once (a stamp per session id under WN_SCRIPTS_NOTICE_DIR) that gh writes inside
 scripts are not checked until a new session starts. Not covered at all: gh run by its absolute path,
-a script that rewrites PATH, curl or an API library, and gh extensions.
+a script that rewrites PATH, and curl or an API library.
+
+PROGRAMS GH STARTS (claude-config#2207). The real gh is handed the guard first on PATH, so a gh that
+a shell alias's command, a pager, an editor or git runs meets the guard again. What the guard cannot
+stand in front of is refused (program_refusal): a gh extension, gh copilot, and an alias naming
+another alias.
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
 read by lib/work-names.py;
@@ -78,14 +83,24 @@ sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 
+_GUARD_DIR = os.path.realpath(os.path.join(_HERE, "bin"))
+
+
 def _without_guard(path):
     """PATH without the guard on gh (bin/gh, claude-config#2183), so the gh this gate runs for its own
     reads is the real one: through the guard, every one of them would start this gate again."""
-    guard = os.path.realpath(os.path.join(_HERE, "bin"))
-    return ":".join(d for d in (path or "").split(":") if d and os.path.realpath(d) != guard)
+    return ":".join(d for d in (path or "").split(":") if d and os.path.realpath(d) != _GUARD_DIR)
 
 
-os.environ["PATH"] = _without_guard(os.environ.get("PATH"))
+def _with_guard_first(path):
+    """PATH with the guard first, for the real gh the guard hands a command to (claude-config#2207).
+    gh runs a shell alias's command, an extension, a pager, an editor and git with its own PATH
+    (measured on gh 2.89.0), so a gh any of them runs meets the guard again, not the real gh."""
+    return ":".join([_GUARD_DIR] + [d for d in _without_guard(path).split(":") if d])
+
+
+_CALLER_PATH = os.environ.get("PATH")
+os.environ["PATH"] = _without_guard(_CALLER_PATH)
 
 
 def _load(name, path):
@@ -255,12 +270,52 @@ def api_writes(command, cwd):
     return out
 
 
-# gh's own top level commands. gh never lets an alias shadow one, so only a first word outside this set
-# can be an alias (claude-config#2183). A word missing here is only asked about as an alias, never
-# passed unjudged: an alias list that does not hold it means it is not one.
-BUILTIN = frozenset("""accessibility agent-task alias api attestation auth browse cache codespace completion
-config copilot extension gist gpg-key help issue label licenses org pr preview project release repo
-ruleset run search secret ssh-key status variable version workflow""".split())
+# gh's own top level commands, with the other names gh answers to for them, its help topics, its hidden
+# credits command and the completion commands of the library it is built on (each read from gh 2.89.0:
+# gh help, the ALIASES of each command's help, and `gh <word> --help`). gh never lets an alias or an
+# extension shadow one, so only a first word outside this set can be an alias (claude-config#2183) or
+# an extension (#2207). A word missing here is asked about as an alias and, when it is not one, refused
+# as an extension, never passed unjudged.
+BUILTIN = frozenset("""accessibility a11y actions agent-task agent-tasks agent agents alias api attestation at
+auth browse cache codespace cs completion config copilot credits environment exit-codes extension
+extensions ext formatting gist gpg-key help issue label licenses mintty org pr preview project reference
+release repo ruleset rs run search secret ssh-key status variable version workflow __complete
+__completeNoDesc""".split())
+# The command whose exec subcommand runs an extension by name, under each of its names.
+EXTENSION = frozenset(("extension", "extensions", "ext"))
+# What gh copilot takes without starting the Copilot CLI.
+COPILOT_OWN = frozenset(("--help", "-h", "--remove"))
+CANNOT_SEE = ("a program that can write to GitHub with no gh in between for the guard to stand in front "
+              "of, so whether it names a work organisation or repository cannot be told")
+
+
+def program_refusal(args):
+    """The reason, when gh given args (its own name left off, any alias already expanded) would start a
+    program the guard cannot see into, else None (claude-config#2207).
+
+    An extension (a word that is neither gh's own command nor an alias, or gh extension exec) and the
+    Copilot CLI that gh copilot starts can each write to GitHub through the API with no gh the guard
+    could judge, so both are refused. Any gh a program gh starts runs meets the guard again, since the
+    real gh is handed the guard first on PATH, so those need nothing here."""
+    if not args or args[0].startswith("-"):
+        return None
+    word = args[0]
+    if word in EXTENSION:
+        sub = next((a for a in args[1:] if not a.startswith("-")), None)
+        if sub == "exec":
+            return "gh %s exec runs a gh extension, %s." % (word, CANNOT_SEE)
+        return None
+    if word == "copilot":
+        if args[1:] and all(a in COPILOT_OWN for a in args[1:]):
+            return None
+        return "gh copilot starts the GitHub Copilot CLI, %s." % CANNOT_SEE
+    if word in BUILTIN:
+        return None
+    if word in aliases():
+        return ("gh %s is another gh alias, which gh does not expand inside an alias (measured on gh "
+                "2.89.0), so what it runs cannot be told." % word)
+    return ("gh %s is neither one of gh's own commands nor a gh alias, so it runs a gh extension, %s."
+            % (word, CANNOT_SEE))
 ALIAS_LINE = re.compile(r"^([^\s:]+): (.*)$")
 _ALIASES = []
 
@@ -312,8 +367,8 @@ def aliases():
 
 
 def expand_alias(args):
-    """-> (alias name, the gh command text it runs) when args (gh's arguments, the program's own name
-    left off) run an alias, else None.
+    """-> (alias name, the gh command text it runs, gh's arguments it runs or None for a shell alias)
+    when args (gh's arguments, the program's own name left off) run an alias, else None.
 
     gh's own expansion: $1, $2 ... take the arguments after the alias name, and the arguments no
     placeholder took go on the end. A shell alias (`!...`) is the shell command with the arguments
@@ -326,7 +381,7 @@ def expand_alias(args):
         return None
     expansion, rest = table[args[0]], list(args[1:])
     if expansion.startswith("!"):
-        return args[0], expansion[1:] + (" " + shlex.join(rest) if rest else "")
+        return args[0], expansion[1:] + (" " + shlex.join(rest) if rest else ""), None
     extra = []
     for n, a in enumerate(rest, 1):
         if "$%d" % n in expansion:
@@ -337,7 +392,7 @@ def expand_alias(args):
         words = shlex.split(expansion)
     except ValueError as e:
         raise CannotTell("the gh alias %s expands to text that cannot be read (%s)" % (args[0], e))
-    return args[0], shlex.join(["gh"] + words + extra)
+    return args[0], shlex.join(["gh"] + words + extra), words + extra
 
 
 def alias_runs(command):
@@ -455,10 +510,12 @@ def gh_main(real, args):
                       for a in judged]
         try:
             got = expand_alias(judged)
+            starts = program_refusal(judged if got is None else (got[2] or []))
         except CannotTell as e:
             return _refuse("gh %s could be a gh alias, and %s, so what it runs cannot be told."
                            % (judged[0], e))
-        reasons = evaluate(got[1] if got else shlex.join(["gh"] + judged), os.getcwd())
+        reasons = ([starts] if starts else []) + evaluate(got[1] if got else shlex.join(["gh"] + judged),
+                                                          os.getcwd())
     finally:
         if seen is not None:
             os.unlink(seen.name)
@@ -469,7 +526,10 @@ def gh_main(real, args):
         os.dup2(feed.fileno(), 0)
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execv(real, [real] + list(args))
+    # The guard goes back first on PATH for the real gh, so a gh that anything gh starts runs (a shell
+    # alias's command, a pager, an editor, git and its hooks) is judged too (claude-config#2207).
+    env = dict(os.environ, PATH=_with_guard_first(_CALLER_PATH))
+    os.execve(real, [real] + list(args), env)
 
 
 def main():

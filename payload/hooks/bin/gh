@@ -30,18 +30,24 @@ if [ -z "$real" ]; then
 fi
 
 # Judged: any command naming pr, issue or api, and any whose first word is not one of gh's own
-# commands, since that can be a gh alias (the judge expands it, and refuses one it cannot read). The
-# list only lets a command skip the judge; a command missing from it is judged, never passed.
+# commands, since that can be a gh alias (the judge expands it, and refuses one it cannot read) or an
+# extension (refused). The list only lets a command skip the judge; a command missing from it is
+# judged, never passed. extension and copilot are left out on purpose: gh extension exec and gh copilot
+# start programs that can write to GitHub with no gh in between, which the judge refuses (#2207).
 judged=0
 for a in "$@"; do
   case "$a" in pr|issue|api) judged=1; break ;; esac
 done
 case "${1:-}" in
-  ""|-*|accessibility|agent-task|alias|attestation|auth|browse|cache|codespace|completion|config|copilot|\
-  extension|gist|gpg-key|help|label|licenses|org|preview|project|release|repo|ruleset|run|search|secret|\
+  ""|-*|accessibility|agent-task|alias|attestation|auth|browse|cache|codespace|completion|config|\
+  gist|gpg-key|help|label|licenses|org|preview|project|release|repo|ruleset|run|search|secret|\
   ssh-key|status|variable|version|workflow) ;;
   *) judged=1 ;;
 esac
+# The real gh runs with this folder first on PATH, so a gh that anything it starts runs (git and its
+# hooks, a pager, a browser command) meets the guard again, even when this guard was run by its path.
+PATH="$here:${PATH:-}"
+export PATH
 [ "$judged" -eq 1 ] || exec "$real" "$@"
 
 exec python3 "$here/../work_names_publish_gate.py" --gh "$real" -- "$@"

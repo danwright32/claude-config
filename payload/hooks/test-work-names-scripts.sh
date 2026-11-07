@@ -62,10 +62,17 @@ ENVDIR="$WORK/session-env"; mkdir -p "$ENVDIR"
 NOTICED="$WORK/noticed"
 
 # A fake gh: two signed in accounts, a visibility table, the work repository list, and any other call
-# recorded as a POST, with what it read on standard input saved, exiting FAKE_POST_RC.
+# recorded as a POST, with what it read on standard input saved, exiting FAKE_POST_RC. Run with FAKE_RUNS
+# as its first word, it starts FAKE_RUNS_CMD with the PATH it was given, as the real gh starts a shell
+# alias's command, an extension, a pager, an editor or git (measured on gh 2.89.0: a shell alias and
+# an extension both get gh's own PATH unchanged, claude-config#2207).
 cat > "$BIN/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s|%s\n' "${GH_TOKEN:-}" "$*" >> "$FAKE_CALLS"
+if [ -n "${FAKE_RUNS:-}" ] && [ "${1:-}" = "$FAKE_RUNS" ]; then
+  printf 'RAN|%s\n' "$FAKE_RUNS_CMD" >> "$FAKE_CALLS"
+  exec sh -c "$FAKE_RUNS_CMD"
+fi
 case "$1 $2" in
   "auth status")
     printf '{"hosts":{"github.com":[{"login":"alice","active":true,"state":"success"}]}}\n'
@@ -126,7 +133,9 @@ fixture_env(){   # the environment every run shares, then the command
 ALIASES="$WORK/aliases"
 ALIAS_SRC="$ALIASES"
 printf '%s\n' 'cm: issue comment $1 --repo danwright-test/public-notes --body "$2"' 'co: pr checkout' 'lv: pr view' \
-  'ml: |-' '    issue comment 5 --repo danwright-test/public-notes --body "line one' '    the zephyr board"' > "$ALIASES"
+  'ml: |-' '    issue comment 5 --repo danwright-test/public-notes --body "line one' '    the zephyr board"' \
+  "sx: '!python3 inner.py'" 'vx: notely' 'vz: ext exec notely' \
+  'd1: issue comment 5 --repo danwright-test/public-notes --body "$1"' 'd2: d1' > "$ALIASES"
 
 # ================================================================ 1. the guard on PATH
 guard(){   # $1 = a python script body run with the guard first on PATH; output in out, code in rc
@@ -223,6 +232,96 @@ r = subprocess.run(["gh", "pr", "view", "5"])
 sys.exit(r.returncode)'
 check "(control) gh's own commands still run when the aliases cannot be read: rc=$rc $out" [ "$rc" -eq 0 ]
 ALIAS_SRC="$ALIASES"
+
+# Programs gh starts itself (claude-config#2207). gh runs a shell alias's command, an extension, a
+# pager, an editor and git with its own PATH, so the real gh the guard hands a command to must get the
+# guard back first on PATH, or every gh those programs run is the real one, unjudged. An extension, and
+# the Copilot CLI gh copilot starts, can write to GitHub with no gh in between, so they are refused.
+inner(){ printf 'import subprocess, sys\nr = subprocess.run(["gh", "issue", "comment", "5", "--repo", "danwright-test/public-notes", "--body", "%s"])\nsys.exit(r.returncode)\n' "$1" > "$CO/inner.py"; }
+posted_comment(){ grep -q '^POST|issue comment' "$CALLS"; }
+guard_args(){   # like guard, but the script is handed gh's arguments
+  : > "$CALLS"; rm -f "$STDIN_SAVE"
+  printf '%s\n' 'import subprocess, sys' 'r = subprocess.run(["gh"] + sys.argv[1:])' 'sys.exit(r.returncode)' > "$CO/scrub.py"
+  out="$(cd "$CO" && fixture_env PATH="$GUARD_BIN:$BIN:$PATH" python3 scrub.py "$@" 2>&1)"; rc=$?
+}
+
+inner "seen in acme-widgets"
+FAKE_RUNS=sx FAKE_RUNS_CMD="python3 inner.py" guard_args sx
+check "#2207 a gh that a shell alias's command runs meets the guard again, so its comment naming a work repository is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and the comment is never posted" bash -c "! grep -q '^POST|issue comment' '$CALLS'"
+check "#2207 and the name is withheld: $out" lacks "$out" "acme-widgets"
+inner "a clean comment"
+FAKE_RUNS=sx FAKE_RUNS_CMD="python3 inner.py" guard_args sx
+check "#2207 (control) a clean comment from a shell alias's command posts: rc=$rc $out" [ "$rc" -eq 0 ]
+check "#2207 (control) and it was posted" posted_comment
+inner "seen in acme-widgets"
+FAKE_RUNS=pr FAKE_RUNS_CMD="python3 inner.py" guard_args pr view 5
+check "#2207 a gh that a program started by one of gh's judged commands runs (a pager, an editor) meets the guard: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never posts" bash -c "! grep -q '^POST|issue comment' '$CALLS'"
+# FAKE_RUNS is never repo, auth, alias or api: the gate's own reads use those, and would start it.
+FAKE_RUNS=gist FAKE_RUNS_CMD="python3 inner.py" guard_args gist clone 1234
+check "#2207 (control) one started by a command the guard lets skip the judge (git under gh gist clone) meets it too: rc=$rc $out" [ "$rc" -ne 0 ]
+: > "$CALLS"
+out="$(cd "$CO" && FAKE_RUNS=sx FAKE_RUNS_CMD="python3 inner.py" fixture_env PATH="$BIN:$PATH" "$GUARD" sx 2>&1)"; rc=$?
+check "#2207 the guard run by its path, not on PATH, still puts itself in front of what gh starts: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never posts" bash -c "! grep -q '^POST|issue comment' '$CALLS'"
+: > "$CALLS"
+out="$(cd "$CO" && FAKE_RUNS=gist FAKE_RUNS_CMD="python3 inner.py" fixture_env PATH="$BIN:$PATH" "$GUARD" gist clone 1234 2>&1)"; rc=$?
+check "#2207 so does a command it lets skip the judge: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never posts" bash -c "! grep -q '^POST|issue comment' '$CALLS'"
+
+FAKE_RUNS=notely FAKE_RUNS_CMD="echo notely ran" guard_args notely 5
+check "#2207 a gh extension, a word that is neither gh's own command nor an alias, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never runs" bash -c "! grep -q '^RAN|' '$CALLS'"
+check "#2207 and says it is an extension: $out" has "$out" "extension"
+for form in "extension exec notely 5" "ext exec notely" "extensions exec notely" "extension --help exec notely"; do
+  FAKE_RUNS=extension FAKE_RUNS_CMD="echo notely ran" guard_args $form
+  check "#2207 gh $form is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+  check "#2207 and never reaches the real gh" bash -c "! grep -q -F '|$form' '$CALLS'"
+done
+guard_args extension list
+check "#2207 (control) gh extension list still runs: rc=$rc $out" [ "$rc" -eq 0 ]
+FAKE_RUNS=vx FAKE_RUNS_CMD="echo notely ran" guard_args vx
+check "#2207 an alias that runs an extension is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never runs it" bash -c "! grep -q '^RAN|' '$CALLS'"
+check "#2207 and says which alias: $out" has "$out" "gh alias vx"
+guard_args vz
+check "#2207 an alias to gh ext exec is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never reaches the real gh" not_posted
+guard_args d2 "a clean comment"
+check "#2207 an alias naming another alias, which gh 2.89.0 does not expand, is refused as cannot tell: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never reaches the real gh" not_posted
+check "#2207 and says it names another alias: $out" has "$out" "another gh alias"
+guard_args d1 "a clean comment"
+check "#2207 (control) the alias it names, run itself with clean text, runs the real gh: rc=$rc $out" [ "$rc" -eq 0 ]
+FAKE_RUNS=copilot FAKE_RUNS_CMD="echo copilot ran" guard_args copilot -p "open a pull request"
+check "#2207 gh copilot, which starts the Copilot CLI, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2207 and never runs it" bash -c "! grep -q '^RAN|' '$CALLS'"
+FAKE_RUNS=copilot FAKE_RUNS_CMD="echo copilot ran" guard_args copilot
+check "#2207 so is gh copilot with nothing after it: rc=$rc $out" [ "$rc" -ne 0 ]
+guard_args copilot --help
+check "#2207 (control) gh copilot --help, which starts nothing, runs: rc=$rc $out" [ "$rc" -eq 0 ]
+for word in cs a11y actions reference agent rs at credits __complete; do
+  guard_args "$word" --help
+  check "#2207 (control) gh $word, one of gh's own commands under another name, runs the real gh: rc=$rc $out" [ "$rc" -eq 0 ]
+done
+
+# The words bin/gh lets skip the judge must all be gh's own commands to the judge as well, and never
+# a command that starts a program the guard cannot see into.
+skipped="$(python3 - "$GUARD" <<'PY'
+import re, sys
+t = open(sys.argv[1]).read()
+m = re.search(r'case "\$\{1:-\}" in\n(.*?)\) ;;', t, re.S)
+print("\n".join(w for w in re.sub(r"[\s\\]", "", m.group(1)).split("|") if w not in ('""', "-*")) if m else "")
+PY
+)"
+builtin="$(GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
+print("\n".join(sorted(g.BUILTIN)))' "$HERE/work_names_publish_gate.py" 2>&1)"
+check "#2207 bin/gh's skip list was read: $(printf '%s\n' "$skipped" | grep -c .) words" [ "$(printf '%s\n' "$skipped" | grep -c .)" -ge 25 ]
+missing="$(comm -23 <(printf '%s\n' "$skipped" | sort -u) <(printf '%s\n' "$builtin" | sort -u) | tr '\n' ' ')"
+check "#2207 every word bin/gh skips is one of gh's own commands to the judge too: missing ${missing:-none}" [ -z "$missing" ]
+check "#2207 and bin/gh never lets the extension command or gh copilot skip the judge" bash -c "! printf '%s\n' \"\$1\" | grep -q -x -e extension -e extensions -e ext -e copilot" _ "$skipped"
 
 # A folder holding only bash, which the guard's own line asks for: /usr/bin holds a gh on a CI runner,
 # so a PATH of the system folders had a real gh past the guard there and the case never ran.
