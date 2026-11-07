@@ -915,7 +915,8 @@ check "#2303 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$ou
 check_eq "#2303 it waited past the 40 minutes" "yes" "$( [ "$(( $(cat "$ST/clock") - 1000000 ))" -ge 2400 ] && echo yes || echo no)"
 check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 21s reading pull request #7" "$out"
 check "#2303 and how long it will wait" "stops once it has waited 60m (MWR_NET_WAIT_SECONDS)" "$out"
-# Said at 21s and then on the first try at least 2 minutes after the last line, 126s apart at 7s tries.
+# Not measured, worked out from the settings this suite sets: said at the end of the first round, then
+# on the first try at least the heartbeat after the last line, so the last line before 40m is 38m 09s.
 check "#2303 a later line says the wait has grown" "Waiting on the network: GitHub has not been reachable for 38m 09s" "$out"
 check "#2303 saying when GitHub answers again" "GitHub answered again reading pull request #7 after 40m" "$out"
 check_eq "#2303 the four tries before the wait are said as today, three retry lines" "3" "$(printf '%s\n' "$out" | grep -c 'Could not connect to GitHub reading pull request #7 (try')"
