@@ -52,8 +52,8 @@ HERE="${BASH_SOURCE[0]%/*}"; [ "$HERE" != "${BASH_SOURCE[0]}" ] || HERE=.
 CATS="$DCS_LIB/categories"
 W="$DCS_WORK"
 
-ALL="trash caches xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files"
-WALKERS=" build-folders worktrees runaway-logs forgotten-tools large-files "
+ALL="trash caches xcode build-folders docker playwright claude-temp worktrees forgotten-worktrees transcripts runaway-logs forgotten-tools large-files"
+WALKERS=" build-folders worktrees forgotten-worktrees runaway-logs forgotten-tools large-files "
 
 
 LIMIT="${DISK_CLEAN_CATEGORY_SECONDS:-600}"
@@ -142,6 +142,7 @@ run_module() { # <name>
     playwright) bash "$CATS/playwright.sh" scan ;;
     claude-temp) bash "$CATS/claude-temp.sh" scan ;;
     worktrees) bash "$CATS/worktrees.sh" scan ;;
+    forgotten-worktrees) bash "$CATS/forgotten-worktrees.sh" scan ;;
     transcripts) bash "$CATS/transcripts.sh" scan ;;
     runaway-logs) bash "$CATS/runaway-logs.sh" scan ;;
     forgotten-tools) bash "$CATS/forgotten-tools.sh" scan ;;
