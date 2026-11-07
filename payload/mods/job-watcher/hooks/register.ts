@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import { errorText } from './mod-kit/skew.ts'
+import { errorCode, errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 import type { AgentSeen, Jobs, JobsEntry, JobWatch, WatchedJob, WatchedJobKept, WatcherNotice } from '../types/index.d.ts'
 import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, logClause, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
@@ -503,13 +503,14 @@ const runsNow = async ($: EngineInterface, pgid: number | null): Promise<boolean
 
 // Whether a file is not there: the engine's stat rejects naming ENOENT (measured of the real engine
 // 2026-11-01: "<mod>: $.fs.stat(<path>) failed: ENOENT", and EACCES or ENOTDIR for the others). Any
-// other failure says nothing either way, so it is never gone (#2016).
+// other failure says nothing either way, so it is never gone (#2016). Decided by the code, since
+// errorText says the cause in words and no longer spells it (#2150).
 const isGone = async ($: EngineInterface, path: string): Promise<boolean> => {
   try {
     await $.fs.stat(path)
     return false
   } catch (err) {
-    return /\bENOENT\b/.test(message(err))
+    return errorCode(err) === 'ENOENT'
   }
 }
 
