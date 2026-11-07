@@ -6,6 +6,8 @@ import {
   CHANGE,
   GUARD,
   HEADER,
+  LINK_PATHS,
+  REEXPORT_HOPS,
   SCAN_MS,
   SENDER_PREFILTER,
   SOURCE,
@@ -13,12 +15,13 @@ import {
   codeOf,
   editHalves,
   editedText,
-  escapeRe,
+  handsOn,
   heldText,
   inScope,
   isOwnRecord,
   isProseFile,
   languageOf,
+  linkPattern,
   literalsOf,
   mentionsStore,
   plainYamlValues,
@@ -27,10 +30,10 @@ import {
   refusal,
   removalKey,
   renderedProblem,
-  searchTerm,
   shellKey,
   slackMarked,
   templateLines,
+  termsPattern,
   textTemplate,
   wordingChange,
   wordingKey,
@@ -97,13 +100,25 @@ const MOST_READ = 200
 type Found = { sender: string } | { none: true } | { unchecked: string }
 const NONE: Found = { none: true }
 
+// A search ending early with its answer, thrown from a helper and caught at the search's foot.
+class Ended {
+  constructor(readonly found: Found) {}
+}
+const end = (found: Found): never => {
+  throw new Ended(found)
+}
+
 /**
  * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
  * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
  * repository to files holding both the template's name and the word slack or postMessage, so only
- * those are read. Every git call and read is bounded by `deadline`, and anything that cannot be
- * answered in time, or at all, is could not check, so the call is held rather than let through. A
- * file in no repository has nothing to search, so none.
+ * those are read. When none does, the files that hand the template on are followed (#2286): a
+ * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
+ * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
+ * deep; a chain going further is could not check. Every git call and read is bounded by `deadline`,
+ * all of them together read at most MOST_READ files, and anything that cannot be answered in time, or
+ * at all, is could not check, so the call is held rather than let through. A file in no repository has
+ * nothing to search, so none.
  */
 const findSender = async ($: EngineInterface, path: string, deadline: number): Promise<Found> => {
   const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
@@ -124,33 +139,70 @@ const findSender = async ($: EngineInterface, path: string, deadline: number): P
     const [top = '', prefix = ''] = where.stdout.split('\n')
     if (!top) return { unchecked: `git named no repository for ${path}` }
     const templateRel = `${prefix}${path.slice(dir === '/' ? 1 : dir.length + 1)}`
-    ms = await left()
-    if (ms <= 0) return late
-    const argv = ['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--all-match', '-E', '-e', escapeRe(searchTerm(templateRel)), '-e', SENDER_PREFILTER, '--', '.']
-    const hits = await $.process.run(argv, { timeoutMs: ms })
-    if (hits.exitCode === 1) return NONE
-    if (hits.exitCode !== 0 || hits.isStdoutTruncated)
-      return { unchecked: `git grep for the files that send ${path} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` }
-    const rels = hits.stdout.split('\u0000').filter(r => r && r !== templateRel)
-    if (rels.length > MOST_READ) return { unchecked: `${rels.length} files could send ${path} to Slack, more than the ${MOST_READ} the guard reads` }
-    for (const rel of rels) {
-      if ((await left()) <= 0) return late
-      const file = `${top}/${rel}`
-      let text: string
-      try {
-        text = String(await $.fs.read(file))
-      } catch (err) {
-        return { unchecked: `${file}, which could send ${path} to Slack, could not be read: ${message(err)}` }
-      }
-      // Only code or config can send, and only what it runs: a prose file (a CLAUDE.md, a runbook)
-      // or a comment naming the template beside a Slack webhook's name posts nothing (Pivot,
-      // 2026-11-06, where both held ordinary code edits as alert wording).
-      if (isProseFile(rel)) continue
-      const code = codeOf(rel, text)
-      if (slackMarked(code) && refersTo(rel, code, templateRel)) return { sender: file }
+    // The files git grep lists for `what`, the template itself left out; none is an empty list.
+    const grep = async (what: string, args: string[]): Promise<string[]> => {
+      const ms = await left()
+      if (ms <= 0) end(late)
+      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', ...args], { timeoutMs: ms })
+      if (hits.exitCode === 1) return []
+      if (hits.exitCode !== 0 || hits.isStdoutTruncated)
+        end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+      return hits.stdout.split('\u0000').filter(r => r && r !== templateRel)
     }
-    return NONE
+    // Every file read in this search, so a file listed at two levels is read once and counted once.
+    const texts = new Map<string, string>()
+    const budget = (rels: string[], could: string) => {
+      const reads = texts.size + rels.filter(r => !texts.has(r)).length
+      if (reads > MOST_READ) end({ unchecked: `${reads} files could ${could}, more than the ${MOST_READ} the guard reads` })
+    }
+    const textOf = async (rel: string, could: string): Promise<string> => {
+      if ((await left()) <= 0) end(late)
+      const known = texts.get(rel)
+      if (known !== undefined) return known
+      let text = ''
+      try {
+        text = String(await $.fs.read(`${top}/${rel}`))
+      } catch (err) {
+        end({ unchecked: `${top}/${rel}, which could ${could}, could not be read: ${message(err)}` })
+      }
+      texts.set(rel, text)
+      return text
+    }
+    const sends = `send ${path} to Slack`
+    const handsOnTo = `hand ${path} on to the file that sends it`
+    // The template, then each level of files handing the last level on, the template never again.
+    const seen = new Set([templateRel])
+    let level = [templateRel]
+    for (let hop = 0; ; hop++) {
+      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
+      budget(rels, sends)
+      for (const rel of rels) {
+        // Only code or config can send, and only what it runs: a prose file (a CLAUDE.md, a runbook)
+        // or a comment naming the template beside a Slack webhook's name posts nothing (Pivot,
+        // 2026-11-06, where both held ordinary code edits as alert wording).
+        if (isProseFile(rel)) continue
+        const code = codeOf(rel, await textOf(rel, sends))
+        if (slackMarked(code) && level.some(t => refersTo(rel, code, t))) return { sender: `${top}/${rel}` }
+      }
+      const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
+      budget(links, handsOnTo)
+      const next: string[] = []
+      for (const rel of links) {
+        // Judged by what it runs, as a sender is, so a comment neither hands the template on nor
+        // stops a file that does from being followed.
+        const code = codeOf(rel, await textOf(rel, handsOnTo))
+        if (!slackMarked(code) && handsOn(rel, code) && level.some(t => refersTo(rel, code, t))) next.push(rel)
+      }
+      if (!next.length) return NONE
+      if (hop === REEXPORT_HOPS)
+        return {
+          unchecked: `${path} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: ${next.map(r => `${top}/${r}`).join(', ')})`,
+        }
+      for (const r of next) seen.add(r)
+      level = next
+    }
   } catch (err) {
+    if (err instanceof Ended) return err.found
     return { unchecked: `the files that could send ${path} to Slack could not be searched: ${message(err)}` }
   }
 }

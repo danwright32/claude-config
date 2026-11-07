@@ -52,8 +52,8 @@ Report what it printed, in plain words, in this order:
 3. Every kind the scan could not measure, by name, stated as unmeasured with the reason it printed
    (timed out, a tool missing, Docker not running), never as zero and never left out, since an
    unmeasured kind may be the large one. A walk that was partial or unmeasured is said the same way,
-   with the kinds that read it (build folders, worktrees, runaway logs, forgotten tools and large
-   files). For a partial walk, name each folder it could not read, as the scan printed them, with
+   with the kinds that read it (build folders, worktrees, worktrees whose repository is gone,
+   runaway logs, forgotten tools and large files). For a partial walk, name each folder it could not read, as the scan printed them, with
    the reason beside each: Operation not permitted is macOS protecting the folder, which Full Disk
    Access usually lifts, and Permission denied is the folder's own permissions, which it does not.
 
@@ -118,10 +118,12 @@ bash ~/.claude/skills/disk-clean/review-check.sh --out <folder> --payload <folde
 
 Then put up one AskUserQuestion confirm picker, the only picker in this flow. Its question names
 what will go, taken from the checker's output and never retyped from memory: each kind with its
-count and total, and under the Trash, Large personal files and Tools not used in 180 days every item
-by path, with its size and any mark it carries (Holds a credential, Removes it from iCloud on every
-device). Say how each goes: Trash entries are deleted for good; Large personal files and Tools not
-used in 180 days are moved to the Trash, which frees nothing until it is emptied; everything else is
+count and total, and under the Trash, Worktrees whose repository is gone, Large personal files and
+Tools not used in 180 days every item by path, with its size, any mark it carries (Holds a
+credential, Removes it from iCloud on every device) and, for a worktree, the date it last changed.
+Say how each goes: Trash entries are deleted for good; Worktrees whose repository is gone, Large
+personal files and Tools not used in 180 days are moved to the Trash, which frees nothing until it
+is emptied (a worktree git has forgotten can still hold work nothing else has); everything else is
 deleted because it regenerates, or, for a log a program holds open, emptied in place. Two options:
 remove them, or keep everything. On keep everything, say nothing was removed and stop.
 
