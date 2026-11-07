@@ -39,7 +39,10 @@ const WRITES: Record<string, unknown> = {
   'python3 rewrite.py docs': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'docs', path: '/w/app/docs' }] }] },
   'python3 rewrite.py gen': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'gen', path: '/w/app/gen' }] }] },
   'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
-  'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }], changes: [], unnamed: [] },
+  // A cp source ending in slash dot copies what lib holds into src, a whole tree (#2396).
+  'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [] },
+  // ditto merges what a source folder holds into its destination whatever the slash, a tree (#2396).
+  'ditto gen/ src/': { files: [{ word: 'src/gen', path: '/w/app/src/gen', sources: ['/w/app/gen'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/gen'], tree: true }], changes: [], unnamed: [] },
   'rsync -a lib/ src/': { files: [{ word: 'src/', path: '/w/app/src', sources: ['/w/app/lib'], mayBeFolder: true }], changes: [], unnamed: [] },
 }
 
@@ -695,6 +698,12 @@ test('a recursive copy into a folder holding a held file is held, naming the fil
   const w = world($, on)
   expect(refusal(await bash($ as never, w, 'rsync -a lib/ src/'))).toContain('which writes src/big.ts.')
   expect(refusal(await bash($ as never, w, 'cp -R lib/. src/', {}, 'b2'))).toContain('which writes src/big.ts.')
+})
+
+test('a ditto into a folder holding a held file is held, naming the file, though the slash reads like cp (#2396)', KIT, async ($, on) => {
+  const w = world($, on)
+  // Read like cp it would write src/gen, which is not there, so nothing held would be judged.
+  expect(refusal(await bash($ as never, w, 'ditto gen/ src/'))).toMatch(/which writes src\/(big|lib\/slack)\.ts\./)
 })
 
 test('a script handed a folder whose files cannot be listed is held as unread, saying why (#2321)', KIT, async ($, on) => {

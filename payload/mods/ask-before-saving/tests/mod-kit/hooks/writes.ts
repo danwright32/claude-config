@@ -951,9 +951,16 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // file under the destination: a tree, as a find -exec's folder is (#2372). GNU cp takes the
       // slash as nothing; which cp runs is not in the words, so the folder under its own name, read
       // above, is kept beside the tree. BSD cp has no -t, so a copy given one is GNU's, read above.
-      if (name === 'cp' && copied && typeof intoOpt !== 'string') {
+      // A source whose last part is a dot (lib/., or . itself) copies what that folder holds on macOS
+      // and GNU cp alike, -t or not, so it is a tree too (#2396). ditto merges what a source folder
+      // holds into the destination whatever the slash, and the words cannot say which source is a
+      // folder, so every source makes it a tree beside the reading above, which a file source gets
+      // (#2396); ditto -c makes the destination one archive file instead. -c is read only in a cluster
+      // of ditto's own letters, since its old -rsrc holds a c and copies (all measured on macOS).
+      const archive = name === 'ditto' && [...opts.keys()].some(k => /^-[vVXczjxkh]*c[vVXczjxkh]*$/.test(k))
+      if ((name === 'cp' || (name === 'ditto' && !archive)) && copied) {
         const dest = (into ?? ops[ops.length - 1]) as string
-        const contents = sources.filter(s => s.endsWith('/'))
+        const contents = name === 'ditto' ? sources : sources.filter(s => /(^|\/)\.\/*$/.test(s) || (typeof intoOpt !== 'string' && s.endsWith('/')))
         const word = dest.replace(/\/+$/, '') || '/'
         if (contents.length) add(word, abs(dest), { sources: absAll(contents), tree: true }, (asWritten.get(dest) ?? dest).replace(/\/+$/, '') || '/')
       }
