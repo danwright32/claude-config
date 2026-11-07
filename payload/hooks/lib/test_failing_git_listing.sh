@@ -15,7 +15,7 @@
 
 failing_git_listing(){
   local dir="$1" which="${2:-committed}" real pattern
-  real="$(command -v git)" || return 1
+  real="$(command -v git 2>/dev/null)" || return 1
   case "$which" in
     committed) pattern='*" diff --name-only --diff-filter=ACMR "*" HEAD "' ;;
     staged)    pattern='*" diff --cached --name-only --diff-filter=ACMR "' ;;

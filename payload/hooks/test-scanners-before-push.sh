@@ -72,8 +72,8 @@ export HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 
 # --- THE PARTS OF THIS SUITE THAT READ THE CHECKOUT IT SITS IN, not a fixture (claude-config#2232).
 #     A copy of this suite run from a folder that is no checkout, as a builder ran one for #2206,
-#     cannot run them, and they said so only in a line the runner does not read, so 12 checks fell
-#     out of the count with no failure (L288). Each part now says so in the runner's one agreed
+#     cannot run them, and they said so only in a line the runner does not read, so their checks
+#     fell out of the count with no failure (L288). Each part now says so in the runner's one agreed
 #     line, SUITE-PART-UNMEASURED, which it counts and names. They are one function, ahead of every
 #     fixture, so SCANNERS_SUITE_PART=checkout runs them alone, and the case after the call further
 #     down runs them that way from a plain folder to see the lines.
@@ -982,7 +982,7 @@ o1734="$(fire "$R1734" "git push")"; c1734=$?
 #     from a copy in a plain folder, where none of them can run: each must say so on its own
 #     SUITE-PART-UNMEASURED line, which the runner counts, and add no pass and no failure
 #     (claude-config#2232). Their old spelling, an indented line in brackets, the runner read as
-#     nothing, and the suite as a plain pass with 12 checks fewer.
+#     nothing, and the suite as a plain pass with those checks missing.
 checkout_parts
 PLAIN="$TMPROOT/plain-folder"; mkdir -p "$PLAIN/hooks"
 if ! { cp "$H" "$DIR/test-scanners-before-push.sh" "$PLAIN/hooks/" && cp -R "$DIR/lib" "$PLAIN/hooks/lib"; }; then
