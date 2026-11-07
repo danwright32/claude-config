@@ -176,7 +176,9 @@
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # or whose sign in GitHub refused is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between,
 # so about a minute, see with_retries), MWR_NET_WAIT_SECONDS (3600: how long a read the network failed
-# on every try keeps being asked before it stops, claude-config#2303), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
+# on every try keeps being asked before it stops, claude-config#2303), MWR_MERGE_TRIES (3: how many
+# times in all a merge GitHub answers "Something went wrong" is tried, claude-config#2289) and
+# MWR_MERGE_RETRY_SECONDS (120: the wait between; settings, not measurements), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
 # the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
@@ -223,6 +225,10 @@ GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 TURN_HOLD="$(num_or "${MWR_TURN_HOLD_SECONDS:-}" 3600)"
+# A merge GitHub answers "Something went wrong" is tried again (claude-config#2289, see the merge).
+MERGE_TRIES="$(num_or "${MWR_MERGE_TRIES:-}" 3)"; [ "$MERGE_TRIES" -ge 1 ] || MERGE_TRIES=1
+MERGE_WAIT="$(num_or "${MWR_MERGE_RETRY_SECONDS:-}" 120)"
+wrong_head=""; wrong_tries=0
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
 usage(){
@@ -1596,5 +1602,19 @@ while :; do
   # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
   # (claude-config#1482).
   if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; continue; fi
+  # GitHub failing to run the merge (claude-config#2289): read back above as still open at this head,
+  # so nothing merged. It goes round again after MERGE_WAIT, where every gate is asked again and the
+  # merge is pinned to whatever head they allow, so only a head the gates allowed is ever merged.
+  if mt_gh_went_wrong "$merge_out"; then
+    [ "$wrong_head" = "$head" ] || { wrong_head="$head"; wrong_tries=0; }
+    wrong_tries=$((wrong_tries + 1))
+    wrong_said="GitHub answered the merge of #$pr at ${head:0:7} with Something went wrong"
+    if [ "$wrong_tries" -lt "$MERGE_TRIES" ]; then
+      say "$wrong_said (try $wrong_tries of $MERGE_TRIES: ${merge_out:0:300}), and reading it back shows it still open at that head, so nothing merged. Asking every gate again and trying the merge, pinned to the head they allow, in $(span "$MERGE_WAIT")."
+      last_status="waiting to try the merge of #$pr again"; rest "$MERGE_WAIT"; last_status=""
+      continue
+    fi
+    stop 1 "Stopped: $wrong_said $MERGE_TRIES times, $(span "$MERGE_WAIT") apart, and reading it back shows it still open at that head, so nothing merged: ${merge_out:0:500}. That is GitHub failing to run the merge, not a gate refusing it: run the same command again in a few minutes."
+  fi
   stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500}"
 done

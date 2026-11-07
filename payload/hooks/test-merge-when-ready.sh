@@ -194,6 +194,10 @@ case "$*" in
     case " $* " in *" --squash "*|*" -s "*|*" --merge "*|*" -m "*|*" --rebase "*|*" -r "*) ;;
       *) echo "--merge, --rebase, or --squash required when not running interactively" >&2; exit 1 ;;
     esac
+    printf '%s\n' "$(rd clock)" >> "$ST/merge-times"
+    # merge-fails holds one error per line, each spent by one merge that merges nothing, as GitHub's
+    # "Something went wrong" did on 2026-11-05 (claude-config#2289).
+    if e="$(pop merge-fails)"; then printf '%s\n' "$e" >&2; exit 1; fi
     pinned="$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')"
     # GitHub refuses to merge a pull request whose head is not its branch's tip, whatever the pin
     # (Bidspoke #2577, claude-config#1458).
@@ -207,6 +211,8 @@ case "$*" in
     [ -s "$ST/tip-after-merge" ] && cp "$ST/tip-after-merge" "$ST/branch-tip"
     # gh pr merge --delete-branch deletes the branch through the API as soon as the merge lands.
     case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
+    # merge-lands-fails: the merge lands, and gh prints an error anyway (claude-config#2289).
+    [ -s "$ST/merge-lands-fails" ] && { cat "$ST/merge-lands-fails" >&2; rm -f "$ST/merge-lands-fails"; exit 1; }
     ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
 esac
@@ -960,6 +966,61 @@ check_eq "#2303 control: GitHub answering with a server error during the wait st
 check_eq "#2303 control: soon after it answered, not at the limit ($waited s)" "yes" "$( [ "$waited" -lt 700 ] && echo yes || echo no)"
 check "#2303 control: said as GitHub's error" "Bad Gateway" "$out"
 check_eq "#2303 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# GitHub answering the merge itself with "Something went wrong" (claude-config#2289). On 2026-11-05
+# a merge in a work repository stopped three times in three minutes on "GraphQL: Something went wrong
+# while executing your query", with every gate allowing it, and a fourth run five minutes later
+# merged. The pull request is read back first: merged is reported as merged; still open at the same
+# head, every gate is asked again and the merge, pinned to that head, is tried again
+# MWR_MERGE_RETRY_SECONDS (120) later, MWR_MERGE_TRIES (3) times in all, then it stops naming the
+# error. The waits are the injected sleep (L524).
+WRONG='GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug. Please include `AB12:3C4D:5E6F` when reporting this issue.'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n%s\n' "$WRONG" "$WRONG" > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge GitHub answers Something went wrong twice merges on the third try" "0" "$rc"
+check "#2289 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2289 three merge commands" "3" "$(count gh-calls 'pr merge')"
+check_eq "#2289 every one pinned to the head the gates allowed" "3" "$(count gh-calls "pr merge 7 .*--match-head-commit $OLD")"
+check_eq "#2289 every gate asked again before each try" "3" "$(grep -c 'match-head-commit' "$ST/red-gate-payloads")"
+check_eq "#2289 two waits of 2 minutes between the tries" "2" "$(count sleeps '^120$')"
+check "#2289 the retry is said, with GitHub's error and that nothing merged" "GitHub answered the merge of #7 at ${OLD:0:7} with Something went wrong (try 1 of 3: $WRONG), and reading it back shows it still open at that head, so nothing merged" "$out"
+check_eq "#2289 the pull request was read back after each merge" "yes" "$( [ "$(count gh-calls 'pr view 7')" -ge 6 ] && echo yes || echo no)"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n%s\n%s\n%s\n' "$WRONG" "$WRONG" "$WRONG" "$WRONG" > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge GitHub keeps answering Something went wrong stops" "1" "$rc"
+check_eq "#2289 after three tries" "3" "$(count gh-calls 'pr merge')"
+check "#2289 the stop names the error and the tries" "Stopped: GitHub answered the merge of #7 at ${OLD:0:7} with Something went wrong 3 times, 2m apart, and reading it back shows it still open at that head, so nothing merged: $WRONG" "$out"
+check "#2289 and says what to do" "run the same command again" "$out"
+check_eq "#2289 nothing merged" "no" "$( [ -e "$ST/merged" ] && echo yes || echo no)"
+
+# Merged though gh printed the error: the read back reports it merged, with no second merge.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$WRONG" > "$ST/merge-lands-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge that landed though GitHub answered Something went wrong is reported merged" "0" "$rc"
+check "#2289 as merged, naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: GraphQL: Something went wrong" "$out"
+check_eq "#2289 and merged once" "1" "$(count gh-calls 'pr merge')"
+
+# The head moving during the wait is judged as a new head: the old head is never merged again.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$WRONG" > "$ST/merge-fails"
+for _ in $(seq 1 20); do printf '%s\n' "grep -q 'pr merge' \"\$ST/gh-calls\" && printf '%s' $NEW > \"\$ST/head\"" >> "$ST/on-sleep"; done
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a head that moved during the wait merges as the new head" "0" "$rc"
+check "#2289 merged at the new head" "Merged #7 in acme/widget at ${NEW:0:7}" "$out"
+check_eq "#2289 the old head was tried once, never again" "1" "$(count gh-calls "pr merge 7 .*--match-head-commit $OLD")"
+check_eq "#2289 the gates judged the new head before it merged" "yes" "$(grep -q "match-head-commit $NEW" "$ST/red-gate-payloads" && echo yes || echo no)"
+
+# Control (L497): any other merge error stops at once, as before.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'GraphQL: Pull request is not mergeable (mergePullRequest)' > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 control: another merge error stops at once" "1" "$rc"
+check_eq "#2289 control: one merge command" "1" "$(count gh-calls 'pr merge')"
+check "#2289 control: naming it" "Stopped: gh pr merge did not merge #7 at ${OLD:0:7}: GraphQL: Pull request is not mergeable" "$out"
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,

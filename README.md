@@ -1820,7 +1820,13 @@ saying "Waiting on the network" with how long about every two minutes, and carri
 once GitHub answers, for up to `MWR_NET_WAIT_SECONDS` (3600, a setting) from when the read began,
 after which it stops saying how long it waited (claude-config#2303). On 2026-11-05 an outage of
 about 40 minutes stopped all ten queued helpers after their four tries. A round with any answer
-GitHub gave in it, its server failing or a refused sign in included, stops as before. The gate's own reads are asked again the same way,
+GitHub gave in it, its server failing or a refused sign in included, stops as before. The merge
+itself is never asked again blindly: when GitHub answers it "Something went wrong while executing
+your query", the pull request is read back first, a merge that landed is reported as merged, and one
+still open at the same head goes round again `MWR_MERGE_RETRY_SECONDS` (120) later, where every gate
+is asked again and the merge is pinned to the head they allow, `MWR_MERGE_TRIES` (3) times in all,
+then stops naming the error (claude-config#2289; on 2026-11-05 that answer stopped one merge three
+times in three minutes, and a run five minutes later merged it). The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
 and a gate whose read the network failed on every try refuses in those same words, never as GitHub
 refusing or not answering (claude-config#1728).
