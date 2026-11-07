@@ -4208,7 +4208,9 @@ which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one su
 its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
 shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
 the suites the runner runs, so the next suite added cannot quietly have no bound
-(claude-config#465). When it stops a suite it reads the load average through
+(claude-config#465). The push asks it too: `scanners-before-push.sh` refuses a push that adds or
+changes a `test-*.sh` that does not arm, judged as the push delivers it, through
+`hooks/lib/suite-arms-check.sh`, the same answer the full suite gives (claude-config#2330). When it stops a suite it reads the load average through
 `hooks/lib/load-average.sh` and judges it by that file's one predicate: where the load beyond the
 suite's own share (`HOOK_TESTS_SLOTS`, 1 when started directly) is more than the machine has cores,
 the stop says UNMEASURED with the figures, since a suite starved of the processor cannot be told
