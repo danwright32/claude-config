@@ -468,6 +468,10 @@ allowed "the import found first on PYTHONPATH at the helper that only saves a dr
 run_bash "python3 $T/pp/app/unplaced.py"
 refused "a Python import found nowhere: not beside the script, on PYTHONPATH, standard library or installed"
 says "that refusal names the import it could not place" "no_such_helper_2358"
+says "that refusal says the gate could not check whether it posts" "could not check whether this command posts to Slack"
+case "$ERR" in *"REFUSED: this command posts to Slack"*) check "that refusal does not claim the command posts" "stderr claimed a post: ${ERR:0:300}" ;; *) check "that refusal does not claim the command posts" ok ;; esac
+run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
+says "a script that really posts still gets the posts wording" "REFUSED: this command posts to Slack"
 run_bash "python3 $T/pp/app/run.py"
 refused "the PYTHONPATH script run without it, its import placed nowhere"
 run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"

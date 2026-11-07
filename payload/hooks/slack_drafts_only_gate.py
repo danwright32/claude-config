@@ -1009,8 +1009,11 @@ def main():
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
     reason = Judge(load_reader()).line(cmd, cwd, 0, cmd)
     if reason:
-        print("refuse\nREFUSED: this command posts to Slack: " + reason + ". " +
-              draft_advice("with the same channel and thread"))
+        # A reason ending "so it cannot see what ... run(s)" is an import the gate could not follow, not
+        # a post it found, so it says the check could not be made rather than claiming a post.
+        lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
+                if "so it cannot see what" in reason else "REFUSED: this command posts to Slack: ")
+        print("refuse\n" + lead + reason + ". " + draft_advice("with the same channel and thread"))
     else:
         print("allow")
 
