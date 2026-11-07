@@ -498,6 +498,35 @@ def except_frame(s):
     s["exceptions"] = {"exceptions": [dict(EXC, frame="f2")]}
 
 
+def retired_check_fails(s):
+    """D1's check fails on the design and on the build, and X1 retires D1 (a rule Dan replaced)."""
+    s["capture"]["frames"][0]["designChecks"][0] = {"id": "D1", "ok": False, "detail": "the heading reads Capacity"}
+    s["capture"]["frames"][0]["checks"][0] = {"id": "D1", "ok": False, "detail": "the heading reads Capacity"}
+    s["exceptions"] = {"exceptions": [dict(EXC, decision="D1")]}
+
+
+rc, out, data = score(make("exc-retires-check", retired_check_fails))
+check("a check an exception retires cannot fail the design itself, so the build can still match",
+      rc == 0 and "the design fails its own check" not in out, out)
+check("the retired check is still reported, as retired by its exception", "D1 is retired by exception X1" in out, out)
+check("with what it found on each side and frame, never silently dropped",
+      "on the design f1: failed, the heading reads Capacity" in out and "on the build f1: failed, the heading reads Capacity" in out, out)
+row = [r for r in data["decisions"]["rows"] if r["id"] == "D1"][0] if data else {}
+check("the score file records the retired check and every run of it",
+      row.get("status") == "excepted" and row.get("exception") == "X1"
+      and {"frame": "f1", "side": "design", "ok": False, "threw": False, "detail": "the heading reads Capacity"} in (row.get("retired") or [])
+      and {"frame": "f2", "side": "built", "ok": True, "threw": False, "detail": ""} in (row.get("retired") or []), row)
+
+
+def unretired_check_fails(s):
+    retired_check_fails(s)
+    s["capture"]["frames"][0]["designChecks"][1] = {"id": "D2", "ok": False, "detail": "no day cards"}
+
+
+rc, out, _ = score(make("exc-retires-only-its-own", unretired_check_fails))
+check("a check no exception retires still fails the design itself, no score",
+      rc == 2 and "the design fails its own check for D2" in out and "own check for D1" not in out, out)
+
 rc, out, data = score(make("exc-frame", except_frame))
 check("a whole frame Dan excepted is skipped from the picture half", rc == 0 and "over 1 frame" in out, out)
 
