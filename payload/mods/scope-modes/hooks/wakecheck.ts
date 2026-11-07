@@ -355,9 +355,16 @@ export const wakeCheck = async (
       const moved = at(m.updated_at)
       if ((gap === null || (oldest !== null && moved >= oldest)) && moved > latest + SAME_CHANGE_MS)
         unexplained.push(`the milestone itself, at ${etWhen(moved)} (no issue event in it explains that)`)
-      const whyNot = [...new Set(undecided)]
+      // Every reason something was not read is said, and a named change never hides one: else the
+      // report names one change and reads as though the milestone was read whole (lessons review).
+      const whyNot = [...new Set(undecided), ...(gap === null ? [] : [gapText])]
       if (unexplained.length) hits.push(`Milestone touched overnight: ${repo} "${title}", by changes nothing the night recorded accounts for: ${unexplained.join('; ')}`)
-      else if (whyNot.length || gap !== null) unmeasured.push(`whether milestone "${title}" in ${repo} was changed only by the night's own work was not checked (${whyNot.length ? whyNot.join('; ') : gapText})`)
+      if (whyNot.length)
+        unmeasured.push(
+          unexplained.length
+            ? `other changes to milestone "${title}" in ${repo} were not checked (${whyNot.join('; ')})`
+            : `whether milestone "${title}" in ${repo} was changed only by the night's own work was not checked (${whyNot.join('; ')})`,
+        )
     }
   }
 

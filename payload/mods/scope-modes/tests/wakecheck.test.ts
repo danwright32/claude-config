@@ -389,6 +389,36 @@ describe('a milestone the night\'s own work explains is left out (#2393)', () =>
     expect(partial.asked).not.toContain(EVENTS(4))
   })
 
+  // Lessons review of de0f3ed: a named change must not hide what was not read, or the report names
+  // one change and reads as though the milestone was read whole.
+  test('a named change and what was not read are both said', async () => {
+    const others = 'other changes to milestone "Ungrouped" in o/r were not checked'
+    // Three full pages, the newest change one no session made: the start of the night is still unread.
+    const full = (from: number) => Array.from({ length: 100 }, (_, i) => closed(7, new Date(SINCE + (from - i) * 60_000).toISOString(), 'dan'))
+    const capped = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: new Date(SINCE + 400 * 60_000).toISOString() }])),
+      [EVENTS(1)]: ok(JSON.stringify([closed(11, new Date(SINCE + 400 * 60_000).toISOString(), 'eve'), ...full(399).slice(0, 99)])),
+      [EVENTS(2)]: ok(JSON.stringify(full(300))),
+      [EVENTS(3)]: ok(JSON.stringify(full(200))),
+      [CLOSERS]: ok(JSON.stringify([{ number: 11, closedByPullRequestsReferences: [] }])),
+    }, github, ['o/r#7'])
+    expect(capped.hits).toEqual([`${lead} "Ungrouped", ${nothing}: #11 closed by eve`])
+    expect(capped.unmeasured).toEqual([`${others} (its issue events from 11:00 PM ET on Wed Oct 7 to 12:41 AM ET on Thu Oct 8 were not read: GitHub was asked for only the newest 300)`])
+
+    // One change no session made, and a close whose pull request could not be read.
+    const undecided = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: ok(JSON.stringify([
+        closed(11, at('05:00:00'), 'eve'),
+        { event: 'demilestoned', created_at: at('04:50:00'), actor: { login: 'eve' }, milestone: { title: 'Ungrouped' }, issue: { number: 12, milestone: null } },
+        closed(1, BEFORE, 'eve'),
+      ])),
+      [CLOSERS]: fail('HTTP 502: Bad Gateway'),
+    })
+    expect(undecided.hits).toEqual([`${lead} "Ungrouped", ${nothing}: #12 removed from it by eve`])
+    expect(undecided.unmeasured).toEqual([`${others} (the pull requests that closed its issues could not be read: HTTP 502: Bad Gateway)`])
+  })
+
   test('the night\'s notes name the issues and pull requests its sessions worked, and nothing else', () => {
     expect(workedOn({ kind: 'done', repo: 'O/R', issue: 7, pr: 20 })).toEqual(['o/r#7', 'o/r#20'])
     expect(workedOn({ kind: 'claim', repo: 'o/r', issue: 3 })).toEqual(['o/r#3'])
