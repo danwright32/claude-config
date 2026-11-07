@@ -449,8 +449,9 @@ def judge_gist(what, args, place, command):
     if not _gist_public(args):
         return None
     files = _positionals(args, GIST_VALUES)
-    if not files:
-        return judge_public(what, "as a public gist,", command, [], [GIST_STDIN])
+    # A `-` is standard input, which only the guard reads (it hands the gate a file holding those
+    # bytes); here it cannot be read, alone or beside named files.
+    unseen = [GIST_STDIN] if not files or "-" in args else []
     named = []
     for f in files:
         named += ["--file", f]
@@ -458,9 +459,9 @@ def judge_gist(what, args, place, command):
     for word, state, detail in field.body_files(named, command, place, ("--file",)):
         if state == "text":
             bodies.append(("the file %s" % word, detail))
-        elif state not in ("shown", "stdin"):
+        elif state != "shown":
             bodies.append(("the file %s" % word, None))
-    return judge_public(what, "as a public gist,", command, bodies)
+    return judge_public(what, "as a public gist,", command, bodies, unseen)
 
 
 def judge_repo_edit(what, args, envs, place, where, command):

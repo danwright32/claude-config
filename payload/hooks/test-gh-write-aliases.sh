@@ -257,6 +257,10 @@ hook "python3 gen.py > made.md && gh gist create --public made.md"
 check "#2398 a public gist file this command writes from what it does not show is refused: $out" refused
 hook "gh gist create --public"
 check "#2398 a public gist naming no file, so read from standard input, is refused: $out" refused
+hook "cat clean.md | gh gist create --public clean.md -"
+check "#2398 standard input beside a named file is refused by the hook, which cannot read it: $out" refused
+hook "cat clean.md | gh gist create --public -"
+check "#2398 and standard input alone: $out" refused
 hook "gh gist create --public -w named.md"
 check "#2398 --web still makes the gist before it opens it, so it is judged: $out" refused
 hook "gh gist create -wp named.md"
@@ -327,6 +331,8 @@ check "#2398 and never runs" not_posted
 guard_args --repo danwright-test/public-notes copilot
 check "#2398 gh copilot behind a flag is refused: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2398 and never runs" not_posted
+FEED="$WORK/feed-clean" guard_args gist create --public -
+check "#2398 (control) the guard reads a clean public gist on standard input and posts it: rc=$rc $out" [ "$rc" -eq 0 ]
 guard_args release list
 check "#2398 (control) gh release list still runs the real gh at once: rc=$rc $out" [ "$rc" -eq 0 ]
 check "#2398 (control) and asks GitHub nothing first" [ "$(grep -c -v '^POST|' "$CALLS")" = "1" ]
