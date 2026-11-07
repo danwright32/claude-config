@@ -189,6 +189,39 @@ else no "a failed committed listing with no upstream should return 3, not the bl
 if [ "$(tail -1 "$TMPROOT/rc")" = "0 [b.txt]" ]; then ok
 else no "(control) the same push read with the real git should carry b.txt, got [$(tail -1 "$TMPROOT/rc")]"; fi
 
+# A DIFF git failed is not an empty diff either (#2349 review): pc_diff hid git's error and returned
+# 0, so the simplify gate allowed the push as "empty" and the test gate judged a diff with parts
+# missing. It returns nonzero, and pc_diff_failure names the part, for each of the four reads: the
+# committed range, the pending commit's tracked files, the list of new files it takes, and a new
+# file's own diff. The files are listed with the real git; only the diff is read through the stand in.
+pcd_case() {   # <label> <stand in dir> <command> <pattern the named part must match>
+  ( cd "$W" && pc_resolve "$3" >/dev/null 2>&1
+    out="$(PATH="$2:$PATH" pc_diff . 2>/dev/null)"; rc=$?
+    echo "$rc [$(pc_diff_failure "$rc")] ${#out}" ) > "$TMPROOT/rc" 2>/dev/null
+  if [ "$(tail -1 "$TMPROOT/rc" | cut -d' ' -f1)" != 0 ] && grep -Eq "$4" "$TMPROOT/rc"; then ok
+  else no "$1: a failed diff should return nonzero and name the part, got [$(tail -1 "$TMPROOT/rc")]"; fi
+}
+GF_RANGE="$TMPROOT/gitfail-range"; GF_PENDING="$TMPROOT/gitfail-pending"
+GF_UNTRACKED="$TMPROOT/gitfail-untracked"; GF_NEWFILE="$TMPROOT/gitfail-newfile"
+failing_git_listing "$GF_RANGE" diff '*" diff "*" HEAD -- "*' || no "the failing git diff stand in could not be written"
+failing_git_listing "$GF_PENDING" diff '*" diff HEAD -- "*' || no "the failing git diff stand in could not be written"
+failing_git_listing "$GF_UNTRACKED" untracked || no "the failing git ls-files stand in could not be written"
+failing_git_listing "$GF_NEWFILE" diff '*" --no-index "*' || no "the failing git diff stand in could not be written"
+W="$(mk_repo)"
+( cd "$W" && printf 'x\n' > a.js && git add a.js && git commit -qm a \
+    && printf 'y\n' >> a.js && printf 'z\n' > new.js ) >/dev/null 2>&1
+pcd_case "the committed range" "$GF_RANGE" "git push" 'commits since'
+pcd_case "the pending commit's tracked files" "$GF_PENDING" "git add a.js new.js && git commit -m b && git push" 'tracked files'
+pcd_case "the list of new files" "$GF_UNTRACKED" "git add a.js new.js && git commit -m b && git push" 'new files'
+pcd_case "a new file's own diff" "$GF_NEWFILE" "git add a.js new.js && git commit -m b && git push" 'a new file'
+# The control: a real empty diff, a pathspec the push does not touch, is still 0 with nothing printed,
+# and the same push read with the real git still shows the new file.
+( cd "$W" && pc_resolve "git add a.js new.js && git commit -m b && git push" >/dev/null 2>&1
+  out="$(pc_diff no-such-dir)"; rc=$?; echo "$rc ${#out}"
+  pc_diff . > "$TMPROOT/diff-real"; echo "$?" ) > "$TMPROOT/rc" 2>/dev/null
+if [ "$(head -1 "$TMPROOT/rc")" = "0 0" ] && [ "$(tail -1 "$TMPROOT/rc")" = 0 ] && grep -q '^+z' "$TMPROOT/diff-real"; then ok
+else no "(control) a real empty diff should be 0 and empty, and the real diff should show new.js, got [$(tr '\n' ' ' < "$TMPROOT/rc")]"; fi
+
 # ---- pc_judge: every way the call can fail is named, and none reads as a verdict ------------------
 STUB="$TMPROOT/stub"; mkdir -p "$STUB"
 cat > "$STUB/claude" <<'S'

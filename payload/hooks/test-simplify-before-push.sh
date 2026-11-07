@@ -253,6 +253,15 @@ failing_git_listing "$GF_DIR" committed || { fail=$((fail+1)); echo "FAIL: #2349
 W="$(mk_repo)"; seed_source "$W"
 run_hook "$W" "git push" "$GF_DIR:$PATH_STUB"
 want_allowed_notice "#2349 a failed listing of the push says the gate could not list it" "SIMPLIFY GATE DID NOT RUN.*could not list the files this push carries"
+# The same for the DIFF of the source files (#2349 review): the files were listed, git failed showing
+# their changes, and the gate read that as nothing to judge and allowed the push silently as "empty".
+GF_DIFF="$TMPROOT/gitfail-diff"
+failing_git_listing "$GF_DIFF" diff || { fail=$((fail+1)); echo "FAIL: #2349 the failing git diff stand in could not be written"; }
+W="$(mk_repo)"; seed_source "$W"
+rm -f "$JUDGE_IN"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W" "git push" "$GF_DIFF:$PATH_STUB"
+want_allowed_notice "#2349 a failed diff of the source files says the gate could not read it" "SIMPLIFY GATE DID NOT RUN.*could not read the diff.*commits since"
+if [ -e "$JUDGE_IN" ]; then fail=$((fail+1)); echo "FAIL: #2349 a push whose diff git failed was sent to the judge"; else pass=$((pass+1)); fi
 
 # --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
 # The diff was asked for with paths relative to the root while git read them from the subdirectory,

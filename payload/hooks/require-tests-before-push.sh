@@ -511,20 +511,35 @@ if [ "$test_changed" -eq 0 ]; then
   # tripped the gate is blank or a comment, there is no behavior to test -> pass.
   # Mirrors the model rubric's needsTest=false for comments; this path exists
   # because the zero-test floor below never reaches the model. (#733)
-  docs_only=1; examined=0
+  # A diff git failed to show is not docs only either (#2349 review): it fails closed onto the floor
+  # below like any diff it cannot see, and the refusal says why the exemption was not given. The
+  # diff is captured before it is classified, so git's failure is its own status, never lost on the
+  # left of a pipe whose classifier also answers "not docs only" for an empty stream.
+  docs_only=1; examined=0; DOCS_UNREAD=""
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
+    f_diff="$(PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f")" \
+      || { rc=$?; DOCS_UNREAD="git failed reading $(pc_diff_failure "$rc") for $f"; docs_only=0; break; }
     case "$f" in
-      *.py) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | py_docstrings_as_comments | diff_docs_only "$style" ;;
-      *) PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style" ;;
+      *.py) py_docstrings_as_comments <<< "$f_diff" | diff_docs_only "$style" ;;
+      *) diff_docs_only "$style" <<< "$f_diff" ;;
     esac || { docs_only=0; break; }
   done <<DOCS_ONLY_EOF
 $source_paths
 DOCS_ONLY_EOF
   [ "$examined" -ge 1 ] && [ "$docs_only" -eq 1 ] && allow docsonly
 fi
+
+# Said in a refusal when the docs only check could not read a diff, so a comment only change refused
+# here is seen to be refused for that, not judged to be code (#2349 review).
+docs_note() {
+  [ -n "${DOCS_UNREAD:-}" ] || return 0
+  echo "Note: the gate could not check whether this push changes only comments, because"
+  echo "$DOCS_UNREAD, so it was counted as a code change."
+  echo ""
+}
 
 # Source touched and no test in the push or anywhere else on the branch -> block without a model.
 # With a test the branch pushed earlier, the judge decides whether it covers this push (#2153).
@@ -535,7 +550,7 @@ PUSH BLOCKED: this push changes source code but adds or modifies no tests.
 Source files in this push:
 ${source_list}$( [ -n "$BRANCH_BASE" ] && printf '%s\n' "No earlier push of this branch changed a test either, since it left $BRANCH_DEF.")
 Add a test for each distinct change, then push again.
-$(widened_note; merge_note; branch_note; modkit_note)
+$(widened_note; merge_note; branch_note; modkit_note; docs_note)
 OVERRIDE: if a test genuinely does not apply (docs / config / copy only,
 or a refactor already covered by existing tests), or the gate missed a
 test that IS in this push (false positive), re-run with:
@@ -557,8 +572,13 @@ msgs="$(pc_messages)"
 # model never saw it. Pull the test files' diffs out separately and place them
 # first, untruncated, so an edit to an existing test is always visible. A test
 # file new in this very command is in them too, as a diff against nothing (#1076).
+# Either diff git failed to show is not an empty one (#2349 review): the judge was shown the push with
+# its tests, or its code, missing, and a pass on the half it saw let the push through silently.
 diff_tests=""
-[ "${#TEST_PATHSPEC[@]}" -gt 0 ] && diff_tests="$(pc_diff "${TEST_PATHSPEC[@]}")"
+if [ "${#TEST_PATHSPEC[@]}" -gt 0 ]; then
+  diff_tests="$(pc_diff "${TEST_PATHSPEC[@]}")" \
+    || { rc=$?; fail_open "could not read the diff of the tests this push carries: git failed reading $(pc_diff_failure "$rc")"; }
+fi
 # Then the tests the branch pushed earlier (step 4b), after the push's own so those are what the
 # first call is shown first, under a heading the rubric names. Their diff is the branch's whole
 # change to each since it left the default branch, which this push does not touch.
@@ -572,7 +592,8 @@ fi
 TEST_EXCLUDES=()
 for tp in "${TEST_PATHSPEC[@]}"; do TEST_EXCLUDES+=(":(exclude)$tp"); done
 # The mod-kit copies counted as tested (#2258) are left out too: they are not judged.
-diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}" ${MODKIT_EXCLUDES[@]+"${MODKIT_EXCLUDES[@]}"})"
+diff_code="$(pc_diff . "${TEST_EXCLUDES[@]}" ${MODKIT_EXCLUDES[@]+"${MODKIT_EXCLUDES[@]}"})" \
+  || { rc=$?; fail_open "could not read the diff of the code this push carries: git failed reading $(pc_diff_failure "$rc")"; }
 
 # THE BUDGET, test changes first (claude-config#723). They are what this gate judges, so they get
 # what they need, and the rest of the diff gets what is left, down to half the budget: when both

@@ -16,7 +16,8 @@
 # One copy now, which every gate calls:
 #
 #   pc_resolve <cmd>      which files the push carries, and from where (sets PC_* below)
-#   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs
+#   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs; nonzero, named
+#                         by pc_diff_failure, when git failed reading it
 #   pc_messages           the subjects of the commits it carries
 #   pc_judge ...          one isolated model call, its envelope read, its failures named
 #   pc_record ...         one line in the ledger of what the gate did
@@ -181,26 +182,51 @@ pc__set_apart_merged() {
 # relative to the repository root, where pc_resolve left the shell. PC_DIFF_CONTEXT, when set, is
 # the lines of context around each change (git's -U), for a reader that needs the file around a
 # line, as the test gate's docs-only check does (claude-config#1238); unset, git's default.
+#
+# A read git FAILED returns nonzero, never 0 with part of the diff missing (#2349 review): it hid
+# git's error and returned 0, so the simplify gate allowed a push whose diff it could not read as
+# "empty", and the test gate judged a diff with its tests or its code gone. The status says which
+# read failed, and pc_diff_failure names it. pc_diff runs inside a command substitution, where no
+# global it set would survive, so the status is the only channel; a caller captures it explicitly.
+#   3  the diff of the committed range         5  the list of new files the pending commit takes
+#   4  the diff of the pending tracked files   6  a new file's own diff
 pc_diff() {   # $@ = pathspecs (a path, ".", or ":(exclude)..." items)
-  local u
+  local u rc
   local -a ctx=()
   [ -n "${PC_DIFF_CONTEXT:-}" ] && ctx=("-U$PC_DIFF_CONTEXT")
-  [ -n "${PC_FROM:-}" ] && git diff ${ctx[@]+"${ctx[@]}"} "$PC_FROM" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  if [ -n "${PC_FROM:-}" ]; then
+    git diff ${ctx[@]+"${ctx[@]}"} "$PC_FROM" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null || return 3
+  fi
   [ "${PC_COMMIT_IN_CHAIN:-0}" -eq 1 ] || return 0
-  git diff ${ctx[@]+"${ctx[@]}"} HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  git diff ${ctx[@]+"${ctx[@]}"} HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null || return 4
   # One join against PC_FILES rather than a search per untracked file: a tree can hold hundreds of
   # untracked files the push has nothing to do with. The list goes in through the environment, never
-  # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh).
-  local loop_input
-  loop_input="$(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null \
-             | PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)')" || true
+  # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh). It is
+  # read into a variable first, so a failed listing is seen rather than lost on the left of a pipe.
+  local untracked loop_input
+  untracked="$(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null)" || return 5
+  loop_input="$(PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)' <<< "$untracked")" || true
   while IFS= read -r u; do
     [ -f "$u" ] || continue
-    git diff --no-index -- /dev/null "$u" 2>/dev/null
+    # --no-index exits 1 when the files differ, which against /dev/null they always do; only above
+    # 1 is git failing.
+    git diff --no-index -- /dev/null "$u" 2>/dev/null; rc=$?
+    [ "$rc" -le 1 ] || return 6
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
   return 0
+}
+
+# What pc_diff's status $1 says git failed reading, for a gate's notice.
+pc_diff_failure() {   # $1 = pc_diff's status
+  case "$1" in
+    3) printf 'the diff of the commits since %s' "${PC_FROM:-the base}" ;;
+    4) printf 'the diff of the tracked files the commit in this command changes' ;;
+    5) printf 'the list of new files the commit in this command takes' ;;
+    6) printf 'the diff of a new file the commit in this command takes' ;;
+    *) printf 'the diff (status %s)' "$1" ;;
+  esac
 }
 
 # The subjects of the commits the push carries, bounded, less those a merge of the default branch

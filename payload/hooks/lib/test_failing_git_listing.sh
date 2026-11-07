@@ -6,10 +6,14 @@
 # a gate judged nothing and let the push through. The suites driving each gate put this stand in on
 # the PATH to see each one refuse, or say it could not read, instead.
 #
-#   failing_git_listing <dir> [committed|staged]
+#   failing_git_listing <dir> [committed|staged|diff|untracked] [<case pattern>]
 #       writes <dir>/git. committed (the default) fails `git diff --name-only --diff-filter=ACMR
 #       <from> HEAD`, the listing of the committed range (pc_files_since); staged fails `git diff
 #       --cached --name-only --diff-filter=ACMR`, the listing of the index a pending commit takes.
+#       diff fails the diffs pc_diff reads, every `git diff ... -- <pathspecs>` that is not a
+#       --name-only listing, or with a pattern only those whose arguments, joined by spaces with a
+#       space either end, match it (`*" -- . "*` is the test gate's diff of everything but tests).
+#       untracked fails `git ls-files --others`, pc_diff's list of new files a pending commit takes.
 #       The failed call prints git's own kind of error and exits 128. Returns 1 when no real git is
 #       on the PATH to pass the other calls to.
 
@@ -19,11 +23,16 @@ failing_git_listing(){
   case "$which" in
     committed) pattern='*" diff --name-only --diff-filter=ACMR "*" HEAD "' ;;
     staged)    pattern='*" diff --cached --name-only --diff-filter=ACMR "' ;;
-    *) echo "failing_git_listing: unknown listing '$which' (committed or staged)" >&2; return 1 ;;
+    diff)      pattern='*" diff "*" -- "*'; [ -n "${3:-}" ] && pattern="$3" ;;
+    untracked) pattern='*" ls-files --others "*' ;;
+    *) echo "failing_git_listing: unknown listing '$which' (committed, staged, diff or untracked)" >&2; return 1 ;;
   esac
   mkdir -p "$dir" || return 1
   cat > "$dir/git" <<STUB
 #!/usr/bin/env bash
+case " \$* " in
+  *" --name-only "*) [ "$which" = diff ] && exec "$real" "\$@" ;;
+esac
 case " \$* " in
   $pattern) echo "fatal: the listing failed (a stand in from lib/test_failing_git_listing.sh)" >&2; exit 128 ;;
 esac
