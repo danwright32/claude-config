@@ -11,15 +11,17 @@ import {
   editedText,
   handsOn,
   heldText,
+  importSpecs,
   importTerms,
   inScope,
   isMessage,
   isOwnRecord,
   isProse,
   isProseFile,
-  linkPattern,
   literalsOf,
   mentionsStore,
+  namePatterns,
+  plainYamlValues,
   question,
   refersTo,
   refusal,
@@ -28,7 +30,6 @@ import {
   slackMarked,
   stringsOf,
   templateLines,
-  termsPattern,
   testFile,
   textTemplate,
   wordingChange,
@@ -120,6 +121,57 @@ test('the message Dan is shown must be the real one: every variable filled, ever
   expect(renderedProblem('Deploy 4182 failed', added)).toContain('failed on')
   // A shell call names no strings, so only the placeholders are read.
   expect(renderedProblem('Backup finished on db-1', [])).toBeUndefined()
+})
+
+// claude-config#2371, Dan's item 5: Dan is shown the message, never the source that builds it.
+const NESTED = 'export const note = (db: string, late: boolean, hours: number) => `Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}`\n'
+
+test('a nested template literal is read whole, its inner wording read too, and the message asks only for words a message holds (Dan item 5)', () => {
+  const texts = stringsOf(NESTED, false, true).map(s => s.text)
+  // The outer template is one string, its value filled in by the inner one; the inner one is wording of its own.
+  expect(texts).toContain('Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}')
+  expect(texts).toContain('is ${hours} hours late')
+  const added = wordingOf(texts)
+  expect(added).toContain('is ${hours} hours late')
+  expect(renderedProblem('Backup of orders is 3 hours late', added)).toBeUndefined()
+  // What it does ask for is a word of the message, never a piece of the code.
+  const missing = renderedProblem('Backup of orders is 3 late', added) ?? ''
+  expect(missing).toContain('hours late')
+  expect(missing).not.toContain('${late')
+  expect(renderedProblem('Orders is 3 hours late', added)).toContain('Backup of')
+  // A template whose substitution never closes is read as before, never lost.
+  expect(stringsOf('const m = `Disk is ${full`\n', false, true).map(s => s.text)).toEqual(['Disk is ${full'])
+})
+
+// A reusable alert workflow whose github-script step posts to Slack, building its text by concatenation.
+const SCRIPT_WORKFLOW = [
+  'on: workflow_call',
+  'jobs:',
+  '  alert:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - name: Tell the team the backup failed',
+  '        uses: actions/github-script@v7',
+  '        env:',
+  '          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}',
+  '        with:',
+  '          script: |',
+  "            const text = 'Nightly backup of ' + process.env.DB + ' failed on ' + context.ref",
+  "            await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text }) })",
+  '',
+].join('\n')
+
+test("a workflow's script step that posts to Slack is read as JavaScript: each piece of a concatenation is wording, and the code around it never is (Dan item 5)", () => {
+  const ci = wordingOf(ciMessages(SCRIPT_WORKFLOW))
+  expect(ci).toEqual(['Nightly backup of ', ' failed on '])
+  expect(renderedProblem('Nightly backup of orders failed on refs/heads/main', ci)).toBeUndefined()
+  // A script step that posts nothing to Slack is a step like any other.
+  expect(ciMessages(SCRIPT_WORKFLOW.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'))).toEqual([])
+  // Outside a CI workflow (a composite action), a script block's lines are code, never plain values.
+  const values = plainYamlValues(SCRIPT_WORKFLOW)
+  expect(values.some(v => v.includes('const text'))).toBe(false)
+  expect(values.some(v => v.includes('await fetch'))).toBe(false)
+  expect(values).toContain('Tell the team the backup failed')
 })
 
 test("the guard's own record is recognised in the store, by name, and in a shell command", () => {
@@ -365,20 +417,80 @@ test('a file hands a template on when it can export what it imports: a JS or TS 
   expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
 })
 
-test('the re-export search finds the line that names the template, in a pattern macOS git grep reads', () => {
-  const re = (rels: string[]) => new RegExp(linkPattern(rels), 'i')
-  const one = re(['lib/templates/deploy.ts'])
-  for (const line of ["export * from './deploy'", "const t = require('./deploy')", 'from .deploy import TEXT', 'import templates.deploy', "body = readFileSync('templates/deploy.ts')"]) expect(one.test(line)).toBe(true)
-  expect(one.test('const deploy = 1')).toBe(false)
-  expect(re(['jobs/templates/backup.txt']).test('body = open("templates/backup.txt").read()')).toBe(true)
-  const two = re(['lib/templates/index.ts', 'lib/alpha.ts'])
-  expect(two.test("export * from './templates'")).toBe(true)
-  expect(two.test("export * from './alpha'")).toBe(true)
-  // macOS git grep -E reads \b as matching nothing (measured), so neither pattern may use it.
-  expect(linkPattern(['lib/a.ts', 'b.txt']).includes('\\b')).toBe(false)
-  expect(termsPattern(['lib/templates/deploy.ts'])).toBe('deploy')
-  expect(termsPattern(['lib/templates/index.ts', 'lib/alpha.ts'])).toBe('(templates|alpha)')
+// A line git grep lists for `rels`: one holding a name (`word`) and, on that same line, the name in a
+// shape refersTo can accept (`shape`), as `-e word --and -e shape` asks.
+const lists = (rels: string[], line: string) => {
+  const p = namePatterns(rels)
+  return new RegExp(p.word, 'i').test(line) && new RegExp(p.shape, 'i').test(line)
+}
+
+test('the search for the files naming a template finds the line that names it, in a pattern macOS git grep reads', () => {
+  const one = ['lib/templates/deploy.ts']
+  for (const line of ["export * from './deploy'", "const t = require('./deploy')", 'from .deploy import TEXT', 'import templates.deploy', "body = readFileSync('templates/deploy.ts')"]) expect(lists(one, line)).toBe(true)
+  expect(lists(one, 'const deploy = 1')).toBe(false)
+  expect(lists(['jobs/templates/backup.txt'], 'body = open("templates/backup.txt").read()')).toBe(true)
+  const two = ['lib/templates/index.ts', 'lib/alpha.ts']
+  expect(lists(two, "export * from './templates'")).toBe(true)
+  expect(lists(two, "export * from './alpha'")).toBe(true)
+  // macOS git grep -E reads \b as matching nothing (measured), so no pattern may use it.
+  expect(JSON.stringify(namePatterns(['lib/a.ts', 'b.txt', 'lib/x/index.ts'])).includes('\\\\b')).toBe(false)
+  expect(namePatterns(['lib/templates/deploy.ts']).word).toBe('deploy')
+  expect(namePatterns(['lib/templates/index.ts', 'lib/alpha.ts']).word).toBe('(templates|alpha)')
   expect(REEXPORT_HOPS).toBe(3)
+})
+
+test('a common short name lists only the lines that name the file, never a word it is a piece of, and every reference refersTo accepts is listed (Dan item 3)', () => {
+  // Words the name is a piece of, as a work repository's files are full of them.
+  for (const [rel, line] of [
+    ['src/lib/et.ts', 'const settings = getSettings()'],
+    ['src/lib/et.ts', "import { getSettings } from '@/lib/get-settings'"],
+    ['src/lib/et.ts', 'let x = target.set(1)'],
+    ['src/lib/et.ts', "import { formatDate } from './date-et-helpers'"],
+    ['src/lib/memory.ts', '// the digest is kept in memory, then posted to slack'],
+    ['src/lib/memory.ts', 'const used = process.memoryUsage()'],
+    ['hooks/decide.ts', 'const verdict = guard.decide(input)'],
+  ] as const)
+    expect(lists([rel], line)).toBe(false)
+  // Every reference the refersTo tests accept is listed, so the narrower search never misses a sender.
+  const refs: [string, string, string][] = [
+    ['src/lib/notify.ts', "import { deployFailed } from './templates/deploy'\n", 'src/lib/templates/deploy.ts'],
+    ['src/lib/notify.ts', "import { deployFailed } from './templates/deploy.js'\n", 'src/lib/templates/deploy.ts'],
+    ['src/jobs/notify.ts', "const t = require('../lib/templates/deploy')\n", 'src/lib/templates/deploy.ts'],
+    ['bin/notify.sh', 'MSG=$(cat ./src/lib/templates/deploy.ts)\n', 'src/lib/templates/deploy.ts'],
+    ['app/notify.py', 'body = open("templates/backup.txt").read()\n', 'app/templates/backup.txt'],
+    ['app/notify.ts', "readFileSync(path.join(__dirname, 'templates', 'backup.txt'), 'utf8')\n", 'app/templates/backup.txt'],
+    ['app/notify.ts', 'readFileSync(`${__dirname}/templates/backup.txt`)\n', 'app/templates/backup.txt'],
+    ['web/notify.ts', "import { digest } from '@/lib/alerts/digest'\n", 'web/src/lib/alerts/digest.ts'],
+    ['app/notify.py', 'from app.alerts.messages import BACKUP_LATE\n', 'app/alerts/messages.py'],
+    ['app/notify.py', 'from app.alerts import messages\n', 'app/alerts/messages.py'],
+    ['app/alerts/notify.py', 'from . import messages\n', 'app/alerts/messages.py'],
+    ['app/alerts/notify.py', 'from .messages import BACKUP_LATE\n', 'app/alerts/messages.py'],
+    ['app/alerts/notify.py', 'import messages\n', 'app/alerts/messages.py'],
+    ['app/alerts/notify.py', 'from . import (a,messages)  # "the late notice"\n', 'app/alerts/messages.py'],
+    ['src/notify.ts', "import { late } from './alerts'\n", 'src/alerts/index.ts'],
+    ['app/notify.py', 'from app import alerts\n', 'app/alerts/__init__.py'],
+    ['lib/notify.ts', 'const body = readFileSync("docs/runbook.txt", "utf8")\n', 'docs/runbook.txt'],
+    ['src/jobs/digest.ts', "import { nowEt } from '../lib/et'\n", 'src/lib/et.ts'],
+    ['src/app/clock/page.tsx', "import { nowEt } from '@/lib/et'\n", 'src/lib/et.ts'],
+    ['src/app/x.ts', 'const m = require("lib.memory")\n', 'src/lib/memory.ts'],
+  ]
+  for (const [sender, text, template] of refs) {
+    expect(refersTo(sender, text, template)).toBe(true)
+    expect(text.split('\n').some(l => lists([template], l))).toBe(true)
+  }
+})
+
+test("the files a module's imports can be are named as git pathspecs, by path, never by what their text holds (Dan item 3)", () => {
+  const specs = importSpecs("import { postAlert } from '@/lib/notify/post'\nimport React from 'react'\nconst x = require('../slack/index.js')\nfrom app.alerts.sender import post_alert\n")
+  expect(specs).toContain(':(glob,icase)**/post.*')
+  expect(specs).toContain(':(glob,icase)**/post/index.*')
+  expect(specs).toContain(':(glob,icase)**/slack.*')
+  expect(specs).toContain(':(glob,icase)**/slack/index.*')
+  expect(specs).toContain(':(glob,icase)**/sender/__init__.py')
+  expect(specs.some(s => s.includes('react'))).toBe(false)
+  // A name holding a glob's own signs is matched as written.
+  expect(importSpecs("import { Row } from './[id]/row'\n")).toContain(':(glob,icase)**/row.*')
+  expect(importSpecs("import x from '../a*b'\n")).toContain(':(glob,icase)**/a\\*b.*')
 })
 
 test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {

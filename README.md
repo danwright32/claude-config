@@ -6640,18 +6640,20 @@ code or config file that posts to Slack counts: one naming a Slack webhook, the 
 SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
 template such a file sends (below). A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
-send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a `_test`
-or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
-nothing,
-so neither is held nor read as a sender; a string handed to a query builder call (`.select(`,
-`.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a
-database select list, a SQL statement or
+send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a
+`_test` or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
+nothing, so neither is held nor read as a sender; a string handed to a query builder call
+(`.select(`, `.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in
+one), a database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
-run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
-other run commands; and a file in no git repository, as a scratchpad script is, is let through even
-when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in
-from a realistic
+run command that itself posts to Slack, each string of a `script:` step that posts to Slack, read as
+JavaScript), never step or job names, needs lists, input descriptions or other run commands; a
+`script:` block in any YAML file is code, never plain values; a nested template literal is one
+string, the strings inside it wording of their own, and the message Dan is shown is checked only for
+the words between its filled in values, never the code that fills them (#2371); and a file in no
+git repository, as a scratchpad script is, is let through even when it posts to Slack itself.
+Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
 kept in the mod's store by the exact wording, never by the file, so the same wording repeated in
@@ -6660,7 +6662,9 @@ again. A `${...}` that JavaScript writes as text (in single or double quotes, or
 template) may stand in the message shown, since that is how it posts; one filled at run time may
 not. A
 shell command writing into such a file is held as a whole command, since the wording it leaves
-cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
+cannot be read before it runs; Dan's answer is kept by the command and the files it writes, so the
+same command run again by a resumed agent or from another folder goes through (#2371). A
+subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
 written by a call. A template whose own file has no Slack marker (a code file, or a text template
 such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
@@ -6669,11 +6673,12 @@ relative import, or its python module, on a line that imports or reads it (a pat
 as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
 sender. A
 module is held too when a file that imports it also imports a Slack send helper (a copy builder
-such as `outage-copy.ts`, or a notice builder), and the card names that file as
-the sender. The search is one
-`git grep` for files holding
-both the template's name and the word
-slack or postMessage, then a read of each, all within 3 seconds per call, following files that
+such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender; the
+helper is found by the path the import names. The search is one `git grep` for files holding the
+word slack or postMessage and the template's name in a form a reference takes (after a slash, as a
+file name with its extension, after its folder and a dot, or on a python import line, never a word
+the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
+each, all within 3 seconds per call, following files that
 re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,

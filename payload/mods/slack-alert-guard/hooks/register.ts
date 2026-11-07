@@ -17,17 +17,16 @@ import {
   codeOf,
   editHalves,
   editedText,
-  escapeRe,
   handsOn,
   heldText,
-  importTerms,
+  importSpecs,
   inScope,
   isJs,
   isOwnRecord,
   isProseFile,
   languageOf,
-  linkPattern,
   mentionsStore,
+  namePatterns,
   plainYamlValues,
   question,
   refersTo,
@@ -38,7 +37,6 @@ import {
   slackMarked,
   stringsOf,
   templateLines,
-  termsPattern,
   testFile,
   textTemplate,
   wordingChange,
@@ -130,8 +128,8 @@ const end = (found: Found): never => {
 /**
  * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
  * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
- * repository to files holding both the template's name and the word slack or postMessage, so only
- * those are read. When none does, the files that hand the template on are followed (#2286): a
+ * repository to files holding the word slack or postMessage and a line naming the template in a form
+ * a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
  * deep; a chain going further is could not check. A template is sent too by a file that uses it and
@@ -205,18 +203,19 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     /**
      * Of the files using the template (a copy builder, a notice builder), the first that imports a
      * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
-     * names the user imports beside the
-     * word slack or postMessage, then read for a marker and a reference from the user. A search that
+     * word slack or postMessage in the files whose path one of the user's imports names (importSpecs,
+     * #2371), never by what their text holds, so a helper whose text never names its own module is
+     * found and a common import (db, utils) lists no crowd; it is then read for a marker and a
+     * reference from the user. A search that
      * fails, runs late, or would read more than MOST_READ files cannot tell, so it is maybe: held for
      * Dan to approve.
      */
     const helperUser = async (users: { rel: string; text: string }[]): Promise<string | undefined> => {
-      const terms = [...new Set(users.flatMap(u => importTerms(u.text)))].map(escapeRe)
-      if (!terms.length) return undefined
+      const specs = [...new Set(users.flatMap(u => importSpecs(u.text)))]
+      if (!specs.length) return undefined
       const ms = await left()
       if (ms <= 0) end(MAYBE)
-      const pattern = terms.length === 1 ? (terms[0] as string) : `(${terms.join('|')})`
-      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--all-match', '-E', '-e', pattern, '-e', SENDER_PREFILTER, '--', ...LINK_PATHS], { timeoutMs: ms })
+      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '-E', '-e', SENDER_PREFILTER, '--', ...specs], { timeoutMs: ms })
       if (hits.exitCode === 1) return undefined
       if (hits.exitCode !== 0 || hits.isStdoutTruncated) end(MAYBE)
       const helpers = candidates(hits.stdout.split('\u0000').filter(r => r && r !== templateRel))
@@ -242,7 +241,9 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     const seen = new Set([templateRel])
     let level = [templateRel]
     for (let hop = 0; ; hop++) {
-      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
+      // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
+      const name = namePatterns(level)
+      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', SENDER_PREFILTER, '-e', name.word, '--and', '-e', name.shape, '--', '.'])
       budget(rels)
       for (const rel of rels) {
         // Only what a file runs can send: a comment naming the template beside a Slack webhook's name
@@ -251,7 +252,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         const text = await textOf(rel, sends)
         if (slackMarked(codeOf(rel, text)) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
       }
-      const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
+      const links = (await grep(`hand ${path} on`, ['-E', '-e', name.word, '--and', '-e', name.shape, '--', ...LINK_PATHS])).filter(r => !seen.has(r))
       budget(links)
       const next: string[] = []
       const users: { rel: string; text: string }[] = []
@@ -342,6 +343,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     const w = await $.modkit.writes({ command, cwd, home })
     // One search deadline for the whole call, set when the first search starts.
     let deadline: number | undefined
+    const key = shellKey(command, w.files.flatMap(f => (f.path === undefined ? [] : [f.path])))
     for (const f of w.files) {
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
@@ -351,7 +353,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       // A code file or a text template (#2248), in a git repository and no test: held when it posts to
       // Slack itself or another file in its repository sends it there.
       if (!code && !textTemplate(f.path)) continue
-      const keys = await unapproved($, [shellKey(cwd, command)])
+      const keys = await unapproved($, [key])
       if (!keys.length) return PASS
       deadline ??= (await $.clock.now()) + SCAN_MS
       const found = await findSender($, f.path, deadline, code && slackMarked(text))
