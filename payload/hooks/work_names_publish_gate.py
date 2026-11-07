@@ -8,10 +8,14 @@ from the command line without ever being a file. This gate judges them before th
 
 WHAT IS JUDGED. Every gh pr create, pr edit, pr comment, pr review, issue create, issue edit and
 issue comment, and every gh api write to a repository's issues, pulls or comments endpoints (the
-same text reaching the same place by another route, L247). Only where the target repository is
-PUBLIC: a private repository passes without the list ever being read. A public repository owned by
-a work owner passes too, a work repository naming its own work. The text judged is the whole
-command (so a heredoc fed body is read) and every body file it names that can be read.
+same text reaching the same place by another route, L247). Also, since claude-config#2326 and #2398,
+gh repo create (its own text, and the history --push sends), gh repo edit, gh repo sync, gh release
+create and edit (title and notes) and gh gist create --public (its files and description). gh's
+other names for these (gh pr new, gh issue new, gh release new and the rest) are read as the long
+form by lib/shell-words.py. Only where the target is PUBLIC: a private repository passes without the
+list ever being read, and so does a secret gist. A public repository owned by a work owner passes
+too, a work repository naming its own work. The text judged is the whole command (so a heredoc fed
+body is read) and every body, notes or gist file it names that can be read.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -132,8 +136,9 @@ BUDGET = float(os.environ.get("WN_PUBLISH_BUDGET_SECONDS") or 35)
 
 HEAD = "WORK NAME IN PUBLIC TEXT"
 REMEDY = ("Scrub it: rewrite the text without the work organisation or repository (say \"a work "
-          "repository\"), then run the command again. Public pull requests, issues and comments never "
-          "name work organisations or repositories (claude-config#2105).")
+          "repository\"), then run the command again. Public pull requests, issues, comments, release "
+          "notes, gists and repository descriptions never name work organisations or repositories "
+          "(claude-config#2105, #2398).")
 
 
 # gh, the budget, the accounts and the work repository list are read by lib/work-names.py, the one
@@ -547,17 +552,23 @@ def program_refusal(args):
     An extension (a word that is neither gh's own command nor an alias, or gh extension exec) and the
     Copilot CLI that gh copilot starts can each write to GitHub through the API with no gh the guard
     could judge, so both are refused. Any gh a program gh starts runs meets the guard again, since the
-    real gh is handed the guard first on PATH, so those need nothing here."""
-    if not args or args[0].startswith("-"):
+    real gh is handed the guard first on PATH, so those need nothing here.
+
+    The command is read past the flags written in front of it, as gh reads it (gh_command, #2398):
+    `gh -R o/x notely` runs the extension notely, and read from its first word it was a flag, passed."""
+    found = scan.gh_command(["gh"] + list(args)) if args else None
+    if not found or not found[0]:
         return None
-    word = args[0]
+    # A group's other name reads as the group (ext is extension); a word that is no name of gh's own
+    # is read as written, since gh lets no alias or extension shadow one of its commands.
+    word, act, front, after = found[0], found[1], list(found[2]), list(found[3])
     if word in EXTENSION:
-        sub = next((a for a in args[1:] if not a.startswith("-")), None)
-        if sub == "exec":
+        if act == "exec":
             return "gh %s exec runs a gh extension, %s." % (word, CANNOT_SEE)
         return None
     if word == "copilot":
-        if args[1:] and all(a in COPILOT_OWN for a in args[1:]):
+        own = front + ([act] if act else []) + after
+        if own and all(a in COPILOT_OWN for a in own):
             return None
         return "gh copilot starts the GitHub Copilot CLI, %s." % CANNOT_SEE
     if word in BUILTIN:

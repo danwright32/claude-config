@@ -147,6 +147,19 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # --help` rather than guessed, because a gate that refuses harmless commands is how
 # the habit of reaching for an override gets learned.
 NON_FILING_FLAGS = {"--help", "-h", "--web", "-w"}
+# Where a command gives one of those words another meaning, only the words that post nothing there
+# (claude-config#2398), each read from that command's help on gh 2.89.0: -h is --homepage to gh repo
+# create and edit, and gh gist create --web makes the gist and then opens it.
+NON_FILING_BY_KIND = {
+    ("repo", "create"): frozenset({"--help"}),
+    ("repo", "edit"): frozenset({"--help"}),
+    ("gist", "create"): frozenset({"--help", "-h"}),
+}
+
+
+def non_filing_flags(kind):
+    """The flags that make the gh command of kind (sub, act) post nothing."""
+    return NON_FILING_BY_KIND.get(tuple(kind), NON_FILING_FLAGS)
 
 
 def _is_operator(tok):
@@ -538,7 +551,7 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
             # which is absurd and teaches exactly the override habit this exists to
             # avoid. A gate that cries wolf gets ignored. --web hands any of them to a
             # browser form a person completes.
-            if not any(a in NON_FILING_FLAGS for a in args):
+            if not any(a in non_filing_flags(found[:2]) for a in args):
                 creates.append((tuple(found[:2]), args, list(seg_env), place.copy()))
             i = j
             at_head = True

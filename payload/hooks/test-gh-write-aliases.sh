@@ -257,6 +257,8 @@ hook "python3 gen.py > made.md && gh gist create --public made.md"
 check "#2398 a public gist file this command writes from what it does not show is refused: $out" refused
 hook "gh gist create --public"
 check "#2398 a public gist naming no file, so read from standard input, is refused: $out" refused
+hook "gh gist create --public -w named.md"
+check "#2398 --web still makes the gist before it opens it, so it is judged: $out" refused
 hook "gh gist create -wp named.md"
 check "#2398 --public among other one letter flags is read as public: $out" refused
 
@@ -272,6 +274,12 @@ hook "gh repo edit danwright-test/public-notes --description \"zephyr tools\""
 check "#2398 editing a public repository's description to name one is refused: $out" refused
 hook "gh repo edit --description \"zephyr tools\""
 check "#2398 and with the repository read from the checkout: $out" refused
+hook "gh repo edit danwright-test/public-notes -h https://example.org --description \"zephyr tools\""
+check "#2398 -h is --homepage to gh repo edit, not help, so the edit is judged: $out" refused
+hook "gh repo create danwright-test/new-tools --public -h https://example.org -d \"zephyr tools\""
+check "#2398 and to gh repo create: $out" refused
+hook "gh repo edit danwright-test/public-notes --help"
+check "#2398 (control) gh repo edit --help sets nothing and passes: $out" passed
 hook "gh repo edit danwright-test/private-notes --description \"zephyr tools\""
 check "#2398 (control) a private repository's description passes: $out" passed
 hook "gh repo edit danwright-test/public-notes --description \"handy tools\""
@@ -310,6 +318,15 @@ printf 'Clean notes\n' > "$WORK/feed-clean"
 FEED="$WORK/feed-clean" guard_args release create v1 --repo danwright-test/public-notes --notes-file -
 check "#2398 (control) clean release notes on standard input post: rc=$rc $out" [ "$rc" -eq 0 ]
 check "#2398 (control) with the same bytes the script sent" [ "$(cat "$STDIN_SAVE" 2>/dev/null)" = "Clean notes" ]
+guard_args -R danwright-test/public-notes notely
+check "#2398 an extension behind a flag gh passes over is refused as an extension: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2398 and never runs" not_posted
+guard_args --repo danwright-test/public-notes extension exec notely
+check "#2398 gh extension exec behind a flag is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2398 and never runs" not_posted
+guard_args --repo danwright-test/public-notes copilot
+check "#2398 gh copilot behind a flag is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2398 and never runs" not_posted
 guard_args release list
 check "#2398 (control) gh release list still runs the real gh at once: rc=$rc $out" [ "$rc" -eq 0 ]
 check "#2398 (control) and asks GitHub nothing first" [ "$(grep -c -v '^POST|' "$CALLS")" = "1" ]
