@@ -526,6 +526,41 @@ test('a template re-exported but sent to Slack by nothing passes, after the chai
   expect(w.ran.length).toBe(1)
 })
 
+// #2368 met #2286: past the template's own level, a prose file or a comment still sends nothing.
+test('a prose file, or a comment, naming a file that hands the template on does not make a sender', withKit, async ($, on) => {
+  const NOTES = '/w/app/docs/alerts.md'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [BARREL]: BARREL_TEXT,
+      [NOTES]: 'Deploy notices come from `lib/templates/index.ts` and post through SLACK_WEBHOOK_URL.\n',
+      [YML]: '# lib/templates/index.ts holds the wording; it posts with SLACK_WEBHOOK_URL\nsteps:\n  - run: curl -X POST "$SLACK_WEBHOOK_URL" -d "{}"\n',
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // The barrel's level was searched too, so the prose file and the comment were met and passed over.
+  expect(grepped(w)).toBeGreaterThan(2)
+})
+
+test('a commented import does not hand a template on, and a Slack marker in a comment does not stop a file that does', withKit, async ($, on) => {
+  const MESSAGES = '/w/app/lib/messages.ts'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [MESSAGES]: "// was: export { deployFailed } from './templates/deploy'\nexport const other = 1\n",
+      [NOTIFY]: notifies('./messages'),
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  // A comment naming the Slack webhook makes messages.ts neither the sender nor a dead end: it is
+  // followed to the file that really sends the template.
+  w.files[MESSAGES] = "// posts nothing itself, never SLACK_WEBHOOK_URL; notify.ts does\nexport { deployFailed } from './templates/deploy'\n"
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
+  expect(why).not.toContain(`which ${MESSAGES}`)
+})
+
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, REWORD))
