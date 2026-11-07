@@ -12,12 +12,14 @@ import {
   SENDER_PREFILTER,
   SOURCE,
   agentRefusal,
+  codeOf,
   editHalves,
   editedText,
   handsOn,
   heldText,
   inScope,
   isOwnRecord,
+  isProseFile,
   languageOf,
   linkPattern,
   literalsOf,
@@ -175,15 +177,21 @@ const findSender = async ($: EngineInterface, path: string, deadline: number): P
       const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', termsPattern(level), '-e', SENDER_PREFILTER, '--', '.'])
       budget(rels, sends)
       for (const rel of rels) {
-        const text = await textOf(rel, sends)
-        if (slackMarked(text) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
+        // Only code or config can send, and only what it runs: a prose file (a CLAUDE.md, a runbook)
+        // or a comment naming the template beside a Slack webhook's name posts nothing (Pivot,
+        // 2026-11-06, where both held ordinary code edits as alert wording).
+        if (isProseFile(rel)) continue
+        const code = codeOf(rel, await textOf(rel, sends))
+        if (slackMarked(code) && level.some(t => refersTo(rel, code, t))) return { sender: `${top}/${rel}` }
       }
       const links = (await grep(`hand ${path} on`, ['-E', '-e', linkPattern(level), '--', ...LINK_PATHS])).filter(r => !seen.has(r))
       budget(links, handsOnTo)
       const next: string[] = []
       for (const rel of links) {
-        const text = await textOf(rel, handsOnTo)
-        if (!slackMarked(text) && handsOn(rel, text) && level.some(t => refersTo(rel, text, t))) next.push(rel)
+        // Judged by what it runs, as a sender is, so a comment neither hands the template on nor
+        // stops a file that does from being followed.
+        const code = codeOf(rel, await textOf(rel, handsOnTo))
+        if (!slackMarked(code) && handsOn(rel, code) && level.some(t => refersTo(rel, code, t))) next.push(rel)
       }
       if (!next.length) return NONE
       if (hop === REEXPORT_HOPS)

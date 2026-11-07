@@ -5,12 +5,14 @@ import {
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
+  codeOf,
   editedText,
   handsOn,
   heldText,
   inScope,
   isOwnRecord,
   isProse,
+  isProseFile,
   linkPattern,
   literalsOf,
   mentionsStore,
@@ -253,4 +255,16 @@ test('the question approves the wording of an automated alert in the named file,
   expect(lead).toContain('automated')
   expect(lead).toContain('sends nothing')
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
+})
+
+test('codeOf drops whole line comments and keeps code, a shebang and code after a closed block comment', () => {
+  expect(codeOf('a.ts', '// notify.ts\nrun(id)\n/* notify.ts */\n * notify.ts\n/* x */ run(id)\n')).toBe('run(id)\n/* x */ run(id)\n')
+  expect(codeOf('a.yml', '# notify.ts\nsteps:\n  - run: go\n')).toBe('steps:\n  - run: go\n')
+  expect(codeOf('job', '#!/bin/sh\n# notify.ts\ncurl x\n')).toBe('#!/bin/sh\ncurl x\n')
+  expect(codeOf('a.json', '{"a": "#b"}\n')).toBe('{"a": "#b"}\n')
+})
+
+test('only prose files are ruled out as senders', () => {
+  for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
+  for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
 })

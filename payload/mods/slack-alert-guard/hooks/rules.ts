@@ -38,6 +38,43 @@ export const inScope = (path: string, text: string): boolean => {
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
 }
 
+// Prose files are read by people, never run, so they post nothing. Only these are ruled out as
+// senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
+// may still send, so it is read as a sender is.
+const PROSE = new Set(['md', 'markdown', 'mdx', 'rst', 'adoc', 'txt'])
+/** Whether a file is prose (a README, a CLAUDE.md, a runbook), which can name a template but never send it. */
+export const isProseFile = (path: string): boolean => PROSE.has(extOf(path) ?? '')
+
+// Comment syntax by extension, for reading a sender's code without its comments.
+const HASH_COMMENTS = new Set(['py', 'rb', 'sh', 'bash', 'zsh', 'yml', 'yaml'])
+
+/**
+ * A file's text with its whole line comments removed, so a sender is judged by what it runs (Pivot,
+ * 2026-11-06: a workflow comment naming a test file made that test a Slack template). A line is a
+ * comment when its first non blank text opens one for the file's language: `#` (not a shebang) in
+ * a hash commented language, `//`, `/*` or a `*` continuation in the others. JSON has none. A
+ * trailing comment after code is kept, since telling it from a `#` or `//` inside a string needs
+ * a parser, and keeping it can only hold an edit, never let one through.
+ */
+export const codeOf = (path: string, text: string): string => {
+  const ext = extOf(path)
+  if (ext === 'json') return text
+  const hash = ext === undefined ? text.startsWith('#!') : HASH_COMMENTS.has(ext)
+  return text
+    .split('\n')
+    .filter((line, i) => {
+      const t = line.trimStart()
+      if (hash) return !(t.startsWith('#') && !(i === 0 && t.startsWith('#!')))
+      if (t.startsWith('//')) return false
+      if (!(t.startsWith('/*') || t.startsWith('*'))) return true
+      // A block comment line is dropped only when nothing runs after it closes on that line, so
+      // `/* note */ send(...)` is still read.
+      const close = t.indexOf('*/')
+      return close >= 0 && t.slice(close + 2).trim() !== ''
+    })
+    .join('\n')
+}
+
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
 // or in a class, so the guard's rules are not themselves read as a Slack poster.
 export const MARKERS: RegExp[] = [
