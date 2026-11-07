@@ -1974,6 +1974,31 @@ test('#2294: a logic only edit to an app page goes through unasked and is record
   expect(w.ran.length).toBe(1)
 })
 
+// #2348: an automatic pass that could not be recorded held the call without looking for Dan's own
+// Not a look or wording change for it, so a call he had already let through was asked about again.
+test('#2348: a logic only edit whose automatic pass cannot be recorded goes through on Dan\'s earlier Not a look or wording change, and is held without one', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: RESULT, old_string: from, new_string: to })
+  // Only the automatic pass fails to save; Dan's own answers save as usual.
+  w.ctl.storeSetFailKey = 'auto:'
+  // No earlier answer: held and asked, as today.
+  const why = refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(0)
+  // Dan lets this very call through; resent, it is not asked about again though the automatic pass
+  // still cannot be saved.
+  await askSkip($, w, why, NOT_LOOK)
+  expect(Object.keys(w.store).some(k => k.startsWith('pass:'))).toBe(true)
+  const asked = w.asked.length
+  expect(refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))).toBe('')
+  expect(w.asked.length).toBe(asked)
+  expect(w.ran.length).toBe(1)
+  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
+  // A different logic only edit he never answered for is still held.
+  expect(refusalOf(await call($, edit('}: Props)', '}: PageProps)')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 test('#2294: a new refusal message in a mod hook file is still held (the #2173 shape), however little else changes', withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })

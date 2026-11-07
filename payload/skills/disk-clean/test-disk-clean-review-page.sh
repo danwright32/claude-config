@@ -71,14 +71,14 @@ fixture_order() {
   python3 - "$FIXTURE" <<'PY'
 import json, sys
 f = json.load(open(sys.argv[1]))
-personal = ["forgotten-tools", "large-files"]
+personal = [c for c in ["forgotten-worktrees", "forgotten-tools", "large-files"] if c in f["categories"]]
 tot = {c: sum(it["bytes"] or 0 for it in f["items"] if it["category"] == c and it["state"] == "offerable") for c in f["categories"]}
 rest = sorted([c for c in f["categories"] if c not in personal], key=lambda c: -tot[c])
 print(" ".join(rest + personal))
 PY
 }
 notes() { # [<categories>]
-  printf 'categories%s%s\n' "$S" "${1:-trash caches xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files}"
+  printf 'categories%s%s\n' "$S" "${1:-trash caches xcode build-folders docker playwright claude-temp worktrees forgotten-worktrees transcripts runaway-logs forgotten-tools large-files}"
   [ -z "${EXTRA_NOTES:-}" ] || printf '%s\n' "$EXTRA_NOTES"
 }
 fresh() {
@@ -223,6 +223,19 @@ check "its markup is escaped" "$(has "$(row large-files-1)" "~/Downloads/&lt;scr
 check "and never live" "$(hasnt "$HTML" "<script>alert(1)")"
 check "a detail holding markup is escaped too" "$(has "$(row large-files-1)" "&lt;b&gt;bold&lt;/b&gt;")"
 check "the page still has exactly one script" "$(eq "$(count_of "$HTML" "<script")" 1)"
+
+# Worktrees whose repository is gone are Dan's own too, since they can hold uncommitted work, so
+# they sit with his files at the end, before Tools not used in 180 days, however large (D3, #2346).
+fresh
+printf '%s\n' "caches-1${S}caches${S}delete${S}$H/Library/Caches/a${S}4096${S}offerable${S}1:1${S}measured${S}${S}" \
+  "forgotten-worktrees-1${S}forgotten-worktrees${S}trash${S}$H/.overture-wt-1${S}943718400${S}offerable${S}1:2${S}measured${S}${S}its repository ~/Apps/gone is gone; last changed 2024-01-01" \
+  "forgotten-tools-1${S}forgotten-tools${S}trash${S}$H/.gradle${S}8192${S}offerable${S}1:3${S}measured${S}${S}" \
+  "large-files-1${S}large-files${S}trash${S}$H/Downloads/a.iso${S}629145600${S}offerable${S}1:4${S}measured${S}${S}" > "$H/items.txt"
+write_record "$H/items.txt" "caches forgotten-worktrees forgotten-tools large-files"
+render --out "$OUT"
+order="$(grep -oE '<div class="group-head" data-category="[a-z-]+"' <<< "$HTML" | awk -F '"' '{ printf "%s%s", (n++ ? " " : ""), $4 }')"
+check "worktrees whose repository is gone come with Dan's own files, first of them (D3)" "$(eq "$order" "caches forgotten-worktrees forgotten-tools large-files")"
+check "and the kind is named in words" "$(has "$HTML" "<h2>Worktrees whose repository is gone</h2>")"
 
 # A kind with nothing that can be ticked has its heading box disabled (D11).
 fresh
