@@ -783,12 +783,13 @@ fi
 # long budget and names a file (SCANNERS_BUDGET_ENDS_WHEN) its scanner writes once it is holding;
 # the budget then ends as soon as that file exists, but not before SCANNERS_BUDGET_ENDS_NOT_BEFORE
 # seconds. Ending sooner can only refuse a push the budget would have let through, never pass one it
-# would have refused, so this cannot loosen the gate. And it is honoured only while the record of
-# passes is somewhere other than the real one, which every run of the suite sets and no real push
-# does (claude-config#2217), so a real push never reads it at all.
+# would have refused, so this cannot loosen the gate. And it is honoured only under the hooks' test
+# marker, HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push
+# carries: the one marker every hook's test only settings read (claude-config#2231), where this once
+# read a record of passes kept somewhere other than the real one (#2217).
 _sc_budget_ends_when=""
 _sc_budget_not_before=0
-if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "$_sc_state_dir" != "$HOME/.claude/state/scanners-passed" ]; then
+if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
   _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
   whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}" _sc_budget_not_before || _sc_budget_not_before=0
 fi
