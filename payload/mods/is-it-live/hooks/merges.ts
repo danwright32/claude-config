@@ -39,11 +39,12 @@ export { VIEW_FIELDS, isNotAPr }
 /** How far GitHub's clock may sit behind this Mac's before a merge reads as older than the command. */
 export const SKEW_MS = 10 * 60_000
 /**
- * How long a merge the helper makes in the background is asked about before it is let go: twice the
- * longest the helper can run (claude-config#1271), which since claude-config#1697 is its ceiling of
- * nine hours in line for the repository's turn (a line that keeps moving keeps its place) plus its
- * deadline of three hours from taking it. A ratio test-merge-when-ready.sh checks against the
- * helper's measured budgets, so neither number can be raised alone (L227).
+ * How long a merge the helper makes in the background is asked about before it is let go: twice its
+ * three hours in line with the line standing still plus its deadline of three hours from taking the
+ * turn (claude-config#1271, #1604), a ratio test-merge-when-ready.sh checks against the helper's
+ * measured budgets, so neither number can be raised alone (L227). Since claude-config#2351 a line
+ * that keeps moving never ends the helper, so a run behind a very long moving line (about 24 pull
+ * requests each holding the turn its full hour) can outlast this window, and its merge is then let go.
  */
 export const WAIT_MS = 24 * 60 * 60_000
 

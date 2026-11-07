@@ -1774,9 +1774,14 @@ than three hours, and three of them each ran out with it still moving and were q
 at the back. So it counts only time in which nothing ahead advanced (the turn passing to another
 ticket, or one ahead leaving), a run keeps its place while the line moves, and it says once, when it
 passes the budget, that it is keeping its place and why. It stops as "nothing ahead of it in line has
-moved for 3h" when the line stood still, and as the ceiling, "its 9h ceiling in line
-(`MWR_LINE_MAX_SECONDS`), with the line still moving", when a line that keeps moving has still not
-reached it in nine hours (room for about 27 merges of 20 minutes; a setting). While it waits in line
+moved for 3h" when the line stood still. A line that keeps moving never ends a run (claude-config#2351):
+the nine hour ceiling #1697 also put on the whole wait, counted from the run's start, ended 11 helpers
+1 to 3 places from the front on 2026-11-06 with the line still moving, and each ran again at the back
+behind about 20 others, so the pull requests that had waited longest merged last. That ceiling is gone,
+and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks it took in line up to
+each move of the line. A wait still ends: nobody can join a line ahead of a run, so it can move only as
+many times as there were pull requests ahead, and the line standing still for three hours ends it.
+While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
 still taken at once: a line of 15 waiters read once a minute was about 900 of the account's 5,000
