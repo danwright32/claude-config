@@ -3144,11 +3144,34 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
-What it does not see, so a pass is not read as more than it measured: a module a script imports (so
-repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
-program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
-means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
-or a payload it cannot read that names a send route, is refused with the reason.
+A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
+`export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
+TypeScript do (the path, each extension, the `.ts` a `.js` names, a folder's `package.json` main or
+its index). Each module found is judged as the script is, by the endpoint it names, then its own
+imports followed, each module read once, so a cycle ends. So repo-digest's `npm run digest`, whose
+`src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
+`scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
+refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
+gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
+names it and is refused like a script run directly would be; a helper that names none (one that
+saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
+`scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
+importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
+
+A Python script's imports are followed the same way: `import x`, `from x import y` and relative
+`from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
+own folder as Python finds it. A module not on disk there is the standard library or an installed
+package and is not read; a relative import that names nothing there is refused. Code given inline
+(`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
+in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
+
+What it does not see, so a pass is not read as more than it measured: an import of a package or
+through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
+with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
+post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
+send route, is refused with the reason.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
@@ -3159,7 +3182,9 @@ and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s a
 load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
 or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
-around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
+around the gate, was not reproduced by these and is replaced by them. Following imports (2026-11-06,
+median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
+before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Read only queries are approved without asking
 
