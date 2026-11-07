@@ -157,13 +157,31 @@ does a public repository a work owner holds. It reads the whole command, a hered
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
 command and never written to disk: the repo digest's repository list (the one
-`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, the work MacBook's project folders
+from the Projects section of the global CLAUDE.md, the organisation's web and email domain (matched
+only as a domain, after an @ or before a dot and a top level domain), and the two built in hashes
+(#2184). Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
 the file scan and the send scan are unchanged, and the commit message checks above read the same
 list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
+
+The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
+command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
+edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
+PATH through `CLAUDE_ENV_FILE`, and `hooks/bin/gh` there judges every gh a script runs with the same
+rule before handing it to the real gh. It refuses with exit 1 without naming what it matched,
+since a script's output can land in a log, and otherwise runs the real gh with its exit code and
+its standard input unchanged. A gh alias is judged as what it expands to, in the hook and the guard
+alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook passes it as before
+and leaves it to the guard. A session started before this was installed, or one whose PATH does not
+carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
+not checked until a new session starts: refusing those scripts instead would stop
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
+covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
+extensions.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -2495,7 +2513,11 @@ description and commits, and the scanner at its base commit
 timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109
 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds
 on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo
-digest list and the registry, then the match
+digest list and the registry, then the match. With the once per session notice (#2183), on
+2026-11-03, five readings each at load average 60 to 84, timed from outside with a python3 clock
+(which adds its own start up to every reading): 0.06 to 0.36 seconds on a plain `git push` in a
+session already stamped, against 0.04 to 0.06 with no session id, a file test and noise apart.
+Re-measure at a quieter load
 
 </td></tr>
 <tr><td>
@@ -2571,6 +2593,12 @@ anything
 </td></tr>
 </tbody>
 </table>
+
+`hooks/bin/gh` (#2183) has no row, since no push waits on it: it stands in front of every gh a
+script runs. In the same readings on 2026-11-03 it added 0.02 to 0.20 seconds to a gh command it
+does not judge (`gh --version`: real 0.07 to 0.11, guard 0.09 to 0.27) and about 0.11 to one it
+judges (`gh pr view --help`: real 0.08 to 0.12, guard 0.18 to 0.22), its python3 start; a judged
+write then pays the publish gate's own reads in the row above. Re-measure at a quieter load.
 
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
@@ -3146,11 +3174,34 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
-What it does not see, so a pass is not read as more than it measured: a module a script imports (so
-repo-digest's `npm run digest`, whose `src/digest.ts` imports the file that posts, still passes), a
-program run by bare name from the PATH, and an endpoint assembled from pieces on purpose. The threat it answers is a session that
-means well choosing the quickest way to post. It fails closed: a python that is missing or crashes,
-or a payload it cannot read that names a send route, is refused with the reason.
+A JavaScript or TypeScript script's relative imports are followed (#2318): `import ... from './x'`,
+`export ... from`, `import './x'`, `import('./x')` and `require('./x')`, resolved as node and
+TypeScript do (the path, each extension, the `.ts` a `.js` names, a folder's `package.json` main or
+its index). Each module found is judged as the script is, by the endpoint it names, then its own
+imports followed, each module read once, so a cycle ends. So repo-digest's `npm run digest`, whose
+`src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
+`scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
+refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
+gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
+names it and is refused like a script run directly would be; a helper that names none (one that
+saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
+`scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
+importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
+
+A Python script's imports are followed the same way: `import x`, `from x import y` and relative
+`from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
+own folder as Python finds it. A module not on disk there is the standard library or an installed
+package and is not read; a relative import that names nothing there is refused. Code given inline
+(`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
+in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
+
+What it does not see, so a pass is not read as more than it measured: an import of a package or
+through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
+with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
+post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
+send route, is refused with the reason.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
@@ -3161,7 +3212,9 @@ and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s a
 load average 22, where bare bash took 0.005 s; a call the full rule reads starts python3, 0.05 s for `npm run x`
 or `bin/x`, 72 ms on `python3` running `nudge.py`, 130 ms on `bash` running a suite script, and 154
 ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 calls by a timer
-around the gate, was not reproduced by these and is replaced by them. Suite: `test-slack-drafts-only-gate.sh`.
+around the gate, was not reproduced by these and is replaced by them. Following imports (2026-11-06,
+median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
+before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
 ## Read only queries are approved without asking
 
@@ -4210,7 +4263,9 @@ which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one su
 its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
 shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
 the suites the runner runs, so the next suite added cannot quietly have no bound
-(claude-config#465). When it stops a suite it reads the load average through
+(claude-config#465). The push asks it too: `scanners-before-push.sh` refuses a push that adds or
+changes a `test-*.sh` that does not arm, judged as the push delivers it, through
+`hooks/lib/suite-arms-check.sh`, the same answer the full suite gives (claude-config#2330). When it stops a suite it reads the load average through
 `hooks/lib/load-average.sh` and judges it by that file's one predicate: where the load beyond the
 suite's own share (`HOOK_TESTS_SLOTS`, 1 when started directly) is more than the machine has cores,
 the stop says UNMEASURED with the figures, since a suite starved of the processor cannot be told
@@ -6846,6 +6901,10 @@ each call a noun makes to the function the TypeScript compiler's own checker res
 parameters are the language's answer rather than the first function of that name in the mod (#895).
 A promise kept in a variable outside a noun's code is linked to a noun's read the same way, so only
 a read of that same variable counts, never another function's variable sharing its name (#915).
+Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
+and that includes a function written in place and handed to a mod helper that only gives it to a
+timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
+does with that parameter, never by its name (#2299).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
