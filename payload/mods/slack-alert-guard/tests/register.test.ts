@@ -677,10 +677,71 @@ test('a shell write approved in one folder is held again when, run from another,
   await ask($, w, why, APPROVE, { rendered: 'Disk is full on db-1' })
   expect(refusalOf(await call($, cmd))).toBe('')
   // From the web folder the same words write the web app's alert, which Dan has not approved.
+  // (Dan item 4's control: a different file is a different approval.)
   w.ctl.cwd = '/w/app/web'
   const again = refusalOf(await call($, cmd))
   expect(again).toContain(WEB)
   expect(idIn(again)).toBeDefined()
+  expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2371, Dan's item 5: a script step that builds its Slack text by concatenation, in a
+// reusable alert workflow and in a composite action, and a nested template literal in a sender.
+const scriptSteps = (indent: string) =>
+  [
+    `${indent}- name: Tell the team the backup failed`,
+    `${indent}  uses: actions/github-script@v7`,
+    `${indent}  env:`,
+    `${indent}    SLACK_WEBHOOK_URL: \${{ secrets.SLACK_WEBHOOK_URL }}`,
+    `${indent}  with:`,
+    `${indent}    script: |`,
+    `${indent}      const text = 'Nightly backup of ' + process.env.DB + ' failed on ' + context.ref`,
+    `${indent}      await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text }) })`,
+    '',
+  ].join('\n')
+// Each file gains its own wording, since an approval is kept by the wording and would let the second through.
+const reworded = (words: string) => ({ old_string: "' failed on '", new_string: `' ${words} on '` })
+
+test("a workflow's script step that posts to Slack is held for its new wording, and Dan approves the message, never the code that builds it (Dan item 5)", withKit, async ($, on) => {
+  const WORKFLOW = '/w/app/.github/workflows/backup-alert.yml'
+  const ACTION = '/w/app/.github/actions/notify/action.yml'
+  const w = world($, on, {
+    files: {
+      [WORKFLOW]: `on: workflow_call\njobs:\n  alert:\n    runs-on: ubuntu-latest\n    steps:\n${scriptSteps('      ')}`,
+      [ACTION]: `name: Notify\nruns:\n  using: composite\n  steps:\n${scriptSteps('    ')}`,
+    },
+  })
+  for (const [file, words] of [
+    [WORKFLOW, 'failed again'],
+    [ACTION, 'failed once more'],
+  ] as const) {
+    const edit = { tool: 'Edit', file_path: file, ...reworded(words) }
+    const why = refusalOf(await call($, edit))
+    expect(why).toContain(`${words} on`)
+    // The code around the pieces is not wording, so Dan is never asked to read it.
+    expect(why).not.toContain('const text')
+    const a = await ask($, w, why, APPROVE, { rendered: `Nightly backup of orders ${words} on refs/heads/main` })
+    expect(refusalOf(a)).toBe('')
+    expect(contextOf(a)).toContain(APPROVE)
+    expect(refusalOf(await call($, edit))).toBe('')
+  }
+  expect(w.ran.length).toBe(2)
+})
+
+test('a nested template literal in a Slack sender is held when its inner wording changes, and Dan approves the message as posted (Dan item 5)', withKit, async ($, on) => {
+  const BACKUP = '/w/app/lib/backup.ts'
+  const w = world($, on, {
+    files: {
+      [BACKUP]:
+        'export const note = (db: string, late: boolean, hours: number) => `Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}`\nexport const post = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: t })\n',
+    },
+  })
+  const edit = { tool: 'Edit', file_path: BACKUP, old_string: 'hours late', new_string: 'hours behind' }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('is ${hours} hours behind')
+  const a = await ask($, w, why, APPROVE, { rendered: 'Backup of orders is 3 hours behind' })
+  expect(refusalOf(a)).toBe('')
+  expect(refusalOf(await call($, edit))).toBe('')
   expect(w.ran.length).toBe(1)
 })
 

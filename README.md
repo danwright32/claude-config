@@ -6224,8 +6224,11 @@ so neither is held nor read as a sender; a string handed to a query builder call
 `.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
-run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
-other run commands; and a file in no git repository, as a scratchpad script is, is let through even
+run command that itself posts to Slack, each string of a `script:` step that posts to Slack, read as
+JavaScript), never step or job names, needs lists, input descriptions or other run commands; a
+`script:` block in any YAML file is code, never plain values; a nested template literal is one
+string, the strings inside it wording of their own, and the message Dan is shown is checked only for
+the words between its filled in values, never the code that fills them (#2371); and a file in no git repository, as a scratchpad script is, is let through even
 when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is

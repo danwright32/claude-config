@@ -127,8 +127,8 @@ const end = (found: Found): never => {
 /**
  * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
  * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
- * repository to files holding both the template's name and the word slack or postMessage, so only
- * those are read. When none does, the files that hand the template on are followed (#2286): a
+ * repository to files holding the word slack or postMessage and a line naming the template in a form
+ * a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
  * deep; a chain going further is could not check. A template is sent too by a file that uses it and

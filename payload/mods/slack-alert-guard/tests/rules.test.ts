@@ -19,6 +19,7 @@ import {
   literalsOf,
   mentionsStore,
   namePatterns,
+  plainYamlValues,
   question,
   refersTo,
   refusal,
@@ -118,6 +119,57 @@ test('the message Dan is shown must be the real one: every variable filled, ever
   expect(renderedProblem('Deploy 4182 failed', added)).toContain('failed on')
   // A shell call names no strings, so only the placeholders are read.
   expect(renderedProblem('Backup finished on db-1', [])).toBeUndefined()
+})
+
+// claude-config#2371, Dan's item 5: Dan is shown the message, never the source that builds it.
+const NESTED = 'export const note = (db: string, late: boolean, hours: number) => `Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}`\n'
+
+test('a nested template literal is read whole, its inner wording read too, and the message asks only for words a message holds (Dan item 5)', () => {
+  const texts = stringsOf(NESTED, false, true).map(s => s.text)
+  // The outer template is one string, its value filled in by the inner one; the inner one is wording of its own.
+  expect(texts).toContain('Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}')
+  expect(texts).toContain('is ${hours} hours late')
+  const added = wordingOf(texts)
+  expect(added).toContain('is ${hours} hours late')
+  expect(renderedProblem('Backup of orders is 3 hours late', added)).toBeUndefined()
+  // What it does ask for is a word of the message, never a piece of the code.
+  const missing = renderedProblem('Backup of orders is 3 late', added) ?? ''
+  expect(missing).toContain('hours late')
+  expect(missing).not.toContain('${late')
+  expect(renderedProblem('Orders is 3 hours late', added)).toContain('Backup of')
+  // A template whose substitution never closes is read as before, never lost.
+  expect(stringsOf('const m = `Disk is ${full`\n', false, true).map(s => s.text)).toEqual(['Disk is ${full'])
+})
+
+// A reusable alert workflow whose github-script step posts to Slack, building its text by concatenation.
+const SCRIPT_WORKFLOW = [
+  'on: workflow_call',
+  'jobs:',
+  '  alert:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - name: Tell the team the backup failed',
+  '        uses: actions/github-script@v7',
+  '        env:',
+  '          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}',
+  '        with:',
+  '          script: |',
+  "            const text = 'Nightly backup of ' + process.env.DB + ' failed on ' + context.ref",
+  "            await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text }) })",
+  '',
+].join('\n')
+
+test("a workflow's script step that posts to Slack is read as JavaScript: each piece of a concatenation is wording, and the code around it never is (Dan item 5)", () => {
+  const ci = wordingOf(ciMessages(SCRIPT_WORKFLOW))
+  expect(ci).toEqual(['Nightly backup of ', ' failed on '])
+  expect(renderedProblem('Nightly backup of orders failed on refs/heads/main', ci)).toBeUndefined()
+  // A script step that posts nothing to Slack is a step like any other.
+  expect(ciMessages(SCRIPT_WORKFLOW.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'))).toEqual([])
+  // Outside a CI workflow (a composite action), a script block's lines are code, never plain values.
+  const values = plainYamlValues(SCRIPT_WORKFLOW)
+  expect(values.some(v => v.includes('const text'))).toBe(false)
+  expect(values.some(v => v.includes('await fetch'))).toBe(false)
+  expect(values).toContain('Tell the team the backup failed')
 })
 
 test("the guard's own record is recognised in the store, by name, and in a shell command", () => {
