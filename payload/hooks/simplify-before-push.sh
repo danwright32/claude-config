@@ -109,6 +109,8 @@ ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && allow override
 case $resolved in
   1) allow empty ;;
   2) fail_open "no upstream branch: cannot tell what this push adds" ;;
+  # A listing git failed is not an empty push (#2349): the files read are only part of it, if any.
+  3) fail_open "could not list the files this push carries: git failed reading $PC_LIST_FAILED" ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -130,7 +132,10 @@ EOF
 # ---------------------------------------------------------------------------
 # 5. Build the source diff and ask the model whether it carries a material simplification.
 # ---------------------------------------------------------------------------
-diff_all="$(pc_diff "${SRC_PATHSPEC[@]}")"
+# A diff git failed is not an empty one (#2349 review): it was read as nothing to judge and allowed
+# silently, exactly like a push with no change to see.
+diff_all="$(pc_diff "${SRC_PATHSPEC[@]}")" \
+  || { rc=$?; fail_open "could not read the diff of the source files this push carries: git failed reading $(pc_diff_failure "$rc")"; }
 diff_len=${#diff_all}
 diff="$(printf '%s' "$diff_all" | head -c "$DIFF_BUDGET")"
 if [ "$diff_len" -gt "$DIFF_BUDGET" ]; then
