@@ -169,6 +169,8 @@ case "$*" in
   # GitHub's answer, and with none the read fails, as an answer nobody set.
   "api graphql"*)
     printf '%s\n' "$(rd clock)" >> "$ST/graph-times"
+    # graph-limited: GitHub refuses this one read for its rate limit.
+    [ -e "$ST/graph-limited" ] && { rm -f "$ST/graph-limited"; echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2; exit 1; }
     [ -s "$ST/graph" ] || { echo "fake gh: no commit graph set" >&2; exit 1; }
     cat "$ST/graph"
     ;;
@@ -2840,7 +2842,18 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#2310 a proof unread at one look and read at the next merges" "0" "$rc"
 check_eq "#2310 while the head's own run is still going" "$PENDING" "$(cat "$ST/rollup")"
 check "#2310 the head's record ends taken" "$(printf '%s\ttaken\t%s' "$NEW" "$OLD")" "$(tp_rows | tail -1)"
-check "#2310 after the unread look was recorded" "$(printf '%s\tnot-taken\t\tcould not read' "$NEW")" "$(tp_rows | head -1)"
+check "#2310 after the unread look was recorded" "$(printf '%s\tnot-taken\t\tcould not read' "$NEW")" "$(sed -n 1p "$TP_LEDGER_DIR/decisions.tsv")"
+
+# A proof refused for the rate limit pauses every look, as any read the helper makes does (#1482),
+# and is asked again once the pause is over.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+tp_graph "$TP_TREE"; : > "$ST/graph-limited"
+printf 'HTTP/2.0 200 OK\r\n\r\n{"resources":{"core":{"limit":5000,"remaining":4989,"reset":1003600},"graphql":{"limit":5000,"remaining":4900,"reset":1003600}}}\n' > "$ST/probe"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2310 a proof refused for the rate limit merges once asked again" "0" "$rc"
+check "#2310 saying GitHub refused the proof's reads for its rate limit" "refused the identical tree proof's reads for head ${NEW:0:7} for its rate limit" "$out"
+check "#2310 and pausing the session's looks for it" "This session's looks at GitHub wait" "$out"
 
 # A check that registers after the proof was weighed is weighed again (lessons review of 9362ece):
 # the review still running keeps the head waiting, a lint check the previous head never ran appears,

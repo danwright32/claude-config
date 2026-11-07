@@ -1477,7 +1477,9 @@ while :; do
         0) tp_for="$tp_key"; tp_ok=1
            say "Head ${head:0:7}: not waiting for its own check run, since $TP_WHY (claude-config#2310). Asking the gates now."
            tp_record merge-when-ready "$slug" "$pr" "$head" taken "$TP_FROM" "$TP_WHY" || say "The decision above could not be recorded." ;;
-        2) if [ "$tp_unread_for" != "$head" ]; then
+        # A rate limit answer pauses every look in the session, as any read here does (#1482).
+        2) ghp_rate_limited "$TP_WHY" && rate_pause "the identical tree proof's reads for head ${head:0:7}" "$TP_WHY"
+           if [ "$tp_unread_for" != "$head" ]; then
              tp_unread_for="$head"
              tp_record merge-when-ready "$slug" "$pr" "$head" not-taken "" "$TP_WHY" || say "Whether head ${head:0:7} carried an identical tree's green could not be recorded."
            fi ;;
