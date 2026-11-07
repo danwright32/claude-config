@@ -307,7 +307,7 @@ EOF
   chmod +x "$1/payload/hooks/test-$2.sh"
 }
 R2033="$(mkrepo lockbudget)"; add_scanner "$R2033" alpha 0; add_slow_locked_scanner "$R2033" phi; commit_all "$R2033"
-o2033="$(HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=trueSCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
+o2033="$(HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
 [ "$c2033" -eq 2 ] \
   && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
   || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
