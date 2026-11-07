@@ -453,9 +453,13 @@ export type ModKitGhApi = { method: string; endpoint: string | undefined; fields
  * a brace the shell expands) carries `folder`, the absolute folder it lands in, where its folder
  * part (or, for a bare name, the folder the command is in) is named as a path would be, a cd before
  * it followed (#1123); absent where that cannot be named or the name may reach below it (a variable
- * in it, a whole `**`).
+ * in it, a whole `**`). `values`, on a write with no path whose word is one variable alone (`$T`,
+ * `${T}`), is every value any plain assignment in the command gives it, as written (`$(mktemp)`),
+ * however many and wherever they stand (#2171); absent where it was not set before the write, where
+ * anything else may set it (read, a loop, printf -v, an append, a declare with options, `${T:=x}`),
+ * or where the command runs text eval, source, trap or alias may set it by.
  */
-export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
+export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true; values?: string[] }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),

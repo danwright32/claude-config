@@ -1320,3 +1320,63 @@ describe('writes: what the shell runs inside a command substitution (#965)', () 
     expect(read('echo x > d; echo "$(cp /tmp/a.md d)"').files).toEqual([{ word: 'd', path: `${CWD}/d`, sources: ['/tmp/a.md'], mayBeFolder: true }])
   })
 })
+
+// #2171: a write to a variable alone whose value the reader cannot read (`T=$(mktemp); ... > "$T"`)
+// is given with `values`, every value any assignment in the command gives it, as written, so a
+// guard can judge what those values are. Absent wherever anything else may set it or it was not set
+// before the write.
+describe('writes: the values a variable alone is given (#2171)', () => {
+  const values = (command: string) => read(command).files.map(f => f.values)
+  test('a variable set only by plain assignments before the write is given every value, as written', () => {
+    expect(values('T=$(mktemp); echo x > "$T"')).toEqual([['$(mktemp)']])
+    expect(values('T="$(mktemp -d)"; git show HEAD:app/page.tsx > ${T}')).toEqual([['$(mktemp -d)']])
+    expect(values('export T=$(mktemp); wc -l app/page.tsx | tee "$T"')).toEqual([['$(mktemp)']])
+    // Two values, a ; or an && between them unknown: both are given.
+    expect(values('T=$(mktemp); T=$(head -1 list); echo x > "$T"')).toEqual([['$(mktemp)', '$(head -1 list)']])
+    // A value given anywhere in the command counts, after the write too (a loop or a function may run it first).
+    expect(values('T=$(mktemp); echo x > "$T"; T=$(head -1 list)')).toEqual([['$(mktemp)', '$(head -1 list)']])
+    // Inside a subshell too, though it ends there.
+    expect(values('T=$(mktemp); (T=$(head -1 list)); echo x > "$T"')).toEqual([['$(mktemp)', '$(head -1 list)']])
+  })
+  test('a variable the reader can read is given its path, never values', () => {
+    expect(read('T=out.txt; echo x > "$T"').files).toEqual([{ word: '$T', path: `${CWD}/out.txt` }])
+  })
+  test('no values where the variable was not set before the write, or ended with a subshell', () => {
+    expect(values('echo x > "$T"')).toEqual([undefined])
+    expect(values('echo x > "$T"; T=$(mktemp)')).toEqual([undefined])
+    expect(values('echo x > "$T"; T=$(mktemp); echo y > "$T"')).toEqual([undefined])
+    expect(values('(T=$(mktemp)); echo x > "$T"')).toEqual([undefined])
+    // Set at the first write, not at the second, which is the same word.
+    expect(values('(T=$(mktemp); echo x > "$T"); echo y > "$T"')).toEqual([undefined])
+  })
+  test('no values where anything but a plain assignment may set it, anywhere in the command', () => {
+    const given = [
+
+      'T=$(mktemp); read T < list; echo x > "$T"',
+      'T=$(mktemp); echo x > "$T"; read T < list',
+      'T=$(mktemp); mapfile T < list; echo x > "$T"',
+      'T=$(mktemp); readarray T < list; echo x > "$T"',
+      'T=$(mktemp); printf -v T %s app/page.tsx; echo x > "$T"',
+      'T=$(mktemp); T+=.tsx; echo x > "$T"',
+      'T=$(mktemp); declare -n T=OTHER; echo x > "$T"',
+      'T=$(mktemp); for T in a b; do :; done; echo x > "$T"',
+      'T=$(mktemp); while read -r T; do echo x > "$T"; done < list',
+      'T=$(mktemp); eval "$X"; echo x > "$T"',
+      'T=$(mktemp); echo x > "$T"; source ./env.sh',
+      "T=$(mktemp); trap 'T=app/page.tsx' DEBUG; echo x > \"$T\"",
+      "T=$(mktemp); alias echo='T=app/page.tsx; echo'; echo x > \"$T\"",
+      'T=$(mktemp); : ${T:=app/page.tsx}; echo x > "$T"',
+      'T=$(mktemp); : ${T=app/page.tsx}; echo x > "$T"',
+    ].filter(c => values(c)[0] !== undefined)
+    // Every command given values is named, so a looser reader shows each case it lets through.
+    expect(given).toEqual([])
+  })
+  test('no values for a word that is more than the variable alone', () => {
+    expect(values('T=$(mktemp); echo x > "$T/a"')).toEqual([undefined])
+    expect(values('T=$(mktemp); echo x > "$T"x')).toEqual([undefined])
+    expect(values('T=$(mktemp); echo x > "$T$U"')).toEqual([undefined])
+  })
+  test('no values where a substitution writes the same word, which no assignment of the line reaches', () => {
+    expect(values('T=$(mktemp); echo x > "$T"; echo "$(echo y > "$T")"')).toEqual([undefined])
+  })
+})
