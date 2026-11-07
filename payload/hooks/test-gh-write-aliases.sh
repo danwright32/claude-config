@@ -91,6 +91,14 @@ case "$1 $2" in
     case "$*" in *contents/repos.json*)
       cat "$FAKE_LIST"; exit 0 ;;
     esac ;;
+  "api gists/"*)
+    # A gist's own record, from the gist table: its id and whether it is public (#2412).
+    id="${2#gists/}"
+    while read -r g p; do
+      [ "$g" = "$id" ] || continue
+      printf '{"id":"%s","public":%s}\n' "$g" "$p"; exit 0
+    done < "$FAKE_GISTS"
+    echo "HTTP 404: Not Found (https://api.github.com/gists/$id)" >&2; exit 1 ;;
 esac
 for a in "$@"; do
   case "$a" in -) cat > "$FAKE_STDIN_SAVE" ;; esac
@@ -101,7 +109,9 @@ SH
 chmod +x "$BIN/gh"
 
 printf '%s\n' '{"tokenByOwner":{"Acme-Corp":"X"},"repos":[{"owner":"Acme-Corp","name":"acme-widgets","label":"widgets"},{"owner":"Acme-Corp","name":"zephyr","label":"Zephyr"}]}' > "$LIST"
-printf 'danwright-test/public-notes PUBLIC\ndanwright-test/private-notes PRIVATE\n' > "$VIS"
+printf 'danwright-test/public-notes PUBLIC\ndanwright-test/private-notes PRIVATE\nAcme-Corp/quiet-tools PRIVATE\n' > "$VIS"
+GISTS="$WORK/gists"
+printf 'aaaa1111 true\nbbbb2222 false\n' > "$GISTS"
 printf 'danwright-test/public-notes' > "$CO/.fake-default"
 FAKE_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
 PROJECTS="$WORK/CLAUDE.md"
@@ -117,7 +127,7 @@ printf 'Release notes\n\nA work repository showed it.\n' > "$CO/clean.md"
 
 fixture_env(){
   env HOOK_TESTS_RUNNING=1 HOME="$HOMEDIR" FAKE_CALLS="$CALLS" FAKE_LIST="$LIST" FAKE_VIS="$VIS" \
-    FAKE_STDIN_SAVE="$STDIN_SAVE" FAKE_ALIASES="$ALIASES" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    FAKE_STDIN_SAVE="$STDIN_SAVE" FAKE_ALIASES="$ALIASES" FAKE_GISTS="$GISTS" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
     WORK_NAMES_PROJECT_LIST="$PROJECTS" WORK_NAMES_PROJECT_HASHES="" "$@"
 }
 
@@ -162,6 +172,22 @@ reads "issue view" gh issue view 5
 reads "label new" gh label new
 # list's alias is left as written, so no gate reading list as a harmless read passes more.
 reads "pr ls" gh pr ls
+# The checks that skip a command before reading it (claude-config#2411) look only for the group's own
+# word, issue or pr, never for an action's: the action is read by gh_path, which knows every alias. So
+# every other name gh gives those groups must hold that word, or the cheap test would skip it unread.
+# This fails the day the table gains a name for either group that does not.
+groups_hold_word(){
+  python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("shell_words", sys.argv[1])
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+bad = [k for k, v in sw.GH_GROUP_ALIASES.items() if v in ("issue", "pr") and v not in k]
+print(" ".join(bad))
+sys.exit(1 if bad else 0)
+' "$READER"
+}
+check "#2411 every other name of the issue and pr groups holds the word the cheap tests look for" groups_hold_word
 
 # ================================================================ 2. the issue field gate
 fields(){   # $1 = the command; stdout in out
@@ -289,6 +315,74 @@ check "#2398 (control) a private repository's description passes: $out" passed
 hook "gh repo edit danwright-test/public-notes --description \"handy tools\""
 check "#2398 (control) a clean description passes: $out" passed
 
+# gh gist edit on a public gist posts its description, a file it adds and a file's new text
+# (claude-config#2412). Whether the gist is public is read from GitHub (gh api gists/<id>).
+hook "gh gist edit aaaa1111 --desc \"zephyr notes\""
+check "#2412 a public gist's new description naming one is refused: $out" refused
+check "#2412 and the refusal names gh gist edit and the public gist: $out" has "$out" "gh gist edit posts as a public gist"
+hook "gh gist edit https://gist.github.com/someone/aaaa1111 --add named.md"
+check "#2412 a file added to a public gist, named by its address, is read and refused: $out" refused
+hook "gh gist edit aaaa1111 --filename notes.md named.md"
+check "#2412 a public gist file's new text read from a file naming one is refused: $out" refused
+hook "gh gist edit aaaa1111 -a named.md"
+check "#2412 the short -a is read: $out" refused
+hook "gh gist edit aaaa1111 --filename notes.md"
+check "#2412 a public gist file edited in an editor program, which this check cannot read, is refused: $out" refused
+check "#2412 and says it is an editor's text: $out" has "$out" "editor"
+hook "cat clean.md | gh gist edit aaaa1111 --filename notes.md -"
+check "#2412 a public gist file's new text from standard input is refused by the hook, which cannot read it: $out" refused
+hook "gh gist edit cccc3333 --add clean.md"
+check "#2412 a gist whose visibility cannot be read is refused: $out" refused
+check "#2412 and says the visibility could not be told: $out" has "$out" "could not tell whether the gist cccc3333 is public"
+hook "gh gist edit aaaa1111 --add clean.md"
+check "#2412 (control) a clean file added to a public gist passes: $out" passed
+hook "gh gist edit aaaa1111 --remove old.md"
+check "#2412 (control) removing a file from a public gist posts no text and passes: $out" passed
+hook "gh gist edit bbbb2222 --desc \"zephyr notes\" --add named.md"
+check "#2412 (control) a secret gist's edit passes: $out" passed
+hook "gh gist edit bbbb2222 --filename notes.md"
+check "#2412 (control) and a secret gist edited in an editor: $out" passed
+
+# gh repo edit --visibility public publishes every file, commit and issue a private repository holds,
+# none of which this check can read (claude-config#2412).
+hook "gh repo edit danwright-test/private-notes --visibility public --accept-visibility-change-consequences"
+check "#2412 making a private repository public is refused: $out" refused
+check "#2412 and says why: $out" has "$out" "makes danwright-test/private-notes public"
+hook "gh repo edit danwright-test/private-notes --visibility=PUBLIC --accept-visibility-change-consequences"
+check "#2412 the --visibility=value form is read too: $out" refused
+hook "GH_REPO=danwright-test/private-notes gh repo edit --visibility public --accept-visibility-change-consequences"
+check "#2412 and with the repository named by GH_REPO: $out" refused
+hook "gh repo edit danwright-test/private-notes --visibility private --accept-visibility-change-consequences"
+check "#2412 (control) keeping a repository private passes: $out" passed
+hook "gh repo edit danwright-test/private-notes --visibility internal --accept-visibility-change-consequences"
+check "#2412 (control) making it internal, which is not public, passes: $out" passed
+hook "gh repo edit danwright-test/public-notes --visibility public --accept-visibility-change-consequences"
+check "#2412 (control) a repository already public publishes nothing new and passes: $out" passed
+hook "gh repo edit Acme-Corp/quiet-tools --visibility public --accept-visibility-change-consequences"
+check "#2412 (control) a work owner's own repository made public passes, as its text does today: $out" passed
+
+# A body or notes file given inside clustered short flags is read (claude-config#2412): gh reads
+# `-dF body.md` as --draft then --body-file body.md, and `-dFbody.md` the same.
+hook "gh pr create $PUB --title T --head x -dF named.md"
+check "#2412 a body file after a clustered -d is read and refused: $out" refused
+check "#2412 and says it was in the body file: $out" has "$out" "named.md"
+hook "gh pr create $PUB --title T --head x -dFnamed.md"
+check "#2412 and with its value attached: $out" refused
+hook "gh release create v1 $PUB -dF named.md"
+check "#2412 a notes file after a clustered -d is read and refused: $out" refused
+hook "gh pr create $PUB --title T --head x -dF clean.md"
+check "#2412 (control) a clean body file after a clustered flag passes: $out" passed
+
+# Each refusal says only what its check measured (L11): a gist file that is not there was never
+# written by the command, and standard input is not a file this command writes.
+hook "gh gist create --public not-there.md"
+check "#2398 a public gist file that is not there is refused: $out" refused
+check "#2398 and says it could not be read: $out" has "$out" "could not be read"
+check "#2398 and never says the command wrote it: $out" lacks "$out" "writes from something it does not show"
+hook "cat clean.md | gh gist create --public -"
+check "#2398 a public gist from standard input says standard input: $out" has "$out" "standard input"
+check "#2398 and never says the command wrote a file: $out" lacks "$out" "writes from something it does not show"
+
 # ================================================================ 4. the guard on PATH
 guard_args(){   # $@ = gh's arguments, run from a script with the guard first on PATH
   : > "$CALLS"; rm -f "$STDIN_SAVE"
@@ -333,6 +427,17 @@ check "#2398 gh copilot behind a flag is refused: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2398 and never runs" not_posted
 FEED="$WORK/feed-clean" guard_args gist create --public -
 check "#2398 (control) the guard reads a clean public gist on standard input and posts it: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args gist edit aaaa1111 --desc "zephyr notes"
+check "#2412 the guard refuses a public gist's description naming one: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2412 and never posts it" not_posted
+FEED="$WORK/feed-named" guard_args gist edit aaaa1111 --filename notes.md -
+check "#2412 the guard reads a public gist file's new text on standard input and refuses it: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2412 and never posts it" not_posted
+FEED="$WORK/feed-clean" guard_args gist edit aaaa1111 --filename notes.md -
+check "#2412 (control) clean text on standard input for a public gist file posts: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args repo edit danwright-test/private-notes --visibility public --accept-visibility-change-consequences
+check "#2412 the guard refuses making a private repository public: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2412 and never runs it" not_posted
 guard_args release list
 check "#2398 (control) gh release list still runs the real gh at once: rc=$rc $out" [ "$rc" -eq 0 ]
 check "#2398 (control) and asks GitHub nothing first" [ "$(grep -c -v '^POST|' "$CALLS")" = "1" ]

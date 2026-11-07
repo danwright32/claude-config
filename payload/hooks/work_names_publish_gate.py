@@ -10,7 +10,8 @@ WHAT IS JUDGED. Every gh pr create, pr edit, pr comment, pr review, issue create
 issue comment, and every gh api write to a repository's issues, pulls or comments endpoints (the
 same text reaching the same place by another route, L247). Also, since claude-config#2326 and #2398,
 gh repo create (its own text, and the history --push sends), gh repo edit, gh repo sync, gh release
-create and edit (title and notes) and gh gist create --public (its files and description). gh's
+create and edit (title and notes), gh gist create --public (its files and description), and since
+#2412 gh gist edit on a public gist and gh repo edit --visibility public. gh's
 other names for these (gh pr new, gh issue new, gh release new and the rest) are read as the long
 form by lib/shell-words.py. Only where the target is PUBLIC: a private repository passes without the
 list ever being read, and so does a secret gist. A public repository owned by a work owner passes
@@ -275,6 +276,7 @@ REPO_SYNC = ("repo", "sync")
 # a public gist's files and description, and a public repository's description, homepage and topics.
 RELEASE = frozenset({("release", "create"), ("release", "edit")})
 GIST_CREATE = ("gist", "create")
+GIST_EDIT = ("gist", "edit")
 REPO_EDIT = ("repo", "edit")
 NOTES_FILE_FLAGS = ("--notes-file", "-F")
 GENERATED = ("with notes GitHub writes from the pull requests and commits it includes (--generate-notes), "
@@ -285,13 +287,25 @@ FROM_TAG = ("with notes taken from the tag's annotation or its commit's message 
             "told. Write the notes with --notes or --notes-file instead.")
 GIST_STDIN = ("from standard input (it names no file, or names -), which this check cannot read here, so "
               "whether it names a work organisation or repository cannot be told. Name the file instead.")
+GIST_EDIT_STDIN = ("with a file's new text from standard input (-), which this check cannot read here, so "
+                   "whether it names a work organisation or repository cannot be told. Name the file instead.")
+# gh gist edit opens an editor on the gist's file unless it is given a file to take the new text from,
+# or adds or removes a file (its help, gh 2.89.0); --desc alone is not counted as saying no editor
+# runs, the reading that refuses more (claude-config#2412).
+GIST_EDITOR = ("with text an editor program can write (it names no file to take the new text from), which "
+               "this check cannot read, so whether it names a work organisation or repository cannot be "
+               "told. Name the file holding the new text after the gist, or add it with --add.")
+UNREAD_FILE = ("from %s, which could not be read (%s), so whether it names a work organisation or "
+               "repository cannot be told.")
 # gh gist create's flags that take a value, so the word after one is never a file.
 GIST_VALUES = frozenset(("--desc", "-d", "--filename", "-f"))
+# gh gist edit's flags that take a value, so the word after one is never the gist or a file.
+GIST_EDIT_VALUES = frozenset(("--add", "-a", "--desc", "-d", "--filename", "-f", "--remove", "-r"))
 # gh repo edit's flags that take a value, so the word after one is never the repository's name.
 REPO_EDIT_VALUES = frozenset(("--description", "-d", "--homepage", "-h", "--add-topic", "--remove-topic",
                               "--default-branch", "--squash-merge-commit-message", "--visibility"))
 # Every gh command this gate judges, as (sub, act).
-JUDGED = KINDS | REPO_CREATE | {REPO_SYNC} | RELEASE | {GIST_CREATE, REPO_EDIT}
+JUDGED = KINDS | REPO_CREATE | {REPO_SYNC} | RELEASE | {GIST_CREATE, GIST_EDIT, REPO_EDIT}
 # gh repo create's flags that take a value, so the word after one is never the repository's name.
 REPO_CREATE_VALUES = frozenset(("--description", "-d", "--homepage", "-h", "--team", "-t", "--template",
                                 "-p", "--gitignore", "-g", "--license", "-l", "--source", "-s",
@@ -306,11 +320,12 @@ def _given(args, flags):
 
 
 def _positionals(args, valued):
+    """The words no flag takes. A lone - is one of them, as gh reads it (standard input)."""
     out, skip = [], False
     for a in args:
         if skip:
             skip = False
-        elif a.startswith("-"):
+        elif a.startswith("-") and a != "-":
             skip = a in valued
         else:
             out.append(a)
@@ -413,9 +428,10 @@ def _file_bodies(args, command, place, flags, shown_as):
     """The files a command posts from, named by flags (field.body_files' rule), as judge's bodies: the
     text of one read from disk, None for one this command writes from something it does not show.
     One whose text is in the command (written from text it shows, or standard input) is judged with
-    the command; one missing or unreadable is the issue field gate's to refuse, and gh's."""
+    the command; one missing or unreadable is the issue field gate's to refuse, and gh's. One named
+    inside clustered short flags (`-dF body.md`) is read too (claude-config#2412)."""
     out = []
-    for word, state, detail in field.body_files(args, command, place, flags):
+    for word, state, detail in field.body_files(args, command, place, flags, clustered=True):
         if state == "hidden":
             out.append(("%s %s" % (shown_as, word), None))
         elif state == "text":
@@ -452,24 +468,93 @@ def judge_gist(what, args, place, command):
     # A `-` is standard input, which only the guard reads (it hands the gate a file holding those
     # bytes); here it cannot be read, alone or beside named files.
     unseen = [GIST_STDIN] if not files or "-" in args else []
+    bodies, unread = _gist_files(files, command, place)
+    return judge_public(what, "as a public gist,", command, bodies, unseen + unread)
+
+
+def _gist_files(files, command, place):
+    """(bodies, unseen) for the local files a gist command posts: the text of each read from disk, None
+    for one this command writes from something it does not show, and for one that is not there or
+    cannot be read a clause saying so (L11: the command never wrote it). Standard input (-) is the
+    caller's to judge, and a file written from text the command shows is judged with the command."""
     named = []
     for f in files:
         named += ["--file", f]
-    bodies = []
+    bodies, unseen = [], []
     for word, state, detail in field.body_files(named, command, place, ("--file",)):
         if state == "text":
             bodies.append(("the file %s" % word, detail))
-        elif state != "shown":
+        elif state == "hidden":
             bodies.append(("the file %s" % word, None))
-    return judge_public(what, "as a public gist,", command, bodies, unseen)
+        elif state in ("missing", "unreadable"):
+            unseen.append(UNREAD_FILE % ("the file %s" % word, detail or "it is not a file"))
+    return bodies, unseen
+
+
+_GISTS = {}
+
+
+def gist_public(gist):
+    """Whether the gist (its id) is public, read from GitHub with each signed in account in turn, or
+    raises CannotTell."""
+    if gist in _GISTS:
+        return _GISTS[gist]
+    last = ""
+    for tok in _tokens():
+        ok, out, err = _gh(["gh", "api", "gists/%s" % gist], None, tok, None)
+        if ok:
+            try:
+                got = json.loads(out)["public"]
+            except (ValueError, KeyError, TypeError):
+                last = "gh api answered with something that is not the gist's JSON"
+                continue
+            if isinstance(got, bool):
+                _GISTS[gist] = got
+                return got
+            last = "gh api gave the gist's public field as %r" % (got,)
+            continue
+        last = err or last
+    raise CannotTell("could not tell whether the gist %s is public: no signed in account could read it (%s)"
+                     % (gist, last[:200]))
+
+
+def judge_gist_edit(what, args, place, command):
+    """gh gist edit posts a gist's new description, a file it adds and a file's new text, all public
+    on a public gist (claude-config#2412); a secret gist is unlisted and judged as private, as gh gist
+    create's is. The gist is the first word that is no flag's (an id or its address), the file to take
+    the new text from the second. Text an editor writes and standard input are refused on a public
+    gist, since this check cannot read them."""
+    named = _positionals(args, GIST_EDIT_VALUES)
+    if not named:
+        raise CannotTell("it names no gist, so whether the gist it edits is public could not be told")
+    gist = named[0].split("#", 1)[0].rstrip("/").split("/")[-1]
+    if not gist_public(gist):
+        return None
+    adds = scan.flag_values(args, "--add", "-a", clustered=True)
+    files = adds + named[1:2]
+    unseen = [GIST_EDIT_STDIN] if "-" in files else []
+    if not files and not scan.flag_values(args, "--remove", "-r", clustered=True):
+        unseen.append(GIST_EDITOR)
+    bodies, unread = _gist_files([f for f in files if f != "-"], command, place)
+    return judge_public(what, "as a public gist,", command, bodies, unseen + unread)
 
 
 def judge_repo_edit(what, args, envs, place, where, command):
     """gh repo edit sets a repository's description, homepage and topics, which are public on a public
-    repository (claude-config#2398). Its repository is the one named, else this checkout's."""
+    repository (claude-config#2398). Its repository is the one named, else this checkout's.
+
+    --visibility public makes a repository public, publishing every file, commit and issue it holds,
+    none of which this check can read, so it is refused for one not yet public that no work owner owns
+    (claude-config#2412), which is where its text would be judged once public."""
     named = _positionals(args, REPO_EDIT_VALUES)
     slug = named[0] if named else None
     gh_repo = None if slug else _env_value("GH_REPO", envs, place)
+    if "public" in [v.lower() for v in scan.flag_values(args, "--visibility")]:
+        full, vis = visibility(slug, where, gh_repo)
+        if vis != "PUBLIC" and not _work_owner(full.split("/", 1)[0]):
+            return ("%s makes %s public, publishing every file, commit and issue it holds, which this check "
+                    "cannot read, so whether any of it names a work organisation or repository cannot be "
+                    "told. Check the repository, then change its visibility yourself." % (what, full))
     return judge(what, slug, where, gh_repo, command, [])
 
 
@@ -546,9 +631,11 @@ CANNOT_SEE = ("a program that can write to GitHub with no gh in between for the 
               "of, so whether it names a work organisation or repository cannot be told")
 
 
-def program_refusal(args):
+def program_refusal(args, in_alias=False):
     """The reason, when gh given args (its own name left off, any alias already expanded) would start a
-    program the guard cannot see into, else None (claude-config#2207).
+    program the guard cannot see into, else None (claude-config#2207). in_alias: args are an alias's
+    expansion, so an alias they name is one inside an alias; otherwise an alias found here stands
+    behind a flag, since expand_alias expands one written first (the lessons review of #2398).
 
     An extension (a word that is neither gh's own command nor an alias, or gh extension exec) and the
     Copilot CLI that gh copilot starts can each write to GitHub through the API with no gh the guard
@@ -575,6 +662,11 @@ def program_refusal(args):
     if word in BUILTIN:
         return None
     if word in aliases():
+        if not in_alias:
+            flags = [w for w in front if w.startswith("-")]
+            return ("gh %s is a gh alias written behind the %s %s, where this check does not expand it, "
+                    "so what it runs cannot be told. Write the alias first, before any flag."
+                    % (word, "flags" if len(flags) > 1 else "flag", " ".join(flags)))
         return ("gh %s is another gh alias, which gh does not expand inside an alias (measured on gh "
                 "2.89.0), so what it runs cannot be told." % word)
     return ("gh %s is neither one of gh's own commands nor a gh alias, so it runs a gh extension, %s."
@@ -721,6 +813,8 @@ def evaluate(command, cwd, depth=0):
                 why = judge_release(what, args, envs, place, where, command)
             elif kind == GIST_CREATE:
                 why = judge_gist(what, args, place, command)
+            elif kind == GIST_EDIT:
+                why = judge_gist_edit(what, args, place, command)
             elif kind == REPO_EDIT:
                 why = judge_repo_edit(what, args, envs, place, where, command)
             else:
@@ -792,7 +886,7 @@ def gh_main(real, args):
                       for a in judged]
         try:
             got = expand_alias(judged)
-            starts = program_refusal(judged if got is None else (got[2] or []))
+            starts = program_refusal(judged if got is None else (got[2] or []), in_alias=got is not None)
         except CannotTell as e:
             return _refuse("gh %s could be a gh alias, and %s, so what it runs cannot be told."
                            % (judged[0], e))

@@ -195,7 +195,12 @@ read as the long form by the one reading of gh (`lib/shell-words.py`), so every 
 the issue field gate included, judges them; and the text gh posts outside pull requests and issues
 is judged for a public target: release titles and notes (`--notes`, `--notes-file`, with
 `--generate-notes` and `--notes-from-tag` refused as unreadable), a public gist's files and
-description, and the description and homepage `gh repo create` or `gh repo edit` sets. Still not covered:
+description, and the description and homepage `gh repo create` or `gh repo edit` sets. Since #2412,
+`gh gist edit` on a public gist is judged on its description and the files it adds or takes new
+text from (an editor's text and standard input refused), `gh repo edit --visibility public` is
+refused for a repository not yet public that no work owner owns, since every file and issue in it
+becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
+is read. Still not covered:
 gh run by its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is

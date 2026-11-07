@@ -17,7 +17,10 @@ payload="$(cat)"
 case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. ;; esac
 . "$_ps_dir/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 # The cheap test first: almost no Bash command files an issue, and python costs every one that runs.
-case "$payload" in *issue*create*) ;; *) exit 0 ;; esac
+# It looks for the group's word only, never create: `gh issue new` is the same create, read as one by
+# the Python half (claude-config#2411), and every other name of the issue group holds the word issue
+# (test-gh-write-aliases.sh holds that).
+case "$payload" in *issue*) ;; *) exit 0 ;; esac
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac

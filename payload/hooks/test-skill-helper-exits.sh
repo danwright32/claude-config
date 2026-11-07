@@ -195,6 +195,7 @@ echo "gh -R x issue create is quoted here and is not a call"
 bash -c 'gh issue create --repo x --title t'
 nohup gh issue create --repo x --title t
 echo "bash -c 'gh issue create --title t' is quoted here and is not a call"
+gh issue new --repo x --title t
 SH
 scan
 [ "$rc" -eq 1 ] && ok || bad "a script filing issues without their fields fails the scan (rc=$rc)" "$out"
@@ -212,7 +213,8 @@ has "$out" "$FILE:16:" && bad "#1188 a quoted mention is not a call" "$out" || o
 fires S1 17 "#1478 a call a shell runs from its -c string"
 fires S1 18 "#1478 a call through nohup"
 has "$out" "$FILE:19:" && bad "#1478 a quoted mention of a wrapped call is not a call" "$out" || ok
-has "$out" "findings=9" && ok || bad "exactly the nine calls are flagged" "$out"
+fires S1 20 "#2411 gh issue new, gh's other name for create, read by the one reading of gh's words"
+has "$out" "findings=10" && ok || bad "exactly the ten calls are flagged" "$out"
 
 # The calls are read by lib/shell-words.py (#1188). Without it the scan cannot tell a call from a
 # mention, so it says so as a finding of its own rather than passing the script, and the audit's

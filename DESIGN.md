@@ -1611,6 +1611,22 @@ their text is not on this machine, a public gist's files are read the same way (
 refused when no file is named; a `-` is refused by the command hook and read by the guard), and `gh repo create` is judged on its own
 text for a public repository with or without `--push`, as is `gh repo edit`.
 
+The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
+line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
+text `create` before reading a command, so `gh issue new` and `gh pr new` passed them unread. Their
+cheap tests now look only for the group's word (`issue`, `pr`), and the action is read by `gh_path`,
+which knows every alias; `test-gh-write-aliases.sh` fails the day the table gives either group a name
+that lacks that word, so no second alias list is kept. With no reader at all, the crude fallback of
+`ps__runs_tool` still matches only the literal words asked about. The work names gate reads whether
+a gist is public from `gh api gists/<id>` (refused when no account can read it) and judges `gh gist
+edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
+new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and
+standard input. `gh repo edit --visibility public` on a repository not yet public that no work owner
+owns is refused outright, since it publishes every file, commit and issue unread. A body or notes
+file inside clustered short flags is read through `flag_values(..., clustered=True)`, asked for only
+by the work names gate, where another file can only refuse more; the issue field gate, which a value
+can satisfy, keeps the plain reading.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

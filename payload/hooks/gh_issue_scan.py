@@ -154,6 +154,8 @@ NON_FILING_BY_KIND = {
     ("repo", "create"): frozenset({"--help"}),
     ("repo", "edit"): frozenset({"--help"}),
     ("gist", "create"): frozenset({"--help", "-h"}),
+    # gh gist edit's help lists no -h and no --web (claude-config#2412), so only --help posts nothing.
+    ("gist", "edit"): frozenset({"--help"}),
 }
 
 
@@ -783,12 +785,19 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
-def flag_values(args, long_flag, short_flag=None):
+def flag_values(args, long_flag, short_flag=None, clustered=False):
     """Every value given to a flag in one create's argument list.
 
     Understands the four forms gh accepts: `--flag value`, `--flag=value`,
     `-f value` and `-fvalue`. A flag with no value, or one followed by another
     flag, contributes nothing, so an empty value can never satisfy a gate.
+
+    clustered: also the short flag written after other one letter flags, `-dF body.md` and
+    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). gh cannot be asked here
+    which letters before it take a value of their own (`-tF` is a title of F), so every such cluster
+    counts, the reading that finds more values, never fewer. Only a caller for whom another value
+    can only refuse more asks for it (the work names gate reading the files a command posts); a
+    gate that a value satisfies never does.
     """
     values = []
     i = 0
@@ -823,6 +832,21 @@ def flag_values(args, long_flag, short_flag=None):
             values.append(tok[len(short_flag) :])
             i += 1
             continue
+
+        # `-dF body.md`, `-dFbody.md`: the short flag after other one letter flags (clustered only).
+        if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
+                and not tok.startswith("--") and short_flag[1] in tok[2:]):
+            rest = tok[tok.index(short_flag[1], 2) + 1:]
+            if rest.startswith("="):
+                rest = rest[1:]
+            if rest:
+                values.append(rest)
+                i += 1
+                continue
+            if i + 1 < n and args[i + 1].strip():
+                values.append(args[i + 1])
+                i += 2
+                continue
 
         i += 1
     return values
