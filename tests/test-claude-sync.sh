@@ -13091,7 +13091,7 @@ WNE="$WORK/worknames-emptyhome"; mkdir -p "$WNE"
 WNR="$WORK/worknames-repo"; mkdir -p "$WNR/payload"
 WNLOG="$WORK/worknames-sync.log"
 WNHASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
-_wn(){ HOME="$WNE" WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" CLAUDE_HOME="$WNH" SYNC_REPO="$WNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+_wn(){ HOME="$WNE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" CLAUDE_HOME="$WNH" SYNC_REPO="$WNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
 if out_wn1="$(_wn)"; then rc_wn1=0; else rc_wn1=$?; fi
 dbg "push carrying the invented organisation: $out_wn1"
 check "#1568 a send carrying a work organisation name is refused" "[ '$rc_wn1' -ne 0 ]"

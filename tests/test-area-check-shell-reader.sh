@@ -38,7 +38,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=22
+EXPECTED=33
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -95,6 +95,21 @@ is("the spool helper's other subcommands are judged as before", 'bash ~/.claude/
   { word: '.', path: '/w/app' },
   { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
 ])
+
+// #2255: text whose every pattern character is quoted reaches a script file as its characters, so it
+// is judged as the one file they name; a pattern the shell or a tool expands, a value filled in as the
+// command runs, and every other write in the command are judged as before.
+is('a quoted pattern handed to a script file is judged as the one file its characters name', "python3 probe.py 'src/*.ts'", [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+is('quoted prose holding a wildcard and a question mark is judged as the one file it names', "python3 probe.py 'every *.ts file, why?'", [{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?' }])
+is('a pattern quoted in double quotes, or only around its wildcard, is judged the same way', `python3 probe.py "src/*.ts" src/'*'.ts`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+unread('an unquoted pattern handed to a script file is still unread', 'python3 probe.py src/*.ts', 'src/*.ts', 'a pattern', '/w/app/src')
+unread('a dollar sign in double quotes, filled in as the command runs, is still unread', 'python3 probe.py "$OUT/*.ts"', '$OUT/*.ts', 'built as the command runs', undefined)
+is('a variable the command sets to a held file is judged as that file', 'X=src/big.ts; python3 probe.py "$X"', [{ word: '$X', path: '/w/app/src/big.ts' }])
+is('a quoted pattern beside a redirect into a file still judges that file', "python3 probe.py 'src/*.ts' > src/big.ts", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+is('a quoted pattern beside a heredoc written into a file still judges that file', "python3 probe.py 'src/*.ts' && cat > src/big.ts <<'EOF'\nx\nEOF", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+unread('a quoted pattern handed to a tool, which expands its own operands, is still unread', "npx foo 'src/*.ts'", 'src/*.ts', 'a pattern', '/w/app/src')
+unread('a quoted group is still unread', "python3 probe.py '{a,b}.ts'", '{a,b}.ts', 'a pattern', '/w/app')
+is('a word the reader cannot close is still unread beside a quoted pattern', `python3 probe.py 'src/*.ts' "$(`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }, { word: '$(', unread: 'a python3 script file is handed $(, built as the command runs' }])
 
 // register.test.ts answers for the reader with WRITES: each must be what the real reader answers.
 const text = readFileSync(testPath, 'utf8')

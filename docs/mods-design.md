@@ -4029,10 +4029,21 @@ fold line names `Refs #N` or `Closes #N` for the issue folded in; a standing ans
   whole. The gap: a line found elsewhere in the command, such as the title, passes too.
 - **When a fact cannot be read.** A log that cannot be read refuses the command, never reads as no
   decisions (L10). A fact the command does not depend on (no checkout, no GitHub repository, GitHub
-  not answering for a merge) lets it through, and the check's own failure lets the command through
-  with one dim line kept in the error file. Only this Mac's log is read, so a file decided on the
+  not answering for a merge) lets it through. Only this Mac's log is read, so a file decided on the
   other Mac is not asked for; every refusal that lists lines to paste says so, and the unreadable
   log refusal says it reads this Mac's log only.
+- **When the check itself fails (#2173, 2026-11-05).** The check's own failure (a throw, the
+  deadline, or the hook failing before its `try`, answered by the registration catch through
+  `neverThrows`) holds a command that could be a pull request one, as every guard's failure holds
+  its call since #2148: `mayActOnPr` in `hooks/prline.ts` asks whether its words hold `gh pr
+  create`, `gh pr edit`, `gh pr merge` or the merge helper, and `checkFailedRefusal` names why and
+  that the error is kept in `errors.jsonl`. It was let through with a dim line until then, on the
+  reasoning that a check at merge time would catch what was missed; it cannot, since a merge is the
+  last check there is, it runs the same code (a fault that fails one fails both), and it reads this
+  Mac's log only, so a merge from the other Mac, the web or GitHub's auto merge is never checked.
+  The same check already refused when its log could not be read, and a false hold costs one refused
+  command that names why. Any other command (`gh issue create`, `gh pr view`) cannot be one it
+  refuses, so it goes ahead with one dim line kept in the error file, as before.
 
 ### The weekly line and escalation, built 2026-11-05 (#1511)
 

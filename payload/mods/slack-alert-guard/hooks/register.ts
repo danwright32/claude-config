@@ -6,23 +6,32 @@ import {
   CHANGE,
   GUARD,
   HEADER,
+  SCAN_MS,
+  SENDER_PREFILTER,
   SOURCE,
   agentRefusal,
+  codeOf,
   editHalves,
   editedText,
+  escapeRe,
   heldText,
   inScope,
   isOwnRecord,
+  isProseFile,
   languageOf,
   literalsOf,
   mentionsStore,
   plainYamlValues,
   question,
+  refersTo,
   refusal,
   removalKey,
   renderedProblem,
+  searchTerm,
   shellKey,
   slackMarked,
+  templateLines,
+  textTemplate,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -53,7 +62,7 @@ const cannotCheck = (why: string) =>
 // The catches' last word, built before anything can fail (#2039).
 const HELD = cannotCheck('unknown failure')
 
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[] }
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string }
 type Verdict = { pass: true } | { own: true } | { unchecked: string } | { hold: Hold }
 const PASS: Verdict = { pass: true }
 
@@ -82,6 +91,70 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
   return out
 }
 
+// The most files the search reads for one template before it holds the call as could not check.
+const MOST_READ = 200
+
+type Found = { sender: string } | { none: true } | { unchecked: string }
+const NONE: Found = { none: true }
+
+/**
+ * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
+ * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
+ * repository to files holding both the template's name and the word slack or postMessage, so only
+ * those are read. Every git call and read is bounded by `deadline`, and anything that cannot be
+ * answered in time, or at all, is could not check, so the call is held rather than let through. A
+ * file in no repository has nothing to search, so none.
+ */
+const findSender = async ($: EngineInterface, path: string, deadline: number): Promise<Found> => {
+  const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
+  const left = async () => deadline - (await $.clock.now())
+  try {
+    // The nearest folder that exists, since a Write can create a file in a folder not yet made.
+    let dir = path.slice(0, path.lastIndexOf('/')) || '/'
+    while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+    let ms = await left()
+    if (ms <= 0) return late
+    const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
+    if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return NONE
+    if (where.exitCode !== 0 || where.isStdoutTruncated)
+      return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
+    // git prints the repository's top folder, then the folder searched from below it, ending in a
+    // slash, or an empty line at the top. The top is git's own spelling, symlinks resolved, so the
+    // template is placed by that prefix rather than by cutting the top off its path.
+    const [top = '', prefix = ''] = where.stdout.split('\n')
+    if (!top) return { unchecked: `git named no repository for ${path}` }
+    const templateRel = `${prefix}${path.slice(dir === '/' ? 1 : dir.length + 1)}`
+    ms = await left()
+    if (ms <= 0) return late
+    const argv = ['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--all-match', '-E', '-e', escapeRe(searchTerm(templateRel)), '-e', SENDER_PREFILTER, '--', '.']
+    const hits = await $.process.run(argv, { timeoutMs: ms })
+    if (hits.exitCode === 1) return NONE
+    if (hits.exitCode !== 0 || hits.isStdoutTruncated)
+      return { unchecked: `git grep for the files that send ${path} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` }
+    const rels = hits.stdout.split('\u0000').filter(r => r && r !== templateRel)
+    if (rels.length > MOST_READ) return { unchecked: `${rels.length} files could send ${path} to Slack, more than the ${MOST_READ} the guard reads` }
+    for (const rel of rels) {
+      if ((await left()) <= 0) return late
+      const file = `${top}/${rel}`
+      let text: string
+      try {
+        text = String(await $.fs.read(file))
+      } catch (err) {
+        return { unchecked: `${file}, which could send ${path} to Slack, could not be read: ${message(err)}` }
+      }
+      // Only code or config can send, and only what it runs: a prose file (a CLAUDE.md, a runbook)
+      // or a comment naming the template beside a Slack webhook's name posts nothing (Pivot,
+      // 2026-11-06, where both held ordinary code edits as alert wording).
+      if (isProseFile(rel)) continue
+      const code = codeOf(rel, text)
+      if (slackMarked(code) && refersTo(rel, code, templateRel)) return { sender: file }
+    }
+    return NONE
+  } catch (err) {
+    return { unchecked: `the files that could send ${path} to Slack could not be searched: ${message(err)}` }
+  }
+}
+
 const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
   const path = typeof input.file_path === 'string' ? input.file_path : ''
   if (!path) return PASS
@@ -96,21 +169,34 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
   const halves = edited === undefined ? editHalves(tool, input) : undefined
   const before = halves ? halves.before : current
   const after = halves ? halves.after : (edited as string)
-  if (!inScope(path, current || after)) return PASS
-  if (!slackMarked(current) && !slackMarked(after)) return PASS
+  // A code file is read for its strings, a text template line by line (#2248); any other file posts
+  // nothing.
+  const code = inScope(path, current || after)
+  const text = !code && textTemplate(path)
+  if (!code && !text) return PASS
+  const marked = code && (slackMarked(current) || slackMarked(after))
   try {
     const lang = languageOf(path, current || after)
-    const { added, removed } = wordingChange(wordingOf(await literals($, lang, before)), wordingOf(await literals($, lang, after)))
+    const wording = async (t: string) => wordingOf(text ? templateLines(t) : await literals($, lang, t))
+    const { added, removed } = wordingChange(await wording(before), await wording(after))
     if (!added.length && !removed.length) return PASS
+    let hold: Hold
     if (added.length) {
       const fresh = [...new Set(added)]
       const open = await unapproved($, fresh.map(wordingKey))
       if (!open.length) return PASS
-      const left = fresh.filter(s => open.includes(wordingKey(s)))
-      return { hold: { file: path, added: left, removed, keys: open } }
+      hold = { file: path, added: fresh.filter(s => open.includes(wordingKey(s))), removed, keys: open }
+    } else {
+      const keys = await unapproved($, [removalKey(path, removed)])
+      if (!keys.length) return PASS
+      hold = { file: path, added: [], removed, keys }
     }
-    const keys = await unapproved($, [removalKey(path, removed)])
-    return keys.length ? { hold: { file: path, added: [], removed, keys } } : PASS
+    if (marked) return { hold }
+    // Wording Dan has not approved, in a file with no Slack marker of its own: held when another
+    // file in its repository sends it to Slack.
+    const found = await findSender($, path, (await $.clock.now()) + SCAN_MS)
+    if ('unchecked' in found) return found
+    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : PASS
   } catch (err) {
     return { unchecked: message(err) }
   }
@@ -124,14 +210,27 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     const cwd = await $.session.cwd()
     const home = (await $.env.get('HOME')) ?? ''
     const w = await $.modkit.writes({ command, cwd, home })
+    // One search deadline for the whole call, set when the first search starts.
+    let deadline: number | undefined
     for (const f of w.files) {
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
       if (!(await $.fs.exists(f.path))) continue
       const text = String(await $.fs.read(f.path))
-      if (!inScope(f.path, text) || !slackMarked(text)) continue
+      const code = inScope(f.path, text)
+      if (code && slackMarked(text)) {
+        const keys = await unapproved($, [shellKey(cwd, command)])
+        return keys.length ? { hold: { file: f.path, added: [], removed: [], keys } } : PASS
+      }
+      // A code file with no Slack marker, or a text template (#2248): held when another file in its
+      // repository sends it to Slack.
+      if (!code && !textTemplate(f.path)) continue
       const keys = await unapproved($, [shellKey(cwd, command)])
-      return keys.length ? { hold: { file: f.path, added: [], removed: [], keys } } : PASS
+      if (!keys.length) return PASS
+      deadline ??= (await $.clock.now()) + SCAN_MS
+      const found = await findSender($, f.path, deadline)
+      if ('unchecked' in found) return found
+      if ('sender' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: found.sender } }
     }
     return PASS
   } catch (err) {
@@ -167,13 +266,13 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     await drawCard($, id, 'The Slack alert guard could not check this call, so it is held.', v.unchecked)
     return cannotCheck(v.unchecked)
   }
-  const { file, added, removed, keys } = v.hold
+  const { file, added, removed, keys, sender } = v.hold
   if (id) {
-    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(agent ? { agent: true as const } : {}) }
+    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(agent ? { agent: true as const } : {}) }
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
-    await drawCard($, id, `${heldText(file, added, removed)}.`, agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.')
+    await drawCard($, id, `${heldText(file, added, removed, sender)}.`, agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.')
   }
-  return agent ? agentRefusal(id, file, added, removed) : refusal(id, file, added, removed)
+  return agent ? agentRefusal(id, file, added, removed, sender) : refusal(id, file, added, removed, sender)
 }
 
 type AskInput = { questions?: unknown[]; answers?: unknown; metadata?: Record<string, unknown> }

@@ -6,7 +6,8 @@
 // Decisions given with the issue:
 // 1. What counts: an edit whose changed text carries message text, in a file that posts to Slack,
 //    recognised by a Slack posting marker in the file (slackMarked). A template with no marker in
-//    its own file is outside this guard.
+//    its own file counts too when another file in its repository sends it (#2248): that file
+//    carries a Slack marker and names the template's path (refersTo).
 // 2. Approval is for exact wording (L64): any change to approved text is held again, and a change
 //    to an alert file that touches no message text passes unasked.
 // 3. Approval is keyed to the wording, never the file (wordingKey), so a test repeating wording Dan
@@ -18,6 +19,8 @@ export const SOURCE = 'slack-alert-guard'
 export const HEADER = 'Slack alert'
 export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
+/** How long the search for a file that sends a template may take, every git call and read in it. */
+export const SCAN_MS = 3000
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
@@ -33,9 +36,46 @@ export const inScope = (path: string, text: string): boolean => {
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
 }
 
+// Prose files are read by people, never run, so they post nothing. Only these are ruled out as
+// senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
+// may still send, so it is read as a sender is.
+const PROSE = new Set(['md', 'markdown', 'mdx', 'rst', 'adoc', 'txt'])
+/** Whether a file is prose (a README, a CLAUDE.md, a runbook), which can name a template but never send it. */
+export const isProseFile = (path: string): boolean => PROSE.has(extOf(path) ?? '')
+
+// Comment syntax by extension, for reading a sender's code without its comments.
+const HASH_COMMENTS = new Set(['py', 'rb', 'sh', 'bash', 'zsh', 'yml', 'yaml'])
+
+/**
+ * A file's text with its whole line comments removed, so a sender is judged by what it runs (Pivot,
+ * 2026-11-06: a workflow comment naming a test file made that test a Slack template). A line is a
+ * comment when its first non blank text opens one for the file's language: `#` (not a shebang) in
+ * a hash commented language, `//`, `/*` or a `*` continuation in the others. JSON has none. A
+ * trailing comment after code is kept, since telling it from a `#` or `//` inside a string needs
+ * a parser, and keeping it can only hold an edit, never let one through.
+ */
+export const codeOf = (path: string, text: string): string => {
+  const ext = extOf(path)
+  if (ext === 'json') return text
+  const hash = ext === undefined ? text.startsWith('#!') : HASH_COMMENTS.has(ext)
+  return text
+    .split('\n')
+    .filter((line, i) => {
+      const t = line.trimStart()
+      if (hash) return !(t.startsWith('#') && !(i === 0 && t.startsWith('#!')))
+      if (t.startsWith('//')) return false
+      if (!(t.startsWith('/*') || t.startsWith('*'))) return true
+      // A block comment line is dropped only when nothing runs after it closes on that line, so
+      // `/* note */ send(...)` is still read.
+      const close = t.indexOf('*/')
+      return close >= 0 && t.slice(close + 2).trim() !== ''
+    })
+    .join('\n')
+}
+
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
 // or in a class, so the guard's rules are not themselves read as a Slack poster.
-const MARKERS: RegExp[] = [
+export const MARKERS: RegExp[] = [
   /hooks\.slack\.com/,
   /chat[._]postMessage/,
   /@slack\//,
@@ -53,6 +93,141 @@ const MARKERS: RegExp[] = [
 
 /** Whether a file's text posts to Slack: a webhook, the chat API, a Slack SDK, a Slack env setting, or a send helper named for Slack. */
 export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(text))
+
+/**
+ * What the repository is searched for before any file is read, case ignored: every marker names
+ * slack or postMessage, so no file slackMarked would match is left out (a test holds every marker
+ * to it). The marker itself is still decided by slackMarked alone.
+ */
+export const SENDER_PREFILTER = 'slack|postmessage'
+
+// Prose files a script reads and sends as they are, each line its own message text (#2248).
+const TEXT_TEMPLATE = new Set(['txt', 'md', 'markdown', 'hbs', 'handlebars', 'mustache', 'j2', 'jinja', 'jinja2', 'tmpl', 'tpl', 'liquid', 'ejs', 'erb'])
+/** Whether a file is a text template: wording a script reads and sends, with no code around it. */
+export const textTemplate = (path: string): boolean => {
+  const ext = extOf(path)
+  return ext !== undefined && TEXT_TEMPLATE.has(ext)
+}
+/** A text template's lines, each trimmed, the blank ones dropped. */
+export const templateLines = (text: string): string[] => text.split('\n').map(l => l.trim()).filter(Boolean)
+
+const stemOf = (name: string): string => {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(0, dot) : name
+}
+// A package's own file, which a sender names by its folder.
+const PACKAGE = new Set(['index', '__init__'])
+
+/** The word a sender has to write to name a template: its file name without the extension, or its folder's name for an index or __init__. */
+export const searchTerm = (rel: string): string => {
+  const segs = rel.split('/')
+  const stem = stemOf(segs[segs.length - 1] ?? '')
+  return PACKAGE.has(stem) && segs.length > 1 ? (segs[segs.length - 2] ?? stem) : stem
+}
+/** A word escaped for an extended regular expression, as git grep -E reads one. */
+export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// The extensions one JavaScript or TypeScript import may name the same file by.
+const JS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'])
+// One path segment naming another: equal, or without its extension, or by a sibling JS one.
+const sameName = (s: string, t: string): boolean => {
+  if (s === t) return true
+  const se = extOf(s)
+  if (se === undefined) return s === stemOf(t)
+  const te = extOf(t)
+  return te !== undefined && JS.has(se) && JS.has(te) && stemOf(s) === stemOf(t)
+}
+// How many segments two paths share counted from the end, the last compared by sameName.
+const sharedTail = (s: string[], t: string[], eq: (a: string, b: string) => boolean): number => {
+  let n = 0
+  while (n < s.length && n < t.length) {
+    const a = s[s.length - 1 - n] as string
+    const b = t[t.length - 1 - n] as string
+    if (!(n === 0 ? eq(a, b) : a === b)) break
+    n++
+  }
+  return n
+}
+const resolve = (base: string[], segs: string[]): string[] | undefined => {
+  const out = [...base]
+  for (const s of segs) {
+    if (s === '.' || s === '') continue
+    if (s === '..') {
+      if (!out.length) return undefined
+      out.pop()
+    } else out.push(s)
+  }
+  return out
+}
+// The modules a python style import line names: `from X import a, b` names X, X.a and X.b;
+// `import X.Y as z` names X.Y. A line holding a quote or a brace is another language's import.
+const importedModules = (text: string): string[] => {
+  const out: string[] = []
+  const word = (s: string) => (s.trim().split(/\s+/)[0] ?? '').replace(/[^\w.]/g, '')
+  for (const line of text.split('\n')) {
+    if (/["'`{}]/.test(line)) continue
+    const from = /^\s*from\s+([\w.]+)\s+import\s+(.+)$/.exec(line)
+    if (from) {
+      const x = from[1] as string
+      out.push(x)
+      for (const n of (from[2] as string).replace(/[()\\]/g, ' ').split(',').map(word))
+        if (n && n !== '*') out.push(x.endsWith('.') ? `${x}${n}` : `${x}.${n}`)
+      continue
+    }
+    const imp = /^\s*import\s+(.+)$/.exec(line)
+    if (imp) for (const n of (imp[1] as string).split(',').map(word)) if (n) out.push(n)
+  }
+  return out
+}
+
+/**
+ * Whether a sender's text names a template's path, both given relative to the repository root.
+ * Read as a path (a token holding a slash, or a file name with the template's extension): a
+ * relative one resolved from the sender's folder or the root must be the template itself; any other
+ * shares at least its last two segments, or is the bare file name with its extension. Read as a
+ * module (a dotted name, or what a python import line names): its last two names match, or the
+ * whole of an imported one does. A bare word that only shares the template's name never counts.
+ */
+export const refersTo = (senderRel: string, text: string, templateRel: string): boolean => {
+  const t = templateRel.toLowerCase().split('/')
+  const last = t[t.length - 1] ?? ''
+  const tExt = extOf(last)
+  const pkg = PACKAGE.has(stemOf(last)) && t.length > 1
+  const paths = pkg ? [t, t.slice(0, -1)] : [t]
+  const mod = [...t.slice(0, -1), stemOf(last)]
+  const mods = pkg ? [mod, t.slice(0, -1)] : [mod]
+  const senderDir = senderRel.toLowerCase().split('/').slice(0, -1)
+  const lower = text.toLowerCase()
+  const byModule = (name: string, whole: boolean): boolean => {
+    const m = name.split('.').filter(Boolean)
+    return m.length > 0 && mods.some(f => {
+      const n = sharedTail(m, f, (a, b) => a === b)
+      return n >= 2 || (whole && n === m.length)
+    })
+  }
+  for (const raw of lower.match(/[\w@~$.\/-]+/g) ?? []) {
+    const tok = raw.replace(/\.+$/, '')
+    const ext = tok.includes('/') ? undefined : extOf(tok)
+    const named = ext !== undefined && tExt !== undefined && (ext === tExt || (JS.has(ext) && JS.has(tExt)))
+    if (tok.includes('/') || named) {
+      const segs = tok.split('/')
+      if (segs[0] === '.' || segs[0] === '..') {
+        for (const base of [senderDir, []]) {
+          const r = resolve(base, segs)
+          if (r && paths.some(f => r.length === f.length && sharedTail(r, f, sameName) === r.length)) return true
+        }
+        continue
+      }
+      const s = segs.filter(x => x !== '' && x !== '.' && x !== '~' && !x.startsWith('@') && !x.startsWith('$'))
+      if (s.length && paths.some(f => {
+        const n = sharedTail(s, f, sameName)
+        return n >= 2 || (s.length === 1 && n === 1 && extOf(s[0] as string) !== undefined)
+      }))
+        return true
+    } else if (tok.includes('.') && byModule(tok, false)) return true
+  }
+  return importedModules(lower).some(m => byModule(m, true))
+}
 
 /** How a file's strings are read: python through mod-kit's reader, YAML with its plain values, a hash comment language, or a C-like one. */
 export const languageOf = (path: string, text: string): 'python' | 'yaml' | 'hash' | 'c' => {
@@ -208,22 +383,24 @@ export const changeText = (added: string[], removed: string[]): string =>
 
 /**
  * What is held, as the card and both refusals open. A shell command carries no wording the guard
- * can read before it runs, so it is named as that rather than as an empty list taken away.
+ * can read before it runs, so it is named as that rather than as an empty list taken away. A
+ * template another file sends (#2248) names that file, its sender, so Dan sees what posts it.
  */
-export const heldText = (file: string, added: string[], removed: string[]): string =>
+export const heldText = (file: string, added: string[], removed: string[], sender?: string): string =>
   added.length || removed.length
-    ? `This edit to ${file} ${changeText(added, removed)}`
-    : `This shell command writes to ${file}, which posts to Slack, and the wording it leaves cannot be read until it runs`
+    ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : ''} ${changeText(added, removed)}`
+    : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
-const blocked = (file: string, added: string[], removed: string[]): string => `Blocked: t${heldText(file, added, removed).slice(1)}`
+const blocked = (file: string, added: string[], removed: string[], sender?: string): string =>
+  `Blocked: t${heldText(file, added, removed, sender).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
-export const refusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `${blocked(file, added, removed)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
+  `${blocked(file, added, removed, sender)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
-export const agentRefusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `${blocked(file, added, removed)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
+  `${blocked(file, added, removed, sender)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets

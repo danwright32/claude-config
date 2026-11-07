@@ -122,7 +122,8 @@ describe('the wake check', () => {
   test('an installed LESSONS.md that cannot be read is said as not checked, with the reason', async () => {
     const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': fail('scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT') })
     expect(r.hits).toEqual([])
-    expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT)'])
+    // Said in words, never the engine's "scope-modes: $.fs.stat(...) failed: ENOENT" (#2150).
+    expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: the file could not be looked up: there is no such file or folder (/Users/x/.claude/LESSONS.md))'])
   })
   test('an installed LESSONS.md whose last change reads as no time is said as not checked, never as before sleep (L50)', async () => {
     const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': ok('0') })
