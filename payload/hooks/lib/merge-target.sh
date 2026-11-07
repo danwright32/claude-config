@@ -1405,13 +1405,23 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
 mt_gh_transient() {  # $1 = the error text gh printed
   local t
   mt_gh_network_fault "${1:-}" && return 0
+  mt_gh_went_wrong "${1:-}" && return 0
   t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
   [ -n "$t" ] || return 1
   case "$t" in
     *"timed out"*|*"timeout awaiting"*|*"context deadline exceeded"*) return 0 ;;
-    *"something went wrong while executing your query"*) return 0 ;;
   esac
   [[ "$t" =~ http\ 5[0-9][0-9] ]] && return 0
+  return 1
+}
+
+# GitHub's own "Something went wrong while executing your query": its GraphQL server failed to run the
+# request. A read with it is asked again (mt_gh_transient), and merge-when-ready.sh tries a merge that
+# met it again after reading it back (claude-config#2289), so both recognise it here, in one place (L370).
+mt_gh_went_wrong() {  # $1 = the error text gh printed
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    *"something went wrong while executing your query"*) return 0 ;;
+  esac
   return 1
 }
 
