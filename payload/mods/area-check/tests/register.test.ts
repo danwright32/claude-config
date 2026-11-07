@@ -755,6 +755,19 @@ test('a read only scan handed a folder holding held files runs judging no file, 
   expect((await bash($ as never, w, './scan.sh src/', {}, 'b2')).result).toBe('done')
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  // Each pass is on record, so a reading that lets everything through shows in the log (L551).
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([
+    { word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' },
+    { word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' },
+  ])
+})
+
+test("a read only scan is still held when mod-kit's reader fails while reading the script, never passed (#2407)", KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = SCAN
+  w.ctl.pipelineThrows = true
+  expect(refusal(await bash($ as never, w, 'bash scan.sh src/'))).toContain('which writes src/big.ts.')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
 })
 
 test('a script that writes into the folder it is handed, or runs another script, is still held, naming the file (#2407)', KIT, async ($, on) => {
