@@ -13,6 +13,14 @@ export const RULE_VERSION = 2
 export const BUDGET_MS = 10_000
 /** One deadline for the whole read of a file's facts, under 75% of the budget (L743). */
 export const DEADLINE_MS = 7_000
+/**
+ * The most files a folder named only by its path (a folder handed to a script, or a copy's folder
+ * destination, #2321) may hold that the area check could hold, for each to be judged one by one; past
+ * it the command is held whole, as a write whose files cannot be named. Each file judged runs two git
+ * processes (about 10 ms each, measured 2026-11-06), and a whole checkout here holds 1075 source files,
+ * so an unbounded walk would outrun the hook's 10 s budget: 25 keeps the walk near a second under load.
+ */
+export const FOLDER_JUDGE_MAX = 25
 /** How long a repository's open issues are reused before they are read again. */
 export const ISSUES_TTL_MS = 60 * 60_000
 /** How long a failed read is reused, so each edit does not pay for it again. */
@@ -115,7 +123,7 @@ const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
  * written: a probe's search text, a regex, a finding. It is judged as the one file those characters
  * name, as every other word a script is handed is (#1586), and as the design round guard reads it
  * (#1951); what a script then matches with it is its own choice, unread, as with a folder it is handed,
- * which is not judged at all. Only a script file: a tool expands its own operands (#1815). Never a
+ * which is judged for the files it holds (#2321). Only a script file: a tool expands its own operands (#1815). Never a
  * group (`{a,b}`), which names several files, nor a pattern character before the last slash, where the
  * folder mod-kit gives is not the one the name sits in. Anything else stays a pattern.
  */
@@ -130,7 +138,9 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  * Every file a command writes that could add lines to a source or test file: a redirect, a copy or an
  * in place edit (`files`), an emptying (`changes` truncate), git writing a path (`byGit` write), a
  * script's arguments (`runs`), and a program's own targets (`unnamed`). A removal, a stamp, a new
- * folder and a mode change add no lines, so they are not judged; nor is a folder handed to a script.
+ * folder and a mode change add no lines, so they are not judged. A folder handed to a script, or a copy
+ * landing in a folder, is given here by its path like a file; the hook finds on the disk that it is a
+ * folder and judges the files under it (#2321), since no answer here says so.
  * Nor are the words of a findings note (#2254), given `home`: see spoolNote. A quoted pattern handed to
  * a script file is judged as the one file its characters name (#2255): see quotedName.
  */
