@@ -4401,8 +4401,22 @@ one pruned walk of the home folder (never into `~/Library`, the Trash, key folde
 app and photo libraries, or a folder iCloud keeps only in the cloud, whose listing would make iCloud
 fetch it), then one module per category in `skills/disk-clean/categories/`: the Trash, app caches,
 Xcode build caches, build folders, Docker, Playwright browsers, Claude Code temp folders, worktrees,
-transcripts, runaway logs, forgotten tools and large personal files. Each module answers `scan` and
-`judge <target>`, and `disk-remove.sh` runs the same judge again just before removing anything.
+worktrees whose repository is gone, transcripts, runaway logs, forgotten tools and large personal
+files. Each module answers `scan` and `judge <target>`, and `disk-remove.sh` runs the same judge
+again just before removing anything.
+
+Worktrees whose repository is gone (`categories/forgotten-worktrees.sh`, claude-config#2346) are
+folders whose `.git` file names a gitdir that no longer exists. No repository lists them, so
+`git worktree remove` cannot reach them and the stale worktree sweep skips them on purpose; the
+Finished worktrees kind no longer lists them too. Each is listed with its size and the date anything
+in it last changed, and moved to the Trash only when Dan ticks it, since it can still hold work
+nothing else has. A folder is left alone, counted in the kind's note and never judged, when it is in
+a synced folder (`dcs_synced` in `scan-lib.sh`: iCloud Drive, Desktop or Documents when iCloud syncs
+them, any `~/Library/CloudStorage` mount, a sync client's folder), when its gitdir is outside this
+Mac's own home folder, or when its gitdir is in a synced folder. An iCloud copy of the work
+MacBook's Documents holds links naming the work MacBook's home folder, which from the personal
+MacBook all look gone, and trashing one would sync the removal back. Its suite is
+`test-disk-clean-forgotten-worktrees.sh`.
 
 On top of its own rule, every kind but the Trash keeps one floor, `dcs_floor` in `scan-lib.sh` with
 `DCS_UNUSED_DAYS=30` (Dan's rule, claude-config#2134): an item is offered only when nothing at or
