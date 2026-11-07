@@ -91,6 +91,26 @@ if grep -q test_b "$TMPROOT/diff-code"; then no "an exclude pathspec did not kee
 if grep -qx -- '- add a' "$TMPROOT/msgs"; then ok; else no "pc_messages did not list the commit the push carries: [$(cat "$TMPROOT/msgs")]"; fi
 if [ "$(cat "$TMPROOT/flags")" = "1 0" ]; then ok; else no "commit in chain and widened flags: [$(cat "$TMPROOT/flags")]"; fi
 
+# PC_FILES names only files the push DELIVERS, never one it deletes: a gate reading each named file
+# from the pushed tree (the suite deadline check in scanners-before-push.sh, #2330) would otherwise
+# fail to read a deleted one and refuse a push that only removes it (#2341 review). Asked of a
+# deletion already committed, one staged with git rm, and one a git add -A in the command takes.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p tests \
+    && printf 'one\n' > tests/test-gone-committed.sh && printf 'two\n' > tests/test-gone-staged.sh \
+    && printf 'three\n' > tests/test-gone-added.sh && printf 'four\n' > tests/test-kept.sh \
+    && git add tests && git commit -qm suites && git push -q \
+    && git rm -q tests/test-gone-committed.sh && git commit -qm "drop one" \
+    && git rm -q tests/test-gone-staged.sh && rm -f tests/test-gone-added.sh \
+    && printf 'five\n' >> tests/test-kept.sh ) >/dev/null 2>&1
+( cd "$W" && pc_resolve "git add -A && git commit -m drop && git push"
+  printf '%s\n' "$PC_FILES" > "$TMPROOT/del-files"
+) > "$TMPROOT/del-out" 2>&1 || no "pc_resolve over deletions: $(cat "$TMPROOT/del-out")"
+for f in tests/test-gone-committed.sh tests/test-gone-staged.sh tests/test-gone-added.sh; do
+  if grep -qx "$f" "$TMPROOT/del-files"; then no "PC_FILES names $f, which the push deletes: [$(tr '\n' ' ' < "$TMPROOT/del-files")]"; else ok; fi
+done
+if grep -qx tests/test-kept.sh "$TMPROOT/del-files"; then ok; else no "PC_FILES lost the changed tests/test-kept.sh beside the deletions: [$(tr '\n' ' ' < "$TMPROOT/del-files")]"; fi
+
 # PC_DIFF_CONTEXT widens every diff to that many lines around each change, in both the committed
 # range and the pending commit, and leaving it unset keeps git's three (claude-config#1238).
 W="$(mk_repo)"
