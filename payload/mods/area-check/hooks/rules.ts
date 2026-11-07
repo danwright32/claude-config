@@ -144,7 +144,11 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  * landing in a folder, is given here by its path like a file; the hook finds on the disk that it is a
  * folder and judges the files under it (#2321), since no answer here says so.
  * Nor are the words of a findings note (#2254), given `home`: see spoolNote. A quoted pattern handed to
- * a script file is judged as the one file its characters name (#2255): see quotedName.
+ * a script file is judged as the one file its characters name (#2255): see quotedName. A word handed
+ * to a script that mod-kit marks `unexpanded` holds no value, so it is never read as built while the
+ * command runs: every $ in it is in single quotes or after a backslash (#1953), or one the shell leaves
+ * as written, as in a double quoted regex "^foo.*bar$" (#2320). mod-kit names no path for a word
+ * holding a $, so such a word, named by no path, is not judged.
  */
 export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const out: ShellTarget[] = []

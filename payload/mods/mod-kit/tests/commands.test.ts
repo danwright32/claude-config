@@ -556,6 +556,27 @@ describe('pipeline: which words the shell hands on as written, every pattern cha
   })
 })
 
+// #2320: a $ the shell leaves as written, before a closing double quote or before nothing a name, a
+// brace, a bracket or a quote can start, is text as a single quoted one is (#1953), so a double quoted
+// regex ending in $ is handed on as its characters. A $ any shell expands stays expanded.
+describe('pipeline: a $ the shell leaves as written is unexpanded, wherever it is quoted (#2320)', () => {
+  test('a $ before a closing double quote, a space, a slash or the end of the command is text', () => {
+    expect(pipeline(`python3 s.py "^foo.*bar$" "a$ b" "costs $5" foo$ "x$/y"`).map(c => c.unexpanded)).toEqual([[false, false, true, true, false, true, true]])
+    expect(pipeline(`grep -n "bar$" a.txt | wc -l`).map(c => c.unexpanded)).toEqual([[false, false, true, false], undefined])
+    // Text before a separator is still text.
+    expect(pipeline(`python3 s.py foo$; ls`).map(c => c.unexpanded)).toEqual([[false, false, true], undefined])
+  })
+  test('a $ starting a name, a brace, a bracket, a quote or a substitution, in any shell, stays expanded', () => {
+    expect(pipeline(`python3 s.py "$OUT/big.ts" x$'y' x$"y" "\${X}" "$[1]" "$=x" "$~x" "$#" "$_" '$P'$Q`).map(c => c.unexpanded)).toEqual([undefined])
+    // One word holding a $ left as text and one expanded is expanded.
+    expect(pipeline(`python3 s.py "a$"$B`).map(c => c.unexpanded)).toEqual([undefined])
+    expect(pipeline(`python3 s.py "$(`).map(c => c.unexpanded)).toEqual([undefined])
+  })
+  test('a $ left as text is no expansion for `literal`, exactly as a single quoted one is not', () => {
+    expect(pipeline(`python3 s.py "^foo.*bar$" '^foo.*bar$'`).map(c => c.literal)).toEqual([undefined])
+  })
+})
+
 // #2141: a word built from a command substitution gives, beside the word as typed, what the
 // substitution runs and, where that is a plain cat of a heredoc or a here string, the text it puts
 // in the word, so a guard reading a pull request's description reads that description. Anything
