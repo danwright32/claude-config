@@ -38,6 +38,12 @@ judged=0
 for a in "$@"; do
   case "$a" in pr|issue|api) judged=1; break ;; esac
 done
+# gh repo create --push and gh repo sync publish commits gh pushes or copies itself (#2326).
+if [ "${1:-}" = repo ]; then
+  for a in "${@:2}"; do
+    case "$a" in create|new|sync) judged=1; break ;; esac
+  done
+fi
 case "${1:-}" in
   ""|-*|accessibility|agent-task|alias|attestation|auth|browse|cache|codespace|completion|config|\
   gist|gpg-key|help|label|licenses|org|preview|project|release|repo|ruleset|run|search|secret|\

@@ -323,6 +323,97 @@ missing="$(comm -23 <(printf '%s\n' "$skipped" | sort -u) <(printf '%s\n' "$buil
 check "#2207 every word bin/gh skips is one of gh's own commands to the judge too: missing ${missing:-none}" [ -z "$missing" ]
 check "#2207 and bin/gh never lets the extension command or gh copilot skip the judge" bash -c "! printf '%s\n' \"\$1\" | grep -q -x -e extension -e extensions -e ext -e copilot" _ "$skipped"
 
+# Text gh posts that is not on its command line (claude-config#2326). Measured on gh 2.89.0 in a
+# throwaway repository against a local stand in for GitHub: with no terminal, gh issue comment
+# --editor and gh pr comment --editor run the editor and post what it wrote, gh issue create and gh
+# pr create refuse --editor, and gh pr create aborts rather than push an unpushed branch. --fill
+# posts commit messages, gh pr create can push the branch, gh repo create --push pushes the whole
+# history, and gh repo sync with a destination copies another repository's commits into it.
+PUB="danwright-test/public-notes"
+GITCO="$WORK/gitco"
+git_in(){ git -C "$GITCO" -c user.name=t -c user.email=t@t "$@" >/dev/null 2>&1; }
+mkdir -p "$GITCO"
+git_in init -q -b main
+git_in commit -q --allow-empty -m "first"
+git_in update-ref refs/remotes/origin/main HEAD
+git_in checkout -q -b tidy
+git_in commit -q --allow-empty -m "Tidy the notes" -m "Copied from the acme-widgets checkout."
+in_git(){   # like guard_args, run from the git checkout
+  : > "$CALLS"
+  printf '%s\n' 'import subprocess, sys' 'r = subprocess.run(["gh"] + sys.argv[1:])' 'sys.exit(r.returncode)' > "$GITCO/scrub.py"
+  out="$(cd "$GITCO" && fixture_env PATH="$GUARD_BIN:$BIN:$PATH" python3 scrub.py "$@" 2>&1)"; rc=$?
+}
+
+for fill in --fill -f --fill-first --fill-verbose; do
+  guard_args pr create --repo "$PUB" --head tidy --title "Tidy" "$fill"
+  check "#2326 gh pr create $fill, whose body gh fills from commit messages, is refused for a public repository: rc=$rc $out" [ "$rc" -ne 0 ]
+  check "#2326 and never posted" not_posted
+done
+check "#2326 and says the text comes from commit messages: $out" has "$out" "fills from commit messages"
+guard_args pr create --repo "$PUB" --head tidy --body "Clean" --fill
+check "#2326 so is --fill with a body but no title: rc=$rc $out" [ "$rc" -ne 0 ]
+guard_args pr create --repo "$PUB" --head tidy --title "Tidy" --body "Clean notes" --fill
+check "#2326 (control) --fill with both a title and a body, which gh uses over it, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args pr create --repo danwright-test/private-notes --head tidy --title "Tidy" --fill
+check "#2326 (control) --fill for a private repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
+
+for form in "issue comment 5 --editor" "pr comment 5 --editor" "issue comment 5 -e" "pr comment 5 -e"; do
+  guard_args $form --repo "$PUB"
+  check "#2326 gh $form, which posts what an editor wrote, is refused for a public repository: rc=$rc $out" [ "$rc" -ne 0 ]
+  check "#2326 and never posted" not_posted
+done
+check "#2326 and says the text comes from an editor: $out" has "$out" "editor"
+guard_args issue comment 5 --editor --repo danwright-test/private-notes
+check "#2326 (control) --editor for a private repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
+
+in_git pr create --repo "$PUB" --title "Tidy" --body "Clean notes"
+check "#2326 gh pr create with no --head, from a branch holding an unpushed commit naming a work repository, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2326 and never posted" not_posted
+check "#2326 and says it read what gh may push: $out" has "$out" "push"
+check "#2326 and withholds the name: $out" lacks "$out" "acme-widgets"
+in_git pr create --repo "$PUB" --head tidy --title "Tidy" --body "Clean notes"
+check "#2326 (control) the same with --head, which never pushes, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+git_in update-ref refs/remotes/origin/tidy HEAD
+in_git pr create --repo "$PUB" --title "Tidy" --body "Clean notes"
+check "#2326 (control) and once that commit is on a remote, nothing is left to push, so it posts: rc=$rc $out" [ "$rc" -eq 0 ]
+git_in checkout -q -b zephyr-notes
+in_git pr create --repo "$PUB" --title "Tidy" --body "Clean notes"
+check "#2326 a branch whose name names a work repository is refused, since gh would push it under that name: rc=$rc $out" [ "$rc" -ne 0 ]
+git_in checkout -q tidy
+guard_args pr create --repo "$PUB" --title "Tidy" --body "Clean notes"
+check "#2326 (control) gh pr create from a folder that is not a git checkout, where gh can push nothing, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+
+in_git repo create danwright-test/new-notes --public --source=. --push
+check "#2326 gh repo create --push of a history holding a message naming a work repository, to a public repository, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2326 and never posted" not_posted
+in_git repo new danwright-test/new-notes --public --source . --push
+check "#2326 so is gh repo new, its other name: rc=$rc $out" [ "$rc" -ne 0 ]
+in_git repo create danwright-test/new-notes --private --source=. --push
+check "#2326 (control) the same to a private repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
+in_git repo create danwright-test/new-notes --public --source=.
+check "#2326 (control) and without --push, which pushes nothing, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+CLEAN="$WORK/cleanco"; mkdir -p "$CLEAN"
+git -C "$CLEAN" -c user.name=t -c user.email=t@t init -q -b main >/dev/null 2>&1
+git -C "$CLEAN" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "Start the notes" >/dev/null 2>&1
+in_git repo create danwright-test/new-notes --public --source "$CLEAN" --push
+check "#2326 (control) a clean history pushed to a new public repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
+
+guard_args repo sync "$PUB" --source danwright-test/private-notes
+check "#2326 gh repo sync into a public repository from a private one, whose commits it cannot read, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2326 and never posted" not_posted
+guard_args repo sync "$PUB" -s danwright-test/private-notes
+check "#2326 so is the short -s: rc=$rc $out" [ "$rc" -ne 0 ]
+guard_args repo sync "$PUB" --source danwright-test/nowhere
+check "#2326 and one whose source's visibility cannot be read: rc=$rc $out" [ "$rc" -ne 0 ]
+guard_args repo sync "$PUB" --source danwright-test/public-notes
+check "#2326 (control) from a public source, whose commits are already public, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args repo sync "$PUB"
+check "#2326 (control) from the destination's own parent posts: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args repo sync danwright-test/private-notes --source danwright-test/nowhere
+check "#2326 (control) into a private repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
+guard_args repo sync --source danwright-test/private-notes
+check "#2326 (control) a local sync, which writes nothing to GitHub, posts: rc=$rc $out" [ "$rc" -eq 0 ]
+
 # A folder holding only bash, which the guard's own line asks for: /usr/bin holds a gh on a CI runner,
 # so a PATH of the system folders had a real gh past the guard there and the case never ran.
 NOGH="$WORK/nogh"; mkdir -p "$NOGH"; ln -s "$(command -v bash)" "$NOGH/bash"
@@ -427,6 +518,16 @@ hook 'python3 scrub.py' "$GUARDED"
 check "a session whose PATH carries the guard runs the script and hears nothing, since the guard judges each write: $out" silent
 hook 'gh pr create --repo danwright-test/public-notes --title Tidy --body "the acme-widgets checkout"' "$GUARDED"
 check "the command's own gh writes are still judged in a guarded session: $out" refused
+hook 'gh pr create --repo danwright-test/public-notes --head tidy --title Tidy --fill' "$GUARDED"
+check "#2326 the command hook refuses gh pr create --fill for a public repository too: $out" refused
+hook 'gh issue comment 5 --repo danwright-test/public-notes --editor' "$GUARDED"
+check "#2326 and gh issue comment --editor: $out" refused
+hook "cd '$GITCO' && gh repo create danwright-test/new-notes --public --source=. --push" "$GUARDED"
+check "#2326 and gh repo create --push of a history naming a work repository: $out" refused
+hook 'gh repo sync danwright-test/public-notes --source danwright-test/private-notes' "$GUARDED"
+check "#2326 and gh repo sync from a private source into a public repository: $out" refused
+hook 'gh repo sync danwright-test/public-notes' "$GUARDED"
+check "#2326 (control) and passes gh repo sync from the parent: $out" silent
 hook 'gh cm 5 "seen in acme-widgets"' "$GUARDED"
 check "a command running an alias that expands to a comment naming a work repository is refused: $out" refused
 check "and says it went through the alias: $out" has "$out" "gh alias cm"

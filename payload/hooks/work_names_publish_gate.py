@@ -66,6 +66,14 @@ a shell alias's command, a pager, an editor or git runs meets the guard again. W
 stand in front of is refused (program_refusal): a gh extension, gh copilot, and an alias naming
 another alias.
 
+TEXT NOT ON THE COMMAND LINE (claude-config#2326), for a public repository: --editor is refused (gh
+runs the editor with no terminal and posts what it wrote), and so is gh pr create --fill unless both
+a title and a body are given. gh pr create with no --head is judged with what it may push: the
+branch's name and the messages of the commits no remote holds. gh repo create --push is judged with
+the whole history it sends, unless the new repository is private or internal. gh repo sync into a
+public destination from a --source that is not public is refused, since those commits are not here
+to read.
+
 Seams (tests): WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER and WORK_NAMES_PROJECT_LIST,
 read by lib/work-names.py;
 WN_PUBLISH_BUDGET_SECONDS, the whole run's time for GitHub (35, against a hook timeout of 45);
@@ -193,19 +201,35 @@ def _env_value(name, envs, place):
     return os.environ.get(name) or None
 
 
-def judge(what, slug, cwd, gh_repo, command, bodies):
-    """None when it may post, else the reason. bodies: [(shown as, text or None when hidden)]."""
+def _work_owner(owner):
+    matcher, owners, _odd = names()
+    owner = (owner or "").lower()
+    return bool(owner) and (owner in owners or wn.sha(owner) in matcher.hashes)
+
+
+def published(slug, cwd, gh_repo):
+    """The repository's full name when text posted there is public and judged (a public repository
+    no work owner owns), else None. Raises CannotTell as visibility does."""
     full, vis = visibility(slug, cwd, gh_repo)
-    if vis != "PUBLIC":
+    if vis != "PUBLIC" or _work_owner(full.split("/", 1)[0]):
         return None
-    matcher, owners, odd = names()
-    owner = full.split("/", 1)[0].lower()
-    if owner in owners or wn.sha(owner) in matcher.hashes:
+    return full
+
+
+def judge(what, slug, cwd, gh_repo, command, bodies, unseen=()):
+    """None when it may post, else the reason. bodies: [(shown as, text, None when hidden, or a
+    function returning the text, called only for a public repository)]. unseen: clauses saying what
+    else the command posts that cannot be read (claude-config#2326), each refused for a public one."""
+    full = published(slug, cwd, gh_repo)
+    if full is None:
         return None
+    matcher, _owners, odd = names()
     hit = find(command, matcher, odd)
     if hit:
         return "%s posts to %s, a public repository, and its text names %s." % (what, full, _shown(hit))
     for shown, text in bodies:
+        if callable(text):
+            text = text()
         if text is None:
             return ("%s posts to %s, a public repository, from %s, which this command writes from "
                     "something it does not show, so whether it names a work organisation or repository "
@@ -214,7 +238,133 @@ def judge(what, slug, cwd, gh_repo, command, bodies):
         hit = find(text, matcher, odd)
         if hit:
             return "%s posts to %s, a public repository, and %s names %s." % (what, full, shown, _shown(hit))
+    for clause in unseen:
+        return "%s posts to %s, a public repository, %s" % (what, full, clause)
     return None
+
+
+# Text gh posts that is not on its command line (claude-config#2326), each form measured on gh 2.89.0
+# in a throwaway repository against a local stand in for GitHub. With no terminal, gh issue comment
+# --editor and gh pr comment --editor run the editor and post what it wrote (gh issue create and gh pr
+# create refuse --editor there), and gh pr create aborts rather than push an unpushed branch, which it
+# does push when it can ask where to.
+EDITOR_FLAGS = ("--editor", "-e")
+FILL_FLAGS = ("--fill", "-f", "--fill-first", "--fill-verbose")
+TITLE_FLAGS = ("--title", "-t")
+BODY_FLAGS = ("--body", "-b", "--body-file", "-F")
+EDITED = ("with text an editor program wrote (--editor), which this check cannot read, so whether it "
+          "names a work organisation or repository cannot be told. Write the text with --body or "
+          "--body-file instead.")
+FILLED = ("with a title or body gh fills from commit messages (--fill), which this check does not read, "
+          "so whether it names a work organisation or repository cannot be told. Give --title and "
+          "--body (or --body-file) instead; given both, gh uses them over --fill.")
+REPO_CREATE = frozenset({("repo", "create"), ("repo", "new")})
+REPO_SYNC = ("repo", "sync")
+# gh repo create's flags that take a value, so the word after one is never the repository's name.
+REPO_CREATE_VALUES = frozenset(("--description", "-d", "--homepage", "-h", "--team", "-t", "--template",
+                                "-p", "--gitignore", "-g", "--license", "-l", "--source", "-s",
+                                "--remote", "-r"))
+REPO_SYNC_VALUES = frozenset(("--branch", "-b", "--source", "-s"))
+
+
+def _given(args, flags):
+    """Whether any of flags is written in args, alone or as --flag=value. A value that looks like one
+    of them counts as one, the reading that refuses more, never less."""
+    return any(a in flags or (a.startswith("--") and a.split("=", 1)[0] in flags) for a in args)
+
+
+def _positionals(args, valued):
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif a.startswith("-"):
+            skip = a in valued
+        else:
+            out.append(a)
+    return out
+
+
+def _git(where, *args):
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", where or os.getcwd()] + list(args), capture_output=True,
+                              text=True, errors="replace", timeout=20)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise CannotTell("git could not be run to read what would be pushed (%s)" % type(e).__name__)
+
+
+def pushed_text(where, history):
+    """The text a push gh makes from where would publish: the names of the refs it pushes and the
+    messages of the commits it sends. history False: the current branch and the commits no remote ref
+    holds, what gh pr create pushes; True: every commit HEAD reaches, what gh repo create --push sends
+    to a new repository, or every ref of a bare one, which it mirrors.
+
+    "" when where is no git checkout or HEAD is on no branch, since gh pushes nothing from there.
+    Raises CannotTell when git cannot list the commits."""
+    r = _git(where, "rev-parse", "--is-bare-repository")
+    if r.returncode != 0:
+        return ""
+    if r.stdout.strip() == "true":
+        refs = _git(where, "for-each-ref", "--format=%(refname:short)")
+        names_, revs = (refs.stdout if refs.returncode == 0 else None), ["--all"]
+    else:
+        b = _git(where, "symbolic-ref", "--quiet", "--short", "HEAD")
+        if b.returncode != 0:
+            return ""
+        names_ = b.stdout
+        if _git(where, "rev-parse", "--verify", "--quiet", "HEAD").returncode != 0:
+            return "branch %s" % names_
+        revs = ["HEAD"] if history else ["HEAD", "--not", "--remotes"]
+    log = _git(where, "log", "--format=%B%x00", *revs)
+    if names_ is None or log.returncode != 0:
+        raise CannotTell("git could not list the commits a push from %s would send (%s)"
+                         % (where, (log.stderr or "for-each-ref failed").strip()[:200]))
+    return "branch %s\n%s" % (names_, log.stdout)
+
+
+def judge_repo_create(what, args, where, command):
+    """gh repo create --push sends the whole history to the new repository (claude-config#2326).
+    Judged unless the repository is made private or internal, or a work owner's."""
+    if not _given(args, ("--push",)) or _given(args, ("--private", "--internal")):
+        return None
+    name = (_positionals(args, REPO_CREATE_VALUES) or [""])[0]
+    if "/" in name and _work_owner(name.split("/", 1)[0]):
+        return None
+    matcher, _owners, odd = names()
+    shown = name or "a new repository"
+    hit = find(command, matcher, odd)
+    if hit:
+        return "%s makes %s, a public repository, and its text names %s." % (what, shown, _shown(hit))
+    source = os.path.expanduser((scan.flag_values(args, "--source", "-s") or ["."])[-1])
+    if not os.path.isabs(source):
+        source = os.path.normpath(os.path.join(where or os.getcwd(), source))
+    hit = find(pushed_text(source, True), matcher, odd)
+    if hit:
+        return ("%s --push publishes the history of %s to %s, a public repository, and its branch names "
+                "or commit messages name %s." % (what, source, shown, _shown(hit)))
+    return None
+
+
+def judge_repo_sync(what, args, where):
+    """gh repo sync with a destination copies the source's commits into it on GitHub (#2326). Their
+    messages are not here to read, so a public destination takes them only from a public source, whose
+    commits are public already. With no destination it updates this checkout and writes nothing to
+    GitHub; with no source the source is the destination's parent, and GitHub keeps every fork of a
+    private repository private, so a public destination's parent is public."""
+    dest = _positionals(args, REPO_SYNC_VALUES)
+    sources = scan.flag_values(args, "--source", "-s")
+    if not dest or not sources:
+        return None
+    full = published(dest[0], where, None)
+    if full is None:
+        return None
+    src, vis = visibility(sources[-1], where, None)
+    if vis == "PUBLIC":
+        return None
+    return ("%s copies the commits of %s, which is not public, into %s, a public repository, and their "
+            "messages cannot be read here, so whether they name a work organisation or repository cannot "
+            "be told." % (what, src, full))
 
 
 # The command hook names the name it matched: only the session sees it, and the session already holds
@@ -437,7 +587,7 @@ def evaluate(command, cwd, depth=0):
                 if why not in reasons:
                     reasons.append(why)
     try:
-        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS)
+        found = scan.scan_gh_in_context(command, cwd, dict(os.environ), KINDS | REPO_CREATE | {REPO_SYNC})
         apis = api_writes(command, cwd) if re.search(r"\bapi\b", command) else []
     except scan.Unreadable as e:
         named = scan.gated_in_text(command, KINDS) or CRUDE_API.search(command or "")
@@ -448,17 +598,14 @@ def evaluate(command, cwd, depth=0):
         return reasons
     for kind, args, envs, place in found:
         what = "gh %s %s" % kind
+        where = place.cwd or place.start or cwd
         try:
-            slugs = scan.flag_values(args, "--repo", "-R")
-            slug = slugs[-1] if slugs else None
-            gh_repo = None if slug else _env_value("GH_REPO", envs, place)
-            bodies = []
-            for word, state, detail in field.body_files(args, command, place):
-                if state == "hidden":
-                    bodies.append(("--body-file %s" % word, None))
-                elif state == "text":
-                    bodies.append(("--body-file %s" % word, detail))
-            why = judge(what, slug, place.cwd or place.start or cwd, gh_repo, command, bodies)
+            if kind in REPO_CREATE:
+                why = judge_repo_create(what, args, where, command)
+            elif kind == REPO_SYNC:
+                why = judge_repo_sync(what, args, where)
+            else:
+                why = _judge_text(kind, what, args, envs, place, where, command)
         except CannotTell as e:
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
@@ -472,6 +619,29 @@ def evaluate(command, cwd, depth=0):
         if why and why not in reasons:
             reasons.append(why)
     return reasons
+
+
+def _judge_text(kind, what, args, envs, place, where, command):
+    """judge() for one gh pr or issue command: its body files, and what it posts that is not on its
+    command line (claude-config#2326). Raises CannotTell."""
+    slugs = scan.flag_values(args, "--repo", "-R")
+    slug = slugs[-1] if slugs else None
+    gh_repo = None if slug else _env_value("GH_REPO", envs, place)
+    bodies = []
+    for word, state, detail in field.body_files(args, command, place):
+        if state == "hidden":
+            bodies.append(("--body-file %s" % word, None))
+        elif state == "text":
+            bodies.append(("--body-file %s" % word, detail))
+    unseen = [EDITED] if _given(args, EDITOR_FLAGS) else []
+    if kind == ("pr", "create"):
+        if _given(args, FILL_FLAGS) and not (_given(args, TITLE_FLAGS) and _given(args, BODY_FLAGS)):
+            unseen.append(FILLED)
+        if not _given(args, ("--head", "-H")):
+            # With no --head, gh pushes the branch when it is not fully pushed and it can ask where.
+            bodies.append(("what it may push (the branch's name and the commits no remote holds)",
+                           lambda: pushed_text(where, False)))
+    return judge(what, slug, where, gh_repo, command, bodies, unseen)
 
 
 # The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so
