@@ -147,6 +147,36 @@ test("a failed call's code and words are read whatever its path holds, a bracket
   )
 })
 
+// The words ") failed: " can sit in the path, in the engine's reason, or in both, so no one marker
+// (the first or the last) is where the path ends. The reason is read by the engine's known reason
+// shapes, a system error such as "ENOENT" or "EACCES: permission denied, stat '<path>'" (#2328).
+test("a failed call's code and words are read whatever its path holds, the failed marker included", async () => {
+  expect(errorCode(new Error('job-watcher: $.fs.stat(/tmp/a) failed: b/job.log) failed: ENOENT'))).toBe('ENOENT')
+  expect(errorText(new Error('scope-modes: $.fs.stat(/tmp/a) failed: b/job.log) failed: EACCES'), 'scope-modes')).toBe(
+    'the file could not be looked up: permission denied (/tmp/a) failed: b/job.log)',
+  )
+})
+
+test("a failed call's code and words are read whole when the engine's reason itself quotes the failed marker", async () => {
+  const quoting = "scope-modes: $.fs.write(/w/a.json) failed: EACCES: permission denied, rename '/w/a.json.tmp) failed: 1' -> '/w/a.json'"
+  expect(errorCode(new Error(quoting))).toBe('EACCES')
+  expect(errorText(new Error(quoting), 'scope-modes')).toBe('the file could not be written: permission denied (/w/a.json.tmp) failed: 1)')
+  // A code with no plain words keeps the whole reason, never a fragment cut at the quoted marker.
+  const uncovered = "scope-modes: $.fs.write(/w/a.json) failed: EXDEV: cross-device link not permitted, rename '/w/a.json.tmp) failed: 1' -> '/w/a.json'"
+  expect(errorCode(new Error(uncovered))).toBe('EXDEV')
+  expect(errorText(new Error(uncovered), 'scope-modes')).toBe(
+    "the file could not be written: EXDEV: cross-device link not permitted, rename '/w/a.json.tmp) failed: 1' -> '/w/a.json'",
+  )
+})
+
+test("a failed call's code and words are read when both its path and the engine's reason hold the failed marker", async () => {
+  const both = "job-watcher: $.fs.stat(/tmp/a) failed: b/job.log) failed: EACCES: permission denied, stat '/tmp/a) failed: b/job.log'"
+  expect(errorCode(new Error(both))).toBe('EACCES')
+  expect(errorText(new Error(both), 'job-watcher')).toBe('the file could not be looked up: permission denied (/tmp/a) failed: b/job.log)')
+  // A reason in no known shape keeps the reading #2367 gave: the path runs to the last marker.
+  expect(errorText(new Error('status-bar: $.process.run(gh) failed: x) failed: still running'), 'status-bar')).toBe('still running')
+})
+
 test('the news of a skew is given once per mod and member in a load, and never for anything else', async () => {
   const a = await thrown(() => $.modkit.mergeHelper({}))
   const b = await thrown(() => $.modkit.mergeHelper({}))
