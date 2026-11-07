@@ -157,13 +157,31 @@ does a public repository a work owner holds. It reads the whole command, a hered
 and every body file it names, and refuses text naming a work organisation OR a work repository,
 showing the name it matched so the text can be rewritten. The names are read live on each judged
 command and never written to disk: the repo digest's repository list (the one
-`lib/lesson-fanout.sh` reads), this Mac's dev update registry, and the two built in hashes. Matching
+`lib/lesson-fanout.sh` reads), this Mac's dev update registry, the work MacBook's project folders
+from the Projects section of the global CLAUDE.md, the organisation's web and email domain (matched
+only as a domain, after an @ or before a dot and a top level domain), and the two built in hashes
+(#2184). Matching
 repository names departs from #1568, which leaves them out of the file scan on purpose, for public
 text only (Dan, 2026-11-02, after a repository name leaked into a public pull request description);
 the file scan and the send scan are unchanged, and the commit message checks above read the same
 list through the same reader (#2111). Whatever it cannot tell is refused: the visibility or
 the list unreadable, a body file it cannot read, a command it cannot parse, the 35 second budget
 spent. There is no override; the remedy is to rewrite the text.
+
+The same check reaches GitHub writes made inside a script (#2183). The hook above sees only the
+command Claude runs, so a Python or shell script making gh calls went unjudged (one scrub made 239
+edits that way). `gh-guard-path.sh`, a SessionStart hook, puts `hooks/bin` first on the session's
+PATH through `CLAUDE_ENV_FILE`, and `hooks/bin/gh` there judges every gh a script runs with the same
+rule before handing it to the real gh. It refuses with exit 1 without naming what it matched,
+since a script's output can land in a log, and otherwise runs the real gh with its exit code and
+its standard input unchanged. A gh alias is judged as what it expands to, in the hook and the guard
+alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook passes it as before
+and leaves it to the guard. A session started before this was installed, or one whose PATH does not
+carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
+not checked until a new session starts: refusing those scripts instead would stop
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
+covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
+extensions.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -2493,7 +2511,11 @@ description and commits, and the scanner at its base commit
 timed from outside; it leaves before loading anything on a command with no `gh` word. 0.087 to 0.109
 seconds on `gh pr view 5`, which starts its python3 to find nothing it judges. 0.63 to 0.74 seconds
 on a `gh pr create` aimed at this repository, through the real gh: the visibility read, the repo
-digest list and the registry, then the match
+digest list and the registry, then the match. With the once per session notice (#2183), on
+2026-11-03, five readings each at load average 60 to 84, timed from outside with a python3 clock
+(which adds its own start up to every reading): 0.06 to 0.36 seconds on a plain `git push` in a
+session already stamped, against 0.04 to 0.06 with no session id, a file test and noise apart.
+Re-measure at a quieter load
 
 </td></tr>
 <tr><td>
@@ -2569,6 +2591,12 @@ anything
 </td></tr>
 </tbody>
 </table>
+
+`hooks/bin/gh` (#2183) has no row, since no push waits on it: it stands in front of every gh a
+script runs. In the same readings on 2026-11-03 it added 0.02 to 0.20 seconds to a gh command it
+does not judge (`gh --version`: real 0.07 to 0.11, guard 0.09 to 0.27) and about 0.11 to one it
+judges (`gh pr view --help`: real 0.08 to 0.12, guard 0.18 to 0.22), its python3 start; a judged
+write then pays the publish gate's own reads in the row above. Re-measure at a quieter load.
 
 Claude Code runs every matching hook in parallel ("All matching hooks run in parallel", the hooks
 reference), so a push waits for the SLOWEST gate, not for their sum, and the tool runs them together
