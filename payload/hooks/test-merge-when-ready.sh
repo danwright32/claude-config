@@ -1057,6 +1057,36 @@ check_eq "#2304 a log that cannot be written is refused before anything" "64" "$
 check "#2304 saying so" "--log $LOGS/no-such-folder/c.log cannot be written" "$out"
 check_eq "#2304 and GitHub was never asked" "0" "$(count gh-calls 'pr view')"
 
+# A relative --log names a file relative to where the caller ran the helper. The helper moves to the
+# top of the checkout before it reads anything, so a path kept as given would send every line after
+# that move into a second file the caller never named (lessons review of #2386). Started from a
+# folder inside the checkout, every line, the exit line included, lands in the one file named.
+mkdir -p "$REPO/sub"; rm -f "$REPO/sub/rel.log" "$REPO/rel.log"
+fresh "$OLD" 0 "$GREEN"
+out="$( (cd "$REPO/sub" && bash "$HELPER" 7 --squash --log=rel.log 2>&1) )"; rc=$?
+check_eq "#2304 a relative --log run still merges" "0" "$rc"
+check "#2304 a relative --log keeps the start line where the caller named it" "merge-when-ready: started for #7" "$(cat "$REPO/sub/rel.log" 2>/dev/null)"
+check "#2304 a relative --log keeps the merge line there too, after the helper moves" "Merged #7 in acme/widget at ${OLD:0:7}" "$(cat "$REPO/sub/rel.log" 2>/dev/null)"
+check_eq "#2304 a relative --log ends with the exit line in the named file" "merge-when-ready: exit 0: merged." "$(tail -1 "$REPO/sub/rel.log" 2>/dev/null)"
+check_eq "#2304 a relative --log writes no second file at the checkout's top" "no" "$([ -e "$REPO/rel.log" ] && echo yes || echo no)"
+rm -f "$REPO/sub/rel.log" "$REPO/rel.log"
+
+# A relative --log whose folder does not exist is refused, naming that folder, before anything runs.
+fresh "$OLD" 0 "$GREEN"
+out="$( (cd "$REPO/sub" && bash "$HELPER" 7 --squash --log=missing/d.log 2>&1) )"; rc=$?
+check_eq "#2304 a relative --log into a missing folder is refused" "64" "$rc"
+check "#2304 naming the folder that does not exist" "does not exist" "$out"
+check_eq "#2304 and GitHub was never asked for it" "0" "$(count gh-calls 'pr view')"
+check_eq "#2304 and nothing was written at the checkout's top" "no" "$([ -e "$REPO/missing" ] && echo yes || echo no)"
+rmdir "$REPO/sub" 2>/dev/null
+
+# An empty --log= names no file, so it is refused rather than the run going on with no log at all.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log=)"; rc=$?
+check_eq "#2304 an empty --log= is refused" "64" "$rc"
+check "#2304 saying it needs a file" "--log needs a file." "$out"
+check_eq "#2304 and GitHub was never asked for the empty one" "0" "$(count gh-calls 'pr view')"
+
 # Every place that documents running it in the background names --log=, never a pipe into tee.
 for f in "$DIR/../../README.md" "$DIR/../skills/orchestrate/SKILL.md" "$HELPER"; do
   check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
