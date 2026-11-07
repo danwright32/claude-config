@@ -7005,7 +7005,10 @@ that session, and when sleep mode ends, by any route, the noon end included, eve
 held something is asked to deliver it where you are then, so every session reports at the same
 moment rather than one popping up minutes after `/sleep` (#1284). No sound, notification or end of turn review reaches you. At
 wake it checks GitHub and the disk for anything outward that happened anyway (issues created,
-milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report.
+milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report. A milestone
+moved only by the night's own work (issues its sessions' notes name, issues closed by pull requests
+they name, issues filed overnight) is left out; any other change to it is named, and when its issue
+events cannot be read it is said as not checked (#2393).
 
 **Which repositories may merge and deploy overnight** (your list, confirmed 2026-10-07, in each
 Mac's own `~/.claude/mods/sleep-repos.local.json` since #1568: it names work repositories, so it is

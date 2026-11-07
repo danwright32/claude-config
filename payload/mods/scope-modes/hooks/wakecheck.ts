@@ -27,6 +27,33 @@ export type WakeFindings = { hits: string[]; unmeasured: string[] }
 /** The time now in ms: the engine's clock (`$.clock.now`), never Date.now, which no test can move. */
 export type Clock = () => number | Promise<number>
 
+const SLUG = /^[\w.-]+\/[\w.-]+$/
+// The note kinds that say a session worked an issue or pull request tonight, in the schema
+// sleep-report.py documents: a claim, its release, done, parked and failed. A question names an
+// issue Dan was asked about, which no session changed, so it explains nothing (#2393).
+const WORKED = new Set(['claim', 'released', 'done', 'parked', 'failed'])
+/**
+ * The issues and pull requests one line of the night's notes says a session worked, each as
+ * owner/name#n lowercased: the same record the sleep report checks against GitHub at wake (#2393).
+ */
+export const workedOn = (note: unknown): string[] => {
+  if (!note || typeof note !== 'object') return []
+  const n = note as { kind?: unknown; repo?: unknown; issue?: unknown; pr?: unknown }
+  if (typeof n.kind !== 'string' || !WORKED.has(n.kind) || typeof n.repo !== 'string' || !SLUG.test(n.repo)) return []
+  const repo = n.repo.toLowerCase()
+  return [n.issue, n.pr].filter((x): x is number => Number.isInteger(x)).map(x => `${repo}#${x}`)
+}
+/** GitHub's issue events for a repository: three pages of 100, newest first, as far back as read. */
+const ISSUE_EVENT_PAGES = 3
+/**
+ * How long after the newest issue event a milestone's updated_at may still be that event's own
+ * change: measured 2026-11-07, an issue added at 14:31:51 moved its milestone to 14:31:52. A later
+ * time is a change to the milestone itself, which no issue event records.
+ */
+const SAME_CHANGE_MS = 60_000
+/** What each issue event that moves a milestone did, as the report says it. */
+const MOVES: Record<string, string> = { closed: 'closed', reopened: 'reopened', milestoned: 'added to it', demilestoned: 'removed from it' }
+
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const firstLine = (s: string) => s.trim().split('\n')[0]?.trim() ?? ''
 const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
@@ -36,11 +63,12 @@ const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
  * repositories the night's notes name, each read whatever the events feed shows (#834 review: a
  * private repository the feed leaves out is still read). `github` reads a remote's address, the
  * live sync clone's among them, as mod-kit's one reader does (#951). `mtimeOf` dates a file (ms),
- * rejecting with the reason when it cannot (#2016).
+ * rejecting with the reason when it cannot (#2016). `worked` are the issues and pull requests the
+ * night's notes say its sessions worked (workedOn), which explain a milestone they moved (#2393).
  */
 export const wakeCheck = async (
   runAny: Runner,
-  o: { since: number; home: string; github: GithubOf; repos?: string[]; now: Clock; budgetMs?: number; mtimeOf: (path: string) => Promise<number> },
+  o: { since: number; home: string; github: GithubOf; repos?: string[]; worked?: string[]; now: Clock; budgetMs?: number; mtimeOf: (path: string) => Promise<number> },
 ): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
@@ -202,20 +230,153 @@ export const wakeCheck = async (
   if (!Number.isFinite(mtime) || mtime <= 0) unmeasured.push(`the installed LESSONS.md was not checked (its last change could not be read: ${unreadMtime})`)
   else if (mtime >= o.since) lessonHits.push(`The installed LESSONS.md changed overnight, at ${etWhen(mtime)}`)
 
+  // #2393: updated_at says only that a milestone changed, so the night's own merges and filings
+  // were put to Dan every morning. The repository's issue events for the night say what changed;
+  // one the night's notes account for (an issue or pull request a session worked, or an issue
+  // created overnight, already its own line above) is left out, and only the rest is reported, by
+  // name. A change no issue event records is the milestone itself. What cannot be read is said as
+  // not checked, never as explained (L460).
+  const worked = new Set((o.worked ?? []).map(k => k.toLowerCase()))
+  const milestonesExplained = async (repo: string, touched: { number?: number; title?: string; updated_at?: string }[]) => {
+    type IssueEv = {
+      event?: string
+      created_at?: string
+      actor?: { login?: string } | null
+      milestone?: { title?: string } | null
+      issue?: { number?: number; milestone?: { number?: number; title?: string } | null } | null
+    }
+    // Newest first, page by page back to sleep's start, as the user's events are read above.
+    const events: IssueEv[] = []
+    let oldest: number | null = null
+    let gap: string | null = null
+    for (let p = 1; p <= ISSUE_EVENT_PAGES; p++) {
+      const r = await run(['gh', 'api', `repos/${repo}/issues/events?per_page=${EVENTS_PER_PAGE}&page=${p}`])
+      if (r.exitCode === SKIPPED) {
+        gap = `page ${p}: the check stopped at its ${Math.round(budget / 1000)} s limit`
+        break
+      }
+      if (r.exitCode !== 0) {
+        gap = `page ${p}: ${firstLine(r.stderr) || `exit ${r.exitCode}`}`
+        break
+      }
+      let page: IssueEv[] | null = null
+      try {
+        const got: unknown = JSON.parse(r.stdout)
+        if (Array.isArray(got)) page = got as IssueEv[]
+      } catch {
+        // said just below, as for an answer that is JSON but not a list
+      }
+      if (!page) {
+        gap = `page ${p}: the answer was not JSON`
+        break
+      }
+      events.push(...page)
+      for (const e of page) {
+        const t = at(e.created_at)
+        if (!Number.isNaN(t) && (oldest === null || t < oldest)) oldest = t
+      }
+      if (page.length < EVENTS_PER_PAGE || page.some(e => when(e.created_at) === 'before')) break
+      if (p === ISSUE_EVENT_PAGES) gap = `GitHub was asked for only the newest ${ISSUE_EVENT_PAGES * EVENTS_PER_PAGE}`
+    }
+    const gapText = gap === null ? '' : oldest === null ? `its issue events could not be read: ${gap}` : `its issue events from ${etWhen(o.since)} to ${etWhen(oldest)} were not read: ${gap}`
+    // The pull requests that closed the night's closed issues, read once, only when a close is not
+    // already accounted for: a session's notes may name its pull request and not the issue it closes.
+    type Closers = { map: Map<number, string[]>; full: boolean; why: string | null }
+    let closers: Closers | null = null
+    const closersOf = async (): Promise<Closers> => {
+      if (closers) return closers
+      const r = await run(['gh', 'issue', 'list', '-R', repo, '--state', 'closed', '--search', `closed:>=${since}`, '--json', 'number,closedByPullRequestsReferences', '--limit', '100'])
+      const failed = (why: string): Closers => (closers = { map: new Map(), full: false, why })
+      if (r.exitCode === SKIPPED) return failed(`the check stopped at its ${Math.round(budget / 1000)} s limit`)
+      if (r.exitCode !== 0) return failed(firstLine(r.stderr) || `exit ${r.exitCode}`)
+      let list: unknown
+      try {
+        list = JSON.parse(r.stdout)
+      } catch {
+        return failed('the answer was not JSON')
+      }
+      if (!Array.isArray(list)) return failed('the answer was not JSON')
+      type Ref = { number?: unknown; repository?: { nameWithOwner?: unknown; name?: unknown; owner?: { login?: unknown } | null } | null }
+      // A reference naming no repository is in this one; one whose repository cannot be read ties nothing.
+      const key = (x: Ref): string | null => {
+        if (!Number.isInteger(x?.number)) return null
+        const rp = x.repository
+        if (rp == null) return `${repo}#${x.number}`
+        const slug = typeof rp.nameWithOwner === 'string' ? rp.nameWithOwner : typeof rp.owner?.login === 'string' && typeof rp.name === 'string' ? `${rp.owner.login}/${rp.name}` : ''
+        return SLUG.test(slug) ? `${slug.toLowerCase()}#${x.number}` : null
+      }
+      const map = new Map<number, string[]>()
+      for (const i of list as { number?: unknown; closedByPullRequestsReferences?: unknown }[]) {
+        if (!Number.isInteger(i?.number)) continue
+        const refs = Array.isArray(i.closedByPullRequestsReferences) ? (i.closedByPullRequestsReferences as Ref[]) : []
+        map.set(i.number as number, refs.map(key).filter((k): k is string => k !== null))
+      }
+      return (closers = { map, full: list.length >= 100, why: null })
+    }
+    for (const m of touched) {
+      const title = m.title ?? ''
+      const mine = (e: IssueEv) => {
+        if (e.event === 'milestoned' || e.event === 'demilestoned') return typeof m.title === 'string' && e.milestone?.title === m.title
+        if (e.event !== 'closed' && e.event !== 'reopened') return false
+        const im = e.issue?.milestone
+        if (!im) return false
+        return typeof im.number === 'number' && typeof m.number === 'number' ? im.number === m.number : typeof m.title === 'string' && im.title === m.title
+      }
+      const unexplained: string[] = []
+      const undecided: string[] = []
+      let latest = Number.NEGATIVE_INFINITY
+      // Oldest first, so the changes read in the order they happened.
+      for (const e of events.filter(mine).filter(e => when(e.created_at) !== 'before').reverse()) {
+        const t = at(e.created_at)
+        if (!Number.isNaN(t)) latest = Math.max(latest, t)
+        const n = e.issue?.number
+        const what = `#${typeof n === 'number' ? n : '?'} ${MOVES[e.event ?? ''] ?? e.event}`
+        if (typeof n === 'number' && (worked.has(`${repo}#${n}`) || issueKeys.has(`${repo}#${n}`))) continue
+        if (e.event === 'closed' && typeof n === 'number') {
+          const c = await closersOf()
+          if (c.why !== null) {
+            undecided.push(`the pull requests that closed its issues could not be read: ${c.why}`)
+            continue
+          }
+          if (c.map.get(n)?.some(k => worked.has(k))) continue
+          if (!c.map.has(n) && c.full) {
+            undecided.push(`GitHub returned the most closed issues asked for (100), so what closed #${n} was not read`)
+            continue
+          }
+        }
+        if (Number.isNaN(t)) {
+          undecided.push(`GitHub gave no time for ${what}`)
+          continue
+        }
+        unexplained.push(`${what} by ${e.actor?.login || 'someone GitHub did not name'}`)
+      }
+      // The milestone's own last change, later than any issue event in it, is the milestone itself;
+      // one inside a window not read cannot be told apart, and the gap says so.
+      const moved = at(m.updated_at)
+      if ((gap === null || (oldest !== null && moved >= oldest)) && moved > latest + SAME_CHANGE_MS)
+        unexplained.push(`the milestone itself, at ${etWhen(moved)} (no issue event in it explains that)`)
+      const whyNot = [...new Set(undecided)]
+      if (unexplained.length) hits.push(`Milestone touched overnight: ${repo} "${title}", by changes nothing the night recorded accounts for: ${unexplained.join('; ')}`)
+      else if (whyNot.length || gap !== null) unmeasured.push(`whether milestone "${title}" in ${repo} was changed only by the night's own work was not checked (${whyNot.length ? whyNot.join('; ') : gapText})`)
+    }
+  }
+
   // Milestones touched and deploy runs, in each repository.
   const deployHits: string[] = []
   if (me) {
     for (const repo of repos) {
-      type Ms = { title?: string; updated_at?: string; created_at?: string }
+      type Ms = { number?: number; title?: string; updated_at?: string; created_at?: string }
       const ms = await json<Ms[]>(['gh', 'api', `repos/${repo}/milestones?state=all&per_page=100`], `milestones in ${repo}`)
       // One page, sorted by due date: a full one may leave out the milestone touched (L24).
       if (ms && ms.length >= 100) unmeasured.push(`${repo} holds 100 or more milestones, so only the first 100 were read`)
+      const touched: Ms[] = []
       for (const m of ms ?? []) {
-        // GitHub moves updated_at on every change, creation included, so it alone says.
+        // GitHub moves updated_at on every change, creation included, so it says that one happened.
         const w = when(m.updated_at)
-        if (w === 'overnight') hits.push(`Milestone touched overnight: ${repo} "${m.title ?? ''}"`)
+        if (w === 'overnight') touched.push(m)
         else if (w === 'unknown') unmeasured.push(`when milestone "${m.title ?? ''}" in ${repo} was last touched ${NO_TIME}`)
       }
+      if (touched.length) await milestonesExplained(repo, touched)
     }
     for (const repo of repos) {
       type RunRow = { workflowName?: string; event?: string; createdAt?: string; url?: string }
