@@ -49,6 +49,7 @@ const WRITES: Record<string, unknown> = {
   'bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash wrap.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'wrap.sh', path: '/w/app/wrap.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash locked.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'locked.sh', path: '/w/app/locked.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'python3 rewrite.py srclink': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'srclink', path: '/w/app/srclink' }] }] },
   './odd.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './odd.sh', path: '/w/app/odd.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
 }
 
@@ -724,6 +725,22 @@ test('a script handed a path whose kind cannot be read is held as unread, since 
   expect(why).toContain('src/locked may be a folder')
   expect(why).toContain('permission denied')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/locked', decision: 'held' })
+})
+
+// #2407 lessons review: a link to a folder holds the files of the folder it leads to, and a path whose
+// existence cannot be asked about may be a folder, so each is held as the folder or as unread.
+test('a script handed a link to a folder holding a held file is held, naming the file under the folder it leads to', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.links[`${APP}/srclink`] = `${APP}/src`
+  expect(refusal(await bash($ as never, w, 'python3 rewrite.py srclink'))).toContain('which writes src/big.ts.')
+})
+
+test('a script handed a path whose existence cannot be asked about is held as unread, since it may be a folder', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.existsFails.push(`${APP}/src/locked`)
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
+  expect(why).toContain('src/locked may be a folder')
+  expect(why).toContain('permission denied')
 })
 
 test('a folder holding 25 files that could be held has each judged one by one, naming the file (#2321)', KIT, async ($, on) => {

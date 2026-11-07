@@ -634,11 +634,16 @@ const plain = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/
 
 // Whether a path a command names is a folder (#2321): mod-kit names a folder handed to a script, or a
 // copy's folder destination, by its path as it would a file, so only the disk can say. Nothing there
-// is no folder; a path that exists but whose stat is refused cannot be told apart, said with why.
-const folderAt = async ($: EngineInterface, path: string): Promise<boolean | { unread: string }> => {
-  if (!(await $.fs.exists(path))) return false
+// is no folder; a path that exists but whose look is refused cannot be told apart, said with why. The
+// existence check is half of that look, so it is inside the same catch (#2407 lessons review). A
+// folder comes back as `dir`, where the path really lands (stat's realPath, its own spelling where
+// none is given): a link to a folder holds the files git lists under the folder it leads to, never
+// under the link's own spelling.
+const folderAt = async ($: EngineInterface, path: string): Promise<false | { dir: string } | { unread: string }> => {
   try {
-    return (await $.fs.stat(path)).kind === 'dir'
+    if (!(await $.fs.exists(path))) return false
+    const s = await $.fs.stat(path, { resolve: true })
+    return s.kind === 'dir' ? { dir: plain(s.realPath ?? path) } : false
   } catch (err) {
     return { unread: msg(err) }
   }
@@ -673,7 +678,7 @@ const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writ
 const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread> => {
   const v = await gate($, 'Bash', id, t.path, agent)
   if ('deny' in v) return v
-  const at = plain(t.path)
+  let at = plain(t.path)
   if (!t.tree) {
     let kind: Awaited<ReturnType<typeof folderAt>>
     try {
@@ -683,7 +688,8 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
       return PASS
     }
     if (kind === false) return PASS
-    if (kind !== true) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    at = kind.dir
     // A folder handed to a script whose text writes nothing is only read (#2407); the pass is logged,
     // so a reading that lets everything through shows in the log rather than as quiet.
     if (t.run) {
