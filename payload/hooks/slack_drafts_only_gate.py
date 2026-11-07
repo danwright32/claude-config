@@ -27,13 +27,15 @@ Two routes are judged:
     like any other script that posts.
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
-through a path alias (`@/lib/x`), a Python module not on disk beside the script (the standard library,
-an installed package), a module run with `python3 -m`, and an import of another language's files are
+through a path alias (`@/lib/x`), a Python module in the standard library or installed, a module run
+with `python3 -m`, and an import of another language's files are
 not followed; a program run by bare name from the PATH is not read; and deliberate obfuscation (an
 endpoint assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
+import glob
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -152,6 +154,27 @@ class Judge:
         self.sw = sw
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
+        # Where the Python a command starts looks for an absolute import beyond the script's folder
+        # (claude-config#2358): the command's PYTHONPATH (its own assignment, one exported earlier in
+        # the line, or the session's), its directory, and the interpreter it names. record() sets it
+        # for each command and puts the previous one back after.
+        self.exported = None
+        self.py_cmd = {"path": self.py_path(os.environ.get("PYTHONPATH", ""), os.getcwd()),
+                       "cwd": os.getcwd(), "interp": None}
+
+    @staticmethod
+    def py_path(value, d):
+        """The directories a PYTHONPATH value names, made absolute against d. An entry that is
+        expanded at run time ($PYTHONPATH) is the session's own, added once at the end."""
+        out = []
+        for p in value.split(os.pathsep):
+            if not p or "$" in p:
+                continue
+            p = os.path.expanduser(p)
+            out.append(os.path.normpath(p if os.path.isabs(p) else os.path.join(d or os.getcwd(), p)))
+        if "$" in value:
+            out += Judge.py_path(os.environ.get("PYTHONPATH", "").replace("$", ""), d)
+        return out
 
     def resolve(self, word, d):
         p = os.path.expanduser(word)
@@ -209,8 +232,9 @@ class Judge:
         imports. Each import is resolved as node and TypeScript, or Python, would, and each module
         found is judged as the script is, by the endpoint it names, then its own imports followed,
         each module read once however many import it, so a cycle ends. A package, a node builtin and
-        a Python module not on disk under root (the standard library, an installed package) are not
-        ours to read. An import that names a local file the gate cannot find or read is refused,
+        a Python module in the standard library or installed are not ours to read. An import that
+        names a local file the gate cannot find or read is refused, and so is a Python import placed
+        nowhere (resolve_py, claude-config#2358),
         because node or Python may still find it (package.json exports, a path alias, a loader) and
         run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules. An
         import whose path is assembled at run time (a template holding ${...}, importlib) is not
@@ -229,12 +253,17 @@ class Judge:
         The one walk both imports() and acts() read, so the two cannot disagree about what is reached."""
         seen = {origin} if origin else set()
         queue = [(origin, root, body, start)]
+        inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
         while queue:
             cur, cur_dir, text, chain = queue.pop(0)
-            for spec, targets in self.import_targets(text, kind, cur_dir, root):
+            if kind == "py":
+                self.py_inserts(text, cur, inserts)
+            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts):
                 via = f"{chain}, which imports {spec}"
                 if targets is False:
-                    yield f"{via}, a module the gate cannot find, so it cannot see what that runs", None, None, None
+                    where = ("" if kind != "py" or spec.startswith(".") else
+                             " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
+                    yield (f"{via}, a module the gate cannot find{where}, so it cannot see what that runs"), None, None, None
                     return
                 for target in targets:
                     target = os.path.realpath(target)
@@ -255,9 +284,10 @@ class Judge:
                     yield None, via, target, found
                     queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
 
-    def import_targets(self, text, kind, cur_dir, root):
-        """(the import as written, the files it runs, or False when it names a local file not there),
-        for each import in text; a package or a builtin gives an empty list."""
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ())):
+        """(the import as written, the files it runs, or False when it names a local file not there,
+        or a Python module placed nowhere), for each import in text; a package or a builtin gives an
+        empty list."""
         if kind == "js":
             for m in IMPORT_SPEC.finditer(text):
                 spec = m.group(2)
@@ -269,7 +299,7 @@ class Judge:
             return
         for level, module, names in self.py_imports(text):
             spec = "." * level + module + (f" import {', '.join(names)}" if level and not module else "")
-            yield spec, self.resolve_py(level, module, names, cur_dir, root)
+            yield spec, self.resolve_py(level, module, names, cur_dir, root, inserts)
 
     @staticmethod
     def py_imports(text):
@@ -297,15 +327,186 @@ class Judge:
                 out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
         return out
 
-    @staticmethod
-    def resolve_py(level, module, names, cur_dir, root):
+    def resolve_py(self, level, module, names, cur_dir, root, inserts=((), ())):
         """The local files a Python import runs (each package's __init__.py, the module, and any
-        submodule it names), an empty list for one not on disk under root (the standard library or an
-        installed package), or False for a relative import, or a local package's missing part, that
-        names nothing there."""
-        base = cur_dir if level else root
-        for _ in range(max(level - 1, 0)):
-            base = os.path.dirname(base)
+        submodule it names), an empty list for the standard library or an installed package, or False
+        for a relative import, or a local package's missing part, that names nothing there, and for an
+        absolute import placed nowhere (claude-config#2358).
+
+        An absolute import is looked for where Python looks, in its order: a folder a sys.path change
+        puts in front, the script's own folder (root), the command's PYTHONPATH, then the standard
+        library and installed packages (placed()), then a folder a sys.path change appends. Placed
+        nowhere, it is refused, since Python may still find it (a path the gate cannot evaluate, a .pth
+        file, a loader) and run what the gate never saw."""
+        if level:
+            base = cur_dir
+            for _ in range(level - 1):
+                base = os.path.dirname(base)
+            found = self.resolve_in(base, level, module, names)
+            return False if found is None else found
+        if not module:
+            return []
+        for base in list(inserts[0]) + [root] + self.py_cmd["path"]:
+            found = self.resolve_in(base, 0, module, names)
+            if found is not None:
+                return found
+        if self.placed(module.split(".")[0], root):
+            return []
+        for base in inserts[1]:
+            found = self.resolve_in(base, 0, module, names)
+            if found is not None:
+                return found
+        return False
+
+    def placed(self, top, root):
+        """Whether a top level Python module is the standard library or an installed package: built
+        in, named in this python's standard library list, or found (not imported) on its own sys.path
+        past this hooks folder, in the site-packages of a virtual environment the command's
+        interpreter belongs to, the session's VIRTUAL_ENV, or the nearest .venv or venv folder above
+        the script or the command's directory."""
+        if top in sys.builtin_module_names or top in getattr(sys, "stdlib_module_names", ()):
+            return True
+        here = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+        dirs = [p for p in sys.path[1:] if p and os.path.realpath(p) != here]
+        envs = []
+        interp = self.py_cmd.get("interp")
+        if interp and "/" in interp:
+            envs.append(os.path.dirname(os.path.dirname(self.resolve(interp, self.py_cmd["cwd"]))))
+        if os.environ.get("VIRTUAL_ENV"):
+            envs.append(os.environ["VIRTUAL_ENV"])
+        for start in (root, self.py_cmd["cwd"]):
+            d = os.path.abspath(start) if start else None
+            while d:
+                for name in (".venv", "venv"):
+                    if os.path.isfile(os.path.join(d, name, "pyvenv.cfg")):
+                        envs.append(os.path.join(d, name))
+                up = os.path.dirname(d)
+                d = None if up == d else up
+        for env in envs:
+            dirs += sorted(glob.glob(os.path.join(env, "lib", "python*", "site-packages")))
+        try:
+            return importlib.machinery.PathFinder.find_spec(top, dirs) is not None
+        except (ImportError, ValueError):
+            return False
+
+    def py_inserts(self, text, cur, inserts):
+        """Add to inserts the folders text's sys.path changes name: sys.path.insert(n, x) in front,
+        sys.path.append(x), sys.path.extend([...]) and site.addsitedir(x) behind. x is evaluated
+        when it is a literal or built from __file__ (os.path.dirname, os.path.join, abspath, Path(...)
+        .parent, / and the like); a relative result is relative to the command's directory, as Python
+        takes it. A change the gate cannot evaluate adds nothing, and an import only it would place is
+        then placed nowhere and refused."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            return
+        cwd = self.py_cmd["cwd"]
+        known = {}  # NAME = <path expression> assignments, as far as each has been read
+        nodes = [n for n in ast.walk(tree) if isinstance(n, (ast.Assign, ast.Call))]
+        for node in sorted(nodes, key=lambda n: (n.lineno, n.col_offset)):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        v = self.py_path_expr(node.value, cur, cwd, known)
+                        if v is None:
+                            known.pop(t.id, None)
+                        else:
+                            known[t.id] = v
+                continue
+            f, args = node.func, node.args
+            name = self.dotted(f)
+            if isinstance(f, ast.Attribute) and self.dotted(f.value) == "sys.path":
+                if f.attr == "insert" and len(args) == 2:
+                    where, exprs = inserts[0], [args[1]]
+                elif f.attr == "append" and args:
+                    where, exprs = inserts[1], [args[0]]
+                elif f.attr == "extend" and args and isinstance(args[0], (ast.List, ast.Tuple)):
+                    where, exprs = inserts[1], list(args[0].elts)
+                else:
+                    continue
+            elif name in ("site.addsitedir", "addsitedir") and args:
+                where, exprs = inserts[1], [args[0]]
+            else:
+                continue
+            for e in exprs:
+                p = self.py_path_expr(e, cur, cwd, known)
+                if p:
+                    p = os.path.normpath(p if os.path.isabs(p) else os.path.join(cwd, p))
+                    if p not in where:
+                        where.append(p)
+
+    @staticmethod
+    def dotted(node):
+        """a.b.c for a Name or an Attribute chain, else None."""
+        out = []
+        while isinstance(node, ast.Attribute):
+            out.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            return ".".join([node.id] + out[::-1])
+        return None
+
+    def py_path_expr(self, e, cur, cwd, known=None):
+        """The path a sys.path expression names, or None when it is not one this can evaluate. known
+        holds the module's NAME = <path> assignments read so far (HERE = os.path.dirname(__file__))."""
+        known = known if known is not None else {}
+        ev = lambda n: self.py_path_expr(n, cur, cwd, known)  # noqa: E731
+        whole = lambda p: os.path.normpath(os.path.join(cwd, os.path.expanduser(p)))  # noqa: E731
+        if isinstance(e, ast.Constant) and isinstance(e.value, str):
+            return e.value
+        if isinstance(e, ast.Name):
+            return cur if e.id == "__file__" else known.get(e.id)  # __file__ is None for inline code
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Add):
+            a, b = ev(e.left), ev(e.right)
+            return a + b if a is not None and b is not None else None
+        if isinstance(e, ast.Attribute) and e.attr == "parent":
+            v = ev(e.value)
+            return os.path.dirname(whole(v)) if v else None
+        if (isinstance(e, ast.Subscript) and isinstance(e.value, ast.Attribute) and e.value.attr == "parents"
+                and isinstance(e.slice, ast.Constant) and isinstance(e.slice.value, int) and e.slice.value >= 0):
+            v = ev(e.value.value)  # Path(__file__).resolve().parents[1]
+            if not v:
+                return None
+            v = whole(v)
+            for _ in range(e.slice.value + 1):
+                v = os.path.dirname(v)
+            return v
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Div):
+            a, b = ev(e.left), ev(e.right)
+            return os.path.join(a, b) if a and b else None
+        if not isinstance(e, ast.Call):
+            return None
+        method = e.func.attr if isinstance(e.func, ast.Attribute) else None
+        last = (self.dotted(e.func) or "").rsplit(".", 1)[-1]
+        vals = [ev(a) for a in e.args]
+        if any(v is None for v in vals):
+            return None
+        if method in ("resolve", "absolute", "expanduser") and not vals:
+            v = ev(e.func.value)  # Path(...).resolve()
+            return whole(v) if v else None
+        if method == "joinpath":
+            v = ev(e.func.value)
+            return os.path.join(v, *vals) if v else None
+        if last == "getcwd" and not vals:
+            return cwd
+        if not vals:
+            return None
+        if last == "join":
+            return os.path.join(*vals)
+        if last == "dirname":
+            return os.path.dirname(vals[0])
+        if last in ("abspath", "realpath", "normpath", "expanduser"):
+            return whole(vals[0])
+        if last in ("Path", "PurePath", "str", "fspath"):
+            return vals[0]
+        return None
+
+    @staticmethod
+    def resolve_in(base, level, module, names):
+        """resolve_py() under one folder: the files, or None when the import's first part is not
+        there, or False for a part after it that is missing."""
         parts = [p for p in module.split(".") if p]
         found, d = [], base
         for i, part in enumerate(parts):
@@ -318,7 +519,7 @@ class Judge:
                     found.append(os.path.join(p, "__init__.py"))
                 d = p
                 continue
-            return False if (level or i) else []
+            return False if (level or i) else None
         if level and not parts and os.path.isfile(os.path.join(d, "__init__.py")):
             found.append(os.path.join(d, "__init__.py"))
         for n in names:
@@ -370,6 +571,38 @@ class Judge:
         return None
 
     def record(self, d, text, wrapper, why, depth, whole):
+        """judge() for one command, with py_cmd set to where the Python it starts looks for imports:
+        its own PYTHONPATH assignment (env's too), else one exported earlier in the line, else the
+        session's (claude-config#2358). Put back afterwards, so a script read as commands inside it
+        does not change what the rest of this command is judged with."""
+        rest, assigns = self.sw.command_rest(text)
+        words = self.sw.command_words(rest)
+        value = None
+        for a in assigns.split("\n"):
+            for w in self.sw.command_words(a) if a.strip() else ():
+                if w.startswith("PYTHONPATH="):
+                    value = w[len("PYTHONPATH="):]
+        if words and words[0] == "export":
+            for w in words[1:]:
+                if w.startswith("PYTHONPATH="):
+                    self.exported = self.py_path(w[len("PYTHONPATH="):], d)
+        elif not words and value is not None:
+            self.exported = self.py_path(value, d)
+        here = os.path.abspath(d or os.getcwd())
+        if value is not None:
+            path = self.py_path(value, d)
+        elif self.exported is not None:
+            path = self.exported
+        else:
+            path = self.py_path(os.environ.get("PYTHONPATH", ""), d)
+        interp = next((w for w in words[:3] if PY_RUNTIME.match(os.path.basename(w))), None)
+        saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp}
+        try:
+            return self.judge(d, text, wrapper, why, depth, whole)
+        finally:
+            self.py_cmd = saved
+
+    def judge(self, d, text, wrapper, why, depth, whole):
         sw = self.sw
         rest, _ = sw.command_rest(text)
         words = sw.command_words(rest)

@@ -421,8 +421,57 @@ run_bash "python3 $T/py/cyc/main.py"
 allowed "a Python import cycle that names no endpoint ends and passes"
 printf '%s\n' 'import json, sys, requests' 'from pathlib import Path' 'from draft_saver import save' 'save("hi")' > "$T/py/ok/main.py"
 printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)  # a draft for Dan' > "$T/py/ok/draft_saver.py"
+# The package is installed in the project's own virtual environment, where the gate places it
+# (claude-config#2358): an import placed nowhere is refused below.
+mkdir -p "$T/py/ok/.venv/lib/python3.12/site-packages/requests"
+printf '%s\n' 'home = /usr/bin' > "$T/py/ok/.venv/pyvenv.cfg"
+: > "$T/py/ok/.venv/lib/python3.12/site-packages/requests/__init__.py"
 run_bash "python3 $T/py/ok/main.py"
 allowed "a Python script importing the standard library, a package and a helper that only saves a draft"
+
+echo "slack drafts only: a Python import is placed through PYTHONPATH and sys.path, or refused (claude-config#2358)"
+
+# A helper that posts, found only through PYTHONPATH or a sys.path change: the #2357 gate looked for
+# it beside the script alone, took it for an installed package, and let the script through (exit 0).
+mkdir -p "$T/pp/lib" "$T/pp/app" "$T/pp/okdir"
+printf '%s\n' 'import json, urllib.request' 'def go():' \
+  '    urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' \
+  > "$T/pp/lib/pp_notify.py"
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)' > "$T/pp/okdir/pp_notify.py"
+printf '%s\n' 'import pp_notify' 'pp_notify.go()' > "$T/pp/app/run.py"
+printf '%s\n' 'import sys' "sys.path.insert(0, \"$T/pp/lib\")" 'import pp_notify' 'pp_notify.go()' > "$T/pp/app/literal.py"
+printf '%s\n' 'import os, sys' 'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))' \
+  'import pp_notify' > "$T/pp/app/beside.py"
+printf '%s\n' 'import sys' 'from pathlib import Path' 'sys.path.append(str(Path(__file__).resolve().parent.parent / "lib"))' \
+  'from pp_notify import go' > "$T/pp/app/pathlib_append.py"
+# The forms measured in this payload's own scripts on 2026-11-07: a name set from __file__ first, a
+# string joined with +, and Path(...).parents[n].
+printf '%s\n' 'import os, sys' 'HERE = os.path.dirname(os.path.abspath(__file__))' 'sys.path.insert(0, HERE + "/../lib")' \
+  'import pp_notify' > "$T/pp/app/named.py"
+printf '%s\n' 'import sys' 'from pathlib import Path' 'ROOT = Path(__file__).resolve().parents[1]' \
+  'sys.path.insert(0, str(ROOT / "lib"))' 'import pp_notify' > "$T/pp/app/parents.py"
+printf '%s\n' 'import json' 'import no_such_helper_2358' 'no_such_helper_2358.go()' > "$T/pp/app/unplaced.py"
+for posts in "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py" "cd $T/pp && PYTHONPATH=lib python3 app/run.py" \
+  "env PYTHONPATH=$T/pp/app/none:$T/pp/lib python3 $T/pp/app/run.py" "export PYTHONPATH=$T/pp/lib; python3 $T/pp/app/run.py" \
+  "python3 $T/pp/app/literal.py" "python3 $T/pp/app/beside.py" "python3 $T/pp/app/pathlib_append.py" \
+  "python3 $T/pp/app/named.py" "python3 $T/pp/app/parents.py"; do
+  run_bash "$posts"
+  refused "a Python helper that posts, placed through PYTHONPATH or sys.path, run as: $posts"
+done
+run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
+says "the refusal names the helper found on PYTHONPATH" "pp_notify.py"
+run_bash "PYTHONPATH=$T/pp/okdir python3 $T/pp/app/run.py"
+allowed "the same import placed on PYTHONPATH at a helper that only saves a draft"
+# Python imports the first one it finds along PYTHONPATH, so the posting one behind it never runs.
+run_bash "PYTHONPATH=$T/pp/okdir:$T/pp/lib python3 $T/pp/app/run.py"
+allowed "the import found first on PYTHONPATH at the helper that only saves a draft"
+run_bash "python3 $T/pp/app/unplaced.py"
+refused "a Python import found nowhere: not beside the script, on PYTHONPATH, standard library or installed"
+says "that refusal names the import it could not place" "no_such_helper_2358"
+run_bash "python3 $T/pp/app/run.py"
+refused "the PYTHONPATH script run without it, its import placed nowhere"
+run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
+refused "inline Python importing a module placed nowhere"
 
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
