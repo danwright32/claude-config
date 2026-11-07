@@ -337,6 +337,29 @@ test("what a workflow's Slack step posts is still held: its payload text and a S
   expect(w.ran).toEqual([])
 })
 
+// #2401, the real shape: a GitLab pipeline whose script list curls a Slack webhook.
+const GITLAB = '/w/app/.gitlab-ci.yml'
+const GITLAB_TEXT = [
+  'deploy:',
+  '  stage: deploy',
+  '  script:',
+  '    - npm ci',
+  '    - echo "Deploying the site now"',
+  "    - curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
+  '  after_script:',
+  "    - 'curl -X POST --data ''{\"text\":\"Cleanup ran on main\"}'' \"$SLACK_WEBHOOK_URL\"'",
+  '',
+].join('\n')
+
+test("a GitLab script list item that curls Slack is held with its message shown, and an item that posts nothing passes (#2401)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [GITLAB]: GITLAB_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Deploy failed on main', new_string: 'Deploy failed on main again' }))).toContain('Deploy failed on main again')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Cleanup ran on main', new_string: 'Cleanup ran on main twice' }))).toContain('Cleanup ran on main twice')
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Deploying the site now', new_string: 'Deploying the whole site now' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
 test('a SQL string in a Slack sender passes when it is not handed to a query builder call, and the alert beside it is still held (Dan item 2)', withKit, async ($, on) => {
   const JOB = '/w/app/lib/late.ts'
   const text = "import { notifySlack } from './alert'\nconst LATE = \"SELECT id, starts_at FROM bookings WHERE status = 'late'\"\nexport const run = async () => {\n  const rows = await pool.query(LATE)\n  await notifySlack(`${rows.length} bookings are late`)\n}\n"

@@ -343,6 +343,47 @@ test('a CI workflow is read for the text a Slack step posts, never its names, ne
   expect(wordingOf(ciMessages(wf))).toEqual(['Deploy of ${{ github.sha }} finished', 'Deploy failed on main', 'Release notes are ready'])
 })
 
+// A GitLab pipeline whose script lists post to Slack (#2401): each list item is one shell command.
+const GITLAB_PIPELINE = [
+  'stages: [deploy]',
+  'deploy:',
+  '  stage: deploy',
+  '  before_script:',
+  '    - echo "Preparing the release"',
+  '  script:',
+  '    - npm ci',
+  '    - echo "Deploying the site now"',
+  "    - curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
+  "    - 'curl -X POST --data ''{\"text\":\"Backup of orders is late\"}'' \"$SLACK_WEBHOOK_URL\"'",
+  '    # the summary goes out last',
+  '    - >',
+  "      curl -X POST -H 'Content-type: application/json'",
+  "      --data '{\"text\":\"Nightly sync finished\"}' \"$SLACK_WEBHOOK_URL\"",
+  '  after_script:',
+  "  - \"curl -X POST --data '{\\\"text\\\":\\\"Cleanup ran on main\\\"}' $SLACK_WEBHOOK_URL\"",
+  '',
+].join('\n')
+
+test('a GitLab script list is read item by item as run commands: an item that posts to Slack shows its message, one that does not is left out (#2401)', () => {
+  expect(ciWorkflow('.gitlab-ci.yml')).toBe(true)
+  expect(wordingOf(ciMessages(GITLAB_PIPELINE))).toEqual(['Deploy failed on main', 'Backup of orders is late', 'Nightly sync finished', 'Cleanup ran on main'])
+  // A pipeline whose script lists post nothing to Slack holds nothing.
+  expect(ciMessages(GITLAB_PIPELINE.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'))).toEqual([])
+  // A Bitbucket step's script list is read the same way.
+  const bitbucket = [
+    'pipelines:',
+    '  default:',
+    '    - step:',
+    '        name: Deploy',
+    '        script:',
+    '          - echo "Starting the deploy"',
+    "          - curl -X POST --data '{\"text\":\"Deploy of main is stuck\"}' \"$SLACK_WEBHOOK_URL\"",
+    '',
+  ].join('\n')
+  expect(ciWorkflow('bitbucket-pipelines.yml')).toBe(true)
+  expect(wordingOf(ciMessages(bitbucket))).toEqual(['Deploy of main is stuck'])
+})
+
 test('a sender naming a template only in a comment does not refer to it', () => {
   expect(refersTo('lib/notify.ts', '// the wording is in docs/runbook.txt\nconst x = 1\n', 'docs/runbook.txt')).toBe(false)
   expect(refersTo('app/notify.py', '# see templates/backup.txt\nx = 1\n', 'app/templates/backup.txt')).toBe(false)

@@ -531,6 +531,52 @@ export const ciWorkflow = (path: string): boolean =>
 
 // The keys whose value is text a step posts: a Slack action's payload or message, a message env value.
 const MESSAGE_KEY = /(^|[-_.])(text|message|msg|title|pretext|fallback|payload|blocks|body|summary|content|subject|footer|header)$/i
+// The keys whose value can be a YAML list of shell commands: GitLab's script lists, and Bitbucket's script (#2401).
+const SCRIPT_LIST_KEY = /^(script|before_script|after_script)$/
+
+/** A YAML scalar as the shell receives it: a quoted one with its quoting undone, a plain one as written. */
+const yamlScalar = (s: string): string => {
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'")
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c === 't' ? '\t' : c))
+  return s
+}
+
+/**
+ * The commands of a YAML list opening on the line after a key at `indent` (a GitLab `script:` list),
+ * each item one shell command: a plain or quoted item with its continuation lines, or a block item
+ * (`- |`, `- >`). Comments between items are skipped; the list ends at the first line outside it.
+ */
+const listCommands = (lines: string[], from: number, indent: number): string[] => {
+  const out: string[] = []
+  let at = -1
+  let cur: string[] | undefined
+  let block = ''
+  const close = () => {
+    if (!cur) return
+    const text = block === '|' ? cur.join('\n') : cur.join(' ')
+    out.push(block ? text.trim() : yamlScalar(text.trim()))
+    cur = undefined
+  }
+  for (let j = from; j < lines.length; j++) {
+    const line = lines[j] as string
+    if (!line.trim()) continue
+    const lead = /^\s*/.exec(line)![0].length
+    if (cur && lead > at) {
+      cur.push(line.trim())
+      continue
+    }
+    if (line.trim().startsWith('#') && (at < 0 || lead <= at)) continue
+    const item = /^(\s*)-(?:\s+(.*))?$/.exec(line)
+    if (!item || lead < indent || (at >= 0 && lead !== at)) break
+    close()
+    at = lead
+    const first = (item[2] ?? '').trim()
+    block = /^[|>][-+]?\d*$/.test(first) ? first[0] as string : ''
+    cur = block ? [] : [first]
+  }
+  close()
+  return out
+}
 
 /**
  * The text a CI workflow can post (Dan's item 1, #2371): the value of a message key (a Slack step's
@@ -554,6 +600,10 @@ export const ciMessages = (text: string): string[] => {
       while (i + 1 < lines.length && (!(lines[i + 1] as string).trim() || /^\s*/.exec(lines[i + 1] as string)![0].length > indent)) block.push(lines[++i] as string)
       value = block.join('\n').trim()
     }
+    // A script list (GitLab, Bitbucket) is a run block written one command per item: each item that
+    // posts to Slack is read as a run command that posts, and an item that posts nothing never is (#2401).
+    // Its lines are left for this loop too, so nothing read before is read any less.
+    if (!raw && SCRIPT_LIST_KEY.test(key)) for (const c of listCommands(lines, i + 1, indent)) if (slackMarked(c)) out.push(...strings(c))
     if (!value) continue
     if (MESSAGE_KEY.test(key)) {
       if (/^["'{[]/.test(value)) out.push(...literalsOf(value, true))
