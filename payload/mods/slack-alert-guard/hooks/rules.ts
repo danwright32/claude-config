@@ -482,8 +482,7 @@ export const ciMessages = (text: string): string[] => {
     }
     if (!value) continue
     if (MESSAGE_KEY.test(key)) {
-      if (value.startsWith('{') || value.startsWith('[')) out.push(...literalsOf(value, true))
-      else if (/^["']/.test(value)) out.push(...literalsOf(value, true))
+      if (/^["'{[]/.test(value)) out.push(...literalsOf(value, true))
       else out.push(value)
     } else if (key === 'run' && slackMarked(value)) out.push(...strings(value))
   }
