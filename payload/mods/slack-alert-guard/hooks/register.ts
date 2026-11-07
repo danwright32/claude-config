@@ -14,7 +14,6 @@ import {
   agentRefusal,
   ciMessages,
   ciWorkflow,
-  copyBuilder,
   editHalves,
   editedText,
   escapeRe,
@@ -111,8 +110,8 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
 const MOST_READ = 200
 
 // posts: the file is in a repository, is no test, and posts to Slack by itself. maybe: the search
-// could not tell whether a file sends the template (more files to read than it reads, or a copy
-// builder's send helper search that failed), so the edit is held for Dan to approve, never refused
+// could not tell whether a file sends the template (more files to read than it reads, or a send
+// helper search that failed), so the edit is held for Dan to approve, never refused
 // with nothing he can answer (#2364).
 type Found = { sender: string } | { none: true } | { unchecked: string } | { posts: true } | { maybe: true }
 const NONE = { none: true } as const
@@ -134,8 +133,8 @@ const end = (found: Found): never => {
  * those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
- * deep; a chain going further is could not check. A copy builder is sent too by a file that uses it
- * and imports a Slack send helper (helperUser, #2361). A test or a doc is never read as a sender or a
+ * deep; a chain going further is could not check. A template is sent too by a file that uses it and
+ * imports a Slack send helper (helperUser, #2361), as a copy or notice builder is. A test or a doc is never read as a sender or a
  * link (#2290, #2361). Every git call and read is bounded by `deadline`, and anything that cannot be
  * answered in time, or at all, is could not check, so the call is held rather than let through. More
  * than MOST_READ files to read is maybe: held for Dan to approve, naming no sender (#2364).
@@ -200,10 +199,10 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     const handsOnTo = `hand ${path} on to the file that sends it`
     // A test sends nothing and a doc posts nothing, so neither is read as a sender or a link (#2290, #2361).
     const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && mayBeCode(r))
-    const copy = copyBuilder(templateRel)
     /**
-     * Of the files using a copy builder, the first that imports a Slack send helper, so sends its copy
-     * through it (#2361): the helper is found by git grep for the names the user imports beside the
+     * Of the files using the template (a copy builder, a notice builder), the first that imports a
+     * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
+     * names the user imports beside the
      * word slack or postMessage, then read for a marker and a reference from the user. A search that
      * fails, runs late, or would read more than MOST_READ files cannot tell, so it is maybe: held for
      * Dan to approve.
@@ -254,7 +253,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         const text = await textOf(rel, handsOnTo)
         if (slackMarked(text) || !level.some(t => refersTo(rel, text, t))) continue
         if (handsOn(rel, text)) next.push(rel)
-        if (copy) users.push({ rel, text })
+        users.push({ rel, text })
       }
       const user = await helperUser(users)
       if (user !== undefined) return { sender: `${top}/${user}` }

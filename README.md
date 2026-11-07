@@ -6243,9 +6243,8 @@ git repository sends it: one that carries a Slack marker and names the template 
 relative import, or its python module, on a line that imports or reads it (a path it only names,
 as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
 sender. A
-copy builder (a module named for its copy, such as `outage-copy.ts` or `alertCopy.ts`) is held
-too when a file that imports it also imports a Slack send helper, and the card names that file as
-the sender. The search is one `git grep` for files holding both the template's name and the word
+module is held too when a file that imports it also imports a Slack send helper (a copy builder
+such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender. The search is one `git grep` for files holding both the template's name and the word
 slack or postMessage, then a read of each, all within 3 seconds per call, following files that
 re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more

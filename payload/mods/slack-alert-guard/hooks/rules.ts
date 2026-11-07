@@ -17,8 +17,9 @@
 // earlier "no file is exempted" in decision 3): a test file (testFile) and a doc send nothing, and
 // neither is a template nor a sender; a string handed to a query builder call, a select list, or a
 // code template is not message text (stringsOf, isMessage); a file in no git repository, as a
-// scratchpad script is, has nothing that sends it. A copy builder (copyBuilder) is held when a file
-// that uses it also uses a Slack send helper, which a marker or reference search alone misses.
+// scratchpad script is, has nothing that sends it. A module whose user also imports a Slack send
+// helper (a copy or notice builder) is held, which a marker or reference search alone misses. A
+// file a sender only names, never imports or reads, is not its template (refersTo, Dan's item 1).
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
@@ -115,15 +116,6 @@ export const searchTerm = (rel: string): string => {
   const stem = stemOf(segs[segs.length - 1] ?? '')
   return PACKAGE.has(stem) && segs.length > 1 ? (segs[segs.length - 2] ?? stem) : stem
 }
-/**
- * Whether a module is a copy builder (#2361): named for the copy it holds, as outage-copy.ts,
- * alertCopy.ts, copy.ts or a copy folder's index, so its exports are wording another file posts.
- */
-export const copyBuilder = (rel: string): boolean => {
-  const term = searchTerm(rel)
-  return /(^|[-_.])copy$/i.test(term) || /[a-z0-9]Copy$/.test(term)
-}
-
 /** A word escaped for an extended regular expression, as git grep -E reads one. */
 export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

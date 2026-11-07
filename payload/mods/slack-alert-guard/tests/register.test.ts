@@ -423,11 +423,13 @@ test("a copy builder whose send helper cannot be read is held for Dan to approve
   expect(w.ran).toEqual([])
 })
 
-test('a module not named as copy, used the same way, still passes: only copy builders are followed to the send helper', withKit, async ($, on) => {
-  const UTIL = '/w/app/src/lib/notify/format.ts'
-  const w = world($, on, { files: { [UTIL]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT.replace('outage-copy', 'format') } })
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: UTIL, old_string: 'is late`', new_string: 'is late again`' }))).toBe('')
-  expect(w.ran.length).toBe(1)
+test('a notice builder of any name, whose importer imports the Slack module, is held too: what decides is the send, not the name', withKit, async ($, on) => {
+  const NOTICE = '/w/app/src/lib/notify/notice.ts'
+  const RUN = "import { buildNotice } from './notice'\nimport type { Payload } from './post'\nexport const runChange = () => buildNotice('1')\n"
+  const w = world($, on, { files: { [NOTICE]: COPY_TEXT, [POST]: POST_TEXT, '/w/app/src/lib/notify/run.ts': RUN } })
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: NOTICE, old_string: 'is late`', new_string: 'is late again`' }))
+  expect(why).toContain('which /w/app/src/lib/notify/run.ts sends to Slack')
+  expect(w.ran).toEqual([])
 })
 
 test('a copy builder used by a route that posts nothing passes', withKit, async ($, on) => {

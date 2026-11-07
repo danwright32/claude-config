@@ -7,7 +7,6 @@ import {
   agentRefusal,
   ciMessages,
   ciWorkflow,
-  copyBuilder,
   editedText,
   handsOn,
   heldText,
@@ -163,12 +162,6 @@ test('a test file is told by its name or a test folder, read from the repository
     expect(testFile(p)).toBe(true)
   // A word holding "test" or "spec" is not a test.
   for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts']) expect(testFile(p)).toBe(false)
-})
-
-test('a copy builder is a module named for the copy it holds', () => {
-  for (const p of ['src/lib/notify/outage-copy.ts', 'src/lib/alertCopy.ts', 'src/lib/notify/copy.ts', 'app/alerts/backup_copy.py', 'src/lib/notify/copy/index.ts'])
-    expect(copyBuilder(p)).toBe(true)
-  for (const p of ['src/lib/copyFile.ts', 'src/lib/photocopy.ts', 'src/lib/copyright.ts', 'src/lib/notify/send.ts']) expect(copyBuilder(p)).toBe(false)
 })
 
 test('docs are not text templates any more; a plain text template still is', () => {
