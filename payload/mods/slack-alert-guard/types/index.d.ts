@@ -14,6 +14,8 @@ export type SlackAlertPending = {
   keys: string[]
   /** For a template another file sends to Slack (#2248): that file, named on the card and refusal. */
   sender?: string
+  /** The ${...} placeholders the added text writes as text rather than fills, which the message shown to Dan may carry (#2361). */
+  literal?: string[]
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }

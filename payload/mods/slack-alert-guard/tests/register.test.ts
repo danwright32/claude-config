@@ -235,14 +235,254 @@ test('new wording in a Slack alert is held until Dan approves the message as Sla
   expect(w.ran.length).toBe(1)
 })
 
-test('approval follows the wording, not the file: a test repeating approved wording passes, new wording in a test is held', withKit, async ($, on) => {
+test('a test file sends nothing: its titles and fixtures pass, by an edit and by a shell write, while the same wording in the sender is held', withKit, async ($, on) => {
   const w = world($, on)
-  w.store[wordingKey('Deploy ${id} failed on production')] = { at: T0, file: ALERT, text: ['Deploy ${id} failed on production'], rendered: SHOWN }
   const TEST = '/w/app/lib/alert.test.ts'
-  const same = { tool: 'Write', file_path: TEST, content: 'import { sendSlackAlert } from "./alert"\nexpect(sent).toBe(`Deploy ${id} failed on production`)\n' }
-  expect(refusalOf(await call($, same))).toBe('')
-  const fresh = { tool: 'Write', file_path: TEST, content: 'import { sendSlackAlert } from "./alert"\nexpect(sent).toBe("Backup is late again")\n' }
-  expect(refusalOf(await call($, fresh))).toContain('Backup is late again')
+  const fresh = { tool: 'Write', file_path: TEST, content: 'import { sendSlackAlert } from "./alert"\ndescribe("the deploy alert", () => {\n  it("says the backup is late", () => expect(sent).toBe("Backup is late again"))\n})\n' }
+  expect(refusalOf(await call($, fresh))).toBe('')
+  const FOLDER = '/w/app/__tests__/route.ts'
+  expect(refusalOf(await call($, { tool: 'Write', file_path: FOLDER, content: 'import { notifySlack } from "../lib/alert"\nconst reason = "Card was declined twice"\n' }))).toBe('')
+  w.files[TEST] = fresh.content
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'it("posts the late notice")\\n' >> ${TEST}` }))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // The same wording in the file that sends it is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: 'Deploy ${id} failed', new_string: 'Backup is late again' }))).toContain('Backup is late again')
+})
+
+test('a file a test only names is not held: a deploy test naming package.json leaves its npm scripts free to change', withKit, async ($, on) => {
+  const PKG = '/w/app/package.json'
+  const DEPLOY_TEST = '/w/app/scripts/deploy.test.ts'
+  const w = world($, on, {
+    files: {
+      [PKG]: '{ "scripts": { "build": "next build" } }\n',
+      [DEPLOY_TEST]: "import { sendSlackAlert } from '../lib/alert'\nit('reads the version from package.json', () => expect(version).toBe('1.2.0'))\n",
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: PKG, old_string: '"next build"', new_string: '"next build && npm run lint"' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('a file a Slack sender only names, never imports or reads, is not held (Dan item 1)', withKit, async ($, on) => {
+  const PKG = '/w/app/package.json'
+  const DEPLOY = '/w/app/scripts/deploy.ts'
+  const w = world($, on, {
+    files: {
+      [PKG]: '{ "scripts": { "build": "next build" } }\n',
+      [DEPLOY]: "import { notifySlack } from '../lib/alert'\nawait run('git add package.json CHANGELOG.md')\nawait notifySlack(`Released ${version}`)\n",
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: PKG, old_string: '"next build"', new_string: '"next build && npm run lint"' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The sender's own wording is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DEPLOY, old_string: 'Released ${version}', new_string: 'Released ${version} to production' }))).toContain('Released ${version} to production')
+})
+
+// Dan item 1, the real shape: a workflow that posts to Slack. Only what a Slack step posts is held.
+const WORKFLOW = '/w/app/.github/workflows/deploy.yml'
+const WORKFLOW_TEXT = [
+  'name: Deploy the site',
+  'on:',
+  '  workflow_dispatch:',
+  '    inputs:',
+  '      environment:',
+  '        description: The environment to deploy to',
+  'jobs:',
+  '  build:',
+  '    name: Build the site',
+  '    steps:',
+  '      - name: Install dependencies',
+  '        run: npm ci && npm run build',
+  '  notify:',
+  '    needs: [ build, test ]',
+  '    steps:',
+  '      - name: Post to Slack',
+  '        uses: slackapi/slack-github-action@v1',
+  '        with:',
+  '          payload: |',
+  '            {"text": "Deploy of ${{ github.sha }} finished"}',
+  '        env:',
+  '          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}',
+  "      - name: Page on failure",
+  "        run: curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
+  '',
+].join('\n')
+
+test("a Slack sending workflow's step names, job names, needs lists, input descriptions and run commands pass (Dan item 1)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [WORKFLOW]: WORKFLOW_TEXT } })
+  const edits: [string, string][] = [
+    ['Install dependencies', 'Install the dependencies'],
+    ['Build the site', 'Build the whole site'],
+    ['[ build, test ]', '[ build, test, lint ]'],
+    ['The environment to deploy to', 'The environment this deploys to'],
+    ['npm ci && npm run build', 'npm ci && npm run build && npm test'],
+    ['Deploy the site', 'Deploy the site now'],
+  ]
+  for (const [from, to] of edits) expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: from, new_string: to }))).toBe('')
+  expect(w.ran.length).toBe(edits.length)
+})
+
+test("what a workflow's Slack step posts is still held: its payload text and a Slack curl's message", withKit, async ($, on) => {
+  const w = world($, on, { files: { [WORKFLOW]: WORKFLOW_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: 'finished"}', new_string: 'finished cleanly"}' }))).toContain('Deploy of ${{ github.sha }} finished cleanly')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: WORKFLOW, old_string: 'Deploy failed on main', new_string: 'Deploy failed on main again' }))).toContain('Deploy failed on main again')
+  expect(w.ran).toEqual([])
+})
+
+test('a SQL string in a Slack sender passes when it is not handed to a query builder call, and the alert beside it is still held (Dan item 2)', withKit, async ($, on) => {
+  const JOB = '/w/app/lib/late.ts'
+  const text = "import { notifySlack } from './alert'\nconst LATE = \"SELECT id, starts_at FROM bookings WHERE status = 'late'\"\nexport const run = async () => {\n  const rows = await pool.query(LATE)\n  await notifySlack(`${rows.length} bookings are late`)\n}\n"
+  const w = world($, on, { files: { [JOB]: text } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: "WHERE status = 'late'\"", new_string: "WHERE status = 'late' AND paid IS FALSE\"" }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'bookings are late`', new_string: 'bookings are late today`' }))).toContain('${rows.length} bookings are late today')
+})
+
+test('database query strings in a Slack sender pass, and an alert sentence in the same file is still held', withKit, async ($, on) => {
+  const ROUTE = '/w/app/lib/cron.ts'
+  const text = 'import { notifySlack } from "./alert"\nexport const run = async () => {\n  const { data } = await db.from("bookings").select("id, starts_at").eq("status", "late")\n  await notifySlack(`Booking ${data[0].id} is late`)\n}\n'
+  const w = world($, on, { files: { [ROUTE]: text } })
+  const select = { tool: 'Edit', file_path: ROUTE, old_string: '"id, starts_at"', new_string: '"id, starts_at, buckets!bookings_bucket_id_fkey!inner(code)"' }
+  expect(refusalOf(await call($, select))).toBe('')
+  const eq = { tool: 'Edit', file_path: ROUTE, old_string: '.eq("status", "late")', new_string: '.eq("status", "late").order("starts_at", { ascending: true }).eq("reason", "Payment failed twice")' }
+  expect(refusalOf(await call($, eq))).toBe('')
+  expect(w.ran.length).toBe(2)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: ROUTE, old_string: 'is late`', new_string: 'is late again`' }))).toContain('Booking ${data[0].id} is late again')
+})
+
+test('a code template in a Slack sender passes, and so does a library file whose only Slack referrer is a test', withKit, async ($, on) => {
+  const LIB = '/w/app/lib/sandbox.ts'
+  const LIB_TEST = '/w/app/lib/sandbox.test.ts'
+  const worker = 'export default {\\n  async fetch(request) {\\n    const body = await request.text();\\n    return new Response(body);\\n  }\\n}'
+  const w = world($, on, {
+    files: {
+      [LIB]: "export const workerSource = 'export default {}'\nexport const label = 'Sandbox ready now'\n",
+      [LIB_TEST]: "import { sendSlackAlert } from './alert'\nimport { workerSource } from './sandbox'\n",
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LIB, old_string: "'export default {}'", new_string: `'${worker}'` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LIB, old_string: 'Sandbox ready now', new_string: 'Sandbox is ready now' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: 'method: "POST"', new_string: `method: "POST", worker: "${worker}"` }))).toBe('')
+  expect(w.ran.length).toBe(3)
+})
+
+test('a doc is neither a template nor a sender: a runbook named in a code comment, and a digest a runbook names, both pass', withKit, async ($, on) => {
+  const RUNBOOK = '/w/app/docs/runbook.md'
+  const DIGEST = '/w/app/lib/digest.ts'
+  const w = world($, on, {
+    files: {
+      [RUNBOOK]: '# Alerts\n\nThe digest in lib/digest.ts posts to hooks.slack.com every night.\n| Late booking | Page the on call |\n',
+      [DIGEST]: 'export const digest = `Nightly digest ready`\n',
+      '/w/app/lib/page.ts': '// rows come from docs/runbook.md\nexport const page = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: t })\n',
+    },
+  })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: RUNBOOK, old_string: '| Late booking | Page the on call |', new_string: '| Late booking | Page the on call now |' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test('a file outside any git repository passes even when it carries a Slack marker, as a scratchpad script does', withKit, async ($, on) => {
+  const SCRATCH = '/private/tmp/claude-501/x/scratchpad/backfill.ts'
+  const w = world($, on, { files: { [SCRATCH]: 'const url = process.env.SLACK_WEBHOOK_URL\nconst q = "x"\n' } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: SCRATCH, old_string: 'const q = "x"', new_string: 'const q = "where status is late and paid is false"' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'notify("Disk is full")\\n' >> ${SCRATCH}` }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // It was the repository that decided: the guard asked git.
+  expect(w.gits.some(g => g.argv[3] === 'rev-parse' && g.argv[2]?.startsWith('/private/tmp'))).toBe(true)
+})
+
+// claude-config#2361: a copy builder module whose text a route hands to a Slack send helper.
+const COPY = '/w/app/src/lib/notify/outage-copy.ts'
+const COPY_TEXT = 'export const lateBooking = (id: string) => `Booking ${id} is late`\n'
+const POST = '/w/app/src/lib/notify/post.ts'
+const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
+const ROUTE = '/w/app/src/app/api/cron/route.ts'
+const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
+
+test('a copy builder whose text a route posts through a Slack send helper is held, naming the route as its sender', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
+  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(COPY)
+  expect(why).toContain(`which ${ROUTE} sends to Slack`)
+  expect(why).toContain('Booking ${id} is late again')
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE, { rendered: 'Booking 4182 is late again' })
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test("a copy builder whose send helper cannot be read is held for Dan to approve, naming no sender, never let through", withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
+  w.ctl.unreadable = POST
+  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('Booking ${id} is late again')
+  expect(why).not.toContain('sends to Slack')
+  expect(why).not.toContain('could not check')
+  expect(idIn(why)).toBeDefined()
+  expect(w.ran).toEqual([])
+})
+
+test('a notice builder of any name, whose importer imports the Slack module, is held too: what decides is the send, not the name', withKit, async ($, on) => {
+  const NOTICE = '/w/app/src/lib/notify/notice.ts'
+  const RUN = "import { buildNotice } from './notice'\nimport type { Payload } from './post'\nexport const runChange = () => buildNotice('1')\n"
+  const w = world($, on, { files: { [NOTICE]: COPY_TEXT, [POST]: POST_TEXT, '/w/app/src/lib/notify/run.ts': RUN } })
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: NOTICE, old_string: 'is late`', new_string: 'is late again`' }))
+  expect(why).toContain('which /w/app/src/lib/notify/run.ts sends to Slack')
+  expect(w.ran).toEqual([])
+})
+
+test('a copy builder used by a route that posts nothing passes', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [ROUTE]: "import { lateBooking } from '@/lib/notify/outage-copy'\nexport const GET = async () => console.log(lateBooking('1'))\n" } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
+  const many: Record<string, string> = {}
+  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// slack channel for deploy news\nexport const n${i} = ${i}\n`
+  const w = world($, on, { files: { ...sent.files, ...many } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain('Deploy ${id} failed on production')
+  expect(idIn(why)).toBeDefined()
+  // No sender is named, since the guard could not tell which file sends it.
+  expect(why).not.toContain('sends to Slack')
+  await ask($, w, why, APPROVE)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('the real shapes over the limit: a page gaining a metadata title is held with an id Dan approves; a deploy doc gaining bullets is a doc and passes', withKit, async ($, on) => {
+  const PAGE = '/w/app/src/app/login/page.tsx'
+  const DOC = '/w/app/DEPLOY.md'
+  const many: Record<string, string> = {}
+  for (let i = 0; i < 452; i++) many[`/w/app/src/app/area${i}/page.tsx`] = `// slack page for area ${i}\nexport default function Page${i}() { return null }\n`
+  // Markdown that names the page and Slack is never counted as a sender.
+  for (let i = 0; i < 50; i++) many[`/w/app/docs/notes${i}.md`] = 'The login page posts to hooks.slack.com\n'
+  const w = world($, on, { files: { ...many, [PAGE]: 'export default function Login() { return null }\n', [DOC]: '# Deploy\n\n- Set the region\n' } })
+  const edit = { tool: 'Edit', file_path: PAGE, old_string: 'export default', new_string: 'export const metadata = { title: "Sign in" };\nexport default' }
+  const why = refusalOf(await call($, edit))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain('"Sign in"')
+  expect(idIn(why)).toBeDefined()
+  await ask($, w, why, APPROVE, { rendered: 'Sign in' })
+  // Approved, the same edit goes through: a retry is never refused the same way again.
+  expect(refusalOf(await call($, edit))).toBe('')
+  const bullets = '- Set the region\n- Set DATABASE_URL to the pooled address\n- Set SENTRY_DSN for errors\n- Set SLACK_WEBHOOK_URL for deploy notices\n'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DOC, old_string: '- Set the region\n', new_string: bullets }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test('an approval can carry a placeholder the code writes as text', withKit, async ($, on) => {
+  const w = world($, on)
+  const edit = { tool: 'Edit', file_path: ALERT, old_string: 'method: "POST"', new_string: "method: \"POST\", hint: 'Set ${SLACK_CHANNEL} before you deploy'" }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('Set ${SLACK_CHANNEL} before you deploy')
+  const a = await ask($, w, why, APPROVE, { rendered: 'Set ${SLACK_CHANNEL} before you deploy' })
+  expect(refusalOf(a)).toBe('')
+  expect(contextOf(a)).toContain(APPROVE)
+  expect(refusalOf(await call($, edit))).toBe('')
 })
 
 test('changing approved wording is held again, and taking message text away is held too', withKit, async ($, on) => {

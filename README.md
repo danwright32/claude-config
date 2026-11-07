@@ -6639,28 +6639,51 @@ have a design-rounds esque check on wording so I can approve the wording before 
 code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
 SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
 template such a file sends (below). A Write, Edit or
-MultiEdit there that adds message text, changes it or takes it away is refused, a test file
-included. Claude then shows Dan the whole message, every variable filled in from a realistic
+MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
+send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a `_test`
+or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
+nothing,
+so neither is held nor read as a sender; a string handed to a query builder call (`.select(`,
+`.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in one), a
+database select list, a SQL statement or
+fragment, and a code template a program writes out are not message text; in a CI workflow only what
+a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
+run command that itself posts to Slack), never step or job names, needs lists, input descriptions or
+other run commands; and a file in no git repository, as a scratchpad script is, is let through even
+when it posts to Slack itself. Claude then shows Dan the whole message, every variable filled in
+from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
-kept in the mod's store by the exact wording, never by the file, so the same wording repeated in a
-test goes through without a second question, and any change to approved wording is held again. A
+kept in the mod's store by the exact wording, never by the file, so the same wording repeated in
+another file goes through without a second question, and any change to approved wording is held
+again. A `${...}` that JavaScript writes as text (in single or double quotes, or escaped in a
+template) may stand in the message shown, since that is how it posts; one filled at run time may
+not. A
 shell command writing into such a file is held as a whole command, since the wording it leaves
 cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
 written by a call. A template whose own file has no Slack marker (a code file, or a text template
-such as `.txt`, `.md` or `.hbs`, read line by line) is held the same way when another file in its
+such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
 git repository sends it: one that carries a Slack marker and names the template by its path, a
-relative import, or its python module. The card and refusal name that sender. The search is one
-`git grep` for files holding both the template's name and the word slack or postMessage, then a
-read of each, all within 3 seconds per call; a search that fails, runs out of time, meets an
-unreadable file, or finds more than 200 files to read holds the call as could not check. A file in
-no git repository is not searched, and a template reached only through a re-exporting index is not
-followed. A shell write to a path the write reader cannot name is outside it.
+relative import, or its python module, on a line that imports or reads it (a path it only names,
+as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
+sender. A
+module is held too when a file that imports it also imports a Slack send helper (a copy builder
+such as `outage-copy.ts`, or a notice builder), and the card names that file as
+the sender. The search is one
+`git grep` for files holding
+both the template's name and the word
+slack or postMessage, then a read of each, all within 3 seconds per call, following files that
+re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+unreadable file, or would follow further holds the call as could not check. One that finds more
+than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
+holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
+nothing he can answer (#2364). A shell write to a path the write reader cannot
+name is outside it.
 
 </td><td>
 
-#2242, #2248
+#2242, #2248, #2286, #2361, #2364, #2290, #2287
 
 </td></tr>
 </tbody>
