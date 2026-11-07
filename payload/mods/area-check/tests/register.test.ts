@@ -34,6 +34,8 @@ const WRITES: Record<string, unknown> = {
   'echo hi > "$OUT/a729192.ts"': { files: [{ word: '$OUT/a729192.ts' }], changes: [], unnamed: [], stdout: [{ word: '$OUT/a729192.ts' }] },
   "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'src', path: '/w/app/src', edits: true, tree: true }], changes: [], unnamed: [] },
   "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
+  // #2373: a write reaching a whole folder holding more files that could be held than are judged one by one.
+  "find gen -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'gen', path: '/w/app/gen', edits: true, tree: true }], changes: [], unnamed: [] },
   // #2321: a folder handed to a script, or a copy's folder destination, named by its path alone.
   'python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'python3 rewrite.py docs': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'docs', path: '/w/app/docs' }] }] },
@@ -732,6 +734,40 @@ test('a folder holding 26 files that could be held is held whole as unread, judg
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
   await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
   expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
+})
+
+// #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is
+// bounded the same way, so a folder like payload/hooks cannot outrun the hook's 10 second budget.
+const FIND_GEN = "find gen -exec sed -i '' 's/a/b/' {} +"
+
+test('a write reaching a folder holding 25 files that could be held has each judged one by one, naming the file (#2373)', KIT, async ($, on) => {
+  const w = genWorld($, on, 25)
+  expect(refusal(await bash($ as never, w, FIND_GEN))).toContain('which writes gen/f1.ts.')
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a write reaching a folder holding 26 files that could be held is held whole as unread, judging none one by one, and runs once decided (#2373)', KIT, async ($, on) => {
+  const w = genWorld($, on, 26)
+  const why = refusal(await bash($ as never, w, FIND_GEN))
+  expect(why).toContain('gen reaches every file under it, and 26 files under it could be held, more than the 25 the area check judges one by one')
+  expect(why).toContain('gen/f1.ts')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND_GEN, {}, 'b2')).result).toBe('done')
+})
+
+// The size the bound exists for: a folder like payload/hooks, where an unbounded walk starts two git
+// processes for each file it judges and passes. The world's stubbed tracked list stands in for git,
+// so the fixture costs no real walk; the cost is counted as the git processes the check starts,
+// which is what spends the hook's budget, and stays the same however many files the folder holds.
+test('a write reaching a folder of 2000 files that could be held is held whole without judging them, starting no git process per file (#2373)', KIT, async ($, on) => {
+  const n = 2000
+  const w = genWorld($, on, n)
+  const why = refusal(await bash($ as never, w, FIND_GEN))
+  expect(why).toContain(`gen reaches every file under it, and ${n} files under it could be held, more than the 25 the area check judges one by one`)
+  expect(w.judged().length).toBe(0)
+  expect(w.ran.filter(l => l.includes(' remote get-url ')).length).toBeLessThan(5)
 })
 
 test("a subagent's shell write is held for itself, where its loop is known", KIT, async ($, on) => {

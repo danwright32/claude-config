@@ -14,9 +14,10 @@ export const BUDGET_MS = 10_000
 /** One deadline for the whole read of a file's facts, under 75% of the budget (L743). */
 export const DEADLINE_MS = 7_000
 /**
- * The most files a folder named only by its path (a folder handed to a script, or a copy's folder
- * destination, #2321) may hold that the area check could hold, for each to be judged one by one; past
- * it the command is held whole, as a write whose files cannot be named. Each file judged runs two git
+ * The most files a folder a command writes may hold that the area check could hold, for each to be
+ * judged one by one: a write marked as reaching the whole folder (find with exec, git putting a folder
+ * back, #2373) or a folder named only by its path (a folder handed to a script, or a copy's folder
+ * destination, #2321). Past it the command is held whole, as a write whose files cannot be named. Each file judged runs two git
  * processes (about 10 ms each, measured 2026-11-06), and a whole checkout here holds 1075 source files,
  * so an unbounded walk would outrun the hook's 10 s budget: 25 keeps the walk near a second under load.
  */
@@ -87,9 +88,9 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
  * a path, judged as that file's first edit would be (`tree` where the write may reach every file
  * under it, so each one there that could be held is judged too, `heldUnder` choosing them; a path
- * without `tree` that the disk says is a folder is judged the same way, at most FOLDER_JUDGE_MAX files
- * one by one, #2321), or a write
- * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
+ * without `tree` that the disk says is a folder is judged the same way, #2321; either way at most
+ * FOLDER_JUDGE_MAX files one by one, #2373), or a write whose file cannot be named, with why, which
+ * is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
  */
 export type ShellTarget = { word: string; path: string; tree?: true } | { word: string; unread: string; folder?: string }

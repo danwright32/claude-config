@@ -603,10 +603,11 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
 
 // A write reaching a whole folder (#2142 lessons review) reaches every file under it: the files there
 // the area check could hold, from the same tracked list and issues an edit is judged by, or why they
-// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge. `max`,
-// given for a folder found only on the disk (#2321), bounds how many of them are judged one by one:
-// past it the files are not listed for judging, and the command is held whole (FOLDER_JUDGE_MAX).
-const underTree = async ($: EngineInterface, path: string, max?: number): Promise<{ paths: string[] } | { unread: string }> => {
+// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge. `max`
+// bounds how many of them are judged one by one, for a write marked `tree` (#2373) and a folder found
+// on the disk (#2321) alike: past it the files are not listed for judging, and the command is held
+// whole (FOLDER_JUDGE_MAX).
+const underTree = async ($: EngineInterface, path: string, max: number): Promise<{ paths: string[] } | { unread: string }> => {
   const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
   const b = await $.modkit.branch({ path })
   if (!b || 'unreadable' in b) return { paths: [] }
@@ -619,7 +620,7 @@ const underTree = async ($: EngineInterface, path: string, max?: number): Promis
   if (!('tracked' in ranked)) return { unread: `the files under it cannot be listed (${ranked.unread})` }
   const rel = path === b.root ? '' : relTo(path, b.root)
   const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
-  if (max !== undefined && held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
+  if (held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
   return { paths: held.map(r => `${b.root}/${r}`) }
 }
 
@@ -650,7 +651,6 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
   const v = await gate($, 'Bash', id, t.path, agent)
   if ('deny' in v) return v
   const at = plain(t.path)
-  let max: number | undefined
   if (!t.tree) {
     let kind: Awaited<ReturnType<typeof folderAt>>
     try {
@@ -661,11 +661,10 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     }
     if (kind === false) return PASS
     if (kind !== true) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
-    max = FOLDER_JUDGE_MAX
   }
   let under: Awaited<ReturnType<typeof underTree>>
   try {
-    under = await underTree($, at, max)
+    under = await underTree($, at, FOLDER_JUDGE_MAX)
   } catch (err) {
     await failed($, t.path, err)
     return PASS
