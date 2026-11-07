@@ -5614,8 +5614,8 @@ only the save it was drawn for; a second save waits behind the first. Each answe
 a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you
-should" or "you must"; never "it ran and never finished"), and not when it limits it
-("for now", "today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
+should" or "you must"; never "it ran and never finished"), and not when it limits it ("for now",
+"today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
 refuses the write, and says why. It asks only after the settings hooks beneath it have decided, so a
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
@@ -5982,8 +5982,8 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 Per session modes, each leading the amber line in the band in bold through the status bar, all off
 when the session ends and none carried into a new one. Every phrase counts only as an instruction of
 its own (starting the message, a sentence, a line or a clause), never in passing and never in a
-question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only",
-"read only for now", "just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
+question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for now",
+"just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
 notes, Claude's own memory and plan notes, read only SQL (whatever its strings say), GraphQL reads
 and GitHub issue, milestone and label work go ahead; edits outside the scratchpad, commits,
 branches, PRs, deploys and data changing SQL are refused with the grey card, the shell routes around
