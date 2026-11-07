@@ -21,6 +21,8 @@ export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
 /** How long the search for a file that sends a template may take, every git call and read in it. */
 export const SCAN_MS = 3000
+/** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
+export const REEXPORT_HOPS = 3
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
@@ -34,6 +36,43 @@ const extOf = (path: string): string | undefined => {
 export const inScope = (path: string, text: string): boolean => {
   const ext = extOf(path)
   return ext === undefined ? text.startsWith('#!') : CODE.has(ext)
+}
+
+// Prose files are read by people, never run, so they post nothing. Only these are ruled out as
+// senders: a file in a language CODE does not list (a .vue, a .sql posting through pg_net, a .toml)
+// may still send, so it is read as a sender is.
+const PROSE = new Set(['md', 'markdown', 'mdx', 'rst', 'adoc', 'txt'])
+/** Whether a file is prose (a README, a CLAUDE.md, a runbook), which can name a template but never send it. */
+export const isProseFile = (path: string): boolean => PROSE.has(extOf(path) ?? '')
+
+// Comment syntax by extension, for reading a sender's code without its comments.
+const HASH_COMMENTS = new Set(['py', 'rb', 'sh', 'bash', 'zsh', 'yml', 'yaml'])
+
+/**
+ * A file's text with its whole line comments removed, so a sender is judged by what it runs (Pivot,
+ * 2026-11-06: a workflow comment naming a test file made that test a Slack template). A line is a
+ * comment when its first non blank text opens one for the file's language: `#` (not a shebang) in
+ * a hash commented language, `//`, `/*` or a `*` continuation in the others. JSON has none. A
+ * trailing comment after code is kept, since telling it from a `#` or `//` inside a string needs
+ * a parser, and keeping it can only hold an edit, never let one through.
+ */
+export const codeOf = (path: string, text: string): string => {
+  const ext = extOf(path)
+  if (ext === 'json') return text
+  const hash = ext === undefined ? text.startsWith('#!') : HASH_COMMENTS.has(ext)
+  return text
+    .split('\n')
+    .filter((line, i) => {
+      const t = line.trimStart()
+      if (hash) return !(t.startsWith('#') && !(i === 0 && t.startsWith('#!')))
+      if (t.startsWith('//')) return false
+      if (!(t.startsWith('/*') || t.startsWith('*'))) return true
+      // A block comment line is dropped only when nothing runs after it closes on that line, so
+      // `/* note */ send(...)` is still read.
+      const close = t.indexOf('*/')
+      return close >= 0 && t.slice(close + 2).trim() !== ''
+    })
+    .join('\n')
 }
 
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
@@ -190,6 +229,43 @@ export const refersTo = (senderRel: string, text: string, templateRel: string): 
     } else if (tok.includes('.') && byModule(tok, false)) return true
   }
   return importedModules(lower).some(m => byModule(m, true))
+}
+
+/**
+ * Whether a file can hand what it imports on to another file (#2286): a JavaScript or TypeScript
+ * file with an export, or any python module, since python exposes every name a module imports.
+ * Other languages are not followed.
+ */
+export const handsOn = (rel: string, text: string): boolean => {
+  const ext = extOf(rel)
+  if (ext === 'py') return true
+  if (ext === undefined || !JS.has(ext)) return false
+  return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
+}
+
+/** The files a template may be handed on through, as git pathspecs. */
+export const LINK_PATHS = [...JS, 'py'].map(e => `*.${e}`)
+
+/** The search words for several files at once, for git grep -E: one word bare, several as alternatives. */
+export const termsPattern = (rels: string[]): string => {
+  const terms = [...new Set(rels.map(r => escapeRe(searchTerm(r))))]
+  return terms.length === 1 ? (terms[0] as string) : `(${terms.join('|')})`
+}
+
+/**
+ * The line a file handing on any of `rels` must hold, for git grep -E with case ignored: an import,
+ * require or from line naming one, or its file name with its extension. Written without \b, which
+ * macOS git grep -E reads as matching nothing.
+ */
+export const linkPattern = (rels: string[]): string => {
+  const alts = new Set<string>()
+  for (const r of rels) {
+    const t = escapeRe(searchTerm(r))
+    alts.add(`(from|require|import).*${t}`)
+    const ext = extOf(r)
+    if (ext !== undefined) alts.add(`${t}\\.${escapeRe(ext)}`)
+  }
+  return [...alts].join('|')
 }
 
 /** How a file's strings are read: python through mod-kit's reader, YAML with its plain values, a hash comment language, or a C-like one. */
