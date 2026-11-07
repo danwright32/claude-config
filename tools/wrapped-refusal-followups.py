@@ -25,6 +25,9 @@ in US Eastern time (the last day not included):
   Bash calls without one (dropped), or the transcript's end (ended). "Names git, gh or rtk" is the
   gate's own test of a command.
 
+A transcript it cannot read, or one listed and gone before it could be read, is counted beside the
+totals, each cause on its own line, so a short total says why it is short (claude-config#2239).
+
 It prints counts and shapes only. A command is read in memory and handed to the gate on its input,
 and never printed, written or copied: transcripts hold other projects' commands, paths and names.
 The gate's record is read through the report's own reader, so the two count the same rows.
@@ -106,50 +109,70 @@ def result_text(content):
 
 def read_transcripts(root, since):
     """Every transcript's Bash calls in order, as ids, plus each call's time and command and each
-    result's (is_error, refused by this gate), keyed by tool id; and the count of lines that looked
-    like a call or a result and could not be read."""
+    result's (is_error, refused by this gate), keyed by tool id; the count of lines that looked
+    like a call or a result and could not be read; and the counts of transcripts left out, as
+    {"read", "unreadable", "gone"} (claude-config#2239). A transcript that cannot be opened, or
+    fails partway through, is unreadable and contributes nothing, so no total holds half a file; one
+    listed and then gone before it could be read (deleted, or rotated away) is gone. Neither is
+    skipped silently: every total is short by whatever they held, and the report says so."""
     paths = glob.glob(os.path.join(root, "*", "*.jsonl"))
     paths += glob.glob(os.path.join(root, "*", "*", "subagents", "*.jsonl"))
-    sequences, calls, results, bad, read = {}, {}, {}, 0, 0
+    sequences, calls, results, bad = {}, {}, {}, 0
+    files = {"read": 0, "unreadable": 0, "gone": 0}
     for p in sorted(paths):
         try:
             if os.path.getmtime(p) < since:
                 continue
-            f = open(p, encoding="utf-8", errors="replace")
-        except OSError:
+        except FileNotFoundError:
+            files["gone"] += 1
             continue
-        read += 1
-        seq = []
-        with f:
-            for line in f:
-                if '"tool_use"' not in line and '"tool_result"' not in line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    bad += 1
-                    continue
-                msg = d.get("message") if isinstance(d, dict) else None
-                content = msg.get("content") if isinstance(msg, dict) else None
-                if not isinstance(content, list):
-                    continue
-                for b in content:
-                    if not isinstance(b, dict):
+        except OSError:
+            files["unreadable"] += 1
+            continue
+        seq, fcalls, fresults, fbad = [], {}, {}, 0
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if '"tool_use"' not in line and '"tool_result"' not in line:
                         continue
-                    if b.get("type") == "tool_use" and b.get("name") == "Bash":
-                        cid = b.get("id")
-                        cmd = (b.get("input") or {}).get("command")
-                        if not isinstance(cid, str) or not isinstance(cmd, str):
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        fbad += 1
+                        continue
+                    msg = d.get("message") if isinstance(d, dict) else None
+                    content = msg.get("content") if isinstance(msg, dict) else None
+                    if not isinstance(content, list):
+                        continue
+                    for b in content:
+                        if not isinstance(b, dict):
                             continue
-                        seq.append(cid)
-                        calls.setdefault(cid, (parse_ts(d.get("timestamp")), cmd))
-                    elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
-                        text = result_text(b.get("content"))
-                        refused = bool(REFUSAL.search(text)) and GATE_ISSUE in text
-                        results.setdefault(b["tool_use_id"], (b.get("is_error") is True, refused))
+                        if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                            cid = b.get("id")
+                            cmd = (b.get("input") or {}).get("command")
+                            if not isinstance(cid, str) or not isinstance(cmd, str):
+                                continue
+                            seq.append(cid)
+                            fcalls.setdefault(cid, (parse_ts(d.get("timestamp")), cmd))
+                        elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                            text = result_text(b.get("content"))
+                            refused = bool(REFUSAL.search(text)) and GATE_ISSUE in text
+                            fresults.setdefault(b["tool_use_id"], (b.get("is_error") is True, refused))
+        except FileNotFoundError:
+            files["gone"] += 1
+            continue
+        except OSError:
+            files["unreadable"] += 1
+            continue
+        files["read"] += 1
+        bad += fbad
+        for cid, v in fcalls.items():
+            calls.setdefault(cid, v)
+        for cid, v in fresults.items():
+            results.setdefault(cid, v)
         if seq:
             sequences[p] = seq
-    return sequences, calls, results, bad, read
+    return sequences, calls, results, bad, files
 
 
 def script_kind(stderr):
@@ -277,7 +300,12 @@ def main(argv):
     in_period = [c for c, (ts, _) in calls.items() if ts is not None and since <= ts < until]
     print("Wrapped command refusals and what came next on %s, %s %s to %s %s (%d days, the last day not included)"
           % (host, since_day, zone, until_day, zone, days))
-    print("  %d transcripts read" % files)
+    print("  %d transcripts read" % files["read"])
+    print("  transcripts that could not be read: %d" % files["unreadable"])
+    print("  transcripts gone before they could be read (deleted or moved after being listed): %d" % files["gone"])
+    if files["unreadable"] or files["gone"]:
+        print("  every total below leaves out whatever those %d transcripts hold"
+              % (files["unreadable"] + files["gone"]))
     if bad:
         print("  %d transcript lines could not be read" % bad)
     if not in_period:
