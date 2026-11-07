@@ -3227,16 +3227,24 @@ with both its venv and the system python3), so those commands fail at the import
 against 0.048 s before on `python3 make-switcher.py` (median of 10, load average about 9).
 
 A file handed to a script as data is not code it runs (#2362). The first word after the program that
-names a file is the script, and is read whatever it is called (`python3 issues.json` still refuses
-one naming an endpoint). A later file shaped like data (an extension no interpreter here runs, such
-as `.json`, `.jsonl`, `.txt` or `.manifest`, and no `#!`) is an argument the script reads, so an
-endpoint named in it is not a send: the end of turn review's `issue-spool.sh clear` over a session
-transcript, and `node titles.js issues.json` over a saved `gh` listing, were both refused on
-2026-11-06 and now pass. Such a file is still read when the script can act on it as more than data: a
-shell script that runs `curl` (or its kind), or runs, sources or evals a file named by its arguments;
-a Python or JavaScript script, or a local module it imports, that names a way to send a request
-(`fetch`, `urllib`, `requests`, ...) or run code (`exec`, `runpy`, `subprocess`, `child_process`, a
-`require` of a computed path, ...); and a script of any other kind. A later file with a script's
+names a file is always read as code, whatever it is called (`python3 issues.json` still refuses one
+naming an endpoint), and so is every later file not shaped like data. A later file shaped like data
+(an extension no interpreter here runs, such as `.json`, `.jsonl`, `.txt` or `.manifest`, and no
+`#!`) is an argument a script reads, so an endpoint named in it is not a send: the end of turn
+review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
+saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
+the script depends on each program's options, so such a file is judged against every one of them,
+and is still read when any of them can act on it as more than data: a shell script that runs `curl`
+(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
+local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
+(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+local module it imports, imports only modules on a short list that cannot send, run code or write
+(`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
+uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
+`sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
+reading is a list of what is inert rather than of what acts, because a list of ways to act missed
+`urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
 extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
 script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
