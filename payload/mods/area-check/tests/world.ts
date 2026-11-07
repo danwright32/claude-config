@@ -143,7 +143,14 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // GitHub's answer to gh pr view, by its words after `gh pr view`.
     prView: (args: string[]) => Run
     unreadableFiles: string[]
+    // The folders on the disk (#2321), which fs.exists finds and fs.stat calls `dir`; a path in
+    // statFails exists but its stat is refused. `tracked` stands in for TRACKED, the default branch's files.
+    folders: string[]
+    statFails: string[]
+    tracked?: string
   } = {
+    folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
+    statFails: [],
     seeded: [],
     rotated: {},
     bases: { HEAD: 'mb123' },
@@ -162,7 +169,15 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
+  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || ctl.folders.includes(e.path) || ctl.statFails.includes(e.path) }) as never)
+  // What a path leads to, as $.fs.stat answers: `dir` or `file`, rejecting ENOENT for a missing path.
+  on('fs.stat', ($, e) => {
+    const p = (e as unknown as { path: string }).path
+    if (ctl.statFails.includes(p)) return { deny: `EACCES: permission denied, stat '${p}'` } as never
+    if (ctl.folders.includes(p)) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
+    if (files[p] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
+    return { deny: `ENOENT: no such file or directory, stat '${p}'` } as never
+  })
   on('fs.read', ($, e) => {
     if (ctl.unreadableFiles.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     const t = files[e.path]
@@ -335,7 +350,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
         }
         return answer(ok(ctl.numstat ?? NUMSTAT))
       }
-      if (sub === 'ls-tree -r --name-only origin/main') return answer(ok(TRACKED + '\n'))
+      if (sub === 'ls-tree -r --name-only origin/main') return answer(ok((ctl.tracked ?? TRACKED) + '\n'))
       if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
     }
     if (argv[0] === 'gh' && argv[1] === 'issue' && argv[2] === 'list') {
