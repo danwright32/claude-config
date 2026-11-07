@@ -417,11 +417,13 @@ for i in "${!mods[@]}"; do
     continue
   fi
   # The mod's source in scratch, any types laid in its own folder replaced by the pinned ones, so
-  # nothing is written into the folder under check or through a link Claude Code laid there.
+  # nothing is written into the folder under check or through a link Claude Code laid there. -H
+  # follows the mod's own folder when it is a link (a folder of links to the mods being changed),
+  # since -R alone copies the link, and the scratch copy then was the mod itself (#2417).
   checked="$scratch/$name"; copy_failed=""
   if [ -z "$scratch" ]; then
     copy_failed="no scratch folder could be made"
-  elif ! { rm -rf "$checked" && cp -R "$d" "$checked" && rm -rf "$checked/.claude-plugin/types" \
+  elif ! { rm -rf "$checked" && cp -RH "$d" "$checked" && rm -rf "$checked/.claude-plugin/types" \
       && mkdir -p "$checked/.claude-plugin/types" \
       && cp -R "$PINNED/claude-code" "$PINNED/claude-code-tools" "$PINNED/claude-code-mcp" "$checked/.claude-plugin/types/"; } 2>/dev/null; then
     copy_failed="the copy failed"
