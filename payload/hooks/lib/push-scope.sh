@@ -993,7 +993,26 @@ ps_commit_in_chain() {
 # questions, because ps_add_scope has to tell them apart: an add names what it stages, a
 # `commit -a` stages every tracked change and names nothing. The first is a cheap filter only;
 # ps__read_adds decides what an add really is.
+#
+# Two shapes the first pattern cannot see (claude-config#2203): a git written straight after a
+# substitution's opener, `x=$(git add -A)` or a backquote, and an add reached through a variable,
+# whose word add comes before any git (`SUB=add; git $SUB -A`) or follows a program held in one
+# (`$G add -A`). So two variable shapes are handed to the parser too: a program held in a variable or
+# a substitution with the word add straight after it, and a git whose subcommand, past its own
+# options, is a variable or a substitution in a command that names add anywhere, alone or as a
+# value. Not any $ beside any add, which hands the parser every heredoc whose prose says add.
 ps__git_add_in_chain() {
+  grep -Eq '(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"')`]|$)' <<< "$1" && return 0
+  grep -Eq '(^|[[:space:];&|(`])"?(\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?|\$\([^)]*\)|`[^`]*`)"?[[:space:]]+add([[:space:];&|)`]|$)' <<< "$1" && return 0
+  grep -Eq '(^|[[:space:];&|"'"'"'(`])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+(-[Cc][[:space:]]+[^[:space:]]+|-[^Cc[:space:]][^[:space:]]*))*[[:space:]]+"?[$`]' <<< "$1" \
+    && grep -Eq '(^|[[:space:];&|"'"'"'(`=])add([[:space:];&|"'"'"')`]|$)' <<< "$1"
+}
+# The reach the first pattern had before #2203, and still the only one an unreadable wrapper is
+# judged by: a script run or a wrapper nobody can read into is refused beside a named add only where
+# a git and the word add share a line, as before (#2078). The shapes #2203 added refuse only on an
+# add the parser finds being run; measured over 6,597 real commands, letting them reach that rule
+# too refused 40 that stage nothing, most of them a script run beside a heredoc whose prose says add.
+ps__git_names_add() {
   grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"']|$)' <<< "$1"
 }
 ps__commit_stages_all() {
@@ -1013,8 +1032,15 @@ ps__commit_stages_all() {
 # $2 is the question:
 #   scope  prints ALL, TRACKED, PATHS then the paths one per line, UNKNOWN (an add was seen but
 #          could not be read, or it names nothing), or NONE (no add at all)
-#   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no
-ps__read_adds() {   # $1 = command  $2 = scope | takes
+#   takes  prints yes when any add takes more than the paths it names (ALL or TRACKED), else no;
+#          when the only such adds are in a script file the command runs, two more lines follow:
+#          the directory the first of them runs in, then that script file's path
+#
+# $3, when given, is the session's directory, and asks for the script files the command runs to be
+# read as well (lib/shell-words.py every_command, claude-config#2301): their commands are judged as
+# the command's own, a relative script name resolved against $3. Reading only adds commands, so an
+# unreadable script is judged exactly as it was without $3.
+ps__read_adds() {   # $1 = command  $2 = scope | takes  $3 = the session directory, to read scripts
   # The command goes in on stdin, never in the environment: a heredoc commit message can pass the
   # platform's limit on argument and environment size, and python then never starts at all.
   #
@@ -1023,42 +1049,99 @@ ps__read_adds() {   # $1 = command  $2 = scope | takes
   # git add -A; fi` (lessons review of #1017) and `env X=1 git -C <dir> add -A` (#1188) are adds here
   # as they are to ps_is_git_add. With that file missing, any segment naming git and add is one.
   # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
-  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
+  local git_names_add=0
+  ps__git_names_add "$1" && git_names_add=1
+  printf '%s' "$1" | PS_MODE="${2:-scope}" PS_GIT_NAMES_ADD="$git_names_add" PS_SCRIPTS_CWD="${3:-}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, io, os, re, shlex, sys
 cmd = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
 mode = os.environ.get("PS_MODE", "scope")
+scripts_cwd = os.environ.get("PS_SCRIPTS_CWD", "")
+# The script files read (claude-config#2301), (path, text) each, only when a session directory came.
+scripts = [] if scripts_cwd else None
 try:
     spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])
     shell_words = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shell_words)
     git_command = shell_words.git_command
-    # The commands a wrapper runs (bash -c, eval, env -S, claude-config#1478), as segments of their own
-    # beside the cut below, and each wrapper whose string cannot be read. The cut below still reads
-    # what it always read; these only add to it.
-    wrapped = [r for r in shell_words.every_command(cmd) if r[4] > 0 or r[3]]
+    # Every command the shell would run, as segments of their own beside the cut below: the commands
+    # a wrapper runs (bash -c, eval, env -S, claude-config#1478), the commands inside a command
+    # substitution, `echo "$(git add -A)"` or `x=$(git add -A)` (claude-config#2203), which the cut
+    # below reads only as the word after echo or an assignment, and each wrapper whose string cannot
+    # be read. The cut below still reads what it always read; these only add to it.
+    wrapped = shell_words.every_command(cmd, scripts_cwd, scripts) if scripts is not None \
+        else shell_words.every_command(cmd)
 except Exception:
-    wrapped = []
+    shell_words, wrapped = None, []
     # With no reader of git, any segment naming git and add is an add, the words after add its own:
-    # the reading that sees more adds, never fewer (L42).
+    # the reading that sees more adds, never fewer (L42). A git glued behind an assignment or a
+    # substitution opener, `x=$(git`, is git too (claude-config#2203).
     def git_command(toks):
-        names = [t.lstrip("({").split("/")[-1] for t in toks]
+        names = [re.split(r"[=(`{]", t)[-1].split("/")[-1] for t in toks]
         if "git" in names and "add" in toks:  # gh-reader: the crude reading, when there is no other
             return ("add", [], toks[toks.index("add") + 1:])
         return None
+def names_an_add(text):
+    # Does this text name a git add anywhere a wrapper nobody can read into might run it
+    # (claude-config#2078)? The bare word add anywhere used to count, so a `git worktree add` or a
+    # search whose quoted words held one was an add. Two readings, each seeing more than the parser:
+    # every `git` in the text with its quotes opened, read by the one reading of git, whose
+    # subcommand is add or a variable (CMD="git add -A"; eval "$CMD" is still one); and a shell word
+    # that is add, or an assignment of it, outside a git command running another subcommand
+    # (bash ./wrapper.sh add -A, SUB=add).
+    for piece in re.split(r"[;&|()\n`]", re.sub(r"[\"\x27]", " ", text)):
+        words = piece.split()
+        for i in range(len(words)):
+            # git_read answers None for any word that is not git, by name or by path.
+            found = shell_words.git_read(words[i:])
+            if found and (found[0] == "add" or "$" in found[0]):
+                return True
+    return add_named(text)
+def add_named(text):
+    # Is the word add named anywhere a variable could carry it into a command: a shell word that is
+    # add, or an assignment of it, outside a git command running another subcommand (SUB=add,
+    # `for s in add`, bash ./wrapper.sh add -A)? The second reading of names_an_add, and what makes
+    # a git whose subcommand is a variable an add (claude-config#2203).
+    for seg in re.split(r"&&|\|\||;|\||\n", text):
+        try:
+            toks = shlex.split(seg, posix=True)
+        except ValueError:
+            toks = seg.split()
+        found = git_command(toks)
+        if found and found[0] and "$" not in found[0]:
+            continue
+        if any(t.strip("({)}") == "add" or t.endswith("=add") for t in toks):
+            return True
+    return False
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
 saw_add, takes_all, tracked, unreadable, unread_wrapper, paths = False, False, False, False, False, []
-segments = re.split(r"&&|\|\||;|\||\n", cmd)
-for _, text, wrapper, why, depth in wrapped:
+# Each segment as (directory, script, text): the directory and the script file it is in for the
+# commands of a script the command runs (claude-config#2301), None for every other.
+segments = [(None, None, s) for s in re.split(r"&&|\|\||;|\||\n", cmd)]
+# The text a variable could carry the word add in from: the command, and every script it runs.
+named = "\n".join([cmd] + [t for _, t in (scripts or [])])
+in_script, next_script = [], 0
+for k, (d, text, wrapper, why, depth) in enumerate(wrapped):
+    while in_script and in_script[-1][0] >= depth:
+        in_script.pop()
+    # A script whose commands were read has them right after its record, one deeper, in the order
+    # shell_words gave the scripts (every_command), so the next entry is this one.
+    if shell_words is not None and scripts and why and shell_words.script_file(why) and k + 1 < len(wrapped) \
+            and wrapped[k + 1][4] == depth + 1 and next_script < len(scripts):
+        in_script.append((depth, scripts[next_script][0]))
+        next_script += 1
     if why:
         # A wrapper whose string cannot be read, in a command naming an add: what it stages cannot be
         # told, so it is an add nobody can account for (UNKNOWN), never no add at all (L98).
-        if re.search(r"(^|[^A-Za-z0-9_-])add([^A-Za-z0-9_-]|$)", cmd):
+        # Judged only where a git and the word add share a line, the reach this rule had before
+        # #2203 widened the filter in front of this reader (ps__git_names_add).
+        if os.environ.get("PS_GIT_NAMES_ADD") == "1" and names_an_add(cmd):
             saw_add, unreadable, unread_wrapper = True, True, True
         continue
-    segments.append(text)
-for seg in segments:
+    segments.append((d, in_script[-1][1], text) if in_script else (None, None, text))
+direct_takes, script_takes = False, []
+for where, script, seg in segments:
     try:
         toks, readable = shlex.split(seg, posix=True), True
     except ValueError:
@@ -1069,12 +1152,26 @@ for seg in segments:
     # claude-config#1188): past reserved words, assignments, rtk, env and sudo, and the options
     # git takes itself.
     found = git_command(toks)
+    # An add reached through a variable (claude-config#2203): a git whose subcommand is a variable or
+    # a substitution in a command naming add (SUB=add; git $SUB -A), or a program held in one whose
+    # first word is add ($G add -A, "$GIT" add ., $(command -v git) add -A). What either really runs
+    # is known only as it runs, so it is an add nobody can account for, the words after it read as
+    # the words of an add.
+    through_variable = False
+    if shell_words is not None:
+        if found and re.search(r"[$`]", found[0]) and add_named(named):
+            found, through_variable = ("add",) + tuple(found[1:]), True
+        elif not found:
+            rest, _ = shell_words.command_rest(seg)
+            head = shell_words.command_words(shell_words.bare(rest))
+            if len(head) > 1 and head[0][:1] in "$`" and head[1] == "add":
+                found, through_variable = ("add", [], head[2:]), True
     if not found or found[0].rstrip(")}") != "add":
         continue
     saw_add = True
-    if not readable:
+    if not readable or through_variable:
         unreadable = True
-    skip = False
+    skip, this_takes = False, False
     for a in found[2]:
         if skip:
             skip = False
@@ -1085,13 +1182,24 @@ for seg in segments:
             skip = m.end() == len(a)
             continue
         if a in EVERYTHING:
-            takes_all = True
+            takes_all = this_takes = True
         elif a in TRACKED_ONLY:
-            tracked = True
-        elif a and not a.startswith("-") and readable:
+            tracked = this_takes = True
+        elif a and not a.startswith("-") and readable and a not in paths:
+            # Once: a command is read both by the cut and by the records of the shell reader.
             paths.append(a)
+    if this_takes:
+        if script is None:
+            direct_takes = True
+        else:
+            script_takes.append((where, script))
 if mode == "takes":
     print("yes" if (takes_all or tracked or unread_wrapper) else "no")
+    # Where an add that takes everything runs when only a script holds one (claude-config#2301): the
+    # command itself has no add to find its repository by.
+    if (takes_all or tracked) and not direct_takes and not unread_wrapper and script_takes:
+        print(script_takes[0][0])
+        print(script_takes[0][1])
 elif not saw_add:
     print("NONE")
 elif takes_all:
@@ -1153,9 +1261,23 @@ ps_add_scope() {   # $1 = command
 # It is a different question from ps_add_scope's, because a `commit -a` is not an add and an add
 # that names paths is scoped whatever the commit does, so it is its own entry point over the same
 # parser rather than a second parser (L342). Returns 0 for yes.
-ps_add_takes_all() {   # $1 = command
-  ps__git_add_in_chain "$1" || return 1
-  [ "$(ps__read_adds "$1" takes)" = "yes" ]
+#
+# $2, when given, is the session's directory, and the script files the command runs are read as well
+# (claude-config#2301), so `bash ./wrapper.sh` holding `git add -A` is an add that takes everything.
+# Only a caller that has already asked whether the command can run a script at all
+# (srw_may_run_script, lib/script-run-words.sh) should pass it, since reading starts python. When the
+# only adds that take everything are in a script, PS_ADD_SCRIPT_DIR is set to the directory the
+# first runs in and PS_ADD_SCRIPT to that script's path; both are empty otherwise.
+ps_add_takes_all() {   # $1 = command  $2 = the session directory, to read the scripts it runs
+  local out
+  PS_ADD_SCRIPT_DIR=""; PS_ADD_SCRIPT=""
+  ps__git_add_in_chain "$1" || [ -n "${2:-}" ] || return 1
+  out="$(ps__read_adds "$1" takes "${2:-}")"
+  [ "${out%%$'\n'*}" = "yes" ] || return 1
+  case "$out" in
+    *$'\n'*) out="${out#*$'\n'}"; PS_ADD_SCRIPT_DIR="${out%%$'\n'*}"; PS_ADD_SCRIPT="${out#*$'\n'}" ;;
+  esac
+  return 0
 }
 
 # The working tree files the commit in this command takes BEYOND the index, from ps_add_scope, as

@@ -39,6 +39,31 @@ case "${WORK%/}" in
 esac
 trap 'rm -rf "$WORK"' EXIT
 
+# The gate's own limits, read from its source rather than written out again here (claude-config#2243),
+# so a change to one moves every expectation built on it, and what can still fail on such a change is
+# the check against something the gate does not hold: the timeout settings.hooks.json registers it
+# with (section 3). Each is one whole line of the gate. A line rewritten past recognition stops the
+# suite naming it, never leaves an expectation built on nothing (L100).
+gate_number() {  # $1 = variable to set, $2 = what it is, $3 = extended regex for its whole line, the number its one group
+  local hits
+  hits="$(sed -n -E "s/$3/\1/p" "$HOOK")"
+  case "$hits" in
+    ''|*[!0-9]*)
+      echo "  FAIL: $2 could not be read from check-work-names-merge.sh as one whole number (got [$hits]), so nothing built on it can be checked"
+      printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$((failed + 1))"
+      exit 1 ;;
+  esac
+  printf -v "$1" '%s' "$hits"
+}
+gate_number READ_CAP "the read budget cap" '^READ_BUDGET_CAP=([0-9]+)$'
+gate_number READ_DEFAULT "the default read budget" '^READ_DEADLINE="\$\(mt_gate_read_budget "\$\{WN_MERGE_READ_BUDGET_SECONDS:-\}" ([0-9]+)\)"$'
+gate_number LIST_SECONDS "the seconds the work repository list is given after the reads" '^repos_budget=\$\(\( READ_DEADLINE \+ ([0-9]+) - SECONDS \)\)$'
+# The budget the reads get when none is set is the default held to the cap, and the work repository
+# list is handed what is left of that plus its own seconds: these are the most it can be handed.
+READ_USED=$(( READ_DEFAULT < READ_CAP ? READ_DEFAULT : READ_CAP ))
+LIST_MOST=$(( READ_USED + LIST_SECONDS ))
+LIST_MOST_CAPPED=$(( READ_CAP + LIST_SECONDS ))
+
 FAKE_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
 printf 'console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/registry-missing.js"
 printf 'console.log("not json")\n' > "$WORK/registry-broken.js"
@@ -61,16 +86,16 @@ case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*)
+    # A read that "took" until the hook's clock read FAKE_CLOCK_AT_VIEW, written where the hook reads
+    # its test clock (WN_MERGE_CLOCK_FILE), so no case waits in real time (claude-config#2169, L524).
+    if [ -n "${FAKE_CLOCK_AT_VIEW+set}" ]; then printf '%s\n' "$FAKE_CLOCK_AT_VIEW" > "$WN_MERGE_CLOCK_FILE"; fi
     if [ -n "${FAKE_PR_ERR:-}" ]; then printf '%s\n' "$FAKE_PR_ERR" >&2; exit 1; fi
     cat "$FAKE_PR_JSON" ;;
   *"/contents/payload/hooks/lib/work-names.py"*)
+    if [ -n "${FAKE_CLOCK_AT_SCOPE+set}" ]; then printf '%s\n' "$FAKE_CLOCK_AT_SCOPE" > "$WN_MERGE_CLOCK_FILE"; fi
     case "${FAKE_SCOPE:-present}" in
       absent) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
       fails) printf 'gh: Bad Gateway (HTTP 502)\n' >&2; exit 1 ;;
-      # A scope read that answers only after 15 seconds, so the hook's own clock has moved past what
-      # its budget leaves for the work repository list (claude-config#2111). A wait this test sets,
-      # not measured.
-      slow) sleep 15; printf '{"name":"work-names.py"}\n' ;;
       *) printf '{"name":"work-names.py"}\n' ;;
     esac ;;
   *"api graphql"*) printf '%s\n' "${FAKE_NODE_JSON:-}" ;;
@@ -90,16 +115,24 @@ print(json.dumps({"number": 7, "url": sys.argv[4], "baseRefOid": "b0b0b0b0b0b0b0
 ' "$1" "$2" "$3" "${4:-https://github.com/acme/widget/pull/7}"
 }
 
-# run_hook <command> [VAR=value ...] ; prints the hook's stdout and stderr, sets hook_rc
+# run_hook <command> [VAR=value ...] ; prints the hook's stdout and stderr, sets hook_rc.
+# HOOK_TESTS_RUNNING=1 is what run-all-tests.sh exports to every suite, and the gate honours its
+# WN_MERGE_SCANNER seam only with it (claude-config#2217). It is set here as well so the suite run
+# on its own behaves as it does inside a full run; a case after it in "$@" can clear it.
 run_hook() {
   local cmd="$1"; shift
   : > "$WORK/gh.log"
+  rm -f "$WORK/clock" "$WORK/budget"
+  # HOOK_ALARM bounds one run in seconds, for a case whose looser gate would hang rather than fail.
+  local alarm=()
+  [ -n "${HOOK_ALARM:-}" ] && alarm=(perl -e 'alarm shift; exec @ARGV' "$HOOK_ALARM")
   hook_out="$(printf '{"tool_input":{"command":%s},"cwd":%s}' \
       "$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
       "$(printf '%s' "$WORK/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
     | ( cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" FAKE_PR_JSON="$WORK/pr.json" FAKE_GH_LOG="$WORK/gh.log" FAKE_LIST="$WORK/list.json" \
           WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" WORK_NAMES_REGISTRY_READER="$WORK/registry-missing.js" \
-          WN_MERGE_SLEEP=true "$@" bash "$HOOK" 2>&1 ))"
+          WN_MERGE_SLEEP=true HOOK_TESTS_RUNNING=1 WN_MERGE_CLOCK_FILE="$WORK/clock" STUB_BUDGET_FILE="$WORK/budget" \
+          "$@" ${alarm[@]+"${alarm[@]}"} bash "$HOOK" 2>&1 ))"
   hook_rc=$?
 }
 denied() { local re='"permissionDecision": *"deny"'; [[ "$hook_out" =~ $re ]]; }
@@ -160,17 +193,65 @@ run_hook "$MERGE 7 --squash" FAKE_LIST="$WORK/no-such-list.json"
 expect_deny "a work repository list that cannot be read refuses the merge" "work repository list"
 expect_deny "as the scanner giving no verdict" "gave no verdict"
 # Under 3 seconds of the budget left for the list is refused before the scanner starts, since a hook
-# killed at its timeout gives no verdict at all. A read budget of 5 leaves 17 seconds for the list,
-# and the slow scope read spends 15 of them, so the read is never asked for. The 5 is slack for the
-# hook to reach its scope read on a loaded machine, which would otherwise refuse it for its earlier
-# reads instead. The wait is real time only because the hook's clock is the shell's own SECONDS.
-# Every number here is one this test or the hook sets, not measured.
-run_hook "$MERGE 7 --squash" FAKE_SCOPE=slow WN_MERGE_READ_BUDGET_SECONDS=5
+# killed at its timeout gives no verdict at all. The default read budget leaves the list LIST_MOST
+# seconds from the hook's start, and a scope read that "took" until 2 seconds before that leaves 2,
+# so the list is never asked for. The scope read moves the hook's clock through its test clock file
+# rather than sleeping, so the case runs at once and the same under load (claude-config#2169, L290,
+# L524). Every number here is one this test or the hook sets, not measured.
+run_hook "$MERGE 7 --squash" FAKE_CLOCK_AT_SCOPE=$(( LIST_MOST - 2 ))
 expect_deny "under 3 seconds left for the work repository list refuses the merge" "had no time left to be read"
-if grep -q 'contents/payload/hooks/lib/work-names.py' "$WORK/gh.log"; then pass; else fail "the slow case never reached the scope read: $(cat "$WORK/gh.log")"; fi
+if grep -q 'contents/payload/hooks/lib/work-names.py' "$WORK/gh.log"; then pass; else fail "the late case never reached the scope read: $(cat "$WORK/gh.log")"; fi
 if grep -q 'contents/repos.json' "$WORK/gh.log"; then fail "the list was read with no budget left for it: $(cat "$WORK/gh.log")"; else pass; fi
 run_hook "$MERGE 7 --squash"
 expect_allow "(control) clean text with the list read merges"
+
+# The test clock can only move the hook's clock FORWARD, so whoever can set WN_MERGE_CLOCK_FILE (any
+# process whose environment the hook inherits) can make the gate refuse sooner, never later: what the
+# list read is handed is never more than the real clock leaves (claude-config#2169). Each case reads
+# that hand off through a stub scanner that records WORK_NAMES_REPOS_BUDGET_SECONDS and passes.
+printf 'import os\nopen(os.environ["STUB_BUDGET_FILE"], "w").write(os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS", "unset"))\n' > "$WORK/scanner-stub.py"
+budget_at_most() {  # $1 = description, $2 = the most the list read may be handed
+  local got; got="$(cat "$WORK/budget" 2>/dev/null)"
+  case "$got" in
+    ''|*[!0-9]*) fail "$1: the list read was handed [${got:-nothing}], wanted at most $2 (exit $hook_rc): $hook_out" ;;
+    *) if [ "$got" -le "$2" ]; then pass; else fail "$1: the list read was handed $got seconds, more than $2"; fi ;;
+  esac
+}
+stub_run() { run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-stub.py" "$@"; }
+stub_run FAKE_CLOCK_AT_SCOPE=20
+budget_at_most "a clock moved forward to 20 leaves the list at most $(( LIST_MOST - 20 )) of the $LIST_MOST seconds" $(( LIST_MOST - 20 ))
+stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=0
+budget_at_most "a later, earlier reading never moves the clock back" $(( LIST_MOST - 14 ))
+stub_run FAKE_CLOCK_AT_SCOPE=-100
+budget_at_most "a negative reading is ignored, never a longer budget" "$LIST_MOST"
+stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=99999999999999999999
+budget_at_most "a reading too long to be a clock, which bash would wrap to 0, is ignored" $(( LIST_MOST - 14 ))
+stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=1000
+budget_at_most "a reading of four digits or more is out of range and ignored" $(( LIST_MOST - 14 ))
+stub_run FAKE_CLOCK_AT_VIEW=14 FAKE_CLOCK_AT_SCOPE=" 3"
+budget_at_most "a reading that is not plain digits is ignored" $(( LIST_MOST - 14 ))
+# Text that bash arithmetic would run as a command is never evaluated: a subscript of a set variable,
+# since under the hook's set -u an unset one stops the shell before the subscript runs.
+stub_run FAKE_CLOCK_AT_SCOPE="SECONDS[\$(touch $WORK/clock-ran)]"
+if [ -e "$WORK/clock-ran" ]; then fail "a test clock reading ran as a command"; rm -f "$WORK/clock-ran"; else pass; fi
+budget_at_most "and that reading is ignored" "$LIST_MOST"
+# A clock file that is not a regular file is never opened: a fifo with no writer would hold the hook
+# until its timeout, and a hook killed there gives no verdict at all. The alarm bounds a looser gate.
+mkfifo "$WORK/clock-fifo"
+HOOK_ALARM=10 stub_run WN_MERGE_CLOCK_FILE="$WORK/clock-fifo"
+budget_at_most "a fifo for a clock file is ignored, never waited on" "$LIST_MOST"
+# The read budget's cap (claude-config#2217) holds for what the list read is handed, not only for
+# what the refusal says: a budget of 100 or merge-when-ready.sh's 90 still leaves the list at most
+# the cap plus the list's own seconds (LIST_MOST_CAPPED), with the test clock moved or not. Every
+# number here is one this test or the hook sets, not measured.
+stub_run WN_MERGE_READ_BUDGET_SECONDS=100 FAKE_CLOCK_AT_SCOPE=20
+budget_at_most "a budget past the cap leaves the list no more than the cap does" $(( LIST_MOST_CAPPED - 20 ))
+stub_run MT_GATE_READ_BUDGET_SECONDS=90
+budget_at_most "merge-when-ready.sh's budget leaves the list no more than the cap does" "$LIST_MOST_CAPPED"
+# And the stub scanner these cases use is the gate's verdict only under the test marker: with it
+# cleared, the gate's own scanner judges and the stub never runs (claude-config#2217).
+stub_run HOOK_TESTS_RUNNING=
+if [ -e "$WORK/budget" ]; then fail "the stub scanner ran without the test marker: $(cat "$WORK/budget")"; else pass; fi
 
 # Every route to a merge.
 pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
@@ -224,6 +305,102 @@ run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/registry-broken.j
 expect_deny "a scanner that cannot judge refuses rather than passes" "gave no verdict"
 run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/no-such-scanner.py"
 expect_deny "a missing scanner refuses rather than passes" "no-such-scanner.py is missing"
+
+# Its test seams hold only under its tests, and its read budget stays inside its timeout
+# (claude-config#2217). The hook reads Claude Code's own environment, so a scanner named there would
+# be the verdict on every merge, and a budget past the timeout lets the hook be killed mid read.
+# Outside its tests the scanner's own seams are ignored too (claude-config#2231), so the invented
+# organisation is nobody's there: these cases name the listed work owner instead, which the scanner
+# matches through the work repository list the fake gh serves, and run with an empty HOME so this
+# Mac's own dev update registry plays no part.
+printf 'import sys\nsys.exit(0)\n' > "$WORK/scanner-passes.py"
+mkdir -p "$WORK/empty-home"
+pr_json "Move it to globex-corp/thing" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
+expect_deny "outside its tests, a scanner named in the environment is not the verdict" "title:1: a work repository or owner name"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py" HOOK_TESTS_RUNNING=0 HOME="$WORK/empty-home"
+expect_deny "nor with the test marker set to anything but 1" "title:1: a work repository or owner name"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/scanner-passes.py"
+expect_allow "(control) under its tests the named scanner is the verdict, so the seam still works"
+pr_json "Add the reader" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" WN_MERGE_SCANNER="$WORK/no-such-scanner.py" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
+expect_allow "outside its tests the gate's own scanner judges, whatever file the environment names"
+# The scanner's own registry reader, named in the gate's environment, is not asked outside its tests
+# either: one that answers "nothing registered" would empty the registry half of every real merge.
+printf 'require("fs").writeFileSync(process.env.READER_RAN, "ran"); console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/marking-reader.js"
+rm -f "$WORK/reader-ran"
+run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran" HOOK_TESTS_RUNNING= HOME="$WORK/empty-home"
+expect_allow "(control) clean text outside its tests merges with the real registry reader"
+if [ -e "$WORK/reader-ran" ]; then fail "outside its tests the gate's scanner ran a registry reader named in the environment"; else pass; fi
+rm -f "$WORK/reader-ran"
+run_hook "$MERGE 7 --squash" WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran"
+if [ -e "$WORK/reader-ran" ]; then pass; else fail "(control) under its tests the named registry reader is asked: $hook_out"; fi
+
+# The retry settings hold only under its tests too, and the wait between reads is capped whoever set
+# it (claude-config#2231): a wait or a count of tries named in Claude Code's environment could hold
+# the hook past its timeout, and a gate killed there gives no verdict at all. Each wait is read off a
+# sleep that records what it was asked for and returns at once, so no case waits in real time (L524).
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$SLEPT_FILE"\n' > "$WORK/record-sleep"
+chmod +x "$WORK/record-sleep"
+slept_run() {  # [VAR=value ...] ; a scope read that keeps failing, its waits in $WORK/slept
+  rm -f "$WORK/slept"
+  run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_SLEEP="$WORK/record-sleep" SLEPT_FILE="$WORK/slept" "$@"
+  slept="$(cat "$WORK/slept" 2>/dev/null | tr '\n' ' ')"
+}
+slept_run WN_MERGE_READ_TRIES=1 HOOK_TESTS_RUNNING=
+expect_deny "outside its tests a count of tries named in the environment is not honoured" "(3 tries, 15 seconds)"
+tries="$(grep -c 'contents/payload' "$WORK/gh.log")"
+if [ "$tries" -eq 3 ]; then pass; else fail "outside its tests the scope was asked $tries times, wanted the default 3"; fi
+slept_run WN_MERGE_READ_RETRY_SECONDS=4 HOOK_TESTS_RUNNING=
+if [ "$slept" = "2 2 " ]; then pass; else fail "outside its tests a wait named in the environment was honoured: slept [$slept], wanted the default [2 2 ]"; fi
+slept_run WN_MERGE_READ_RETRY_SECONDS=4 HOOK_TESTS_RUNNING=0
+if [ "$slept" = "2 2 " ]; then pass; else fail "nor with the test marker set to anything but 1: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=3
+if [ "$slept" = "3 " ]; then pass; else fail "(control) under its tests the retry settings are its own: slept [$slept], wanted [3 ]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=12
+if [ "$slept" = "5 " ]; then pass; else fail "a wait past the cap is clamped to 5 seconds: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=123456789012345678901234567890
+if [ "$slept" = "5 " ]; then pass; else fail "a wait too long for the shell's arithmetic is clamped too: slept [$slept]"; fi
+if says "integer expression expected"; then fail "a wait too long for the shell's arithmetic reached a comparison: $hook_out"; else pass; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=03
+if [ "$slept" = "3 " ]; then pass; else fail "a wait padded with zeros is read as its value: slept [$slept]"; fi
+slept_run WN_MERGE_READ_TRIES=2 WN_MERGE_READ_RETRY_SECONDS=soon
+if [ "$slept" = "2 " ]; then pass; else fail "a wait that is not a number is not believed, and the default holds: slept [$slept]"; fi
+
+# The budget, read off the refusal a scope read that keeps failing gives, which names it. The cases
+# below ask for 90 and more to be clamped and for 5 to be kept, so they test the clamp only while the
+# cap sits between the two.
+if [ 5 -lt "$READ_CAP" ] && [ "$READ_CAP" -lt 90 ]; then pass; else fail "the read budget cap of $READ_CAP is not between the 5 these cases keep and the 90 they clamp, so they no longer test the clamp"; fi
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=100
+expect_deny "a read budget past the cap is clamped to it" "(3 tries, $READ_CAP seconds)"
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 MT_GATE_READ_BUDGET_SECONDS=90
+expect_deny "so is the budget merge-when-ready.sh hands every gate" "(3 tries, $READ_CAP seconds)"
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=123456789012345678901234567890
+expect_deny "a budget too long for the shell's arithmetic is clamped too" "(3 tries, $READ_CAP seconds)"
+if says "integer expression expected"; then fail "a budget too long for the shell's arithmetic reached a comparison: $hook_out"; else pass; fi
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=-5
+expect_deny "a budget that is not a number is not believed, and the read still refuses" "(3 tries, $READ_USED seconds)"
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=5
+expect_deny "(control) a budget under the cap is still the test's own" "(3 tries, 5 seconds)"
+run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_READ_TRIES=3 WN_MERGE_READ_BUDGET_SECONDS=0005
+expect_deny "a budget padded with zeros is read as its value, not clamped for its length" "(3 tries, 5 seconds)"
+run_hook "$MERGE 7 --squash" WN_MERGE_READ_BUDGET_SECONDS=08
+expect_allow "a budget with a leading zero is read in base ten, not crashed on"
+pr_json "Add the Acme-HQ reader" "Adds the reader." "clean" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" WN_MERGE_READ_BUDGET_SECONDS=lots MT_GATE_READ_BUDGET_SECONDS=lots
+expect_deny "a budget that is not a number never opens the gate" "title:1: a work organisation name"
+# The cap is held below the timeout the gate is registered with, less the seconds the work
+# repository list is given after it: a gate killed at its timeout gives no verdict of its own. All
+# three numbers are settings, not measured. The cap and the list's seconds are read from the gate
+# (READ_CAP, LIST_SECONDS) and the timeout from settings.hooks.json, which the gate never reads, so
+# this is the check that fails when either of the gate's numbers grows past it (claude-config#2243,
+# L721).
+. "$HOOK_DIR/lib/settings-file.sh"
+timeout="$(jq -r '[.. | objects | select((.command? // "") | endswith("/check-work-names-merge.sh")) | .timeout] | first // empty' "$(hook_settings_file "$HOOK_DIR/..")" 2>/dev/null)"
+case "$timeout" in
+  ''|*[!0-9]*) fail "no timeout for check-work-names-merge.sh could be read from settings.hooks.json (got '$timeout')" ;;
+  *) if [ "$LIST_MOST_CAPPED" -lt "$timeout" ]; then pass; else fail "the read budget cap of $READ_CAP plus the list's $LIST_SECONDS seconds is not inside the registered timeout of $timeout"; fi ;;
+esac
 
 # 4. One pull request per command: the text read is one pull request's (claude-config#1062).
 run_hook "$MERGE 7 --squash && $MERGE 8 --squash"

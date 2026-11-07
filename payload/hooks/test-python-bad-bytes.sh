@@ -512,7 +512,8 @@ grep -q '^UNPARSED' "$WORK/marker.out" && bad "#2080 the scan read a heredoc pas
 # With lib/shell-words.py missing there is no reading of where a heredoc ends, so the scan refuses by
 # name rather than guessing; and the tree scans above fail on its exit, not only on what it printed.
 mkdir -p "$WORK/nolib"
-cp "$DIR/lib/python_c_programs.py" "$DIR/lib/shell_code_lines.py" "$WORK/nolib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/nolib" python_c_programs.py shell_code_lines.py \
+  || bad "#2147 the hook helpers could not be installed into $WORK/nolib"
 PYTHON_C_PROGRAMS_LIB="$WORK/nolib" python3 "$WORK/scan.py" "$WORK/marker/split.sh" > "$WORK/nolib.out" 2>&1
 rc=$?
 [ "$rc" = 2 ] && ok || bad "#2080 with shell-words.py missing the scan should exit 2, exited $rc: $(tr '\n' '|' < "$WORK/nolib.out")"

@@ -860,6 +860,34 @@ for script in "$DIR/../skills/milestone/create-milestone.sh" "$DIR/../skills/pla
     fail=$((fail + 1)); echo "FAIL: #536 $(basename "$script") files issues without the session line"; fi
 done
 
+# ============================ a redirection in front of gh (claude-config#2235) ============================
+# The shell takes a redirection out of a command before it finds the name, so `2>/dev/null gh issue
+# create` files an issue. The scan cut it into `2`, `>`, `/dev/null` and wrote the words back quoted,
+# so the gate read a command named 2 and let an unmilestoned create through. Each case is also run
+# through a copy of the hooks whose reader reads the redirection the old way, which must let it
+# through, so every case is one the fix decides.
+for v in rejoin glue; do
+  if python3 -B "$DIR/lib/loose-reader.py" "$DIR" "$TMP_DIR/loose-$v" "$v"; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: #2235 the $v copy of the hooks could not be made"; fi
+done
+redirected() { # redirected <description> <command> <loose copy>...
+  local name="$1" cmd="$2" v out
+  shift 2
+  denies "#2235 $name" "$cmd"
+  for v in "$@"; do
+    out="$(HOOK="$TMP_DIR/loose-$v/require-issue-fields.sh" run "$cmd")"
+    if [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
+      fail=$((fail + 1)); echo "FAIL: #2235 the $v copy should let it through, or the case decides nothing: $name"; fi
+  done
+}
+redirected "no milestone, behind an error redirection" "2>/dev/null gh issue create --title \"T\" $P $C" rejoin glue
+redirected "no priority, behind an output redirection" "> /dev/null gh issue create --title \"T\" $M $C" rejoin
+redirected "no category, behind input" "</dev/null gh issue create --title \"T\" $M $P" rejoin
+redirected "no milestone, behind an assignment and a redirection" "A=1 2>&1 gh issue create --title \"T\" $P $C" rejoin glue
+redirected "no milestone, in a later segment behind a redirection" "true && 2>/dev/null gh issue create --title \"T\" $P $C" rejoin glue
+allows "#2235 control: a complete create behind a redirection" "2>/dev/null gh issue create --title \"T\" $ALL"
+allows "#2235 control: a number then a space runs a command named 2" "2 >/dev/null gh issue create --title \"T\" $P $C"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

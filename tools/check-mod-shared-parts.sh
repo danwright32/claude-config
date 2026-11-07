@@ -92,7 +92,12 @@
 #             by hand (instanceof TypeError anywhere)          five mods each read absence their own way,
 #                                                               and each took a member missing from an older
 #                                                               copy of the provider for the mod being absent)
-#   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#   engine-prefix                                               errorText(err, mod), which says it in words
+#             reading the engine's "<mod>: $.noun.member: "    without the prefix, and errorCode(err) for
+#             prefix off an error (a pattern on ': \$\.')       a caller deciding by its code (#2150: auto
+#                                                               session name stripped it alone, every other
+#                                                               mod showed it to Dan)
+#   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
 #                                                               cannot land (#939) is never answered by a
@@ -148,7 +153,11 @@
 # is not a read, and passes. And a third (#2039), the catch: a hook registered with
 # `.catch(($, e, next) => ...)` answers straight through neverThrows from hooks/mod-kit/hold.ts on
 # that line, since a catch that throws is a guard failing open; only the replay of a call already
-# passed on may sit outside it, as `next.called ? next(e) : neverThrows(...)`.
+# passed on may sit outside it, as `next.called ? next(e) : neverThrows(...)`. A catch that judges
+# the call once more does that inside the 1,000 ms grace the engine gives a catch, and a catch cut at
+# the grace lets the call run, so a rerun straight inside neverThrows, `neverThrows(() => hook($, e,
+# next), ...)`, fails: it starts through withinGrace from the same hold.ts, which holds the call when
+# too little of the grace is left (ask before saving's rerunInGrace in its rules.ts, tested there).
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -213,6 +222,9 @@ PARTS=(
   "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
   "missing-reader|instanceof TypeError|missingOf(err) (errorText, skewNews) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts"
   "input-reader|of [^ ;()]*\\.inputs\\)|inputTexts from the copy of hooks/inputs.ts kept at hooks/mod-kit/inputs.ts, which never opens a device or a fifo"
+  # #2150: a pattern reading the engine's "<mod>: $.noun.member: " prefix off an error. errorText says
+  # such a failure in words without it, and errorCode gives its code to a caller deciding by it.
+  "engine-prefix|: \\\\\\\$\\\\\\.|errorText(err, mod) (errorCode(err) for its code) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts, which says an engine call's failure in words without its prefix"
 )
 
 n=0
@@ -350,6 +362,18 @@ for d in "$dir"/*/; do
     failed=1
     echo "check-mod-shared-parts: $name keeps its own catch at ${h#"$sd"}: a guard's catch that throws holds nothing, so answer straight through neverThrows(work, fallback, last), with only a replay after next() allowed outside it as next.called ? next(e) : neverThrows(...), from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, on the catch's own line."
   done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit '\.catch\((async )?\(\$' "$sd/hooks" 2>/dev/null | grep -vE '\.catch\((async )?\(\$[^)]*\) *=> *(next\.called \? next\(e\) : )?neverThrows\(')"
+  # grace (#2039): a catch that judges the call once more, `neverThrows(() => hook($, e, next), ...)`,
+  # runs the hook's whole judgement inside the 1,000 ms the engine gives a catch (its next.budget,
+  # read 2026-11-05), and a catch cut at
+  # that grace lets the call RUN. So such a rerun starts only through withinGrace from the same copy
+  # of hold.ts, which holds the call when too little of the grace is left, or through a function of
+  # the guard's own built on it (ask before saving's rerunInGrace). A catch answering only a refusal
+  # does no slow work and is not matched.
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    echo "check-mod-shared-parts: $name reruns its hook in a catch at ${h#"$sd"} with no check of the time left: a catch cut at its 1,000 ms grace lets the call run, so start the rerun through withinGrace(next.budget, () => hook(\$, e, next), outOfTime) from the copy of hooks/hold.ts kept at hooks/mod-kit/hold.ts, with outOfTime refusing in the guard's own could not check words."
+  done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit 'neverThrows\((async )?\(\) *=> *[A-Za-z_][A-Za-z0-9_]*\(\$, *e, *next\)' "$sd/hooks" 2>/dev/null)"
   # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
   # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review
   # of #957). A click alone reaches such a hook; mod-kit's typed /press raises modkit.press, which it

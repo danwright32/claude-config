@@ -26,7 +26,8 @@ of lessons are written in, and `name#N` is what lesson-fanout.sh parses to skip 
 lesson came from. The same login without its hyphen is a different GitHub account, and the
 company's public web domain, so it is not one either (in published text it is matched as a domain
 only, see TWO MORE SOURCES below, claude-config#2184). These are decisions recorded on #1568's pull
-request, not omissions, and they still hold for files. The exceptions are text that is published
+request, not omissions, and they still hold for files, save the two published documents (THE TWO
+PUBLISHED DOCUMENTS below, claude-config#2252). The other exceptions are text that is published
 without being a file: the publish gate (work_names_publish_gate.py, claude-config#2105) checks public
 pull request and issue text against the work repository names as well, and --work-repos does the
 same for commit messages (claude-config#2111, below). Both read the list through work_repo_names
@@ -55,12 +56,25 @@ TWO MORE SOURCES FOR PUBLISHED TEXT (claude-config#2184). The #2110 scrub found 
 neither the list nor the registry holds, so --work-repos and the publish gate also take:
   projects   every project folder on the work MacBook's project list, the "On Dans-MacBook-Pro"
              block of the Projects section in the global CLAUDE.md (read by work_mac_projects, two
-             directories above this file both in the repository and installed). A CLAUDE.md that
-             cannot be read, has no such section or block, or lists no project there is refused.
+             directories above this file both in the repository and installed). Since #2112 that
+             block lists none in the public file, so the names are matched through WORK_PROJECTS,
+             their sha256 hashes, built and matched as BUILT_IN is, and taken whenever the block
+             itself lists no project; where the block imports projects.local.txt and that file is
+             beside the CLAUDE.md (the work MacBook only), its entries are matched too. A CLAUDE.md
+             that cannot be read or has no such section or block is refused, and so is a list
+             yielding neither a name nor a hash.
   domains    a built in organisation's login without its hyphens, which is its web and email domain,
              matched only as a domain: after an @, or before a dot and a top level domain. As a bare
              word it stays prose, as #1568 decided, since the same letters can be an ordinary word.
-             A project folder that is such a login is judged by this rule, not as a bare name.
+             A project folder that is such a login is a project all the same, and is refused as a
+             plain word as every project is (claude-config#2190).
+
+THE TWO PUBLISHED DOCUMENTS (claude-config#2252). README.md and DESIGN.md at the root are the manual
+and the design record, read by strangers before anything else, and once named the work MacBook's
+projects in dated anecdotes. The file scan holds those two, and only those, to WORK_PROJECTS and to
+the domain rule as well, so a new mention there is refused by the tree suite (before every push and
+in CI) rather than found by a sweep. It uses the committed hashes only, never the live list or this
+Mac's projects.local.txt, so CI judges them exactly as a Mac does. Every other file keeps #1568's rule.
 
 Usage:
   work-names.py [--root DIR] [--files0-from FILE|-] [PATH ...]
@@ -72,8 +86,13 @@ to read it; with --work-repos also the list unreadable or its time budget spent)
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
-WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
-WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from.
+Both are honoured only under HOOK_TESTS_RUNNING=1 (claude-config#2231), as below.
+WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from, honoured only
+under HOOK_TESTS_RUNNING=1 too.
+WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30), is not a
+test setting: the merge gate hands in what is left of its timeout. It may only shorten the default.
+WORK_NAMES_PROJECT_HASHES, comma separated sha256 hex replacing WORK_PROJECTS (empty means none),
+honoured only under HOOK_TESTS_RUNNING=1, so no real run can empty the committed set.
 """
 import hashlib
 import json
@@ -87,6 +106,23 @@ BUILT_IN = {
     "91bb8dd6329de4f774a80b5431e2eaa984575662c24063fd0e6672a0c8d6fc2b",  # the work organisation
     "1c166f0036586d4969300ad3475ac491b1f7f09459cb89882da389836bd820af",  # the agency organisation that holds the website
 }
+# The work MacBook's project folders (claude-config#2112), held ONLY as sha256 hashes of their lower
+# case names, as BUILT_IN holds the organisations, since the public CLAUDE.md no longer lists them.
+# Built from the last CLAUDE.md block that did, by the same reading work_mac_projects does, every
+# folder included: the one spelled as an organisation's login without its hyphens is a project too,
+# refused as a plain word as well as a domain (claude-config#2190). tests/test-work-names-tree.sh
+# checks this set against that block in history.
+WORK_PROJECTS = {
+    "305788032b694143d7dfcf4dd1225d397186663127ecd2f0b3246200344a42bc",  # a work MacBook project
+    "5d093d8dbf4080f6854ad3c1f6249e765160cf6825defc6a63be240afa75adee",  # a work MacBook project
+    "b62f3b3b1b40cb86438bf4d2affd121f9518814e713d3df7d4c193b2168f28fc",  # a work MacBook project
+    "bbba57318f71911354fdaab5d67ea8c352bfe113231e968a9ac1f4cf5b38e546",  # a work MacBook project
+    "d6386c59a6bcfcb1e4ced6beeb4594757afaa891ac805388076d0c83d2f5260a",  # a work MacBook project
+    "eb54300f6828b72efe018d2575f8189ebcc6e0f152afa14d00c6a7382de14171",  # a work MacBook project
+}
+# The two documents at the root a stranger reads first, which the file scan holds to the hashed
+# projects and the domains as well (claude-config#2252), as paths relative to the root.
+PUBLISHED_DOCS = ("README.md", "DESIGN.md")
 TOKEN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 # The one remedy, said the same for a file and for a message (claude-config#1995).
 REMEDY = ("Replace the organisation with an invented one in a fixture, or drop it from prose and "
@@ -107,6 +143,10 @@ PROJECTS_SECTION = re.compile(r"^## Projects[ \t]*$(.*?)(?=^## |\Z)", re.M | re.
 WORK_BLOCK = re.compile(r"^On %s(?: \([^)\n]*\))?:[ \t]*\n((?:[ \t]*\n)*(?:- .*(?:\n|\Z))*)"
                         % re.escape(WORK_MAC), re.M)
 ENTRY = re.compile(r"^- `([^`]+)`", re.M)
+# The work MacBook's own list (claude-config#2112): a block importing it inside a sentence means the
+# file of that name beside the CLAUDE.md read, which exists on that Mac only.
+LOCAL_IMPORT = re.compile(r"\S @projects\.local\.txt")
+LOCAL_LIST = "projects.local.txt"
 # A word written as a domain: after an @, or before a dot and a top level domain, never inside a
 # longer hyphenated run (that run is the Matcher's). 39 is GitHub's longest login.
 DOMAIN_AT = re.compile(r"@([a-z0-9]{2,39})(?![a-z0-9-])")
@@ -117,9 +157,44 @@ def sha(s):
     return hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def under_test():
+    """True only under the hooks' own test runner, which exports HOOK_TESTS_RUNNING=1 to every suite
+    (run-all-tests.sh). The gates that ask this scanner read Claude Code's own environment, so every
+    test setting here is honoured only with it (claude-config#2217, #2231)."""
+    return os.environ.get("HOOK_TESTS_RUNNING") == "1"
+
+
+REPOS_BUDGET_CAP = 30
+
+
+def repos_budget():
+    """-> the seconds a --work-repos run may spend on GitHub, or raises ValueError. Not a test
+    setting: check-work-names-merge.sh hands in what is left of its own timeout, so it is honoured
+    always, but only to SHORTEN the default (claude-config#2231): a longer one named in Claude Code's
+    environment would hold the scan past the calling hook's timeout, where it gives no verdict. The
+    cap is the default, a setting, not measured. Anything but a finite number is refused, never
+    believed, and main() refuses the message check for it."""
+    raw = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS")
+    if not raw:
+        return REPOS_BUDGET_CAP
+    value = float(raw)
+    if value != value:
+        raise ValueError("WORK_NAMES_REPOS_BUDGET_SECONDS is not a number")
+    return min(value, REPOS_BUDGET_CAP)
+
+
 def extra_hashes():
-    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "")
+    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "") if under_test() else ""
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def project_hashes():
+    """The hashed work MacBook projects: WORK_PROJECTS, or in a test run only (HOOK_TESTS_RUNNING=1)
+    the comma separated WORK_NAMES_PROJECT_HASHES when it is set, where empty means none."""
+    if under_test() and "WORK_NAMES_PROJECT_HASHES" in os.environ:
+        raw = os.environ["WORK_NAMES_PROJECT_HASHES"]
+        return {h.strip().lower() for h in raw.split(",") if h.strip()}
+    return set(WORK_PROJECTS)
 
 
 def hyphenless(word, hashes):
@@ -142,7 +217,9 @@ def registry_entries(timeout=60):
     publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it;
     the gate passes what is left of its own time budget as timeout.
     """
-    reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
+    # A reader named in the environment, which could answer "nothing registered" on every real run,
+    # is asked only under test (claude-config#2231).
+    reader = (under_test() and os.environ.get("WORK_NAMES_REGISTRY_READER")) or os.path.join(HERE, "dev-update-registry.js")
     try:
         p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=timeout, errors="replace")
     except FileNotFoundError:
@@ -245,10 +322,13 @@ class GitHub:
 
 
 def work_mac_projects():
-    """-> [lower case folder name] of each project on the work MacBook's project list, or raises
-    CannotTell (claude-config#2184). Never empty: a list with no project is refused, never clean."""
-    path = os.environ.get("WORK_NAMES_PROJECT_LIST") or os.path.normpath(
-        os.path.join(HERE, "..", "..", "CLAUDE.md"))
+    """-> ([lower case folder name], {sha256 of one}) for the work MacBook's projects, or raises
+    CannotTell (claude-config#2184). The names are the block's entries and, when the block imports
+    that Mac's projects.local.txt, that file's entries where it exists; the hashes are
+    project_hashes(), taken when the block itself lists no project (claude-config#2112). Never both
+    empty: a list with no project is refused, never clean."""
+    named = os.environ.get("WORK_NAMES_PROJECT_LIST") if under_test() else None
+    path = named or os.path.normpath(os.path.join(HERE, "..", "..", "CLAUDE.md"))
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -265,14 +345,29 @@ def work_mac_projects():
                          "project list could not be read and its projects could not be checked"
                          % (path, WORK_MAC))
     names = []
-    for entry in ENTRY.findall(block.group(1)):
-        name = os.path.basename(entry.strip().rstrip("/")).strip().lower()
-        if name and name not in names:
-            names.append(name)
-    if not names:
+
+    def add(entries):
+        for entry in entries:
+            name = os.path.basename(entry.strip().rstrip("/")).strip().lower()
+            if name and name not in names:
+                names.append(name)
+
+    add(ENTRY.findall(block.group(1)))
+    hashes = set() if names else project_hashes()
+    if LOCAL_IMPORT.search(block.group(1)):
+        local = os.path.join(os.path.dirname(path), LOCAL_LIST)
+        try:
+            with open(local, encoding="utf-8", errors="replace") as fh:
+                add(ENTRY.findall(fh.read()))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise CannotTell("the work MacBook's own project list (%s) is there but could not be read "
+                             "(%s), so its projects could not be checked" % (local, e.strerror or e))
+    if not names and not hashes:
         raise CannotTell("the work MacBook's project list in %s lists no project, and an empty project "
                          "list is never read as clean" % path)
-    return names
+    return names, hashes
 
 
 def work_repo_names(github):
@@ -280,7 +375,7 @@ def work_repo_names(github):
     registry and the work MacBook's project list, or raises CannotTell. Odd names are those that are
     not one plain token (a dot in them), which the Matcher cannot hold and odd_hit finds instead. The
     Matcher also finds an organisation's domain (claude-config#2184)."""
-    projects = work_mac_projects()
+    projects, hashed_projects = work_mac_projects()
     raw, last = None, ""
     for tok in github.tokens():
         ok, out, err = github.run(["gh", "api", "-H", "Accept: application/vnd.github.raw",
@@ -316,12 +411,13 @@ def work_repo_names(github):
     owners = {o for o, _ in pairs}
     every = owners | {n for _, n in pairs if n}
     hashes = BUILT_IN | extra_hashes()
-    # A project folder that is an organisation's login without its hyphens is that organisation's
-    # domain, which the Matcher's domain rule judges; as a bare word it stays prose (#2184).
-    every |= {p for p in projects if not hyphenless(p, hashes)}
+    # Every project folder is a name, the one spelled as an organisation's login without its hyphens
+    # included: it is a work project, so it is refused as a plain word too, not only as a domain
+    # (claude-config#2190, reversing #2184 for project folders only).
+    every |= set(projects)
     plain = {n for n in every if TOKEN.fullmatch(n)}
     odd = sorted(every - plain)
-    return Matcher(hashes, set(), plain, domains=True), owners, odd
+    return Matcher(hashes, set(), plain, domains=True, project_hashes=hashed_projects), owners, odd
 
 
 def odd_hit(text, odd):
@@ -337,13 +433,17 @@ class Matcher:
     the send scan never pass any; work_repo_names passes the work repository names, for the publish gate
     (claude-config#2105) and --work-repos (#2111), which depart from #1568 for text that is published
     without being a file, see DESIGN.md. domains: also find a hashed login without its hyphens
-    written as a domain (claude-config#2184), passed by work_repo_names only, never for files."""
+    written as a domain (claude-config#2184), passed by work_repo_names and, among files, for
+    README.md and DESIGN.md at the root only (claude-config#2252), never for any other file.
+    project_hashes: sha256 of further names matched as names are (the hashed work MacBook projects,
+    claude-config#2112), kept apart from hashes, which the publish gate reads as organisations."""
 
-    def __init__(self, hashes, owners, names=frozenset(), domains=False):
+    def __init__(self, hashes, owners, names=frozenset(), domains=False, project_hashes=frozenset()):
         self.hashes = hashes
         self.owners = owners
         self.names = names
         self.domains = domains
+        self.project_hashes = project_hashes
         self.cache = {}
 
     def domain(self, text):
@@ -381,7 +481,7 @@ class Matcher:
                 if run in self.owners:
                     found = ("a name from this Mac's dev update registry", run)
                     break
-                if run in self.names:
+                if run in self.names or (self.project_hashes and sha(run) in self.project_hashes):
                     found = ("a work repository or owner name", run)
                     break
             if found:
@@ -448,9 +548,8 @@ def main(argv):
                 "never reads the work repository list (claude-config#1568).")
         if isinstance(texts, str):
             die("the text stream could not be read: %s, so its messages could not be checked." % texts)
-        budget = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS") or 30
         try:
-            matcher, owners, odd = work_repo_names(GitHub(budget, "the work name check"))
+            matcher, owners, odd = work_repo_names(GitHub(repos_budget(), "the work name check"))
         except (CannotTell, ValueError) as e:
             die("%s. A message that cannot be checked is not a clean one." % e)
         hits = []
@@ -458,7 +557,7 @@ def main(argv):
             scan_text(text, label, matcher, hits, odd)
         sentence = ("the work organisation names and domains and %d work repository and owner names "
                     "from the work repository list, this Mac's dev update registry and the work "
-                    "MacBook's project list" % (len(matcher.names) + len(odd)))
+                    "MacBook's project list" % (len(matcher.names) + len(odd) + len(matcher.project_hashes)))
         return report(hits, [], len(texts), "message", sentence, REPO_REMEDY)
 
     owners, sentence = read_registry()
@@ -478,6 +577,9 @@ def main(argv):
         return 0
 
     matcher = Matcher(BUILT_IN | extra_hashes(), owners)
+    # README.md and DESIGN.md at the root also match the hashed projects and the domains (#2252).
+    projects = frozenset(project_hashes())
+    docs = Matcher(BUILT_IN | extra_hashes(), owners, domains=True, project_hashes=projects)
     hits = []
     unreadable = []
     if texts is not None:
@@ -486,15 +588,28 @@ def main(argv):
         for label, text in texts:
             scan_text(text, label, matcher, hits)
         return report(hits, [], len(texts), "message", sentence)
+    saw_doc = False
     for f in files:
         path = os.path.join(root, f) if root and not os.path.isabs(f) else f
         if os.path.isdir(path):
             continue
+        doc = published_doc(f, root)
+        saw_doc = saw_doc or doc
         try:
-            scan_file(path, f, matcher, hits)
+            scan_file(path, f, docs if doc else matcher, hits)
         except OSError as e:
             unreadable.append("%s (%s)" % (f, e.strerror or e))
+    if saw_doc:
+        sentence += (", and %d hashed work MacBook project%s in %s, with the work organisations' web "
+                     "and email domains" % (len(projects), "" if len(projects) == 1 else "s",
+                                            " and ".join(PUBLISHED_DOCS)))
     return report(hits, unreadable, len(files), "file", sentence)
+
+
+def published_doc(f, root):
+    """True when the listed file is README.md or DESIGN.md at the root (claude-config#2252)."""
+    rel = os.path.relpath(f, root) if root and os.path.isabs(f) else f
+    return os.path.normpath(rel) in PUBLISHED_DOCS
 
 
 def read_texts(raw):

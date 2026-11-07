@@ -67,6 +67,8 @@ import {
   unsure,
   unreadable,
   commentOnlyChange,
+  logicOnlyChange,
+  autoPassWhy,
   shellUnread,
   bracketsOpen,
   namedByIssue,
@@ -1817,6 +1819,72 @@ test('#1341: in TSX, a JSX comment is a comment, and JSX text or a quoted prop s
   expect(commentOnlyChange(noted, noted.replace('who', 'whom'), true)).toBe(true)
 })
 
+// #2294: Dan, 2026-11-05: "if nothing on screen changes, why even ask me to skip". An app's React
+// screen file changed only in its logic is let through by the guard's own reading of the edit, never by
+// a session saying so; anything that can be text, a look or a class on screen is still held.
+const OFFERS_PAGE = `import { useState } from 'react'
+import { Card } from '@/components/card'
+
+// The offers a person was made.
+export default function Page({ offers }: { offers: Offer[] }) {
+  const [open, setOpen] = useState(false)
+  const visible = offers.filter(o => o.active)
+  if (!visible) return null
+  return (
+    <Card>
+      <h1>Your offers</h1>
+      {visible.map(o => <Row key={o.id} offer={o} />)}
+    </Card>
+  )
+}
+`
+test('#2294: a logic only change to an app screen file passes; text, JSX, styles, numbers, booleans, comments, style or side effect imports and a swapped import are held', () => {
+  const logic = (from: string, to: string) => {
+    const after = OFFERS_PAGE.replace(from, to)
+    expect(after).not.toBe(OFFERS_PAGE)
+    return logicOnlyChange(OFFERS_PAGE, after)
+  }
+  const imported = "import { Card } from '@/components/card'\nimport { byDate } from '@/lib/sort'\n"
+  // Let through: a condition, a new import from a new module with its use, a type renamed.
+  expect(logic('o => o.active)', 'o => o.active && !o.expired)')).toBe(true)
+  expect(logic("import { Card } from '@/components/card'\n", imported)).toBe(true)
+  expect(logicOnlyChange(OFFERS_PAGE, OFFERS_PAGE.replace("import { Card } from '@/components/card'\n", imported).replace('o.active)', 'o.active).sort(byDate)'))).toBe(true)
+  expect(logic('offers: Offer[]', 'offers: OfferRow[]')).toBe(true)
+  expect(logic('if (!visible) return null', 'if (!visible.length) return null')).toBe(true)
+  // Held: an import swapped for another, which may change a component.
+  expect(logic("'@/components/card'", "'@/components/card2'")).toBe(false)
+  // Held: a number, a boolean, a comment, a string, an error's message.
+  expect(logic('o => o.active)', 'o => o.active).slice(0, 5)')).toBe(false)
+  expect(logic('useState(false)', 'useState(true)')).toBe(false)
+  expect(logic('// The offers a person was made.', '// The offers made to a person.')).toBe(false)
+  expect(logic('o => o.active)', "o => o.status === 'active')")).toBe(false)
+  expect(logic('if (!visible) return null', "if (!visible) throw new Error('No offers')")).toBe(false)
+  // Held: a style file or a side effect import, which change the page with no word on it.
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport './page.css'\n")).toBe(false)
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport '@/lib/polyfill'\n")).toBe(false)
+  expect(logic("import { useState } from 'react'\n", "import { useState } from 'react'\nimport styles from './page.module.scss'\n")).toBe(false)
+  // Held: a line naming a look, a class helper or a colour.
+  expect(logic('  const visible', '  const styles = pick(offers)\n  const visible')).toBe(false)
+  expect(logic('  const visible', '  const k = cn(offers)\n  const visible')).toBe(false)
+  expect(logic('  const visible', '  const tone = offers.length ? good : bad\n  const visible')).toBe(false)
+  // Held: JSX touched, even only in an expression inside it; a template literal.
+  expect(logic('<h1>Your offers</h1>', '<h2>Your offers</h2>')).toBe(false)
+  expect(logic('key={o.id}', 'key={o.ref}')).toBe(false)
+  expect(logic('  const visible', '  const k = `${a}${b}`\n  const visible')).toBe(false)
+  // Held: a text the reader cannot follow, before or after.
+  expect(logic('o => o.active)', "o => o.active, 'open)")).toBe(false)
+  const broken = OFFERS_PAGE.replace('</Card>', '')
+  expect(logicOnlyChange(broken, broken.replace('o.active)', 'o.active && o.live)'))).toBe(false)
+  // No change at all is not judged as one.
+  expect(logicOnlyChange(OFFERS_PAGE, OFFERS_PAGE)).toBe(false)
+})
+
+test('#2294: an automatic pass says what it let through and why, citing the issue', () => {
+  const why = autoPassWhy(['src/app/offers/page.tsx'])
+  expect(why).toContain('src/app/offers/page.tsx')
+  expect(why).toContain('#2294')
+})
+
 test('#1576: a mod hook file a shell write cannot be judged after, since it could not be read first, is said so with why', () => {
   const said = shellUnread('payload/mods/demo/hooks/register.tsx', 'EACCES')
   expect(said).toContain('payload/mods/demo/hooks/register.tsx')
@@ -2334,4 +2402,41 @@ test('#2161: an index by a number or another quoted key is no read of a reason k
   const exported = swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed =')
   for (const expr of ['line[0]', "P['text']", 'P["text"]'])
     expect([expr, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)]).toEqual([expr, 'passes'])
+})
+
+// #2223: reading a mod hook file costs time in step with its size. Every edit to a 180 KB hook file
+// took about a second through the hook on a quiet Mac, and past five seconds under load, because
+// readMod and drawnOf scanned the whole file again once for each function, local and call in it.
+// Judged by growth between two sizes of the same code, never by a wall clock budget: four times the
+// file took about eleven times as long before the fix; in step with size it is about four.
+test('#2223: four times as much mod hook code takes under six times as long to read (it took about eleven)', () => {
+  const chunk = (i: number) => [
+    `const pick${i} = (rows: string[]) => rows.map(r => r.trim()).filter(r => r.split(',').length > 1 && r !== 'none')`,
+    `const show${i} = async ($: any, rows: string[]) => {`,
+    `  const names = pick${i}(rows).map((r, k) => { const head = r.slice(0, 4); return head + k })`,
+    `  if (names.some(x => x.startsWith('tmp'))) return`,
+    `  for (const x of names) await $.process.run(['git', 'log', '--format=%H', x])`,
+    `  $.ui.toast(\`Saved \${names.length} rows\`)`,
+    '}',
+    '',
+  ].join('\n')
+  const file = (n: number) =>
+    "import type { Register } from 'claude-code'\n" + Array.from({ length: n }, (_, i) => chunk(i)).join('') +
+    "export const register: Register = on => {\n  on('tool.call', async ($, e) => { await show0($, []) })\n}\n"
+  const timed = (n: number) => {
+    const before = file(n)
+    const after = before.replace('rows.map(r => r.trim())', 'rows.map(r => r.trim() + "")')
+    let best = Infinity
+    for (let i = 0; i < 3; i++) {
+      const start = performance.now()
+      expect(modHookTsHold([], 'rows.ts', before, after)).toBeUndefined()
+      best = Math.min(best, performance.now() - start)
+    }
+    return best
+  }
+  timed(10)
+  const small = timed(100)
+  const large = timed(400)
+  expect(small).toBeGreaterThan(0)
+  expect({ ratio: Math.round((large / small) * 10) / 10, under: large / small < 6 }).toEqual({ ratio: expect.any(Number), under: true })
 })

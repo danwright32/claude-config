@@ -123,6 +123,63 @@ want_finding "a markdown line carrying a phrase is a finding" "$out" "docs/notes
 out="$(detect_file docs/notes.md $'Accepted, for now, with the trade stated (#77).\n')"
 want_clean "a markdown line with its issue number is clean" "$out"
 
+# A phrase QUOTED as the subject of a sentence is a mention, not a deferral (claude-config#2133):
+# the README mods table names the words a mod listens for, and had to split them across two lines
+# to get past this check. Only a short span (six words at most) inside backticks or double quotes
+# closed on the same line is skipped; every way around that is still a finding.
+out="$(detect_file docs/notes.md $'The mod skips a limit ("for now", "today", "this session").\n')"
+want_clean "a phrase inside double quotes is a mention" "$out"
+out="$(detect_file docs/notes.md $'Dan\'s "read only for now" turns the mode on.\n')"
+want_clean "a short double quoted span holding the phrase is a mention" "$out"
+out="$(detect_file docs/notes.md $'The mod listens for `for now` as a limit.\n')"
+want_clean "a phrase inside backticks is a mention" "$out"
+out="$(detect_file a.ts $'const a = 1; // listens for "for now" and `follow up` as limits\n')"
+want_clean "a quoted phrase in a code comment is a mention" "$out"
+out="$(detect_file docs/notes.md $'The mod listens for the limit, for now.\n')"
+want_finding "the same words as plain prose are still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Leave the "retry" flag off for now.\n')"
+want_finding "a deferral beside a short quoted word elsewhere is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Leave the `retry` flag off for now.\n')"
+want_finding "a deferral beside a short backticked word elsewhere is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted "for now, with the trade stated.\n')"
+want_finding "an unclosed double quote hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted `for now, with the trade stated.\n')"
+want_finding "a lone backtick hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted "for now, with\nthe trade stated".\n')"
+want_finding "a double quote closed only on the NEXT line hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Accepted `for now, with\nthe trade stated`.\n')"
+want_finding "a backtick closed only on the NEXT line hides nothing" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'The note says "we will wire the retry properly for now and tidy it".\n')"
+want_finding "a quoted span longer than six words is judged, so a quoted deferral sentence is still a finding" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Use a 5" pipe, for now, then "the long one".\n')"
+want_finding "an inch mark straight after a digit opens no span, so it cannot pair with a later quote" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'Keep the x"for now"y flag off.\n')"
+want_finding "a quote run into the words either side is not a mention" "$out" "docs/notes.md:1: for now:"
+out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
+want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
+# The real case: the README mods table rows that had to split the phrase across two lines to get
+# past this check (#2123). Each row's line is found by text it holds split or whole, and is judged
+# joined to the line after it, the shape a rejoin gives it, so these real words are held clean
+# before and after the README is rejoined (L48). A reworded row fails here rather than passing a
+# scan of nothing.
+README_FILE="$DIR/../../README.md"
+for needle in 'not when it limits it ("for' '"stay read only", "read only for'; do
+  n="$(grep -n -m 1 -F -- "$needle" "$README_FILE")"
+  n="${n%%:*}"
+  if [ -z "$n" ]; then
+    check "README still holds the row quoting the limit phrase: $needle" "line not found in README.md"
+    continue
+  fi
+  joined="$(sed -n "${n}p;$((n + 1))p" "$README_FILE")"
+  joined="${joined//$'\n'/ }"
+  case "$joined" in
+    *'"for now"'*|*'"read only for now"'*) ;;
+    *) check "README line $n joined to the next quotes the phrase whole" "it does not: $joined"; continue ;;
+  esac
+  out="$(detect_file README.md "$joined")"
+  want_clean "the real README line $n, joined to the next, quotes the phrase as a mention" "$out"
+done
+
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
 want_finding "matching is case insensitive" "$out" "todo"
@@ -385,7 +442,8 @@ want_rc 0 "push hook: a command that merely mentions a push is ignored"
 # copy of itself whose lib/ holds no detector.
 mkdir -p "$WORK/nolib/lib"
 cp "$PUSH_HOOK" "$WORK/nolib/check-deferrals.sh"
-cp "$DIR/lib/push-scope.sh" "$WORK/nolib/lib/push-scope.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/nolib/lib" push-scope.sh \
+  || check "#2204 push-scope.sh could be installed into the copy with no detector" "the install refused"
 W="$(mk_repo p12)"
 commit_file "$W" src/a.ts $'// TODO wire the retry\n'
 p="$(HK_CMD="git push" HK_CWD="$W" python3 -c 'import json,os,sys
