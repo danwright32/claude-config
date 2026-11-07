@@ -6235,7 +6235,8 @@ again. A `${...}` that JavaScript writes as text (in single or double quotes, or
 template) may stand in the message shown, since that is how it posts; one filled at run time may
 not. A
 shell command writing into such a file is held as a whole command, since the wording it leaves
-cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
+cannot be read before it runs; Dan's answer is kept by the command and the files it writes, so the
+same command run again by a resumed agent or from another folder goes through (#2371). A subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
 written by a call. A template whose own file has no Slack marker (a code file, or a text template
 such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
@@ -6244,8 +6245,12 @@ relative import, or its python module, on a line that imports or reads it (a pat
 as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
 sender. A
 module is held too when a file that imports it also imports a Slack send helper (a copy builder
-such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender. The search is one `git grep` for files holding both the template's name and the word
-slack or postMessage, then a read of each, all within 3 seconds per call, following files that
+such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender; the
+helper is found by the path the import names. The search is one `git grep` for files holding the
+word slack or postMessage and the template's name in a form a reference takes (after a slash, as a
+file name with its extension, after its folder and a dot, or on a python import line, never a word
+the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
+each, all within 3 seconds per call, following files that
 re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,

@@ -334,6 +334,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     const w = await $.modkit.writes({ command, cwd, home })
     // One search deadline for the whole call, set when the first search starts.
     let deadline: number | undefined
+    const key = shellKey(command, w.files.flatMap(f => (f.path === undefined ? [] : [f.path])))
     for (const f of w.files) {
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
@@ -343,7 +344,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       // A code file or a text template (#2248), in a git repository and no test: held when it posts to
       // Slack itself or another file in its repository sends it there.
       if (!code && !textTemplate(f.path)) continue
-      const keys = await unapproved($, [shellKey(cwd, command)])
+      const keys = await unapproved($, [key])
       if (!keys.length) return PASS
       deadline ??= (await $.clock.now()) + SCAN_MS
       const found = await findSender($, f.path, deadline, code && slackMarked(text))

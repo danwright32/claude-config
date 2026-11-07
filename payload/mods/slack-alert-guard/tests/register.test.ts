@@ -651,6 +651,39 @@ test('a shell write into a Slack posting file is held until Dan approves it, the
   expect(w.ran.map(x => x.tool)).toEqual(['Bash', 'Bash'])
 })
 
+test('a shell write Dan approved keeps its approval when a resumed agent, or the session from another folder, runs the same command again (Dan item 4)', withKit, async ($, on) => {
+  const w = world($, on)
+  const cmd = { tool: 'Bash', command: `printf 'notify("Disk is full")\\n' >> ${ALERT}` }
+  // A subagent's write is held; the main session asks Dan, and he approves.
+  const held = refusalOf(await call($, { ...cmd, agentId: 'agent-a1' }))
+  const id = /call (t\d+) waits on Dan/.exec(held)?.[1]
+  expect(id).toBeDefined()
+  await ask($, w, `slack-alert-guard:${id}`, APPROVE, { rendered: 'Disk is full on db-1' })
+  // The agent, resumed while the session is in another folder, runs the same command: it goes through.
+  w.ctl.cwd = '/w/app/lib'
+  expect(refusalOf(await call($, { ...cmd, agentId: 'agent-a1' }))).toBe('')
+  // So does the main session, from a third folder.
+  w.ctl.cwd = '/w'
+  expect(refusalOf(await call($, cmd))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test('a shell write approved in one folder is held again when, run from another, the same words write a different Slack file (Dan item 4)', withKit, async ($, on) => {
+  const WEB = '/w/app/web/lib/alert.ts'
+  const w = world($, on, { files: { [WEB]: ALERT_TEXT } })
+  const cmd = { tool: 'Bash', command: `printf 'notify("Disk is full")\\n' >> lib/alert.ts` }
+  const why = refusalOf(await call($, cmd))
+  expect(why).toContain(ALERT)
+  await ask($, w, why, APPROVE, { rendered: 'Disk is full on db-1' })
+  expect(refusalOf(await call($, cmd))).toBe('')
+  // From the web folder the same words write the web app's alert, which Dan has not approved.
+  w.ctl.cwd = '/w/app/web'
+  const again = refusalOf(await call($, cmd))
+  expect(again).toContain(WEB)
+  expect(idIn(again)).toBeDefined()
+  expect(w.ran.length).toBe(1)
+})
+
 // claude-config#2248: the wording lives in a template, and a different file sends it to Slack.
 const TEMPLATE = '/w/app/lib/templates/deploy.ts'
 const TEMPLATE_TEXT = 'export const deployFailed = (id: string) => `Deploy ${id} failed`\n'

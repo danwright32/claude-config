@@ -564,8 +564,13 @@ const hash = (text: string): string => {
 export const wordingKey = (text: string): string => `wording:${hash(text)}`
 /** Where his approval of taking text away from one file is kept: by the file and the text removed. */
 export const removalKey = (file: string, removed: string[]): string => `removal:${hash(JSON.stringify([file, [...removed].sort()]))}`
-/** Where his approval of one shell call is kept: by its folder and its whole command. */
-export const shellKey = (cwd: string, command: string): string => `shell:${hash(JSON.stringify([cwd, command]))}`
+/**
+ * Where his approval of one shell call is kept: by its whole command and the files it writes, as
+ * absolute paths, never the folder it runs from (#2371, Dan's item 4). The same command run again
+ * keeps his answer, by a resumed agent or from another folder; words that write a different file from
+ * there are another call.
+ */
+export const shellKey = (command: string, paths: string[]): string => `shell:${hash(JSON.stringify([command, [...new Set(paths)].sort()]))}`
 
 /**
  * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's
