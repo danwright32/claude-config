@@ -23,11 +23,46 @@ may_post() {
   case "$1" in *'"command"'*) text="${1#*\"command\"}" ;; esac
   [[ "$text" =~ $GH_WORD ]]
 }
-may_post "$payload" || exit 0
-
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HERE="${BASH_SOURCE[0]%/*}" ;; *) HERE=. ;; esac
 HERE="$(cd "${HERE:-/}" && pwd)"
+
+# A gh a running script makes is judged by the guard on gh (bin/gh), which gh-guard-path.sh puts
+# first on the session's PATH at its start (claude-config#2183). A session already running when that
+# shipped has no guard in front, and this hook cannot see those writes. It is not refused anything
+# more for it: refusing such scripts would stop merge-when-ready.sh, and so every merge on both Macs,
+# until each session restarted. It is told so, once, on its first command. The test is a stamp per
+# session, so every later command pays one file test; the session's env file is read only before it.
+notice=""
+sid=""
+# The payload is matched in the session's locale and then in C's (claude-config#1885), since in a
+# UTF-8 locale a byte that is not UTF-8 hides every word after it. BASH_REMATCH is the matching try's.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+SID_RE='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9-]+)"'
+payload_match "$payload" "$SID_RE" && sid="${BASH_REMATCH[1]}"
+notice_dir="${WN_SCRIPTS_NOTICE_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/work-names-scripts-notice}"
+if [ -n "$sid" ] && [ ! -e "$notice_dir/$sid" ]; then
+  env_dir="${WN_SESSION_ENV_DIR:-$HERE/../session-env}"
+  here_p="$(cd "$HERE" && pwd -P)"
+  if [ -x "$HERE/bin/gh" ] && grep -q -x -F -e "export PATH=\"$HERE/bin:\$PATH\"" -e "export PATH=\"$here_p/bin:\$PATH\"" "$env_dir/$sid"/*.sh 2>/dev/null; then
+    mkdir -p "$notice_dir" 2>/dev/null && : > "$notice_dir/$sid" 2>/dev/null
+  else
+    notice="Work names check: this session started without the guard on gh in front of its PATH, so gh writes made inside scripts, and through a gh alias it cannot read, are not checked for work organisation or repository names in this session. gh commands typed directly are still checked. Start a new session to have them checked."
+  fi
+fi
+say_notice() {   # the notice, once: stamped, then said as this hook's last word, letting the call through
+  mkdir -p "$notice_dir" 2>/dev/null && : > "$notice_dir/$sid" 2>/dev/null
+  # shellcheck source=lib/hook-notice.sh
+  . "$HERE/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+    printf '%s\n' "$1" >&2
+    printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
+  hook_allow_notice "$notice" PreToolUse
+}
+
+if ! may_post "$payload"; then
+  [ -n "$notice" ] && say_notice
+  exit 0
+fi
 
 # The shared reader cleans the payload before python3 parses it: a lone surrogate escape there raised
 # when the text was written back out (claude-config#1944). It loads only past the gh test above, so
@@ -55,5 +90,7 @@ if [ "$rc" -ne 0 ]; then
   exit 2
 fi
 
+# A refusal is said alone, so the notice waits for the next command rather than being lost.
+[ -z "$out" ] && [ -n "$notice" ] && say_notice
 printf '%s' "$out"
 exit 0

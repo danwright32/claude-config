@@ -149,6 +149,57 @@ grep -q 'no-such-repo' <<< "$out_r" \
   && check "and nothing is written" ok \
   || check "and nothing is written" "file=$(cat "$NONE")"
 
+# ---------------------------------------------------------------------------
+# The file cannot be written (exit 4): history holds the list, but the write fails. Two ways it
+# fails, each leaving nothing behind and saying so (claude-config#2297).
+# ---------------------------------------------------------------------------
+# One: the directory is unwritable, so not even the temporary file can be created.
+LOCKED="$TMPROOT/locked"
+mkdir -p "$LOCKED"
+chmod 555 "$LOCKED"
+if [ -w "$LOCKED" ]; then
+  check "an unwritable directory can be made for the exit 4 check (UNMEASURED, not a pass)" "the fixture directory is still writable, so the failure could not be set up"
+else
+  out_u="$(write MacTwo "$LOCKED/projects.local.txt")"; code_u=$?
+  [ "$code_u" -eq 4 ] \
+    && check "a list that cannot be written into its directory exits 4" ok \
+    || check "a list that cannot be written into its directory exits 4" "exit=$code_u out=$out_u"
+  grep -q 'could not be written' <<< "$out_u" && grep -qF -- "$LOCKED/projects.local.txt" <<< "$out_u" \
+    && check "and says which file could not be written" ok \
+    || check "and says which file could not be written" "out=$out_u"
+  [ ! -e "$LOCKED/projects.local.txt" ] \
+    && check "and no list is left in its place" ok \
+    || check "and no list is left in its place" "file=$(cat "$LOCKED/projects.local.txt")"
+  locked_listing="$(ls -A "$LOCKED")"
+  [ -z "$locked_listing" ] \
+    && check "and no temporary file is left beside it" ok \
+    || check "and no temporary file is left beside it" "dir=$locked_listing"
+fi
+chmod 755 "$LOCKED"
+
+# Two: the temporary file is written in full and the move into place fails. A mv that always
+# refuses stands in for a full disk or a lost directory, and is the case where the cleanup has a
+# real file to remove.
+SHIM="$TMPROOT/shim"
+FAILMV="$TMPROOT/failmv"
+mkdir -p "$SHIM" "$FAILMV"
+printf '#!/bin/sh\nexit 1\n' > "$SHIM/mv"
+chmod 755 "$SHIM/mv"
+out_m="$(PATH="$SHIM:$PATH" write MacTwo "$FAILMV/projects.local.txt")"; code_m=$?
+[ "$code_m" -eq 4 ] \
+  && check "a move into place that fails exits 4" ok \
+  || check "a move into place that fails exits 4" "exit=$code_m out=$out_m"
+grep -q 'could not be written' <<< "$out_m" \
+  && check "and says the file could not be written" ok \
+  || check "and says the file could not be written" "out=$out_m"
+[ ! -e "$FAILMV/projects.local.txt" ] \
+  && check "and no list is left in its place after a failed move" ok \
+  || check "and no list is left in its place after a failed move" "file=$(cat "$FAILMV/projects.local.txt")"
+failmv_listing="$(ls -A "$FAILMV")"
+[ -z "$failmv_listing" ] \
+  && check "and the temporary file it had already written is removed" ok \
+  || check "and the temporary file it had already written is removed" "dir=$failmv_listing"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
