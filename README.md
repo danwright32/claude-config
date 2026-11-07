@@ -1814,7 +1814,13 @@ made and then failed before GitHub's answer arrived (a reset, a read timeout, a 
 "lost the connection to GitHub N times"; neither as GitHub refusing or being unable to show
 something. "error connecting to" stopped #1640 at 41 minutes on 2026-10-24, and `dial tcp ...:
 connect: can't assign requested address` (no local port left to connect from) stopped #1732 at once
-on 2026-10-25, with #1675 installed, because only the first wording was known. The gate's own reads are asked again the same way,
+on 2026-10-25, with #1675 installed, because only the first wording was known. When every try of
+those four failed on the network, the helper does not stop: it keeps asking every 20 seconds,
+saying "Waiting on the network" with how long about every two minutes, and carries on where it was
+once GitHub answers, for up to `MWR_NET_WAIT_SECONDS` (3600, a setting) from when the read began,
+after which it stops saying how long it waited (claude-config#2303). On 2026-11-05 an outage of
+about 40 minutes stopped all ten queued helpers after their four tries. A round with any answer
+GitHub gave in it, its server failing or a refused sign in included, stops as before. The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
 and a gate whose read the network failed on every try refuses in those same words, never as GitHub
 refusing or not answering (claude-config#1728).

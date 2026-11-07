@@ -175,7 +175,8 @@
 # may lag its branch's tip before the base is set again to resync it, and how long after that before
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # or whose sign in GitHub refused is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between,
-# so about a minute, see with_retries), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
+# so about a minute, see with_retries), MWR_NET_WAIT_SECONDS (3600: how long a read the network failed
+# on every try keeps being asked before it stops, claude-config#2303), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
 # the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
@@ -464,10 +465,53 @@ signin_across_runs(){
 # The wait between tries is a wait on GitHub, published as one (claude-config#1676), saying what it
 # is asked again for without changing the line a later wait compares itself with.
 rest_retry(){ local s="$last_status"; last_status="asking GitHub again for $reading"; rest "$1"; last_status="$s"; }
+# A NETWORK OUTAGE IS WAITED THROUGH (claude-config#2303). On 2026-11-05 an outage of about 40 minutes
+# stopped all ten helpers one session had queued, each after its four tries a minute apart, and every
+# one had to be started again by hand, the queue order rebuilt. A read the network never carried to
+# GitHub, or whose connection failed before any answer came (MT_CONNECT_RC, either phase), is safe to
+# ask again: GitHub gave no answer, and a read changes nothing. So when EVERY try of a round failed
+# that way, the rounds go on, READ_WAIT apart, through the same injected sleep and clock (L524), until
+# GitHub answers or NET_WAIT seconds have passed since the read began. A round holding any answer
+# GitHub gave (its server failing, a refused sign in, a refusal) ends as it always did, so only the
+# network is waited on. The wait is said as waiting on the network, with how long, every HEARTBEAT
+# rather than every try, and a stop at the limit says how long it waited (signin_or_unread).
+# MWR_NET_WAIT_SECONDS (3600: the 60 minutes a helper may hold the turn, so a dead network still ends
+# in a clear stop the same day; a setting, not a measurement). 0 stops after one round, as before.
+NET_WAIT="$(num_or "${MWR_NET_WAIT_SECONDS:-}" 3600)"
+net_waited=""; net_t0=0; net_said=""
+net_heartbeat(){
+  local t; t="$(now)"
+  [ -z "$net_said" ] || [ $(( t - net_said )) -ge "$HEARTBEAT" ] || return 0
+  say "Waiting on the network: GitHub has not been reachable for $(dur $(( t - net_t0 ))) reading $reading (${read_err:0:200}); asking again every ${READ_WAIT}s, and it stops once it has waited $(span "$NET_WAIT") (MWR_NET_WAIT_SECONDS)."
+  net_said="$t"
+}
+# Inside a round of the wait, a try the network failed is only the heartbeat; any other is said as today.
+announce_net(){ if [ "${2:-}" = "$MT_CONNECT_RC" ]; then net_heartbeat; else announce_retry "$@"; fi; }
+rest_net(){ local s="$last_status"; last_status="waiting on the network to reach GitHub for $reading"; rest "$1"; last_status="$s"; }
+# Whether the round mt_retry_read just made failed on the network on every try.
+net_round(){ [ "$1" -eq "$MT_CONNECT_RC" ] && [ "${MT_CONNECT_FAILS:-0}" -ge "$READ_TRIES" ]; }
 with_retries(){   # $1 = what is being read, for the line it says; $2 = the reader
-  local rc
-  reading="$1"
+  local rc fails unreached dropped
+  reading="$1"; net_waited=""; net_t0="$(now)"; net_said=""
   mt_retry_read "$READ_TRIES" "$READ_WAIT" rest_retry "" announce_retry "$2"; rc=$?
+  if [ "$NET_WAIT" -gt 0 ] && net_round "$rc"; then
+    fails="$MT_CONNECT_FAILS"; unreached="$MT_CONNECT_UNREACHED"; dropped="$MT_CONNECT_DROPPED"
+    while [ $(( $(now) - net_t0 )) -lt "$NET_WAIT" ]; do
+      net_heartbeat
+      rest_net "$READ_WAIT"
+      mt_retry_read "$READ_TRIES" "$READ_WAIT" rest_net "" announce_net "$2"; rc=$?
+      fails=$(( fails + ${MT_CONNECT_FAILS:-0} )); unreached=$(( unreached + ${MT_CONNECT_UNREACHED:-0} )); dropped=$(( dropped + ${MT_CONNECT_DROPPED:-0} ))
+      net_round "$rc" || break
+    done
+    net_waited=$(( $(now) - net_t0 ))
+    if net_round "$rc"; then
+      # Still the network at the limit: the stop counts every try the wait made.
+      MT_CONNECT_FAILS="$fails"; MT_CONNECT_UNREACHED="$unreached"; MT_CONNECT_DROPPED="$dropped"
+    else
+      [ "$rc" -eq 0 ] && say "GitHub answered again reading $1 after $(dur "$net_waited") of waiting on the network; carrying on."
+      net_waited=""
+    fi
+  fi
   [ "$rc" -eq 5 ] && rate_pause "reading $1" "$read_err"
   return "$rc"
 }
@@ -490,6 +534,8 @@ signin_or_unread(){   # $1 = what was being read, $2 = what with_retries returne
   if [ "$2" -eq "$MT_SIGNIN_RC" ]; then
     mt_signin_said "$1" "${read_err:0:300}"
   elif [ "$2" -eq "$MT_CONNECT_RC" ]; then
+    # After a wait on the network (claude-config#2303), how long it waited comes first.
+    [ -z "$net_waited" ] || printf 'waited %s on the network (MWR_NET_WAIT_SECONDS), and ' "$(dur "$net_waited")"
     mt_connect_said "$1" "${read_err:0:300}"
   else
     printf 'could not %s %s (%s%s)' "${3:-read}" "$1" "$read_err" "$(tried "$2")"

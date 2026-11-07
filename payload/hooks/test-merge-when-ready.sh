@@ -736,7 +736,9 @@ check "#1061 the retry is said, with GitHub's own error" "connection reset by pe
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+# With no wait on the network (claude-config#2303, measured in its own section below), as in every
+# run here whose network never comes back: these measure the four tries and how the stop says them.
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1061 a compare that keeps failing still stops" "1" "$rc"
 check "#1061 naming the last error" "TLS handshake timeout" "$out"
 check "#1061 and saying it could not confirm the head contains main's tip" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
@@ -760,7 +762,7 @@ check_eq "#1061 after one retry wait for it" "1" "$(count sleeps '^7$')"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1061 a pull request read that keeps failing stops" "1" "$rc"
 check "#1061 naming GitHub's last error" "TLS handshake timeout" "$out"
 check_eq "#1061 nothing merged" "0" "$(count gh-calls 'pr merge')"
@@ -842,7 +844,7 @@ check_not "#1675 never said as a refused sign in" "refused the sign in" "$out"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1675 a connection never made on any try still stops" "1" "$rc"
 check "#1675 said as the connection, four times, naming what it was reading" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub (error connecting to api.github.com)" "$out"
 check "#1675 and that GitHub never answered" "GitHub never answered" "$out"
@@ -853,7 +855,7 @@ check_eq "#1675 nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1675 a compare gh could never connect for stops" "1" "$rc"
 check "#1675 and says so" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_eq "#1675 and nothing merged" "0" "$(count gh-calls 'pr merge')"
@@ -872,7 +874,7 @@ check "#1735 the retry is said as the connection" "Could not connect to GitHub r
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$DIAL" > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1735 a dial that fails on every try still stops" "1" "$rc"
 check "#1735 said as the connection, four times, with the error" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub ($DIAL)" "$out"
 check_not "#1735 never as a pull request that could not be read" "could not read pull request" "$out"
@@ -883,12 +885,81 @@ check_eq "#1735 nothing merged" "0" "$(count gh-calls 'pr merge')"
 RESET='Get "https://api.github.com/repos/acme/widget/compare/main...x": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer'
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$RESET" > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1735 a compare whose connection is reset on every try stops" "1" "$rc"
 check "#1735 each retry says the connection was lost" "Lost the connection to GitHub reading whether #7 contains the tip of main (try 1 of 4" "$out"
 check "#1735 and the stop says it was lost four times" "lost the connection to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_not "#1735 never that gh could not reach GitHub" "could not reach it" "$out"
 check_eq "#1735 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A network outage is waited through, not stopped on after four tries (claude-config#2303). On
+# 2026-11-05 an outage of about 40 minutes stopped all ten helpers a session had queued, each after
+# four tries a minute apart, and every one had to be started again by hand with the queue order
+# rebuilt. A read the network never carried to GitHub is safe to ask again, so while every try fails
+# that way the helper keeps waiting, saying it is waiting on the network with how long, up to
+# MWR_NET_WAIT_SECONDS (3600 by default), and carries on when GitHub answers. The sections above run
+# with that wait at 0, since they measure the four tries and their wording. Every wait here is the
+# injected sleep (L524): an outage of 40 minutes is crossed in no real time.
+net_back_at(){ local i; for i in $(seq 1 600); do printf '[ "$(cat "$ST/clock")" -lt %s ] || rm -f "$ST/view-down"\n' "$1" >> "$ST/on-sleep"; done; }
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"; net_back_at 1002400
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 a pull request read through a 40 minute outage merges" "0" "$rc"
+check "#2303 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2303 it waited past the 40 minutes" "yes" "$( [ "$(( $(cat "$ST/clock") - 1000000 ))" -ge 2400 ] && echo yes || echo no)"
+check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 21s reading pull request #7" "$out"
+check "#2303 and how long it will wait" "stops once it has waited 60m (MWR_NET_WAIT_SECONDS)" "$out"
+# Said at 21s and then on the first try at least 2 minutes after the last line, 126s apart at 7s tries.
+check "#2303 a later line says the wait has grown" "Waiting on the network: GitHub has not been reachable for 38m 09s" "$out"
+check "#2303 saying when GitHub answers again" "GitHub answered again reading pull request #7 after 40m" "$out"
+check_eq "#2303 the four tries before the wait are said as today, three retry lines" "3" "$(printf '%s\n' "$out" | grep -c 'Could not connect to GitHub reading pull request #7 (try')"
+net_lines="$(printf '%s\n' "$out" | grep -c 'Waiting on the network')"
+check_eq "#2303 the wait is said about every 2 minutes, not on every try ($net_lines lines)" "yes" "$( [ "$net_lines" -ge 15 ] && [ "$net_lines" -le 25 ] && echo yes || echo no)"
+check_not "#2303 never out of time" "Out of time" "$out"
+
+# The outer limit: a network that never comes back still ends in a stop, at MWR_NET_WAIT_SECONDS.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 a network that never comes back still stops" "1" "$rc"
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 at the 60 minute limit, within one round of tries ($waited s)" "yes" "$( [ "$waited" -ge 3600 ] && [ "$waited" -le 3660 ] && echo yes || echo no)"
+check "#2303 the stop says how long it waited on the network" "Stopped: waited 60m " "$out"
+check "#2303 naming the setting" "on the network (MWR_NET_WAIT_SECONDS), and could not connect to GitHub" "$out"
+check "#2303 and what it was reading, as the connection" "times reading pull request #7 in acme/widget from GitHub (error connecting to api.github.com)" "$out"
+check_eq "#2303 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(MWR_NET_WAIT_SECONDS=600 run 7 --squash)"; rc=$?
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 MWR_NET_WAIT_SECONDS sets the limit" "1" "$rc"
+check_eq "#2303 a 10 minute limit stops near 10 minutes ($waited s)" "yes" "$( [ "$waited" -ge 600 ] && [ "$waited" -le 660 ] && echo yes || echo no)"
+
+# Controls (L497): an answer GitHub gave is handled as today, before and during the wait.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 control: GitHub's server failing on every try stops after four as today" "1" "$rc"
+check_eq "#2303 control: three retry waits" "3" "$(count sleeps '^7$')"
+check_not "#2303 control: never said as waiting on the network" "Waiting on the network" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"; printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 control: a round with a refused sign in in it is not waited through" "1" "$rc"
+check_eq "#2303 control: four tries" "4" "$(count gh-calls 'pr view 7')"
+check_not "#2303 control: and not said as waiting on the network" "Waiting on the network" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+for _ in $(seq 1 600); do printf '%s\n' '[ "$(cat "$ST/clock")" -lt 1000600 ] || printf "%s\n" "HTTP 502: Bad Gateway (https://api.github.com/graphql)" > "$ST/view-down"' >> "$ST/on-sleep"; done
+out="$(run 7 --squash)"; rc=$?
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 control: GitHub answering with a server error during the wait stops as today" "1" "$rc"
+check_eq "#2303 control: soon after it answered, not at the limit ($waited s)" "yes" "$( [ "$waited" -lt 700 ] && echo yes || echo no)"
+check "#2303 control: said as GitHub's error" "Bad Gateway" "$out"
+check_eq "#2303 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
@@ -947,7 +1018,7 @@ check_eq "#1615 and so is the CI gate" "90" "$(sort -u "$ST/red-gate-budgets" | 
 # Its default retry pace: about a minute in all, through the injected sleep.
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
-out="$(env -u MWR_READ_RETRY_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
+out="$(env -u MWR_READ_RETRY_SECONDS MWR_NET_WAIT_SECONDS=0 bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
 check_eq "#1061 with no retry setting it still stops when GitHub stays unreachable" "1" "$rc"
 check_eq "#1061 the default retry waits are 20 seconds each, a minute in all" "20 20 20" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
 
