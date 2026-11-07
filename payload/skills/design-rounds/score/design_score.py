@@ -69,7 +69,11 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
   design-exceptions  {"exceptions": [{"id": "X1", "decision": "D7" | "frame": "f3", "region"?: [x, y, w, h],
                                       "words": "Dan's own words", "date": "YYYY-MM-DD",
                                       "source": "where he said it: an issue comment or session link"}]}
-                     optional; the score prints how many it skipped every time, none included
+                     optional; the score prints how many it skipped every time, none included.
+                     An exception naming a decision retires that decision's check: it is left out of
+                     the count, and its failing (or throwing) on the build or on the design itself
+                     fails nothing, since the rule it asserts is one Dan replaced. Every run of it is
+                     still kept on its row ("retired") and printed, never dropped.
 
 Exit codes, never read alike (L11): 0 matched (both halves 100%), 1 not matched yet, 2 no score: the
 capture or design could not be read, a frame or picture is missing, a design frame is not drawn whole
@@ -434,6 +438,7 @@ def score_capture(folder):
     # --- decisions ---------------------------------------------------------------------------
     by_id = {d["id"]: d for d in decisions}
     results = {}   # decision id -> [(frame, ok, detail)]
+    retired = {}   # decision id an exception names -> every run of its check, on both sides
     control_missing = []
     for fid, cf in captured.items():
         for side in ("checks", "designChecks"):
@@ -463,9 +468,16 @@ def score_capture(folder):
                     no.append("frame %s: a check is for %s, which the decision map does not hold; the checks and "
                               "the map disagree about what was decided" % (fid, did))
                     continue
-                if did in excepted_decisions:
-                    continue
                 detail = str(r.get("detail") or "")
+                if did in excepted_decisions:
+                    # An exception retires its decision's check: what it finds, on either side, can fail
+                    # neither the build nor the design itself (the positive control below), since the
+                    # rule it asserts is one Dan replaced. Every run is kept and reported as retired,
+                    # never dropped, so a retired check still says what it saw.
+                    retired.setdefault(did, []).append({"frame": fid, "side": "design" if side == "designChecks"
+                                                        else "built", "ok": r["ok"], "threw": bool(r.get("threw")),
+                                                        "detail": detail})
+                    continue
                 if r.get("threw"):
                     no.append("frame %s: the check for %s threw (%s) on the %s side, so it measured nothing"
                               % (fid, did, detail or "no detail", where))
@@ -494,7 +506,11 @@ def score_capture(folder):
         verify = d.get("verify", "check")
         if did in excepted_decisions:
             row["status"] = "excepted"
-            row["detail"] = "exception %s" % excepted_decisions[did].get("id")
+            row["exception"] = excepted_decisions[did].get("id")
+            row["detail"] = "exception %s" % row["exception"]
+            order = list(declared)
+            row["retired"] = sorted(retired.get(did, []), key=lambda g: (g["side"] != "design", order.index(g["frame"])))
+            row["frames"] = sorted({g["frame"] for g in row["retired"]}, key=order.index)
         elif verify not in VERIFY:
             no.append("%s says \"verify\": %r, and a decision is verified by one of %s"
                       % (did, verify, ", ".join(VERIFY)))
@@ -661,6 +677,26 @@ def verify_score(s):
     return verdict, problems
 
 
+def retired_lines(r):
+    """A decision an exception names: retired by it, and every run of its retired check that did not pass,
+    with a count of those that did, so a retired check still says what it saw (it can fail nothing)."""
+    head = "    %s is retired by %s" % (r["id"], r.get("detail", ""))
+    runs = r.get("retired")
+    if not runs:
+        # A score written before retired checks were kept, or a capture that ran no check for it.
+        return [head + ("" if runs is None else ": no check ran for it")]
+    passed = sum(1 for g in runs if g["ok"] and not g["threw"])
+    lines = [head + ": its check can fail neither the design nor the build, and %s" % (
+        "passed on every run (%d)" % passed if passed == len(runs) else "passed on %d of %d runs" % (passed, len(runs)))]
+    for g in runs:
+        if g["ok"] and not g["threw"]:
+            continue
+        where = "the design" if g["side"] == "design" else "the build"
+        lines.append("      on %s %s: %s, %s" % (where, g["frame"], "threw" if g["threw"] else "failed",
+                                               g["detail"] or "no detail"))
+    return lines
+
+
 def render(s):
     lines = []
     commit = s.get("commit")
@@ -689,7 +725,7 @@ def render(s):
             elif r["status"] == "elsewhere":
                 lines.append("    %s is proven elsewhere: %s" % (r["id"], r.get("detail", "")))
             elif r["status"] == "excepted":
-                lines.append("    %s is skipped by %s" % (r["id"], r.get("detail", "")))
+                lines.extend(retired_lines(r))
     frames = s["pictures"]["frames"]
     measured = [f for f in frames if f["status"] == "measured"]
     if measured:
