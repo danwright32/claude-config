@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# The work names guard on gh (claude-config#2183). gh-guard-path.sh puts this folder first on every
+# session's PATH, so a gh that a script runs (a python subprocess, a shell loop) reaches this before
+# the real gh, where the command hook only ever saw the script's own command line. A gh pr or issue
+# command, and every gh api call, is judged by work_names_publish_gate.py with the real text it is
+# about to send; everything else runs the real gh at once.
+#
+# The real gh is the first one on PATH past this folder. The judge is handed it by path and runs the
+# real gh itself, with the same arguments, standard input and exit code, once the text is cleared.
+# A judge that cannot start refuses the write: a guard that did not run is not one that found nothing.
+
+set -uo pipefail
+
+case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; *) here=. ;; esac
+here="$(cd "${here:-/}" && pwd -P)"
+
+real=""
+IFS=: read -r -a dirs <<<"${PATH:-}"
+for d in "${dirs[@]}"; do
+  [ -n "$d" ] || continue
+  [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$here" ] && continue
+  if [ -x "$d/gh" ] && [ ! -d "$d/gh" ]; then
+    real="$d/gh"
+    break
+  fi
+done
+if [ -z "$real" ]; then
+  echo "gh: the work names guard ($here/gh) found no gh on PATH past itself, so there is no gh to run." >&2
+  exit 127
+fi
+
+# Judged: any command naming pr, issue or api, and any whose first word is not one of gh's own
+# commands, since that can be a gh alias (the judge expands it, and refuses one it cannot read) or an
+# extension (refused). The list only lets a command skip the judge; a command missing from it is
+# judged, never passed. extension and copilot are left out on purpose: gh extension exec and gh copilot
+# start programs that can write to GitHub with no gh in between, which the judge refuses (#2207).
+judged=0
+for a in "$@"; do
+  case "$a" in pr|issue|api) judged=1; break ;; esac
+done
+# gh repo create --push and gh repo sync publish commits gh pushes or copies itself (#2326).
+if [ "${1:-}" = repo ]; then
+  for a in "${@:2}"; do
+    case "$a" in create|new|sync) judged=1; break ;; esac
+  done
+fi
+case "${1:-}" in
+  ""|-*|accessibility|agent-task|alias|attestation|auth|browse|cache|codespace|completion|config|\
+  gist|gpg-key|help|label|licenses|org|preview|project|release|repo|ruleset|run|search|secret|\
+  ssh-key|status|variable|version|workflow) ;;
+  *) judged=1 ;;
+esac
+# The real gh runs with this folder first on PATH, so a gh that anything it starts runs (git and its
+# hooks, a pager, a browser command) meets the guard again, even when this guard was run by its path.
+PATH="$here:${PATH:-}"
+export PATH
+[ "$judged" -eq 1 ] || exec "$real" "$@"
+
+exec python3 "$here/../work_names_publish_gate.py" --gh "$real" -- "$@"

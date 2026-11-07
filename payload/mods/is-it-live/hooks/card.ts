@@ -60,32 +60,45 @@ const sentences = (s: string) => s.split(/(?<=[.!?])\s+/).filter(x => x.trim()).
 // Dan's voice has no dashes: an em or en dash, a hyphen standing alone between words, or two hyphens.
 const DASH = new RegExp(`[${String.fromCharCode(0x2014)}${String.fromCharCode(0x2013)}]|\\s-\\s|--`)
 
-/** Why the card cannot be made from this input, or undefined when it can. Each field named. */
-export const reasonToRefuse = (i: CardInput): string | undefined => {
-  if (typeof i.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(i.repo)) return 'repo must be owner/name, as GitHub spells it.'
-  if (!Number.isInteger(i.pr) || i.pr <= 0) return 'pr must be the pull request number.'
-  if (!DEPLOYS.includes(i.deploy)) return `deploy must be one of ${DEPLOYS.join(', ')}.`
-  if (i.deploy !== 'none' && i.deploy !== 'deploying' && !(typeof i.checked === 'string' && i.checked.trim()))
-    return i.deploy === 'live' ? 'live needs checked: how it was checked that the change is live.' : 'checked must say why live could not be confirmed.'
+/**
+ * Every reason the card cannot be made from this input, each field named, so one refusal lists all
+ * of them (#2374): a card took five refused calls in a row when each call named only the first.
+ */
+export const problemsWith = (i: CardInput): string[] => {
+  const out: string[] = []
+  if (typeof i.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(i.repo)) out.push('repo must be owner/name, as GitHub spells it.')
+  if (!Number.isInteger(i.pr) || i.pr <= 0) out.push('pr must be the pull request number.')
+  const deployOk = DEPLOYS.includes(i.deploy)
+  if (!deployOk) out.push(`deploy must be one of ${DEPLOYS.join(', ')}.`)
+  else if (i.deploy !== 'none' && i.deploy !== 'deploying' && !(typeof i.checked === 'string' && i.checked.trim()))
+    out.push(i.deploy === 'live' ? 'live needs checked: how it was checked that the change is live.' : 'checked must say why live could not be confirmed.')
   const n = typeof i.changed === 'string' ? sentences(i.changed) : 0
-  if (n < 2 || n > 3) return `changed must say what changed in 2 to 3 sentences (it has ${n}).`
-  if (!i.see || typeof i.see.link !== 'string' || !/^https?:\/\//.test(i.see.link)) return 'see.link must be the direct link to where the change shows.'
-  if (!Array.isArray(i.see.clicks) || !i.see.clicks.every(c => typeof c === 'string' && c.trim())) return 'see.clicks must be the exact clicks, one per entry.'
+  if (n < 2 || n > 3) out.push(`changed must say what changed in 2 to 3 sentences (it has ${n}).`)
+  if (!i.see || typeof i.see.link !== 'string' || !/^https?:\/\//.test(i.see.link)) out.push('see.link must be the direct link to where the change shows.')
+  if (!i.see || !Array.isArray(i.see.clicks) || !i.see.clicks.every(c => typeof c === 'string' && c.trim())) out.push('see.clicks must be the exact clicks, one per entry.')
   const r = i.requester
   if (r !== undefined) {
-    if (!r || typeof r.name !== 'string' || !r.name.trim()) return 'requester.name must say who asked.'
-    if (!VIAS.includes(r.via)) return `requester.via must be one of ${VIAS.join(', ')}.`
-    if (/^dan$/i.test(r.name.trim())) return 'No message when Dan asked: leave requester out.'
-    if (r.via === 'issue' && !(Number.isInteger(r.issue) && (r.issue as number) > 0)) return 'requester.issue must be the issue number when they asked in an issue.'
+    const named = Boolean(r) && typeof r.name === 'string' && Boolean(r.name.trim())
+    if (!named) out.push('requester.name must say who asked.')
+    const viaOk = Boolean(r) && VIAS.includes(r.via)
+    if (!viaOk) out.push(`requester.via must be one of ${VIAS.join(', ')}.`)
+    if (named && /^dan$/i.test(r.name.trim())) out.push('No message when Dan asked: leave requester out.')
+    if (viaOk && r.via === 'issue' && !(Number.isInteger(r.issue) && (r.issue as number) > 0)) out.push('requester.issue must be the issue number when they asked in an issue.')
     // The message tells them it is live, so only a call saying the change is out owes it; an
     // earlier call may pass it, and it is held until then (#1335).
     const given = typeof i.message === 'string' && i.message.trim()
-    if (!given && isOut(stateOf(i.deploy))) return `A message for ${r.name} is owed, in Dan's voice.`
-    if (given && DASH.test(i.message as string)) return "The message must have no dashes (Dan's voice): use a comma, colon or a new sentence."
+    if (named && deployOk && !given && isOut(stateOf(i.deploy))) out.push(`A message for ${r.name} is owed, in Dan's voice.`)
+    if (given && DASH.test(i.message as string)) out.push("The message must have no dashes (Dan's voice): use a comma, colon or a new sentence.")
   } else if (has(i as unknown as Record<string, unknown>, 'message') && i.message) {
-    return 'A message is only for someone other than Dan who asked: say who asked in requester, or leave the message out.'
+    out.push('A message is only for someone other than Dan who asked: say who asked in requester, or leave the message out.')
   }
-  return undefined
+  return out
+}
+
+/** Why the card cannot be made from this input, all problems in one sentence list, or undefined when it can. */
+export const reasonToRefuse = (i: CardInput): string | undefined => {
+  const all = problemsWith(i)
+  return all.length ? all.join(' ') : undefined
 }
 
 type Run = { text: string; color?: string; bold?: boolean }
