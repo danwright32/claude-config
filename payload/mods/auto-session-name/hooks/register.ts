@@ -22,10 +22,10 @@ const CLAIM_MS = 3 * 60_000
 const RENEW_MS = CLAIM_MS / 3
 const WHO = 'Auto session name'
 
-// An engine refusal arrives led by '<plugin>: $.noun.verb: '; the reason is what follows.
-// A skew (a member an older loaded mod lacks) is said as the two mods out of step, never as the raw
-// TypeError (#1299, mod-kit's hooks/skew.ts).
-const errText = (err: unknown) => errorText(err, MOD).replace(/^[\w-]+: \$\.[\w.]+: /, '')
+// mod-kit's errorText says an engine refusal in words without the '<plugin>: $.noun.verb: ' it
+// arrives led by (#2150), and a skew (a member an older loaded mod lacks) as the two mods out of
+// step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
+const errText = (err: unknown) => errorText(err, MOD)
 
 // The one reader and the one writer of the record. A record about another session id (a /clear
 // started a new one) reads as none. Writes are compare and set on the version, retried, so two
