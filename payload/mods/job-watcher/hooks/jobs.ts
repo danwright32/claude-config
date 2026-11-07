@@ -102,7 +102,7 @@ export const harnessFinished = (said: string): boolean => said === 'unlisted' ||
 export const holdRefusal = (held: InFlight[]): string =>
   `You still hold background work you started: ${held.map(t => `${t.id} (${t.what})`).join(', ')}. ` +
   'A dispatched agent never ends its turn to wait on its own background work, since nothing reads its report until it hands back. ' +
-  'Either wait for it in the foreground (a Bash call that waits on it, not run in the background), finish what it was for, or stop it with TaskStop; then hand back your report, or finish the merge yourself.'
+  'Either wait for it in the foreground (a Bash call that waits on it, not run in the background), finish what it was for, or stop it with TaskStop; then hand back your report for the main session to merge (#2344).'
 
 // The jobs a notice from Claude Code reports on, by id: "<task-id>X</task-id>" (seen in a session on
 // 2026-10-04). Only ever a prompt to look again; the watcher drops a job on its own evidence.
