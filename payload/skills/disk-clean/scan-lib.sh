@@ -547,6 +547,46 @@ dcs_icloud() { # <path>
     *) return 1 ;;
   esac
 }
+# Succeeds, setting DCS_WHY to where, when <path> lies in a folder a sync client keeps: iCloud
+# Drive, Desktop or Documents when iCloud syncs them, any ~/Library/CloudStorage mount (Google Drive,
+# OneDrive, Dropbox and Box through macOS's file provider), or a sync client's own folder in home.
+# Moving anything there to the Trash removes it on every device that syncs it, and a folder that
+# looks missing there may only not have arrived yet (#2346).
+dcs_synced() { # <path>
+  local p="${1%/}" h
+  for h in "$HOME" "$DCS_HOME"; do
+    case "$p/" in
+      "$h/Library/Mobile Documents/"*) DCS_WHY="iCloud Drive"; return 0 ;;
+      "$h/Library/CloudStorage/"*) DCS_WHY="a cloud storage folder"; return 0 ;;
+      "$h/Google Drive/"*) DCS_WHY="Google Drive"; return 0 ;;
+      "$h/Dropbox/"*|"$h/.dropbox/"*) DCS_WHY="Dropbox"; return 0 ;;
+      "$h/OneDrive/"*|"$h/OneDrive - "*) DCS_WHY="OneDrive"; return 0 ;;
+      "$h/Box/"*) DCS_WHY="Box"; return 0 ;;
+      "$h/pCloud Drive/"*|"$h/.pcloud/"*) DCS_WHY="pCloud"; return 0 ;;
+      "$h/SynologyDrive/"*) DCS_WHY="Synology Drive"; return 0 ;;
+      "$h/Desktop/"?*) dcs_icloud "$p" && { DCS_WHY="Desktop, which iCloud syncs"; return 0; } ;;
+      "$h/Documents/"?*) dcs_icloud "$p" && { DCS_WHY="Documents, which iCloud syncs"; return 0; } ;;
+    esac
+  done
+  return 1
+}
+# Prints the gitdir a worktree's .git FILE in <dir> names, as an absolute path with . and .. worked
+# out by name (git writes a relative one when worktree.useRelativePaths is set). Fails when there is
+# no readable .git file, or its first line names no folder inside a "worktrees" folder (a submodule's
+# names .git/modules). Never call it on a .git file iCloud keeps only in the cloud: reading it makes
+# iCloud fetch it.
+dcs_gitdir() { # <dir>
+  local d="${1%/}" line g
+  [ -f "$d/.git" ] && [ -r "$d/.git" ] || return 1
+  line="$(awk 'NR == 1 { sub(/\r$/, ""); print }' "$d/.git")"
+  case "$line" in "gitdir: "?*) g="${line#gitdir: }" ;; *) return 1 ;; esac
+  case "$g" in /*) ;; *) g="$d/$g" ;; esac
+  g="$(printf '%s\n' "$g" | awk -F / '{
+    n = 0
+    for (i = 2; i <= NF; i++) { if ($i == "" || $i == ".") continue; if ($i == "..") { if (n) n--; continue } p[++n] = $i }
+    s = ""; for (i = 1; i <= n; i++) s = s "/" p[i]; print (s == "" ? "/" : s) }')"
+  case "${g%/*}" in */worktrees) printf '%s\n' "$g" ;; *) return 1 ;; esac
+}
 # Joins flags and details: <flags var value> <new flag>
 dcs_join() { if [ -n "$1" ]; then printf '%s,%s' "$1" "$2"; else printf '%s' "$2"; fi; }
 
