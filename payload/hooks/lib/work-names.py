@@ -66,7 +66,8 @@ neither the list nor the registry holds, so --work-repos and the publish gate al
   domains    a built in organisation's login without its hyphens, which is its web and email domain,
              matched only as a domain: after an @, or before a dot and a top level domain. As a bare
              word it stays prose, as #1568 decided, since the same letters can be an ordinary word.
-             A project folder that is such a login is judged by this rule, not as a bare name.
+             A project folder that is such a login is a project all the same, and is refused as a
+             plain word as every project is (claude-config#2190).
 
 THE TWO PUBLISHED DOCUMENTS (claude-config#2252). README.md and DESIGN.md at the root are the manual
 and the design record, read by strangers before anything else, and once named the work MacBook's
@@ -85,8 +86,11 @@ to read it; with --work-repos also the list unreadable or its time budget spent)
 
 Seams (tests): WORK_NAMES_EXTRA_HASHES, comma separated sha256 hex of more lower case logins.
 WORK_NAMES_REGISTRY_READER, the reader to ask (default: dev-update-registry.js beside this file).
-WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30).
-WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from.
+Both are honoured only under HOOK_TESTS_RUNNING=1 (claude-config#2231), as below.
+WORK_NAMES_PROJECT_LIST, the CLAUDE.md to read the work MacBook's project list from, honoured only
+under HOOK_TESTS_RUNNING=1 too.
+WORK_NAMES_REPOS_BUDGET_SECONDS, the whole --work-repos run's time for GitHub (default 30), is not a
+test setting: the merge gate hands in what is left of its timeout. It may only shorten the default.
 WORK_NAMES_PROJECT_HASHES, comma separated sha256 hex replacing WORK_PROJECTS (empty means none),
 honoured only under HOOK_TESTS_RUNNING=1, so no real run can empty the committed set.
 """
@@ -104,9 +108,12 @@ BUILT_IN = {
 }
 # The work MacBook's project folders (claude-config#2112), held ONLY as sha256 hashes of their lower
 # case names, as BUILT_IN holds the organisations, since the public CLAUDE.md no longer lists them.
-# Built from the last CLAUDE.md block that did, by the same reading work_mac_projects does, less the
-# one folder that is an organisation's login without its hyphens (the domain rule judges that one).
+# Built from the last CLAUDE.md block that did, by the same reading work_mac_projects does, every
+# folder included: the one spelled as an organisation's login without its hyphens is a project too,
+# refused as a plain word as well as a domain (claude-config#2190). tests/test-work-names-tree.sh
+# checks this set against that block in history.
 WORK_PROJECTS = {
+    "305788032b694143d7dfcf4dd1225d397186663127ecd2f0b3246200344a42bc",  # a work MacBook project
     "5d093d8dbf4080f6854ad3c1f6249e765160cf6825defc6a63be240afa75adee",  # a work MacBook project
     "b62f3b3b1b40cb86438bf4d2affd121f9518814e713d3df7d4c193b2168f28fc",  # a work MacBook project
     "bbba57318f71911354fdaab5d67ea8c352bfe113231e968a9ac1f4cf5b38e546",  # a work MacBook project
@@ -150,15 +157,41 @@ def sha(s):
     return hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def under_test():
+    """True only under the hooks' own test runner, which exports HOOK_TESTS_RUNNING=1 to every suite
+    (run-all-tests.sh). The gates that ask this scanner read Claude Code's own environment, so every
+    test setting here is honoured only with it (claude-config#2217, #2231)."""
+    return os.environ.get("HOOK_TESTS_RUNNING") == "1"
+
+
+REPOS_BUDGET_CAP = 30
+
+
+def repos_budget():
+    """-> the seconds a --work-repos run may spend on GitHub, or raises ValueError. Not a test
+    setting: check-work-names-merge.sh hands in what is left of its own timeout, so it is honoured
+    always, but only to SHORTEN the default (claude-config#2231): a longer one named in Claude Code's
+    environment would hold the scan past the calling hook's timeout, where it gives no verdict. The
+    cap is the default, a setting, not measured. Anything but a finite number is refused, never
+    believed, and main() refuses the message check for it."""
+    raw = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS")
+    if not raw:
+        return REPOS_BUDGET_CAP
+    value = float(raw)
+    if value != value:
+        raise ValueError("WORK_NAMES_REPOS_BUDGET_SECONDS is not a number")
+    return min(value, REPOS_BUDGET_CAP)
+
+
 def extra_hashes():
-    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "")
+    raw = os.environ.get("WORK_NAMES_EXTRA_HASHES", "") if under_test() else ""
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
 def project_hashes():
     """The hashed work MacBook projects: WORK_PROJECTS, or in a test run only (HOOK_TESTS_RUNNING=1)
     the comma separated WORK_NAMES_PROJECT_HASHES when it is set, where empty means none."""
-    if os.environ.get("HOOK_TESTS_RUNNING") == "1" and "WORK_NAMES_PROJECT_HASHES" in os.environ:
+    if under_test() and "WORK_NAMES_PROJECT_HASHES" in os.environ:
         raw = os.environ["WORK_NAMES_PROJECT_HASHES"]
         return {h.strip().lower() for h in raw.split(",") if h.strip()}
     return set(WORK_PROJECTS)
@@ -184,7 +217,9 @@ def registry_entries(timeout=60):
     publish gate (work_names_publish_gate.py, claude-config#2105) both read the registry through it;
     the gate passes what is left of its own time budget as timeout.
     """
-    reader = os.environ.get("WORK_NAMES_REGISTRY_READER") or os.path.join(HERE, "dev-update-registry.js")
+    # A reader named in the environment, which could answer "nothing registered" on every real run,
+    # is asked only under test (claude-config#2231).
+    reader = (under_test() and os.environ.get("WORK_NAMES_REGISTRY_READER")) or os.path.join(HERE, "dev-update-registry.js")
     try:
         p = subprocess.run(["node", reader, "repos"], capture_output=True, text=True, timeout=timeout, errors="replace")
     except FileNotFoundError:
@@ -292,8 +327,8 @@ def work_mac_projects():
     that Mac's projects.local.txt, that file's entries where it exists; the hashes are
     project_hashes(), taken when the block itself lists no project (claude-config#2112). Never both
     empty: a list with no project is refused, never clean."""
-    path = os.environ.get("WORK_NAMES_PROJECT_LIST") or os.path.normpath(
-        os.path.join(HERE, "..", "..", "CLAUDE.md"))
+    named = os.environ.get("WORK_NAMES_PROJECT_LIST") if under_test() else None
+    path = named or os.path.normpath(os.path.join(HERE, "..", "..", "CLAUDE.md"))
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -376,9 +411,10 @@ def work_repo_names(github):
     owners = {o for o, _ in pairs}
     every = owners | {n for _, n in pairs if n}
     hashes = BUILT_IN | extra_hashes()
-    # A project folder that is an organisation's login without its hyphens is that organisation's
-    # domain, which the Matcher's domain rule judges; as a bare word it stays prose (#2184).
-    every |= {p for p in projects if not hyphenless(p, hashes)}
+    # Every project folder is a name, the one spelled as an organisation's login without its hyphens
+    # included: it is a work project, so it is refused as a plain word too, not only as a domain
+    # (claude-config#2190, reversing #2184 for project folders only).
+    every |= set(projects)
     plain = {n for n in every if TOKEN.fullmatch(n)}
     odd = sorted(every - plain)
     return Matcher(hashes, set(), plain, domains=True, project_hashes=hashed_projects), owners, odd
@@ -512,9 +548,8 @@ def main(argv):
                 "never reads the work repository list (claude-config#1568).")
         if isinstance(texts, str):
             die("the text stream could not be read: %s, so its messages could not be checked." % texts)
-        budget = os.environ.get("WORK_NAMES_REPOS_BUDGET_SECONDS") or 30
         try:
-            matcher, owners, odd = work_repo_names(GitHub(budget, "the work name check"))
+            matcher, owners, odd = work_repo_names(GitHub(repos_budget(), "the work name check"))
         except (CannotTell, ValueError) as e:
             die("%s. A message that cannot be checked is not a clean one." % e)
         hits = []

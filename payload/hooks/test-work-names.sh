@@ -27,7 +27,14 @@
 # The scanner holds the two organisation names only as sha256 hashes, and this suite tests with an
 # invented organisation handed in the same way (WORK_NAMES_EXTRA_HASHES). No work organisation or
 # repository name belongs in this file.
+#
+# The scanner honours its test settings (WORK_NAMES_EXTRA_HASHES, WORK_NAMES_REGISTRY_READER,
+# WORK_NAMES_PROJECT_HASHES, WORK_NAMES_PROJECT_LIST) only under HOOK_TESTS_RUNNING=1, the marker
+# run-all-tests.sh exports to
+# every suite (claude-config#2231). It is exported here too, so this suite run on its own behaves as
+# it does inside a full run; a case that means to be outside a test run clears it on its own line.
 set -uo pipefail
+export HOOK_TESTS_RUNNING=1
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SCAN="$HERE/lib/work-names.py"
@@ -215,6 +222,30 @@ check "an organisation without its hyphen as an email or web domain is found by 
 check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "acmehq"
 repo_texts 'commit 5d6e7f8\0Move it\n\nthe acmehq notes, and acmehqs.com\n'
 check "(control) the same letters as a bare word or another domain pass (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+# claude-config#2190: a work MacBook project folder spelled as an organisation's login without its
+# hyphens is a work project, so it is refused as a plain word wherever it is written, not only as a
+# domain. The spelling is derived from the invented organisation here, never written down.
+FAKE_PLAIN="$(printf '%s' "$FAKE_ORG" | tr -d '-')"
+FAKE_PLAIN_LOWER="$(printf '%s' "$FAKE_PLAIN" | tr '[:upper:]' '[:lower:]')"
+PROJECTS_ORG="$WORK/projects-org-CLAUDE.md"
+printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- `~/Apps/%s`: a work app\n\n## Writing Style\n' "$FAKE_PLAIN_LOWER" > "$PROJECTS_ORG"
+org_texts(){   # printf format and arguments -> text_out, text_rc, with that project listed
+  text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    WORK_NAMES_PROJECT_LIST="$PROJECTS_ORG" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+}
+org_texts 'commit 5d6e7f8\0Move it\n\nthe %s notes are done\n' "$FAKE_PLAIN"
+check "#2190 a listed project spelled as an organisation without its hyphens is refused as a plain word (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+check "#2190 and named as a work repository by its line: $text_out" has "$text_out" "commit 5d6e7f8:3: a work repository or owner name"
+check "#2190 and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "$FAKE_PLAIN_LOWER"
+org_texts 'commit 5d6e7f8\0Move it\n\nline two\nask ops@%s.com\n' "$FAKE_PLAIN_LOWER"
+check "#2190 written in an email address it is refused by its line too (exit $text_rc): $text_out" has "$text_out" "commit 5d6e7f8:4:"
+org_texts 'commit 5d6e7f8\0Move it\n\nfrom %s/widget\n' "$FAKE_ORG"
+check "#2190 (control) the hyphenated organisation login is still an organisation name: $text_out" has "$text_out" "commit 5d6e7f8:3: a work organisation name"
+org_texts 'commit 5d6e7f8\0Move it\n\nthe %ss notes, and pre%s too\n' "$FAKE_PLAIN_LOWER" "$FAKE_PLAIN_LOWER"
+check "#2190 (control) a longer word holding the same letters passes (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+org_texts 'commit 5d6e7f8\0Move it\n\nan ordinary sentence about the widget\n'
+check "#2190 (control) an unrelated message passes with that project listed (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 mv "$PROJECTS" "$PROJECTS.away"
 repo_texts 'commit 1a2b3c4\0clean\n'
 check "an unreadable project list is refused, never read as clean (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
@@ -258,13 +289,18 @@ printf -- '- `~/Apps/Lanternwick`: a work app\n' > "$LOCALDIR/projects.local.txt
 local_texts "" 'commit 5d6e7f8\0Move it\n\nfrom the Lanternwick checkout\n'
 check "#2112 a project in the local file beside the CLAUDE.md is found with no hash (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
 check "and never repeated: $text_out" lacks "$(printf '%s' "$text_out" | tr '[:upper:]' '[:lower:]')" "lanternwick"
+# claude-config#2190: the work MacBook's own shape, its local file listing the project spelled as an
+# organisation without its hyphens.
+printf -- '- `~/Apps/%s`: a work app\n' "$FAKE_PLAIN" > "$LOCALDIR/projects.local.txt"
+local_texts "" 'commit 5d6e7f8\0Move it\n\nthe %s notes are done\n' "$FAKE_PLAIN_LOWER"
+check "#2190 that project in the local file is refused as a plain word (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
 printf 'nothing listed\n' > "$LOCALDIR/projects.local.txt"
 local_texts "" 'commit 1a2b3c4\0clean\n'
 check "#2112 a local file listing nothing, with no hash, is refused (exit $text_rc): $text_out" [ "$text_rc" -eq 2 ]
 rm -f "$LOCALDIR/projects.local.txt"
 local_texts unset 'commit 1a2b3c4\0clean\n'
 check "#2112 outside a test run the seam is ignored and the committed hashes make the list readable (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
-check "and the five committed hashes are counted beside the list's four names: $text_out" has "$text_out" "9 work repository and owner names"
+check "and the six committed hashes are counted beside the list's four names: $text_out" has "$text_out" "10 work repository and owner names"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"
@@ -320,6 +356,68 @@ check "#2252 (control) with that hash absent the same README passes, so the hit 
 cp "$DOCS/named-readme.md" "$DOCS/sub/README.md"
 docs_scan "$INKWELL_HASH" named-readme.md named-design.md sub/README.md
 check "#2252 (control) any other file, a nested README included, keeps #1568's rule (exit $scan_rc): $scan_out" [ "$scan_rc" -eq 0 ]
+
+# ---------------------------------------------------------------- 9. its test settings, outside a test
+# claude-config#2231: the scanner is asked by gates that read Claude Code's own environment, so a
+# setting meant for its tests must not be honoured anywhere else. A reader named there that answers
+# "nothing registered" would empty the registry half on every real run; the extra hashes are honoured
+# under the same marker, so one rule decides every setting.
+printf 'require("fs").writeFileSync(process.env.READER_RAN, "ran"); console.log(JSON.stringify({state: "missing", file: "/nowhere/repos.local.json"}))\n' > "$WORK/marking-reader.js"
+reader_texts(){   # $1 = the test marker's value -> text_out, text_rc
+  rm -f "$WORK/reader-ran"
+  text_out="$( printf 'commit 1a2b3c4\0Fix the %s reader\n' "$FAKE_ORG" | HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
+    WORK_NAMES_REGISTRY_READER="$WORK/marking-reader.js" READER_RAN="$WORK/reader-ran" HOOK_TESTS_RUNNING="$1" \
+    python3 "$SCAN" --texts0-from - 2>&1 )"; text_rc=$?
+}
+reader_texts 1
+check "#2231 (control) under the test marker the named registry reader is asked: $text_out" [ -e "$WORK/reader-ran" ]
+check "#2231 (control) and the extra hash finds the invented organisation (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+reader_texts ""
+check "#2231 outside a test run a registry reader named in the environment is never run: $text_out" [ ! -e "$WORK/reader-ran" ]
+check "#2231 outside a test run the extra hashes are not honoured (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+reader_texts 0
+check "#2231 nor with the marker set to anything but 1: $text_out" [ ! -e "$WORK/reader-ran" ]
+check "#2231 and the extra hashes not honoured with it either (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+reader_texts ""
+check "#2231 outside a test run the default reader reads the registry under HOME: $text_out" has "$text_out" "$EMPTY_HOME/.claude/skills/pennie-dev-update/repos.local.json"
+# The project list is a test setting too: a CLAUDE.md named there that lists nothing would take the
+# work MacBook's projects out of every real message check. One that cannot be read shows which file
+# was asked for, so the case needs no list of its own.
+list_texts(){   # $1 = the test marker's value -> text_out, text_rc
+  text_out="$( printf 'commit 1a2b3c4\0clean\n' | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" \
+    WORK_NAMES_PROJECT_LIST="$WORK/nowhere/CLAUDE.md" HOOK_TESTS_RUNNING="$1" \
+    python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+}
+list_texts 1
+check "#2231 (control) under the test marker the named project list is read (exit $text_rc): $text_out" has "$text_out" "$WORK/nowhere/CLAUDE.md"
+list_texts ""
+check "#2231 outside a test run a project list named in the environment is never read: $text_out" lacks "$text_out" "$WORK/nowhere/CLAUDE.md"
+list_texts 0
+check "#2231 nor with the marker set to anything but 1: $text_out" lacks "$text_out" "$WORK/nowhere/CLAUDE.md"
+# The work repository list's budget is not a test setting: check-work-names-merge.sh hands in what is
+# left of its own timeout. So it is honoured always, and may only shorten the default of 30, never
+# lengthen it, so no value named in the environment can hold the scan past the calling hook.
+budget_of(){   # $1 = the value, or "unset" -> the budget the scan would use, or "refused"
+  if [ "$1" = unset ]; then
+    env -u WORK_NAMES_REPOS_BUDGET_SECONDS -u HOOK_TESTS_RUNNING python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+  else
+    env -u HOOK_TESTS_RUNNING WORK_NAMES_REPOS_BUDGET_SECONDS="$1" python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+  fi
+}
+BUDGET_PY='import importlib.util, sys
+spec = importlib.util.spec_from_file_location("work_names", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+try:
+    print("%g" % mod.repos_budget())
+except ValueError:
+    print("refused")'
+check "#2231 (control) the repository list budget is 30 seconds when unset: $(budget_of unset)" [ "$(budget_of unset)" = 30 ]
+check "#2231 (control) a shorter budget handed in is honoured outside a test run: $(budget_of 12)" [ "$(budget_of 12)" = 12 ]
+check "#2231 a longer budget named in the environment is capped at 30: $(budget_of 1000)" [ "$(budget_of 1000)" = 30 ]
+check "#2231 an infinite budget is capped too: $(budget_of inf)" [ "$(budget_of inf)" = 30 ]
+check "#2231 a budget that is not a number is refused, never believed: $(budget_of nan)" [ "$(budget_of nan)" = refused ]
+check "#2231 nor is one that is a word: $(budget_of lots)" [ "$(budget_of lots)" = refused ]
 
 # The two built in hashes cover every owner in the registry on a Mac that has one, so the check CI
 # runs (with no registry) is the same check for the organisations that matter. Only measurable where
