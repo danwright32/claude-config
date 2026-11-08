@@ -667,8 +667,12 @@ mkdir -p "$_sc_runs" 2>/dev/null
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
 whole_above_zero "$_sc_run_stale" _sc_run_stale || _sc_run_stale=21600
-# A poll delay that can be injected (L524), for the wait on the suite lock further down.
-_sc_sleep="${SCANNERS_SLEEP:-sleep}"
+# A poll delay that can be injected (L524), for the wait on the suite lock further down. It names a
+# command this gate runs, so it is honoured only under the hooks' test marker, HOOK_TESTS_RUNNING=1,
+# which run-all-tests.sh exports to every suite and no real push carries (claude-config#2399, the
+# class #2317 closed for the merge gates' settings). Anywhere else the sleep on the PATH runs.
+_sc_sleep=sleep
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${SCANNERS_SLEEP:-}" ] && _sc_sleep="$SCANNERS_SLEEP"
 
 # The run's own script: it runs the suite with its output in the run's folder, then records how long
 # it took and, last, its exit code, written whole by a rename so a reader never sees half of one.
@@ -881,12 +885,13 @@ fi
 # long budget and names a file (SCANNERS_BUDGET_ENDS_WHEN) its scanner writes once it is holding;
 # the budget then ends as soon as that file exists, but not before SCANNERS_BUDGET_ENDS_NOT_BEFORE
 # seconds. Ending sooner can only refuse a push the budget would have let through, never pass one it
-# would have refused, so this cannot loosen the gate. And it is honoured only while the record of
-# passes is somewhere other than the real one, which every run of the suite sets and no real push
-# does (claude-config#2217), so a real push never reads it at all.
+# would have refused, so this cannot loosen the gate. And it is honoured only under the hooks' test
+# marker, HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push
+# carries: the one marker every hook's test only settings read (claude-config#2231), where this once
+# read a record of passes kept somewhere other than the real one (#2217).
 _sc_budget_ends_when=""
 _sc_budget_not_before=0
-if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "$_sc_state_dir" != "$HOME/.claude/state/scanners-passed" ]; then
+if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
   _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
   whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}" _sc_budget_not_before || _sc_budget_not_before=0
 fi
