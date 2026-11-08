@@ -77,7 +77,7 @@ sid="$(dcr_header "$REC" scan_id)"
 check "the record carries a scan_id" "$([ -n "$sid" ] && echo ok || echo "none")"
 check "the scan_id is never one disk-remove reads as --propose's" "$(case "$sid" in (named-*) echo "$sid" ;; (*) echo ok ;; esac)"
 check "the header names every category, the Trash first" \
-  "$(eq "$(dcr_header "$REC" categories)" "trash caches xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files")"
+  "$(eq "$(dcr_header "$REC" categories)" "trash caches xcode build-folders docker playwright claude-temp worktrees forgotten-worktrees transcripts runaway-logs forgotten-tools large-files")"
 check "the header says how each category went" "$(eq "$(dcr_header "$REC" status.caches)" measured)"
 check "an unmeasured category says so in the header" "$(has "$(dcr_header "$REC" status.docker)" "unmeasured: ")"
 check "the header says how the walk went" "$(eq "$(dcr_header "$REC" walk)" complete)"
@@ -436,11 +436,11 @@ check "du was run in batches, never once per item" "$([ "$(dc_calls du | wc -l |
 cc="$(dc_check_commands 2>&1)"; cc_rc=$?
 check "every command the disk-clean scripts call is stubbed, core or a builtin" "$([ "$cc_rc" -eq 0 ] && echo ok || echo "$(awk '/^fail/ && n++ < 10' <<< "$cc")")"
 missing=""
-for m in caches trash xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files; do
+for m in caches trash xcode build-folders docker playwright claude-temp worktrees forgotten-worktrees transcripts runaway-logs forgotten-tools large-files; do
   case "$cc" in *"follow	$m.sh	"*) ;; *) missing="$missing $m.sh" ;; esac
 done
 check "the check read scan.sh and every category module" "$([ -z "$missing" ] && echo ok || echo "not followed:$missing")"
-for m in caches trash xcode build-folders docker playwright claude-temp worktrees transcripts runaway-logs forgotten-tools large-files; do
+for m in caches trash xcode build-folders docker playwright claude-temp worktrees forgotten-worktrees transcripts runaway-logs forgotten-tools large-files; do
   check "categories/$m.sh is executable" "$([ -x "$DIR/categories/$m.sh" ] && echo ok || echo "not executable or missing")"
 done
 check "no category is named named, which disk-remove reserves" "$([ -e "$DIR/categories/named.sh" ] && echo "categories/named.sh exists" || echo ok)"

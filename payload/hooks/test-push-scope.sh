@@ -548,6 +548,13 @@ for c in 'gh -R o/x pr create --fill' 'gh pr -R o/x create --fill' 'gh --repo=o/
          'rtk gh -R o/x pr create' 'env GH_TOKEN=x gh pr --repo o/x create' 'sudo -u dan gh -Ro/x pr create'; do
   if ps_is_gh_pr_create "$c"; then check "#1188 a pr create is seen: $c" ok; else check "#1188 a pr create is seen: $c" "not seen"; fi
 done
+# gh pr new is gh's other name for gh pr create (claude-config#2411): read by the one reading of gh's
+# words (lib/shell-words.py gh_path), never by looking for the text create first.
+for c in 'gh pr new --fill' 'gh -R o/x pr new --fill' 'rtk gh pr new --title t --body b' "sh -c 'gh pr new --fill'"; do
+  if ps_is_gh_pr_create "$c"; then check "#2411 a pr new is seen as the creation it is: $c" ok; else check "#2411 a pr new is seen as the creation it is: $c" "not seen"; fi
+done
+if ps_is_gh_pr_create 'echo "gh pr new --fill"'; then check "#2411 a pr new inside a quoted argument is not a creation" "seen"
+else check "#2411 a pr new inside a quoted argument is not a creation" ok; fi
 if ps_is_gh_pr_create 'gh --fill pr create'; then check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" "seen"
 else check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" ok; fi
 for c in "env A=1 git push" "sudo git push origin main" "env -u X sudo -E git -C \"$SP\" push"; do
@@ -831,6 +838,56 @@ if [ "$pyc_got" != "PATHS a.txt b.txt " ]; then
 elif [ -n "$pyc_left" ]; then
   check "#1017 reading an add leaves no shell-words bytecode beside it" "it wrote [$pyc_left]"
 else check "#1017 reading an add leaves no shell-words bytecode beside it" ok; fi
+
+# The review runner is loaded by path from three places, and each used to leave
+# lib/__pycache__/ai-review-run.cpython-*.pyc in the installed, synced lib (#2353, the #1017 class):
+# ai-review-placement.py's runner(), and the loader snippets in the two ai-review suites. Only the
+# loaders run, never the suites (those take minutes), in a private copy of lib, never the shared one
+# other suites write into (#2103, L411), with the environment's bytecode switches cleared so only the
+# loader's own setting is measured (L322). The copy holds no bytecode before a run, so anything
+# there afterwards was written by it.
+PYC2353="$RD/pyc2353"; mkdir -p "$PYC2353/snippets"
+cp -R "$DIR/lib" "$PYC2353/lib" && find "$PYC2353/lib" -name __pycache__ -type d -prune -exec rm -rf {} +
+pyc2353_run() { env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$@"; }
+# Only the runner's own bytecode counts: the probe below loads ai-review-placement.py itself.
+pyc2353_left() { find "$PYC2353/lib" -name 'ai-review-run*.pyc' -print | tr '\n' ' '; }
+pyc2353_ans="$(pyc2353_run python3 -c 'import importlib.util,sys
+s=importlib.util.spec_from_file_location("p",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(hasattr(m.runner(),"framework_line"))' "$PYC2353/lib/ai-review-placement.py" 2>&1)"
+pyc2353_got="$(pyc2353_left)"
+if [ "$pyc2353_ans" != "True" ]; then
+  check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" "runner() did not load the review runner ([$pyc2353_ans]), so whether it writes bytecode was not measured"
+elif [ -n "$pyc2353_got" ]; then
+  check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" "it wrote [$pyc2353_got]"
+else check "#2353 ai-review-placement.py's runner() leaves no bytecode in lib" ok; fi
+rm -rf "$PYC2353/lib/__pycache__"
+# Each suite's python heredoc that loads ai-review-run.py, cut off after its exec_module line, so only
+# the loader runs. The count is checked against the loader lines in the suite, so a heredoc this
+# extraction misses is reported rather than skipped (L98).
+for pyc2353_suite in test-ai-review-start-order.sh test-ai-review-on-push.sh; do
+  rm -f "$PYC2353"/snippets/*
+  awk -v out="$PYC2353/snippets" '
+    /<<.EOF.( \|\| true)?$/ { inb = 1; body = ""; done = 0; next }
+    inb && /^EOF$/ { if (body ~ /spec_from_file_location\("ai_review_run"/) { n++; f = out "/" n ".py"; printf "%s", body > f; close(f) } inb = 0; next }
+    inb && !done { body = body $0 "\n"; if ($0 ~ /exec_module\(m\)/) done = 1 }
+  ' "$DIR/$pyc2353_suite"
+  pyc2353_want="$(grep -c 'spec_from_file_location("ai_review_run"' "$DIR/$pyc2353_suite")"
+  pyc2353_have="$(ls "$PYC2353/snippets" | wc -l | tr -d ' ')"
+  if [ "$pyc2353_have" != "$pyc2353_want" ] || [ "$pyc2353_have" = 0 ]; then
+    check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "extracted $pyc2353_have loader snippet(s) against $pyc2353_want loader line(s), so it was not measured"
+    continue
+  fi
+  pyc2353_bad=""
+  for pyc2353_snip in "$PYC2353"/snippets/*.py; do
+    pyc2353_err="$(pyc2353_run python3 - "$PYC2353/lib/ai-review-run.py" < "$pyc2353_snip" 2>&1)" \
+      || pyc2353_bad="$pyc2353_bad [$(basename "$pyc2353_snip") did not run: $pyc2353_err]"
+  done
+  pyc2353_got="$(pyc2353_left)"
+  if [ -n "$pyc2353_bad" ]; then check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "not measured:$pyc2353_bad"
+  elif [ -n "$pyc2353_got" ]; then check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" "it wrote [$pyc2353_got]"
+  else check "#2353 $pyc2353_suite's runner loaders leave no bytecode in lib" ok; fi
+  rm -rf "$PYC2353/lib/__pycache__"
+done
 
 # The reader's edges, each one a way a plausible scanner gets the directory wrong.
 want_repo "cd $T &>/dev/null && git push" "$T" \

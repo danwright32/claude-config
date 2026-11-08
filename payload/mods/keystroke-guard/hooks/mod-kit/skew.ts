@@ -74,13 +74,53 @@ export const skewSentence = (mod: string, m: Missing): string =>
 // test's deny and the real engine's denied reads), and a failure, "<mod>: $.fs.stat(<path>) failed:
 // <reason>" (the real engine, 2026-11-01). An abandoned command's "<mod>: $.process.run(mkdir)
 // aborted" has no reason after it and is left as it is: /sleep reads it as abandoned (#1677).
-// The call's argument runs to the first ") failed: ", not the first ")", since a path may hold a
-// bracket ("/tmp/out (1)/job.log") and stopping there found no call, and so no code, at all.
-const ENGINE_CALL = /^[a-z0-9][\w-]*: \$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\(([\s\S]*?)\) failed)?: ([\s\S]*)$/
+const ENGINE_HEAD = /^[a-z0-9][\w-]*: \$\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)/
+const FAILED = ') failed: '
 // A system error as Node and the engine spell it: its code, then optionally its own words and, for a
 // file, the call and the path ("EACCES: permission denied, open '/p'").
 const SYSTEM_ERROR = /^(E[A-Z0-9]{2,})(?::\s*([\s\S]*))?$/
+const BARE_CODE = /^E[A-Z0-9]{2,}$/
 const SYSCALL_PATH = /^[^,]*, [a-z_]+ '([^']*)'(?: -> '[^']*')?$/
+
+type EngineCall = { noun: string; member: string; arg: string | undefined; reason: string }
+
+/** The path a system error's own words name, or null when they name none. */
+const reasonPath = (reason: string): string | null => {
+  const sys = SYSTEM_ERROR.exec(reason.trim())
+  if (!sys) return null
+  const detail = (sys[2] ?? '').trim()
+  return SYSCALL_PATH.exec(detail)?.[1] ?? (detail.startsWith('/') || detail.startsWith('~') ? detail : null)
+}
+
+/**
+ * An engine call's name, argument and reason, or null when the text is not one. The words
+ * ") failed: " can sit in the path ("/tmp/a) failed: b/job.log"), in the reason (a path it quotes),
+ * or in both, so neither the first nor the last of them is where the argument ends (#2328). Each
+ * place they occur is a possible end, and the reason is read by the engine's known reason shapes,
+ * a system error: first an end whose reason names the argument as its own path, then one whose
+ * reason is a bare code (the shape the real engine gives, 2026-11-01), then the first whose reason
+ * is a system error at all, which keeps a reason quoting the words whole. A reason in no known
+ * shape cannot say where it starts, and keeps the last end, as #2367 read it.
+ */
+const engineCall = (text: string): EngineCall | null => {
+  const head = ENGINE_HEAD.exec(text)
+  if (!head) return null
+  const [whole, noun, member] = head as unknown as [string, string, string]
+  const rest = text.slice(whole.length)
+  if (rest.startsWith(': ')) return { noun, member, arg: undefined, reason: rest.slice(2) }
+  if (!rest.startsWith('(')) return null
+  const ends: { arg: string; reason: string }[] = []
+  for (let at = rest.indexOf(FAILED); at !== -1; at = rest.indexOf(FAILED, at + 1)) {
+    ends.push({ arg: rest.slice(1, at), reason: rest.slice(at + FAILED.length) })
+  }
+  const known = ends.filter((e) => SYSTEM_ERROR.test(e.reason.trim()))
+  const end =
+    known.find((e) => reasonPath(e.reason) === e.arg) ??
+    known.find((e) => BARE_CODE.test(e.reason.trim())) ??
+    known[0] ??
+    ends[ends.length - 1]
+  return end ? { noun, member, ...end } : null
+}
 
 // What a file call could not do, in words. A call missing here keeps only its reason.
 const CALL_WORDS: Readonly<Record<string, string>> = {
@@ -112,9 +152,9 @@ const CODE_WORDS: Readonly<Record<string, string>> = {
 
 /** An engine call's failure as plain words, or null when the text is not one. */
 const engineWords = (text: string): string | null => {
-  const call = ENGINE_CALL.exec(text)
+  const call = engineCall(text)
   if (!call) return null
-  const [, noun, member, arg, reason] = call as unknown as [string, string, string, string | undefined, string]
+  const { noun, member, arg, reason } = call
   const sys = SYSTEM_ERROR.exec(reason.trim())
   const words = sys ? CODE_WORDS[sys[1] as string] : undefined
   let why = reason
@@ -151,7 +191,7 @@ export const errorCode = (err: unknown): string | null => {
   if (typeof own === 'string' && /^E[A-Z0-9]{2,}$/.test(own)) return own
   if (err === undefined || err === null) return null
   const text = rawText(err)
-  const reason = ENGINE_CALL.exec(text)?.[4] ?? text
+  const reason = engineCall(text)?.reason ?? text
   return SYSTEM_ERROR.exec(reason.trim())?.[1] ?? null
 }
 

@@ -262,6 +262,431 @@ grep -rn chat.postMessage .
 EOF"
 allowed "a shell fed a heredoc that only greps for the endpoint"
 
+echo "slack drafts only: a script posting through a module it imports is refused (claude-config#2318)"
+
+# The shape measured in repo-digest on 2026-11-05: package.json runs `FORCE_RUN=1 node src/digest.ts`,
+# src/digest.ts names no endpoint and imports ./slack.ts (with its .ts extension written, beside a
+# node builtin and an `import type`), and src/slack.ts names chat.postMessage. The #2302 gate let it
+# through (exit 0).
+mkdir -p "$T/rd/src"
+printf '%s\n' '{"name": "repo-digest", "type": "module", "scripts": {' \
+  '  "digest": "FORCE_RUN=1 node src/digest.ts", "fmt": "node src/fmt-only.ts"}}' > "$T/rd/package.json"
+cat > "$T/rd/src/digest.ts" <<'TS'
+import { readFileSync } from "node:fs";
+import { buildDigest } from "./format.ts";
+import { postDigest } from "./slack.ts";
+await postDigest(buildDigest(JSON.parse(readFileSync("repos.json", "utf8"))));
+TS
+cat > "$T/rd/src/format.ts" <<'TS'
+export type SlackBlock = { type: string };
+export function buildDigest(x: unknown): SlackBlock[] { return [{ type: String(x) }]; }
+TS
+cat > "$T/rd/src/slack.ts" <<'TS'
+import type { SlackBlock } from "./format.ts";
+export async function postDigest(blocks: SlackBlock[]) {
+  await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: JSON.stringify(blocks) });
+}
+TS
+printf '%s\n' 'import { buildDigest } from "./format.ts";' 'console.log(buildDigest(1));' > "$T/rd/src/fmt-only.ts"
+for posts in "cd $T/rd && npm run digest" "cd $T/rd && node src/digest.ts" "node $T/rd/src/digest.ts" \
+  "cd $T/rd && npx tsx src/digest.ts" "cd $T/rd/src && FORCE_RUN=1 node digest.ts"; do
+  run_bash "$posts"
+  refused "a script importing a helper that posts, run as: $posts"
+done
+run_bash "cd $T/rd && npm run digest"
+says "the refusal names the helper the script imports" "slack.ts"
+says "the refusal names the endpoint the helper holds" "chat.postMessage"
+run_bash "cd $T/rd && npm run fmt"
+allowed "a package script whose script imports only a helper that names no endpoint"
+
+# The resolutions node and TypeScript make: no extension, a directory's index, require(), a dynamic
+# import(), an `export ... from`, and the .js a TypeScript ESM file writes for its own .ts sibling.
+mkdir -p "$T/imp/lib/notify" "$T/imp/deep" "$T/imp/cyc" "$T/imp/ok"
+printf '%s\n' 'module.exports = () => fetch("https://hooks.slack.com/services/T0/B0/x");' > "$T/imp/lib/notify/index.js"
+printf '%s\n' 'const notify = require("./lib/notify");' 'notify();' > "$T/imp/req.js"
+printf '%s\n' 'const m = await import("./lib/notify/index.js");' > "$T/imp/dyn.mjs"
+printf '%s\n' 'export { post } from "./ts-helper.js";' > "$T/imp/reexport.ts"
+printf '%s\n' 'export const post = () => fetch("https://slack.com/api/chat.scheduleMessage");' > "$T/imp/ts-helper.ts"
+printf '%s\n' '#!/usr/bin/env node' 'require("../lib/notify")();' > "$T/imp/deep/notify-cli"
+chmod +x "$T/imp/deep/notify-cli"
+for posts in "node $T/imp/req.js" "node $T/imp/dyn.mjs" "npx tsx $T/imp/reexport.ts" "$T/imp/deep/notify-cli"; do
+  run_bash "$posts"
+  refused "a script reaching a posting helper through an import node resolves, run as: $posts"
+done
+run_bash "node $T/imp/req.js"
+says "a helper found as a directory's index is named" "index.js"
+
+# Two imports deep: the script names nothing, the helper it imports names nothing, and the helper
+# that one imports posts.
+printf '%s\n' 'import { a } from "./mid";' 'a();' > "$T/imp/deep/top.ts"
+printf '%s\n' 'import { b } from "./bottom";' 'export const a = () => b();' > "$T/imp/deep/mid.ts"
+printf '%s\n' 'export const b = () => fetch("https://slack.com/api/chat.postMessage");' > "$T/imp/deep/bottom.ts"
+run_bash "node $T/imp/deep/top.ts"
+refused "a script whose helper imports a helper that posts"
+says "the refusal names the helper two imports deep" "bottom.ts"
+
+# A cycle ends: two helpers importing each other are each read once, and a poster reached only past
+# the cycle is still found.
+printf '%s\n' 'import { y } from "./y";' 'export const x = () => y();' > "$T/imp/cyc/x.ts"
+printf '%s\n' 'import { x } from "./x";' 'export const y = () => x;' > "$T/imp/cyc/y.ts"
+printf '%s\n' 'import { x } from "./x";' 'x();' > "$T/imp/cyc/main.ts"
+run_bash "node $T/imp/cyc/main.ts"
+allowed "an import cycle that names no endpoint ends and passes"
+printf '%s\n' 'import { x } from "./x";' 'import { z } from "./z";' 'export const w = () => x() + z();' > "$T/imp/cyc/w.ts"
+printf '%s\n' 'import { w } from "./w";' 'export const z = () => fetch("https://slack.com/api/chat.postEphemeral");' > "$T/imp/cyc/z.ts"
+printf '%s\n' 'import { w } from "./w";' 'w();' > "$T/imp/cyc/main2.ts"
+run_bash "node $T/imp/cyc/main2.ts"
+refused "a poster reached through an import cycle"
+says "the refusal names the helper past the cycle" "z.ts"
+
+# An import the gate cannot find or read is a module it cannot see, and node may still find it
+# (package.json exports, a path alias, a loader), so it is refused rather than passed.
+printf '%s\n' 'import { gone } from "./not-here";' 'gone();' > "$T/imp/missing.ts"
+run_bash "node $T/imp/missing.ts"
+refused "a script importing a relative module the gate cannot find"
+says "the refusal names the import it could not find" "./not-here"
+printf '%s\n' 'export const s = 1;' > "$T/imp/sealed.ts"
+printf '%s\n' 'import { s } from "./sealed.ts";' 'console.log(s);' > "$T/imp/reads-sealed.ts"
+chmod 000 "$T/imp/sealed.ts"
+if [ -r "$T/imp/sealed.ts" ]; then
+  echo "SUITE-PART-UNMEASURED #2318 a script importing a module the gate cannot read: this user can read a mode 000 file (running as root), so no unreadable module could be made"
+else
+  run_bash "node $T/imp/reads-sealed.ts"
+  refused "a script importing a module the gate cannot read"
+  says "the refusal names the module it could not read" "sealed.ts"
+fi
+chmod 644 "$T/imp/sealed.ts"
+# An import written in a comment is an example, not code node runs (claude-config#2397). Measured
+# 2026-11-07: a test harness whose header comment shows how to import it, from the suites' folder,
+# was read as importing ./lib/harness.ts from its own folder, which is not there, so every suite
+# importing the harness was refused. The fixture is that shape: a suite in scripts/, the harness in
+# scripts/lib/, and no scripts/lib/lib/.
+mkdir -p "$T/imp/cmt/scripts/lib"
+printf '%s\n' '// A tiny test harness. Use it from a suite like this:' \
+  '//   import { assert, finish } from "./lib/harness.ts";' \
+  '/* or, the older way:' \
+  '   const { assert } = require("./lib/old-harness.js");' \
+  '*/' \
+  '/**' \
+  ' * import { finish } from "./lib/finish.ts";' \
+  ' */' \
+  'export const assert = (ok: boolean) => { if (!ok) throw new Error("failed"); };' \
+  'export const finish = () => console.log("done"); // import "./lib/trailing.ts"' > "$T/imp/cmt/scripts/lib/harness.ts"
+printf '%s\n' 'import { assert, finish } from "./lib/harness.ts";' 'assert(true);' 'finish();' > "$T/imp/cmt/scripts/test-lane.ts"
+run_bash "node $T/imp/cmt/scripts/test-lane.ts"
+allowed "a suite whose harness shows an example import in its comments"
+run_bash "cd $T/imp/cmt && node --experimental-strip-types scripts/test-lane.ts"
+allowed "the same suite run from the repository root"
+# The controls: a real import of a missing module beside those comments is still refused, and so is
+# one after a string, a template or a regex holding // (a URL is not a comment opening), or after a
+# block comment closed earlier on its line.
+printf '%s\n' '// import { a } from "./lib/example.ts";' 'import { gone } from "./not-here";' 'gone();' > "$T/imp/cmt/real.ts"
+run_bash "node $T/imp/cmt/real.ts"
+refused "a real import of a missing module below a commented example"
+says "that refusal names the real import" "./not-here"
+for line in 'const u = "https://example.com/a"; import { gone } from "./not-here";' \
+  "const u = 'https://example.com/a'; import { gone } from \"./not-here\";" \
+  'const u = `https://example.com/${1}`; import { gone } from "./not-here";' \
+  'const r = /https?:\/\//; import { gone } from "./not-here";' \
+  'const s = "/*"; import { gone } from "./not-here"; const e = "*/";' \
+  '/* a note */ import { gone } from "./not-here";' \
+  'const x = 1 / 2; import { gone } from "./not-here"; const y = 3 / 4;'; do
+  printf '%s\n' "$line" > "$T/imp/cmt/url.ts"
+  run_bash "node $T/imp/cmt/url.ts"
+  refused "a real import of a missing module on a line holding: ${line:0:40}"
+done
+# A block comment that never closes is not trusted as a comment: node refuses to parse the file, and
+# a misread one must not hide the imports after it.
+printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/cmt/open.ts"
+run_bash "node $T/imp/cmt/open.ts"
+refused "an import after a block comment that never closes"
+# Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
+# lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+mkdir -p "$T/imp/chain" "$T/imp/short"
+for n in $(seq 0 305); do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/chain/m$n.ts"; done
+printf '%s\n' 'export {};' > "$T/imp/chain/m306.ts"
+for n in 0 1 2; do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/short/m$n.ts"; done
+printf '%s\n' 'export {};' > "$T/imp/short/m3.ts"
+run_bash "node $T/imp/chain/m0.ts"
+refused "a script whose imports reach more modules than the gate reads"
+says "the refusal says the imports go past what it reads" "more than 300 modules"
+run_bash "node $T/imp/short/m0.ts"
+allowed "a short import chain that names no endpoint"
+
+# Passes: a helper that only saves a draft, packages and node builtins (not ours to read, and not
+# relative), and an import whose path is assembled at run time.
+cat > "$T/imp/ok/draft.ts" <<'TS'
+import { writeFileSync } from "node:fs";
+// Saves the message as a draft for Dan to send himself (slack_send_message_draft does the rest).
+export const saveDraft = (text: string) => writeFileSync("drafts/digest.md", text);
+TS
+cat > "$T/imp/ok/main.ts" <<'TS'
+import express from "express";
+import { join } from "node:path";
+import { saveDraft } from "./draft";
+const lang = process.env.LANG_CODE;
+const words = await import(`./locales/${lang}.js`);
+saveDraft(join("a", String(express), String(words)));
+TS
+run_bash "node $T/imp/ok/main.ts"
+allowed "a script importing a helper that only saves a draft, a package and a builtin"
+run_bash "grep -rn chat.postMessage $T/rd/src/slack.ts"
+allowed "a grep for the endpoint in the helper still passes"
+
+# A Python script's imports are followed the same way: a sibling module, a package and its
+# __init__.py, a relative import inside a package. A module not on disk beside it is the standard
+# library or an installed package, so `import json` is not an import the gate cannot find; a relative
+# one that names nothing is.
+mkdir -p "$T/py/helpers/inner" "$T/py/ok" "$T/py/cyc" "$T/py/badpkg"
+printf '%s\n' 'import json, os' 'import notify_helper' 'notify_helper.go()' > "$T/py/run_alert.py"
+printf '%s\n' 'import urllib.request' 'def go():' '    urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/py/notify_helper.py"
+printf '%s\n' 'from helpers.inner import relay' 'relay.go()' > "$T/py/run_pkg.py"
+: > "$T/py/helpers/__init__.py"; : > "$T/py/helpers/inner/__init__.py"
+printf '%s\n' 'from . import sender' 'def go():' '    sender.send()' > "$T/py/helpers/inner/relay.py"
+printf '%s\n' 'def send():' '    return "https://hooks.slack.com/services/T0/B0/x"' > "$T/py/helpers/inner/sender.py"
+printf '%s\n' 'from .gone import thing' > "$T/py/badpkg/mod.py"; : > "$T/py/badpkg/__init__.py"
+printf '%s\n' 'from badpkg import mod' > "$T/py/run_bad.py"
+for posts in "python3 $T/py/run_alert.py" "cd $T/py && python3 run_alert.py" "uv run $T/py/run_alert.py" \
+  "python3 $T/py/run_pkg.py"; do
+  run_bash "$posts"
+  refused "a Python script importing a helper that posts, run as: $posts"
+done
+run_bash "python3 $T/py/run_alert.py"
+says "the refusal names the Python helper" "notify_helper.py"
+run_bash "python3 $T/py/run_pkg.py"
+says "the refusal names the Python helper three imports deep" "sender.py"
+run_bash "python3 $T/py/run_bad.py"
+refused "a Python relative import the gate cannot find"
+says "the refusal names the relative import it could not find" ".gone"
+printf '%s\n' 'import a_mod' 'a_mod.f()' > "$T/py/cyc/main.py"
+printf '%s\n' 'import b_mod' 'def f():' '    return b_mod' > "$T/py/cyc/a_mod.py"
+printf '%s\n' 'import a_mod' > "$T/py/cyc/b_mod.py"
+run_bash "python3 $T/py/cyc/main.py"
+allowed "a Python import cycle that names no endpoint ends and passes"
+printf '%s\n' 'import json, sys, requests' 'from pathlib import Path' 'from draft_saver import save' 'save("hi")' > "$T/py/ok/main.py"
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)  # a draft for Dan' > "$T/py/ok/draft_saver.py"
+# The package is installed in the project's own virtual environment, where the gate places it
+# (claude-config#2358): an import placed nowhere is refused below.
+mkdir -p "$T/py/ok/.venv/lib/python3.12/site-packages/requests"
+printf '%s\n' 'home = /usr/bin' > "$T/py/ok/.venv/pyvenv.cfg"
+: > "$T/py/ok/.venv/lib/python3.12/site-packages/requests/__init__.py"
+run_bash "python3 $T/py/ok/main.py"
+allowed "a Python script importing the standard library, a package and a helper that only saves a draft"
+
+echo "slack drafts only: a Python import is placed through PYTHONPATH and sys.path, or refused (claude-config#2358)"
+
+# A helper that posts, found only through PYTHONPATH or a sys.path change: the #2357 gate looked for
+# it beside the script alone, took it for an installed package, and let the script through (exit 0).
+mkdir -p "$T/pp/lib" "$T/pp/app" "$T/pp/okdir"
+printf '%s\n' 'import json, urllib.request' 'def go():' \
+  '    urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' \
+  > "$T/pp/lib/pp_notify.py"
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)' > "$T/pp/okdir/pp_notify.py"
+printf '%s\n' 'import pp_notify' 'pp_notify.go()' > "$T/pp/app/run.py"
+printf '%s\n' 'import sys' "sys.path.insert(0, \"$T/pp/lib\")" 'import pp_notify' 'pp_notify.go()' > "$T/pp/app/literal.py"
+printf '%s\n' 'import os, sys' 'sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))' \
+  'import pp_notify' > "$T/pp/app/beside.py"
+printf '%s\n' 'import sys' 'from pathlib import Path' 'sys.path.append(str(Path(__file__).resolve().parent.parent / "lib"))' \
+  'from pp_notify import go' > "$T/pp/app/pathlib_append.py"
+# The forms measured in this payload's own scripts on 2026-11-07: a name set from __file__ first, a
+# string joined with +, and Path(...).parents[n].
+printf '%s\n' 'import os, sys' 'HERE = os.path.dirname(os.path.abspath(__file__))' 'sys.path.insert(0, HERE + "/../lib")' \
+  'import pp_notify' > "$T/pp/app/named.py"
+printf '%s\n' 'import sys' 'from pathlib import Path' 'ROOT = Path(__file__).resolve().parents[1]' \
+  'sys.path.insert(0, str(ROOT / "lib"))' 'import pp_notify' > "$T/pp/app/parents.py"
+printf '%s\n' 'import json' 'import no_such_helper_2358' 'no_such_helper_2358.go()' > "$T/pp/app/unplaced.py"
+for posts in "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py" "cd $T/pp && PYTHONPATH=lib python3 app/run.py" \
+  "env PYTHONPATH=$T/pp/app/none:$T/pp/lib python3 $T/pp/app/run.py" "export PYTHONPATH=$T/pp/lib; python3 $T/pp/app/run.py" \
+  "python3 $T/pp/app/literal.py" "python3 $T/pp/app/beside.py" "python3 $T/pp/app/pathlib_append.py" \
+  "python3 $T/pp/app/named.py" "python3 $T/pp/app/parents.py"; do
+  run_bash "$posts"
+  refused "a Python helper that posts, placed through PYTHONPATH or sys.path, run as: $posts"
+done
+run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
+says "the refusal names the helper found on PYTHONPATH" "pp_notify.py"
+run_bash "PYTHONPATH=$T/pp/okdir python3 $T/pp/app/run.py"
+allowed "the same import placed on PYTHONPATH at a helper that only saves a draft"
+# Python imports the first one it finds along PYTHONPATH, so the posting one behind it never runs.
+run_bash "PYTHONPATH=$T/pp/okdir:$T/pp/lib python3 $T/pp/app/run.py"
+allowed "the import found first on PYTHONPATH at the helper that only saves a draft"
+run_bash "python3 $T/pp/app/unplaced.py"
+refused "a Python import found nowhere: not beside the script, on PYTHONPATH, standard library or installed"
+says "that refusal names the import it could not place" "no_such_helper_2358"
+says "that refusal says the gate could not check whether it posts" "could not check whether this command posts to Slack"
+case "$ERR" in *"REFUSED: this command posts to Slack"*) check "that refusal does not claim the command posts" "stderr claimed a post: ${ERR:0:300}" ;; *) check "that refusal does not claim the command posts" ok ;; esac
+run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
+says "a script that really posts still gets the posts wording" "REFUSED: this command posts to Slack"
+run_bash "python3 $T/pp/app/run.py"
+refused "the PYTHONPATH script run without it, its import placed nowhere"
+# An export inside a script run in its own shell ends with that shell, so it must not place the
+# imports of the commands after it; a sourced one really exports into the caller (claude-config#2409).
+printf '%s\n' '#!/bin/bash' "export PYTHONPATH=$T/pp/okdir" > "$T/pp/setexp.sh"
+run_bash "bash $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+refused "an export inside a script run by bash does not place the next command's import"
+run_bash "source $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+allowed "an export inside a sourced script places the next command's import"
+run_bash ". $T/pp/setexp.sh && python3 $T/pp/app/run.py"
+allowed "the same sourced with a dot"
+run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
+refused "inline Python importing a module placed nowhere"
+
+# Code given inline or fed on standard input imports from the directory it runs in.
+run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
+refused "python3 -c importing a helper that posts"
+run_bash "cd $T/imp && node -e 'require(\"./lib/notify\")()'"
+refused "node -e requiring a helper that posts"
+says "the inline refusal names the helper" "index.js"
+run_bash "cd $T/py && python3 - <<'PY'
+import notify_helper
+notify_helper.go()
+PY"
+refused "a Python script fed on standard input importing a helper that posts"
+run_bash "cd $T/py && python3 -c 'import json; print(json.dumps(1))'"
+allowed "python3 -c importing only the standard library"
+run_bash "cd $T/imp && node -e 'console.log(require(\"node:fs\").existsSync(\"x\"))'"
+allowed "node -e requiring only a builtin"
+run_bash "cat $T/rd/src/digest.ts"
+allowed "reading the importing script runs nothing"
+
+echo "slack drafts only: a file handed to a script as data is not code it runs (claude-config#2362)"
+
+# The two refusals measured 2026-11-06. The end of turn review's TO FILE THESE line, bash
+# lib/issue-spool.sh clear <project> <transcript .jsonl> <stamp .manifest>, over a session transcript
+# whose conversation text names chat.postMessage; and node running a script over a saved gh listing
+# (a .json) that names it. Both were refused (exit 2), each data file read as though it were a script.
+mkdir -p "$T/ds/proj"
+printf '%s\n' '{"type":"user","message":{"content":"curl -X POST https://slack.com/api/chat.postMessage -d text=hi"}}' \
+  '{"type":"assistant","message":{"content":"the gate refuses hooks.slack.com too"}}' > "$T/ds/session.jsonl"
+printf '%s\n' '{"keys":{}}' > "$T/ds/claude-issue-findings.session.manifest"
+printf '%s\n' '[{"number":2302,"title":"Refuse chat.postMessage from every session"}]' > "$T/ds/issues.json"
+printf '%s\n' 'const fs = require("fs");' 'const rows = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' \
+  'console.log(rows.map((r) => r.title).join(", "));' > "$T/ds/titles.js"
+printf '%s\n' 'import json, sys' 'print(len(json.load(open(sys.argv[1]))))' > "$T/ds/count.py"
+run_bash "bash $DIR/lib/issue-spool.sh clear $T/ds/proj $T/ds/session.jsonl $T/ds/claude-issue-findings.session.manifest"
+allowed "issue-spool.sh clear over a transcript whose conversation names chat.postMessage"
+for reads in "node $T/ds/titles.js $T/ds/issues.json" "cd $T/ds && node titles.js issues.json" \
+  "python3 $T/ds/count.py $T/ds/issues.json" "python3 -I $T/ds/count.py $T/ds/session.jsonl"; do
+  run_bash "$reads"
+  allowed "a script reading a data file that names an endpoint, run as: $reads"
+done
+
+# The controls: a data file is still code where the program runs it, and a script that can send, or
+# runs what it is handed, still has the files it is handed read.
+for runs in "node $T/ds/issues.json" "python3 $T/ds/session.jsonl" "bash $T/ds/session.jsonl" \
+  "python3 -I $T/ds/issues.json $T/ds/count.py"; do
+  run_bash "$runs"
+  refused "a data file naming an endpoint given to the program as its script: $runs"
+done
+run_bash "python3 $T/alert.py $T/ds/issues.json"
+refused "a script whose own code posts, handed a data file"
+says "that refusal names the script that posts" "alert.py"
+printf '%s\n' '{"url": "https://slack.com/api/chat.postMessage", "text": "hi"}' > "$T/ds/msg.json"
+printf '%s\n' 'const fs = require("fs");' 'const m = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' \
+  'await fetch(m.url, { method: "POST", body: JSON.stringify({ text: m.text }) });' > "$T/ds/post.mjs"
+run_bash "node $T/ds/post.mjs $T/ds/msg.json"
+refused "a script that sends a request, handed a data file naming the endpoint"
+says "that refusal names the data file" "msg.json"
+# A file read as code before the script (an option's value) must not stand in for the script when
+# judging what the script does with its data (lessons review, 2026-11-07).
+run_bash "node --require $T/ds/titles.js $T/ds/post.mjs $T/ds/msg.json"
+refused "a sending script behind an option's file value, handed a data file naming the endpoint"
+printf '%s\n' 'import json, sys, urllib.request' 'm = json.load(open(sys.argv[1]))' \
+  'urllib.request.urlopen(urllib.request.Request(m["url"], data=m["text"].encode()))' > "$T/ds/post.py"
+run_bash "python3 $T/ds/post.py $T/ds/msg.json"
+refused "a Python script that sends a request, handed a data file naming the endpoint"
+# A hand list of ways to send or run code always misses one (lessons review at 56b9d7f): urllib3,
+# httplib2, smtplib, ftplib, asyncio streams and importlib's exec_module each slipped past it, and
+# the data file each was handed went unread. A Python script now counts as unable to act only when
+# every module it imports is one that cannot send, run code or write, so each of these is refused.
+# urllib3 and httplib2 are made installed in a throwaway virtual environment beside the scripts, so
+# the test does not depend on what this Mac has installed (placed nowhere is refused anyway).
+mkdir -p "$T/dv/.venv/lib/python3/site-packages/urllib3" "$T/dv/.venv/lib/python3/site-packages/httplib2" "$T/dv/lib"
+printf '%s\n' 'home = /usr/bin' > "$T/dv/.venv/pyvenv.cfg"
+printf '%s\n' '' > "$T/dv/.venv/lib/python3/site-packages/urllib3/__init__.py"
+printf '%s\n' '' > "$T/dv/.venv/lib/python3/site-packages/httplib2/__init__.py"
+cp "$T/ds/msg.json" "$T/dv/msg.json"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/dv/job.txt"
+printf '%s\n' 'import json, sys, urllib3' 'm = json.load(open(sys.argv[1]))' \
+  'urllib3.PoolManager().request("POST", m["url"], body=m["text"])' > "$T/dv/u3.py"
+printf '%s\n' 'import json, sys, httplib2' 'm = json.load(open(sys.argv[1]))' \
+  'httplib2.Http().request(m["url"], "POST", body=m["text"])' > "$T/dv/h2.py"
+printf '%s\n' 'import json, smtplib, sys' 'm = json.load(open(sys.argv[1]))' \
+  'smtplib.SMTP("localhost").sendmail("a@b", ["c@d"], m["url"])' > "$T/dv/mail.py"
+printf '%s\n' 'import ftplib, io, json, sys' 'm = json.load(open(sys.argv[1]))' \
+  'ftplib.FTP("localhost").storbinary("STOR x", io.BytesIO(m["url"].encode()))' > "$T/dv/ftp.py"
+printf '%s\n' 'import asyncio, json, sys' 'async def go(m):' '    r, w = await asyncio.open_connection("slack.com", 443, ssl=True)' \
+  '    w.write(m["url"].encode())' 'asyncio.run(go(json.load(open(sys.argv[1]))))' > "$T/dv/aio.py"
+printf '%s\n' 'import importlib.machinery, importlib.util, sys' \
+  'loader = importlib.machinery.SourceFileLoader("job", sys.argv[1])' \
+  'mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("job", loader))' 'loader.exec_module(mod)' > "$T/dv/load.py"
+printf '%s\n' 'import json, sys' 'print(eval(json.load(open(sys.argv[1]))["text"]))' > "$T/dv/ev.py"
+printf '%s\n' 'import json, os.path, sys' 'm = json.load(open(sys.argv[1]))' 'os.system("curl -d x " + m["url"])' > "$T/dv/ospath.py"
+printf '%s\n' 'import json, sys' 'm = json.load(open(sys.argv[1]))' 'sys.modules["os"].system("curl " + m["url"])' > "$T/dv/sysmod.py"
+printf '%s\n' 'import json, sys' 'm = json.load(open(sys.argv[1]))' 'open("/tmp/x.sh", "w").write("curl " + m["url"])' > "$T/dv/writes.py"
+printf '%s\n' 'import smtplib' 'def send(text):' '    smtplib.SMTP("localhost").sendmail("a@b", ["c@d"], text)' > "$T/dv/lib_mailer.py"
+printf '%s\n' 'import json, sys' 'import lib_mailer' 'lib_mailer.send(json.load(open(sys.argv[1]))["url"])' > "$T/dv/via.py"
+for acts in "u3.py msg.json" "h2.py msg.json" "mail.py msg.json" "ftp.py msg.json" "aio.py msg.json" \
+  "load.py job.txt" "ev.py msg.json" "ospath.py msg.json" "sysmod.py msg.json" "writes.py msg.json" "via.py msg.json"; do
+  run_bash "cd $T/dv && python3 $acts"
+  refused "a Python script that can act on what it is handed, handed a data file naming the endpoint: $acts"
+done
+run_bash "cd $T/dv && python3 u3.py msg.json"
+says "the refusal names the module the gate does not know to be inert" "urllib3"
+# The controls: a script importing only modules that cannot send, run code or write, which prints the
+# data file it is handed, still has that file read as data. re.compile is a regular expression, not
+# the compile builtin (claude-config#2413).
+printf '%s\n' 'import json, sys' 'print(json.load(open(sys.argv[1]))["text"])' > "$T/dv/show.py"
+printf '%s\n' 'import json, re, sys' 'from os import path' 'from typing import Any' 'pat = re.compile(r"chat\.\w+")' \
+  'm: Any = json.load(open(sys.argv[1]))' 'print(path.basename(sys.argv[1]), pat.findall(m["url"]))' > "$T/dv/rx.py"
+for reads in "show.py msg.json" "rx.py msg.json"; do
+  run_bash "cd $T/dv && python3 $reads"
+  allowed "a Python script importing only modules that cannot act, handed a data file naming the endpoint: $reads"
+done
+printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
+printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
+printf '%s\n' '#!/bin/bash' 'exec bash "$@"' > "$T/ds/run-it.sh"
+run_bash "source $T/ds/hook.conf"
+refused "a sourced file that posts"
+run_bash "bash $T/ds/load.sh $T/ds/hook.conf"
+refused "a shell script that sources the file it is handed, which posts"
+run_bash "bash $T/ds/run-it.sh $T/ds/hook.conf"
+refused "a shell script that runs the file it is handed, which posts"
+printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
+run_bash "python3 $T/ds/runner.py $T/ds/job.txt"
+refused "a Python script that runs the file it is handed, which posts"
+run_bash "python3 $T/ds/count.py $T/alert.py"
+refused "a script file handed to another script is still read, since a wrapper may run it"
+# A script run by its own path has the files it is handed read as one run through its interpreter
+# does, the interpreter taken from its #! line (claude-config#2400): `./post.mjs msg.json` was let
+# through while `node post.mjs msg.json` was refused.
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/post.mjs"; } > "$T/ds/post-direct.mjs"
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/post.mjs"; } > "$T/ds/post-node"
+{ printf '%s\n' '#!/usr/bin/env python3'; cat "$T/ds/post.py"; } > "$T/ds/post-python"
+{ printf '%s\n' '#!/usr/bin/env node'; cat "$T/ds/titles.js"; } > "$T/ds/titles-direct"
+{ printf '%s\n' '#!/usr/bin/env python3'; cat "$T/ds/count.py"; } > "$T/ds/count-direct"
+chmod +x "$T/ds/post-direct.mjs" "$T/ds/post-node" "$T/ds/post-python" "$T/ds/titles-direct" "$T/ds/count-direct"
+for runs in "$T/ds/post-direct.mjs $T/ds/msg.json" "cd $T/ds && ./post-direct.mjs msg.json" \
+  "$T/ds/post-node $T/ds/msg.json" "cd $T/ds && ./post-python msg.json"; do
+  run_bash "$runs"
+  refused "a sending script run by its own path, handed a data file naming the endpoint: $runs"
+  says "that refusal names the data file, run as: $runs" "msg.json"
+done
+# The controls: the same scripts through their interpreter are refused as before, and a script run by
+# its own path that only reads what it is handed still passes.
+run_bash "node $T/ds/post-node $T/ds/msg.json"
+refused "the extensionless node script through node, handed a data file naming the endpoint"
+for reads in "$T/ds/titles-direct $T/ds/issues.json" "cd $T/ds && ./count-direct session.jsonl"; do
+  run_bash "$reads"
+  allowed "a script run by its own path reading a data file that names an endpoint: $reads"
+done
+# A compiled program run by its path has no #! to name an interpreter and is not a script the gate
+# reads, so the files it is handed stay unread as before (lessons review at b3c887d): reading them
+# would refuse a pager or a JSON tool over any file naming an endpoint.
+cp /bin/cat "$T/ds/cat-bin"
+run_bash "cd $T/ds && ./cat-bin session.jsonl"
+allowed "a compiled program run by its own path over a data file that names an endpoint"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok

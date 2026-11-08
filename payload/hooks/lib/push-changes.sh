@@ -16,7 +16,8 @@
 # One copy now, which every gate calls:
 #
 #   pc_resolve <cmd>      which files the push carries, and from where (sets PC_* below)
-#   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs
+#   pc_diff <pathspec>..  the diff of what the push carries, limited to the pathspecs; nonzero, named
+#                         by pc_diff_failure, when git failed reading it
 #   pc_messages           the subjects of the commits it carries
 #   pc_judge ...          one isolated model call, its envelope read, its failures named
 #   pc_record ...         one line in the ledger of what the gate did
@@ -52,12 +53,15 @@ pc_files_since() {   # $1 = commit or tree
 #   PC_WIDENED         1 when the command's git add could not be read and the whole working tree
 #                      was counted instead; a refusal must say so (lib/push-scope.sh, #457)
 #   PC_FILES           the files, one per line, relative to the repository root
+#   PC_LIST_FAILED     which listing git failed, empty when every listing was read
 # and moves the shell to the repository root, which every path above is relative to.
 #
 # Returns 0 when the push carries files, 1 when it carries none with an upstream to compare against
 # (a correct, quiet verdict), and 2 when it carries none and there is no upstream: the base may have
 # fallen back to the current commit, so "nothing" is the gate being blind, not the push being empty
-# (#736), and the caller must say so.
+# (#736), and the caller must say so. Returns 3 when git failed a listing (#2349), whatever the
+# others found: PC_FILES is then only part of the push, and an empty one is not an empty push, so
+# the caller refuses or says it could not read, never passes quietly as it does on 1.
 pc_resolve() {   # $1 = command
   local pending_list top f
   PC_UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
@@ -83,14 +87,18 @@ pc_resolve() {   # $1 = command
   [ -n "$PC_MB" ] && pc__set_apart_merged
 
   local committed="" pending=""
-  [ -n "$PC_FROM" ] && committed="$(pc_files_since "$PC_FROM")"
+  PC_LIST_FAILED=""
+  if [ -n "$PC_FROM" ]; then
+    committed="$(pc_files_since "$PC_FROM")" || PC_LIST_FAILED="the files the commits since $PC_FROM change"
+  fi
 
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the
   # directory the command runs in, because the paths its git add names are relative to it.
   PC_WIDENED=0; PC_PENDING_ALL=""
   if [ "$PC_COMMIT_IN_CHAIN" -eq 1 ]; then
-    pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
+    pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" \
+      || PC_LIST_FAILED="${PC_LIST_FAILED:+$PC_LIST_FAILED, and }the staged files the commit in this command takes"
     pending_list="$(ps_pending_files "$1")"
     [ "${pending_list%%$'\n'*}" = "WIDENED" ] && PC_WIDENED=1
     # Every path the commit takes beyond the index, deletions included, for pc_push_tree.
@@ -110,6 +118,9 @@ LOOP_INPUT
   # Every path from here on is relative to the root, so the shell stands there.
   top="$(git rev-parse --show-toplevel 2>/dev/null)"
   [ -n "$top" ] && cd "$top" 2>/dev/null
+  # A listing git failed leaves PC_FILES holding only what the other listings read, so it is not an
+  # answer at all, however many files it names.
+  [ -n "$PC_LIST_FAILED" ] && return 3
   if [ -z "$PC_FILES" ]; then
     [ -z "$PC_UPSTREAM" ] && return 2
     return 1
@@ -171,26 +182,51 @@ pc__set_apart_merged() {
 # relative to the repository root, where pc_resolve left the shell. PC_DIFF_CONTEXT, when set, is
 # the lines of context around each change (git's -U), for a reader that needs the file around a
 # line, as the test gate's docs-only check does (claude-config#1238); unset, git's default.
+#
+# A read git FAILED returns nonzero, never 0 with part of the diff missing (#2349 review): it hid
+# git's error and returned 0, so the simplify gate allowed a push whose diff it could not read as
+# "empty", and the test gate judged a diff with its tests or its code gone. The status says which
+# read failed, and pc_diff_failure names it. pc_diff runs inside a command substitution, where no
+# global it set would survive, so the status is the only channel; a caller captures it explicitly.
+#   3  the diff of the committed range         5  the list of new files the pending commit takes
+#   4  the diff of the pending tracked files   6  a new file's own diff
 pc_diff() {   # $@ = pathspecs (a path, ".", or ":(exclude)..." items)
-  local u
+  local u rc
   local -a ctx=()
   [ -n "${PC_DIFF_CONTEXT:-}" ] && ctx=("-U$PC_DIFF_CONTEXT")
-  [ -n "${PC_FROM:-}" ] && git diff ${ctx[@]+"${ctx[@]}"} "$PC_FROM" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  if [ -n "${PC_FROM:-}" ]; then
+    git diff ${ctx[@]+"${ctx[@]}"} "$PC_FROM" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null || return 3
+  fi
   [ "${PC_COMMIT_IN_CHAIN:-0}" -eq 1 ] || return 0
-  git diff ${ctx[@]+"${ctx[@]}"} HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  git diff ${ctx[@]+"${ctx[@]}"} HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null || return 4
   # One join against PC_FILES rather than a search per untracked file: a tree can hold hundreds of
   # untracked files the push has nothing to do with. The list goes in through the environment, never
-  # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh).
-  local loop_input
-  loop_input="$(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null \
-             | PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)')" || true
+  # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh). It is
+  # read into a variable first, so a failed listing is seen rather than lost on the left of a pipe.
+  local untracked loop_input
+  untracked="$(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null)" || return 5
+  loop_input="$(PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)' <<< "$untracked")" || true
   while IFS= read -r u; do
     [ -f "$u" ] || continue
-    git diff --no-index -- /dev/null "$u" 2>/dev/null
+    # --no-index exits 1 when the files differ, which against /dev/null they always do; only above
+    # 1 is git failing.
+    git diff --no-index -- /dev/null "$u" 2>/dev/null; rc=$?
+    [ "$rc" -le 1 ] || return 6
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
   return 0
+}
+
+# What pc_diff's status $1 says git failed reading, for a gate's notice.
+pc_diff_failure() {   # $1 = pc_diff's status
+  case "$1" in
+    3) printf 'the diff of the commits since %s' "${PC_FROM:-the base}" ;;
+    4) printf 'the diff of the tracked files the commit in this command changes' ;;
+    5) printf 'the list of new files the commit in this command takes' ;;
+    6) printf 'the diff of a new file the commit in this command takes' ;;
+    *) printf 'the diff (status %s)' "$1" ;;
+  esac
 }
 
 # The subjects of the commits the push carries, bounded, less those a merge of the default branch

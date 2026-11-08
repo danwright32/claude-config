@@ -46,10 +46,11 @@ if . "$HERE/lib/push-scope.sh" 2>/dev/null; then
   # a command sent as a list of its words is judged rather than handed to the python3 half (#2057).
   if ! ps_parse_payload "$payload" raw >/dev/null; then
     case "$(ps_payload_text "$payload")" in
-      *"issue create"*|*"issue edit"*|*"issue comment"*|*"pr create"*|*"pr edit"*|*"pr comment"*)
+      # gh issue new and gh pr new are gh's other names for the two creates (claude-config#2398).
+      *"issue create"*|*"issue new"*|*"issue edit"*|*"issue comment"*|*"pr create"*|*"pr new"*|*"pr edit"*|*"pr comment"*)
         ps_unparsed_refuse "$payload" require-issue-fields.sh - \
           "a gh issue create missing its milestone, priority or category, or a gh command posting a body from a file that is not there" \
-          '*issue create*' '*issue edit*' '*issue comment*' '*pr create*' '*pr edit*' '*pr comment*' ;;
+          '*issue create*' '*issue new*' '*issue edit*' '*issue comment*' '*pr create*' '*pr new*' '*pr edit*' '*pr comment*' ;;
     esac
   fi
 fi

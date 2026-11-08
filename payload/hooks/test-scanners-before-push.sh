@@ -70,6 +70,135 @@ printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/Apps/Quillfeather`\n' > "$TMPR
 # runner exports; it is set here too, so this suite run on its own reads the same list.
 export HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_LIST="$TMPROOT/wn-projects.md"
 
+# --- THE PARTS OF THIS SUITE THAT READ THE CHECKOUT IT SITS IN, not a fixture (claude-config#2232).
+#     A copy of this suite run from a folder that is no checkout, as a builder ran one for #2206,
+#     cannot run them, and they said so only in a line the runner does not read, so their checks
+#     fell out of the count with no failure (L288). Each part now says so in the runner's one agreed
+#     line, SUITE-PART-UNMEASURED, which it counts and names. They are one function, ahead of every
+#     fixture, so SCANNERS_SUITE_PART=checkout runs them alone, and the case after the call further
+#     down runs them that way from a plain folder to see the lines.
+checkout_parts(){
+  local REAL _sel _want _real_sel _real_floor _real_n _lockers _ln _sf _code _reg _declared _onfail _default
+  # The selection against THIS repository, read rather than assumed. Fixtures can only confirm the
+  # rule as written; what matters is which real suites it picks, and above all that it never picks
+  # the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27 seconds,
+  # where running that suite whole would be 268).
+  # Found by the one shared test, lib/checkout-root.sh (claude-config#1663): empty outside a checkout.
+  REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+  if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
+  _sel="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$REAL" \
+          | SCANNERS_LIST=1 bash "$H" 2>&1)"
+  [ "$(grep -c '^SUITE ' <<< "$_sel")" -ge 5 ] \
+    && check "the real repo's standalone scanners are all selected" ok \
+    || check "the real repo's standalone scanners are all selected" "got=$_sel"
+  for _want in test-pipefail-shortcircuit.sh test-repo-files.sh; do
+    grep -q "^SUITE payload/hooks/$_want\$" <<< "$_sel" \
+      && check "and $_want is among them" ok \
+      || check "and $_want is among them" "got=$_sel"
+  done
+  # The secret scan over every file a push publishes is a scanner by the same rule, and it is the
+  # one check that stands between a credential anywhere in the tree and GitHub (claude-config#1128).
+  # Nothing in this gate names it, so this is what says it is still picked.
+  grep -q '^SUITE tests/test-payload-secret-scan\.sh$' <<< "$_sel" \
+    && check "and the whole tree secret scan is among them" ok \
+    || check "and the whole tree secret scan is among them" "got=$_sel"
+  # The home path check reads every synced file, and on 2026-10-25 only CI ran it, so a fixture
+  # naming one machine's home cost PR #1732 a whole CI round (claude-config#1734).
+  grep -q '^SUITE payload/hooks/test-check-home-paths\.sh$' <<< "$_sel" \
+    && check "#1734 and the home path check is among them" ok \
+    || check "#1734 and the home path check is among them" "got=$_sel"
+  # The recorded floor names exactly the suites selected here, so it can never again sit far below
+  # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
+  # named in the same change; one removed on purpose is taken out.
+  _real_sel="$(awk '{ print $2 }' <<< "$_sel" | sort -u)"
+  _real_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
+  _real_n="$(grep -c . <<< "$_real_sel")"
+  [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
+    && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
+    || check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" "selected and not named: $(comm -23 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')/ named and not selected: $(comm -13 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')"
+  # NO SCANNER WAITS ON ANOTHER SUITE RUN'S LOCK (claude-config#2033). Every refusal for time this
+  # gate gave on 2026-11-01 after #1997, seven of them at load averages of 21 to 95, named one run
+  # still going: the sync suite's section scanning comments for undated numbers, running for 1 or 2
+  # seconds. That suite takes a machine wide lock, which every full run holds for minutes, and
+  # builders run one just before they push, so the section refused on the lock and was started
+  # again every few seconds until the budget ran out. The scan now lives in a suite of its own that
+  # takes no lock, so it still runs before every push and nothing in the gate's path can be held up
+  # by another run. A suite takes that lock when its code makes the lock's directory. Its code is
+  # read into a variable and matched with case, never piped into grep -q, which leaves on its first
+  # hit and under pipefail reports the match as a failure (L183).
+  _lockers=""
+  while IFS= read -r _ln; do
+    _sf="$(awk '{ print $2 }' <<< "$_ln")"
+    [ -n "$_sf" ] || continue
+    _code="$(grep -v '^[[:space:]]*#' "$REAL/$_sf" 2>/dev/null)"
+    case "$_code" in *'mkdir "$SUITE_LOCK"'*) _lockers="$_lockers $_ln;" ;; esac
+  done <<< "$_sel"
+  [ -z "$_lockers" ] \
+    && check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" ok \
+    || check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" "these wait on any full run:$_lockers"
+  grep -q '^SUITE tests/test-undated-measurements\.sh$' <<< "$_sel" \
+    && check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" ok \
+    || check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" "got=$_sel"
+  grep -q "^SUITE .*$(basename "$H")$" <<< "$_sel" \
+    && check "and the suite that drives this gate is not one of its own subjects" "it selected itself: $_sel" \
+    || check "and the suite that drives this gate is not one of its own subjects" ok
+  grep -q '^SUITE tests/test-claude-sync.sh$' <<< "$_sel" \
+    && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
+    || check "and the four minute suite is never selected whole" ok
+  # The runner's own suite is the slowest whole suite there is: it starts the runner on dozens of
+  # fixture trees, and on 2026-10-31 this gate recorded 510 seconds for it against a budget of 150,
+  # so every push was refused once and waited for it (claude-config#1997). Only a few of its checks
+  # read this repository's files, and those live in a scanner of their own, which IS selected, so
+  # they still run before every push while the fixture runs do not.
+  grep -q '^SUITE payload/hooks/test-run-all-tests\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner's own suite is never selected whole" "it would run whole, about 500 seconds against the budget: $_sel" \
+    || check "#1997 and the runner's own suite is never selected whole" ok
+  grep -q '^SUITE payload/hooks/test-run-all-tests-real-tree\.sh$' <<< "$_sel" \
+    && check "#1997 and the runner suite's checks over this repository's files are selected" ok \
+    || check "#1997 and the runner suite's checks over this repository's files are selected" "got=$_sel"
+  else
+  # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
+  # will be, so there is no selection to read and that is not a fault. Said on the runner's agreed
+  # line rather than skipped in silence, because a suite that quietly checks less is how coverage
+  # disappears (L98, #2232).
+  printf 'SUITE-PART-UNMEASURED the checks of which real suites the gate selects in this repository: %s is not the payload of a claude-config checkout (lib/checkout-root.sh), so there is no selection to read here; they run where the repository is\n' "$DIR/.."
+  fi
+
+  # The default budget must sit below the timeout the registration declares, or Claude Code kills
+  # the gate first and the push goes through unscanned, which is the defect. Both numbers are read
+  # from their files, so moving either one without the other fails here. The registration also asks
+  # Claude Code to BLOCK the call if the gate is killed anyway (onFailure, measured working on
+  # 2.1.312 the same day), so a gate that overruns its own budget still cannot let a push through.
+  _reg=""
+  . "$DIR/lib/settings-file.sh" 2>/dev/null && _reg="$(hook_settings_file "$DIR/..")"
+  if [ -n "$_reg" ] && command -v jq >/dev/null 2>&1; then
+    _declared="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].timeout // empty' "$_reg")"
+    _onfail="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].onFailure // empty' "$_reg")"
+    _default="$(sed -n 's/^_sc_budget_default=\([0-9][0-9]*\)$/\1/p' "$H")"
+    if [ -n "$_declared" ] && [ -n "$_default" ] && [ "$_default" -lt "$_declared" ]; then
+      check "#1881 the default budget sits below the declared hook timeout" ok
+    else
+      check "#1881 the default budget sits below the declared hook timeout" "budget=${_default:-unread} timeout=${_declared:-unread}"
+    fi
+    [ "$_onfail" = "block" ] && check "#1881 the registration blocks the push if the gate is killed anyway" ok \
+      || check "#1881 the registration blocks the push if the gate is killed anyway" "onFailure=${_onfail:-absent}"
+  else
+    # No hooks block beside this copy of the hooks, or no jq to read it, so this is said on the
+    # runner's agreed line rather than skipped in silence (L98, #2232).
+    if [ -z "$_reg" ]; then
+      printf 'SUITE-PART-UNMEASURED the checks of the gate budget against its declared hook timeout: no settings.hooks.json or settings.json in %s to read the timeout from\n' "$DIR/.."
+    else
+      printf 'SUITE-PART-UNMEASURED the checks of the gate budget against its declared hook timeout: jq is not installed, so %s could not be read\n' "$_reg"
+    fi
+  fi
+}
+if [ "${SCANNERS_SUITE_PART:-}" = checkout ]; then
+  checkout_parts
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]; exit $?
+fi
+
 # A repository shaped like this one: the marker the hook keys on, plus whatever scanners the test
 # wants. Everything happens in a throwaway git repo, never against the real one (L2).
 mkrepo(){            # $1 = name  -> prints the repo path
@@ -524,7 +653,7 @@ o38="$(fire "$R38" "git push")"; c38=$?
 # and, since #1910, the key's, and nothing else.
 FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
 cp "$H" "$FAKEHOOKS/scanners-before-push.sh"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js || check "the install of the fake hooks' helpers" "the install refused"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FAKEHOOKS/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js push-changes.sh suite-arms-check.sh || check "the install of the fake hooks' helpers" "the install refused"
 cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
 #!/usr/bin/env bash
 case "\$1" in --uncommitted|--changed) echo "repo-files: git could not list the files under \$2 that are not committed." >&2; exit 1 ;; esac
@@ -884,88 +1013,27 @@ o1734="$(fire "$R1734" "git push")"; c1734=$?
   && check "#1734 a fixture naming this machine's own home blocks the push, named by the home path check" ok \
   || check "#1734 a fixture naming this machine's own home blocks the push, named by the home path check" "exit=$c1734 out=$o1734"
 
-# --- the selection against THIS repository, read rather than assumed. Fixtures can only confirm
-#     the rule as written; what matters is which real suites it picks, and above all that it never
-#     picks the four minute suite as a whole (measured 2026-09-21: the selection below runs in 27
-#     seconds, where running that suite whole would be 268).
-# Found by the one shared test, lib/checkout-root.sh (claude-config#1663): empty outside a checkout.
-REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
-if [ -n "$REAL" ] && [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
-  _sel="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"}' "$REAL" \
-          | SCANNERS_LIST=1 bash "$H" 2>&1)"
-  [ "$(grep -c '^SUITE ' <<< "$_sel")" -ge 5 ] \
-    && check "the real repo's standalone scanners are all selected" ok \
-    || check "the real repo's standalone scanners are all selected" "got=$_sel"
-  for _want in test-pipefail-shortcircuit.sh test-repo-files.sh; do
-    grep -q "^SUITE payload/hooks/$_want\$" <<< "$_sel" \
-      && check "and $_want is among them" ok \
-      || check "and $_want is among them" "got=$_sel"
-  done
-  # The secret scan over every file a push publishes is a scanner by the same rule, and it is the
-  # one check that stands between a credential anywhere in the tree and GitHub (claude-config#1128).
-  # Nothing in this gate names it, so this is what says it is still picked.
-  grep -q '^SUITE tests/test-payload-secret-scan\.sh$' <<< "$_sel" \
-    && check "and the whole tree secret scan is among them" ok \
-    || check "and the whole tree secret scan is among them" "got=$_sel"
-  # The home path check reads every synced file, and on 2026-10-25 only CI ran it, so a fixture
-  # naming one machine's home cost PR #1732 a whole CI round (claude-config#1734).
-  grep -q '^SUITE payload/hooks/test-check-home-paths\.sh$' <<< "$_sel" \
-    && check "#1734 and the home path check is among them" ok \
-    || check "#1734 and the home path check is among them" "got=$_sel"
-  # The recorded floor names exactly the suites selected here, so it can never again sit far below
-  # the selection (claude-config#1744: on 2026-10-25 it recorded 6 while 21 were selected). A scanner added is
-  # named in the same change; one removed on purpose is taken out.
-  _real_sel="$(awk '{ print $2 }' <<< "$_sel" | sort -u)"
-  _real_floor="$(awk '/^[[:space:]]*#/ { next } NF { print $1 }' "$REAL/.claude/scanners-floor.txt" 2>/dev/null | sort -u)"
-  _real_n="$(grep -c . <<< "$_real_sel")"
-  [ "$_real_n" -ge 21 ] && [ "$_real_sel" = "$_real_floor" ] \
-    && check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" ok \
-    || check "#1744 the repository's floor names exactly the $_real_n suites the gate selects" "selected and not named: $(comm -23 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')/ named and not selected: $(comm -13 <(printf '%s\n' "$_real_sel") <(printf '%s\n' "$_real_floor") | tr '\n' ' ')"
-  # NO SCANNER WAITS ON ANOTHER SUITE RUN'S LOCK (claude-config#2033). Every refusal for time this
-  # gate gave on 2026-11-01 after #1997, seven of them at load averages of 21 to 95, named one run
-  # still going: the sync suite's section scanning comments for undated numbers, running for 1 or 2
-  # seconds. That suite takes a machine wide lock, which every full run holds for minutes, and
-  # builders run one just before they push, so the section refused on the lock and was started
-  # again every few seconds until the budget ran out. The scan now lives in a suite of its own that
-  # takes no lock, so it still runs before every push and nothing in the gate's path can be held up
-  # by another run. A suite takes that lock when its code makes the lock's directory. Its code is
-  # read into a variable and matched with case, never piped into grep -q, which leaves on its first
-  # hit and under pipefail reports the match as a failure (L183).
-  _lockers=""
-  while IFS= read -r _ln; do
-    _sf="$(awk '{ print $2 }' <<< "$_ln")"
-    [ -n "$_sf" ] || continue
-    _code="$(grep -v '^[[:space:]]*#' "$REAL/$_sf" 2>/dev/null)"
-    case "$_code" in *'mkdir "$SUITE_LOCK"'*) _lockers="$_lockers $_ln;" ;; esac
-  done <<< "$_sel"
-  [ -z "$_lockers" ] \
-    && check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" ok \
-    || check "#2033 no scanner the gate selects belongs to a suite that takes the machine wide suite lock" "these wait on any full run:$_lockers"
-  grep -q '^SUITE tests/test-undated-measurements\.sh$' <<< "$_sel" \
-    && check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" ok \
-    || check "#2033 and the scan for undated numbers in comments and documents is selected as a suite of its own" "got=$_sel"
-  grep -q "^SUITE .*$(basename "$H")$" <<< "$_sel" \
-    && check "and the suite that drives this gate is not one of its own subjects" "it selected itself: $_sel" \
-    || check "and the suite that drives this gate is not one of its own subjects" ok
-  grep -q '^SUITE tests/test-claude-sync.sh$' <<< "$_sel" \
-    && check "and the four minute suite is never selected whole" "it would run whole: $_sel" \
-    || check "and the four minute suite is never selected whole" ok
-  # The runner's own suite is the slowest whole suite there is: it starts the runner on dozens of
-  # fixture trees, and on 2026-10-31 this gate recorded 510 seconds for it against a budget of 150,
-  # so every push was refused once and waited for it (claude-config#1997). Only a few of its checks
-  # read this repository's files, and those live in a scanner of their own, which IS selected, so
-  # they still run before every push while the fixture runs do not.
-  grep -q '^SUITE payload/hooks/test-run-all-tests\.sh$' <<< "$_sel" \
-    && check "#1997 and the runner's own suite is never selected whole" "it would run whole, about 500 seconds against the budget: $_sel" \
-    || check "#1997 and the runner's own suite is never selected whole" ok
-  grep -q '^SUITE payload/hooks/test-run-all-tests-real-tree\.sh$' <<< "$_sel" \
-    && check "#1997 and the runner suite's checks over this repository's files are selected" ok \
-    || check "#1997 and the runner suite's checks over this repository's files are selected" "got=$_sel"
+# --- the parts of this suite that read the checkout (defined near the top), then the same parts run
+#     from a copy in a plain folder, where none of them can run: each must say so on its own
+#     SUITE-PART-UNMEASURED line, which the runner counts, and add no pass and no failure
+#     (claude-config#2232). Their old spelling, an indented line in brackets, the runner read as
+#     nothing, and the suite as a plain pass with those checks missing.
+checkout_parts
+PLAIN="$TMPROOT/plain-folder"; mkdir -p "$PLAIN/hooks"
+if ! { cp "$H" "$DIR/test-scanners-before-push.sh" "$PLAIN/hooks/" && cp -R "$DIR/lib" "$PLAIN/hooks/lib"; }; then
+  check "#2232 a copy of this suite could be made in a plain folder" "the copy into $PLAIN failed"
+elif _plain_top="$(git -C "$PLAIN" rev-parse --show-toplevel 2>/dev/null)"; then
+  printf 'SUITE-PART-UNMEASURED #2232 the parts that read the checkout, run from a plain folder: this temporary folder sits inside the git repository at %s, so no plain folder could be made here\n' "$_plain_top"
 else
-  # The INSTALLED copy of these hooks sits in ~/.claude, where there is no repository and never
-  # will be, so there is no selection to read and that is not a fault. Said out loud rather than
-  # skipped in silence, because a suite that quietly checks less is how coverage disappears (L98).
-  echo "  (no repository at $REAL, so the selection against a real tree was not checked here; it is checked where this repo is)"
+  _plain_out="$(SCANNERS_SUITE_PART=checkout bash "$PLAIN/hooks/test-scanners-before-push.sh" 2>&1)"; _plain_rc=$?
+  _plain_lines="$(grep -c '^SUITE-PART-UNMEASURED ' <<< "$_plain_out")"
+  [ "$_plain_rc" -eq 0 ] && [ "$_plain_lines" -eq 2 ] && grep -q -x 'SUITE-RESULT passed=0 failed=0' <<< "$_plain_out" \
+    && check "#2232 run from a plain folder, each part that reads the checkout says on its own line that it was not measured" ok \
+    || check "#2232 run from a plain folder, each part that reads the checkout says on its own line that it was not measured" "exit=$_plain_rc lines=$_plain_lines out=$_plain_out"
+  grep -q '^SUITE-PART-UNMEASURED .*selects in this repository' <<< "$_plain_out" \
+    && grep -q '^SUITE-PART-UNMEASURED .*declared hook timeout' <<< "$_plain_out" \
+    && check "#2232 and each line names its part" ok \
+    || check "#2232 and each line names its part" "out=$_plain_out"
 fi
 
 # --- scanners that do not finish inside the gate's own budget REFUSE the push (claude-config#1881).
@@ -1312,30 +1380,8 @@ R1881e="$(mkrepo badbudget)"; add_scanner "$R1881e" alpha 0; commit_all "$R1881e
 o1881e="$(SCANNERS_STATE_DIR="$BUDGETSTATE" SCANNERS_BUDGET_SECONDS=soon fire "$R1881e" "git push")"; c1881e=$?
 [ "$c1881e" -eq 0 ] && check "#1881 an unreadable budget falls back to the default rather than refusing every push" ok \
   || check "#1881 an unreadable budget falls back to the default rather than refusing every push" "exit=$c1881e out=$o1881e"
-
-# The default budget must sit below the timeout the registration declares, or Claude Code kills the
-# gate first and the push goes through unscanned, which is the defect. Both numbers are read from
-# their files, so moving either one without the other fails here. The registration also asks Claude
-# Code to BLOCK the call if the gate is killed anyway (onFailure, measured working on 2.1.312 the
-# same day), so a gate that overruns its own budget still cannot let a push through.
-_reg=""
-. "$DIR/lib/settings-file.sh" 2>/dev/null && _reg="$(hook_settings_file "$DIR/..")"
-if [ -n "$_reg" ] && command -v jq >/dev/null 2>&1; then
-  _declared="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].timeout // empty' "$_reg")"
-  _onfail="$(jq -r '[.hooks.PreToolUse[].hooks[] | select(.command | endswith("/scanners-before-push.sh"))][0].onFailure // empty' "$_reg")"
-  _default="$(sed -n 's/^_sc_budget_default=\([0-9][0-9]*\)$/\1/p' "$H")"
-  if [ -n "$_declared" ] && [ -n "$_default" ] && [ "$_default" -lt "$_declared" ]; then
-    check "#1881 the default budget sits below the declared hook timeout" ok
-  else
-    check "#1881 the default budget sits below the declared hook timeout" "budget=${_default:-unread} timeout=${_declared:-unread}"
-  fi
-  [ "$_onfail" = "block" ] && check "#1881 the registration blocks the push if the gate is killed anyway" ok \
-    || check "#1881 the registration blocks the push if the gate is killed anyway" "onFailure=${_onfail:-absent}"
-else
-  # No hooks block beside this copy of the hooks, or no jq to read it, so this is said out loud rather
-  # than skipped in silence (L98).
-  echo "  (no readable hooks block beside this suite, or no jq, so the budget against the declared timeout was not checked here)"
-fi
+# (The default budget against the timeout the registration declares is read from the checkout's
+# hooks block, so it is one of the checkout_parts near the top, claude-config#2232.)
 
 # --- the gate's watchdog is gone when its scanners finish, even when it could not act on a plain
 #     kill (claude-config#1889). The watchdog is started in the background and, on a push whose
@@ -1525,7 +1571,7 @@ treefire "$R1910e" "git push" >/dev/null
 nokey_hooks(){   # $1 = folder  $2 = the one thing missing: listing (the listings of what is not committed fail), pidlock or recorded (that lock library is absent), or state (nothing; the state folder is made bad by the caller)
   mkdir -p "$1/lib"
   cp "$H" "$1/scanners-before-push.sh"
-  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js pid-lock.sh recorded-pid.sh repo-files.sh || check "the install of the nokey hooks' helpers" "the install refused"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$1/lib" push-scope.sh load-average.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js pid-lock.sh recorded-pid.sh repo-files.sh push-changes.sh suite-arms-check.sh || check "the install of the nokey hooks' helpers" "the install refused"
   # The one library this case is missing, removed on purpose after the install.
   [ "$2" = pidlock ] && rm -f "$1/lib/pid-lock.sh"
   [ "$2" = recorded ] && rm -f "$1/lib/recorded-pid.sh"
@@ -1719,6 +1765,119 @@ out="$(H="$WN_NOLIB/scanners-before-push.sh" wn_fire "$RC2" "git push")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "wn-nolib-hooks/lib/work-names-messages.sh, which reads the messages" <<< "$out" \
   && check "#1995 a gate that cannot load the message reader refuses the push, naming the file" ok \
   || check "#1995 a gate that cannot load the message reader refuses the push, naming the file" "exit=$rc out=$out"
+
+# --- every suite a push adds or changes arms its own wall clock (claude-config#2330). That rule was
+#     enforced only by test-suite-deadline.sh, which runs in the full suite, so on 2026-11-05 a suite
+#     shipped without it and the miss surfaced in CI about 40 minutes later. The gate asks the same
+#     question, through the same lib/suite-arms-check.sh, of each test-*.sh the push adds or
+#     changes, as the push delivers it, and of nothing already on the remote's default branch.
+DLB="$TMPROOT/dl-remote.git"; git init -q --bare "$DLB"
+RD="$(mkrepo deadline)"; add_scanner "$RD" alpha 0
+# A suite already published that does not arm: not this push's business until a push changes it.
+printf '#!/usr/bin/env bash\necho old\n' > "$RD/tests/test-old.sh"
+printf 'readme\n' > "$RD/README.md"
+commit_all "$RD"
+git -C "$RD" branch -M main; git -C "$RD" remote add origin "$DLB"
+git -C "$RD" push -q origin main >/dev/null 2>&1; git -C "$RD" fetch -q origin >/dev/null 2>&1
+dl_branch(){ git -C "$RD" checkout -q main; git -C "$RD" checkout -q -B "$1"; }   # $1 = a branch cut fresh from main
+dl_armed(){ printf '#!/usr/bin/env bash\n. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || exit 1\nsuite_deadline_arm || exit $?\necho %s\n' "$2" > "$1"; }
+DL_WHY="do not source lib/suite-deadline.sh and call suite_deadline_arm"
+# Control: a push touching no suite is judged as before, with the unarmed published one left alone.
+dl_branch docs; printf 'more\n' >> "$RD/README.md"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" && ! grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 (control) a push touching no test suite is let through, the unarmed one already published not judged" ok \
+  || check "#2330 (control) a push touching no test suite is let through, the unarmed one already published not judged" "exit=$rc out=$out"
+# A push adding a suite that does not arm is refused, naming it, before any scanner is spent.
+dl_branch add-unarmed; printf '#!/usr/bin/env bash\necho new\n' > "$RD/payload/hooks/test-new.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin add-unarmed")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "payload/hooks/test-new.sh" <<< "$out" && grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 a push adding a suite that does not arm its deadline is refused, naming the suite" ok \
+  || check "#2330 a push adding a suite that does not arm its deadline is refused, naming the suite" "exit=$rc out=$out"
+grep -q -F "tests/test-old.sh" <<< "$out" \
+  && check "#2330 and names only the suites the push adds, never one already published" "out=$out" \
+  || check "#2330 and names only the suites the push adds, never one already published" ok
+grep -q -F "scan(s) passed" <<< "$out" \
+  && check "#2330 and refuses before any scanner suite is spent" "out=$out" \
+  || check "#2330 and refuses before any scanner suite is spent" ok
+# The same suite, armed, goes through.
+dl_branch add-armed; dl_armed "$RD/tests/test-armed.sh" armed; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin add-armed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "$DL_WHY" <<< "$out" \
+  && check "#2330 a push adding a suite that arms its deadline is let through" ok \
+  || check "#2330 a push adding a suite that arms its deadline is let through" "exit=$rc out=$out"
+# A push CHANGING a published suite that does not arm is judged too: it is in the push.
+dl_branch change-old; printf 'echo changed\n' >> "$RD/tests/test-old.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin change-old")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-old.sh" <<< "$out" \
+  && check "#2330 a push changing a suite that does not arm its deadline is refused, naming it" ok \
+  || check "#2330 a push changing a suite that does not arm its deadline is refused, naming it" "exit=$rc out=$out"
+# The suite is judged as the push DELIVERS it, never as the working copy holds it: arming it in the
+# working copy after the commit does not arm what the push carries.
+dl_branch tree-only; printf '#!/usr/bin/env bash\necho late\n' > "$RD/tests/test-late.sh"; commit_all "$RD"
+dl_armed "$RD/tests/test-late.sh" late
+out="$(wn_fire "$RD" "git push -u origin tree-only")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-late.sh" <<< "$out" \
+  && check "#2330 the suite is judged as the push delivers it, not as the working copy holds it" ok \
+  || check "#2330 the suite is judged as the push delivers it, not as the working copy holds it" "exit=$rc out=$out"
+git -C "$RD" checkout -q -- tests/test-late.sh
+# A suite that only MENTIONS the deadline in a comment is refused here as the full suite refuses it.
+dl_branch comment-only; printf '#!/usr/bin/env bash\n# . lib/suite-deadline.sh\n# suite_deadline_arm\n' > "$RD/tests/test-talk.sh"; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin comment-only")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-talk.sh" <<< "$out" \
+  && check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" ok \
+  || check "#2330 a suite that only mentions the deadline in comments is refused, as the full suite refuses it" "exit=$rc out=$out"
+# A push that only DELETES a suite has nothing to judge: the suite is not in the tree it delivers,
+# so it can neither arm nor fail to. The push's file list must leave deletions out, or the gate
+# fails to read the deleted file and refuses the push as unread (#2341 review). Asked here of a
+# committed deletion of an unarmed and of an armed suite. A deletion the command itself commits never
+# reaches this check (the work names check above refuses every push chained after its commit), so
+# that listing is asked of lib/push-changes.sh directly, in test-push-changes.sh.
+dl_branch del-unarmed; git -C "$RD" rm -q tests/test-old.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin del-unarmed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "tests/test-old.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push that only deletes an unarmed suite is let through, the deleted suite not judged" ok \
+  || check "#2330 a push that only deletes an unarmed suite is let through, the deleted suite not judged" "exit=$rc out=$out"
+git -C "$RD" checkout -q main; dl_armed "$RD/tests/test-keep.sh" keep; commit_all "$RD"
+git -C "$RD" push -q origin main >/dev/null 2>&1; git -C "$RD" fetch -q origin >/dev/null 2>&1
+dl_branch del-armed; git -C "$RD" rm -q tests/test-keep.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin del-armed")"; rc=$?
+[ "$rc" -eq 0 ] && ! grep -q -F "tests/test-keep.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push that only deletes an armed suite is let through, the deleted suite not judged" ok \
+  || check "#2330 a push that only deletes an armed suite is let through, the deleted suite not judged" "exit=$rc out=$out"
+# A RENAME is a deletion plus an addition: the old name drops out, and the new one, still unarmed,
+# is judged and refused under its new name.
+dl_branch rename-unarmed; git -C "$RD" mv tests/test-old.sh tests/test-renamed.sh; commit_all "$RD"
+out="$(wn_fire "$RD" "git push -u origin rename-unarmed")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "tests/test-renamed.sh" <<< "$out" && grep -q -F "$DL_WHY" <<< "$out" \
+  && ! grep -q -F "tests/test-old.sh" <<< "$out" && ! grep -q -F "could not be read from the tree" <<< "$out" \
+  && check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" ok \
+  || check "#2330 a push renaming an unarmed suite is refused under its new name, the old name not read" "exit=$rc out=$out"
+# A listing of the push that git FAILED refuses it (claude-config#2349). lib/push-changes.sh once
+# answered it as a push carrying nothing, so this check judged no suite and an unarmed one went on to
+# CI. git is a stand in here that fails only that listing; the same push with the real git is the
+# add-unarmed case above, refused for the suite itself.
+. "$DIR/lib/test_failing_git_listing.sh" || check "#2349 lib/test_failing_git_listing.sh loads" "it is missing"
+DL_GITFAIL="$TMPROOT/dl-gitfail"
+failing_git_listing "$DL_GITFAIL" committed || check "#2349 the failing git listing stand in is written" "it could not be"
+dl_branch list-fails; printf '#!/usr/bin/env bash\necho new\n' > "$RD/payload/hooks/test-new.sh"; commit_all "$RD"
+out="$(PATH="$DL_GITFAIL:$PATH" wn_fire "$RD" "git push -u origin list-fails")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "could not list the files this push carries" <<< "$out" && ! grep -q -F "scan(s) passed" <<< "$out" \
+  && check "#2349 a push whose file listing git failed is refused, saying the listing failed, before any scanner" ok \
+  || check "#2349 a push whose file listing git failed is refused, saying the listing failed, before any scanner" "exit=$rc out=$out"
+# A copy of the gate without the shared check refuses the push, naming the file, rather than pass a
+# suite nobody judged.
+DL_NOLIB="$TMPROOT/dl-nolib-hooks"; mkdir -p "$DL_NOLIB/lib"
+cp "$H" "$DL_NOLIB/scanners-before-push.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$DL_NOLIB/lib" push-scope.sh whole-number.sh work-names-messages.sh work-names.py dev-update-registry.js push-changes.sh >/dev/null \
+  || check "#2330 the gate's other libraries could be installed for the missing check case" "the install refused"
+rm -f "$DL_NOLIB/lib/suite-arms-check.sh"
+dl_branch docs
+out="$(H="$DL_NOLIB/scanners-before-push.sh" wn_fire "$RD" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "dl-nolib-hooks/lib/suite-arms-check.sh" <<< "$out" \
+  && check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" ok \
+  || check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" "exit=$rc out=$out"
+git -C "$RD" checkout -q main
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a

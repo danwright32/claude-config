@@ -585,6 +585,32 @@ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'orphan could not be type checked' | grep -q 'elsewhere' \
   && check "a dependency the folder does not hold fails the mod, naming it" ok \
   || check "a dependency the folder does not hold fails the mod, naming it" "exit=$code out=$out"
+# A run leaves the checkout it read exactly as it found it, passing or failing, including when the
+# folder handed to it holds links to mods rather than the mods (#2417): copied as a link, the scratch
+# copy WAS the mod, so its types, tsconfig and dependency contracts were laid into the checkout as an
+# untracked .claude-plugin/types/ that an unscoped stage would commit.
+M4L="$TMPROOT/m4l-repo"; mkmod "$M4L" fine; mkmod "$M4L" illtyped; mkmod "$M4L" leaning
+printf '{ "name": "leaning", "version": "0.1.0", "description": "x", "dependencies": ["fine"] }\n' > "$M4L/leaning/.claude-plugin/plugin.json"
+printf '{ "name": "fine", "version": "0.1.0", "description": "x", "types": "./types/index.d.ts" }\n' > "$M4L/fine/.claude-plugin/plugin.json"
+mkdir -p "$M4L/fine/types"; printf 'export type F = 1\n' > "$M4L/fine/types/index.d.ts"
+git -C "$M4L" init -q && git -C "$M4L" add -A && git -C "$M4L" -c user.name=t -c user.email=t@t commit -q -m fixture
+m4l_before="$(git -C "$M4L" status --porcelain --untracked-files=all 2>&1)"
+m4l_left(){ local now; now="$(git -C "$M4L" status --porcelain --untracked-files=all 2>&1)"; [ "$now" = "$m4l_before" ] && echo ok || echo "git status was '$m4l_before' and is now '$now'"; }
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4L" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2417: a failing run straight over the checkout fails" ok || check "#2417: a failing run straight over the checkout fails" "exit=$code out=$out"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
+M4LV="$TMPROOT/m4l-links"; mkdir -p "$M4LV"
+ln -s "$M4L/fine" "$M4LV/fine"; ln -s "$M4L/leaning" "$M4LV/leaning"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4LV" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && grep -qxF 'TYPES leaning: "claude-code","claude-code-tools","claude-code-mcp","fine"' "$TSC_LOG" \
+  && check "#2417: a passing run over links to mods type checks them, dependency included" ok \
+  || check "#2417: a passing run over links to mods type checks them, dependency included" "exit=$code out=$out $(cat "$TSC_LOG")"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
+ln -s "$M4L/illtyped" "$M4LV/illtyped"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4LV" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2417: a failing run over links to mods fails" ok || check "#2417: a failing run over links to mods fails" "exit=$code out=$out"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
 # The pinned types missing a file: no mod can be checked, and that is a fault in the checkout.
 TSX="$TMPROOT/ts-broken"; pin "$TSX" 2.1.291; rm -f "$TSX/claude-code-types/claude-code-tools/index.d.ts"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSX" bash "$CHECK" "$M4G" 2>&1)"; code=$?
@@ -2478,9 +2504,117 @@ export const register = on => {
   })
 }
 TS
+  # #2299: a mod's helper that starts the timer itself (picker manners' offTheDialog($, () => work()))
+  # defers the callback a noun hands it, just as the timer written in place does. The helper is known
+  # by what it does, never by its name: each mention of the parameter is in a timer's callback, as
+  # that callback itself, inside a function written there, or handed to a function that only makes
+  # one. The noun must hand it a function written in place, since anything else runs at the call.
+  mknounmod "$M12W" helper-defers deferhelper <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const later = ($, work: () => Promise<unknown>) => $.clock.after(0, work)
+export const register = on => {
+  on('deferhelper.press', ($, e, next) => {
+    later($, () => slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-defers-wrapped deferwrapped <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const reporting = ($, work: () => Promise<unknown>) => () => void work().catch(err => $.ui.log(String(err)))
+export const offPath = ($, work: () => Promise<unknown>) => $.clock.after(0, reporting($, work))
+export const register = on => {
+  on('deferwrapped.press', ($, e, next) => {
+    offPath($, () => slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-defers-in-callback defercallback <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+function soon(work: () => Promise<unknown>) {
+  setTimeout(() => {
+    void work()
+  }, 0)
+}
+export const register = on => {
+  on('defercallback.press', ($, e, next) => {
+    soon(async () => {
+      await slow($)
+    })
+    return { value: true }
+  })
+}
+TS
+  # Each of these runs the noun's callback before the noun answers, so it stays refused: a helper that
+  # also calls it in place, one that arms its timer with a call that runs it at once, a value worked
+  # out at the call rather than a function, a helper inside a promise the noun waits on, and a helper
+  # whose own timer sits inside the promise it hands back.
+  mknounmod "$M12W" helper-runs-inline runsinline <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const now = ($, work: () => Promise<unknown>) => {
+  void work()
+  $.clock.after(0, () => undefined)
+}
+export const register = on => {
+  on('runsinline.press', ($, e, next) => {
+    now($, () => slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-arms-with-call armscall <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const run = (work: () => Promise<unknown>) => {
+  void work()
+  return () => undefined
+}
+const later = ($, work: () => Promise<unknown>) => $.clock.after(0, run(work))
+export const register = on => {
+  on('armscall.press', ($, e, next) => {
+    later($, () => slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-given-value givenvalue <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const later = ($, work) => $.clock.after(0, work)
+export const register = on => {
+  on('givenvalue.press', ($, e, next) => {
+    later($, slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-in-held-promise heldhelper <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const later = ($, work: () => unknown) => $.clock.after(0, work)
+export const register = on => {
+  on('heldhelper.press', async ($, e, next) => {
+    await new Promise(r => later($, () => slow($).then(r)))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" helper-timer-in-promise timerpromise <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const settles = ($, work: () => Promise<unknown>) =>
+  new Promise(r => {
+    $.clock.after(0, () => {
+      void work().then(r)
+    })
+  })
+export const register = on => {
+  on('timerpromise.press', async ($, e, next) => {
+    await settles($, () => slow($))
+    return { value: true }
+  })
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"45 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"53 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -2496,14 +2630,14 @@ TS
       && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
       || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
   done
-  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1 awaited-timer/hooks/register.ts:5; do
+  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1 awaited-timer/hooks/register.ts:5 helper-runs-inline/hooks/register.ts:1 helper-arms-with-call/hooks/register.ts:1 helper-given-value/hooks/register.ts:1 helper-in-held-promise/hooks/register.ts:1 helper-timer-in-promise/hooks/register.ts:1; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
       && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
       || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
   done
   printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
     && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
-  for m in short-process process-in-hook shorthand-timeout string-then-comments model-timed timer-defers timer-inline-code; do
+  for m in short-process process-in-hook shorthand-timeout string-then-comments model-timed timer-defers timer-inline-code helper-defers helper-defers-wrapped helper-defers-in-callback; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
   done
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
@@ -2513,7 +2647,7 @@ TS
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred awaited-timer; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred awaited-timer helper-runs-inline helper-arms-with-call helper-given-value helper-in-held-promise helper-timer-in-promise; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
