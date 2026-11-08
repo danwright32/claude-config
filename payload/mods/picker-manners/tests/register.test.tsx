@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
-import { offTheDialog } from '../hooks/register.ts'
+import { checkOffAnswered, offTheDialog } from '../hooks/register.ts'
 import { GO_TO_SLEEP, itemChoices, openQuestionsIn, SKIP_QUESTION } from '../hooks/mod-kit/openquestions.ts'
 
 // Picker manners (#615) leaves the asking to Claude Code's own dialog (#744, decided with Dan on
@@ -350,6 +350,28 @@ test("the guard's answered call returns before GitHub is asked, and the issue is
   await w.settle()
   expect(w.edits.map(x => x.issue)).toEqual([12])
 })
+// #2408: a listener that throws is skipped by the engine without the guard hearing of it (PR #2405),
+// so whatever stops picker manners checking the guard's answer off on its issue is logged in picker
+// manners, while the guard keeps the answer it recorded and the question stays open there.
+// The edit itself refused is logged by the work started off the call, once, naming the issue.
+test("a failed check off of the guard's answer on its issue is logged, and only once (#2408)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  w.editFails = 'HTTP 403: Resource not accessible by integration'
+  const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  expect(r.result?.answers).toEqual({ [GUARD_WORDS]: 'Skip them' })
+  await w.settle()
+  expect(w.edits).toEqual([])
+  const lines = w.logs.filter(l => l.includes('HTTP 403: Resource not accessible by integration'))
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toContain('o/r#12')
+})
+test("a check off of the guard's answer that succeeds logs nothing (#2408)", { plugins: [kitWithRepo, guardStandIn] }, async ($, on) => {
+  const w = issueWorld(on, 'Skip them', { 12: SECTION })
+  await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
+  await w.settle()
+  expect(w.edits.map(x => x.issue)).toEqual([12])
+  expect(w.logs).toEqual([])
+})
 test("with no design round guard loaded, the guard's own picker is left off the issue, and the answer still reaches Claude (#2261)", { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, 'Skip them', { 12: SECTION })
   const r = await askWith($ as never, GUARD_WORDS, { source: 'design-round-guard:toolu_1' })
@@ -497,6 +519,38 @@ test('whatever escapes the work done off the dialog is said, never left unhandle
   const stand = { clock: { after: (_ms: number, fn: () => void) => fn() }, ui: { log: (text: string) => logged(text) } }
   offTheDialog(stand as never, () => Promise.reject(new Error('the body could not be built')))
   expect(await line).toBe("Picker manners could not add this question to its issue's Open questions (the body could not be built), so /sleep will not see it there.")
+})
+// #2408: the guard's answer listener can fail before any work starts, when $.clock.after throws (as
+// it does for a wait it cannot take, ask before saving's lapseAfter). The engine skips a listener that
+// throws and the guard never hears of it, so this was logged nowhere. Only the two nouns it uses, with
+// a clock that throws as it is asked; a refusal the engine answers with a handle instead is reported
+// by the engine itself, so a test through the engine cannot make this throw.
+test("a check off of the guard's answer that cannot be started is logged once, naming its issue, and never throws (#2408)", async () => {
+  const logged: string[] = []
+  const stand = {
+    clock: {
+      after: () => {
+        throw new Error('the mod reloaded')
+      },
+    },
+    ui: { log: async (text: string) => void logged.push(text) },
+  }
+  await checkOffAnswered(stand as never, { question: GUARD_WORDS, answer: 'Skip them', options: ['Skip them', 'Run design rounds'] })
+  expect(logged).toEqual([
+    "Picker manners could not check your answer off in issue #12's Open questions (the mod reloaded), so the question stays open there; the design round guard has your answer all the same.",
+  ])
+})
+// A log that cannot be written either leaves nothing to throw: the guard's call still goes on.
+test("a check off that cannot be started or logged still never throws (#2408)", async () => {
+  const stand = {
+    clock: {
+      after: () => {
+        throw new Error('the mod reloaded')
+      },
+    },
+    ui: { log: async () => Promise.reject(new Error('the transcript is gone')) },
+  }
+  await checkOffAnswered(stand as never, { question: GUARD_WORDS, answer: 'Skip them', options: [] })
 })
 
 test('an issue that cannot be read or written is said, and the answer still reaches Claude (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {

@@ -91,11 +91,34 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
   }
 }
 
+// The issues a question names, as a log line says them, without asking GitHub or the session's
+// repository: owner/name#N as written, and a bare #N as issue #N.
+const issuesNamedIn = (question: string) => [...issueRefsIn(question, null).map(x => `${x.repo}#${x.issue}`), ...bareIssuesIn(question).map(n => `issue #${n}`)]
+
 // Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
 // back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
 const reportingFailure = ($: EngineInterface, work: () => Promise<unknown>) => () =>
   void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${errorText(err, 'picker-manners')}), so /sleep will not see it there.`))
 export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) => $.clock.after(0, reportingFailure($, work))
+
+// The design round guard's answer checked off on its issue, started on a timer (designRound.answered,
+// below). #2408: the engine skips a listener that throws without the guard hearing of it (PR #2405),
+// so anything stopping the work being started ($.clock.after throwing) is logged here and never
+// thrown: the guard keeps his answer, and the question stays open on its issue. What the work itself
+// meets is logged by recordOnIssues and reportingFailure.
+export const checkOffAnswered = async ($: EngineInterface, e: { question: string; answer: string; options: readonly string[] }) => {
+  try {
+    $.clock.after(0, reportingFailure($, () => recordOnIssues($, e.question, e.answer, e.options)))
+  } catch (err) {
+    const named = issuesNamedIn(e.question)
+    const where = named.length ? `${named.map(x => `${x}'s`).join(', ')} Open questions` : "its issue's Open questions"
+    try {
+      await $.ui.log(`Picker manners could not check your answer off in ${where} (${errorText(err, 'picker-manners')}), so the question stays open there; the design round guard has your answer all the same.`)
+    } catch {
+      // Nowhere left to say it; the guard has his answer all the same.
+    }
+  }
+}
 
 export const register: Register = on => {
   // #2261: a hook on a noun no loaded mod provides stops this whole mod loading, so with the design
@@ -133,7 +156,7 @@ export const register: Register = on => {
     // #2253: the design round guard counts only its own picker, so a question in its words asked
     // without its source is never written onto the issue, where a checked box reads as settled.
     if (guardIgnores(question, (e.metadata as { source?: unknown } | undefined)?.source)) {
-      const refs = [...issueRefsIn(question, null).map(x => `${x.repo}#${x.issue}`), ...bareIssuesIn(question).map(n => `issue #${n}`)]
+      const refs = issuesNamedIn(question)
       const where = refs.length ? `${refs.map(x => `${x}'s`).join(', ')} Open questions` : 'any issue'
       $.ui.log(`Picker manners: this question was not added to ${where}, since the design round guard counts only its own picker, so this answer lets no edit through.`)
       const told = `Dan's answer to this question lets no edit through: the design round guard counts only its own picker, asked with the metadata its refusal of an edit gives, so nothing is recorded and it was not added to ${where}. Tell Dan that in one line; when the guard refuses an edit, ask its question the way that refusal says.`
@@ -155,7 +178,7 @@ export const register: Register = on => {
   // a call to a noun, which Claude Code cuts off at 10 s while gh is given 20, so the timer is started
   // here, where the noun's code can be seen to hand GitHub over and answer at once (#744, #939).
   on('designRound.answered', async ($, e, next) => {
-    $.clock.after(0, reportingFailure($, () => recordOnIssues($, e.question, e.answer, e.options)))
+    await checkOffAnswered($, e)
     return next(e)
   })
 
