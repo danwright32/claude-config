@@ -24,16 +24,21 @@ Two routes are judged:
     is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
-    path with the interpreter its #! names (claude-config#2400); a Python script counts as able to
-    unless it imports only modules known to be unable to (PY_INERT). The one script let through is
-    /nudge, at
-    skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
-    like any other script that posts.
+    path with the interpreter its #! names (claude-config#2400). A script counts as able to send a
+    request, run code or write a file unless it is seen to be unable to: a Python script imports only
+    modules known to be unable to (PY_INERT) and uses no builtin that runs code; a JavaScript one
+    imports only node builtins known to be unable to (JS_INERT) and names no global that sends or runs
+    code and no fs method that writes; a shell script hands its arguments only to programs known to
+    be unable to send or run code (SH_INERT), to its own functions, or to scripts seen unable to act
+    (claude-config#2434). The one script let through is /nudge, at skills/nudge/nudge.py beside this
+    hooks folder, by its real path; a copy anywhere else is refused like any other script that posts.
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
 through a path alias (`@/lib/x`), a Python module in the standard library or installed, a module run
 with `python3 -m`, and an import of another language's files are
-not followed; a program run by bare name from the PATH is not read; and deliberate obfuscation (an
+not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
+program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
+shell script's writes are not counted as acting on a data file; and deliberate obfuscation (an
 endpoint assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
 """
@@ -232,11 +237,9 @@ IMPORT_MAX_FILES = 300
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
 # What lets a script act on a data file as more than data: sending a request (whose address the file
-# can hold), running code (which the file can be), or writing it somewhere that runs later. A
-# JavaScript script, or a module it imports, naming any of JS_ACTS still has the data files it is
-# handed read. Read from the text, comments included, which can only refuse more.
+# can hold), running code (which the file can be), or writing it somewhere that runs later.
 #
-# A Python script is judged the other way round (lessons review at 56b9d7f): a list of the ways to act
+# A Python script is judged by what cannot act (lessons review at 56b9d7f): a list of the ways to act
 # missed urllib3, httplib2, smtplib, ftplib, asyncio streams and importlib's exec_module, and a list
 # like that always misses the next one (L96). So a Python script counts as unable to act only when
 # every module it imports from outside the script's own files is in PY_INERT, modules that cannot
@@ -265,10 +268,55 @@ PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # that writes.
 PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "symlink_to",
                        "hardlink_to", "link_to", "chmod", "mkdir"})
-JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
-                     r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
-                     r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
-                     r"""\b(require|import)\s*\(\s*[^'"`\s)]|['"](node:)?(https?|net|tls|http2|dgram)['"]""")
+# A JavaScript or TypeScript script is judged the same way (claude-config#2434): a hand list of ways to
+# act (fetch, axios, child_process, ...) missed the request package, worker_threads and dns. So it
+# counts as unable to act only when every module it imports from outside its own files is in JS_INERT
+# (node builtins that cannot send, run code or write, `node:` prefix or not), and it names none of
+# JS_RUNS (the globals that send or run code, and the routes from an object to Function or a loader),
+# no require or import() of a computed name (JS_DYNAMIC), and none of JS_WRITES. fs is here for
+# reading, as pathlib is for Python, and its writing methods are JS_WRITES. Any package counts as
+# able to act. JS_RUNS is read from the text, comments included, which can only refuse more; the
+# imports, JS_DYNAMIC and JS_WRITES from the code with comments blanked (js_code), so an import shown
+# in a comment is not one (claude-config#2397).
+JS_INERT = frozenset({
+    "assert", "assert/strict", "buffer", "console", "crypto", "events", "fs", "fs/promises", "os", "path",
+    "path/posix", "path/win32", "perf_hooks", "querystring", "readline", "readline/promises", "stream",
+    "stream/promises", "string_decoder", "timers", "timers/promises", "url", "util", "zlib"})
+JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval|Function|Worker|SharedWorker|"
+                     r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
+                     r"mainModule)\b")
+JS_DYNAMIC = re.compile(r"""\brequire\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# fs's methods that write, move or remove a file, or open one to (a stream or a handle). The short
+# names a reader may use for something else (open, rename, rm) count only where called.
+JS_WRITES = re.compile(r"\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|"
+                       r"copyFileSync|cpSync|renameSync|symlink|symlinkSync|linkSync|chmod|chmodSync|lchmod|"
+                       r"lchmodSync|chown|chownSync|lchown|lchownSync|fchmod|fchmodSync|fchown|fchownSync|mkdirSync|"
+                       r"mkdtemp|mkdtempSync|rmSync|rmdirSync|unlinkSync|truncateSync|ftruncate|ftruncateSync|"
+                       r"utimes|utimesSync|lutimes|lutimesSync|futimes|futimesSync|openSync|writeSync|writev|"
+                       r"writevSync)\b|\b(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+# And a shell script (claude-config#2434): a command handed the script's arguments acts unless it is a
+# function the script defines (its body is read as the script's own commands), a script the gate
+# reads and sees cannot act (acts), code written into the script itself (a heredoc, -c), or one of
+# SH_INERT, builtins and programs that cannot send a request or run code with the words they are
+# handed. A list of senders (SENDERS) missed every program off it, gh and nc among them. Unlike a
+# Python or JavaScript script, a shell script's writes are not counted: every shell script that keeps
+# state writes, with a redirection or by moving a file (issue-spool.sh clear moves each spool file into
+# place), so the programs that only copy, move or remove a file (cp, mv, tee, ln, rm) are here too.
+SH_INERT = frozenset({
+    "[", "[[", ":", "basename", "case", "cat", "cd", "cmp", "column", "comm", "cp", "cut", "date", "declare", "diff",
+    "dirname", "du", "echo", "egrep", "exit", "export", "expr", "false", "fgrep", "file", "fold", "for", "getopts",
+    "grep", "head", "hexdump", "jq", "ln", "local", "ls", "md5", "md5sum", "mkdir", "mktemp", "mv", "nl", "od",
+    "paste", "popd", "printf",
+    "pushd", "read", "readlink", "readonly", "realpath", "return", "rev", "rg", "rm", "rmdir", "seq", "set",
+    "sha1sum", "sha256sum", "shasum", "shift", "sort", "stat", "strings", "tac", "tail", "tee", "test", "touch", "tr",
+    "true", "typeset", "uniq", "unset", "wait", "wc"})
+# git, only for the subcommands that read a repository (issue-spool.sh finds a checkout's common dir
+# with rev-parse), and with no option that names a program or setting to run or a file to write.
+GIT_INERT = frozenset({"rev-parse", "log", "show", "status", "diff", "ls-files", "ls-tree", "symbolic-ref",
+                       "cat-file", "for-each-ref", "merge-base", "rev-list", "describe", "name-rev"})
+GIT_RUNS = ("-c", "--config-env", "--exec-path", "--output", "--ext-diff", "--textconv", "-O")
+# find, except with -exec and its kind, and awk, unless its program can run a command (awk_runs).
+AWKS = {"awk", "gawk", "mawk", "nawk"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
 POSITIONAL = r"\$\{?[1-9@*]"
 
@@ -308,6 +356,8 @@ class Judge:
         self.sw = sw
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
+        self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
+        self.unfollowed = None  # the last import modules() could not follow (unfollow)
         # Where the Python a command starts looks for an absolute import beyond the script's folder
         # (claude-config#2358): the command's PYTHONPATH (its own assignment, one exported earlier in
         # the line, or the session's), its directory, and the interpreter it names. record() sets it
@@ -417,7 +467,8 @@ class Judge:
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
-                    yield (f"{via}, a module the gate cannot find{where}, so it cannot see what that runs"), None, None, None
+                    yield self.unfollow(f"{via}, a module the gate cannot find{where}, so it cannot see what that "
+                                        "runs"), None, None, None
                     return
                 for target in targets:
                     target = os.path.realpath(target)
@@ -425,18 +476,24 @@ class Judge:
                         continue
                     seen.add(target)
                     if len(seen) > IMPORT_MAX_FILES:
-                        yield (f"{start} imports more than {IMPORT_MAX_FILES} modules, past what the gate "
-                               "reads, so it cannot see what they run"), None, None, None
+                        yield self.unfollow(f"{start} imports more than {IMPORT_MAX_FILES} modules, past what "
+                                            "the gate reads, so it cannot see what they run"), None, None, None
                         return
                     try:
                         with open(target, "rb") as f:
                             found = f.read(MAX_FILE).decode("utf-8", "replace")
                     except OSError:
-                        yield (f"{via} ({target}), a module the gate cannot read, so it cannot see what that "
-                               "runs"), None, None, None
+                        yield self.unfollow(f"{via} ({target}), a module the gate cannot read, so it cannot "
+                                            "see what that runs"), None, None, None
                         return
                     yield None, via, target, found
                     queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
+
+    def unfollow(self, why):
+        """Record why that an import could not be followed, for main() to say the check could not be
+        made, keyed on this cause rather than on the words it is put in; and give it back."""
+        self.unfollowed = why
+        return why
 
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ())):
         """(the import as written, the files it runs, or False when it names a local file not there,
@@ -919,15 +976,27 @@ class Judge:
         """How a script can act on a file it is handed as more than data, as a phrase ("sends a request
         (curl)", "runs the file it is handed (source)"), or None when it only reads what it is handed.
 
-        A shell script acts when one of its commands sends a request, or runs, sources or evals a
-        file or command named by the arguments it was handed (or a variable set from them). A
-        JavaScript script acts when it, or a local module it imports, names a way to send a request or
-        to run code (JS_ACTS). A Python script acts unless it, and every local module it imports, is
-        seen to be unable to (py_acts). A script of any other kind, one that cannot be read, and
-        one whose imports cannot all be followed are taken to act: only a script seen to do neither
-        has its data files left unread. Arguments a script passes on to ANOTHER program are not
-        followed there: that program is judged for what it names, not for what it does with them."""
+        Each language is judged by what cannot act, so anything not seen to be unable to counts as
+        acting (claude-config#2434). A shell script acts when one of its commands sends a request,
+        runs, sources or evals a file or command named by the arguments it was handed (or a variable
+        set from them), or hands them to a program not seen to be unable to act (shell_acts). A
+        JavaScript script acts unless it, and every local module it imports, is seen to be unable to
+        (js_acts), and a Python script likewise (py_acts). A script of any other kind, one that
+        cannot be read, and one whose imports cannot all be followed are taken to act: only a script
+        seen to do none of it has its data files left unread. A script a shell script hands its
+        arguments to is judged here the same way; one already being judged further up counts as
+        judged there."""
         real = os.path.realpath(path)
+        if real in self.acting:
+            return None  # a script handing its arguments back to itself is judged where it began
+        self.acting.add(real)
+        try:
+            return self.acts_on(real, d, shell_hint, lang)
+        finally:
+            self.acting.discard(real)
+
+    def acts_on(self, real, d, shell_hint, lang):
+        """acts() for a script at its real path, once the walk is known not to have come back to it."""
         try:
             with open(real, "rb") as f:
                 body = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -940,25 +1009,38 @@ class Judge:
         if not kind:
             return "is a kind of script the gate does not read for what it does with its arguments"
         root = os.path.dirname(real)
-        if kind == "py":
-            why = self.py_acts(body, real, root)
-            if why:
-                return why
-        else:
-            hit = JS_ACTS.search(body)
-            if hit:
-                return f"can send a request or run code ({hit.group(0).strip()})"
+        why = self.py_acts(body, real, root) if kind == "py" else self.js_acts(body)
+        if why:
+            return why
         for why, _, target, found in self.modules("it", real, root, body, kind):
             if why:
                 return f"imports a module the gate cannot follow ({why})"
-            if kind == "py":
-                inner = self.py_acts(found, target, root)
-                if inner:
-                    return f"imports {os.path.basename(target)}, which {inner}"
+            inner = self.py_acts(found, target, root) if kind == "py" else self.js_acts(found)
+            if inner:
+                return f"imports {os.path.basename(target)}, which {inner}"
+        return None
+
+    @staticmethod
+    def js_acts(text):
+        """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
+        a phrase, or None when it is seen unable to. It is unable to only when every module it imports
+        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC or
+        JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
+        judges it with this same reading, and one that is not there is refused there."""
+        code = js_code(text)
+        for m in IMPORT_SPEC.finditer(code):
+            spec = m.group(2)
+            bare = spec.split("?", 1)[0]
+            if "${" not in spec and (bare.startswith(("./", "../", "/", "file://")) or bare in (".", "..")):
                 continue
-            hit = JS_ACTS.search(found)
-            if hit:
-                return f"can send a request or run code through {os.path.basename(target)} ({hit.group(0).strip()})"
+            if "${" in spec or (spec[5:] if spec.startswith("node:") else spec) not in JS_INERT:
+                return f"imports a module the gate does not know to be unable to send a request, run code or write a file ({spec})"
+        hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code)
+        if hit:
+            return f"can send a request or run code ({hit.group(0).strip()})"
+        hit = JS_WRITES.search(code)
+        if hit:
+            return f"can write a file ({hit.group(0).strip(' (')})"
         return None
 
     def py_acts(self, text, cur, root):
@@ -1062,8 +1144,17 @@ class Judge:
         return None
 
     def shell_acts(self, body, d):
-        """acts() for a shell script's body: the first of its commands that sends a request, or runs
-        what the script was handed, as a phrase, or None."""
+        """acts() for a shell script's body: the first of its commands that sends a request, runs what
+        the script was handed, or hands it to a program not seen to be unable to act, as a phrase, or
+        None.
+
+        Handed means a word after the program's name holds an expansion of the script's arguments or
+        of a variable set from them, a redirection's included (`nc host 443 < "$1"`). What it does not
+        follow, so a pass is not read as more than it measured: what reaches a program through a pipe
+        (`cat "$1" | x`), code written into the script itself (a heredoc fed to python3 -, a -c
+        string), and what the script writes with a redirection."""
+        defined = set(re.findall(r"(?:^|[\s;&|(){}])(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", body))
+        defined |= set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", body))
         names = {"OPTARG"} if "getopts" in body else set()
         while True:
             given = POSITIONAL + (r"|\$\{?(?:" + "|".join(sorted(names)) + r")\b" if names else "")
@@ -1083,6 +1174,12 @@ class Judge:
         for _, text, _, _, _ in records:
             rest, _ = self.sw.command_rest(text)
             words = self.sw.command_words(rest)
+            if words and not words[0].strip():
+                # A line continued with a backslash inside $(...) comes back with the newline as its
+                # first word and its assignments still in front (issue-spool.sh's append), so it is
+                # read again from its first real word.
+                rest, _ = self.sw.command_rest(self.sw.rejoin([w for w in words if w.strip()]))
+                words = self.sw.command_words(rest)
             if not words:
                 continue
             if re.match(r"[A-Za-z_]\w*(\[[^]]*\])?\+?=", words[0]):
@@ -1096,16 +1193,62 @@ class Judge:
                 if any(handed.search(w) for w in words[1:]):
                     return f"runs the file it is handed ({name})"
                 continue
+            if not any(handed.search(w) for w in words[1:]) or name in SH_INERT or \
+                    (name[:-2] if name.endswith("()") else name) in defined:
+                continue  # a definition, `show() { cat "$1"; }`, reads as a command named show()
+            git = self.sw.git_read(words) if name == "git" else None
+            if git and git[0] in GIT_INERT and not any(
+                    w in GIT_RUNS or w.startswith(GIT_RUNS) for w in git[1] + git[2]):
+                continue
+            if name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
+                continue  # find runs a program only through -exec and its kind
+            if name in AWKS and not self.awk_runs(words):
+                continue
             if name in SHELLS or INTERPRETER.match(name):
-                operand, inline, _ = self.operands(words)
+                operand, inline, stdin = self.operands(words)
                 if inline:
                     code = next((words[k + 1] for k in range(1, len(words) - 1)
                                  if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), "")
                     if handed.search(code):
                         return f"runs code it is handed ({name})"
-                elif operand and handed.search(operand):
+                    continue  # code written into the script, read with it for what it names
+                if operand and handed.search(operand):
                     return f"runs the file it is handed ({name})"
+                if stdin and operand in (None, "-"):
+                    continue  # its code is a heredoc in the script, read with it for what it names
+                if not operand or re.search(r"[$`]", operand):
+                    return (f"hands its arguments to {name} running a script or module the gate cannot "
+                            f"read ({operand or ' '.join(words[1:3])})")
+                path = self.resolve(operand, d)
+                if not os.path.isfile(path):
+                    return f"hands its arguments to {name} running a script the gate cannot find ({operand})"
+                kind = "js" if JS_RUNTIME.match(name) else "py" if re.match(r"(python|pypy)", name) else None
+                inner = self.acts(path, d, name in SHELLS, kind)
+                if inner:
+                    return f"hands its arguments to {os.path.basename(operand)}, which {inner}"
+                continue
+            return (f"hands its arguments to a program the gate does not know to be unable to send a "
+                    f"request or run code ({name})")
         return None
+
+    @staticmethod
+    def awk_runs(words):
+        """Whether an awk command can run a program: its program comes from a file (-f), or names
+        system(), a pipe to or from a command (`print | "sh"`, `"cmd" | getline`, `|&`) or a gawk
+        extension (@load, @include). A program written in the command is read; `||` is not a pipe."""
+        k = 1
+        while k < len(words):
+            w = words[k]
+            if w in ("-F", "-v"):
+                k += 2
+            elif w.startswith(("-f", "--file", "--exec", "-E", "-i", "--include", "-l", "--load")):
+                return True
+            elif w.startswith("-") and w != "-":
+                k += 1
+            else:
+                break
+        program = words[k] if k < len(words) else ""
+        return bool(re.search(r"\bsystem\s*\(|(?<!\|)\|(?!\|)|@load|@include", program)) or not program
 
     def package(self, name, words, d, depth):
         """The reason `npm run <script>` (pnpm, yarn) posts, or None.
@@ -1295,12 +1438,14 @@ def main():
         return
     cmd = ti["command"]
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
-    reason = Judge(load_reader()).line(cmd, cwd, 0, cmd)
+    judge = Judge(load_reader())
+    reason = judge.line(cmd, cwd, 0, cmd)
     if reason:
-        # A reason ending "so it cannot see what ... run(s)" is an import the gate could not follow, not
-        # a post it found, so it says the check could not be made rather than claiming a post.
+        # A reason carrying an import the gate could not follow (recorded by modules() where it gives
+        # up, never matched by its wording) is not a post it found, so it says the check could not be
+        # made rather than claiming a post.
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if "so it cannot see what" in reason else "REFUSED: this command posts to Slack: ")
+                if judge.unfollowed and judge.unfollowed in reason else "REFUSED: this command posts to Slack: ")
         print("refuse\n" + lead + reason + ". " + draft_advice("with the same channel and thread"))
     else:
         print("allow")

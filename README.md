@@ -3234,8 +3234,9 @@ importing a helper that posts (their `npm test` globs are not read, so `npm test
 
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
-own folder as Python finds it. A module not on disk there is the standard library or an installed
-package and is not read; a relative import that names nothing there is refused. Code given inline
+own folder as Python finds it. A module not beside the script is looked for where Python looks next
+(below); the standard library and installed packages are not read, and an import placed nowhere, or
+a relative import that names nothing there, is refused. Code given inline
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
@@ -3262,19 +3263,31 @@ naming an endpoint), and so is every later file not shaped like data. A later fi
 review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
 saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
 the script depends on each program's options, so such a file is judged against every one of them,
-and is still read when any of them can act on it as more than data: a shell script that runs `curl`
-(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
-local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
-(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+and is still read when any of them can act on it as more than data. Each language is judged by what
+cannot act (#2434), so anything not seen to be unable to counts as acting: a shell script that runs
+`curl` (or its kind), runs, sources or evals a file named by its arguments, or hands its arguments
+(or a variable set from them) to anything but a short list of programs that cannot send a request or
+run code (`cat`, `grep`, `jq`, `wc`, `printf`, `mv`, `rm` and the like, `SH_INERT`), its own
+functions, `git` reading a repository, `find` without `-exec`, `awk` whose program runs no command,
+or a script the gate reads and sees cannot act; so `gh`, `nc` and `node send.js "$1"` count. A
+JavaScript script unless it, and every local module it imports, imports only node builtins that
+cannot send, run code or write (`fs` for reading, `path`, `url`, `util`, `readline` and the like,
+`JS_INERT`) and names no global that sends or runs code (`fetch`, `WebSocket`, `eval`, `Function`,
+`Worker`, a `.constructor`, a `require` of a computed name) and no `fs` method that writes; any package
+counts, so `request`, `worker_threads` and `dns` do. A Python script unless it, and every
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
 `sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
-`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
-extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
-script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
+The JavaScript and shell readings were lists of what acts until #2434, and missed the `request`
+package, `worker_threads`, `dns` and every program off the list of senders. A shell script's writes
+are not counted, since every shell script that keeps state writes (`issue-spool.sh clear` moves its
+spool files into place), and neither are its data reaching a program through a pipe or code written
+into the script itself (a heredoc fed to `python3 -`). A later file with a script's extension, a `#!`
+or no extension at all is read as before, since a wrapper may run it. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
