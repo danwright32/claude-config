@@ -1635,6 +1635,14 @@ first letter taking the rest of the word. Every repository read is judged, the l
 read as one that gh reads as something else can only refuse more; a command missing from the list
 has every cluster holding R read as naming one.
 
+Release notes on standard input (#2430). `gh release create --notes-file -` reads the notes from
+standard input, which the command hook passed unread. `scan.stdin_feeds` reads each pipeline stage
+running a release: a heredoc or here-string that expands nothing, or a pipe from a stage printing
+only shown text, is text the command shows and is judged with it; a file fed in with `<` is read as
+a notes file is; anything else is refused, as is a release `stdin_feeds` cannot find (one a shell
+runs from a string). The guard still reads a lone `-` when gh runs; `--notes-file=-` and `-F-` it
+does not read, so they are refused there too.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

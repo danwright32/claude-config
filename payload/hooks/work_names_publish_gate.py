@@ -285,6 +285,11 @@ GENERATED = ("with notes GitHub writes from the pull requests and commits it inc
 FROM_TAG = ("with notes taken from the tag's annotation or its commit's message (--notes-from-tag), which "
             "this check does not read, so whether they name a work organisation or repository cannot be "
             "told. Write the notes with --notes or --notes-file instead.")
+# gh reads the notes from standard input for `--notes-file -` (its help, gh 2.89.0); the guard reads
+# those bytes when gh runs, but the command hook sees only the command (claude-config#2430).
+NOTES_STDIN = ("with notes from standard input (--notes-file -) that the command does not show, which this "
+               "check cannot read here, so whether they name a work organisation or repository cannot be "
+               "told. Write the notes with a heredoc in the command, or name the file with --notes-file.")
 GIST_STDIN = ("from standard input (it names no file, or names -), which this check cannot read here, so "
               "whether it names a work organisation or repository cannot be told. Name the file instead.")
 GIST_EDIT_STDIN = ("with a file's new text from standard input (-), which this check cannot read here, so "
@@ -479,7 +484,48 @@ def judge_release(kind, what, args, envs, place, where, command):
     bodies = _file_bodies(args, command, place, NOTES_FILE_FLAGS, "--notes-file")
     unseen = ([GENERATED] if _given(args, ("--generate-notes",)) else []) + \
              ([FROM_TAG] if _given(args, ("--notes-from-tag",)) else [])
+    if _notes_stdin(args):
+        more, unread = _release_stdin(kind, command, place)
+        bodies += more
+        unseen += unread
     return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
+
+
+def _notes_stdin(args):
+    """Whether a gh release command takes its notes from standard input: `--notes-file -` or `-F -`
+    (which scan.flag_values passes over as a flag with no value), `--notes-file=-`, `-F-`, or a `-`
+    after a clustered -F (`-dF -`)."""
+    pairs = zip(args, args[1:])
+    return any(a in NOTES_FILE_FLAGS and b == "-" for a, b in pairs) or \
+        "-" in scan.flag_values(args, *NOTES_FILE_FLAGS, clustered=True)
+
+
+def _release_stdin(kind, command, place):
+    """(bodies, unseen) for release notes gh reads from standard input (`--notes-file -`,
+    claude-config#2430). Text the command shows is judged with the command and adds nothing; a file
+    fed in with `<` is read as a notes file is; anything else is unseen, as is a release reading
+    standard input that scan.stdin_feeds does not find (one a shell runs from a string). Every release
+    of kind in the command reading standard input counts, the reading that refuses more."""
+    try:
+        feeds = [f for f in scan.stdin_feeds(command, {kind}) if _notes_stdin(f[1])]
+    except scan.Unreadable:
+        feeds = []
+    if not feeds:
+        return [], [NOTES_STDIN]
+    bodies, unseen = [], []
+    for _kind, _args, state, detail in feeds:
+        if state == "hidden":
+            unseen.append(NOTES_STDIN)
+        elif state == "file":
+            shown_as = "the file %s fed to it on standard input" % detail
+            for word, got, why in field.body_files(["--notes-file", detail], command, place, NOTES_FILE_FLAGS):
+                if got == "hidden":
+                    bodies.append((shown_as, None))
+                elif got == "text":
+                    bodies.append((shown_as, why))
+                elif got in ("missing", "unreadable"):
+                    unseen.append(UNREAD_FILE % (shown_as, why))
+    return bodies, unseen
 
 
 def _gist_public(args):

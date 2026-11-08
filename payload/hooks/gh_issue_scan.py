@@ -785,6 +785,45 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
+def stdin_feeds(command, kinds):
+    """What each gh command of kinds the command runs at the head of a stage reads on its standard
+    input (claude-config#2430), as (kind, args, state, detail):
+      "shown"   text the command shows (a heredoc or here-string that expands nothing, or a stage
+                before it in a pipe printing only shown text), so it is judged with the command
+      "file"    a file fed in with `<`; detail is the word naming it
+      "hidden"  anything else: a pipe from a stage whose output is not shown, an expanding heredoc,
+                or whatever the command itself was started with
+    Only a command at the head of a stage is seen: one a shell, eval or env runs from a string is not,
+    so a caller for whom standard input matters refuses a command it does not find here.
+    Raises Unreadable when the command cannot be tokenized."""
+    pipelines, bodies = _stages(command)
+    out = []
+    for stages in pipelines:
+        if stages in ("(", ")"):
+            continue
+        fed = None  # the first stage reads whatever the command was started with
+        for stage in stages:
+            words, redirects, heredocs = stage
+            k = 0
+            while k < len(words) and (words[k] in HEAD_WORDS or ASSIGNMENT.match(words[k])):
+                k += 1
+            found = gh_command(words[k:]) if k < len(words) else None
+            if found and tuple(found[:2]) in kinds:
+                files = [t for op, t in redirects if op == "<"]
+                strings = [t for op, t in redirects if op == "<<<"]
+                if heredocs:
+                    state, detail = ("shown" if all(bodies[h] for h in heredocs) else "hidden"), None
+                elif strings:
+                    state, detail = ("hidden" if any(EXPANDS.search(t) for t in strings) else "shown"), None
+                elif files:
+                    state, detail = "file", files[-1]
+                else:
+                    state, detail = ("shown" if fed else "hidden"), None
+                out.append((tuple(found[:2]), list(found[2]) + list(found[3]), state, detail))
+            fed = _shown(stage, bool(fed), bodies)
+    return out
+
+
 def flag_values(args, long_flag, short_flag=None, clustered=False, takes_value=None):
     """Every value given to a flag in one create's argument list.
 

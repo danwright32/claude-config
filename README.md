@@ -201,7 +201,9 @@ text from (an editor's text and standard input refused), `gh repo edit --visibil
 refused for a repository not yet public that no work owner owns, since every file and issue in it
 becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
 is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
-gh reads the cluster, and every repository named is judged. Still not covered: gh run by its absolute path, a script that rewrites PATH, and curl or
+gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
+standard input (`--notes-file -`) are judged when the command shows them (a heredoc, a here-string,
+shown text piped in) or feeds in a file with `<`, and refused otherwise. Still not covered: gh run by its absolute path, a script that rewrites PATH, and curl or
 an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is

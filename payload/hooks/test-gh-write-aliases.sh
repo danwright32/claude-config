@@ -281,6 +281,48 @@ check "#2398 gh release edit's notes are judged too: $out" refused
 hook "python3 gen.py > made.md && gh release create v1 $PUB --notes-file made.md"
 check "#2398 a notes file this command writes from what it does not show is refused: $out" refused
 
+# Release notes gh reads from standard input (`--notes-file -`, claude-config#2430) are judged where the
+# command shows them (a heredoc, a here-string, echo or printf piped in) or names the file fed in (`<`),
+# and refused anywhere else, since the hook cannot read them: the guard reads them only when gh runs.
+hook "cat named.md | gh release create v1 $PUB --notes-file -"
+check "#2430 notes piped in from what the command does not show are refused: $out" refused
+check "#2430 and the refusal says standard input: $out" has "$out" "standard input"
+hook "cat clean.md | gh release create v1 $PUB --notes-file -"
+check "#2430 clean notes piped from a file are refused the same way, since the hook cannot read them: $out" refused
+hook "gh release create v1 $PUB -F - < named.md"
+check "#2430 notes fed from a file naming one are read and refused: $out" refused
+check "#2430 and the refusal names the file: $out" has "$out" "named.md"
+hook "gh release create v1 $PUB -F - < not-there.md"
+check "#2430 notes fed from a file that is not there are refused: $out" refused
+check "#2430 and say the file fed in could not be read, never that the command wrote it: $out" \
+  has "$out" "not-there.md fed to it on standard input, which could not be read"
+hook "gh release create v1 $PUB --notes-file=- < named.md"
+check "#2430 the --notes-file=- form is read too: $out" refused
+hook "gh release create v1 $PUB -F-"
+check "#2430 the -F- form with nothing shown on standard input is refused: $out" refused
+hook "gh release edit v1 $PUB --notes-file -"
+check "#2430 gh release edit's notes from standard input are refused too: $out" refused
+hook "bash -c 'cat clean.md | gh release create v1 $PUB --notes-file -'"
+check "#2430 notes on standard input inside a shell's string are refused: $out" refused
+hook "gh release create v1 $PUB -F - < clean.md"
+check "#2430 (control) a clean file fed in passes: $out" passed
+hook "printf 'a clean build\n' | gh release create v1 $PUB --notes-file -"
+check "#2430 (control) clean notes the command shows, piped in, pass: $out" passed
+hook "printf 'built from acme-widgets\n' | gh release create v1 $PUB --notes-file -"
+check "#2430 (control) and naming one, they are judged and refused: $out" refused
+hook "gh release create v1 $PUB --notes-file - <<< 'a clean build'"
+check "#2430 (control) a clean here-string passes: $out" passed
+hook "gh release create v1 $PUB --notes-file - <<'EOF'
+a clean build
+EOF"
+check "#2430 (control) a clean heredoc passes: $out" passed
+hook "gh release create v1 $PUB --notes-file - <<'EOF'
+built from acme-widgets
+EOF"
+check "#2430 (control) a heredoc naming one is refused: $out" refused
+hook "cat named.md | gh release create v1 $PRIV --notes-file -"
+check "#2430 (control) notes on standard input in a private repository pass: $out" passed
+
 hook "gh gist create --public named.md"
 check "#2398 a public gist whose file names one is refused: $out" refused
 hook "gh gist new -p named.md"
@@ -443,6 +485,11 @@ printf 'Notes from acme-hq\n' > "$WORK/feed-named"
 FEED="$WORK/feed-named" guard_args release create v1 --repo danwright-test/public-notes --notes-file -
 check "#2398 the guard reads release notes sent on standard input and refuses them: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2398 and never posts them" not_posted
+# The guard reads standard input only for a lone `-`, so `--notes-file=-` is notes it never read
+# (claude-config#2430): refused, never posted unread.
+FEED="$WORK/feed-named" guard_args release create v1 --repo danwright-test/public-notes --notes-file=-
+check "#2430 the guard refuses release notes on standard input it did not read (--notes-file=-): rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2430 and never posts them" not_posted
 FEED="$WORK/feed-named" guard_args gist create --public -
 check "#2398 the guard refuses a public gist sent on standard input naming one: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2398 and never posts it" not_posted
