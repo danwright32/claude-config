@@ -175,7 +175,8 @@
 # looks in a line that moved are not counted, claude-config#2351),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
-# epoch seconds, the clock's seam), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
+# epoch seconds, the clock's seam, honoured only with HOOK_TESTS_RUNNING=1, claude-config#2399),
+# MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
 # MWR_HEARTBEAT_SECONDS (120: how often a wait that has not changed is said again, with how long it
 # has lasted, see wait_a_look), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
@@ -189,9 +190,10 @@
 # the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
-# measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE (honoured only with HOOK_TESTS_RUNNING=1,
-# claude-config#2231), MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+# measurement), and the commands and scripts it runs, each honoured only with
+# HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
+# MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
+# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
 # check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
@@ -205,18 +207,25 @@ set -uo pipefail
 MWR_LIB="${BASH_SOURCE[0]%/*}"; [ "$MWR_LIB" != "${BASH_SOURCE[0]}" ] || MWR_LIB=.
 MWR_LIB="$(cd "${MWR_LIB:-/}" && pwd)"
 MWR_HOOKS="$(cd "$MWR_LIB/.." && pwd)"
-RED_GATE="${MWR_RED_GATE:-$MWR_HOOKS/block-red-merge.sh}"
-REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"
-CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
-DESIGN_GATE="${MWR_DESIGN_GATE:-$MWR_HOOKS/design-score-gate.sh}"
-VERIFY_GATE="${MWR_VERIFY_GATE:-$MWR_HOOKS/require-verification-run.sh}"
-CLOSING_GATE="${MWR_CLOSING_GATE:-$MWR_HOOKS/check-closing-merge.sh}"
-# The privacy gate is named from the environment only under the test marker (claude-config#2231): a
-# script named there that answers nothing would stand in for it on every merge this helper makes.
-WORK_NAMES_GATE="$MWR_HOOKS/check-work-names-merge.sh"
-[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${MWR_WORK_NAMES_GATE:-}" ] && WORK_NAMES_GATE="$MWR_WORK_NAMES_GATE"
-REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
-SLEEP="${MWR_SLEEP:-sleep}"
+# Every script this helper runs is named from the environment only under the hooks' test marker,
+# HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite (claude-config#2231 for the
+# privacy gate, #2317 for the rest). This helper reads Claude Code's own environment, so a script named
+# there that answers nothing would stand in for a merge gate, the lessons review or the worktree check
+# on every merge it makes. Anywhere else the installed script beside it runs, whatever the setting says.
+mwr_script(){ # mwr_script <the setting's value> <the installed script or command> -> what to run
+  if [ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "$1" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+}
+RED_GATE="$(mwr_script "${MWR_RED_GATE:-}" "$MWR_HOOKS/block-red-merge.sh")"
+REVIEW_GATE="$(mwr_script "${MWR_REVIEW_GATE:-}" "$MWR_HOOKS/pr-review-gate.sh")"
+CHANGELOG_GATE="$(mwr_script "${MWR_CHANGELOG_GATE:-}" "$MWR_HOOKS/require-changelog-tag.sh")"
+DESIGN_GATE="$(mwr_script "${MWR_DESIGN_GATE:-}" "$MWR_HOOKS/design-score-gate.sh")"
+VERIFY_GATE="$(mwr_script "${MWR_VERIFY_GATE:-}" "$MWR_HOOKS/require-verification-run.sh")"
+CLOSING_GATE="$(mwr_script "${MWR_CLOSING_GATE:-}" "$MWR_HOOKS/check-closing-merge.sh")"
+WORK_NAMES_GATE="$(mwr_script "${MWR_WORK_NAMES_GATE:-}" "$MWR_HOOKS/check-work-names-merge.sh")"
+REVIEW_LIB="$(mwr_script "${MWR_REVIEW_LIB:-}" "$MWR_LIB/pr-review.sh")"
+# The wait and the clock name commands this runs as well, so they take the same rule
+# (claude-config#2399): outside a test run the sleep on the PATH waits and date is the clock.
+SLEEP="$(mwr_script "${MWR_SLEEP:-}" sleep)"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 POLL="$(num_or "${MWR_POLL_SECONDS:-}" 60)"; [ "$POLL" -ge 1 ] || POLL=1
 DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 10800)"
@@ -227,7 +236,7 @@ DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 10800)"
 LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
-NOW_CMD="${MWR_NOW:-}"
+NOW_CMD="$(mwr_script "${MWR_NOW:-}" "")"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
@@ -371,7 +380,8 @@ done
 slug="${repo:-$(mt_remote_slug)}"
 [ -n "$slug" ] || usage "this checkout has no GitHub origin; name the repository with --repo owner/name."
 
-# The clock is a seam like the sleep (L524): MWR_NOW names a command printing epoch seconds. One that
+# The clock is a seam like the sleep (L524): MWR_NOW names a command printing epoch seconds, under the
+# test marker only (see NOW_CMD). One that
 # prints anything else is not believed, and the real clock is read instead.
 now(){
   local t=""
@@ -800,7 +810,8 @@ retarget(){   # $1 = pull request number
 # because removing it would take the floor from under the session still standing in it; the sweep
 # takes it later. Nothing here can change the exit: the merge has landed, and a worktree that could
 # not be judged or removed is said and left for the sweep.
-WT_CHECK="${MWR_WORKTREE_CHECK:-$MWR_HOOKS/check-stale-worktrees.sh}"
+# Named from the environment only under the test marker, as every script this runs is (see mwr_script).
+WT_CHECK="$(mwr_script "${MWR_WORKTREE_CHECK:-}" "$MWR_HOOKS/check-stale-worktrees.sh")"
 tidy_worktree(){
   local all line cur="" main="" wt="" real out rc tok="" said_any=""
   [ -n "${branch:-}" ] || return 0

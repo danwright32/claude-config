@@ -342,11 +342,31 @@ if [ -e "$WORK/reader-ran" ]; then pass; else fail "(control) under its tests th
 # sleep that records what it was asked for and returns at once, so no case waits in real time (L524).
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$SLEPT_FILE"\n' > "$WORK/record-sleep"
 chmod +x "$WORK/record-sleep"
+# WN_MERGE_SLEEP is honoured only under its tests as well (claude-config#2317), so outside them the
+# gate runs the sleep on its PATH: here a copy of the recording sleep, first on the PATH, so those
+# cases record their waits too and still never wait in real time.
+mkdir -p "$WORK/sleep-bin"
+cp "$WORK/record-sleep" "$WORK/sleep-bin/sleep"
 slept_run() {  # [VAR=value ...] ; a scope read that keeps failing, its waits in $WORK/slept
   rm -f "$WORK/slept"
-  run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_SLEEP="$WORK/record-sleep" SLEPT_FILE="$WORK/slept" "$@"
+  run_hook "$MERGE 7 --squash" FAKE_SCOPE=fails WN_MERGE_SLEEP="$WORK/record-sleep" SLEPT_FILE="$WORK/slept" \
+    PATH="$WORK/sleep-bin:$WORK/bin:$PATH" "$@"
   slept="$(cat "$WORK/slept" 2>/dev/null | tr '\n' ' ')"
 }
+# Outside its tests a sleep named in the environment is never run (claude-config#2317): it is a
+# command the gate runs between reads, so one that never returns would hold the gate past its
+# timeout, where it is killed and gives no verdict. The sleep on the PATH waits instead.
+printf '#!/usr/bin/env bash\nprintf "ran %%s\\n" "$1" >> "$DECOY_RAN"\n' > "$WORK/decoy-sleep"
+chmod +x "$WORK/decoy-sleep"
+for marker in "" 0; do
+  rm -f "$WORK/decoy-ran"
+  slept_run WN_MERGE_SLEEP="$WORK/decoy-sleep" DECOY_RAN="$WORK/decoy-ran" HOOK_TESTS_RUNNING="$marker"
+  if [ -e "$WORK/decoy-ran" ]; then fail "outside its tests (marker '$marker') a sleep named in the environment ran: $(cat "$WORK/decoy-ran")"; else pass; fi
+  if [ "$slept" = "2 2 " ]; then pass; else fail "outside its tests (marker '$marker') the sleep on the PATH waits between reads: slept [$slept], wanted [2 2 ]"; fi
+done
+rm -f "$WORK/decoy-ran"
+slept_run WN_MERGE_SLEEP="$WORK/decoy-sleep" DECOY_RAN="$WORK/decoy-ran"
+if [ -e "$WORK/decoy-ran" ]; then pass; else fail "(control) under its tests the sleep named in the environment is the one run"; fi
 slept_run WN_MERGE_READ_TRIES=1 HOOK_TESTS_RUNNING=
 expect_deny "outside its tests a count of tries named in the environment is not honoured" "(3 tries, 15 seconds)"
 tries="$(grep -c 'contents/payload' "$WORK/gh.log")"
