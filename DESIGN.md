@@ -1627,6 +1627,14 @@ file inside clustered short flags is read through `flag_values(..., clustered=Tr
 by the work names gate, where another file can only refuse more; the issue field gate, which a value
 can satisfy, keeps the plain reading.
 
+The repository inside clustered short flags (#2423). `-dR o/x` posts to o/x, but reading every cluster
+holding an R as `-R` would take `-tRelease` as the repository `elease`. So the work names gate reads
+`--repo` with `flag_values(..., takes_value=...)`, a per command list of the one letter flags that
+take a value (`SHORT_VALUES`, from each command's help), and stops a cluster where gh does, at the
+first letter taking the rest of the word. Every repository read is judged, the last first, so a word
+read as one that gh reads as something else can only refuse more; a command missing from the list
+has every cluster holding R read as naming one.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

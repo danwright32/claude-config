@@ -385,6 +385,31 @@ check "#2412 a notes file after a clustered -d is read and refused: $out" refuse
 hook "gh pr create $PUB --title T --head x -dF clean.md"
 check "#2412 (control) a clean body file after a clustered flag passes: $out" passed
 
+# The repository a command posts to, given inside clustered short flags, is read (claude-config#2423):
+# gh reads `-dR o/x` as --draft then --repo o/x. GH_REPO names a private repository, so a reading that
+# misses the clustered -R judges the private one and passes text posted to the public one.
+INPRIV="GH_REPO=danwright-test/private-notes"
+hook "$INPRIV gh pr create --title T --head x --body \"copied from the acme-widgets issue\" -dR danwright-test/public-notes"
+check "#2423 a repository after a clustered -d is read, and text naming one there is refused: $out" refused
+check "#2423 and the refusal names the public repository: $out" has "$out" "danwright-test/public-notes"
+hook "$INPRIV gh pr create --title T --head x --body \"copied from the acme-widgets issue\" -dRdanwright-test/public-notes"
+check "#2423 and with its value attached: $out" refused
+hook "$INPRIV gh pr create --title T --head x --body \"copied from the acme-widgets issue\" -dR=danwright-test/public-notes"
+check "#2423 and attached with =, as gh reads it: $out" refused
+hook "$INPRIV gh release create v1 -dR danwright-test/public-notes --notes \"built from acme-widgets\""
+check "#2423 a release's repository after a clustered -d is read too: $out" refused
+hook "$INPRIV gh pr review 5 -cR danwright-test/public-notes --body \"seen in zephyr\""
+check "#2423 and a review's, after its clustered -c: $out" refused
+# A letter that takes a value of its own ends the cluster, as gh reads it, so `-tRelease` is the title
+# Release and never a repository: read as one, the repository elease could not be found and a clean
+# command would be refused.
+hook "gh pr create $PRIV --head x -tRelease --body \"copied from the acme-widgets issue\""
+check "#2423 (control) -tRelease is a title, not a repository, and the private repository's command passes: $out" passed
+hook "gh release create v1 -dtR $PRIV --notes \"built from acme-widgets\""
+check "#2423 (control) -dtR is a draft titled R, so the private repository named after it is still the one: $out" passed
+hook "$INPRIV gh pr create --title T --head x --body \"copied from the acme-widgets issue\" -dR danwright-test/private-notes"
+check "#2423 (control) a clustered -R naming a private repository passes: $out" passed
+
 # Each refusal says only what its check measured (L11): a gist file that is not there was never
 # written by the command, and standard input is not a file this command writes.
 hook "gh gist create --public not-there.md"

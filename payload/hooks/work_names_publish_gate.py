@@ -417,11 +417,43 @@ def judge_repo_sync(what, args, where):
             "be told." % (what, src, full))
 
 
-def _repo_of(args, envs, place):
-    """(slug, GH_REPO) a gh pr, issue or release command posts to: its --repo (-R), else GH_REPO."""
-    slugs = scan.flag_values(args, "--repo", "-R")
-    slug = slugs[-1] if slugs else None
-    return slug, (None if slug else _env_value("GH_REPO", envs, place))
+# The one letter flags that take a value, per command whose repository _repo_of reads, from each
+# command's own help on gh 2.89.0 (FLAGS and INHERITED FLAGS), so a cluster such as `-dR o/x` is read
+# as gh reads it, a letter at a time until one takes the rest (claude-config#2423).
+SHORT_VALUES = {
+    ("issue", "create"): frozenset("abFlmpTtR"),
+    ("issue", "edit"): frozenset("bFmtR"),
+    ("issue", "comment"): frozenset("bFR"),
+    ("pr", "create"): frozenset("aBbFHlmprTtR"),
+    ("pr", "edit"): frozenset("BbFmtR"),
+    ("pr", "comment"): frozenset("bFR"),
+    ("pr", "review"): frozenset("bFR"),
+    ("release", "create"): frozenset("nFtR"),
+    ("release", "edit"): frozenset("nFtR"),
+}
+
+
+def _repo_of(kind, args, envs, place):
+    """(slugs, GH_REPO) a gh pr, issue or release command posts to: every repository its --repo (-R)
+    names, written alone or inside clustered short flags (`-dR o/x`, claude-config#2423), the last
+    first since gh takes the last, else GH_REPO. Every one is judged (judge_repos), so a word read as
+    a repository that gh reads as something else can only refuse more. A command missing from
+    SHORT_VALUES has every cluster holding R read as naming one, the reading that refuses more."""
+    slugs = []
+    for s in reversed(scan.flag_values(args, "--repo", "-R", clustered=True,
+                                       takes_value=SHORT_VALUES.get(tuple(kind)))):
+        if s not in slugs:
+            slugs.append(s)
+    return slugs, (None if slugs else _env_value("GH_REPO", envs, place))
+
+
+def judge_repos(what, slugs, cwd, gh_repo, command, bodies, unseen=()):
+    """judge() for each repository a command may post to (_repo_of): the first refusal, else None."""
+    for slug in slugs or [None]:
+        why = judge(what, slug, cwd, gh_repo, command, bodies, unseen)
+        if why:
+            return why
+    return None
 
 
 def _file_bodies(args, command, place, flags, shown_as):
@@ -439,15 +471,15 @@ def _file_bodies(args, command, place, flags, shown_as):
     return out
 
 
-def judge_release(what, args, envs, place, where, command):
+def judge_release(kind, what, args, envs, place, where, command):
     """gh release create and edit post their title and notes on the release page (claude-config#2398):
     --notes on the command line, --notes-file read here, and the notes gh has GitHub generate or takes
     from the tag refused in a public repository, since this check cannot read them."""
-    slug, gh_repo = _repo_of(args, envs, place)
+    slugs, gh_repo = _repo_of(kind, args, envs, place)
     bodies = _file_bodies(args, command, place, NOTES_FILE_FLAGS, "--notes-file")
     unseen = ([GENERATED] if _given(args, ("--generate-notes",)) else []) + \
              ([FROM_TAG] if _given(args, ("--notes-from-tag",)) else [])
-    return judge(what, slug, where, gh_repo, command, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
 
 
 def _gist_public(args):
@@ -810,7 +842,7 @@ def evaluate(command, cwd, depth=0):
             elif kind == REPO_SYNC:
                 why = judge_repo_sync(what, args, where)
             elif kind in RELEASE:
-                why = judge_release(what, args, envs, place, where, command)
+                why = judge_release(kind, what, args, envs, place, where, command)
             elif kind == GIST_CREATE:
                 why = judge_gist(what, args, place, command)
             elif kind == GIST_EDIT:
@@ -837,7 +869,7 @@ def evaluate(command, cwd, depth=0):
 def _judge_text(kind, what, args, envs, place, where, command):
     """judge() for one gh pr or issue command: its body files, and what it posts that is not on its
     command line (claude-config#2326). Raises CannotTell."""
-    slug, gh_repo = _repo_of(args, envs, place)
+    slugs, gh_repo = _repo_of(kind, args, envs, place)
     bodies = _file_bodies(args, command, place, ("--body-file", "-F"), "--body-file")
     unseen = [EDITED] if _given(args, EDITOR_FLAGS) else []
     if kind == ("pr", "create"):
@@ -847,7 +879,7 @@ def _judge_text(kind, what, args, envs, place, where, command):
             # With no --head, gh pushes the branch when it is not fully pushed and it can ask where.
             bodies.append(("what it may push (the branch's name and the commits no remote holds)",
                            lambda: pushed_text(where, False)))
-    return judge(what, slug, where, gh_repo, command, bodies, unseen)
+    return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
 
 
 # The guard's refusal starts as gh's own errors do, with the program's name. Written as a format so

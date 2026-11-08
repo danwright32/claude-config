@@ -785,7 +785,7 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
-def flag_values(args, long_flag, short_flag=None, clustered=False):
+def flag_values(args, long_flag, short_flag=None, clustered=False, takes_value=None):
     """Every value given to a flag in one create's argument list.
 
     Understands the four forms gh accepts: `--flag value`, `--flag=value`,
@@ -793,11 +793,16 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
     flag, contributes nothing, so an empty value can never satisfy a gate.
 
     clustered: also the short flag written after other one letter flags, `-dF body.md` and
-    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). gh cannot be asked here
-    which letters before it take a value of their own (`-tF` is a title of F), so every such cluster
-    counts, the reading that finds more values, never fewer. Only a caller for whom another value
-    can only refuse more asks for it (the work names gate reading the files a command posts); a
+    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). With no takes_value, which
+    letters before it take a value of their own (`-tF` is a title of F) is not known, so every such
+    cluster counts, the reading that finds more values, never fewer. Only a caller for whom another
+    value can only refuse more asks for it (the work names gate reading the files a command posts); a
     gate that a value satisfies never does.
+
+    takes_value: the command's one letter flags that take a value, from gh's help, so a cluster is
+    read as gh reads it, stopping at the first of them (claude-config#2423, _cluster_at). A caller
+    gives it where a value read from a letter that is really another flag's value would be wrong in
+    the direction that lets text through, such as the repository a command posts to.
     """
     values = []
     i = 0
@@ -834,9 +839,11 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
             continue
 
         # `-dF body.md`, `-dFbody.md`: the short flag after other one letter flags (clustered only).
-        if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
-                and not tok.startswith("--") and short_flag[1] in tok[2:]):
-            rest = tok[tok.index(short_flag[1], 2) + 1:]
+        at = (_cluster_at(tok, short_flag[1], takes_value)
+              if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
+                  and not tok.startswith("--") and short_flag[1] in tok[2:]) else None)
+        if at is not None:
+            rest = tok[at + 1:]
             if rest.startswith("="):
                 rest = rest[1:]
             if rest:
@@ -850,6 +857,23 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
 
         i += 1
     return values
+
+
+def _cluster_at(tok, letter, takes_value):
+    """Where letter stands as a flag of its own in the one letter cluster tok (`-dR`), or None.
+
+    takes_value None: anywhere after the first letter, the reading that finds more. Otherwise the
+    letters of that command that take a value, from gh's help: gh reads a cluster a letter at a time
+    and the first letter taking a value takes the rest of the word, so `-tRelease` is a title and holds
+    no -R, and `-dtR` is a draft titled R (claude-config#2423)."""
+    if takes_value is None:
+        return tok.index(letter, 2)
+    for k in range(1, len(tok)):
+        if tok[k] == letter:
+            return k
+        if tok[k] in takes_value:
+            return None
+    return None
 
 
 # The text of a command that cannot be tokenized, cut where a command could end (a shell operator, a
