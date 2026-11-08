@@ -516,6 +516,14 @@ says "that refusal says the gate could not check whether it posts" "could not ch
 case "$ERR" in *"REFUSED: this command posts to Slack"*) check "that refusal does not claim the command posts" "stderr claimed a post: ${ERR:0:300}" ;; *) check "that refusal does not claim the command posts" ok ;; esac
 run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
 says "a script that really posts still gets the posts wording" "REFUSED: this command posts to Slack"
+# The wording is chosen by the cause, an import the gate gave up on, never by matching the words that
+# cause is put in (lessons review of #2389): a script that posts from a folder whose name holds those
+# words still gets the posts wording.
+mkdir -p "$T/so it cannot see what"
+printf '%s\n' 'await fetch("https://hooks.slack.com/services/T0/B0/x", { method: "POST" });' > "$T/so it cannot see what/post.mjs"
+run_bash "node '$T/so it cannot see what/post.mjs'"
+says "a script that posts from a folder named like the could not check wording gets the posts wording" \
+  "REFUSED: this command posts to Slack"
 run_bash "python3 $T/pp/app/run.py"
 refused "the PYTHONPATH script run without it, its import placed nowhere"
 # An export inside a script run in its own shell ends with that shell, so it must not place the
@@ -721,6 +729,85 @@ printf '%s\n' 'import json, re, sys' 'from os import path' 'from typing import A
 for reads in "show.py msg.json" "rx.py msg.json"; do
   run_bash "cd $T/dv && python3 $reads"
   allowed "a Python script importing only modules that cannot act, handed a data file naming the endpoint: $reads"
+done
+# JavaScript and shell scripts are judged the same way (claude-config#2434). A hand list of what can
+# act (JS_ACTS, SENDERS) missed a node script using the request package, worker_threads or dns, one
+# writing a file or reaching Function through a constructor, and a shell script handing its argument
+# to a program off the list, so each data file was read as data although the script could post it.
+mkdir -p "$T/dj"
+cp "$T/ds/msg.json" "$T/dj/msg.json"
+J='const m = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));'
+printf '%s\n' 'const request = require("request");' "$J" 'request.post(m.url, { body: m.text });' > "$T/dj/req.js"
+printf '%s\n' 'import { Worker as W } from "node:worker_threads";' 'import { readFileSync } from "node:fs";' \
+  'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'new W(m.text, { eval: true });' > "$T/dj/worker.mjs"
+printf '%s\n' 'const dns = require("dns");' "$J" 'dns.resolveTxt(m.text + "." + m.url, () => {});' > "$T/dj/dns.js"
+printf '%s\n' "$J" 'require("fs").writeFileSync("/tmp/x.sh", "curl " + m.url);' > "$T/dj/writes.js"
+printf '%s\n' "$J" '(() => {}).constructor(m.text)();' > "$T/dj/ctor.js"
+printf '%s\n' 'const request = require("request");' 'module.exports = (u) => request.post(u);' > "$T/dj/lib-req.js"
+printf '%s\n' 'const send = require("./lib-req.js");' "$J" 'send(m.url);' > "$T/dj/via.js"
+printf '%s\n' "$J" 'require(m.text);' > "$T/dj/dyn.js"
+# A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
+# 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
+printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
+printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
+  'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
+for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
+  "ctor.js:constructor" "via.js:request" "dyn.js:require" "words.js:(got)"; do
+  run_bash "cd $T/dj && node ${acts%%:*} msg.json"
+  refused "a JavaScript script that can act on what it is handed, handed a data file naming the endpoint: ${acts%%:*}"
+  says "that refusal names what lets ${acts%%:*} act" "${acts#*:}"
+done
+# The controls: a script importing only modules that cannot act (fs read, path, a local helper that
+# imports nothing), with an import of a package shown only in a comment, still has its data read as
+# data, as does titles.js above.
+printf '%s\n' 'export const fmt = (s) => `[${s}]`;' > "$T/dj/fmt.mjs"
+printf '%s\n' '// const request = require("request"); was the old way' 'import { readFileSync } from "node:fs";' \
+  'import path from "path";' 'import { fmt } from "./fmt.mjs";' 'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' \
+  'process.stdout.write(fmt(path.basename(process.argv[2]) + " " + m.text) + "\n");' > "$T/dj/show.mjs"
+run_bash "cd $T/dj && node show.mjs msg.json"
+allowed "a JavaScript script importing only modules that cannot act, handed a data file naming the endpoint"
+# A function of the script's own named like an fs method (repo-digest's format.ts has a link()) is not
+# fs's when the script imports no fs.
+printf '%s\n' 'const link = (u, t) => `<${u}|${t}>`;' 'process.stdin.on("data", (b) => console.log(link(process.argv[2], String(b))));' \
+  > "$T/dj/fmt-link.js"
+run_bash "cd $T/dj && node fmt-link.js msg.json"
+allowed "a script calling its own link(), importing no fs, handed a data file naming the endpoint"
+cp "$T/ds/titles.js" "$T/dj/titles.js"
+cp "$T/ds/post.mjs" "$T/dj/sender.js"
+printf '%s\n' '#!/bin/bash' 'msg="$1"' 'gh api -X POST /repos/x/y/dispatches --input "$msg"' > "$T/dj/gh.sh"
+printf '%s\n' '#!/bin/bash' 'nc slack.com 443 < "$1"' > "$T/dj/nc.sh"
+printf '%s\n' '#!/bin/bash' 'node ./sender.js "$1"' > "$T/dj/hand-js.sh"
+printf '%s\n' '#!/bin/bash' 'python3 "$HOME/send.py" "$@"' > "$T/dj/hand-py.sh"
+# awk, find and git are judged by how they are called: awk by whether its program can run a command,
+# find by -exec, git by its subcommand and options. And a line continued inside $(...) is read from
+# its first real word, so the curl after it is seen.
+printf '%s\n' '#!/bin/bash' 'awk '"'"'{ system("curl -d @- " $0) }'"'"' "$1"' > "$T/dj/awk.sh"
+printf '%s\n' '#!/bin/bash' 'find "$(dirname "$1")" -name "*.json" -exec sh {} \;' > "$T/dj/find.sh"
+printf '%s\n' '#!/bin/bash' 'git -c core.pager=sh log --format=%s -- "$1"' > "$T/dj/git.sh"
+printf '%s\n' '#!/bin/bash' 'out="$(printf "%s" "$1" | \' '  curl -s -d @- https://example.com/x)"' > "$T/dj/cont.sh"
+printf '%s\n' '#!/bin/bash' 'while read -r line; do eval "$line"; done < "$1"' > "$T/dj/loop.sh"
+# A local script named like a tool on SH_INERT is a script of its own, judged by what it does
+# (lessons review at 340575e).
+mkdir -p "$T/dj/bin"
+printf '%s\n' '#!/bin/bash' 'curl -s -d @"$1" "$(jq -r .url "$1")"' > "$T/dj/bin/grep"
+chmod +x "$T/dj/bin/grep"
+printf '%s\n' '#!/bin/bash' 'bin/grep -c chat "$1"' > "$T/dj/local-grep.sh"
+for acts in "gh.sh:(gh)" "nc.sh:(nc)" "hand-js.sh:sender.js" "hand-py.sh:send.py" "awk.sh:(awk)" "find.sh:(find)" \
+  "git.sh:(git)" "cont.sh:(curl)" "loop.sh:loop" "local-grep.sh:bin/grep"; do
+  run_bash "cd $T/dj && bash ${acts%%:*} msg.json"
+  refused "a shell script handing its argument to a program that can act, handed a data file naming the endpoint: ${acts%%:*}"
+  says "that refusal names the program ${acts%%:*} hands it to" "${acts#*:}"
+done
+# The controls: a shell script handing its argument only to programs that cannot act, to a function
+# it defines, or to a script the gate reads and sees cannot act, still has its data read as data.
+printf '%s\n' '#!/bin/bash' 'f="$1"' 'grep -c chat "$f"' 'jq -r .text "$f" | head -1' 'wc -l < "$f"' \
+  'show() { cat "$1"; }' 'show "$f"' '[ -s "$f" ] && echo "$(basename "$f")"' \
+  'awk -F, '"'"'NR > 1 || $1 == "x" { print $1 }'"'"' "$f"' 'find "$(dirname "$f")" -name "*.json" -newer "$f"' \
+  'git -C "$(dirname "$f")" rev-parse --show-toplevel' '/usr/bin/grep -c chat "$f"' > "$T/dj/reads.sh"
+printf '%s\n' '#!/bin/bash' 'node ./titles.js "$1"' > "$T/dj/hand-reader.sh"
+for reads in "reads.sh" "hand-reader.sh"; do
+  run_bash "cd $T/dj && bash $reads msg.json"
+  allowed "a shell script handing its argument only to what cannot act, handed a data file naming the endpoint: $reads"
 done
 printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
 printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
