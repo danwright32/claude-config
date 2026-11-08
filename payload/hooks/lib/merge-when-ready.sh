@@ -80,10 +80,11 @@
 # behind it is, so it costs no call) has been unchanged for MWR_SETTLE_SECONDS, so a burst of merges
 # costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
 # hours by default from taking the repository's turn (claude-config#1604, see out_of_time), and the
-# poll count bound the run, and is-it-live's window for a background merge (WAIT_MS) is held at twice
-# its line budget plus that deadline, by test-merge-when-ready.sh (L227); since claude-config#2351 a
-# line that keeps moving never ends a run, so one behind a very long moving line can outlast that
-# window. Waiting changes only
+# poll count bound the run, and is-it-live's window for a background merge (WAIT_MS, 24 hours) is held
+# at least twice its line budget plus that deadline, by test-merge-when-ready.sh (L227); since
+# claude-config#2351 a line that keeps moving never ends a run, so one behind a very long moving line
+# can outlast that window, and past it is-it-live goes on asking only while the run still holds a
+# place in line (lib/merge-in-line.sh, claude-config#2403). Waiting changes only
 # WHEN an update is made; what merges is still exactly the head every gate judged, as above.
 #
 # ONE HELPER PER REPOSITORY AT A TIME, IN TURN (claude-config#1515). Settling answers a base that
@@ -944,7 +945,8 @@ updated_from=""; updated_at=0; catching_up=""
 # each move, or up to taking the turn, are spared (polls_spared), so the looks it counts against
 # MWR_MAX_POLLS are those of the stretch the line stood still plus those it held the turn for. The
 # cost is that a run behind a very long moving line has no fixed longest, which is-it-live's window
-# (WAIT_MS) cannot cover past about 24 pull requests each holding the turn its full hour.
+# (WAIT_MS, 24 hours) cannot cover past about 24 pull requests each holding the turn its full hour, so
+# past it is-it-live asks whether this run still holds a place in line (lib/merge-in-line.sh, #2403).
 taken_at=""; dl_used=0; dl_from=""
 line_from="$t0"; line_seen_ticket=""; line_seen_ahead=0; line_moved_at=""; line_long_said=""
 line_polls_from=0; polls_spared=0
