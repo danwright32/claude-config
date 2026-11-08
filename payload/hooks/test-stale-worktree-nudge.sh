@@ -400,7 +400,9 @@ held_to_timeout(){ # held_to_timeout <path>: STARTED, charged at the worst cost 
   fi
 }
 count_prompt k1
-case "$(cat "$COUNT_LOG")" in *date*) ok ;; *) bad "#2453 the premise: the shims see the programs the hook starts (it logged: $(tr '\n' ' ' <"$COUNT_LOG"))" ;; esac
+# git, never date, as the premise: a run due always asks git which repository this is, while date
+# is started only by a bash without EPOCHSECONDS (macOS's 3.2 has none, a bash 5 has it).
+case "$(cat "$COUNT_LOG")" in *git*) ok ;; *) bad "#2453 the premise: the shims see the programs the hook starts (it logged: $(tr '\n' ' ' <"$COUNT_LOG"))" ;; esac
 held_to_timeout "a session's first prompt, which starts a run"
 count_prompt k1
 held_to_timeout "a later prompt, with no run due"
