@@ -381,12 +381,21 @@ slug="${repo:-$(mt_remote_slug)}"
 [ -n "$slug" ] || usage "this checkout has no GitHub origin; name the repository with --repo owner/name."
 
 # The clock is a seam like the sleep (L524): MWR_NOW names a command printing epoch seconds, under the
-# test marker only (see NOW_CMD). One that
-# prints anything else is not believed, and the real clock is read instead.
+# test marker only (see NOW_CMD). A read that gives no time is asked again, up to three reads in all
+# (claude-config#2327): the command can fail to run at all under load, and one read of the real clock
+# in the middle of a run on the injected one crosses every deadline at once. Only a clock that gives
+# no time three times running is read past, to the real clock, and that is said on stderr, since
+# stdout is the time the caller reads.
 now(){
-  local t=""
-  [ -n "$NOW_CMD" ] && t="$("$NOW_CMD" 2>/dev/null)"
-  case "$t" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$t" ;; esac
+  local t="" reads=0
+  if [ -n "$NOW_CMD" ]; then
+    while [ "$reads" -lt 3 ]; do
+      t="$("$NOW_CMD" 2>/dev/null)"; reads=$((reads + 1))
+      case "$t" in ''|*[!0-9]*) ;; *) printf '%s' "$t"; return 0 ;; esac
+    done
+    printf 'merge-when-ready: the clock named in MWR_NOW (%s) gave no time in %s reads, so the real clock is read instead.\n' "$NOW_CMD" "$reads" >&2
+  fi
+  date +%s
 }
 t0="$(now)"
 # This run, as lib/merge-target.sh's record of refused sign ins names it (claude-config#1626), handed
