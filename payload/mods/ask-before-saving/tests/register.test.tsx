@@ -500,8 +500,9 @@ test('a printenv that fails is never read as the variable being unset: the save 
   const w = world($, on)
   // An inline script the real reader judges writes files, to a file its text cannot name, so what the
   // command mentions is read (#752: the stand-in reader took every python3 command for one, and
-  // print(1) writes nothing; #830: one whose file is named is judged by that file alone).
-  const r = await call($, { tool: 'Bash', command: `python3 -c "import sys; open(sys.argv[1],'w').write('1')" out.txt # $PRINTENV_BREAKS/CLAUDE.md` })
+  // print(1) writes nothing; #830: one whose file is named is judged by that file alone). The path is
+  // a word it is handed, since a comment is no part of the command the shell runs (#2407).
+  const r = await call($, { tool: 'Bash', command: `python3 -c "import sys; open(sys.argv[1],'w').write('1')" out.txt "$PRINTENV_BREAKS/CLAUDE.md"` })
   expect(refusalOf(r)).toContain('could not check whether this writes lasting memory')
   expect(w.ran).toEqual([])
 })

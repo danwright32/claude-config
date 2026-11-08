@@ -147,10 +147,16 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     // statFails exists but its stat is refused. `tracked` stands in for TRACKED, the default branch's files.
     folders: string[]
     statFails: string[]
+    // A link on the disk and the path it leads to (#2407 lessons review): fs.stat answers what it leads
+    // to, and with resolve its realPath there. A path in existsFails throws when asked whether it exists.
+    links: Record<string, string>
+    existsFails: string[]
     tracked?: string
   } = {
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
+    links: {},
+    existsFails: [],
     seeded: [],
     rotated: {},
     bases: { HEAD: 'mb123' },
@@ -169,13 +175,20 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     return { value: APP } as never
   })
   on('session.repo', () => ({ value: { root: APP, remote: 'git@github.com:dan/app.git' } }) as never)
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || ctl.folders.includes(e.path) || ctl.statFails.includes(e.path) }) as never)
-  // What a path leads to, as $.fs.stat answers: `dir` or `file`, rejecting ENOENT for a missing path.
+  on('fs.exists', ($, e) => {
+    if (ctl.existsFails.includes(e.path)) return { deny: `EACCES: permission denied, access '${e.path}'` } as never
+    return { value: files[e.path] !== undefined || ctl.folders.includes(e.path) || ctl.statFails.includes(e.path) || ctl.links[e.path] !== undefined } as never
+  })
+  // What a path leads to, as $.fs.stat answers: `dir` or `file`, rejecting ENOENT for a missing path;
+  // with resolve, realPath, where it lands, a link's target or the path itself.
   on('fs.stat', ($, e) => {
-    const p = (e as unknown as { path: string }).path
+    const { path: asked, resolve } = e as unknown as { path: string; resolve?: boolean }
+    const p = ctl.links[asked] ?? asked
+    const isLink = ctl.links[asked] !== undefined
+    const real = resolve ? { realPath: p } : {}
     if (ctl.statFails.includes(p)) return { deny: `EACCES: permission denied, stat '${p}'` } as never
-    if (ctl.folders.includes(p)) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
-    if (files[p] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } } as never
+    if (ctl.folders.includes(p)) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink, ...real } } as never
+    if (files[p] !== undefined) return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink, ...real } } as never
     return { deny: `ENOENT: no such file or directory, stat '${p}'` } as never
   })
   on('fs.read', ($, e) => {
