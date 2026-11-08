@@ -31,6 +31,16 @@
 # prompt: the merged pull request list is GitHub's shared hourly allowance, and a prompt is not a
 # reason to spend it.
 #
+# AND IT STARTS AS FEW PROGRAMS AS IT CAN, because on a loaded Mac starting one is what costs
+# (#2453). The hook took 5.2 to 10.5 s in 11 of 24 runs under tools/load-window.sh (measured
+# 2026-11-07) against its 5 s timeout, so the reminder was lost on exactly the busy days it is for.
+# Under a 48 spawner window a subshell cost nothing measurable while each program started cost 0.17
+# to 0.23 s and python3 0.47, and the hook started ten of them besides bash (cat, python3 for the
+# session id, shasum and cut twice, mkdir twice, date, git). It now reads its input and the session
+# id in bash, names the session's record after the id rather than a hash, and cuts with bash: a
+# later prompt starts date alone, and the worst prompt date, git and shasum. Its suite counts them
+# on every path and holds them, at the worst cost measured, to the timeout.
+#
 # AGAIN EVERY THREE HOURS, not only at the first prompt (claude-config#1521). This ran once per
 # session, on the premise that a worktree going stale part way through a session is removed by the
 # next one and "a day late is nothing". That premise expired (L316): on 2026-10-22 one coordinator
@@ -59,7 +69,9 @@
 #   STALE_WT_NOW        the clock in epoch seconds, for a fixture (L524)
 set -uo pipefail
 
-input="$(cat 2>/dev/null || true)"
+# Read by bash itself, never by cat: on a loaded Mac each program started costs a fifth of a second
+# or more, and a subshell nothing (#2453, below).
+{ input="$(</dev/stdin)"; } 2>/dev/null
 # Cleaned by the shared reader when it loads: a lone surrogate escape anywhere in the payload
 # (an emoji cut in half is enough) makes jq read none of it (claude-config#1944). Without the
 # library the payload is read as it came, as before.
@@ -89,7 +101,15 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 [ -f "$RUNNER" ] || exit 0
 
-session="$(printf '%s' "$input" | python3 -c '
+# The session id is read by bash's own pattern match, which every payload Claude Code sends
+# satisfies: a top level "session_id" whose value holds no escape. A JSON string cannot hold a bare
+# quote, so the pattern cannot match one inside the prompt text. Anything else (no id, an empty
+# one, an escape in it) is read by python3 as before, which falls back to the transcript path.
+session_re='"session_id"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
+if [[ $input =~ $session_re ]] && [ -n "${BASH_REMATCH[1]}" ]; then
+  session="${BASH_REMATCH[1]}"
+else
+  session="$(printf '%s' "$input" | python3 -c '
 import json, sys
 sys.stdout.reconfigure(errors="replace")
 try:
@@ -98,13 +118,16 @@ except Exception:
     d = {}
 print(d.get("session_id") or d.get("transcript_path") or "")
 ' 2>/dev/null || true)"
+fi
 
 top=""; rkey=""
 which_repo(){
   [ -n "$top" ] && return 0
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [ -n "$top" ] || return 1
-  rkey="$(printf '%s' "$top" | shasum | cut -c1-12)"
+  # The same twelve characters `| cut -c1-12` gave, cut by bash rather than a second program.
+  rkey="$(printf '%s' "$top" | shasum)"
+  rkey="${rkey:0:12}"
 }
 
 # --- say what a finished run left to say ----------------------------------
@@ -121,7 +144,7 @@ if [ "${#waiting[@]}" -gt 0 ] && which_repo; then
     case "$f" in *.tmp.*) continue ;; esac
     claimed="$STATE_DIR/claude-stale-worktrees-repo-$rkey.claimed.$$"
     mv "$f" "$claimed" 2>/dev/null || continue
-    said="$said$(cat "$claimed" 2>/dev/null)"$'\n'
+    said="$said$(<"$claimed")"$'\n'
     mv -f "$claimed" "$STATE_DIR/claude-stale-worktrees-repo-$rkey.shown" 2>/dev/null || true
   done
 fi
@@ -130,7 +153,7 @@ fi
 # --- start this session's run ---------------------------------------------
 start_run(){
   which_repo || return 0   # not a repository: there is nothing to judge
-  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
   # No stdin, no stdout, no stderr, not waited for: a run that held the hook's stdout would hold the
   # prompt for as long as it ran (L235). Started by a subshell whose own output is /dev/null, so the
   # runner is never this hook's child and that subshell, which records its pid, can write into no
@@ -151,8 +174,13 @@ if [ -z "$session" ]; then
   exit 0
 fi
 
-key="$(printf '%s' "$session" | shasum | cut -c1-12)"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
+# The record is named after the session id itself, made safe for a file name, rather than a hash of
+# it: a hash took two programs (shasum, which is perl, and cut) on every prompt (#2453). A session
+# id is a UUID, so it comes through whole; a transcript path, the fallback, keeps its last 100
+# characters, which end in the session's own id.
+key="${session//[^A-Za-z0-9_.-]/_}"
+[ "${#key}" -le 100 ] || key="${key: -100}"
+[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE="$STATE_DIR/claude-stale-worktrees-${key}.state"
 
 # THE RECORD IS READ BEFORE THE RUN STARTS, which is the whole of the cost bound: once this session
