@@ -59,8 +59,9 @@ sid_among(){
 }
 G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
-# The timeout Claude Code gives this hook, read from the settings that install it rather than
-# written here, so the test holds the hook to whatever the hook is actually given (L188).
+# The settings that install this hook give it a timeout, Claude Code's bound on every prompt. The
+# suite no longer runs the hook under it (claude-config#2429: a wall clock bound measures the
+# Mac's load); it checks only that one is given.
 TIMEOUT="$(python3 -c '
 import json, sys
 for m in json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]:
@@ -69,11 +70,10 @@ for m in json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]:
             print(h.get("timeout", 60))
 ' "$SETTINGS" 2>/dev/null)"
 [ -n "$TIMEOUT" ] && ok || bad "${SETTINGS:-no settings file beside $DIR} names a timeout for stale-worktree-nudge.sh"
-TIMEOUT="${TIMEOUT:-5}"
 
 # The stub check. Its verdict, output and stderr are set from outside. It RECORDS every call and
-# the session it ran in, and with STUB_GATE set it marks that it has started and then waits for
-# the gate, which is how a run is held part way.
+# the session it ran in, and with STUB_GATE set it marks that it has started, waits for the gate,
+# which is how a run is held part way, and marks that it has left the gate.
 STUB="$TMP/check.sh"
 cat >"$STUB" <<'EOS'
 #!/usr/bin/env bash
@@ -82,6 +82,7 @@ python3 -c 'import os; print(os.getsid(0))' >>"$STUB_SIDS" 2>/dev/null
 if [ -n "${STUB_GATE:-}" ]; then
   : >"$STUB_GATE.reached"
   t0=$SECONDS; while [ ! -e "$STUB_GATE" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
+  : >"$STUB_GATE.left"
 fi
 printf '%s\n' "${STUB_SAYS:-}"
 [ -z "${STUB_ERR:-}" ] || printf '%s\n' "$STUB_ERR" >&2
@@ -122,20 +123,29 @@ export STUB_SAYS="  removed agent-x [fix/1-x]: PR #1 merged and nothing in it wa
 # --- the defect: the check ran inside the prompt, past the hook's timeout (claude-config#1247) ---
 # With 46 worktrees the check took 3.9 to 4.8 seconds before removing anything (measured
 # 2026-10-16), so Claude Code killed the hook at 5 and threw its output away, every session. The
-# stub here does not finish
-# until the test opens its gate, so a hook that waits for the check cannot return in time, and the
-# hook is run under exactly the timeout the settings give it. Captured through a pipe, so a run
-# that kept the hook's stdout open would hold the capture too (L235).
-HOOK_RC="$(cd "$PROJ" && STUB_GATE="$TMP/gate-slow" STUB_RC=1 STALE_WT_CHECK="$STUB" python3 -c '
-import subprocess, sys
+# stub here does not finish until the test opens its gate, so a hook that waits for the check
+# returns only after the stub has left its gate, which the stub marks. Captured through a pipe, so
+# a run that kept the hook's stdout open would hold the capture too (L235).
+#
+# Judged by that order, never by the clock (claude-config#2429): it used to be run under the
+# settings' own 5 second timeout, and the hook's own start (bash, python3, git) took 5.2 to 10.5 s
+# in 11 of 24 runs under tools/load-window.sh with 48 process launching workers, so the suite failed
+# inside a full suite run with nothing wrong. The ceiling here is the hang ceiling, which only a
+# hang reaches. What the hook costs on every prompt is counted, not timed, by
+# test-per-prompt-hook-cost.sh (L224).
+run_hook_held(){ # run_hook_held <session id> <gate>: the hook's exit, and whether the check had left its gate
+  python3 -c '
+import os, subprocess, sys
 try:
-    r = subprocess.run(["bash", sys.argv[1]], input=b"{\"session_id\":\"slow\"}",
+    r = subprocess.run(["bash", sys.argv[1]], input=("{\"session_id\":\"%s\"}" % sys.argv[3]).encode(),
                        capture_output=True, timeout=float(sys.argv[2]))
-    print(r.returncode)
+    print(r.returncode, "check-left" if os.path.exists(sys.argv[4] + ".left") else "check-held")
 except subprocess.TimeoutExpired:
     print("timed out")
-' "$SCRIPT" "$TIMEOUT")"
-check_eq "the hook returns inside its ${TIMEOUT}s timeout while the check is still running" 0 "$HOOK_RC"
+' "$SCRIPT" "$HANG_S" "$1" "$2"
+}
+HOOK_RC="$(cd "$PROJ" && STUB_GATE="$TMP/gate-slow" STUB_RC=1 STALE_WT_CHECK="$STUB" run_hook_held slow "$TMP/gate-slow")"
+check_eq "the hook returns while the check is still held at its gate, never waiting for it" "0 check-held" "$HOOK_RC"
 if reached "$TMP/gate-slow"; then ok; else bad "the check was started at all, rather than skipped to return quickly"; fi
 # It runs in a session of its own, so nothing aimed at the session the prompt came from (the
 # terminal closing, Ctrl+C, a kill of the hook's group) reaches a removal part way through (L617).
@@ -339,22 +349,16 @@ cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 : >"$GH_GATE.reached"
 t0=$SECONDS; while [ ! -e "$GH_GATE" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
+: >"$GH_GATE.left"
 cat "$GH_MERGED"
 STUB
 chmod +x "$TMP/bin/gh"
 export GH_GATE="$TMP/gate-gh" GH_MERGED="$TMP/merged.tsv"
 printf 'fix/415-landed\t%s\t415\n' "$(G -C "$WT/agent-landed" rev-parse HEAD)" >"$GH_MERGED"
 E2E_STATE="$TMP/e2e-state"
-HOOK_RC="$(cd "$REPO" && STALE_WT_GH="$TMP/bin/gh" STALE_WT_STATE_DIR="$E2E_STATE" python3 -c '
-import subprocess, sys
-try:
-    r = subprocess.run(["bash", sys.argv[1]], input=b"{\"session_id\":\"e2e\"}",
-                       capture_output=True, timeout=float(sys.argv[2]))
-    print(r.returncode)
-except subprocess.TimeoutExpired:
-    print("timed out")
-' "$SCRIPT" "$TIMEOUT")"
-check_eq "with the real check and a slow GitHub, the hook returns inside its timeout" 0 "$HOOK_RC"
+# Judged by order, not the clock, as in the first section (claude-config#2429).
+HOOK_RC="$(cd "$REPO" && STALE_WT_GH="$TMP/bin/gh" STALE_WT_STATE_DIR="$E2E_STATE" run_hook_held e2e "$GH_GATE")"
+check_eq "with the real check and a slow GitHub, the hook returns while GitHub has not answered" "0 check-held" "$HOOK_RC"
 reached "$GH_GATE" || bad "the real check reached GitHub"
 check_eq "and the landed worktree is still there while GitHub has not answered" yes "$([ -d "$WT/agent-landed" ] && echo yes || echo no)"
 : >"$GH_GATE"
