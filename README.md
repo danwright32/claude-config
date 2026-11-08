@@ -202,9 +202,9 @@ refused for a repository not yet public that no work owner owns, since every fil
 becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
 is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
-standard input (`--notes-file -`) are judged when the command shows them (a heredoc, a here-string,
-shown text piped in) or feeds in a file with `<`, and refused otherwise. Still not covered: gh run by its absolute path, a script that rewrites PATH, and curl or
-an API library.
+standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
+on gh itself with nothing piped in, and refused otherwise (#2442). Still not covered: gh run by
+its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`

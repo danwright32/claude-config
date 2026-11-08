@@ -1640,11 +1640,13 @@ has every cluster holding R read as naming one.
 
 Release notes on standard input (#2430). `gh release create --notes-file -` reads the notes from
 standard input, which the command hook passed unread. `scan.stdin_feeds` reads each pipeline stage
-running a release: a heredoc or here-string that expands nothing, or a pipe from a stage printing
-only shown text, is text the command shows and is judged with it; a file fed in with `<` is read as
-a notes file is; anything else is refused, as is a release `stdin_feeds` cannot find (one a shell
-runs from a string). The guard still reads a lone `-` when gh runs; `--notes-file=-` and `-F-` it
-does not read, so they are refused there too.
+running a release, and fails closed (#2442): only exactly one heredoc or here-string that expands
+nothing, or one plain `<` file, written on gh itself with nothing piped in, is judged (the text as
+shown, the file as a notes file is). Anything else is refused: a pipe into gh (even from printf), a
+second redirection, a redirection with a descriptor anywhere in the command (`3<`, `2<&1`,
+`{fd}<`), a subshell, group or function around gh, and a release `stdin_feeds` cannot find (one a
+shell runs from a string). The guard still reads a lone `-` when gh runs; `--notes-file=-` and
+`-F-` it does not read, so they are refused there too.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
