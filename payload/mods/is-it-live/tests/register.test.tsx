@@ -45,7 +45,9 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
-        isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        // #2436: Dan's own words are what he types at the terminal or from his phone, as mod-kit's
+        // origin reader says (its own tests prove the real one).
+        isDans: async ({ origin }: { origin?: { kind?: string } }) => origin?.kind === 'composer' || origin?.kind === 'bridge',
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         hold: async () => { throw new Error("mod-kit's hold is not stood in by these tests") },
         release: async () => { throw new Error("mod-kit's release is not stood in by these tests") },
@@ -184,6 +186,12 @@ type World = {
   /** #1991: the accounts plain `gh auth status` names, and the token `gh auth token -u` gives for each. */
   logins: string[]
   tokens: Record<string, string>
+  /** #2403: what lib/merge-in-line.sh answers, asked of a background merge past its window. */
+  inLine?: Gh
+  /** #2436: what Slack answers a draft, the answer Dan picks in a question, and the job watcher's running task ids ('unreadable' refuses). */
+  slackDraft: { text: string; isError?: true }
+  answer?: string
+  jobs: string[] | 'unreadable'
 }
 /** How a command was run: the folder it ran in and the account token handed to it, if any. */
 type Asked = { cwd?: string; token?: string }
@@ -205,8 +213,12 @@ const world = (on: On, init: Partial<World> = {}) => {
     gone: [],
     logins: ['danwright32'],
     tokens: {},
+    slackDraft: { text: '{"channel_link":"https://app.slack.com/client/T1/C07ABCDEF"}' },
+    jobs: [],
     ...init,
   }
+  const asks: { question: string; options: { label: string }[] }[] = []
+  const slackCalls: string[] = []
   const toasts: string[] = []
   const copies: string[] = []
   const runs: string[][] = []
@@ -214,6 +226,11 @@ const world = (on: On, init: Partial<World> = {}) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on, w.stored)
   on('process.run', ($, e) => {
+    // #2436: the job watcher's list, standing in, asked of the world.
+    if (e.argv[0] === '__jobs') {
+      const out = w.jobs === 'unreadable' ? { exitCode: 1, stdout: '', stderr: 'the job list could not be read' } : { exitCode: 0, stdout: JSON.stringify(w.jobs), stderr: '' }
+      return { value: { ...out, isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
     if (e.argv[0] === '__modkit') {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
@@ -238,6 +255,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv], how) : a.startsWith('gh issue view') && w.issueView ? w.issueView([...e.argv], how) : undefined
     const g: Gh = how.cwd !== undefined && w.gone.includes(how.cwd)
       ? { exitCode: 1, stdout: '', stderr: `chdir: ${how.cwd}: no such file or directory` }
+      : a.includes('merge-in-line.sh') && w.inLine
+      ? w.inLine
       : viewed
       ? viewed
       : a === 'gh auth status'
@@ -268,6 +287,20 @@ const world = (on: On, init: Partial<World> = {}) => {
     return (b.isError ? { isError: true, result: b.text, text: b.text } : { result, text: b.text }) as never
   })
   on('classic.Stop', () => ({}) as never)
+  // #2436: Dan's prompt, Slack's own tools, and Claude Code's question dialog, beneath the mod.
+  on('prompt.submit', ($, e) => ({ text: e.text, context: [] }) as never)
+  on('tool.call', { tool: ['mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__plugin_slack_slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_read_thread'] }, ($, e) => {
+    slackCalls.push(String(e.tool))
+    if (String(e.tool).endsWith('slack_read_thread')) return { result: 'messages', text: 'messages' } as never
+    const d = w.slackDraft
+    return (d.isError ? { isError: true, result: d.text, text: d.text } : { result: d.text, text: d.text }) as never
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
+    const q = ((e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions ?? [])[0]
+    if (q) asks.push(q)
+    if (w.answer === 'afk') return { result: { questions: [q], answers: {}, afkTimeoutMs: 60_000 } } as never
+    return { result: { questions: [q], answers: q && w.answer ? { [q.question]: w.answer } : {} } } as never
+  })
   on('ui.log', () => ({ value: undefined }) as never)
   on('tool.register', () => ({ value: undefined }) as never)
   on('command.register', () => ({ value: undefined }) as never)
@@ -283,7 +316,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, runs, asked, clock }
+  return { w, toasts, copies, runs, asked, clock, asks, slackCalls }
 }
 
 const CARD = {
@@ -294,7 +327,7 @@ const CARD = {
   changed: 'The bookings list now filters by venue. Old bookings keep their venue.',
   see: { link: 'https://scheduler.example.com/bookings', clicks: ['Open Bookings', 'Pick a venue in the filter'] },
 }
-type Out = { deny?: string; result?: unknown; text?: string; context?: readonly string[] }
+type Out = { deny?: string; result?: unknown; text?: string; context?: readonly string[]; isError?: boolean }
 const card = async ($: unknown, input: Record<string, unknown>) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: 'mcp__is-it-live__card', tool_use_id: 'c1', ...input } as never)) as Out
 const textOf = (o: Out) => String(o.deny ?? o.text ?? o.result ?? '')
@@ -1044,6 +1077,47 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
   expect((await turnEnd($)).block).toContain(`${REPO}#412`)
 })
 
+// #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so it can be
+// running still past WAIT_MS. Past it, the merge is asked about only while lib/merge-in-line.sh says
+// the helper holds a place in line; one whose helper is gone, or that cannot be asked, is let go as
+// before. A helper still running is never let go, so its merge, made at hour 26, is still owed a card.
+const HOUR = 3_600_000
+const pastWindow = async ($: unknown, on: On, inLine: Gh | undefined) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), ...(inLine ? { inLine } : {}) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --repo ${REPO} --squash`, { run_in_background: true })
+  expect((await turnEnd($)).block).toBeUndefined()
+  // Inside the window the line is never asked: no process per turn end for an ordinary wait.
+  expect(w.runs.some(r => r.join(' ').includes('merge-in-line.sh'))).toBe(false)
+  await w.clock.advance(25 * HOUR)
+  const quiet = await turnEnd($)
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: T0 + 26 * HOUR }
+  await w.clock.advance(HOUR)
+  return { w, quiet, after: await turnEnd($) }
+}
+
+test('a background merge whose helper is still in line past the window is waited on still, and owed its card once it merges (#2403)', withKit, async ($, on) => {
+  const { w, quiet, after } = await pastWindow($, on, { exitCode: 0, stdout: 'running\n' })
+  // Still running is neither finished nor failed: nothing owed while it is open.
+  expect(quiet.block).toBeUndefined()
+  const asked = w.runs.find(r => r.join(' ').includes('merge-in-line.sh')) as string[]
+  expect(asked.slice(-2)).toEqual([REPO, '412'])
+  expect(asked.join(' ')).toContain('/Users/dan/.claude/hooks/lib/merge-in-line.sh')
+  expect(after.block).toContain(`${REPO}#412`)
+})
+
+test('a background merge past the window whose helper has left the line is let go (#2403)', withKit, async ($, on) => {
+  const { after } = await pastWindow($, on, { exitCode: 0, stdout: 'gone\n' })
+  expect(after.block).toBeUndefined()
+})
+
+test('a background merge past the window is let go when whether its helper is in line cannot be read, never kept on an answer it did not get (#2403)', withKit, async ($, on) => {
+  const { after } = await pastWindow($, on, { exitCode: 2, stdout: '', stderr: 'usage: merge-in-line.sh <owner/name> <pull request number>' })
+  expect(after.block).toBeUndefined()
+})
+
 // #1991: a merge the helper makes in the background stays waiting until a turn end hears from GitHub
 // that it merged, and three things kept that from ever happening, each tested here: the turn end asked
 // as the active gh account alone, in the folder the helper ran in (a worktree that may since be gone),
@@ -1395,4 +1469,223 @@ test('a mod-kit that cannot say which folder a command runs in leaves a merge as
   await start($)
   expect(said(await bash($, 'gh pr merge 12 --squash'))).toContain(`You merged ${WORK}#12.`)
   expect(said(await bash($, `cd ${OTHER_DIR} && gh pr merge 12 --squash`))).toContain('GitHub did not confirm that #12 merged just now (the folder it ran in could not be read from the command)')
+})
+
+// ---- #2436: a draft reply to the Slack thread the session started from, after its last merge ----
+// Dan, 2026-11-07: "slack thread start = draft response saved. every time", and, answering the
+// issue's open question the same day, one draft after the session's last merge from that thread. The
+// turn end is held while a merge has landed since the thread's last draft and no merge of the session
+// is still in flight. The mod never calls a Slack tool: it tells the session what to do.
+
+const CH = 'C07ABCDEF'
+const TS = '1730912345.123456'
+const THREAD = `https://acme.slack.com/archives/${CH}/p1730912345123456`
+const SOURCE = `is-it-live-draft:${CH}:${TS}`
+const DRAFT = 'mcp__claude_ai_Slack__slack_send_message_draft'
+const READ = 'mcp__claude_ai_Slack__slack_read_thread'
+// The job watcher, standing in: its list of this session's running jobs, asked of the world.
+const jobWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const list = async () => {
+        const r = await built.process.run(['__jobs'])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return (JSON.parse(r.stdout) as string[]).map(id => ({ id, label: 'bash ~/.claude/hooks/lib/merge-when-r', runMs: 0, kept: false, stuck: false, state: 'running', owner: null, ownerId: null, stall: null, quietMs: null }))
+      }
+      return { ...built, jobs: { list, agents: async () => [] } }
+    })
+  },
+}
+const withKitAndJobs = { plugins: [modKit, jobWatcher] }
+const says = async ($: unknown, text: string, kind = 'composer') =>
+  (await ($ as { prompt: { submit: (e: never) => Promise<unknown> } }).prompt.submit({ text, origin: { kind }, wait: false } as never)) as { context?: string[] }
+const slack = async ($: unknown, tool: string, input: Record<string, unknown>, more: Record<string, unknown> = {}) =>
+  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool, tool_use_id: 's1', ...input, ...more } as never)) as Out
+const draft = ($: unknown, input: Record<string, unknown> = {}, more: Record<string, unknown> = {}) => slack($, DRAFT, { channel_id: CH, thread_ts: TS, message: 'This is live now.', ...input }, more)
+const askDan = async ($: unknown, source: string, more: Record<string, unknown> = {}) =>
+  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({
+    tool: 'AskUserQuestion',
+    tool_use_id: 'q1',
+    questions: [{ question: 'Save this reply to the thread? "This is live now."', header: 'Slack', options: [{ label: 'Post', description: '' }], multiSelect: false }],
+    metadata: { source },
+    ...more,
+  } as never)) as Out
+const mergeAndCard = async ($: unknown, pr = 412) => {
+  await bash($, `gh pr merge ${pr} --squash`)
+  expect((await card($, { ...CARD, pr, deploy: 'none' })).deny).toBeUndefined()
+}
+const merged = (...prs: number[]) => github(Object.fromEntries(prs.map(n => [`${REPO}#${n}`, { state: 'MERGED' as const, mergedAt: JUST }])))
+
+test('a session that started from no Slack thread is never held for a draft reply after a merge (#2436)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  // A thread a subagent reads is its research, not where the session started.
+  await slack($, READ, { channel_id: CH, message_ts: TS }, { agentId: 'a1' })
+  await mergeAndCard($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge in a session started from a pasted Slack thread holds the turn end until a draft reply to that thread is saved (#2436)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await mergeAndCard($)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(THREAD)
+  expect(held).toContain('/no-ai-tells')
+  expect(held).toContain(`"source": "${SOURCE}"`)
+  expect(held).toContain(`slack_send_message_draft with channel_id "${CH}" and thread_ts "${TS}"`)
+  expect(held).toContain('Never call slack_send_message or slack_schedule_message')
+  expect(held).toContain('attached_draft_exists')
+  // The steps in order: write the reply, run /no-ai-tells, show Dan the text in the picker, then save it.
+  const steps = ['write a short reply', '/no-ai-tells', 'showing the reply in the question', 'slack_send_message_draft'].map(s => held.indexOf(s))
+  expect(steps.every(n => n >= 0)).toBe(true)
+  expect([...steps].sort((a, b) => a - b)).toEqual(steps)
+  // The mod itself calls no Slack tool.
+  expect(w.slackCalls).toEqual([])
+  expect((await draft($)).isError).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a draft to another thread, one Slack refused, or one with no thread leaves the turn held (#2436)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($)
+  await draft($, { thread_ts: '1730999999.000100' })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  await draft($, { thread_ts: undefined })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  w.w.slackDraft = { text: 'attached_draft_exists: A draft already exists for this channel', isError: true }
+  await draft($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // An error Slack names in a result not marked as one is no saved draft either.
+  w.w.slackDraft = { text: '{"ok":false,"error":"attached_draft_exists"}' }
+  await draft($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // The Slack plugin's own server saves it as well as the claude.ai connector does.
+  w.w.slackDraft = { text: '{"channel_link":"https://app.slack.com/client/T1/C07ABCDEF"}' }
+  await slack($, 'mcp__plugin_slack_slack__slack_send_message_draft', { channel_id: CH, thread_ts: TS, message: 'Live now.' })
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a draft saved before a merge does not count for it, a later merge asks again, and a thread pasted after a merge is owed one (#2436)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413) })
+  await start($)
+  await mergeAndCard($, 412)
+  await says($, `and reply on ${THREAD} when done`)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('the first thread the session reads is recorded; a later thread it reads is not (#2436)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await slack($, READ, { channel_id: CH, message_ts: TS })
+  await slack($, READ, { channel_id: 'C0OTHER', message_ts: '1700000000.000200' })
+  await mergeAndCard($)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).not.toContain('C0OTHER')
+})
+
+test('a link in a message that is not Dan typing is not where the session started (#2436)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, THREAD, 'task-notification')
+  await mergeAndCard($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge helper still running in the background holds nothing until its merge lands, then the draft is asked for (#2436)', withKitAndJobs, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), jobs: ['b7'] })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  w.w.bash = BACKGROUND
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 413 --squash', { run_in_background: true })
+  w.w.bash = { text: '' }
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${REPO}#413`] = { state: 'MERGED', mergedAt: JUST }
+  w.w.jobs = []
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(`${REPO}#413`)
+  expect(held).toContain(SOURCE)
+  expect((await card($, { ...CARD, pr: 413, deploy: 'none' })).deny).toBeUndefined()
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a helper that ended without merging is no longer in flight, so the merges before it are owed their draft (#2436)', withKitAndJobs, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), jobs: [] })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  w.w.bash = BACKGROUND
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 413 --squash', { run_in_background: true })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('with no job list to read, a merge still waiting in the background counts as in flight (#2436)', withKitAndJobs, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), jobs: 'unreadable' })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  w.w.bash = BACKGROUND
+  await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 413 --squash', { run_in_background: true })
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('Dan skipping the draft in the picker lets the turn end, and the next merge asks again (#2436)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412, 413) })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  // A subagent never asks, and a question naming no recorded thread is refused.
+  expect((await askDan($, SOURCE, { agentId: 'a1' })).deny).toContain('main session')
+  expect((await askDan($, `is-it-live-draft:${CH}:1700000000.000300`)).deny).toContain('No Slack thread')
+  // Dan away: nothing is recorded.
+  w.w.answer = 'afk'
+  expect(said(await askDan($, SOURCE))).toContain('did not answer')
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // Save as a draft: the session is told to save the exact text, and the turn stays held until it does.
+  w.w.answer = 'Save as a draft'
+  const save = said(await askDan($, SOURCE))
+  expect(save).toContain(`slack_send_message_draft with channel_id "${CH}" and thread_ts "${TS}"`)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // The options are the mod's, whatever the session offered: never Post or Send.
+  expect(w.asks[w.asks.length - 1]?.options.map(o => o.label)).toEqual(['Save as a draft', 'Skip this time'])
+  expect(w.asks[w.asks.length - 1]?.question).toContain('This is live now.')
+  w.w.answer = 'Skip this time'
+  expect(said(await askDan($, SOURCE))).toContain('next merge')
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('the draft hold is refused once per chain of turn ends, so a draft that cannot be saved never traps the turn (#2436)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  expect((await turnEnd($, true)).block).toBeUndefined()
+  expect(w.toasts.join(' ')).toContain(`No Slack draft reply saved to ${THREAD}`)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('a session with nobody at the prompt is never held for a draft (#2436)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: 'terminal', isInteractive: false } as never)
+  await says($, THREAD)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toBeUndefined()
 })

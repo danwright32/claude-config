@@ -24,16 +24,21 @@ Two routes are judged:
     is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
-    path with the interpreter its #! names (claude-config#2400); a Python script counts as able to
-    unless it imports only modules known to be unable to (PY_INERT). The one script let through is
-    /nudge, at
-    skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
-    like any other script that posts.
+    path with the interpreter its #! names (claude-config#2400). A script counts as able to send a
+    request, run code or write a file unless it is seen to be unable to: a Python script imports only
+    modules known to be unable to (PY_INERT) and uses no builtin that runs code; a JavaScript one
+    imports only node builtins known to be unable to (JS_INERT) and names no global that sends or runs
+    code and no fs method that writes; a shell script hands its arguments only to programs known to
+    be unable to send or run code (SH_INERT), to its own functions, or to scripts seen unable to act
+    (claude-config#2434). The one script let through is /nudge, at skills/nudge/nudge.py beside this
+    hooks folder, by its real path; a copy anywhere else is refused like any other script that posts.
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
 through a path alias (`@/lib/x`), a Python module in the standard library or installed, a module run
 with `python3 -m`, and an import of another language's files are
-not followed; a program run by bare name from the PATH is not read; and deliberate obfuscation (an
+not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
+program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
+shell script's writes are not counted as acting on a data file; and deliberate obfuscation (an
 endpoint assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
 """
@@ -232,11 +237,9 @@ IMPORT_MAX_FILES = 300
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
 # What lets a script act on a data file as more than data: sending a request (whose address the file
-# can hold), running code (which the file can be), or writing it somewhere that runs later. A
-# JavaScript script, or a module it imports, naming any of JS_ACTS still has the data files it is
-# handed read. Read from the text, comments included, which can only refuse more.
+# can hold), running code (which the file can be), or writing it somewhere that runs later.
 #
-# A Python script is judged the other way round (lessons review at 56b9d7f): a list of the ways to act
+# A Python script is judged by what cannot act (lessons review at 56b9d7f): a list of the ways to act
 # missed urllib3, httplib2, smtplib, ftplib, asyncio streams and importlib's exec_module, and a list
 # like that always misses the next one (L96). So a Python script counts as unable to act only when
 # every module it imports from outside the script's own files is in PY_INERT, modules that cannot
@@ -265,12 +268,89 @@ PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
 # that writes.
 PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "symlink_to",
                        "hardlink_to", "link_to", "chmod", "mkdir"})
+# A JavaScript or TypeScript script is judged the same way (claude-config#2434): a hand list of ways to
+# act (fetch, axios, child_process, ...) missed the request package, worker_threads and dns. So it
+# counts as unable to act only when every module it imports from outside its own files is in JS_INERT
+# (node builtins that cannot send, run code or write, `node:` prefix or not), and it names none of
+# JS_RUNS (the globals that send or run code, and the routes from an object to Function or a loader),
+# no require or import() of a computed name (JS_DYNAMIC), and none of JS_WRITES. fs is here for
+# reading, as pathlib is for Python, and its writing methods are JS_WRITES. Any package counts as
+# able to act. JS_RUNS is read from the text, comments included, which can only refuse more; the
+# imports, JS_DYNAMIC and JS_WRITES from the code with comments blanked (js_code), so an import shown
+# in a comment is not one (claude-config#2397).
+JS_INERT = frozenset({
+    "assert", "assert/strict", "buffer", "console", "crypto", "events", "fs", "fs/promises", "os", "path",
+    "path/posix", "path/win32", "perf_hooks", "querystring", "readline", "readline/promises", "stream",
+    "stream/promises", "string_decoder", "timers", "timers/promises", "url", "util", "zlib"})
+JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval|Function|Worker|SharedWorker|"
+                     r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
+                     r"mainModule)\b")
+JS_DYNAMIC = re.compile(r"""\brequire\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
+# word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
+# real scripts were refused only by one of these words).
 JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
                      r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
                      r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
                      r"""\b(require|import)\s*\(\s*[^'"`\s)]|['"](node:)?(https?|net|tls|http2|dgram)['"]""")
+# fs's methods that write, move or remove a file, or open one to (a stream or a handle). The short
+# names a script may define for itself (link, open, rename: repo-digest's format.ts has a link()) count
+# where called as a method (`fsp.rm(`, fs reached through a helper too), and called bare only in a
+# script that imports fs (JS_FS), where `import { rm } from "fs/promises"` binds them.
+JS_WRITES = re.compile(r"\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|"
+                       r"copyFileSync|cpSync|renameSync|symlink|symlinkSync|linkSync|chmod|chmodSync|lchmod|"
+                       r"lchmodSync|chown|chownSync|lchown|lchownSync|fchmod|fchmodSync|fchown|fchownSync|mkdirSync|"
+                       r"mkdtemp|mkdtempSync|rmSync|rmdirSync|unlinkSync|truncateSync|ftruncate|ftruncateSync|"
+                       r"utimes|utimesSync|lutimes|lutimesSync|futimes|futimesSync|openSync|writeSync|writev|"
+                       r"writevSync)\b")
+JS_WRITES_SHORT = re.compile(r"\b(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+JS_WRITES_METHOD = re.compile(r"\.\s*(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+JS_FS = {"fs", "fs/promises"}
+# And a shell script (claude-config#2434): a command handed the script's arguments acts unless it is a
+# function the script defines (its body is read as the script's own commands), a script the gate
+# reads and sees cannot act (acts), code written into the script itself (a heredoc, -c), or one of
+# SH_INERT, builtins and programs that cannot send a request or run code with the words they are
+# handed. A list of senders (SENDERS) missed every program off it, gh and nc among them. Unlike a
+# Python or JavaScript script, a shell script's writes are not counted: every shell script that keeps
+# state writes, with a redirection or by moving a file (issue-spool.sh clear moves each spool file into
+# place), so the programs that only copy, move or remove a file (cp, mv, tee, ln, rm) are here too.
+SH_INERT = frozenset({
+    "[", "[[", ":", "basename", "case", "cat", "cd", "chmod", "cmp", "column", "comm", "cp", "cut", "date", "declare", "diff",
+    "dirname", "du", "echo", "egrep", "exit", "export", "expr", "false", "fgrep", "file", "fold", "for", "getopts",
+    "grep", "head", "hexdump", "jq", "kill", "ln", "local", "ls", "md5", "md5sum", "mkdir", "mktemp", "mv", "nl", "od",
+    "paste", "popd", "printf",
+    "pushd", "read", "readlink", "readonly", "realpath", "return", "rev", "rg", "rm", "rmdir", "seq", "set",
+    "sha1sum", "sha256sum", "shasum", "shift", "sleep", "sort", "stat", "strings", "tac", "tail", "tee", "test",
+    "touch", "tr",
+    "true", "typeset", "uniq", "unset", "wait", "wc"})
+# git, only for the subcommands that read a repository (issue-spool.sh finds a checkout's common dir
+# with rev-parse), and with no option that names a program or setting to run or a file to write.
+GIT_INERT = frozenset({"rev-parse", "log", "show", "status", "diff", "ls-files", "ls-tree", "symbolic-ref",
+                       "cat-file", "for-each-ref", "merge-base", "rev-list", "describe", "name-rev"})
+GIT_RUNS = ("-c", "--config-env", "--exec-path", "--output", "--ext-diff", "--textconv", "-O")
+# find, except with -exec and its kind, and awk, unless its program can run a command (awk_runs).
+AWKS = {"awk", "gawk", "mawk", "nawk"}
+# The folders a program is taken from by the name it has there; anywhere else it is a script of its own.
+SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
 POSITIONAL = r"\$\{?[1-9@*]"
+# What a Python import's folder can be handed through: a shell variable in an argument, PYTHONPATH or
+# an exported variable (claude-config#2449). A variable's value is known only where the script sets
+# it once, unconditionally, at its top (sh_trusted); these mark where that stops being certain: a
+# compound command, a group, a subshell or a function opening, and every other way a name is bound.
+SH_COMPOUND = re.compile(r"^(?:(?:if|then|elif|else|fi|do|done|while|until|for|select|case|esac|function|coproc|time|!)"
+                         r"(?=[\s;&|()]|$)|[{}()]|\[\[)")
+SH_FUNC_DEF = re.compile(r"^[A-Za-z_][\w:.-]*\s*\(\s*\)")
+SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
+              r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
+# and those that bind names), so it is an assignment like any other.
+SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
+                        "return", "set", "shift", "trap", "unset", "times", "local", "declare", "typeset"})
+# A parameter expansion: ${...} (its whole inside) or $NAME, $1, $@ and the other one character names.
+SH_PARAM = re.compile(r"\$(?:\{([^{}]*)\}|([A-Za-z_]\w*|[0-9@*#?$!-]))")
+# Where a redirection starts in a command's text, its target the word after it.
+SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 
 
 def load_reader():
@@ -308,6 +388,8 @@ class Judge:
         self.sw = sw
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
+        self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
+        self.unfollowed = None  # the last import modules() could not follow (unfollow)
         # Where the Python a command starts looks for an absolute import beyond the script's folder
         # (claude-config#2358): the command's PYTHONPATH (its own assignment, one exported earlier in
         # the line, or the session's), its directory, and the interpreter it names. record() sets it
@@ -315,6 +397,18 @@ class Judge:
         self.exported = None
         self.py_cmd = {"path": self.py_path(os.environ.get("PYTHONPATH", ""), os.getcwd()),
                        "cwd": os.getcwd(), "interp": None}
+        # The shell variables of the text line() is reading (claude-config#2449), and the script file
+        # it is, as its BASH_SOURCE names it, which script() hands to the line() it calls.
+        self.shell = self.shell_scope("", "", None)
+        self.next_script = None
+
+    @staticmethod
+    def shell_scope(text, cwd, script):
+        """A fresh record of one text's variables: each NAME=value command read so far (pending, its
+        text and directory), the values worked out from them, the names exported, and the names
+        sh_trusted finds safe to take a value for, worked out the first time one is asked for."""
+        return {"text": text, "cwd": cwd, "script": script, "pending": {}, "values": {}, "exported": set(),
+                "trusted": None}
 
     @staticmethod
     def py_path(value, d):
@@ -356,6 +450,7 @@ class Judge:
         if is_shell and depth < MAX_DEPTH:
             # Read as commands even with no endpoint in it: it can run another script that posts.
             try:
+                self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
                 inner = self.line(body, d, depth + 1, body)
             except Exception:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
@@ -417,7 +512,8 @@ class Judge:
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
-                    yield (f"{via}, a module the gate cannot find{where}, so it cannot see what that runs"), None, None, None
+                    yield self.unfollow(f"{via}, a module the gate cannot find{where}, so it cannot see what that "
+                                        "runs"), None, None, None
                     return
                 for target in targets:
                     target = os.path.realpath(target)
@@ -425,18 +521,24 @@ class Judge:
                         continue
                     seen.add(target)
                     if len(seen) > IMPORT_MAX_FILES:
-                        yield (f"{start} imports more than {IMPORT_MAX_FILES} modules, past what the gate "
-                               "reads, so it cannot see what they run"), None, None, None
+                        yield self.unfollow(f"{start} imports more than {IMPORT_MAX_FILES} modules, past what "
+                                            "the gate reads, so it cannot see what they run"), None, None, None
                         return
                     try:
                         with open(target, "rb") as f:
                             found = f.read(MAX_FILE).decode("utf-8", "replace")
                     except OSError:
-                        yield (f"{via} ({target}), a module the gate cannot read, so it cannot see what that "
-                               "runs"), None, None, None
+                        yield self.unfollow(f"{via} ({target}), a module the gate cannot read, so it cannot "
+                                            "see what that runs"), None, None, None
                         return
                     yield None, via, target, found
                     queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
+
+    def unfollow(self, why):
+        """Record why that an import could not be followed, for main() to say the check could not be
+        made, keyed on this cause rather than on the words it is put in; and give it back."""
+        self.unfollowed = why
+        return why
 
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ())):
         """(the import as written, the files it runs, or False when it names a local file not there,
@@ -547,9 +649,10 @@ class Judge:
         """Add to inserts the folders text's sys.path changes name: sys.path.insert(n, x) in front,
         sys.path.append(x), sys.path.extend([...]) and site.addsitedir(x) behind. x is evaluated
         when it is a literal or built from __file__ (os.path.dirname, os.path.join, abspath, Path(...)
-        .parent, / and the like); a relative result is relative to the command's directory, as Python
-        takes it. A change the gate cannot evaluate adds nothing, and an import only it would place is
-        then placed nowhere and refused."""
+        .parent, / and the like), or from sys.argv[n] or os.environ where the command hands python a
+        value py_args can work out (claude-config#2449); a relative result is relative to the command's
+        directory, as Python takes it. A change the gate cannot evaluate adds nothing, and an import
+        only it would place is then placed nowhere and refused."""
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -627,6 +730,16 @@ class Judge:
             for _ in range(e.slice.value + 1):
                 v = os.path.dirname(v)
             return v
+        if isinstance(e, ast.Subscript) and isinstance(e.slice, ast.Constant):
+            # sys.argv[n] and os.environ["X"]: what the command hands this python, where py_args could
+            # work it out (claude-config#2449); None, so placed nowhere, where it could not.
+            base, key = self.dotted(e.value), e.slice.value
+            if base == "sys.argv" and isinstance(key, int) and not isinstance(key, bool) and key >= 0:
+                argv = self.py_cmd.get("argv") or ()
+                return argv[key] if key < len(argv) else None
+            if base == "os.environ" and isinstance(key, str):
+                return (self.py_cmd.get("env") or {}).get(key)
+            return None
         if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Div):
             a, b = ev(e.left), ev(e.right)
             return os.path.join(a, b) if a and b else None
@@ -637,6 +750,8 @@ class Judge:
         vals = [ev(a) for a in e.args]
         if any(v is None for v in vals):
             return None
+        if self.dotted(e.func) in ("os.environ.get", "os.getenv") and len(vals) == 1:
+            return (self.py_cmd.get("env") or {}).get(vals[0])
         if method in ("resolve", "absolute", "expanduser") and not vals:
             v = ev(e.func.value)  # Path(...).resolve()
             return whole(v) if v else None
@@ -655,6 +770,451 @@ class Judge:
             return whole(vals[0])
         if last in ("Path", "PurePath", "str", "fspath"):
             return vals[0]
+        return None
+
+    # A shell variable's value, for the folder a Python import is placed in (claude-config#2449).
+    #
+    # tests/test-mods.sh sets ROOT="$(cd "$DIR/.." && pwd)" at its top and runs
+    # `python3 - "$ROOT/tools/lib" <<'PY'`, whose code does sys.path.insert(0, sys.argv[1]) and imports
+    # ts_source. The gate refuses an import it cannot place (#2358), so it refused the whole suite
+    # until it could work out what "$ROOT/tools/lib" holds. A value is worked out only where it is
+    # certain what the variable holds when python starts (sh_trusted), from the few forms the scripts
+    # use: literals, quotes, other such variables, BASH_SOURCE, and $(pwd), $(dirname X) and
+    # $(cd X && pwd). Anything else is None, and an entry built from None is placed nowhere, so the
+    # import is refused as before: this only ever places more imports, each judged like any other.
+
+    def sh_note(self, text, words, assigns, d):
+        """Note a command that only sets one variable (NAME=value, or export NAME=value), for sh_var."""
+        lines = [a for a in assigns.split("\n") if a.strip()]
+        if not words and len(lines) == 1:
+            name, exported = lines[0].split("=", 1)[0], False
+        elif words[:1] == ["export"] and len(words) == 2 and "=" in words[1] and not lines:
+            name, exported = words[1].split("=", 1)[0], True
+        else:
+            return
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            return
+        self.shell["pending"][name] = (text, d)
+        self.shell["values"].pop(name, None)
+        if exported:
+            self.shell["exported"].add(name)
+
+    def sh_var(self, name, seen=()):
+        """The value of a variable the text being read set, or None where it is not certain."""
+        ctx = self.shell
+        if name in ctx["values"]:
+            return ctx["values"][name]
+        if name not in ctx["pending"] or name in seen:
+            return None
+        if ctx["trusted"] is None:
+            ctx["trusted"] = self.sh_trusted(ctx["text"], ctx["cwd"], ctx["script"])
+        if name not in ctx["trusted"]:
+            return None
+        text, d = ctx["pending"][name]
+        m = re.match(r"\s*(?:export\s+)?" + name + "=", text)
+        v = None
+        if m:
+            end = self.sh_word_end(text, m.end())
+            v = self.sh_word(text[m.end():end], d, lambda n: self.sh_var(n, seen + (name,)), ctx["script"], True)[0]
+        ctx["values"][name] = v
+        return v
+
+    def sh_pythonpath(self, value, text, d):
+        """A PYTHONPATH value with its variables worked out from the command's own text, where they can
+        be; otherwise the value as it was, whose $ entries py_path leaves out."""
+        if "$" not in value:
+            return value
+        m = re.search(r"(?<![\w$])PYTHONPATH=", text)
+        if not m:
+            return value
+        end = self.sh_word_end(text, m.end())
+        v = self.sh_word(text[m.end():end], d, self.sh_var, self.shell["script"], True)[0]
+        return value if v is None else v
+
+    def sh_trusted(self, s, cwd, script):
+        """The names whose value is certain wherever s uses them after setting them: each set exactly
+        once in s, by a command of its own at the top of s, before the first compound command, group,
+        subshell, function, pipeline or && / || chain (so it has run, and run only once, by the time
+        anything after it does), bound no other way in s (read, for, local, export NAME, ${NAME:=}...),
+        and set by no file s sources. A file s sources whose path cannot be worked out, or which is not
+        there, leaves no name certain. One those files source in turn is read where its path can be
+        worked out; where it cannot, it is not read (as the gate reads no sourced file it cannot find)."""
+        parts = []
+        try:
+            cmds = self.sw.commands(s, cwd, parts=parts)
+        except Exception:
+            return set()
+        subst = [(a, b) for p in parts if len(p["scope"]) == 1 for a, b, _ in p["inner"]]
+        # A guard is no end to the top: `x || exit 1`, `x || { ...; exit 1; }` and
+        # `if x; then ...; exit 1; fi` either do not run their exit, so everything after them runs
+        # unconditionally, or end the script, so nothing after them runs. Its body is simple commands
+        # ending in an exit nothing chains into; anything else in it ends the top.
+        cands, prev, block = {}, ";", None
+        for (d, t), p in zip(cmds, parts):
+            if len(p["scope"]) > 1:
+                if any(a <= p["start"] < b for a, b in subst):
+                    continue  # a command substitution's, read as part of the command holding it
+                break  # a subshell
+            head = t.strip()
+            if block is not None:
+                if SH_FUNC_DEF.match(head) or p["how"] in ("&", "case"):
+                    break
+                if block["cond"]:
+                    if not re.match(r"then(\s|$)", head):
+                        if SH_COMPOUND.match(head):
+                            break
+                        continue  # one of the if's condition commands
+                    block["cond"], head = False, head[4:].strip()
+                    if not head:
+                        continue
+                if head == block["end"]:
+                    if not (re.match(r"exit\b", block["last"]) and block["before"] not in ("&&", "||", "|")
+                            and block["how"] in (";", "#", "\\n")):
+                        break
+                    block, prev = None, p["how"]
+                    continue
+                if SH_COMPOUND.match(head):
+                    break  # elif, else, or a compound command inside
+                block.update(before=block["how"], last=head, how=p["how"])
+                continue
+            if prev in ("&&", "||") and p["how"] not in ("|", "&", "&&", "||", "case"):
+                if re.match(r"exit\b", head):
+                    prev = p["how"]
+                    continue
+                if re.match(r"\{(\s|$)", head):
+                    inner = head[1:].strip()
+                    if inner and (SH_COMPOUND.match(inner) or SH_FUNC_DEF.match(inner)):
+                        break
+                    block = {"end": "}", "cond": False, "last": inner, "before": ";", "how": p["how"] if inner else ";"}
+                    continue
+            if re.match(r"if(\s|$)", head) and prev not in ("&&", "||", "|", "&") and p["how"] not in ("&", "case"):
+                block = {"end": "fi", "cond": True, "last": "", "before": ";", "how": ";"}
+                continue
+            if prev in ("&&", "||", "|", "&") or p["how"] in ("|", "&", "case"):
+                break
+            if SH_COMPOUND.match(head) or SH_FUNC_DEF.match(head):
+                break
+            prev = p["how"]
+            m = re.match(r"(?:export\s+)?([A-Za-z_]\w*)=", head)
+            if not m or head[self.sh_word_end(head, m.end()):].strip():
+                continue
+            name = m.group(1)
+            cands[name] = None if name in cands else (head[m.end():self.sh_word_end(head, m.end())], d, p["start"],
+                                                       p["end"])
+        # NAME=value in front of a command (not a special builtin) sets it for that command alone,
+        # so it is no second assignment: `LIBDIR="$DIR/lib" python3 ...` beside `export LIBDIR=...`.
+        temp = {}
+        for (d, t), p in zip(cmds, parts):
+            rest_t, assigns = self.sw.command_rest(t)
+            words = self.sw.command_words(rest_t)
+            if words and words[0] not in SH_SPECIAL:
+                for a in assigns.split("\n"):
+                    n = a.split("=", 1)[0]
+                    if a.strip() and re.fullmatch(r"[A-Za-z_]\w*", n):
+                        temp[n] = temp.get(n, 0) + 1
+        names = set()
+        for name, c in cands.items():
+            if c is None:
+                continue
+            rest = s[:c[2]] + s[c[3]:]
+            sets = len(re.findall(r"(?<![\w$])" + name + r"(?:\[[^\]\n]*\])?\+?=", rest))
+            if sets <= temp.get(name, 0) and not re.search(SH_BINDERS.format(name), rest):
+                names.add(name)
+        memo = {}
+
+        def var(n, before, seen=()):
+            c = cands.get(n)
+            if n not in names or n in seen or c[2] >= before:
+                return None
+            if n not in memo:
+                memo[n] = self.sh_word(c[0], c[1], lambda x: var(x, before, seen + (n,)), script, True)[0]
+            return memo[n]
+
+        for (d, t), p in zip(cmds, parts):
+            target = self.sh_source_target(t)
+            if target is None:
+                continue
+            v = self.sh_word(target, d, lambda n, at=p["start"]: var(n, at), script, False)
+            path = v[0] and not v[1] and os.path.join(os.path.abspath(d or os.getcwd()), v[0])
+            if not path or not os.path.isfile(path):
+                return set()
+            names -= self.sh_bound_in(path, names, var, 0, set())
+        return names
+
+    def sh_source_target(self, t):
+        """The raw word a source or . command names, or None for any other command."""
+        rest, _ = self.sw.command_rest(t)
+        rest = rest.lstrip()
+        end = self.sh_word_end(rest, 0)
+        if rest[:end] not in ("source", "."):
+            return None
+        start = len(rest) - len(rest[end:].lstrip())
+        return rest[start:self.sh_word_end(rest, start)] or None
+
+    def sh_bound_in(self, path, names, var, depth, seen):
+        """The names a sourced file binds, it or a file it sources whose path can be worked out."""
+        real = os.path.realpath(path)
+        if real in seen or depth > MAX_DEPTH:
+            return set()
+        seen.add(real)
+        try:
+            with open(real, "rb") as f:
+                text = f.read(MAX_FILE).decode("utf-8", "replace")
+        except OSError:
+            return set(names)
+        bound = {n for n in names if re.search(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", text)
+                 or re.search(SH_BINDERS.format(n), text)}
+        try:
+            cmds = self.sw.commands(text, os.path.dirname(real))
+        except Exception:
+            return bound
+        for d, t in cmds:
+            target = self.sh_source_target(t)
+            if target is None:
+                continue
+            v = self.sh_word(target, d, lambda n: var(n, float("inf")), path, False)
+            if v[0] and not v[1]:
+                nested = os.path.join(os.path.abspath(d or os.getcwd()), v[0])
+                if os.path.isfile(nested):
+                    bound |= self.sh_bound_in(nested, names, var, depth + 1, seen)
+        return bound
+
+    def py_args(self, text, name, d):
+        """(sys.argv, the variables in os.environ) for the python command text runs, as far as they are
+        certain: an argv entry is None where it is not, and every entry after one that can become
+        other than one word; argv itself is None where which word is the script is not certain."""
+        words, k, toks = [], 0, self.sh_tokens(text)
+        while k < len(toks):
+            kind, raw = toks[k]
+            if kind == "op":
+                if not SH_REDIRECT.fullmatch(raw):
+                    break
+                k += 2
+                continue
+            words.append(raw)
+            k += 1
+        script = self.shell["script"]
+        vals = [self.sh_word(w, d, self.sh_var, script, False) for w in words]
+        at = next((i for i, (v, sp) in enumerate(vals) if v is not None and not sp and os.path.basename(v) == name), None)
+        if at is None:
+            return None, {}
+        env = {n: self.sh_var(n) for n in self.shell["exported"]}
+        for (v, sp), w in zip(vals[:at], words[:at]):
+            m = re.match(r"([A-Za-z_]\w*)=", w)
+            if m:
+                env[m.group(1)] = self.sh_word(w[m.end():], d, self.sh_var, script, True)[0]
+            elif v is None or v.startswith("-"):
+                env = {}  # env -i, env -u and the like: what it leaves is not worked out here
+        j, argv = at + 1, None
+        while j < len(vals):
+            v, sp = vals[j]
+            if v is None or sp:
+                return None, env
+            if v == "--":
+                j += 1
+                if j >= len(vals) or vals[j][0] is None or vals[j][1]:
+                    return None, env
+                argv, j = [vals[j][0]], j + 1
+                break
+            if v == "-" or not v.startswith("-"):
+                argv, j = [v], j + 1
+                break
+            if v.startswith("--"):
+                j += 2 if v == "--check-hash-based-pycs" else 1
+                continue
+            letters, step = v[1:], 1
+            for i, ch in enumerate(letters):
+                if ch == "m":
+                    return None, env
+                if ch == "c":
+                    argv, step = ["-c"], 1 if letters[i + 1:] else 2
+                    break
+                if ch in "WX":
+                    step = 1 if letters[i + 1:] else 2
+                    break
+            j += step
+            if argv:
+                break
+        if argv is None:
+            return ([""] if j >= len(vals) else None), env
+        for v, sp in vals[j:]:
+            if sp:
+                break
+            argv.append(v)
+        return argv, env
+
+    def sh_tokens(self, s):
+        """s's words and operators, as (kind, raw text), up to the first unquoted line break."""
+        out, i, n = [], 0, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\n":
+                break
+            if c.isspace():
+                i += 1
+                continue
+            m = SH_REDIRECT.match(s, i)
+            if m:
+                out.append(("op", m.group(0)))
+                i = m.end()
+                continue
+            m = re.match(r"&&|\|\||;;|[;&|()]", s[i:])
+            if m:
+                out.append(("op", m.group(0)))
+                i += len(m.group(0))
+                continue
+            end = self.sh_word_end(s, i)
+            out.append(("word", s[i:end]))
+            i = max(end, i + 1)
+        return out
+
+    @staticmethod
+    def sh_close(s, i):
+        """The index of the ) closing the $( that ends just before i, or None."""
+        dq, n = False, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'" and not dq:
+                j = s.find("'", i + 1)
+                if j < 0:
+                    return None
+                i = j + 1
+                continue
+            if c == '"':
+                dq = not dq
+            elif s.startswith("$(", i):
+                j = Judge.sh_close(s, i + 2)
+                if j is None:
+                    return None
+                i = j
+            elif c == ")" and not dq:
+                return i
+            elif c == "(" and not dq:
+                return None  # a subshell or a case pattern inside: not a form worked out here
+            i += 1
+        return None
+
+    def sh_word_end(self, s, i):
+        """Where the shell word starting at i ends: at unquoted space or an operator."""
+        dq, n = False, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'" and not dq:
+                j = s.find("'", i + 1)
+                if j < 0:
+                    return n
+                i = j + 1
+                continue
+            if c == '"':
+                dq = not dq
+            elif s.startswith("$(", i):
+                j = self.sh_close(s, i + 2)
+                if j is None:
+                    return n
+                i = j
+            elif s.startswith("${", i):
+                j = s.find("}", i)
+                if j < 0:
+                    return n
+                i = j
+            elif not dq and (c.isspace() or c in ";&|<>()"):
+                return i
+            i += 1
+        return n
+
+    def sh_word(self, raw, d, var, script, assign):
+        """(the value of one raw shell word, or None where it is not certain; whether it can become
+        other than one word). assign is True for a NAME=value's value, which is not split or globbed."""
+        out, i, n, dq = [], 0, len(raw), False
+        unknown = splits = False
+        while i < n:
+            c = raw[i]
+            if c == '"':
+                dq = not dq
+                i += 1
+                continue
+            if c == "'" and not dq:
+                j = raw.find("'", i + 1)
+                if j < 0:
+                    return None, True
+                out.append(raw[i + 1:j])
+                i = j + 1
+                continue
+            if c in "\\`":
+                return None, True
+            if c == "$":
+                if raw.startswith("$(", i) and not raw.startswith("$((", i):
+                    j = self.sh_close(raw, i + 2)
+                    if j is None:
+                        return None, True
+                    v, i = self.sh_subst(raw[i + 2:j], d, var, script), j + 1
+                else:
+                    m = SH_PARAM.match(raw, i)
+                    if not m:
+                        return None, True
+                    p, i = m.group(1) if m.group(1) is not None else m.group(2), m.end()
+                    if p in ("@", "*") or "[@]" in p or "[*]" in p or p.startswith(("!", "#")):
+                        return None, True  # as many words as there are values
+                    v = script if p in ("BASH_SOURCE", "BASH_SOURCE[0]") else (
+                        var(p) if re.fullmatch(r"[A-Za-z_]\w*", p) else None)
+                if v is None:
+                    unknown = True
+                    splits = splits or not (dq or assign)
+                elif not (dq or assign) and (not v or re.search(r"[\s*?\[]", v)):
+                    return None, True
+                else:
+                    out.append(v)
+                continue
+            if not dq and (c.isspace() or c in ";&|<>(){}*?[~"):
+                return None, True
+            out.append(c)
+            i += 1
+        if dq:
+            return None, True
+        return (None if unknown else "".join(out)), splits
+
+    def sh_subst(self, body, d, var, script):
+        """What $(body) prints, for $(pwd), $(dirname X) and $(cd X && pwd); None for anything else,
+        and where cd would fail."""
+        if "\n" in body.strip():
+            return None  # more than one line of commands: sh_tokens would read only the first
+        toks = self.sh_tokens(body.strip())
+        if any(k == "op" and t != "&&" for k, t in toks):
+            return None
+        vals = []
+        for k, t in toks:
+            if k == "op":
+                vals.append(t)
+                continue
+            v, sp = self.sh_word(t, d, var, script, False)
+            if v is None or sp:
+                return None
+            vals.append(v)
+        here = os.path.abspath(d or os.getcwd())
+        if vals in (["pwd"], ["pwd", "-P"]):
+            return here if len(vals) == 1 else os.path.realpath(here)
+        if len(vals) == 2 and vals[0] == "dirname":
+            p = vals[1].rstrip("/")
+            if not vals[1]:
+                return "."
+            if not p:
+                return "/"
+            return (p[:p.rfind("/")].rstrip("/") or "/") if "/" in p else "."
+        if len(vals) in (4, 5) and vals[0] == "cd" and vals[2:4] == ["&&", "pwd"] and vals[4:] in ([], ["-P"]):
+            target = vals[1]
+            if not target or target.startswith("-") or (os.environ.get("CDPATH") and not os.path.isabs(target)
+                                                         and not target.startswith((".", "/"))):
+                return None
+            p = os.path.normpath(os.path.join(here, os.path.expanduser(target) if target.startswith("~") else target))
+            if not os.path.isdir(p):
+                return None
+            return os.path.realpath(p) if vals[4:] else p
         return None
 
     @staticmethod
@@ -717,12 +1277,18 @@ class Judge:
         return False
 
     def line(self, s, cwd, depth, whole):
-        """The reason a command line posts, or None."""
-        for d, text, wrapper, why, _ in self.sw.every_command(s, cwd):
-            reason = self.record(d, text, wrapper, why, depth, whole)
-            if reason:
-                return reason
-        return None
+        """The reason a command line posts, or None. Its shell variables are its own: a script read
+        here starts with none, and the caller's are back once it is read."""
+        saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script)
+        self.next_script = None
+        try:
+            for d, text, wrapper, why, _ in self.sw.every_command(s, cwd):
+                reason = self.record(d, text, wrapper, why, depth, whole)
+                if reason:
+                    return reason
+            return None
+        finally:
+            self.shell = saved
 
     def record(self, d, text, wrapper, why, depth, whole):
         """judge() for one command, with py_cmd set to where the Python it starts looks for imports:
@@ -731,15 +1297,16 @@ class Judge:
         does not change what the rest of this command is judged with."""
         rest, assigns = self.sw.command_rest(text)
         words = self.sw.command_words(rest)
+        self.sh_note(text, words, assigns, d)
         value = None
         for a in assigns.split("\n"):
             for w in self.sw.command_words(a) if a.strip() else ():
                 if w.startswith("PYTHONPATH="):
-                    value = w[len("PYTHONPATH="):]
+                    value = self.sh_pythonpath(w[len("PYTHONPATH="):], text, d)
         if words and words[0] == "export":
             for w in words[1:]:
                 if w.startswith("PYTHONPATH="):
-                    self.exported = self.py_path(w[len("PYTHONPATH="):], d)
+                    self.exported = self.py_path(self.sh_pythonpath(w[len("PYTHONPATH="):], text, d), d)
         elif not words and value is not None:
             self.exported = self.py_path(value, d)
         here = os.path.abspath(d or os.getcwd())
@@ -815,6 +1382,9 @@ class Judge:
             operand, inline, stdin = self.operands(words)
             lang = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else None
             here = os.path.abspath(d or os.getcwd())
+            if lang == "py":
+                # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
+                self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
             if inline:
                 # The code imports from the directory it runs in (claude-config#2318).
                 code = next((words[k + 1] for k in range(1, len(words) - 1)
@@ -919,15 +1489,27 @@ class Judge:
         """How a script can act on a file it is handed as more than data, as a phrase ("sends a request
         (curl)", "runs the file it is handed (source)"), or None when it only reads what it is handed.
 
-        A shell script acts when one of its commands sends a request, or runs, sources or evals a
-        file or command named by the arguments it was handed (or a variable set from them). A
-        JavaScript script acts when it, or a local module it imports, names a way to send a request or
-        to run code (JS_ACTS). A Python script acts unless it, and every local module it imports, is
-        seen to be unable to (py_acts). A script of any other kind, one that cannot be read, and
-        one whose imports cannot all be followed are taken to act: only a script seen to do neither
-        has its data files left unread. Arguments a script passes on to ANOTHER program are not
-        followed there: that program is judged for what it names, not for what it does with them."""
+        Each language is judged by what cannot act, so anything not seen to be unable to counts as
+        acting (claude-config#2434). A shell script acts when one of its commands sends a request,
+        runs, sources or evals a file or command named by the arguments it was handed (or a variable
+        set from them), or hands them to a program not seen to be unable to act (shell_acts). A
+        JavaScript script acts unless it, and every local module it imports, is seen to be unable to
+        (js_acts), and a Python script likewise (py_acts). A script of any other kind, one that
+        cannot be read, and one whose imports cannot all be followed are taken to act: only a script
+        seen to do none of it has its data files left unread. A script a shell script hands its
+        arguments to is judged here the same way; one already being judged further up counts as
+        judged there."""
         real = os.path.realpath(path)
+        if real in self.acting:
+            return None  # a script handing its arguments back to itself is judged where it began
+        self.acting.add(real)
+        try:
+            return self.acts_on(real, d, shell_hint, lang)
+        finally:
+            self.acting.discard(real)
+
+    def acts_on(self, real, d, shell_hint, lang):
+        """acts() for a script at its real path, once the walk is known not to have come back to it."""
         try:
             with open(real, "rb") as f:
                 body = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -940,25 +1522,42 @@ class Judge:
         if not kind:
             return "is a kind of script the gate does not read for what it does with its arguments"
         root = os.path.dirname(real)
-        if kind == "py":
-            why = self.py_acts(body, real, root)
-            if why:
-                return why
-        else:
-            hit = JS_ACTS.search(body)
-            if hit:
-                return f"can send a request or run code ({hit.group(0).strip()})"
+        why = self.py_acts(body, real, root) if kind == "py" else self.js_acts(body)
+        if why:
+            return why
         for why, _, target, found in self.modules("it", real, root, body, kind):
             if why:
                 return f"imports a module the gate cannot follow ({why})"
-            if kind == "py":
-                inner = self.py_acts(found, target, root)
-                if inner:
-                    return f"imports {os.path.basename(target)}, which {inner}"
+            inner = self.py_acts(found, target, root) if kind == "py" else self.js_acts(found)
+            if inner:
+                return f"imports {os.path.basename(target)}, which {inner}"
+        return None
+
+    @staticmethod
+    def js_acts(text):
+        """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
+        a phrase, or None when it is seen unable to. It is unable to only when every module it imports
+        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC,
+        JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
+        judges it with this same reading, and one that is not there is refused there."""
+        code = js_code(text)
+        uses_fs = False
+        for m in IMPORT_SPEC.finditer(code):
+            spec = m.group(2)
+            bare = spec.split("?", 1)[0]
+            if "${" not in spec and (bare.startswith(("./", "../", "/", "file://")) or bare in (".", "..")):
                 continue
-            hit = JS_ACTS.search(found)
-            if hit:
-                return f"can send a request or run code through {os.path.basename(target)} ({hit.group(0).strip()})"
+            name = spec[5:] if spec.startswith("node:") else spec
+            if "${" in spec or name not in JS_INERT:
+                return f"imports a module the gate does not know to be unable to send a request, run code or write a file ({spec})"
+            uses_fs = uses_fs or name in JS_FS
+        hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code) or JS_ACTS.search(text)
+        if hit:
+            return f"can send a request or run code ({hit.group(0).strip()})"
+        hit = JS_WRITES.search(code) or JS_WRITES_METHOD.search(code) or \
+            (JS_WRITES_SHORT.search(code) if uses_fs else None)
+        if hit:
+            return f"can write a file ({hit.group(0).strip(' (.')})"
         return None
 
     def py_acts(self, text, cur, root):
@@ -1062,8 +1661,17 @@ class Judge:
         return None
 
     def shell_acts(self, body, d):
-        """acts() for a shell script's body: the first of its commands that sends a request, or runs
-        what the script was handed, as a phrase, or None."""
+        """acts() for a shell script's body: the first of its commands that sends a request, runs what
+        the script was handed, or hands it to a program not seen to be unable to act, as a phrase, or
+        None.
+
+        Handed means a word after the program's name holds an expansion of the script's arguments or
+        of a variable set from them, a redirection's included (`nc host 443 < "$1"`). What it does not
+        follow, so a pass is not read as more than it measured: what reaches a program through a pipe
+        (`cat "$1" | x`), code written into the script itself (a heredoc fed to python3 -, a -c
+        string), and what the script writes with a redirection."""
+        defined = set(re.findall(r"(?:^|[\s;&|(){}])(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", body))
+        defined |= set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", body))
         names = {"OPTARG"} if "getopts" in body else set()
         while True:
             given = POSITIONAL + (r"|\$\{?(?:" + "|".join(sorted(names)) + r")\b" if names else "")
@@ -1083,6 +1691,12 @@ class Judge:
         for _, text, _, _, _ in records:
             rest, _ = self.sw.command_rest(text)
             words = self.sw.command_words(rest)
+            if words and not words[0].strip():
+                # A line continued with a backslash inside $(...) comes back with the newline as its
+                # first word and its assignments still in front (issue-spool.sh's append), so it is
+                # read again from its first real word.
+                rest, _ = self.sw.command_rest(self.sw.rejoin([w for w in words if w.strip()]))
+                words = self.sw.command_words(rest)
             if not words:
                 continue
             if re.match(r"[A-Za-z_]\w*(\[[^]]*\])?\+?=", words[0]):
@@ -1096,16 +1710,78 @@ class Judge:
                 if any(handed.search(w) for w in words[1:]):
                     return f"runs the file it is handed ({name})"
                 continue
+            if not any(handed.search(w) for w in words[1:]):
+                continue
+            if "/" not in words[0] and (name[:-2] if name.endswith("()") else name) in defined:
+                continue  # a definition, `show() { cat "$1"; }`, reads as a command named show()
+            # A program is the tool its name says only by bare name or from a system folder: a local
+            # ./grep or bin/cat is a script of its own, judged below by what it does.
+            system = "/" not in words[0] or os.path.dirname(words[0]) in SYSTEM_BIN
+            if system and name in SH_INERT:
+                continue
+            git = self.sw.git_read(words) if system and name == "git" else None
+            if git and git[0] in GIT_INERT and not any(
+                    w in GIT_RUNS or w.startswith(GIT_RUNS) for w in git[1] + git[2]):
+                continue
+            if system and name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
+                continue  # find runs a program only through -exec and its kind
+            if system and name in AWKS and not self.awk_runs(words):
+                continue
             if name in SHELLS or INTERPRETER.match(name):
-                operand, inline, _ = self.operands(words)
+                operand, inline, stdin = self.operands(words)
                 if inline:
                     code = next((words[k + 1] for k in range(1, len(words) - 1)
                                  if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), "")
                     if handed.search(code):
                         return f"runs code it is handed ({name})"
-                elif operand and handed.search(operand):
+                    continue  # code written into the script, read with it for what it names
+                if operand and handed.search(operand):
                     return f"runs the file it is handed ({name})"
+                if stdin and operand in (None, "-"):
+                    continue  # its code is a heredoc in the script, read with it for what it names
+                if not operand or re.search(r"[$`]", operand):
+                    return (f"hands its arguments to {name} running a script or module the gate cannot "
+                            f"read ({operand or ' '.join(words[1:3])})")
+                path = self.resolve(operand, d)
+                if not os.path.isfile(path):
+                    return f"hands its arguments to {name} running a script the gate cannot find ({operand})"
+                kind = "js" if JS_RUNTIME.match(name) else "py" if re.match(r"(python|pypy)", name) else None
+                inner = self.acts(path, d, name in SHELLS, kind)
+                if inner:
+                    return f"hands its arguments to {os.path.basename(operand)}, which {inner}"
+                continue
+            if name in ("done", "}", ")", "fi", "esac"):
+                return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
+                        f"({name} {' '.join(words[1:3])})")
+            if not system and not re.search(r"[$`]", words[0]):
+                path = self.resolve(words[0], d)
+                if os.path.isfile(path):
+                    inner = self.acts(path, d, False, None)
+                    if inner:
+                        return f"hands its arguments to {words[0]}, which {inner}"
+                    continue
+            return (f"hands its arguments to a program the gate does not know to be unable to send a "
+                    f"request or run code ({name})")
         return None
+
+    @staticmethod
+    def awk_runs(words):
+        """Whether an awk command can run a program: its program comes from a file (-f), or names
+        system(), a pipe to or from a command (`print | "sh"`, `"cmd" | getline`, `|&`) or a gawk
+        extension (@load, @include). A program written in the command is read; `||` is not a pipe."""
+        k = 1
+        while k < len(words):
+            w = words[k]
+            if w in ("-F", "-v"):
+                k += 2
+            elif w.startswith(("-f", "--file", "--exec", "-E", "-i", "--include", "-l", "--load")):
+                return True
+            elif w.startswith("-") and w != "-":
+                k += 1
+            else:
+                break
+        program = words[k] if k < len(words) else ""
+        return bool(re.search(r"\bsystem\s*\(|(?<!\|)\|(?!\|)|@load|@include", program)) or not program
 
     def package(self, name, words, d, depth):
         """The reason `npm run <script>` (pnpm, yarn) posts, or None.
@@ -1295,12 +1971,14 @@ def main():
         return
     cmd = ti["command"]
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
-    reason = Judge(load_reader()).line(cmd, cwd, 0, cmd)
+    judge = Judge(load_reader())
+    reason = judge.line(cmd, cwd, 0, cmd)
     if reason:
-        # A reason ending "so it cannot see what ... run(s)" is an import the gate could not follow, not
-        # a post it found, so it says the check could not be made rather than claiming a post.
+        # A reason carrying an import the gate could not follow (recorded by modules() where it gives
+        # up, never matched by its wording) is not a post it found, so it says the check could not be
+        # made rather than claiming a post.
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if "so it cannot see what" in reason else "REFUSED: this command posts to Slack: ")
+                if judge.unfollowed and judge.unfollowed in reason else "REFUSED: this command posts to Slack: ")
         print("refuse\n" + lead + reason + ". " + draft_advice("with the same channel and thread"))
     else:
         print("allow")

@@ -232,7 +232,9 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
 ./claude-sync release           # lift your own hold now instead of waiting for it to run out
+./claude-sync release "why"     # lift only the hold you took with that label
 ./claude-sync release --other S # lift the hold session S took (status names each hold's session)
+./claude-sync release --force   # lift every hold in force on this Mac, naming each
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -364,7 +366,8 @@ the watcher then sent that session's half finished work. Now:
   gives every command a session runs, its subagents' included, so a subagent's hold is its
   session's. A run with no session id (a plain terminal) records `unknown`, and an `unknown` hold
   is anyone's to lift.
-- Several holds can be in force at once, one per session, each with its own end. The watcher is
+- Several holds can be in force at once, one per session and label (see #2452 below), each with
+  its own end. The watcher is
   held while ANY of them is live. Each expires on its own: the watcher clears that one, says so,
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
@@ -376,7 +379,35 @@ the watcher then sent that session's half finished work. Now:
   works). Naming a session that holds nothing, or a start shared by two, refuses and lifts nothing.
   Every release names the hold it lifted, and names every hold still in force with the command
   that lifts it.
-- `status` lists every live hold on its own line, with whose it is and that command.
+- `status` lists every live hold on its own line, with whose it is, the clock time it ends, and
+  that command.
+
+A hold is named by its session AND its label, the `why` it was taken with (#2452). Every subagent
+a session dispatches carries that session's id, so on 2026-11-07 three builders from one session
+each took `hold 60 "build #N"`: each hold replaced the last, and each builder's plain `release`
+lifted the hold a sibling was still working under. The record's shape did not change, since every
+line already carried its label. What changed:
+
+- `hold` replaces only the caller's own line with the SAME label. A second `hold` from the same
+  session under another label is a second hold, kept beside the first and counted; the watcher
+  stays held until every one is released or has expired.
+- `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
+  the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
+  non-zero, and names the holds the caller does hold and any other session's, each with its end and
+  the command that lifts it. A label beginning with a dash goes after `--`: `release -- "-fix"`.
+- A plain `release` lifts the caller's own or `unknown` hold when there is exactly one. With more
+  than one it lifts none, exits non-zero, and names each with its end and `release "<label>"`,
+  because lifting them all would free a hold a sibling agent may still need.
+- `release --other <session> [label]` refuses the same way when that session holds more than one
+  and no label is given.
+- `release --force` lifts every hold in force on this Mac, naming each one it lifted. It is the
+  person at the keyboard's way to clear holds once they know none is still needed, and it is
+  suggested only to a caller with no session id, or alongside a refusal to choose.
+- The success line of `hold`, and every hint `status` and `release` print, name the label only
+  when the plain form would have to choose, so a single hold still reads `claude-sync release`.
+
+A claude-sync from before #2452 still reads every line correctly, but its `hold` keeps only one
+line per session, so it would drop a sibling's line of the same session until that Mac pulls.
 
 Every change to the record (taking, lifting, clearing an expired hold) happens under a lock beside
 it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot each write a
@@ -1788,8 +1819,10 @@ three updates, which on a busy day (2026-10-16: several merges at once, 15 to 30
 restart to a person. The first update is made at once; after that it waits until the base's tip
 has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges costs one fresh check
 run rather than one each, and only the deadline bounds how many updates it makes. is-it-live's
-window for a merge made in the background (`WAIT_MS`, twenty four hours) is kept at twice the longest
-a run can last, its wait in line plus its deadline (below), which the helper's suite checks.
+window for a merge made in the background (`WAIT_MS`, twenty four hours) is kept at least twice the
+longest a run lasts in a line standing still, its wait in line plus its deadline (below), which the
+helper's suite checks; past it, a merge whose helper still holds a place in line is asked about
+still (#2403).
 Settling answered a base that moves, but not the helpers moving it: on 2026-10-22 a work pull request sat in
 the helper about 112 minutes while four other pull requests merged under its 23 minute checks, each
 one restarting them (claude-config#1515). So each run now takes its repository's turn
@@ -3234,8 +3267,9 @@ importing a helper that posts (their `npm test` globs are not read, so `npm test
 
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
-own folder as Python finds it. A module not on disk there is the standard library or an installed
-package and is not read; a relative import that names nothing there is refused. Code given inline
+own folder as Python finds it. A module not beside the script is looked for where Python looks next
+(below); the standard library and installed packages are not read, and an import placed nowhere, or
+a relative import that names nothing there, is refused. Code given inline
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
@@ -3262,19 +3296,37 @@ naming an endpoint), and so is every later file not shaped like data. A later fi
 review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
 saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
 the script depends on each program's options, so such a file is judged against every one of them,
-and is still read when any of them can act on it as more than data: a shell script that runs `curl`
-(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
-local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
-(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+and is still read when any of them can act on it as more than data. Each language is judged by what
+cannot act (#2434), so anything not seen to be unable to counts as acting: a shell script that runs
+`curl` (or its kind), runs, sources or evals a file named by its arguments, or hands its arguments
+(or a variable set from them) to anything but a short list of programs that cannot send a request or
+run code (`cat`, `grep`, `jq`, `wc`, `printf`, `mv`, `rm` and the like, `SH_INERT`), its own
+functions, `git` reading a repository, `find` without `-exec`, `awk` whose program runs no command,
+or a script the gate reads and sees cannot act; so `gh`, `nc` and `node send.js "$1"` count. A
+JavaScript script unless it, and every local module it imports, imports only node builtins that
+cannot send, run code or write (`fs` for reading, `path`, `url`, `util`, `readline` and the like,
+`JS_INERT`) and names no global that sends or runs code (`fetch`, `WebSocket`, `eval`, `Function`,
+`Worker`, a `.constructor`, a `require` of a computed name, or any word the old list named, such as
+`got`, so nothing refused before passes) and no `fs` method that writes; any package counts, so
+`request`, `worker_threads` and `dns` do. Measured 2026-11-07 by handing each script a data file
+naming `chat.postMessage`: of 268 JavaScript and TypeScript files in repo-digest, NurseDex's
+`scripts/`, Overture, Ovation and playeditapp, 91 of the 144 that passed now refuse (most import
+`vitest`, a Deno `https://` module or `node:test`); of this payload's 416 shell scripts, most of the
+321 that passed now refuse, chiefly by handing their arguments to a function from a library they
+source, which the gate does not follow. None that refused now passes. A Python script unless it, and every
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
 `sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
-`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
-extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
-script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
+The JavaScript and shell readings were lists of what acts until #2434, and missed the `request`
+package, `worker_threads`, `dns` and every program off the list of senders. A shell script's writes
+are not counted, since every shell script that keeps state writes (`issue-spool.sh clear` moves its
+spool files into place), and neither are its data reaching a program through a pipe or code written
+into the script itself (a heredoc fed to `python3 -`). A later file with a script's extension, a `#!`
+or no extension at all is read as before, since a wrapper may run it. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
@@ -5609,10 +5661,14 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with
-the line standing still plus its three hour deadline from taking the turn, a ratio the helper's
-suite checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run
-behind a very long moving line can outlast it) and owed once GitHub says it merged. That question
+each turn end for `WAIT_MS`, twenty four hours, at least twice the helper's three hours in line with
+the line standing still plus its three hour deadline from taking the turn (a ratio the helper's
+suite checks, #1271, #1604), and owed once GitHub says it merged. Since #2351 a line that keeps
+moving never ends the helper, so a run behind a very long moving line can outlast that window. Past
+it the merge is asked about still while its helper holds a place in the repository's line
+(`hooks/lib/merge-in-line.sh` reads the line's tickets, a live run being one whose pid runs with the
+start time it recorded), and let go once it holds none, or once that cannot be read, so a helper
+still running is never taken for one that finished or failed (#2403). That question
 is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
@@ -5632,10 +5688,32 @@ traps a turn, a sleeping worker's included: the next end in the chain goes ahead
 what is still owed. What is owed is session state, so a new session owes nothing for another's
 merges. The `classic.Stop` hook runs only while the managed settings file is in place
 (`tools/sec-default-bypassed-hooks.tsv`); without it the line on the merge's result still shows.
+The same turn end also asks for a draft reply to the Slack thread the session started from (#2436,
+Dan, 2026-11-07: "slack thread start = draft response saved. every time"). A thread is recorded,
+per session, when Dan's own typed prompt (mod-kit's `isDans`) holds a Slack message link (a link to
+a reply names its parent through `thread_ts`), and when the main session reads a thread with
+`slack_read_thread` while it has none recorded; a thread a subagent reads, or a later one, is
+research. A merge GitHub confirms, or a background merge a turn end hears has merged, marks a
+merge landed. Answering the issue's open question the same day, Dan chose one draft after the
+session's last merge from the thread, not one after each; a turn end cannot know a merge is the
+last, so it holds only when a merge landed after the thread's last draft or skip and no merge of
+the session is in flight: a helper merge still waiting in is it live's own record whose background
+task the job watcher still lists (its list carries each job's task id for this). A helper that
+ended without merging is no longer in flight; with no job list to read, a waiting merge is taken as
+in flight. The hold tells the session to write the reply, run `/no-ai-tells`, ask Dan with
+`AskUserQuestion` carrying `metadata.source` `is-it-live-draft:<channel>:<thread ts>`, whose two
+answers the mod words (Save as a draft, Skip this time), and on Save save that exact text with
+`slack_send_message_draft` to the channel and thread, never a send; Slack keeps one attached draft
+per channel and refuses another with `attached_draft_exists`, which the hold says to resolve with
+Dan. Any draft Slack saved to that thread, under any Slack server and from any part of the session
+(the card's message for a thread requester, #2435, included), or Dan's Skip, settles it until the
+next merge. Which came first is kept as a count of steps in the session, never two clock readings.
+Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+The mod never calls a Slack tool.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271
+#617, #663, #707, #771, #1244, #1271, #2436
 
 </td></tr>
 <tr><td>
@@ -6531,10 +6609,12 @@ line and carried on the next tool call instead. While the Mac is asleep the conv
 woken (it reaches Claude, never Dan) and the agent is noted for the morning report (#1234). A
 session list that cannot be asked is said as such and asked again once a minute later; an unreadable
 record is named (#753). The status bar reads this session's jobs through `$.jobs.list()` and the
-quiet agents through `$.jobs.agents()`. A look still running is never overlapped by a second, a
-session start's included; one that has not finished in ten minutes is given up, said to Claude once,
-and acts on nothing after, and no second stop is sent while one is unanswered. Keeping a job asks
-mod-kit's screen first, so a name or reason carrying a secret never reaches the status bar. A
+quiet agents through `$.jobs.agents()`; each listed job carries its task id, which is it live reads
+to tell whether a merge helper it waits on is still running (#2436). A look still running is
+never overlapped by a second, a session start's included; one that has not finished in ten
+minutes is given up, said to Claude once, and acts on nothing after, and no second stop is sent
+while one is unanswered. Keeping a job asks mod-kit's screen first, so a name or reason carrying
+a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
@@ -7034,7 +7114,11 @@ a read of that same variable counts, never another function's variable sharing i
 Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
 and that includes a function written in place and handed to a mod helper that only gives it to a
 timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
-does with that parameter, never by its name (#2299).
+does with that parameter, never by its name (#2299). Only the function the timer is handed counts:
+one written in place, or the one a mod function that only makes a function hands back. The rest of
+the timer's arguments is worked out as the timer is set, so it is the noun's own code: the delay, a
+call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
+a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
@@ -7785,8 +7869,8 @@ wrong when it is removed
 
 </td><td>
 
-`claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named
-session's, with `--other`)
+`claude-sync hold`, and `claude-sync release`, which removes the caller's own line of the label
+it names, or its only one (or a named session's, with `--other`, or every line, with `--force`)
 
 </td><td>
 
@@ -7795,7 +7879,8 @@ the watcher's send, `claude-sync status`, `claude-sync release`, and the payload
 
 </td><td>
 
-absent means no hold, which is the normal state. One line per hold, one hold per session (#1863):
+absent means no hold, which is the normal state. One line per hold, one hold per session and
+label (#1863, #2452):
 `<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before
 #1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A
 line with no `session=` field, the single line every hold was before #1863, is read as a hold by

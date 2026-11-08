@@ -3044,6 +3044,62 @@ json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash",
 PY_SET
 }
 
+# Lands a change to one or more files on a fixture's shared branch with plain git, in one commit, the
+# way the other Mac's send would have left it, for a section whose subject is the RECEIVING Mac
+# (claude-config#2460). Those sections used to make the other Mac publish with a whole claude-sync
+# run of its own, about a second each, whose output nothing read, and enough of them took this suite
+# past its section time budget on CI's slower runners. The commit is built on the shared branch as
+# it stands, so it lands on top of whatever the other Macs pushed. claude-sync reads no commit's
+# author or message, only its id and time, so the sync's own identity is not reproduced. The branch
+# is the clone's own, never a name: a bare repo made without -b is on whatever git defaults to.
+#
+# The clone records nothing as applied. So a clone that runs claude-sync again afterwards must have
+# its home already holding every byte the commit landed (copy from the home, as the callers do) and
+# nothing another Mac pushed since: that is the state a hand commit leaves, which the tool reads as
+# applied by comparing bytes (unapplied_remote_changes). Anything else is a state no real Mac is in.
+#
+# Each source is copied with its mode, since a hook's executable bit travels too. An empty source
+# removes the file. Says FAIL when the shared branch does not end up holding the change, because
+# every refusal a receiving Mac is then asked about passes just as well on a commit that never
+# landed.
+fixture_land(){   # fixture_land <clone> <path under payload/> <source file, or empty to remove> [<path> <source>]...
+  local c="$1" b base head p src what=""
+  shift
+  b="$(git -C "$c" symbolic-ref --short HEAD 2>/dev/null)"
+  git -C "$c" fetch -q origin 2>/dev/null
+  git -C "$c" reset -q --hard "origin/$b" 2>/dev/null
+  base="$(git -C "$c" rev-parse HEAD 2>/dev/null)"
+  while [ "$#" -ge 2 ]; do
+    p="payload/$1"; src="$2"; what="$what $1"; shift 2
+    if [ -n "$src" ]; then
+      mkdir -p "$(dirname "$c/$p")"
+      cp -p "$src" "$c/$p"
+      git -C "$c" add -- "$p"
+    else
+      git -C "$c" rm -q -- "$p" 2>/dev/null
+    fi
+  done
+  # A sync applies before it sends, and the apply makes every hook script and every skill script in
+  # the home executable (claude-sync's do_apply_only), so a sync publishes them with that mode, the
+  # files it was not sent to change included. Without this the receiving Mac's own apply makes them
+  # executable, reads the difference as a local edit, and tries to send it back.
+  chmod +x "$c"/payload/hooks/*.sh "$c"/payload/hooks/*.py 2>/dev/null
+  find "$c/payload/skills" -name '*.sh' -exec chmod +x {} \; 2>/dev/null
+  git -C "$c" add -u -- payload 2>/dev/null
+  git -C "$c" -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m "fixture:$what" >/dev/null 2>&1
+  head="$(git -C "$c" rev-parse HEAD 2>/dev/null)"
+  if [ -z "$b" ] || [ -z "$head" ] || [ "$head" = "$base" ]; then
+    bad "fixture_land:$what was already that way on the shared branch of $c, so nothing landed"
+    return 1
+  fi
+  git -C "$c" push -q origin "HEAD:$b" 2>/dev/null
+  if [ "$(git -C "$c" ls-remote origin "refs/heads/$b" 2>/dev/null | cut -f1)" != "$head" ]; then
+    bad "fixture_land: the change to$what did not reach the shared branch of $c"
+    return 1
+  fi
+  return 0
+}
+
 
 section "== push =="
 bash "$SCRIPT" push >/dev/null 2>&1
@@ -3357,7 +3413,7 @@ check "#331 both Macs hold the skill before anything is deleted" \
 # A deletes it and publishes. B has not applied that yet and still holds its own copy, which is
 # exactly the state a Mac is in between the other one publishing and this one receiving.
 rm -rf "$DELHA/skills/shared-skill"
-CLAUDE_HOME="$DELHA" SYNC_REPO="$DELA" SYNC_HOSTNAME=delMacA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$DELA" skills/shared-skill/SKILL.md ""
 check "#331 the deletion really did reach the shared repo" \
   "[ ! -e '$DELA/payload/skills/shared-skill' ]"
 check "#331 and this Mac still holds its own copy, which is what makes the send stale" \
@@ -3473,10 +3529,11 @@ check "#1009 the other Mac received version one before anything changed" \
 # The commit holding the copy this Mac is about to send back, read before anything else moves.
 rd_v1="$(git -C "$RDR" log --format=%H -1 -- "payload/$RDREL" 2>/dev/null)"
 # A edits it, then deletes it, and publishes both. The version the repo deleted is version two.
+# Through fixture_land rather than two syncs of A's (claude-config#2460): every run under test is B's.
 printf 'export const ghargs = "version two"\n' > "$RDHA/$RDREL"
-env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RDA" "$RDREL" "$RDHA/$RDREL"
 rm -f "$RDHA/$RDREL" "$RDHA/$RDODD"
-env "${RDENV[@]}" CLAUDE_HOME="$RDHA" SYNC_REPO="$RDA" SYNC_HOSTNAME=oldMacA bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RDA" "$RDREL" "" "$RDODD" ""
 check "#1009 the deletion really did reach the shared repo" \
   "git -C '$RDB' cat-file -e 'main:payload/$RDMOD/hooks/register.ts' 2>/dev/null && ! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null"
 # B receives both, so its applied marker is past the deletion, and then the version it held before
@@ -4099,7 +4156,7 @@ CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull >/dev/null 2>&1
 echo two > "$SUAH/hooks/mod-me.sh"
 echo new > "$SUAH/hooks/add-me.sh"
 rm -f "$SUAH/hooks/del-me.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SUAH" SYNC_REPO="$SUA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$SUA" hooks/mod-me.sh "$SUAH/hooks/mod-me.sh" hooks/add-me.sh "$SUAH/hooks/add-me.sh" hooks/del-me.sh ""
 # Mac B's next pull must say exactly what it received
 out_sum="$(CLAUDE_HOME="$SUBH" SYNC_REPO="$SUB" bash "$SCRIPT" pull 2>&1)"
 check "pull names the modified file"      "grep -q 'updated .*hooks/mod-me.sh' <<< \"\$out_sum\""
@@ -4518,7 +4575,7 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFBH" SYNC_REPO="$CFB" bash "$SCRIPT" pull >/dev/
 # A changes both files and sends them up; B merges at the git level only.
 echo MAC-A-VERSION > "$CFAH/hooks/x.sh"
 echo A-CHANGED-THIS-TOO > "$CFAH/hooks/y.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$CFAH" SYNC_REPO="$CFA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$CFA" hooks/x.sh "$CFAH/hooks/x.sh" hooks/y.sh "$CFAH/hooks/y.sh"
 git -C "$CFB" pull -q --ff-only
 # B edits x.sh (a real conflict) but leaves y.sh alone (not a conflict).
 echo MAC-B-MY-OWN-EDIT > "$CFBH/hooks/x.sh"
@@ -4898,14 +4955,13 @@ check "and reports no unapplied changes"              "! grep -qi 'not applied' 
 HCR2="$WORK/hcrepo2"; git clone -q "$HCBARE" "$HCR2" 2>/dev/null
 HCH2="$WORK/hchome2"; mkdir -p "$HCH2"; echo '{"hooks":{}}' > "$HCH2/settings.json"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" pull >/dev/null 2>&1
-# Their work is published from its own healthy clone via sync, which carries no
-# send guard. Publishing it from a Mac this test has deliberately wedged would
+# Their work lands from a clone of its own with plain git, which no send guard
+# can refuse. Publishing it from a Mac this test has deliberately wedged would
 # make the control depend on the very bug it is the control for.
 HCR3="$WORK/hcrepo3"; git clone -q "$HCBARE" "$HCR3" 2>/dev/null
-HCH3="$WORK/hchome3"; mkdir -p "$HCH3"; echo '{"hooks":{}}' > "$HCH3/settings.json"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" pull >/dev/null 2>&1
+HCH3="$WORK/hchome3"; mkdir -p "$HCH3/hooks"
 echo 'THEIR-WORK' > "$HCH3/hooks/hc-theirs.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HCR3" hooks/hc-theirs.sh "$HCH3/hooks/hc-theirs.sh"   # the other Mac's publish, not a sync of its own (claude-config#2460)
 check "their work really was published"            "[ -f '$HCR3/payload/hooks/hc-theirs.sh' ]"
 echo 'mine while truly behind' > "$HCH2/hooks/hc-mine.sh"
 out_hcb="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" send 2>&1)"
@@ -4944,7 +5000,11 @@ echo '# rules v2' > "$NSAH/CLAUDE.md"
 mkdir -p "$NSAH/skills/rs-added"; mkskill "$NSAH/skills/rs-added/SKILL.md" 'SKILL new'
 mkskill "$NSAH/skills/rs-existing/SKILL.md" 'SKILL v2'
 echo 'two' > "$NSAH/hooks/rs-hook.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac A's edits that are plain files land through fixture_land (claude-config#2460); the ones that
+# change settings.json still go through a sync below, because the hooks block a send derives from it
+# is the tool's to write.
+fixture_land "$NSA" CLAUDE.md "$NSAH/CLAUDE.md" skills/rs-added/SKILL.md "$NSAH/skills/rs-added/SKILL.md" \
+  skills/rs-existing/SKILL.md "$NSAH/skills/rs-existing/SKILL.md" hooks/rs-hook.sh "$NSAH/hooks/rs-hook.sh"
 out_ns="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 notice_ns="$(printf '%s\n' "$out_ns" | grep -i 'new Claude Code session' || true)"
 check "pull tells you a new session is needed"   "[ -n \"\$notice_ns\" ]"
@@ -4958,14 +5018,14 @@ check "nor an edit to an existing skill"         "! grep -q 'rs-existing' <<< \"
 # The whole point is that it stays quiet otherwise: a pull carrying only hook
 # edits must not tell you to restart, or the notice becomes noise to scroll past.
 echo three > "$NSAH/hooks/rs-hook.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$NSA" hooks/rs-hook.sh "$NSAH/hooks/rs-hook.sh"
 out_ns2="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 check "hook-only pull still reports the change"  "grep -q 'updated .*hooks/rs-hook.sh' <<< \"\$out_ns2\""
 check "hook-only pull says nothing about restarting" "! grep -qi 'new Claude Code session' <<< \"\$out_ns2\""
 # A removed skill is gone from the running session's list just as wrongly as an
 # added one is missing from it, so it earns the notice too.
 rm -rf "$NSAH/skills/rs-added"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NSAH" SYNC_REPO="$NSA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$NSA" skills/rs-added/SKILL.md ""
 out_ns3="$(CLAUDE_HOME="$NSBH" SYNC_REPO="$NSB" bash "$SCRIPT" pull 2>&1)"
 check "a removed skill also earns the notice"    "grep -q 'rs-added' <<< \"\$(grep -i 'new Claude Code session' <<< \"\$out_ns3\")\""
 
@@ -6570,7 +6630,7 @@ CFR="$WORK/conf-repoB"; git clone -q "$CFB_BARE" "$CFR" 2>/dev/null
 CFHB="$WORK/conf-homeB"; mkdir -p "$CFHB"; echo '{"hooks":{}}' > "$CFHB/settings.json"
 CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 mkskill "$CFHA/skills/s/SKILL.md" 'A rewrote this line'
-CLAUDE_HOME="$CFHA" SYNC_REPO="$CFA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$CFA" skills/s/SKILL.md "$CFHA/skills/s/SKILL.md"
 mkskill "$CFHB/skills/s/SKILL.md" 'B rewrote this line'
 out_conf="$(CLAUDE_HOME="$CFHB" SYNC_REPO="$CFR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"; rc_conf=$?
 check "#22 a real two-Mac conflict fails" "[ $rc_conf -ne 0 ]"
@@ -7072,7 +7132,7 @@ mkskill "$BHHA/skills/own/SKILL.md" 'A1'
 CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
 mkskill "$BHHB/skills/theirs/SKILL.md" 'a change only the other Mac has'
-CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$BHR" skills/theirs/SKILL.md "$BHHB/skills/theirs/SKILL.md"   # not a sync of the other Mac's own (claude-config#2460)
 # A is now behind, and has its own unsent edit, which is the exact shape of the real case.
 mkskill "$BHHA/skills/own/SKILL.md" 'A2, written while behind'
 check "#323 the fixture really does leave this Mac behind before the send" \
@@ -7098,7 +7158,7 @@ BHN="$WORK/behind-notify.log"; : > "$BHN"
 BHNOTIFIER="$WORK/behind-notifier.sh"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$BHN" > "$BHNOTIFIER"; chmod +x "$BHNOTIFIER"
 mkskill "$BHHB/skills/theirs/SKILL.md" 'another change only the other Mac has'
-CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$BHR" skills/theirs/SKILL.md "$BHHB/skills/theirs/SKILL.md"
 bh_stuck(){   # one watcher send whose reconcile does nothing at all
   CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_IN_WATCH=1 \
     SYNC_NOTIFIER="$BHNOTIFIER" SYNC_NO_NOTIFY=0 SYNC_SEND_RECONCILE=true bash "$SCRIPT" send 2>&1 || true
@@ -7131,7 +7191,7 @@ bh_try(){   # one watcher send whose reconcile records that it was attempted, an
     SYNC_SEND_RECONCILE="$BHCOUNTER" bash "$SCRIPT" send >/dev/null 2>&1 || true
 }
 mkskill "$BHHB/skills/theirs/SKILL.md" 'a third change only the other Mac has'
-CLAUDE_HOME="$BHHB" SYNC_REPO="$BHR" SYNC_HOSTNAME=macBB SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$BHR" skills/theirs/SKILL.md "$BHHB/skills/theirs/SKILL.md"
 bh_try; bh_try; bh_try
 check "#327 three sends in a row do not each pay for a reconcile" \
   "[ \"\$(grep -c . '$BHTRY')\" -le 1 ]"
@@ -7524,6 +7584,9 @@ sp_sync(){   # $1 = A|B: a sync a person typed, with no gate of either kind
   CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_HOSTNAME="mac-sp-$1" SYNC_CLONE_REGISTRY="$SPREG" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
 }
+# Mac B's later edits to its skill reach the shared repo through fixture_land, not a sync of its own
+# (claude-config#2460): every run under test here is A's, and B syncs only to build the base.
+sp_land_b(){ fixture_land "$SPR" skills/theirs/SKILL.md "$SPHB/skills/theirs/SKILL.md"; }
 # The watcher's send on Mac A with the send side hook suite gate ON, which this file otherwise turns
 # off for every run, and SYNC_NO_HOOK_TESTS cleared too, since either one turns the gate off.
 sp_send(){   # $1 = the CI state of every commit -> the send's output
@@ -7544,7 +7607,7 @@ sp_hook spdemo 'spdemo one' 0
 sp_sync A; sp_sync B; sp_sync A
 
 # The catch up succeeds (the shared head is green) and sends this Mac's edit itself.
-mkskill "$SPHB/skills/theirs/SKILL.md" 'B2'; sp_sync B
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B2'; sp_land_b
 mkskill "$SPHA/skills/own/SKILL.md" 'A2, sent by the catch up'
 check "#1402 the fixture leaves this Mac behind with an edit of its own" \
   "sp_behind && sp_shared_has hooks/spdemo.sh 'spdemo one'"
@@ -7556,14 +7619,14 @@ check "#1402 and the send reports it as sent" "grep -q '^SEND-OUTCOME sent' <<< 
 check "#1402 and never as nothing to send" "out_lacks \"\$out_sp1\" '^SEND-OUTCOME nothing'"
 # The control, so the line above is not simply printed for every catch up: with nothing of this
 # Mac's to send, the same catch up says so (L1).
-mkskill "$SPHB/skills/theirs/SKILL.md" 'B3'; sp_sync B
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B3'; sp_land_b
 out_sp_none="$(sp_send success)"
 dbg "#1402 behind send with nothing of its own: $out_sp_none"
 check "#1402 a catch up with nothing of this Mac's to send says nothing to send, not sent" \
   "grep -q B3 '$SPHA/skills/theirs/SKILL.md' && grep -q '^SEND-OUTCOME nothing' <<< \"\$out_sp_none\" && out_lacks \"\$out_sp_none\" '^SEND-OUTCOME sent'"
 
 # #1403: the same catch up, carrying a hook edit whose suite fails, beside an edit that may go.
-mkskill "$SPHB/skills/theirs/SKILL.md" 'B4'; sp_sync B
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B4'; sp_land_b
 sp_hook spdemo 'spdemo changed while behind' 1
 mkskill "$SPHA/skills/own/SKILL.md" 'A3, beside a red hook'
 out_sp2="$(sp_send success)"
@@ -7580,7 +7643,7 @@ check "#1402 and what did go is reported as sent" "grep -q '^SEND-OUTCOME sent' 
 
 # #1403 on #1398's path: the shared head is still being tested, so this Mac's commit is built on top
 # of it and pushed without it being taken in. What is built on must have been through the gate too.
-mkskill "$SPHB/skills/theirs/SKILL.md" 'B5, still being tested'; sp_sync B
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B5, still being tested'; sp_land_b
 sp_hook spother 'spother red' 1
 mkskill "$SPHA/skills/own/SKILL.md" 'A4, over an untested tip'
 out_sp3="$(sp_send in_progress)"
@@ -7596,7 +7659,7 @@ check "#1403 and the send says which it held back" "line_has \"\$out_sp3\" 'NOT 
 check "#1402 and it is reported as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp3\""
 
 # A behind send whose only change of its own is a held hook held it back. That is not nothing to send.
-mkskill "$SPHB/skills/theirs/SKILL.md" 'B6, still being tested'; sp_sync B
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B6, still being tested'; sp_land_b
 out_sp4="$(sp_send in_progress)"
 dbg "#1402 behind send holding only a red hook: $out_sp4"
 check "#1402 a catch up that held this Mac's only change back says so, naming it" \
@@ -11694,8 +11757,9 @@ check "#203 and it still divides every section between the shards" \
 
 # Now a store the SUITE ITSELF wrote, not one this file made up. A real filtered run records what
 # its sections cost, and that is the record the selector reads: a fixture written here would prove
-# only that the reader agrees with this file's idea of the format (L48, L52).
-SECTION_UNTIL='apply is idempotent' SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+# only that the reader agrees with this file's idea of the format (L48, L52). It stops at the fifth
+# section, the fewest records the check below accepts, rather than the ninth (claude-config#2460).
+SECTION_UNTIL='install-autosync writes a receive-timer' SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
 st_recs="$(ls "$ST_STORE" 2>/dev/null | grep -c . | tr -d ' ')"
 check "#203 a run records what each of its sections cost (${st_recs:-0} record(s))" \
   "[ \"\${st_recs:-0}\" -ge 5 ]"
@@ -14065,7 +14129,7 @@ check "#947 the refusal is recorded where a pull can name it" "grep -q 'agents/l
 # The other Mac changes the SAME file, and another one, and sends.
 printf 'shared edited on A\n' > "$RFHA/agents/shared.md"
 printf 'other edited on A\n' > "$RFHA/agents/other.md"
-env "${rs_env[@]}" CLAUDE_HOME="$RFHA" SYNC_REPO="$RFRA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RFRA" agents/shared.md "$RFHA/agents/shared.md" agents/other.md "$RFHA/agents/other.md"
 rs_upstream="$(git -C "$RFB" rev-parse HEAD)"
 
 rs_rc=0
@@ -14099,7 +14163,7 @@ check "#947 and the record of the refusal is cleared"     "[ ! -e '$RFRB/.send-r
 # message does not claim a refused send that did not happen (L11).
 printf 'hand edit in the clone\n' > "$RFRB/payload/agents/other.md"
 printf 'other edited on A again\n' > "$RFHA/agents/other.md"
-env "${rs_env[@]}" CLAUDE_HOME="$RFHA" SYNC_REPO="$RFRA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RFRA" agents/other.md "$RFHA/agents/other.md"
 rs_rc=0
 out_rs4="$(env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIPT" pull 2>&1)" || rs_rc=$?
 dbg "pull over a hand edit: rc=$rs_rc $out_rs4"
@@ -14130,7 +14194,7 @@ check "#947 which does not call that copy an earlier one"    "! grep -q 'an earl
 printf 'B new 2\n' > "$RFHB/agents/mine.md"
 printf 'export AWS_KEY=%s\n' "$rs_secret" > "$RFHB/agents/leak.md"
 printf 'other third from A\n' > "$RFHA/agents/other.md"
-env "${rs_env[@]}" CLAUDE_HOME="$RFHA" SYNC_REPO="$RFRA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RFRA" agents/other.md "$RFHA/agents/other.md"
 rs_upstream="$(git -C "$RFB" rev-parse HEAD)"
 # A commit an earlier run left unpushed. A sync whose send is refused pushes nothing at all, so it
 # must not ride up on this run either.
@@ -14152,7 +14216,7 @@ check "#947 and the pending edit is still in this Mac's config" "grep -qx 'B new
 # THE WATCHER'S PATH. A send that finds this Mac behind reconciles through the same sync, and every
 # one of those used to be refused at the scan and counted as a skipped send.
 printf 'other fourth from A\n' > "$RFHA/agents/other.md"
-env "${rs_env[@]}" CLAUDE_HOME="$RFHA" SYNC_REPO="$RFRA" bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RFRA" agents/other.md "$RFHA/agents/other.md"
 rm -f "$RFRB/.behind-skips"
 rs_rc=0
 out_rs6="$(env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIPT" send 2>&1)" || rs_rc=$?
@@ -14362,7 +14426,7 @@ CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev
 CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 printf 'rtk rewritten on B\n' > "$IXHB/RTK.md"
 printf 'rtk rewritten on A\n' > "$IXHA/RTK.md"
-CLAUDE_HOME="$IXHA" SYNC_REPO="$IXRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$IXRA" RTK.md "$IXHA/RTK.md"
 out_ix2="$(CLAUDE_HOME="$IXHB" SYNC_REPO="$IXRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull with a real clash: $out_ix2"
 check "#83 a file that really clashes is still kept and reported" \
@@ -14619,6 +14683,21 @@ CI_REG="$WORK/ci-clone-registry"; : > "$CI_REG"
 # inside ci_case: it is called inside a command substitution, which is a subshell, so anything it
 # assigns is discarded on the way out. The first version did exactly that and every later reference
 # read an empty string, so a check failed with "no such file" rather than on the rule (L235).
+# What A publishes lands through fixture_land rather than a claude-sync sync of A's own
+# (claude-config#2460): only B's runs are under test here, and A's clone runs claude-sync once, to
+# publish the base, and never again. Every refusal check below passes just as well on a publish that
+# never landed, and ci_case runs in a subshell where a check's count (fixture_land's FAIL included)
+# is lost, so each publish records whether it landed, and one check at the end of the section reads
+# the record.
+ci_publish_a(){   # ci_publish_a <text> -> a commit making from-A.sh hold that text lands on the shared main
+  printf '%s\n' "$1" > "$WORK/ci-from-A.sh"
+  # To stderr, so a FAIL it prints is seen in the run's log rather than captured as B's output.
+  if fixture_land "$CIA" hooks/from-A.sh "$WORK/ci-from-A.sh" >&2; then
+    printf 'landed %s\n' "$1" >> "$WORK/ci-publish.log"
+  else
+    printf 'MISSING %s\n' "$1" >> "$WORK/ci-publish.log"
+  fi
+}
 ci_home(){ printf '%s' "$WORK/ci-Bhome-$1"; }
 ci_repo(){ printf '%s' "$WORK/ci-B-$1"; }
 ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the automatic tick output
@@ -14629,11 +14708,8 @@ ci_case(){   # ci_case <label> <ci state, empty for a gh that refuses> -> the au
   mkdir -p "$CI_HOME/hooks"; echo '{"hooks":{}}' > "$CI_HOME/settings.json"
   CLAUDE_HOME="$CI_HOME" SYNC_REPO="$CI_REPO" SYNC_CLONE_REGISTRY="$CI_REG" \
     SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull >/dev/null 2>&1
-  # A publishes something only it has. It syncs rather than sends, so a push from an earlier case
-  # cannot leave it behind and silently skip.
-  printf 'newer for %s\n' "$1" > "$CIHA/hooks/from-A.sh"
-  CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
-    SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  # A publishes something only it has.
+  ci_publish_a "newer for $1"
   # B ticks AUTOMATICALLY, with a local edit of its own so there is something to send as well.
   printf 'edit from B\n' > "$CI_HOME/hooks/from-B.sh"
   CI_STATE="$2" SYNC_GH="$CIBIN/gh" SYNC_IN_WATCH=1 SYNC_REPO_SLUG="$CI_SLUG" \
@@ -14776,9 +14852,7 @@ check "#327 and a green verdict never arms it in the first place" \
 # restarts every run, never reaches its own window, and the escape never fires while every other
 # check here still passes. Asserted by the START TIME staying put across two runs, not by the file
 # merely existing, because a file rewritten with a fresh timestamp exists just as convincingly.
-printf 'newer for clock a\n' > "$CIHA/hooks/from-A.sh"
-CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
-  SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+ci_publish_a 'newer for clock a'
 printf '111 \n' > "$(ci_repo unreadable)/.ci-unreadable-since"
 ci_tick unreadable "" >/dev/null 2>&1
 check "#327 a second unreadable run keeps the start time the first one recorded" \
@@ -14787,9 +14861,7 @@ check "#327 a second unreadable run keeps the start time the first one recorded"
 # A verdict that BLOCKS still clears the clock, because it is an answer. Red is the one worth
 # driving: a check that only proved green clears it would be satisfied by a rule about passing
 # rather than about readability (L159).
-printf 'newer for clock b\n' > "$CIHA/hooks/from-A.sh"
-CLAUDE_HOME="$CIHA" SYNC_REPO="$CIA" SYNC_CLONE_REGISTRY="$CI_REG" \
-  SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1
+ci_publish_a 'newer for clock b'
 printf '111 \n' > "$(ci_repo unreadable)/.ci-unreadable-since"
 ci_tick unreadable failure >/dev/null 2>&1
 check "#327 a red verdict clears the clock too, because it is an answer and not a pass" \
@@ -14976,6 +15048,10 @@ rm -f "$(ci_repo red)/.ci-red-since"
 out_rdstk2="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1 || true)"
 check "#391 and says nothing at all once there is no record" \
   "[ -z \"\$out_rdstk2\" ]"
+# The record ci_publish_a keeps: 15 cases and the two clock commits, every one on the shared main
+# when it was published, so no refusal above passed on a commit that was never there (#2460).
+check "#2460 every commit A published reached the shared main, all 17 of them" \
+  "[ \"\$(grep -c '^landed ' '$WORK/ci-publish.log')\" -eq 17 ] && ! grep -q '^MISSING ' '$WORK/ci-publish.log'"
 
 section "== the Mac that SENT a commit learns when its tests failed (#340) =="
 # needs: only a commit CI has passed is applied automatically
@@ -15209,7 +15285,7 @@ printf 'alpha\ncharlie\n' > "$CNHB/hooks/cn-deleted.sh"
 printf 'alpha\nbravo\ncharlie\ndelta\necho\n' > "$CNHA/hooks/cn-shared.sh"
 printf 'alpha\nbravo\ncharlie\nonly on A\n' > "$CNHA/hooks/cn-clash.sh"
 printf 'alpha\nbravo\ncharlie\necho\n' > "$CNHA/hooks/cn-deleted.sh"
-CLAUDE_HOME="$CNHA" SYNC_REPO="$CNRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$CNRA" hooks/cn-shared.sh "$CNHA/hooks/cn-shared.sh" hooks/cn-clash.sh "$CNHA/hooks/cn-clash.sh" hooks/cn-deleted.sh "$CNHA/hooks/cn-deleted.sh"
 out_cn="$(CLAUDE_HOME="$CNHB" SYNC_REPO="$CNRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull with one contained side, one real clash and one local deletion: $out_cn"
 
@@ -15577,7 +15653,7 @@ check "#181 and the stub can tell a held lock from a free one" \
 # Judged by its EXIT CODE and by nothing else (L184). This stub prints the runner's own success
 # line and exits 1, which is the pair a reader of the last line of output gets wrong.
 mkrunner 1
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh "$HTHA/hooks/run-all-tests.sh"
 out_ht2="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull with a runner that prints success and exits 1: $out_ht2"
 check "#178 a failing suite is reported as failed" \
@@ -15589,7 +15665,7 @@ check "#178 and its printed success line does not decide it" \
 # check on this config does not pass, the other says nothing checked it, and sending a reader to
 # look for a fault that is not there is its own defect (L11, L98).
 rm -f "$HTHA/hooks/run-all-tests.sh"
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh ""
 out_ht3="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull that removed the runner: $out_ht3"
 check "#178 hooks arriving with no runner says so" \
@@ -15600,11 +15676,11 @@ check "#178 and does not call that a failure" \
 # Cost. The suite is minutes of work, so a pull that landed no hook must not pay it: there is
 # nothing newly installed for it to check.
 mkrunner 0
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh "$HTHA/hooks/run-all-tests.sh"
 CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 ht_before="$(ht_ran)"
 printf '# rules v2\n' > "$HTHA/CLAUDE.md"
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" CLAUDE.md "$HTHA/CLAUDE.md"
 out_ht4="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull carrying only a rule file: $out_ht4"
 check "#178 a pull that landed the rule file really applied it" \
@@ -15615,7 +15691,7 @@ check "#178 and says nothing about a suite it did not run" \
 
 # And the off switch, for a run that must not pay the cost at all.
 echo 'two' > "$HTHA/hooks/ht-one.sh"
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/ht-one.sh "$HTHA/hooks/ht-one.sh"
 ht_before2="$(ht_ran)"
 out_ht5="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
 check "#178 the hook really arrived on that pull"  "grep -q 'two' '$HTHB/hooks/ht-one.sh'"
@@ -15628,7 +15704,7 @@ check "#178 SYNC_NO_HOOK_TESTS=1 skips the suite"  "[ \"\$(ht_ran)\" = \"\$ht_be
 # surface that dies with the attempt leaves somebody facing the same state with no way to learn why
 # (L148).
 mkrunner 1
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh "$HTHA/hooks/run-all-tests.sh"
 CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 out_st1="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 dbg "status after a failing suite: $out_st1"
@@ -15643,7 +15719,7 @@ check "#182 and the record keeps what the runner said" \
 
 # It goes quiet on its own once a later run actually passes, the same way the conflict report does.
 mkrunner 0
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh "$HTHA/hooks/run-all-tests.sh"
 CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 out_st2="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#182 a later passing run clears the report" "! line_has \"\$out_st2\" 'hook suite' 'FAILED'"
@@ -15651,7 +15727,7 @@ check "#182 a later passing run clears the report" "! line_has \"\$out_st2\" 'ho
 # A suite that could NOT be run keeps its own wording here too, or the record collapses the two
 # outcomes the closing line was careful to keep apart (L11).
 rm -f "$HTHA/hooks/run-all-tests.sh"
-CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$HTRA" hooks/run-all-tests.sh ""
 CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 out_st3="$(CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
 check "#182 a suite that could not run is reported as that" \
@@ -15698,7 +15774,7 @@ HTRUNNERV
 # at all, which reads exactly like a coverage clause that was never written.
 ht_cover(){   # ht_cover <exit> <verdict line> -> Mac B's whole closing output
   mkrunner_v "$1" "$2"
-  CLAUDE_HOME="$HTHA" SYNC_REPO="$HTRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+  fixture_land "$HTRA" hooks/run-all-tests.sh "$HTHA/hooks/run-all-tests.sh" >&2
   CLAUDE_HOME="$HTHB" SYNC_REPO="$HTRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1
 }
 ht_field(){   # ht_field <name> -> that named field of Mac B's recorded verdict
@@ -15840,14 +15916,16 @@ git clone -q "$SYB" "$SYRB" 2>/dev/null
 SYHB="$WORK/synctests-homeB"; mkdir -p "$SYHB"
 echo '{"hooks":{}}' > "$SYHB/settings.json"
 syB(){ CLAUDE_HOME="$SYHB" SYNC_REPO="$SYRB" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" "$@" 2>&1; }
-syA(){ CLAUDE_HOME="$SYHA" SYNC_REPO="$SYRA" SYNC_NO_NOTIFY=1 SYNC_NO_LAUNCHCTL=1 bash "$SCRIPT" "$@" >/dev/null 2>&1; }
+# Mac A's edits after its first sync land through fixture_land (claude-config#2460): every receive
+# under test is Mac B's, and A's syncs were whole runs whose output nothing read.
+sy_land_runner(){ fixture_land "$SYRA" hooks/run-all-tests.sh "$SYHA/hooks/run-all-tests.sh"; }
 sy_ran(){   # how many times the suite has run in Mac B's home
   n="$(grep -c "home=$SYHB\$" "$SYRAN" 2>/dev/null || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   printf '%s' "$n"
 }
 
-mksyrunner 0 2; syA sync
+mksyrunner 0 2; sy_land_runner
 sy_before1="$(sy_ran)"
 out_sy1="$(syB sync)"
 dbg "sync that landed a hook: $out_sy1"
@@ -15865,7 +15943,7 @@ check "#184 and the stub can tell a held lock from a free one" \
 
 # Cost, the same rule the pull path follows: a sync that landed no hook has installed nothing this
 # runner checks, so it must not pay minutes for it.
-printf '# rules v2\n' > "$SYHA/CLAUDE.md"; syA sync
+printf '# rules v2\n' > "$SYHA/CLAUDE.md"; fixture_land "$SYRA" CLAUDE.md "$SYHA/CLAUDE.md"
 sy_before2="$(sy_ran)"
 out_sy2="$(syB sync)"
 check "#184 a sync carrying only a rule file really applied it" "grep -q 'rules v2' '$SYHB/CLAUDE.md'"
@@ -15875,7 +15953,7 @@ check "#184 and says nothing about a suite it did not run" \
 
 # A failure on this path has to reach the same durable record, or a sync from the daemon leaves the
 # fault in a line nobody was there to read (#182, L148).
-mksyrunner 1 3; syA sync
+mksyrunner 1 3; sy_land_runner
 out_sy3="$(syB sync)"
 dbg "sync whose suite failed: $out_sy3"
 check "#184 a failing suite is reported as failed on a sync" \
@@ -15885,7 +15963,7 @@ check "#184 and status still names it after the sync has ended" \
   "line_has \"\$out_sy3s\" 'hook suite' 'FAILED'"
 check "#184 and the record keeps what the runner said" "grep -q 'sy-detail' '$SYRB/.hook-tests'"
 
-mksyrunner 0 4; syA sync
+mksyrunner 0 4; sy_land_runner
 sy_before4="$(sy_ran)"
 out_sy4="$(CLAUDE_HOME="$SYHB" SYNC_REPO="$SYRB" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" sync 2>&1)"
 check "#184 the hook really arrived on that sync" "grep -q '# v4' '$SYHB/hooks/run-all-tests.sh'"
@@ -15894,7 +15972,7 @@ check "#184 SYNC_NO_HOOK_TESTS=1 skips the suite on a sync too" "[ \"\$(sy_ran)\
 # The resume point after claude-sync updates itself mid-sync. It applies the payload and is the only
 # thing that does on that run, so a verdict that lived in do_sync would be lost exactly when the tool
 # has just changed underneath the Mac, which is when it is most worth having.
-mksyrunner 0 5; syA sync
+mksyrunner 0 5; sy_land_runner
 git -C "$SYRB" pull -q --ff-only 2>/dev/null
 sy_before5="$(sy_ran)"
 out_sy5="$(syB apply-only)"
@@ -15907,7 +15985,7 @@ check "#184 and carries the verdict in its closing line" \
 # falls through to a full reconcile when its push is rejected. .last-applied absent is the state the
 # refusal is deliberately switched off in (a fresh clone, or the first run of a new version), which
 # is what makes the fall-through reachable here rather than only in a race.
-mksyrunner 0 6; syA sync
+mksyrunner 0 6; sy_land_runner
 rm -f "$SYRB/.last-applied"
 mkdir -p "$SYHB/agents"; printf 'a local edit\n' > "$SYHB/agents/sy-local.md"
 sy_before6="$(sy_ran)"
@@ -17131,8 +17209,13 @@ section "== every section reports its size and how long it took (#107) =="
 # 0s quite legitimately, and a timer that was simply broken would ALSO read 0s everywhere, which is
 # indistinguishable from a fast suite (L182, L1). SUITE_SLOW_IN=<text> stalls a chosen section for a
 # known couple of seconds, and the check below requires that section's line to report at least that.
+#
+# The child stops at the third section, the fewest the comparison below accepts. It ran up to
+# `apply is idempotent`, nine sections and about ten seconds, and nothing here needed the six it
+# added (claude-config#2460).
 _PFO="$WORK/profile-child.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_SLOW_IN="apply is idempotent" SECTION_UNTIL="apply is idempotent" bash "$SCRIPT_SELF" > "$_PFO" 2>&1
+_pf_cut="install-schedule plist content"
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SUITE_SLOW_IN="$_pf_cut" SECTION_UNTIL="$_pf_cut" bash "$SCRIPT_SELF" > "$_PFO" 2>&1
 dbg "#107 child output: $(head -c 400 "$_PFO" | tr '\n' '|')"
 
 check "#107 a section closes with its check count and duration" \
@@ -17162,7 +17245,7 @@ check "#107 the per section counts add up to the run's own total" \
 
 # The positive control: the deliberately slowed section must REPORT being slow. Paired with its
 # own heading rather than searched for anywhere, or any slow section in the run would satisfy it.
-_pf_slow="$(awk '/^== apply is idempotent/{f=1;next} f && /^  \(section:/{print;exit}' "$_PFO" \
+_pf_slow="$(awk -v cut="== $_pf_cut" 'index($0, cut) == 1 {f=1;next} f && /^  \(section:/{print;exit}' "$_PFO" \
             | grep -oE '[0-9]+s\)' | grep -oE '[0-9]+')"
 case "$_pf_slow" in ''|*[!0-9]*) _pf_slow=-1 ;; esac
 check "#107 a section made slow on purpose reports the time it took" "[ '$_pf_slow' -ge 2 ]"
@@ -17171,7 +17254,7 @@ check "#107 a section made slow on purpose reports the time it took" "[ '$_pf_sl
 check "#107 the run ends with a profile of the slowest sections" \
   "grep -qi 'slowest sections' '$_PFO'"
 check "#107 the profile names a section and a duration on one line" \
-  "line_has \"\$(cat '$_PFO')\" '^ +[0-9]+s ' 'apply is idempotent'"
+  "line_has \"\$(cat '$_PFO')\" '^ +[0-9]+s ' '$_pf_cut'"
 
 section "== a busy Mac does not turn a timing check red (#149) =="
 # Eight full runs on 2026-08-21, while Lightroom, Xcode and Backblaze had this Mac at load 38 to
@@ -18655,10 +18738,12 @@ check "#1854 status reads the same record and says the same length" \
   "line_has \"\$out_54s\" 'watcher hold' '1 hour 30 minutes' 'building the nudge skill'"
 
 # A second, SHORTER hold must not cut the first one short: that is a hold somebody was promised
-# being lifted early by somebody else, with nothing said to either of them.
+# being lifted early by somebody else, with nothing said to either of them. Under the same label,
+# because that is the same hold (#2452); a hold under another label is a second hold beside it,
+# which the #2452 section tests.
 until_54a="$(awk 'NR==1{print $1}' "$H54_HOLD" 2>/dev/null)"
 out_54k=""; rc_54k=0
-out_54k="$(h54_env bash "$SCRIPT" hold 5 "a quick commit" 2>&1)" || rc_54k=$?
+out_54k="$(h54_env bash "$SCRIPT" hold 5 "building the nudge skill" 2>&1)" || rc_54k=$?
 dbg "#1854 shorter hold over a longer one: rc=$rc_54k $out_54k"
 check "#1854 a shorter hold over a longer one succeeds" "[ '$rc_54k' = 0 ]"
 check "#1854 and keeps the longer hold's expiry" "[ \"\$(awk 'NR==1{print \$1}' '$H54_HOLD')\" = '$until_54a' ]"
@@ -18956,6 +19041,197 @@ dbg "#1886 status with no reader: $out_63s"
 check "#1886 status with the reader missing still says the watcher is held" "line_has \"\$out_63s\" 'watcher hold' 'hold-record.sh'"
 check "#1886 and clears nothing, the expired line included" "cmp -s '$H63_HOLD' '$H63/hold-before-no-reader'"
 rm -f "$H63_HOLD" "$H63/hold-before-no-reader"
+
+
+section "== a hold is named by its session AND its label, and release frees only the one its caller took (#2452) =="
+# #1863 gave each SESSION one hold, but every subagent a session dispatches carries that session's
+# id. On 2026-11-07 three builders from one session each took `hold 60 "build #N"`: each hold
+# replaced the last, and each builder's plain release lifted the hold a sibling was still working
+# under. Now a hold is one line per session AND label, a second hold with a new label is counted
+# beside the first, release "<label>" lifts only that one, and a plain release that would have to
+# pick between several refuses, naming each with its end and the command that lifts it.
+H52="$WORK/h2452"; mkdir -p "$H52/home/hooks"
+echo '{"hooks":{}}' > "$H52/home/settings.json"
+printf '# rules before any hold\n' > "$H52/home/CLAUDE.md"
+git init -q --bare "$H52/bare.git"; git clone -q "$H52/bare.git" "$H52/repo" 2>/dev/null
+H52_HOLD="$H52/hold-marker"
+H52_S="ssssssss-1111-4111-8111-111111111111"
+H52_T="tttttttt-2222-4222-8222-222222222222"
+h52_env(){ CLAUDE_HOME="$H52/home" SYNC_REPO="$H52/repo" SYNC_HOLD_FILE="$H52_HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+h52_s(){ h52_env CLAUDE_CODE_SESSION_ID="$H52_S" "$@"; }
+h52_t(){ h52_env CLAUDE_CODE_SESSION_ID="$H52_T" "$@"; }
+h52_commits(){ git -C "$H52/repo" rev-list --count HEAD 2>/dev/null || echo 0; }
+h52_lines(){ grep -c -- "$1" "$H52_HOLD" 2>/dev/null || true; }
+
+# TWO BUILDERS OF ONE SESSION, each with its own label: both holds are kept.
+out_52a=""; rc_52a=0
+out_52a="$(h52_s bash "$SCRIPT" hold 60 "build #2442" 2>&1)" || rc_52a=$?
+out_52b=""; rc_52b=0
+out_52b="$(h52_s bash "$SCRIPT" hold 30 "build #2445" 2>&1)" || rc_52b=$?
+dbg "#2452 first builder holds: rc=$rc_52a $out_52a"
+dbg "#2452 second builder holds: rc=$rc_52b $out_52b"
+check "#2452 a second hold from the same session with another label is taken, not kept under the first" \
+  "[ '$rc_52b' = 0 ] && line_has \"\$out_52b\" 'held off for 30 minutes' 'build #2445'"
+check "#2452 and the record holds both, each under the session" \
+  "grep -q 'session=$H52_S build #2442\$' '$H52_HOLD' && grep -q 'session=$H52_S build #2445\$' '$H52_HOLD'"
+check "#2452 and the second builder is told the first hold is also in force" "line_has \"\$out_52b\" 'also held' 'build #2442'"
+check "#2452 and is told to lift its own by its label, since a plain release would have to choose" \
+  "line_has \"\$out_52b\" 'held off' 'claude-sync release \"build #2445\"'"
+# The same label again is the same hold: lengthened in place, never a second line.
+h52_s bash "$SCRIPT" hold 45 "build #2445" >/dev/null 2>&1 || true
+check "#2452 the same label held again replaces its own line rather than adding one" "[ \"\$(h52_lines 'build #2445')\" = 1 ]"
+# A label holding a backslash compares equal to itself read back: awk -v would read the backslash
+# as an escape, so the hold failed its own read back and the same label held again added a line.
+out_52bs=""; rc_52bs=0
+out_52bs="$(h52_s bash "$SCRIPT" hold 10 'edits C:\temp' 2>&1)" || rc_52bs=$?
+h52_s bash "$SCRIPT" hold 20 'edits C:\temp' >/dev/null 2>&1 || true
+dbg "#2452 backslash label: rc=$rc_52bs $out_52bs"
+check "#2452 a label with a backslash is taken and read back" "[ '$rc_52bs' = 0 ] && line_has \"\$out_52bs\" 'held off for 10 minutes' 'temp'"
+check "#2452 and held again under the same label stays one line" "[ \"\$(grep -c -F 'edits C:\\temp' '$H52_HOLD')\" = 1 ]"
+h52_s bash "$SCRIPT" release 'edits C:\temp' >/dev/null 2>&1 || true
+check "#2452 and release by that label lifts it" "! grep -q -F 'edits C:' '$H52_HOLD'"
+out_52st="$(h52_s bash "$SCRIPT" status 2>&1 || true)"
+check "#2452 status names each of the session's holds with the label that lifts it" \
+  "line_has \"\$out_52st\" 'watcher hold' 'release \"build #2442\"' && line_has \"\$out_52st\" 'watcher hold' 'release \"build #2445\"'"
+
+# A PLAIN RELEASE that would have to pick between them refuses and lifts nothing.
+out_52p=""; rc_52p=0
+out_52p="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52p=$?
+dbg "#2452 plain release among two of the session's holds: rc=$rc_52p $out_52p"
+check "#2452 a plain release among two of the session's own holds fails" "[ '$rc_52p' != 0 ]"
+check "#2452 and lifts neither" "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 1 ]"
+check "#2452 and names each hold, when it ends, and the label that lifts it" \
+  "line_has \"\$out_52p\" 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release \"build #2442\"' && line_has \"\$out_52p\" 'build #2445' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release \"build #2445\"'"
+check "#2452 and says how to lift them all at once" "line_has \"\$out_52p\" 'release --force' 'every'"
+check "#2452 and never says it released anything" "case \"\$out_52p\" in *'hold released'*) false ;; *) true ;; esac"
+
+# The watcher stays held while both are in force.
+printf '# rules edited under two holds\n' > "$H52/home/CLAUDE.md"
+c52_before="$(h52_commits)"
+h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#2452 the watcher sends nothing while the session's two holds are in force" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+
+# A LABEL NOBODY HOLDS lifts nothing and names what is in force, with its end.
+out_52n=""; rc_52n=0
+out_52n="$(h52_s bash "$SCRIPT" release "build #9999" 2>&1)" || rc_52n=$?
+dbg "#2452 release of a label nobody holds: rc=$rc_52n $out_52n"
+check "#2452 release naming a label nobody holds lifts nothing" \
+  "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 1 ]"
+check "#2452 and says so, naming the holds in force and when each ends" \
+  "line_has \"\$out_52n\" 'nothing was released' 'build #9999' && line_has \"\$out_52n\" 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET'"
+# A mistyped or already lifted label is a failure, never a success: a builder reading the exit code
+# would otherwise believe its hold gone while it stays in force (L98), as --other with a missing
+# label already does.
+check "#2452 and exits non-zero, saying this session holds no hold by that label" \
+  "[ '$rc_52n' != 0 ] && line_has \"\$out_52n\" 'this session holds no watcher hold labelled' 'build #9999'"
+check "#2452 and names the holds this session does hold, with the command that lifts each" \
+  "line_has \"\$out_52n\" 'build #2445' 'release \"build #2445\"'"
+
+# THE MATCHING LABEL lifts that hold only.
+out_52r=""; rc_52r=0
+out_52r="$(h52_s bash "$SCRIPT" release "build #2445" 2>&1)" || rc_52r=$?
+dbg "#2452 release by label: rc=$rc_52r $out_52r"
+check "#2452 release by its label lifts that hold, naming it" "[ '$rc_52r' = 0 ] && line_has \"\$out_52r\" 'released' 'build #2445'"
+check "#2452 and leaves the sibling's hold in the record" "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 0 ]"
+check "#2452 and says the watcher is still held by it, until when" "line_has \"\$out_52r\" 'still held' 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET'"
+check "#2452 and never says the next edit sends" "case \"\$out_52r\" in *'sends normally'*) false ;; *) true ;; esac"
+c52_before="$(h52_commits)"
+h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#2452 and the watcher still sends nothing" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+
+# ANOTHER SESSION'S LABEL is not the caller's to lift, even named.
+h52_t bash "$SCRIPT" hold 20 "T works on a skill" >/dev/null 2>&1 || true
+out_52o=""; rc_52o=0
+out_52o="$(h52_s bash "$SCRIPT" release "T works on a skill" 2>&1)" || rc_52o=$?
+dbg "#2452 release of another session's label: rc=$rc_52o $out_52o"
+check "#2452 release naming another session's label leaves that hold in place" "[ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+check "#2452 and says whose it is, until when, and how to lift it" \
+  "line_has \"\$out_52o\" 'session tttttttt' 'T works on a skill' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release --other tttttttt'"
+check "#2452 and exits non-zero, since this session holds nothing by that label" "[ '$rc_52o' != 0 ]"
+# A session holding nothing at all says so, and still names whose holds are in force.
+out_52u=""; rc_52u=0
+out_52u="$(h52_env CLAUDE_CODE_SESSION_ID=uuuuuuuu-3333-4333-8333-333333333333 bash "$SCRIPT" release "build #2442" 2>&1)" || rc_52u=$?
+dbg "#2452 release by a session holding nothing: rc=$rc_52u $out_52u"
+check "#2452 a labelled release from a session holding nothing fails, lifts nothing, and says it holds none" \
+  "[ '$rc_52u' != 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ] && line_has \"\$out_52u\" 'this session holds no watcher hold' 'at all'"
+check "#2452 and names the hold by that label as another session's, with how to lift it" \
+  "line_has \"\$out_52u\" 'session ssssssss' 'build #2442' 'release --other ssssssss'"
+
+# RELEASE --OTHER on a session holding two refuses until the label is named.
+h52_t bash "$SCRIPT" hold 20 "T second job" >/dev/null 2>&1 || true
+out_52q=""; rc_52q=0
+out_52q="$(h52_s bash "$SCRIPT" release --other tttttttt 2>&1)" || rc_52q=$?
+dbg "#2452 --other on a session with two holds: rc=$rc_52q $out_52q"
+check "#2452 release --other on a session holding two fails and lifts neither" \
+  "[ '$rc_52q' != 0 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ] && [ \"\$(h52_lines 'T second job')\" = 1 ]"
+check "#2452 and names each with the command that lifts it" \
+  "line_has \"\$out_52q\" 'T second job' 'release --other tttttttt \"T second job\"'"
+out_52ql=""; rc_52ql=0
+out_52ql="$(h52_s bash "$SCRIPT" release --other tttttttt "T second job" 2>&1)" || rc_52ql=$?
+check "#2452 and release --other with the label lifts only that one" \
+  "[ '$rc_52ql' = 0 ] && [ \"\$(h52_lines 'T second job')\" = 0 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+
+# A PERSON AT THE KEYBOARD (no session id): a plain release leaves the sessions' holds, naming them,
+# and --force lifts every hold, naming each one it lifted.
+out_52k=""; rc_52k=0
+out_52k="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release 2>&1)" || rc_52k=$?
+dbg "#2452 terminal plain release: rc=$rc_52k $out_52k"
+check "#2452 a terminal's plain release leaves every session's hold in place" \
+  "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+check "#2452 and names each, with --force as the way to lift them all" \
+  "line_has \"\$out_52k\" 'nothing was released' 'build #2442' 'until' && line_has \"\$out_52k\" 'every hold' 'release --force'"
+out_52x=""; rc_52x=0
+out_52x="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release --force extra 2>&1)" || rc_52x=$?
+check "#2452 release --force with anything after it refuses and lifts nothing" \
+  "[ '$rc_52x' != 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ]"
+out_52f=""; rc_52f=0
+out_52f="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release --force 2>&1)" || rc_52f=$?
+dbg "#2452 terminal release --force: rc=$rc_52f $out_52f"
+check "#2452 release --force lifts every hold in force" "[ '$rc_52f' = 0 ] && [ ! -e '$H52_HOLD' ]"
+check "#2452 and names each one it lifted" \
+  "line_has \"\$out_52f\" 'released' 'build #2442' && line_has \"\$out_52f\" 'released' 'T works on a skill'"
+
+# ONE OF THE SESSION'S HOLDS EXPIRES: only that one is cleared, and the watcher stays held.
+{
+  printf '%s %s %s session=%s build #2442\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" "$H52_S"
+  printf '%s %s %s session=%s build #2445\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H52_S"
+} > "$H52_HOLD"
+printf '# rules edited while a sibling hold expired\n' > "$H52/home/CLAUDE.md"
+c52_before="$(h52_commits)"
+out_52e="$(h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#2452 one of the session's holds expired: $out_52e"
+check "#2452 an expired hold beside a live one of the same session is cleared alone" \
+  "[ \"\$(h52_lines 'build #2445')\" = 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ]"
+check "#2452 and the watcher stays held by the live one" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+# With one hold of its own left, a plain release lifts it as before.
+out_52l=""; rc_52l=0
+out_52l="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52l=$?
+check "#2452 a plain release with one hold of the session's own lifts it" \
+  "[ '$rc_52l' = 0 ] && [ ! -e '$H52_HOLD' ] && line_has \"\$out_52l\" 'released' 'build #2442'"
+# Releasing that label AGAIN, with no record left at all, is the already lifted case: it fails and
+# says so, while a plain release with nothing held stays a quiet success.
+out_52a2=""; rc_52a2=0
+out_52a2="$(h52_s bash "$SCRIPT" release "build #2442" 2>&1)" || rc_52a2=$?
+dbg "#2452 labelled release with no record: rc=$rc_52a2 $out_52a2"
+check "#2452 a labelled release with no hold in force at all exits non-zero and says so" \
+  "[ '$rc_52a2' != 0 ] && line_has \"\$out_52a2\" 'this session holds no watcher hold labelled' 'build #2442'"
+out_52p2=""; rc_52p2=0
+out_52p2="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52p2=$?
+check "#2452 and a plain release with nothing held still succeeds, saying nothing was released" \
+  "[ '$rc_52p2' = 0 ] && line_has \"\$out_52p2\" 'No watcher hold' 'nothing was released'"
+# A label beginning with a dash is told to be lifted after --, and release takes it there, rather
+# than refusing it as an unknown option so that only --force could lift it.
+h52_s bash "$SCRIPT" hold 20 "-fix" >/dev/null 2>&1 || true
+h52_s bash "$SCRIPT" hold 20 "build #2460" >/dev/null 2>&1 || true
+out_52d=""; rc_52d=0
+out_52d="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52d=$?
+check "#2452 a label beginning with a dash is named with -- before it" "line_has \"\$out_52d\" '-fix' 'release -- \"-fix\"'"
+out_52dl=""; rc_52dl=0
+out_52dl="$(h52_s bash "$SCRIPT" release -- "-fix" 2>&1)" || rc_52dl=$?
+dbg "#2452 release -- -fix: rc=$rc_52dl $out_52dl"
+check "#2452 and release -- lifts it, and only it" \
+  "[ '$rc_52dl' = 0 ] && [ \"\$(h52_lines '-fix')\" = 0 ] && [ \"\$(h52_lines 'build #2460')\" = 1 ]"
+rm -f "$H52_HOLD"
 
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
@@ -19660,7 +19936,8 @@ CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash 
 # The stale checkout: a second clone taken now, then left behind while A publishes more.
 CKDEV="$WORK/checkout-dev"; git clone -q "$CKB" "$CKDEV" 2>/dev/null
 printf '# rules again\n' > "$CKHA/CLAUDE.md"
-CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+# A's later publishes land through fixture_land, not sends of its own (claude-config#2460).
+fixture_land "$CKA" CLAUDE.md "$CKHA/CLAUDE.md"
 CKB2="$WORK/checkout-B"; git clone -q "$CKB" "$CKB2" 2>/dev/null
 CKHB="$WORK/checkout-homeB"; mkdir -p "$CKHB"
 echo '{"hooks":{}}' > "$CKHB/settings.json"
@@ -19707,7 +19984,7 @@ check "#266 a clone that has gone is reported as unanswerable, not as up to date
 CKGONE="$WORK/checkout-dev-unreachable"; git clone -q "$CKB" "$CKGONE" 2>/dev/null
 git -C "$CKGONE" remote set-url origin "$WORK/no-such-bare.git"
 printf '# rules a third time\n' > "$CKHA/CLAUDE.md"
-CLAUDE_HOME="$CKHA" SYNC_REPO="$CKA" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" send >/dev/null 2>&1
+fixture_land "$CKA" CLAUDE.md "$CKHA/CLAUDE.md"
 CKREG3="$WORK/checkout-clones3"; printf '%s\n%s\n' "$CKB2" "$CKGONE" > "$CKREG3"
 out_375="$(CLAUDE_HOME="$CKHB" SYNC_REPO="$CKB2" SYNC_CLONE_REGISTRY="$CKREG3" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1 || true)"
 line_375="$(printf '%s\n' "$out_375" | sed -n "\|$CKGONE|p" | sed -n '/behind/p')"
@@ -20429,7 +20706,7 @@ CLAUDE_HOME="$SRHB" SYNC_REPO="$SRRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev
 # Mac A changes a RULE file, which is the class the notice exists for: a session already running
 # keeps the copy it loaded at startup and cannot see the new one.
 printf '# rtk\nsecond, changed on Mac A\n' > "$SRHA/RTK.md"
-CLAUDE_HOME="$SRHA" SYNC_REPO="$SRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$SRA" RTK.md "$SRHA/RTK.md"
 
 out_sr="$(CLAUDE_HOME="$SRHB" SYNC_REPO="$SRRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync 2>&1)"
 dbg "#283 the receiving sync said: $out_sr"

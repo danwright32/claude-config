@@ -516,6 +516,14 @@ says "that refusal says the gate could not check whether it posts" "could not ch
 case "$ERR" in *"REFUSED: this command posts to Slack"*) check "that refusal does not claim the command posts" "stderr claimed a post: ${ERR:0:300}" ;; *) check "that refusal does not claim the command posts" ok ;; esac
 run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
 says "a script that really posts still gets the posts wording" "REFUSED: this command posts to Slack"
+# The wording is chosen by the cause, an import the gate gave up on, never by matching the words that
+# cause is put in (lessons review of #2389): a script that posts from a folder whose name holds those
+# words still gets the posts wording.
+mkdir -p "$T/so it cannot see what"
+printf '%s\n' 'await fetch("https://hooks.slack.com/services/T0/B0/x", { method: "POST" });' > "$T/so it cannot see what/post.mjs"
+run_bash "node '$T/so it cannot see what/post.mjs'"
+says "a script that posts from a folder named like the could not check wording gets the posts wording" \
+  "REFUSED: this command posts to Slack"
 run_bash "python3 $T/pp/app/run.py"
 refused "the PYTHONPATH script run without it, its import placed nowhere"
 # An export inside a script run in its own shell ends with that shell, so it must not place the
@@ -529,6 +537,86 @@ run_bash ". $T/pp/setexp.sh && python3 $T/pp/app/run.py"
 allowed "the same sourced with a dot"
 run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
 refused "inline Python importing a module placed nowhere"
+
+echo "slack drafts only: a sys.path entry handed to python through a shell variable is placed (claude-config#2449)"
+
+# tests/test-mods.sh runs `python3 - "$ROOT/tools/lib" <<'PY'` and imports ts_source after
+# sys.path.insert(0, sys.argv[1]), ROOT set at the top of the script. The #2358 gate could not place
+# that entry, so it refused the whole suite (exit 2, measured 2026-11-07). The same script, one tree
+# whose helper only saves a draft and one whose helper posts: each shape is allowed in the first and
+# refused in the second, so the placed module is judged, never assumed harmless.
+av_tree() { # av_tree <dir> <helper body file>: the tree's helper, and every script shape beside it
+  mkdir -p "$1/tests" "$1/tools/lib"
+  cp "$2" "$1/tools/lib/av_helper.py"
+  local top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+  printf '%s\n' '#!/bin/bash' "$top" 'fc="$(python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' \
+    'from av_helper import save' 'save("hi")' 'PY' ')"' > "$1/tests/stdin.sh"
+  printf '%s\n' '#!/bin/bash' "$top" \
+    "out=\"\$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import av_helper' \"\$DIR/../tools/lib\")\"" > "$1/tests/inline.sh"
+  printf '%s\n' '#!/bin/bash' 'python3 - "first" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/lib" <<'"'PY'" \
+    'import sys' 'sys.path.insert(0, sys.argv[2])' 'import av_helper' 'PY' > "$1/tests/subst.sh"
+  printf '%s\n' '#!/bin/bash' "$top" 'PYTHONPATH="$ROOT/tools/lib" python3 - <<'"'PY'" 'import av_helper' 'PY' > "$1/tests/pypath.sh"
+  printf '%s\n' '#!/bin/bash' "$top" 'export LIBDIR="$ROOT/tools/lib"' \
+    "python3 -c 'import os, sys; sys.path.insert(0, os.environ[\"LIBDIR\"]); import av_helper'" > "$1/tests/environ.sh"
+  # The guards the payload's suites open with, which either do not exit or end the script, and a
+  # NAME=value in front of one command, which sets it for that command alone.
+  printf '%s\n' '#!/bin/bash' 'if [ -z "${BASH_VERSION:-}" ]; then' '  echo "not bash" >&2' '  exit 2' 'fi' \
+    'true || { echo "no"; exit 1; }' 'true || exit $?' "$top" 'ROOT=/nowhere/2449 true' \
+    'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$1/tests/guard.sh"
+}
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)' > "$T/av_ok.py"
+printf '%s\n' 'import json, urllib.request' 'def save(text):' \
+  '    urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": text}).encode())' > "$T/av_posts.py"
+av_tree "$T/av/ok" "$T/av_ok.py"
+av_tree "$T/av/posts" "$T/av_posts.py"
+for shape in stdin inline subst pypath environ guard; do
+  run_bash "bash $T/av/ok/tests/$shape.sh"
+  allowed "a sys.path entry from a shell variable, at a helper that only saves a draft: tests/$shape.sh"
+  run_bash "bash $T/av/posts/tests/$shape.sh"
+  refused "the same entry at a helper that posts: tests/$shape.sh"
+done
+# Run as the session runs the suite: by a path relative to the command's directory.
+run_bash "cd $T/av/ok && bash tests/stdin.sh"
+allowed "the test-mods.sh shape run by its relative path"
+run_bash "cd $T/av/posts && bash tests/stdin.sh"
+says "the refusal names the placed helper that posts" "av_helper.py"
+
+# The controls: wherever the gate cannot be sure what the argument holds when python starts, the
+# entry is placed nowhere and the import is refused, as before.
+C="$T/av/ok/tests"
+printf '%s\n' '#!/bin/bash' 'python3 - "$NOT_SET_2449/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/unset.sh"
+# Set first to the tree whose helper posts, then, only when X is set, to this one: read in order, the
+# last assignment is this tree's, but python is handed the posting tree whenever X is unset.
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' "ROOT=\"$T/av/posts\"" \
+  'if [ -n "${X:-}" ]; then' '  ROOT="$(cd "$DIR/.." && pwd)"' 'fi' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/twice.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '[ -n "${X:-}" ] && ROOT="$(cd "$DIR/.." && pwd)"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/cond.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' \
+  "python3 - '\$ROOT/tools/lib' <<'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/quoted.sh"
+printf '%s\n' 'ROOT=/nowhere/2449' > "$T/av/ok/tools/rebind.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' '. "$ROOT/tools/rebind.sh"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/rebind.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' '. "$NOT_SET_2449/lib.sh"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/unsourced.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' \
+  'python3 - $NOT_SET_2449 "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[2])' 'import av_helper' 'PY' > "$C/split.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '( ROOT="$(cd "$DIR/.." && pwd)" )' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/subshell.sh"
+# Set only inside a guard that then exits, so whenever python runs, the guard did not and ROOT is empty.
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'if [ -z "${X:-}" ]; then' \
+  '  ROOT="$(cd "$DIR/.." && pwd)"' '  exit 0' 'fi' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/inguard.sh"
+for why in "unset:a variable the script never sets" "twice:a variable set again inside an if" \
+  "inguard:a variable set only inside a guard that exits" \
+  "cond:a variable set only when an && runs" "quoted:the variable in single quotes, which python gets as written" \
+  "rebind:a variable a sourced file sets again" "unsourced:a sourced file the gate cannot find" \
+  "split:an unquoted unknown word before the argument, which can split into any number" \
+  "subshell:a variable set only inside a subshell"; do
+  run_bash "bash $C/${why%%:*}.sh"
+  refused "an entry the gate cannot be sure of is placed nowhere and refused: ${why#*:}"
+done
 
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
@@ -641,6 +729,85 @@ printf '%s\n' 'import json, re, sys' 'from os import path' 'from typing import A
 for reads in "show.py msg.json" "rx.py msg.json"; do
   run_bash "cd $T/dv && python3 $reads"
   allowed "a Python script importing only modules that cannot act, handed a data file naming the endpoint: $reads"
+done
+# JavaScript and shell scripts are judged the same way (claude-config#2434). A hand list of what can
+# act (JS_ACTS, SENDERS) missed a node script using the request package, worker_threads or dns, one
+# writing a file or reaching Function through a constructor, and a shell script handing its argument
+# to a program off the list, so each data file was read as data although the script could post it.
+mkdir -p "$T/dj"
+cp "$T/ds/msg.json" "$T/dj/msg.json"
+J='const m = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));'
+printf '%s\n' 'const request = require("request");' "$J" 'request.post(m.url, { body: m.text });' > "$T/dj/req.js"
+printf '%s\n' 'import { Worker as W } from "node:worker_threads";' 'import { readFileSync } from "node:fs";' \
+  'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'new W(m.text, { eval: true });' > "$T/dj/worker.mjs"
+printf '%s\n' 'const dns = require("dns");' "$J" 'dns.resolveTxt(m.text + "." + m.url, () => {});' > "$T/dj/dns.js"
+printf '%s\n' "$J" 'require("fs").writeFileSync("/tmp/x.sh", "curl " + m.url);' > "$T/dj/writes.js"
+printf '%s\n' "$J" '(() => {}).constructor(m.text)();' > "$T/dj/ctor.js"
+printf '%s\n' 'const request = require("request");' 'module.exports = (u) => request.post(u);' > "$T/dj/lib-req.js"
+printf '%s\n' 'const send = require("./lib-req.js");' "$J" 'send(m.url);' > "$T/dj/via.js"
+printf '%s\n' "$J" 'require(m.text);' > "$T/dj/dyn.js"
+# A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
+# 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
+printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
+printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
+  'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
+for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
+  "ctor.js:constructor" "via.js:request" "dyn.js:require" "words.js:(got)"; do
+  run_bash "cd $T/dj && node ${acts%%:*} msg.json"
+  refused "a JavaScript script that can act on what it is handed, handed a data file naming the endpoint: ${acts%%:*}"
+  says "that refusal names what lets ${acts%%:*} act" "${acts#*:}"
+done
+# The controls: a script importing only modules that cannot act (fs read, path, a local helper that
+# imports nothing), with an import of a package shown only in a comment, still has its data read as
+# data, as does titles.js above.
+printf '%s\n' 'export const fmt = (s) => `[${s}]`;' > "$T/dj/fmt.mjs"
+printf '%s\n' '// const request = require("request"); was the old way' 'import { readFileSync } from "node:fs";' \
+  'import path from "path";' 'import { fmt } from "./fmt.mjs";' 'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' \
+  'process.stdout.write(fmt(path.basename(process.argv[2]) + " " + m.text) + "\n");' > "$T/dj/show.mjs"
+run_bash "cd $T/dj && node show.mjs msg.json"
+allowed "a JavaScript script importing only modules that cannot act, handed a data file naming the endpoint"
+# A function of the script's own named like an fs method (repo-digest's format.ts has a link()) is not
+# fs's when the script imports no fs.
+printf '%s\n' 'const link = (u, t) => `<${u}|${t}>`;' 'process.stdin.on("data", (b) => console.log(link(process.argv[2], String(b))));' \
+  > "$T/dj/fmt-link.js"
+run_bash "cd $T/dj && node fmt-link.js msg.json"
+allowed "a script calling its own link(), importing no fs, handed a data file naming the endpoint"
+cp "$T/ds/titles.js" "$T/dj/titles.js"
+cp "$T/ds/post.mjs" "$T/dj/sender.js"
+printf '%s\n' '#!/bin/bash' 'msg="$1"' 'gh api -X POST /repos/x/y/dispatches --input "$msg"' > "$T/dj/gh.sh"
+printf '%s\n' '#!/bin/bash' 'nc slack.com 443 < "$1"' > "$T/dj/nc.sh"
+printf '%s\n' '#!/bin/bash' 'node ./sender.js "$1"' > "$T/dj/hand-js.sh"
+printf '%s\n' '#!/bin/bash' 'python3 "$HOME/send.py" "$@"' > "$T/dj/hand-py.sh"
+# awk, find and git are judged by how they are called: awk by whether its program can run a command,
+# find by -exec, git by its subcommand and options. And a line continued inside $(...) is read from
+# its first real word, so the curl after it is seen.
+printf '%s\n' '#!/bin/bash' 'awk '"'"'{ system("curl -d @- " $0) }'"'"' "$1"' > "$T/dj/awk.sh"
+printf '%s\n' '#!/bin/bash' 'find "$(dirname "$1")" -name "*.json" -exec sh {} \;' > "$T/dj/find.sh"
+printf '%s\n' '#!/bin/bash' 'git -c core.pager=sh log --format=%s -- "$1"' > "$T/dj/git.sh"
+printf '%s\n' '#!/bin/bash' 'out="$(printf "%s" "$1" | \' '  curl -s -d @- https://example.com/x)"' > "$T/dj/cont.sh"
+printf '%s\n' '#!/bin/bash' 'while read -r line; do eval "$line"; done < "$1"' > "$T/dj/loop.sh"
+# A local script named like a tool on SH_INERT is a script of its own, judged by what it does
+# (lessons review at 340575e).
+mkdir -p "$T/dj/bin"
+printf '%s\n' '#!/bin/bash' 'curl -s -d @"$1" "$(jq -r .url "$1")"' > "$T/dj/bin/grep"
+chmod +x "$T/dj/bin/grep"
+printf '%s\n' '#!/bin/bash' 'bin/grep -c chat "$1"' > "$T/dj/local-grep.sh"
+for acts in "gh.sh:(gh)" "nc.sh:(nc)" "hand-js.sh:sender.js" "hand-py.sh:send.py" "awk.sh:(awk)" "find.sh:(find)" \
+  "git.sh:(git)" "cont.sh:(curl)" "loop.sh:loop" "local-grep.sh:bin/grep"; do
+  run_bash "cd $T/dj && bash ${acts%%:*} msg.json"
+  refused "a shell script handing its argument to a program that can act, handed a data file naming the endpoint: ${acts%%:*}"
+  says "that refusal names the program ${acts%%:*} hands it to" "${acts#*:}"
+done
+# The controls: a shell script handing its argument only to programs that cannot act, to a function
+# it defines, or to a script the gate reads and sees cannot act, still has its data read as data.
+printf '%s\n' '#!/bin/bash' 'f="$1"' 'grep -c chat "$f"' 'jq -r .text "$f" | head -1' 'wc -l < "$f"' \
+  'show() { cat "$1"; }' 'show "$f"' '[ -s "$f" ] && echo "$(basename "$f")"' \
+  'awk -F, '"'"'NR > 1 || $1 == "x" { print $1 }'"'"' "$f"' 'find "$(dirname "$f")" -name "*.json" -newer "$f"' \
+  'git -C "$(dirname "$f")" rev-parse --show-toplevel' '/usr/bin/grep -c chat "$f"' > "$T/dj/reads.sh"
+printf '%s\n' '#!/bin/bash' 'node ./titles.js "$1"' > "$T/dj/hand-reader.sh"
+for reads in "reads.sh" "hand-reader.sh"; do
+  run_bash "cd $T/dj && bash $reads msg.json"
+  allowed "a shell script handing its argument only to what cannot act, handed a data file naming the endpoint: $reads"
 done
 printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
 printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
