@@ -6,13 +6,14 @@ import type { IsItLiveThread } from '../types/index.d.ts'
 // every time". Seen that day: a session began from Dan's thread with Geoff's answers, merged seven
 // pull requests built from them, and saved no reply until Dan asked. Answering the issue's open
 // question the same day, Dan chose one draft after the session's LAST merge from the thread, not one
-// after each. A turn end cannot know a merge is the last, so register.ts holds it when a merge has
+// after each. A turn end cannot know a merge is the last, so drafts.ts holds it when a merge has
 // landed since the thread's last draft and no merge of the session is still in flight.
 //
 // The mod never calls a Slack tool and never sends anything (payload/CLAUDE.md, "Slack: drafts only"):
 // it tells the session to write the reply, run /no-ai-tells, show Dan, and save it with
 // slack_send_message_draft, or lets Dan skip it in a picker whose answers this mod words. Pure:
-// register.ts reads the prompt, the tool calls and the turn end, and keeps what this decides.
+// drafts.ts reads the prompt, the tool calls and the turn end (register.ts's Stop hook calls its
+// draftHold), and keeps what this decides.
 
 export type SlackThread = { channel: string; ts: string; link?: string }
 
