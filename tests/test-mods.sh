@@ -585,6 +585,32 @@ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep 'orphan could not be type checked' | grep -q 'elsewhere' \
   && check "a dependency the folder does not hold fails the mod, naming it" ok \
   || check "a dependency the folder does not hold fails the mod, naming it" "exit=$code out=$out"
+# A run leaves the checkout it read exactly as it found it, passing or failing, including when the
+# folder handed to it holds links to mods rather than the mods (#2417): copied as a link, the scratch
+# copy WAS the mod, so its types, tsconfig and dependency contracts were laid into the checkout as an
+# untracked .claude-plugin/types/ that an unscoped stage would commit.
+M4L="$TMPROOT/m4l-repo"; mkmod "$M4L" fine; mkmod "$M4L" illtyped; mkmod "$M4L" leaning
+printf '{ "name": "leaning", "version": "0.1.0", "description": "x", "dependencies": ["fine"] }\n' > "$M4L/leaning/.claude-plugin/plugin.json"
+printf '{ "name": "fine", "version": "0.1.0", "description": "x", "types": "./types/index.d.ts" }\n' > "$M4L/fine/.claude-plugin/plugin.json"
+mkdir -p "$M4L/fine/types"; printf 'export type F = 1\n' > "$M4L/fine/types/index.d.ts"
+git -C "$M4L" init -q && git -C "$M4L" add -A && git -C "$M4L" -c user.name=t -c user.email=t@t commit -q -m fixture
+m4l_before="$(git -C "$M4L" status --porcelain --untracked-files=all 2>&1)"
+m4l_left(){ local now; now="$(git -C "$M4L" status --porcelain --untracked-files=all 2>&1)"; [ "$now" = "$m4l_before" ] && echo ok || echo "git status was '$m4l_before' and is now '$now'"; }
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4L" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2417: a failing run straight over the checkout fails" ok || check "#2417: a failing run straight over the checkout fails" "exit=$code out=$out"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
+M4LV="$TMPROOT/m4l-links"; mkdir -p "$M4LV"
+ln -s "$M4L/fine" "$M4LV/fine"; ln -s "$M4L/leaning" "$M4LV/leaning"
+: > "$TSC_LOG"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4LV" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && grep -qxF 'TYPES leaning: "claude-code","claude-code-tools","claude-code-mcp","fine"' "$TSC_LOG" \
+  && check "#2417: a passing run over links to mods type checks them, dependency included" ok \
+  || check "#2417: a passing run over links to mods type checks them, dependency included" "exit=$code out=$out $(cat "$TSC_LOG")"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
+ln -s "$M4L/illtyped" "$M4LV/illtyped"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" bash "$CHECK" "$M4LV" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2417: a failing run over links to mods fails" ok || check "#2417: a failing run over links to mods fails" "exit=$code out=$out"
+check "#2417: and leaves git status as it found it" "$(m4l_left)"
 # The pinned types missing a file: no mod can be checked, and that is a fault in the checkout.
 TSX="$TMPROOT/ts-broken"; pin "$TSX" 2.1.291; rm -f "$TSX/claude-code-types/claude-code-tools/index.d.ts"
 out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSX" bash "$CHECK" "$M4G" 2>&1)"; code=$?
