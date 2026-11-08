@@ -374,7 +374,9 @@ EOF
   chmod +x "$1/payload/hooks/test-$2.sh"
 }
 LOCKSTATE="$TMPROOT/lockstate"
-lockfire(){ SCANNERS_STATE_DIR="$LOCKSTATE" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=6 SCANNERS_LOCK_POLL_SECONDS=2 fire "$@"; }
+# The injected sleep is honoured only under the test marker (claude-config#2399), so the cases that
+# use it set the marker themselves rather than leaning on the export at the top.
+lockfire(){ HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$LOCKSTATE" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=6 SCANNERS_LOCK_POLL_SECONDS=2 fire "$@"; }
 
 R30="$(mkrepo lockheld)"; add_scanner "$R30" alpha 0; add_locked_scanner "$R30" sigma 99 0; commit_all "$R30"
 o30="$(lockfire "$R30" "git push")"; c30=$?
@@ -434,7 +436,7 @@ EOF
   chmod +x "$1/payload/hooks/test-$2.sh"
 }
 R2033="$(mkrepo lockbudget)"; add_scanner "$R2033" alpha 0; add_slow_locked_scanner "$R2033" phi; commit_all "$R2033"
-o2033="$(SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
+o2033="$(HOOK_TESTS_RUNNING=1 SCANNERS_STATE_DIR="$TMPROOT/lockbudget-state" SCANNERS_SLEEP=true SCANNERS_LOCK_WAIT_SECONDS=60 SCANNERS_LOCK_POLL_SECONDS=2 SCANNERS_BUDGET_SECONDS=2 fire "$R2033" "git push")"; c2033=$?
 [ "$c2033" -eq 2 ] \
   && check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" ok \
   || check "#2033 a scanner still waiting its turn on the lock when the budget runs out blocks the push" "exit=$c2033 out=$o2033"
@@ -447,6 +449,39 @@ grep -q 'did not finish in' <<< "$o2033" \
 grep -q 'process 4242' <<< "$o2033" \
   && check "#2033 and names the run holding the lock, from the refusal before the retry" ok \
   || check "#2033 and names the run holding the lock, from the refusal before the retry" "out=$o2033"
+
+# The lock wait's sleep names a command the gate runs, so it is honoured only under the test marker
+# (claude-config#2399, the class #2317 closed for the gate settings): outside a test run the sleep
+# on the PATH runs, whatever SCANNERS_SLEEP says. A sleep put first on the PATH records its seconds
+# and returns at once, and the setting names a decoy that does the same, so neither waits for real
+# (L524). The scanner refuses on the lock once and then passes, so the gate sleeps exactly once.
+SLEEPBIN="$TMPROOT/sleepbin"; mkdir -p "$SLEEPBIN"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "%s"\n' "$TMPROOT/path-sleeps" > "$SLEEPBIN/sleep"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "%s"\n' "$TMPROOT/decoy-sleeps" > "$TMPROOT/decoy-sleep"
+chmod +x "$SLEEPBIN/sleep" "$TMPROOT/decoy-sleep"
+sleep_case(){   # $1 = the marker  $2 = its label
+  rm -f "$TMPROOT/path-sleeps" "$TMPROOT/decoy-sleeps"
+  local r; r="$(mkrepo "locksleep$2")"; add_locked_scanner "$r" "chi$2" 1 0; commit_all "$r"
+  o2399="$(HOOK_TESTS_RUNNING="$1" PATH="$SLEEPBIN:$PATH" SCANNERS_STATE_DIR="$TMPROOT/locksleep-state$2" \
+           SCANNERS_SLEEP="$TMPROOT/decoy-sleep" SCANNERS_LOCK_WAIT_SECONDS=6 SCANNERS_LOCK_POLL_SECONDS=2 fire "$r" "git push")"; c2399=$?
+}
+for m in unset 0; do
+  [ "$m" = unset ] && sleep_case "" "$m" || sleep_case "$m" "$m"
+  [ "$c2399" -eq 0 ] \
+    && check "#2399 outside a test run (marker $m) a scanner whose lock frees still runs and the push goes" ok \
+    || check "#2399 outside a test run (marker $m) a scanner whose lock frees still runs and the push goes" "exit=$c2399 out=$o2399"
+  [ ! -s "$TMPROOT/decoy-sleeps" ] \
+    && check "#2399 outside a test run (marker $m) the sleep named in SCANNERS_SLEEP is never run" ok \
+    || check "#2399 outside a test run (marker $m) the sleep named in SCANNERS_SLEEP is never run" "it ran for $(tr '\n' ' ' < "$TMPROOT/decoy-sleeps")"
+  [ "$(cat "$TMPROOT/path-sleeps" 2>/dev/null)" = "2" ] \
+    && check "#2399 outside a test run (marker $m) the sleep on the PATH waits the poll" ok \
+    || check "#2399 outside a test run (marker $m) the sleep on the PATH waits the poll" "path sleeps: $(cat "$TMPROOT/path-sleeps" 2>/dev/null)"
+done
+# Control: under the marker the setting is the test's own, so the seam every case above uses works.
+sleep_case 1 marked
+[ "$c2399" -eq 0 ] && [ "$(cat "$TMPROOT/decoy-sleeps" 2>/dev/null)" = "2" ] && [ ! -s "$TMPROOT/path-sleeps" ] \
+  && check "#2399 control: under the test marker the sleep named in SCANNERS_SLEEP is the one run" ok \
+  || check "#2399 control: under the test marker the sleep named in SCANNERS_SLEEP is the one run" "exit=$c2399 decoy=$(cat "$TMPROOT/decoy-sleeps" 2>/dev/null) path=$(cat "$TMPROOT/path-sleeps" 2>/dev/null) out=$o2399"
 
 # --- a scanner that RAN but could not read what it judges measured nothing, which is a fault in
 #     this gate's run and not a finding about the push (claude-config#1146). On 2026-10-13 the
@@ -1585,29 +1620,30 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
 # The case that failed on 2026-11-04 (#2206), made certain rather than left to the load: the held
 # scanner starts 3 seconds after the gate, later than the 2 second budget the case used to give.
 HELD_STARTS_LATE=3 nokey_case late pidlock 'lib/pid-lock.sh could not be loaded'
-# The early end is a setting for this suite, honoured only while the record of passes is a
-# throwaway, as it is in every case here and never for a real push (#2206, #2217). One push, the
-# same scanner (it starts late by the delay this case sets, then passes) and the file already there
-# with no floor, fired with a throwaway record and with the real one under a stand in home:
-# honoured, the budget ends at once and the push is refused; ignored, the scanner finishes inside
-# its budget and the push goes. The times are settings, not measured.
-EEHOME="$TMPROOT/earlyend-home"; mkdir -p "$EEHOME"
+# The early end is a setting for this suite, honoured only under the hooks' test marker,
+# HOOK_TESTS_RUNNING=1, which run-all-tests.sh exports to every suite and no real push carries
+# (#2206, #2231, the one marker the work names gates read too). One push, the same scanner (it
+# starts late by the delay this case sets, then passes) and the file already there with no floor,
+# fired with the marker (set by the case itself, never left to the runner's export, #2399) and
+# without it, each with a throwaway record of passes: honoured, the
+# budget ends at once and the push is refused; ignored, the scanner finishes inside its budget and
+# the push goes. The times are settings, not measured.
 REE="$(mkrepo earlyend)"; add_held_scanner "$REE" eta "$TMPROOT/earlyend-never-held" 0; commit_all "$REE"
 : > "$TMPROOT/earlyend-ready"
-oEE1="$(HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state" SCANNERS_BUDGET_SECONDS=20 \
+oEE1="$(HOOK_TESTS_RUNNING=1 HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state" SCANNERS_BUDGET_SECONDS=20 \
         SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE1=$?
 [ "$cEE1" -eq 2 ] && grep -q 'did not finish in' <<< "$oEE1" \
-  && check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" ok \
-  || check "#2206 with a throwaway record of passes, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
+  && check "#2206 under the test marker, the early end is honoured and the budget ends once its file exists" ok \
+  || check "#2206 under the test marker, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
 # The refused push left its run going, as a push with a key does; it is let finish, so the second
 # push's scanner is the only one running.
 hang_wait "ls '$TMPROOT/earlyend-state/runs/'*/*/rc >/dev/null 2>&1"
 : > "$TMPROOT/earlyend-ready"
-oEE2="$( unset SCANNERS_STATE_DIR; HOME="$EEHOME" HELD_STARTS_LATE=2 SCANNERS_BUDGET_SECONDS=20 \
+oEE2="$(HOOK_TESTS_RUNNING= HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state-unmarked" SCANNERS_BUDGET_SECONDS=20 \
          SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE2=$?
 [ "$cEE2" -eq 0 ] \
-  && check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" ok \
-  || check "#2206 with the real record of passes, the early end is ignored and the scanner gets its whole budget" "exit=$cEE2 out=$oEE2"
+  && check "#2231 outside a test run, the early end is ignored and the scanner gets its whole budget, whatever record of passes is named" ok \
+  || check "#2231 outside a test run, the early end is ignored and the scanner gets its whole budget, whatever record of passes is named" "exit=$cEE2 out=$oEE2"
 nokey_case listing listing 'repo-files.sh --changed'
 nokey_case pidlock pidlock 'lib/pid-lock.sh could not be loaded'
 nokey_case recorded recorded 'lib/recorded-pid.sh could not be loaded'

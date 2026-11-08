@@ -5699,6 +5699,27 @@ test('the wake check reads every repository the night notes named, private ones 
   expect(w.runs.filter(r => r[0] === 'stat')).toEqual([])
 })
 
+// #2393: the night's notes say which issues its sessions worked, and the wake check is handed them,
+// so a milestone moved only by closing one of them is not put to Dan; the same milestone moved with
+// no such note still is.
+for (const noted of [true, false])
+  test(`a milestone moved by closing an issue the night's notes ${noted ? 'name is left out' : 'do not name is reported'} (#2393)`, withDeps, async ($, on) => {
+    const notes = `${noted ? '{"v":1,"kind":"done","repo":"o/r","issue":7,"pr":20,"text":"Fixed"}' : '{"v":1,"kind":"finding","repo":"o/r","text":"Noticed"}'}\n`
+    const when = new Date(T0 - MIN).toISOString()
+    const { w, clock } = world(on, {
+      files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: notes },
+      night: {
+        'gh api repos/o/r/milestones?state=all&per_page=100': JSON.stringify([{ number: 2, title: 'Ungrouped', updated_at: when }]),
+        'gh api repos/o/r/issues/events?per_page=100&page=1': JSON.stringify([{ event: 'closed', created_at: when, actor: { login: 'dan' }, issue: { number: 7, milestone: { number: 2, title: 'Ungrouped' } } }]),
+        [`gh issue list -R o/r --state closed --search closed:>=${new Date(T0 - 5 * MIN).toISOString().replace(/\.\d{3}Z$/, 'Z')} --json number,closedByPullRequestsReferences --limit 100`]: JSON.stringify([{ number: 7, closedByPullRequestsReferences: [] }]),
+      },
+    })
+    await start($ as never, clock)
+    await command($ as never, 'wake')
+    const said = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string }).filter(n => n.kind === 'outward' && n.text.startsWith('Milestone touched overnight'))
+    expect(said.map(n => n.text)).toEqual(noted ? [] : ['Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #7 closed by dan'])
+  })
+
 test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {
   const { w, clock } = world(on, {
     ...worker,

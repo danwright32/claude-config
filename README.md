@@ -5712,8 +5712,8 @@ only the save it was drawn for; a second save waits behind the first. Each answe
 a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you
-should" or "you must"; never "it ran and never finished"), and not when it limits it ("for
-now", "today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
+should" or "you must"; never "it ran and never finished"), and not when it limits it ("for now",
+"today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
 refuses the write, and says why. It asks only after the settings hooks beneath it have decided, so a
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
@@ -6080,8 +6080,8 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 Per session modes, each leading the amber line in the band in bold through the status bar, all off
 when the session ends and none carried into a new one. Every phrase counts only as an instruction of
 its own (starting the message, a sentence, a line or a clause), never in passing and never in a
-question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for
-now", "just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
+question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for now",
+"just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
 notes, Claude's own memory and plan notes, read only SQL (whatever its strings say), GraphQL reads
 and GitHub issue, milestone and label work go ahead; edits outside the scratchpad, commits,
 branches, PRs, deploys and data changing SQL are refused with the grey card, the shell routes around
@@ -7162,7 +7162,10 @@ that session, and when sleep mode ends, by any route, the noon end included, eve
 held something is asked to deliver it where you are then, so every session reports at the same
 moment rather than one popping up minutes after `/sleep` (#1284). No sound, notification or end of turn review reaches you. At
 wake it checks GitHub and the disk for anything outward that happened anyway (issues created,
-milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report.
+milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report. A milestone
+moved only by the night's own work (issues its sessions' notes name, issues closed by pull requests
+they name, issues filed overnight) is left out; any other change to it is named, and when its issue
+events cannot be read it is said as not checked (#2393).
 
 **Which repositories may merge and deploy overnight** (your list, confirmed 2026-10-07, in each
 Mac's own `~/.claude/mods/sleep-repos.local.json` since #1568: it names work repositories, so it is
