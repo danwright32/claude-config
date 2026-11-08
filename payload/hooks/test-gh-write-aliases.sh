@@ -193,7 +193,8 @@ check "#2411 every other name of the issue and pr groups holds the word the chea
 # lib/ holds no shell-words bytecode, so one run of this suite failed that one in every later full run.
 # Measured with both loaders above pointed at a copy, never the real lib/, so a sibling run cannot race it.
 PYC="$WORK/pyc"; mkdir -p "$PYC"
-cp "$READER" "$PYC/shell-words.py"
+python3 "$HERE/lib/install-hook-libs.py" "$HERE/lib" "$PYC" shell-words.py \
+  || check "#2422 the reader installs into $PYC" false
 pyc_read="$(READER="$PYC/shell-words.py" read_gh gh pr new)"
 check "#2422 control: the copied reader ran, got '$pyc_read'" [ "$pyc_read" = "pr create" ]
 READER="$PYC/shell-words.py" groups_hold_word >/dev/null
