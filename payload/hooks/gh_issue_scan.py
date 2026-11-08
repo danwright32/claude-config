@@ -808,7 +808,9 @@ def stdin_feeds(command, kinds):
             while k < len(words) and (words[k] in HEAD_WORDS or ASSIGNMENT.match(words[k])):
                 k += 1
             found = gh_command(words[k:]) if k < len(words) else None
-            if found and tuple(found[:2]) in kinds:
+            # One that posts nothing (--help) is passed over, as scan_gh_in_context passes it over.
+            if found and tuple(found[:2]) in kinds and \
+                    not any(a in non_filing_flags(found[:2]) for a in list(found[2]) + list(found[3])):
                 files = [t for op, t in redirects if op == "<"]
                 strings = [t for op, t in redirects if op == "<<<"]
                 if heredocs:

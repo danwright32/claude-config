@@ -304,6 +304,13 @@ hook "gh release edit v1 $PUB --notes-file -"
 check "#2430 gh release edit's notes from standard input are refused too: $out" refused
 hook "bash -c 'cat clean.md | gh release create v1 $PUB --notes-file -'"
 check "#2430 notes on standard input inside a shell's string are refused: $out" refused
+hook "gh release create v1 $PUB --notes-file - <<'EOF'
+a clean build
+EOF
+bash -c 'cat clean.md | gh release create v2 $PUB --notes-file -'"
+check "#2430 and still refused beside a release whose clean notes the command shows: $out" refused
+hook "gh release create v1 $PUB --help --notes-file - ; bash -c 'cat clean.md | gh release create v2 $PUB --notes-file -'"
+check "#2430 and beside a release that posts nothing (--help), which never stands in for it: $out" refused
 hook "gh release create v1 $PUB -F - < clean.md"
 check "#2430 (control) a clean file fed in passes: $out" passed
 hook "printf 'a clean build\n' | gh release create v1 $PUB --notes-file -"

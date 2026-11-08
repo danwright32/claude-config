@@ -290,6 +290,8 @@ FROM_TAG = ("with notes taken from the tag's annotation or its commit's message 
 NOTES_STDIN = ("with notes from standard input (--notes-file -) that the command does not show, which this "
                "check cannot read here, so whether they name a work organisation or repository cannot be "
                "told. Write the notes with a heredoc in the command, or name the file with --notes-file.")
+NOTES_UNREAD = ("with notes from standard input (--notes-file -), and what it is fed could not be read from "
+                "the command (%s), so whether they name a work organisation or repository cannot be told.")
 GIST_STDIN = ("from standard input (it names no file, or names -), which this check cannot read here, so "
               "whether it names a work organisation or repository cannot be told. Name the file instead.")
 GIST_EDIT_STDIN = ("with a file's new text from standard input (-), which this check cannot read here, so "
@@ -505,12 +507,16 @@ def _release_stdin(kind, command, place):
     claude-config#2430). Text the command shows is judged with the command and adds nothing; a file
     fed in with `<` is read as a notes file is; anything else is unseen, as is a release reading
     standard input that scan.stdin_feeds does not find (one a shell runs from a string). Every release
-    of kind in the command reading standard input counts, the reading that refuses more."""
+    of kind in the command reading standard input counts, the reading that refuses more, and fewer
+    found by stdin_feeds than scan_gh_in_context finds is refused, so a release whose notes are shown
+    never stands in for one run from a string beside it (the lessons review of #2430)."""
     try:
         feeds = [f for f in scan.stdin_feeds(command, {kind}) if _notes_stdin(f[1])]
-    except scan.Unreadable:
-        feeds = []
-    if not feeds:
+        every = [f for f in scan.scan_gh_in_context(command, place.start, dict(place.environ or {}), {kind})
+                 if _notes_stdin(f[1])]
+    except scan.Unreadable as e:
+        return [], [NOTES_UNREAD % e]
+    if not feeds or len(feeds) < len(every):
         return [], [NOTES_STDIN]
     bodies, unseen = [], []
     for _kind, _args, state, detail in feeds:
