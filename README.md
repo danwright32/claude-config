@@ -179,9 +179,18 @@ alike (Dan, on #2183); the guard refuses an alias it cannot read, while the hook
 and leaves it to the guard. A session started before this was installed, or one whose PATH does not
 carry the guard, keeps exactly its old checks and is told once that gh writes inside scripts are
 not checked until a new session starts: refusing those scripts instead would stop
-`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Still not
-covered: gh run by its absolute path, a script that rewrites PATH, curl or an API library, and gh
-extensions.
+`merge-when-ready.sh`, so every merge on both Macs, until each session restarted. Programs gh starts
+itself (#2207): the real gh runs with the guard first on PATH, so a gh that a shell alias's command,
+a pager, an editor or git runs is judged too; a gh extension (by name, through an alias, or with
+`gh extension exec`), the Copilot CLI that `gh copilot` starts, and an alias naming another alias
+(which gh 2.89.0 does not expand) are refused, since an extension or the Copilot CLI can write to
+GitHub with no gh in between. Text gh posts that is not on its command line (#2326), for a public
+repository, in the hook and the guard alike: `--editor` is refused, and so is `gh pr create --fill`
+unless both a title and a body are given; `gh pr create` with no `--head` is judged with what it may
+push (the branch's name and the messages of the commits no remote holds); `gh repo create --push`
+with the whole history it sends, unless the new repository is private or internal; and `gh repo
+sync` into a public repository from a `--source` that is not public is refused. Still not covered:
+gh run by its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -1647,7 +1656,12 @@ new and the refusal says why.
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
-(claude-config#851). It updates the branch, starts the new head's lessons review alongside its
+(claude-config#851). For a log of the run, add `--log=<file>` rather than piping it into `tee`: a
+background command reports its pipeline's last exit, so `... 2>&1 | tee <log>` reads as exit 0
+however the helper ended, and on 2026-11-05 ten helpers stopped by a network outage were each
+reported "completed (exit code 0)", the same as a merge (claude-config#2304). With `--log` the
+helper appends what it says to the file itself, beside its own output, and ends the file with its
+exit and what it means. It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
@@ -1833,7 +1847,19 @@ made and then failed before GitHub's answer arrived (a reset, a read timeout, a 
 "lost the connection to GitHub N times"; neither as GitHub refusing or being unable to show
 something. "error connecting to" stopped #1640 at 41 minutes on 2026-10-24, and `dial tcp ...:
 connect: can't assign requested address` (no local port left to connect from) stopped #1732 at once
-on 2026-10-25, with #1675 installed, because only the first wording was known. The gate's own reads are asked again the same way,
+on 2026-10-25, with #1675 installed, because only the first wording was known. When every try of
+those four failed on the network, the helper does not stop: it keeps asking every 20 seconds,
+saying "Waiting on the network" with how long about every two minutes, and carries on where it was
+once GitHub answers, for up to `MWR_NET_WAIT_SECONDS` (3600, a setting) from when the read began,
+after which it stops saying how long it waited (claude-config#2303). On 2026-11-05 an outage of
+about 40 minutes stopped all ten queued helpers after their four tries. A round with any answer
+GitHub gave in it, its server failing or a refused sign in included, stops as before. The merge
+itself is never asked again blindly: when GitHub answers it "Something went wrong while executing
+your query", the pull request is read back first, a merge that landed is reported as merged, and one
+still open at the same head goes round again `MWR_MERGE_RETRY_SECONDS` (120) later, where every gate
+is asked again and the merge is pinned to the head they allow, `MWR_MERGE_TRIES` (3) times in all,
+then stops naming the error (claude-config#2289; on 2026-11-05 that answer stopped one merge three
+times in three minutes, and a run five minutes later merged it). The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
 and a gate whose read the network failed on every try refuses in those same words, never as GitHub
 refusing or not answering (claude-config#1728).
@@ -3202,9 +3228,49 @@ package and is not read; a relative import that names nothing there is refused. 
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
+An absolute Python import is placed where Python looks, in its order (#2358): a folder a `sys.path`
+change puts in front, the script's own folder, the command's `PYTHONPATH` (its own assignment, `env`'s,
+one exported earlier in the line, or the session's), then the standard library and installed packages
+(this python3's own, the site-packages of a virtual environment the command's interpreter belongs to,
+`VIRTUAL_ENV`, or the nearest `.venv` or `venv` above the script or the command's directory), then a
+folder a `sys.path` change appends. A `sys.path.insert`, `append`, `extend` or `site.addsitedir` is
+evaluated when it is a literal or built from `__file__` (`os.path` calls, `+`, `Path(...).parent`,
+`.parents[n]`, `/`, and names set that way first). An import placed nowhere is refused, naming where
+it looked, since Python may still find it some way the gate cannot see. Measured 2026-11-07: this
+payload's 110 Python files still refuse 2; across the 463 Python files in the other Apps checkouts,
+refused went from 0 to 245, every one a PostRoll module run by its path that imports `postroll`,
+`tests` or `tools`, which Python itself cannot place from there either (no editable install, checked
+with both its venv and the system python3), so those commands fail at the import anyway. Cost: 0.062 s
+against 0.048 s before on `python3 make-switcher.py` (median of 10, load average about 9).
+
+A file handed to a script as data is not code it runs (#2362). The first word after the program that
+names a file is always read as code, whatever it is called (`python3 issues.json` still refuses one
+naming an endpoint), and so is every later file not shaped like data. A later file shaped like data
+(an extension no interpreter here runs, such as `.json`, `.jsonl`, `.txt` or `.manifest`, and no
+`#!`) is an argument a script reads, so an endpoint named in it is not a send: the end of turn
+review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
+saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
+the script depends on each program's options, so such a file is judged against every one of them,
+and is still read when any of them can act on it as more than data: a shell script that runs `curl`
+(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
+local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
+(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+local module it imports, imports only modules on a short list that cannot send, run code or write
+(`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
+uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
+`sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
+reading is a list of what is inert rather than of what acts, because a list of ways to act missed
+`urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
+extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
+script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
+with its arguments as well as for what it names.
+
 What it does not see, so a pass is not read as more than it measured: an import of a package or
-through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
-with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+through a path alias (`@/lib/x`), a Python import placed through a `.pth` file or a `sys.path` change
+it cannot evaluate (refused, not passed, unless the module is also installed), a module run with
+`python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
 endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
 post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
 send route, is refused with the reason.

@@ -946,14 +946,16 @@ type Verdict =
 // other call pays a store read for it (lessons review of #1010).
 // Since #2294 a pass the guard's own reading made (`auto`) is kept under `auto:<call key>` before the
 // call goes ahead, when the call has an id: one with none is a preview, which runs nothing and is
-// recorded nowhere. A pass that cannot be kept is not made: the call is held and asked about as before.
+// recorded nowhere. A pass that cannot be kept is not made: the call waits on Dan as before, unless
+// he already let this very call through (#2348), which is looked up as for any other held call.
 const judge = async ($: EngineInterface, tool: string, input: Record<string, unknown>, id = ''): Promise<Verdict> => {
   const v = await judged($, tool, input)
   if ('pass' in v && v.auto) {
     const { auto, ...pass } = v
     if (!id) return pass
+    let called: Called | undefined
     try {
-      const called = await keyOf($, tool, input)
+      called = await keyOf($, tool, input)
       await $.store.set(`auto:${called.key}`, {
         kind: 'no-screen-change',
         at: await $.clock.now(),
@@ -965,8 +967,13 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
       } satisfies DesignRoundAutoPass)
       return pass
     } catch (err) {
-      $.ui.log(`design-round-guard: an automatic pass could not be recorded, so the call is held: ${message(err)}`, { to: 'debug' })
-      return { missing: { ...auto, unread: [], worded: [] } }
+      $.ui.log(`design-round-guard: an automatic pass could not be recorded, so the call waits on Dan's own answer: ${message(err)}`, { to: 'debug' })
+      const missing: Verdict = { missing: { ...auto, unread: [], worded: [] } }
+      try {
+        return (await passed($, called ?? (await keyOf($, tool, input)))) ? pass : missing
+      } catch {
+        return missing
+      }
     }
   }
   if (!('unsure' in v || 'missing' in v)) return v
