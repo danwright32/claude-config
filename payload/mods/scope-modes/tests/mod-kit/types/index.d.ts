@@ -528,8 +528,10 @@ export type ModKitWrites = {
    * `'*push*'`): the shell matched it against no file, so the run is handed its characters as
    * written. A tool may still expand it itself, and so may a script.
    * `unexpanded` marks an argument whose every $ and backtick is in single quotes or after a
-   * backslash, wherever the command spells it (#1953: a regex 'x$', prose 'costs $5'): the shell
-   * hands it on as written, so it holds no variable's value.
+   * backslash, or is a $ the shell leaves as written (before a closing double quote, or before nothing
+   * a name, brace, bracket or quote can start), wherever the command spells it (#1953: a regex 'x$',
+   * prose 'costs $5'; #2320: a regex "bar$"): the shell hands it on as written, so it holds no
+   * variable's value.
    */
   runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
   /**

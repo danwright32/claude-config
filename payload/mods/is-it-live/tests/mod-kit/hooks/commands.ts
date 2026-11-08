@@ -256,8 +256,9 @@ const restored = (text: string, removed: readonly { at: number; lines: string[] 
 // `'*push*'`, "app/*.css" and app/\*x are, while ''*x'', "app/"*x and '$P' are not.
 //
 // `unexpanded`, where given, is filled with the place in the text of each word holding a $ or a
-// backtick only inside single quotes or after a backslash (#1953), which the shell hands on as
-// written: `'x$'`, 'costs $5', \$HOME and "a\$b" are, while $P, "$P", '$P'$Q and "$(x)" are not.
+// backtick only inside single quotes or after a backslash (#1953), or a $ the shell leaves as written
+// wherever it stands (#2320, leftAsWritten), which the shell hands on as written: `'x$'`, 'costs $5',
+// \$HOME, "a\$b", "^foo.*bar$" and foo$ are, while $P, "$P", '$P'$Q, x$'y' and "$(x)" are not.
 //
 // `subbed`, where given, is filled with each word's command substitutions (#2141): by the word's
 // place in the text, where each starts in the text (`at`), where its text starts in the word and how
@@ -269,7 +270,19 @@ type InWord = { at: number; pos: number; len: number; quoted: boolean }
 // groups and extended glob characters, read wider than any one shell's so a word is never taken for
 // one it hands on as written while some shell would match it against files.
 const GLOB_CHAR = /[*?[\]{}()~^#]/
-const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
+// Whether the $ at `i` is one the shell leaves as written (#2320): the command ends right after it,
+// or what follows can start nothing it expands. That is a space, a tab, a new line, a slash, a dot,
+// a comma or a percent sign anywhere; in double quotes the quote closing them (`"bar$"`); outside
+// quotes a separator (; | &). Never a name's letter, a digit or a special parameter (@ * # ? ! $ - _),
+// a brace, a bracket or a parenthesis, nor a quote outside double quotes (bash's $'..' and $".."),
+// nor zsh's flags (= ~ ^ +), so a $ any shell expands is never read as text. The reading is narrow on
+// purpose: a $ before anything not listed stays one the shell expands.
+const leftAsWritten = (cmd: string, i: number, inDouble: boolean): boolean => {
+  const next = cmd[i + 1]
+  if (next === undefined || /[\s/.,%]/.test(next)) return true
+  return inDouble ? next === '"' : /[;|&]/.test(next)
+}
+const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
   let starts: number[] = []
@@ -396,7 +409,7 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
         i = sub
       } else {
         quotedChar(c)
-        dollar(c, quote === '"')
+        dollar(c, quote === '"' && !(c === '$' && leftAsWritten(cmd, i, true)))
         word += c
       }
       continue
@@ -528,7 +541,12 @@ const split = (cmd: string, bare?: Map<number, number[]>, literal?: Set<number>,
       word += c
     } else {
       begin(i)
-      bareChar(c)
+      // A bare $ the shell leaves as written is an expansion for `literal`, as a quoted one is, and
+      // text for `unexpanded` (#2320).
+      if (c === '$' && leftAsWritten(cmd, i, false)) {
+        expands = true
+        dollar(c, false)
+      } else bareChar(c)
       if (c === '$' && /[A-Za-z_{]/.test(cmd[i + 1] ?? '')) wordBare.push(word.length)
       word += c
     }
@@ -746,8 +764,9 @@ const printfText = (args: readonly string[]): string | undefined => {
  * no file (#1951): every pattern character in it quoted or after a backslash, and no expansion in
  * it; absent where no word is one.
  * `unexpanded` gives for each word whether its every $ and backtick is in single quotes or after a
- * backslash, so the shell hands it on with no expansion (#1953); absent where no word is one. Read for
- * every shell, where `splits` is for one that splits words.
+ * backslash (#1953), or is a $ the shell leaves as written (#2320, leftAsWritten: `"bar$"`, foo$), so
+ * the shell hands it on with no expansion; absent where no word is one. Read for every shell, where
+ * `splits` is for one that splits words.
  */
 export type Command = {
   words: string[]
