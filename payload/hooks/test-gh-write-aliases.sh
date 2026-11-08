@@ -329,6 +329,28 @@ EOF"
 check "#2430 (control) a heredoc naming one is refused: $out" refused
 hook "cat named.md | gh release create v1 $PRIV --notes-file -"
 check "#2430 (control) notes on standard input in a private repository pass: $out" passed
+# The shell gives a command only its LAST redirection to standard input, so a stage with more than one
+# is refused as unread, never judged from the clean one shown beside the file gh really reads (the
+# lessons review of #2442). Each heredoc, here-string, `<`, `<&` and `<>` counts as one.
+hook "gh release create v1 $PUB -F - <<'EOF' < named.md
+a clean build
+EOF"
+check "#2442 a clean heredoc beside a file fed in is refused, since gh reads the file: $out" refused
+check "#2442 and the refusal says standard input: $out" has "$out" "standard input"
+hook "gh release create v1 $PUB -F - <<< 'a clean build' < named.md"
+check "#2442 a clean here-string beside a file fed in is refused: $out" refused
+hook "gh release create v1 $PUB -F - < clean.md <<< 'a clean build'"
+check "#2442 a file and a here-string together are refused whichever comes last: $out" refused
+hook "printf 'a clean build\n' | gh release create v1 $PUB -F - <&3"
+check "#2442 clean text piped in is refused when standard input is taken from another descriptor: $out" refused
+hook "printf 'a clean build\n' | gh release create v1 $PUB -F - <> named.md"
+check "#2442 and when standard input is a file opened for reading and writing: $out" refused
+hook "cat <<'EOF' < named.md | gh release create v1 $PUB -F -
+a clean build
+EOF"
+check "#2442 a stage piping in a file beside a clean heredoc is refused: $out" refused
+hook "cat <<< 'a clean build' < named.md | gh release create v1 $PUB -F -"
+check "#2442 and beside a clean here-string: $out" refused
 
 hook "gh gist create --public named.md"
 check "#2398 a public gist whose file names one is refused: $out" refused

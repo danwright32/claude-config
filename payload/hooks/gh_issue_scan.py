@@ -711,6 +711,16 @@ def _name(words):
     return (words[i], words[i + 1:]) if i < len(words) else (None, [])
 
 
+def _stdin_redirects(stage):
+    """How many redirections the stage gives its standard input: each heredoc, and each `<`, `<<<`,
+    `<&` and `<>`. The shell keeps only the last of them, so stdin_feeds never judges a stage with
+    more than one from any one it shows (the lessons review of #2442): `<<'EOF' < named.md` reads
+    named.md. _shown does not ask it yet, since file_writes reads it and the issue field gate stands
+    down on a write that is not shown, so asking there would loosen that gate."""
+    _words, redirects, heredocs = stage
+    return len(heredocs) + sum(1 for op, _ in redirects if op.startswith("<"))
+
+
 def _shown(stage, fed, bodies):
     """Whether everything the stage writes out is text the command shows."""
     words, redirects, heredocs = stage
@@ -792,7 +802,8 @@ def stdin_feeds(command, kinds):
                 before it in a pipe printing only shown text), so it is judged with the command
       "file"    a file fed in with `<`; detail is the word naming it
       "hidden"  anything else: a pipe from a stage whose output is not shown, an expanding heredoc,
-                or whatever the command itself was started with
+                `<&` or `<>`, more than one redirection to standard input (the shell reads only the
+                last, #2442), or whatever the command itself was started with
     Only a command at the head of a stage is seen: one a shell, eval or env runs from a string is not,
     so a caller for whom standard input matters refuses a command it does not find here.
     Raises Unreadable when the command cannot be tokenized."""
@@ -813,16 +824,22 @@ def stdin_feeds(command, kinds):
                     not any(a in non_filing_flags(found[:2]) for a in list(found[2]) + list(found[3])):
                 files = [t for op, t in redirects if op == "<"]
                 strings = [t for op, t in redirects if op == "<<<"]
-                if heredocs:
+                if _stdin_redirects(stage) > 1:
+                    state, detail = "hidden", None  # the shell reads only the last (#2442)
+                elif heredocs:
                     state, detail = ("shown" if all(bodies[h] for h in heredocs) else "hidden"), None
                 elif strings:
                     state, detail = ("hidden" if any(EXPANDS.search(t) for t in strings) else "shown"), None
                 elif files:
                     state, detail = "file", files[-1]
+                elif _stdin_redirects(stage):
+                    state, detail = "hidden", None  # `<&` another descriptor, or `<>` a file
                 else:
                     state, detail = ("shown" if fed else "hidden"), None
                 out.append((tuple(found[:2]), list(found[2]) + list(found[3]), state, detail))
-            fed = _shown(stage, bool(fed), bodies)
+            # A stage piping on more than one redirection to its standard input pipes the last,
+            # which nothing here judges by order, so what it pipes is never shown (#2442).
+            fed = _shown(stage, bool(fed), bodies) and _stdin_redirects(stage) <= 1
     return out
 
 
