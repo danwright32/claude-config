@@ -45,8 +45,12 @@
 #
 # Work a noun's code hands to a timer (`$.clock.after(0, ...)`, `setTimeout`) runs after the noun has
 # answered, unless the timer sits inside a promise the noun builds (it may be waiting on it), so it is
-# not the noun's code: neither the code written in the timer's arguments nor what it
-# calls is read as the noun's (#939). Measured live on 2026-10-08 (2.1.294, a throwaway plugin in a
+# not the noun's code: neither the code written in the function the timer is handed nor what it
+# calls is read as the noun's (#939). Only that function is deferred (#2333): one written in place, or
+# the one a mod function that does nothing but make a function hands back. Everything else in the
+# timer's arguments is worked out as the timer is set, so it is the noun's own code: the delay, a call
+# given as the callback (`$.clock.after(0, slow())`), a call that may run what it is given, and the
+# arguments of a function making call, a function written in place there included. Measured live on 2026-10-08 (2.1.294, a throwaway plugin in a
 # headless `claude -p`, no user settings): a noun hook that started 13 s of `$.process.run` on
 # `$.clock.after(0, ...)` answered at once, and the timer's work finished 13,010 ms later, whole. A
 # mod-kit button's press is such a noun (modkit.press), and a switch or a compact behind it takes longer
@@ -638,11 +642,6 @@ def timers_started(f, start, end):
     return out
 
 
-def deferred_spans(f, start, end):
-    """The argument spans of each timer a region starts (#939): what runs after the noun answered."""
-    return [(f.rel, open_at, close) for open_at, close, _ in timers_started(f, start, end)]
-
-
 def function_written(text):
     """Whether text is one function written in place, an arrow or a function expression, and nothing
     more: what it holds runs when it is called, never as the text is evaluated."""
@@ -706,6 +705,23 @@ def makes_only_a_function(df, start, stop):
     return fn is not None and function_written(fn[1])
 
 
+def maker_call(files, df, a, b):
+    """When df.code[a:b] is one whole call of a mod function that only makes a function, (where its
+    name starts, where its ( is, where the call ends); otherwise None. The call runs none of what it is
+    given, and the function it makes is what a timer handed the call runs later."""
+    text = df.code[a:b]
+    x = a + len(text) - len(text.lstrip())
+    t = text.strip()
+    m = re.match(r"(" + IDENT + r")\s*\(", t)
+    if not m or m.group(1) in KEYWORDS:
+        return None
+    open_at = x + m.end() - 1
+    if closing(df.code, open_at) != x + len(t):
+        return None
+    found = resolve(files, df, x, m.group(1))
+    return (x, open_at, x + len(t)) if found and makes_only_a_function(*found) else None
+
+
 def handed_to_timer(files, df, at, name, callbacks):
     """Whether the mention of the parameter name at position at in df lies in the callback of a timer
     the function starts (callbacks) in a way that runs it only when the timer fires: as that callback
@@ -714,21 +730,34 @@ def handed_to_timer(files, df, at, name, callbacks):
     for a, b in callbacks:
         if not a <= at < b:
             continue
-        text = df.code[a:b]
-        x = a + len(text) - len(text.lstrip())
-        t = text.strip()
+        t = df.code[a:b].strip()
         if t == name or function_written(t):
             return True
-        m = re.match(r"(" + IDENT + r")\s*\(", t)
-        if not m or m.group(1) in KEYWORDS:
-            return False
-        open_at = x + m.end() - 1
-        if closing(df.code, open_at) != x + len(t):
-            return False
-        whole = any(s <= at < e and df.code[s:e].strip() == name for s, e in spans_top(df.code, open_at + 1, x + len(t) - 1))
-        found = resolve(files, df, x, m.group(1)) if whole else None
-        return bool(found) and makes_only_a_function(*found)
+        call = maker_call(files, df, a, b)
+        return bool(call) and any(
+            s <= at < e and df.code[s:e].strip() == name for s, e in spans_top(df.code, call[1] + 1, call[2] - 1)
+        )
     return False
+
+
+def deferred_spans(files, f, start, end):
+    """What of each timer a region starts runs after the noun answered (#939): only the function the
+    timer is handed (#2333). A function written in place is deferred whole. For a call of a mod
+    function that only makes a function, only its name is: the function it makes runs later, so its
+    body is not the noun's code, while the arguments, worked out as the timer is set, are. Anything
+    else in the timer's arguments (the delay, a call given as the callback, a call that may run what it
+    is given) runs before the noun answers, so it is the noun's own code."""
+    out = []
+    for _, _, cb in timers_started(f, start, end):
+        if cb is None:
+            continue
+        if function_written(f.code[cb[0] : cb[1]]):
+            out.append((f.rel, *cb))
+            continue
+        call = maker_call(files, f, *cb)
+        if call:
+            out.append((f.rel, call[0], call[1]))
+    return out
 
 
 DEFERS = {}
@@ -798,7 +827,7 @@ for entry, folder, man, files in mods:
             continue
         seen.add((f.rel, start, end))
         regions.append((f, start, end, name))
-        deferred += deferred_spans(f, start, end)
+        deferred += deferred_spans(files, f, start, end)
         held = held_promises(f, start, end)
         for m in re.finditer(r"(?<![\w$.])(" + IDENT + r")\s*(?:<[^<>()]*>)?\s*\(", f.code[start:end]):
             # Called from a timer the region starts: it runs after the noun answered (#939).
