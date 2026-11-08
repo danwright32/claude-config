@@ -51,6 +51,12 @@ const WRITES: Record<string, unknown> = {
   'bash locked.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'locked.sh', path: '/w/app/locked.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'python3 rewrite.py srclink': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'srclink', path: '/w/app/srclink' }] }] },
   './odd.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './odd.sh', path: '/w/app/odd.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  // #2426 lessons review: one folder handed to two scripts, the one that writes first or second.
+  'bash scan.sh src/ && python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'python3 rewrite.py src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash scan.sh src/ && bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash rewrite.sh src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash scan.sh src/ && bash scan.sh ./src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: './src', path: '/w/app/src' }] }] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -793,6 +799,29 @@ test('a script that writes into the folder it is handed, or runs another script,
   w.files[`${APP}/wrap.sh`] = `${SCAN}python3 tools/fix.py "$1"\n`
   expect(refusal(await bash($ as never, w, 'bash rewrite.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
   expect(refusal(await bash($ as never, w, 'bash wrap.sh src/', {}, 'b2'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+})
+
+test('a folder handed to a read only scan and to a script that may write there is held, whichever runs first (#2426 lessons review)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = SCAN
+  w.files[`${APP}/rewrite.sh`] = `${SCAN}sed -i '' 's/a/b/' "$1"/*.ts\n`
+  // rewrite.py is not there, so what it writes cannot be read; rewrite.sh writes into the folder.
+  const commands = ['bash scan.sh src/ && python3 rewrite.py src/', 'python3 rewrite.py src/ && bash scan.sh src/', 'bash scan.sh src/ && bash rewrite.sh src/', 'bash rewrite.sh src/ && bash scan.sh src/']
+  const held: string[] = []
+  for (const [i, command] of commands.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `${command}: ran` : `${command}: ${refusal(r).includes('which writes src/big.ts.') ? 'held' : refusal(r)}`)
+  }
+  expect(held).toEqual(commands.map(c => `${c}: held`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+test('a folder handed twice to the same read only scan runs judging no file, its one script passed on record (#2426 lessons review)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = SCAN
+  expect((await bash($ as never, w, 'bash scan.sh src/ && bash scan.sh ./src')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' }])
 })
 
 test('a script handed a folder that cannot be read, is not there, or runs under an interpreter mod-kit does not read is still held (#2407)', KIT, async ($, on) => {

@@ -669,6 +669,19 @@ const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writ
   return { writes: scriptWrite(await $.modkit.writes({ command: prog.command, cwd, home }), home) }
 }
 
+// Whether every script a folder was handed to is read as writing nothing there (#2426 lessons review):
+// the first that may write, or whose reading throws, answers no.
+const allOnlyRead = async ($: EngineInterface, runs: readonly ShellRun[]): Promise<boolean> => {
+  for (const r of runs) {
+    try {
+      if ((await scriptWritesIn($, r)).writes !== null) return false
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
 // path the disk says is a folder (#2321), each file under it the area check could hold, which refuses
 // the command naming that file. A folder whose files cannot be listed, too many of them to judge one
@@ -690,19 +703,13 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     if (kind === false) return PASS
     if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
     at = kind.dir
-    // A folder handed to a script whose text writes nothing is only read (#2407); the pass is logged,
-    // so a reading that lets everything through shows in the log rather than as quiet.
-    if (t.run) {
-      let can: { writes: string | null }
-      try {
-        can = await scriptWritesIn($, t.run)
-      } catch (err) {
-        can = { writes: `its writes could not be read (${msg(err)})` }
-      }
-      if (can.writes === null) {
-        await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: t.run.path, decision: 'passed' })
-        return PASS
-      }
+    // A folder handed only to scripts whose text writes nothing is only read (#2407): every one of them
+    // is read, and any one that may write there, or cannot be read, judges the folder as before (#2426
+    // lessons review). Each pass is logged, so a reading that lets everything through shows in the log
+    // rather than as quiet.
+    if (t.runs?.length && (await allOnlyRead($, t.runs))) {
+      for (const r of t.runs) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: r.path, decision: 'passed' })
+      return PASS
     }
   }
   let under: Awaited<ReturnType<typeof underTree>>

@@ -430,9 +430,30 @@ test('a shell write is judged by every file it names: a redirect, an in place ed
   // `git checkout -- src/big.ts`: git marks every pathspec as reaching a whole folder, as it may.
   expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'write', tree: true, from: '' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', tree: true }])
   // `python3 gen.py src/big.ts`
-  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', run: { what: 'a python3 script', path: '/w/app/gen.py' } }])
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', runs: [{ what: 'a python3 script', path: '/w/app/gen.py' }] }])
   // `python3 -c "open('src/lib/slack.ts','w').write('x')"`
   expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline python3 script', words: ['python3', '-c', '...'], inputs: [], targets: ['/w/app/src/lib/slack.ts'], folder: '/w/app' }] })).toEqual([{ word: '/w/app/src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+})
+
+// #2426 lessons review: one path reached more than once keeps every script it was handed to, and a
+// route into it that is no script ends the exemption, so the folder is judged as any write would be.
+const SCAN_RUN = { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }
+const REWRITE_RUN = { what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }
+
+test('a path handed to two scripts keeps both, in either order, and the same script twice once (#2426 lessons review)', () => {
+  const scan = { what: 'a bash script file', path: '/w/app/scan.sh' }
+  const rewrite = { what: 'a python3 script file', path: '/w/app/rewrite.py' }
+  // `bash scan.sh src/ && python3 rewrite.py src/`, and the other order.
+  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, REWRITE_RUN] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [scan, rewrite] }])
+  expect(shellTargets({ ...NONE, runs: [REWRITE_RUN, SCAN_RUN] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [rewrite, scan] }])
+  // `bash scan.sh src/ && bash scan.sh ./src`
+  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, { ...SCAN_RUN, args: [{ word: './src', path: '/w/app/src' }] }] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [scan] }])
+})
+
+test('a path written twice keeps the reach of the write reaching its whole folder, whichever comes first (#2426 lessons review)', () => {
+  // `echo x > src && find src -exec sed -i '' 's/a/b/' {} +`, as two writes of one path.
+  expect(shellTargets({ ...NONE, files: [{ word: 'src', path: '/w/app/src' }, { word: 'src', path: '/w/app/src', tree: true }] })).toEqual([{ word: 'src', path: '/w/app/src', tree: true }])
+  expect(shellTargets({ ...NONE, files: [{ word: 'src', path: '/w/app/src', tree: true }, { word: 'src', path: '/w/app/src' }] })).toEqual([{ word: 'src', path: '/w/app/src', tree: true }])
 })
 
 test('a removal, a stamp, a new folder or a mode change adds no lines, so it is not judged; nor is a command that writes nothing', () => {

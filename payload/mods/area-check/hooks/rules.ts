@@ -92,10 +92,11 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * FOLDER_JUDGE_MAX files one by one, #2373), or a write whose file cannot be named, with why, which
  * is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
- * `run` is the script a path was handed to, and only that (#2407): a folder handed to a script is
- * judged for the files under it only when the script can write there (scriptProgram, scriptWrite).
+ * `runs` is every script a path was handed to, present only when that is the command's one way of
+ * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every one
+ * of them is read as writing nothing there (scriptProgram, scriptWrite; #2426 lessons review).
  */
-export type ShellTarget = { word: string; path: string; tree?: true; run?: ShellRun } | { word: string; unread: string; folder?: string }
+export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string }
 
 const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
 // A name whose extension is written out and is no source one is never judged, whatever its folder is.
@@ -225,9 +226,15 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const add = (t: ShellTarget) => {
     const k = 'path' in t ? `p\n${t.path}` : `u\n${t.word}`
     const had = seen.get(k)
-    // A path the command also writes itself is that write, not only a word a script is handed (#2407).
+    // One path reached twice is judged by what both routes may do, so a merge only ever narrows the
+    // exemption (#2426 lessons review): a path the command also writes itself is that write, not only a
+    // word a script is handed (#2407); a path handed to two scripts keeps both, each to be read; and a
+    // write reaching the whole folder keeps that reach.
     if (had) {
-      if ('path' in had && had.run && !('run' in t && t.run)) delete had.run
+      if (!('path' in had) || !('path' in t)) return
+      if (t.tree) had.tree = true
+      if (!had.runs || !t.runs) delete had.runs
+      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
       return
     }
     seen.set(k, t)
@@ -251,7 +258,7 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
     const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
     for (const a of r.args) {
       const literal = a.path ? undefined : quotedName(r, a)
-      if (a.path) add({ word: a.word, path: a.path, run })
+      if (a.path) add({ word: a.word, path: a.path, runs: [run] })
       else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
