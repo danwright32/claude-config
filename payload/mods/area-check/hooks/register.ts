@@ -60,6 +60,9 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  scriptProgram,
+  scriptWrite,
+  unreadPart,
   questionKey,
   legacyQuestionKey,
   restructureQuestion,
@@ -70,8 +73,10 @@ import {
   type Held,
   type Question,
   type Ranked,
+  type ShellRun,
   type ShellTarget,
 } from './rules.ts'
+import { currentText } from './mod-kit/inputs.ts'
 
 // The area check (claude-config#1506), phase 2 (#1509): the HOLD. Dan, 2026-10-22: sessions build
 // in fragile areas without noticing that the area already has open structural issues, or is growing
@@ -603,10 +608,11 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
 
 // A write reaching a whole folder (#2142 lessons review) reaches every file under it: the files there
 // the area check could hold, from the same tracked list and issues an edit is judged by, or why they
-// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge. `max`,
-// given for a folder found only on the disk (#2321), bounds how many of them are judged one by one:
-// past it the files are not listed for judging, and the command is held whole (FOLDER_JUDGE_MAX).
-const underTree = async ($: EngineInterface, path: string, max?: number): Promise<{ paths: string[] } | { unread: string }> => {
+// cannot be listed. A folder in no checkout, or in one not on GitHub, holds nothing to judge. `max`
+// bounds how many of them are judged one by one, for a write marked `tree` (#2373) and a folder found
+// on the disk (#2321) alike: past it the files are not listed for judging, and the command is held
+// whole (FOLDER_JUDGE_MAX).
+const underTree = async ($: EngineInterface, path: string, max: number): Promise<{ paths: string[] } | { unread: string }> => {
   const d: Deadline = { at: (await $.clock.now()) + DEADLINE_MS }
   const b = await $.modkit.branch({ path })
   if (!b || 'unreadable' in b) return { paths: [] }
@@ -619,7 +625,7 @@ const underTree = async ($: EngineInterface, path: string, max?: number): Promis
   if (!('tracked' in ranked)) return { unread: `the files under it cannot be listed (${ranked.unread})` }
   const rel = path === b.root ? '' : relTo(path, b.root)
   const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
-  if (max !== undefined && held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
+  if (held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
   return { paths: held.map(r => `${b.root}/${r}`) }
 }
 
@@ -628,17 +634,53 @@ const plain = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/
 
 // Whether a path a command names is a folder (#2321): mod-kit names a folder handed to a script, or a
 // copy's folder destination, by its path as it would a file, so only the disk can say. Nothing there
-// is no folder; a path that exists but whose stat is refused cannot be told apart, said with why.
-const folderAt = async ($: EngineInterface, path: string): Promise<boolean | { unread: string }> => {
-  if (!(await $.fs.exists(path))) return false
+// is no folder; a path that exists but whose look is refused cannot be told apart, said with why. The
+// existence check is half of that look, so it is inside the same catch (#2407 lessons review). A
+// folder comes back as `dir`, where the path really lands (stat's realPath, its own spelling where
+// none is given): a link to a folder holds the files git lists under the folder it leads to, never
+// under the link's own spelling.
+const folderAt = async ($: EngineInterface, path: string): Promise<false | { dir: string } | { unread: string }> => {
   try {
-    return (await $.fs.stat(path)).kind === 'dir'
+    if (!(await $.fs.exists(path))) return false
+    const s = await $.fs.stat(path, { resolve: true })
+    return s.kind === 'dir' ? { dir: plain(s.realPath ?? path) } : false
   } catch (err) {
     return { unread: msg(err) }
   }
 }
 
 type Unread = Extract<ShellTarget, { unread: string }>
+
+// Whether a script handed a folder can write there (#2407): its file read as mod-kit reads every file
+// a command names (currentText, which never opens a device or a fifo), fed to its interpreter as the
+// program it runs (scriptProgram), and read by mod-kit's one reader of what a command writes, run from
+// the folder the session is in. `writes: null` only when every step answered and the script writes
+// nothing the area check could judge; anything that cannot be read, or any write, is why it may write
+// there, so the folder is judged as before (fail closed).
+const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writes: string | null }> => {
+  if (!run.path) return { writes: `${run.what} is named by no path that can be read` }
+  const cur = await currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, run.path)
+  if (!('text' in cur)) return { writes: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
+  const prog = scriptProgram(run, cur.text)
+  if ('unread' in prog) return { writes: prog.unread }
+  const [cwd, home] = await Promise.all([$.session.cwd(), homeOf($)])
+  const unread = unreadPart(await $.modkit.pipeline({ command: prog.command, cwd, home }), prog.delimiter)
+  if (unread) return { writes: unread }
+  return { writes: scriptWrite(await $.modkit.writes({ command: prog.command, cwd, home }), home) }
+}
+
+// Whether every script a folder was handed to is read as writing nothing there (#2426 lessons review):
+// the first that may write, or whose reading throws, answers no.
+const allOnlyRead = async ($: EngineInterface, runs: readonly ShellRun[]): Promise<boolean> => {
+  for (const r of runs) {
+    try {
+      if ((await scriptWritesIn($, r)).writes !== null) return false
+    } catch {
+      return false
+    }
+  }
+  return true
+}
 
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
 // path the disk says is a folder (#2321), each file under it the area check could hold, which refuses
@@ -649,8 +691,7 @@ type Unread = Extract<ShellTarget, { unread: string }>
 const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, { path: string }>, agent: string | null): Promise<{ deny: string } | typeof PASS | Unread> => {
   const v = await gate($, 'Bash', id, t.path, agent)
   if ('deny' in v) return v
-  const at = plain(t.path)
-  let max: number | undefined
+  let at = plain(t.path)
   if (!t.tree) {
     let kind: Awaited<ReturnType<typeof folderAt>>
     try {
@@ -660,12 +701,20 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
       return PASS
     }
     if (kind === false) return PASS
-    if (kind !== true) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
-    max = FOLDER_JUDGE_MAX
+    if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
+    at = kind.dir
+    // A folder handed only to scripts whose text writes nothing is only read (#2407): every one of them
+    // is read, and any one that may write there, or cannot be read, judges the folder as before (#2426
+    // lessons review). Each pass is logged, so a reading that lets everything through shows in the log
+    // rather than as quiet.
+    if (t.runs?.length && (await allOnlyRead($, t.runs))) {
+      for (const r of t.runs) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: r.path, decision: 'passed' })
+      return PASS
+    }
   }
   let under: Awaited<ReturnType<typeof underTree>>
   try {
-    under = await underTree($, at, max)
+    under = await underTree($, at, FOLDER_JUDGE_MAX)
   } catch (err) {
     await failed($, t.path, err)
     return PASS
