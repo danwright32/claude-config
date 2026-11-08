@@ -163,7 +163,7 @@ want_finding "single quotes are not a quote here (apostrophes would pair), so th
 # before and after the README is rejoined (L48). A reworded row fails here rather than passing a
 # scan of nothing.
 README_FILE="$DIR/../../README.md"
-for needle in 'not when it limits it ("for' '"stay read only", "read only for'; do
+for needle in 'not when it limits it ("for now",' '"stay read only", "read only for now",'; do
   n="$(grep -n -m 1 -F -- "$needle" "$README_FILE")"
   n="${n%%:*}"
   if [ -z "$n" ]; then
