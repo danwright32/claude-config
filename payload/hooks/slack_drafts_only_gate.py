@@ -330,6 +330,8 @@ GIT_INERT = frozenset({"rev-parse", "log", "show", "status", "diff", "ls-files",
 GIT_RUNS = ("-c", "--config-env", "--exec-path", "--output", "--ext-diff", "--textconv", "-O")
 # find, except with -exec and its kind, and awk, unless its program can run a command (awk_runs).
 AWKS = {"awk", "gawk", "mawk", "nawk"}
+# The folders a program is taken from by the name it has there; anywhere else it is a script of its own.
+SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
 POSITIONAL = r"\$\{?[1-9@*]"
 
@@ -1210,16 +1212,22 @@ class Judge:
                 if any(handed.search(w) for w in words[1:]):
                     return f"runs the file it is handed ({name})"
                 continue
-            if not any(handed.search(w) for w in words[1:]) or name in SH_INERT or \
-                    (name[:-2] if name.endswith("()") else name) in defined:
+            if not any(handed.search(w) for w in words[1:]):
+                continue
+            if "/" not in words[0] and (name[:-2] if name.endswith("()") else name) in defined:
                 continue  # a definition, `show() { cat "$1"; }`, reads as a command named show()
-            git = self.sw.git_read(words) if name == "git" else None
+            # A program is the tool its name says only by bare name or from a system folder: a local
+            # ./grep or bin/cat is a script of its own, judged below by what it does.
+            system = "/" not in words[0] or os.path.dirname(words[0]) in SYSTEM_BIN
+            if system and name in SH_INERT:
+                continue
+            git = self.sw.git_read(words) if system and name == "git" else None
             if git and git[0] in GIT_INERT and not any(
                     w in GIT_RUNS or w.startswith(GIT_RUNS) for w in git[1] + git[2]):
                 continue
-            if name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
+            if system and name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
                 continue  # find runs a program only through -exec and its kind
-            if name in AWKS and not self.awk_runs(words):
+            if system and name in AWKS and not self.awk_runs(words):
                 continue
             if name in SHELLS or INTERPRETER.match(name):
                 operand, inline, stdin = self.operands(words)
@@ -1247,6 +1255,13 @@ class Judge:
             if name in ("done", "}", ")", "fi", "esac"):
                 return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
                         f"({name} {' '.join(words[1:3])})")
+            if not system and not re.search(r"[$`]", words[0]):
+                path = self.resolve(words[0], d)
+                if os.path.isfile(path):
+                    inner = self.acts(path, d, False, None)
+                    if inner:
+                        return f"hands its arguments to {words[0]}, which {inner}"
+                    continue
             return (f"hands its arguments to a program the gate does not know to be unable to send a "
                     f"request or run code ({name})")
         return None
