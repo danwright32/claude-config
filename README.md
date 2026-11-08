@@ -3239,9 +3239,49 @@ package and is not read; a relative import that names nothing there is refused. 
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
+An absolute Python import is placed where Python looks, in its order (#2358): a folder a `sys.path`
+change puts in front, the script's own folder, the command's `PYTHONPATH` (its own assignment, `env`'s,
+one exported earlier in the line, or the session's), then the standard library and installed packages
+(this python3's own, the site-packages of a virtual environment the command's interpreter belongs to,
+`VIRTUAL_ENV`, or the nearest `.venv` or `venv` above the script or the command's directory), then a
+folder a `sys.path` change appends. A `sys.path.insert`, `append`, `extend` or `site.addsitedir` is
+evaluated when it is a literal or built from `__file__` (`os.path` calls, `+`, `Path(...).parent`,
+`.parents[n]`, `/`, and names set that way first). An import placed nowhere is refused, naming where
+it looked, since Python may still find it some way the gate cannot see. Measured 2026-11-07: this
+payload's 110 Python files still refuse 2; across the 463 Python files in the other Apps checkouts,
+refused went from 0 to 245, every one a PostRoll module run by its path that imports `postroll`,
+`tests` or `tools`, which Python itself cannot place from there either (no editable install, checked
+with both its venv and the system python3), so those commands fail at the import anyway. Cost: 0.062 s
+against 0.048 s before on `python3 make-switcher.py` (median of 10, load average about 9).
+
+A file handed to a script as data is not code it runs (#2362). The first word after the program that
+names a file is always read as code, whatever it is called (`python3 issues.json` still refuses one
+naming an endpoint), and so is every later file not shaped like data. A later file shaped like data
+(an extension no interpreter here runs, such as `.json`, `.jsonl`, `.txt` or `.manifest`, and no
+`#!`) is an argument a script reads, so an endpoint named in it is not a send: the end of turn
+review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
+saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
+the script depends on each program's options, so such a file is judged against every one of them,
+and is still read when any of them can act on it as more than data: a shell script that runs `curl`
+(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
+local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
+(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+local module it imports, imports only modules on a short list that cannot send, run code or write
+(`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
+uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
+`sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
+reading is a list of what is inert rather than of what acts, because a list of ways to act missed
+`urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
+extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
+script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
+with its arguments as well as for what it names.
+
 What it does not see, so a pass is not read as more than it measured: an import of a package or
-through a path alias (`@/lib/x`), a Python module that is not on disk beside the script, a module run
-with `python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+through a path alias (`@/lib/x`), a Python import placed through a `.pth` file or a `sys.path` change
+it cannot evaluate (refused, not passed, unless the module is also installed), a module run with
+`python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
 endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
 post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
 send route, is refused with the reason.
@@ -6770,28 +6810,56 @@ have a design-rounds esque check on wording so I can approve the wording before 
 code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
 SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
 template such a file sends (below). A Write, Edit or
-MultiEdit there that adds message text, changes it or takes it away is refused, a test file
-included. Claude then shows Dan the whole message, every variable filled in from a realistic
+MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
+send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a
+`_test` or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
+nothing, so neither is held nor read as a sender; a string handed to a query builder call
+(`.select(`, `.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in
+one), a database select list, a SQL statement or
+fragment, and a code template a program writes out are not message text; in a CI workflow only what
+a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
+run command that itself posts to Slack, each string of a `script:` step that posts to Slack, read as
+JavaScript), never step or job names, needs lists, input descriptions or other run commands; a
+`script:` block in any YAML file is code, never plain values; a nested template literal is one
+string, the strings inside it wording of their own, and the message Dan is shown is checked only for
+the words between its filled in values, never the code that fills them (#2371); and a file in no
+git repository, as a scratchpad script is, is let through even when it posts to Slack itself.
+Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
-kept in the mod's store by the exact wording, never by the file, so the same wording repeated in a
-test goes through without a second question, and any change to approved wording is held again. A
+kept in the mod's store by the exact wording, never by the file, so the same wording repeated in
+another file goes through without a second question, and any change to approved wording is held
+again. A `${...}` that JavaScript writes as text (in single or double quotes, or escaped in a
+template) may stand in the message shown, since that is how it posts; one filled at run time may
+not. A
 shell command writing into such a file is held as a whole command, since the wording it leaves
-cannot be read before it runs. A subagent's call is refused and told to stop and report to the main
+cannot be read before it runs; Dan's answer is kept by the command and the files it writes, so the
+same command run again by a resumed agent or from another folder goes through (#2371). A
+subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
 written by a call. A template whose own file has no Slack marker (a code file, or a text template
-such as `.txt`, `.md` or `.hbs`, read line by line) is held the same way when another file in its
+such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
 git repository sends it: one that carries a Slack marker and names the template by its path, a
-relative import, or its python module. The card and refusal name that sender. The search is one
-`git grep` for files holding both the template's name and the word slack or postMessage, then a
-read of each, all within 3 seconds per call; a search that fails, runs out of time, meets an
-unreadable file, or finds more than 200 files to read holds the call as could not check. A file in
-no git repository is not searched, and a template reached only through a re-exporting index is not
-followed. A shell write to a path the write reader cannot name is outside it.
+relative import, or its python module, on a line that imports or reads it (a path it only names,
+as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
+sender. A
+module is held too when a file that imports it also imports a Slack send helper (a copy builder
+such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender; the
+helper is found by the path the import names. The search is one `git grep` for files holding the
+word slack or postMessage and the template's name in a form a reference takes (after a slash, as a
+file name with its extension, after its folder and a dot, or on a python import line, never a word
+the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
+each, all within 3 seconds per call, following files that
+re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+unreadable file, or would follow further holds the call as could not check. One that finds more
+than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
+holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
+nothing he can answer (#2364). A shell write to a path the write reader cannot
+name is outside it.
 
 </td><td>
 
-#2242, #2248
+#2242, #2248, #2286, #2361, #2364, #2290, #2287
 
 </td></tr>
 </tbody>
