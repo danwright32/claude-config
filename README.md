@@ -232,7 +232,9 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
 ./claude-sync release           # lift your own hold now instead of waiting for it to run out
+./claude-sync release "why"     # lift only the hold you took with that label
 ./claude-sync release --other S # lift the hold session S took (status names each hold's session)
+./claude-sync release --force   # lift every hold in force on this Mac, naming each
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -364,7 +366,8 @@ the watcher then sent that session's half finished work. Now:
   gives every command a session runs, its subagents' included, so a subagent's hold is its
   session's. A run with no session id (a plain terminal) records `unknown`, and an `unknown` hold
   is anyone's to lift.
-- Several holds can be in force at once, one per session, each with its own end. The watcher is
+- Several holds can be in force at once, one per session and label (see #2452 below), each with
+  its own end. The watcher is
   held while ANY of them is live. Each expires on its own: the watcher clears that one, says so,
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
@@ -376,7 +379,35 @@ the watcher then sent that session's half finished work. Now:
   works). Naming a session that holds nothing, or a start shared by two, refuses and lifts nothing.
   Every release names the hold it lifted, and names every hold still in force with the command
   that lifts it.
-- `status` lists every live hold on its own line, with whose it is and that command.
+- `status` lists every live hold on its own line, with whose it is, the clock time it ends, and
+  that command.
+
+A hold is named by its session AND its label, the `why` it was taken with (#2452). Every subagent
+a session dispatches carries that session's id, so on 2026-11-07 three builders from one session
+each took `hold 60 "build #N"`: each hold replaced the last, and each builder's plain `release`
+lifted the hold a sibling was still working under. The record's shape did not change, since every
+line already carried its label. What changed:
+
+- `hold` replaces only the caller's own line with the SAME label. A second `hold` from the same
+  session under another label is a second hold, kept beside the first and counted; the watcher
+  stays held until every one is released or has expired.
+- `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
+  the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
+  non-zero, and names the holds the caller does hold and any other session's, each with its end and
+  the command that lifts it. A label beginning with a dash goes after `--`: `release -- "-fix"`.
+- A plain `release` lifts the caller's own or `unknown` hold when there is exactly one. With more
+  than one it lifts none, exits non-zero, and names each with its end and `release "<label>"`,
+  because lifting them all would free a hold a sibling agent may still need.
+- `release --other <session> [label]` refuses the same way when that session holds more than one
+  and no label is given.
+- `release --force` lifts every hold in force on this Mac, naming each one it lifted. It is the
+  person at the keyboard's way to clear holds once they know none is still needed, and it is
+  suggested only to a caller with no session id, or alongside a refusal to choose.
+- The success line of `hold`, and every hint `status` and `release` print, name the label only
+  when the plain form would have to choose, so a single hold still reads `claude-sync release`.
+
+A claude-sync from before #2452 still reads every line correctly, but its `hold` keeps only one
+line per session, so it would drop a sibling's line of the same session until that Mac pulls.
 
 Every change to the record (taking, lifting, clearing an expired hold) happens under a lock beside
 it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot each write a
@@ -7812,8 +7843,8 @@ wrong when it is removed
 
 </td><td>
 
-`claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named
-session's, with `--other`)
+`claude-sync hold`, and `claude-sync release`, which removes the caller's own line of the label
+it names, or its only one (or a named session's, with `--other`, or every line, with `--force`)
 
 </td><td>
 
@@ -7822,7 +7853,8 @@ the watcher's send, `claude-sync status`, `claude-sync release`, and the payload
 
 </td><td>
 
-absent means no hold, which is the normal state. One line per hold, one hold per session (#1863):
+absent means no hold, which is the normal state. One line per hold, one hold per session and
+label (#1863, #2452):
 `<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before
 #1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A
 line with no `session=` field, the single line every hold was before #1863, is read as a hold by
