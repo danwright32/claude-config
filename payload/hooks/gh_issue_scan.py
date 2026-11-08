@@ -584,10 +584,13 @@ HEAD_WORDS = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "t
 EXPANDS = re.compile(r"[$`]")
 
 
-def _cut_heredocs(command):
+def _cut_heredocs(command, spaced=True):
     """The command with every heredoc body taken out, and the bodies.
 
     Each opener is replaced by a token of its own, so a reader can tell which command a body feeds.
+    spaced puts a space either side of each opener and here-string, as the word reader needs; without
+    it each stays against whatever was written before it, so a descriptor number on one (`3<<<`,
+    `3<<EOF`) is still there to be seen (_raw_redirections, the third lessons review of #2442).
     Returns (text, [shown]), one entry per body: True when the body is text the command shows
     verbatim, which a quoted delimiter guarantees and an unquoted one gives only when the body holds
     nothing the shell would expand. A body that never closes ends the text, as the shell reads it.
@@ -616,7 +619,7 @@ def _cut_heredocs(command):
             i += 1
             continue
         if command.startswith("<<<", i):
-            out.append(" <<< ")
+            out.append(" <<< " if spaced else "<<<")
             i += 3
             continue
         if command.startswith("<<", i):
@@ -626,7 +629,7 @@ def _cut_heredocs(command):
             if opener:
                 word, strip_tabs, quoted, i = opener
                 pending.append((word, strip_tabs, quoted))
-                out.append(" " + HEREDOC_MARK % openers + " ")
+                out.append((" %s " if spaced else "%s") % (HEREDOC_MARK % openers))
                 openers += 1
                 continue
         if c == "\n":
@@ -659,7 +662,8 @@ REDIRECT_TOKEN = re.compile(r"\d*[<>&|]+\Z")
 def _stages(command):
     """Every pipeline in the command, as a list of stages, each a (words, redirects, heredocs) triple.
 
-    redirects are (operator, target) pairs; heredocs the indexes of the bodies feeding that stage.
+    redirects are (operator, target) pairs, the operator with any descriptor number written against
+    it (`2>`, `3<`); heredocs the indexes of the bodies feeding that stage.
     A subshell's opening and closing parenthesis are entries of their own, the strings "(" and ")",
     in order among the pipelines, so a reader can tell where a cd inside one ends.
     Raises Unreadable when the command cannot be tokenized.
@@ -689,9 +693,11 @@ def _stages(command):
             stage = ([], [], [])
         elif REDIRECT_TOKEN.match(tok) and ("<" in tok or ">" in tok):
             # Its descriptor number (`2>`, claude-config#2235) is the shell's, never a word of the
-            # command, and the operator is recorded without it, as it always was.
+            # command, and stays on the operator: `3<` reads on descriptor 3, never standard input
+            # (the third lessons review of #2442). A reader asking only which way it goes takes it
+            # off with _bare.
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
-            stage[1].append((tok.lstrip("0123456789"), target))
+            stage[1].append((tok, target))
             i += 1
         else:
             stage[0].append(tok)
@@ -711,14 +717,11 @@ def _name(words):
     return (words[i], words[i + 1:]) if i < len(words) else (None, [])
 
 
-def _stdin_redirects(stage):
-    """How many redirections the stage gives its standard input: each heredoc, and each `<`, `<<<`,
-    `<&` and `<>`. The shell keeps only the last of them, so stdin_feeds never judges a stage with
-    more than one from any one it shows (the lessons review of #2442): `<<'EOF' < named.md` reads
-    named.md. _shown does not ask it yet, since file_writes reads it and the issue field gate stands
-    down on a write that is not shown, so asking there would loosen that gate."""
-    _words, redirects, heredocs = stage
-    return len(heredocs) + sum(1 for op, _ in redirects if op.startswith("<"))
+def _bare(op):
+    """A redirection operator without the descriptor number written against it: which way it goes.
+    _shown reads operators this way, as it always has, since file_writes reads it and the issue field
+    gate stands down on a write that is not shown, so a stricter reading there would loosen that gate."""
+    return op.lstrip("0123456789")
 
 
 def _shown(stage, fed, bodies):
@@ -737,7 +740,7 @@ def _shown(stage, fed, bodies):
         strings = [t for op, t in redirects if op == "<<<"]
         if strings:
             return not any(EXPANDS.search(t) for t in strings)
-        if any(op.startswith("<") for op, _ in redirects):
+        if any(_bare(op).startswith("<") for op, _ in redirects):
             return False  # fed from a file
         return fed
     return False
@@ -795,51 +798,135 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
+# A descriptor written against a redirection: digits, or a name the shell gives a free descriptor.
+DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_][A-Za-z0-9_]*\}")
+RAW_HEREDOC = re.compile("\x1fheredoc\\d+\x1f")
+
+
+def _raw_redirections(command):
+    """Every redirection the command makes, read from its text with the quotes still in it, as
+    (written against it, operator) pairs: `3< x` is ("3", "<"), a heredoc opener `3<<EOF` is
+    ("3", "<<"), `cat<<EOF` is ("cat", "<<"). None when the text holds what this reading does not
+    follow: ANSI quoting (`$'...'`), whose backslashes can escape a quote, or a comment, after which
+    the shell reads nothing a word reader sees (the third lessons review of #2442)."""
+    text, _ = _cut_heredocs(command, spaced=False)
+    out, word, quote, i, n = [], "", None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                word += text[i:i + 2]
+                i += 2
+                continue
+            word += c
+            quote = None if c == quote else quote
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            word += text[i:i + 2]
+            i += 2
+            continue
+        if text.startswith("$'", i) or (c == "#" and not word):
+            return None
+        if c in ("'", '"'):
+            quote = c
+            word += c
+            i += 1
+            continue
+        mark = RAW_HEREDOC.match(text, i)
+        if mark:
+            out.append((word, "<<"))
+            word, i = "", mark.end()
+            continue
+        if c in "<>":
+            j = i
+            while j < n and text[j] in "<>&|":
+                j += 1
+            out.append((word, text[i:j]))
+            word, i = "", j
+            continue
+        word = "" if c.isspace() or c in ";&|()" else word + c
+        i += 1
+    return out
+
+
+def _provable(command, pipelines):
+    """Whether this command is one whose standard input redirections can be proved from its words
+    (the third lessons review of #2442). It is not when its text read with the quotes in place makes a
+    different number of redirections than the word reader found (a quoted `'<'` is a word, which the
+    word reader cannot tell from an operator), when any redirection that reads, or that writes onto
+    standard input, carries a descriptor (`3<`, `2<&1`, `3<<<`, `{fd}<`, `0>&3`), or when any stage
+    hands a string to a shell, eval or env -S, whose commands no stage here shows."""
+    raw = _raw_redirections(command)
+    if raw is None:
+        return False
+    stages = [st for p in pipelines if isinstance(p, list) for st in p]
+    if len(raw) != sum(len(st[1]) + len(st[2]) for st in stages):
+        return False
+    for glued, op in raw:
+        if DESCRIPTOR.fullmatch(glued) and not (op.startswith(">") and glued in ("1", "2")):
+            return False
+    return not any(wrapped_words(st[0]) for st in stages)
+
+
+def _proved_feed(stage, bodies):
+    """(state, detail) for the one redirection of standard input on a gh stage: a heredoc or
+    here-string that expands nothing is "shown", a plain `<` is "file", and anything else, more than
+    one, or none at all is "hidden"."""
+    _words, redirects, heredocs = stage
+    reads = [(op, t) for op, t in redirects if "<" in op]
+    if len(heredocs) + len(reads) != 1:
+        return "hidden", None
+    if heredocs:
+        return ("shown" if bodies[heredocs[0]] else "hidden"), None
+    op, target = reads[0]
+    if op == "<<<":
+        return ("hidden" if EXPANDS.search(target) else "shown"), None
+    if op == "<":
+        return "file", target
+    return "hidden", None
+
+
 def stdin_feeds(command, kinds):
     """What each gh command of kinds the command runs at the head of a stage reads on its standard
     input (claude-config#2430), as (kind, args, state, detail):
-      "shown"   text the command shows (a heredoc or here-string that expands nothing, or a stage
-                before it in a pipe printing only shown text), so it is judged with the command
+      "shown"   a heredoc or here-string that expands nothing, so it is judged with the command
       "file"    a file fed in with `<`; detail is the word naming it
-      "hidden"  anything else: a pipe from a stage whose output is not shown, an expanding heredoc,
-                `<&` or `<>`, more than one redirection to standard input (the shell reads only the
-                last, #2442), or whatever the command itself was started with
-    Only a command at the head of a stage is seen: one a shell, eval or env runs from a string is not,
-    so a caller for whom standard input matters refuses a command it does not find here.
+      "hidden"  everything else
+    Hidden is the default. A command is judged shown or file only in the one form that can be proved
+    (the third lessons review of #2442): exactly one heredoc, here-string or `<` on the gh stage
+    itself, with no descriptor number on it; the first stage of its pipeline, so nothing is piped in;
+    no other redirection that reads, on any descriptor; not inside a subshell, a brace group or a
+    function body; and nowhere in the command a reading redirection with a descriptor, text the word
+    reader may misread, or a string a shell, eval or env -S runs (_provable). A command a shell or
+    eval runs from a string is not seen at all, so a caller for whom standard input matters refuses a
+    command it does not find here.
     Raises Unreadable when the command cannot be tokenized."""
     pipelines, bodies = _stages(command)
+    provable = _provable(command, pipelines)
     out = []
+    depth, braces = 0, 0
     for stages in pipelines:
         if stages in ("(", ")"):
+            depth = depth + 1 if stages == "(" else max(0, depth - 1)
             continue
-        fed = None  # the first stage reads whatever the command was started with
-        for stage in stages:
-            words, redirects, heredocs = stage
+        for position, stage in enumerate(stages):
+            words = stage[0]
             k = 0
             while k < len(words) and (words[k] in HEAD_WORDS or ASSIGNMENT.match(words[k])):
                 k += 1
+            opened = words[:k].count("{")
             found = gh_command(words[k:]) if k < len(words) else None
             # One that posts nothing (--help) is passed over, as scan_gh_in_context passes it over.
             if found and tuple(found[:2]) in kinds and \
                     not any(a in non_filing_flags(found[:2]) for a in list(found[2]) + list(found[3])):
-                files = [t for op, t in redirects if op == "<"]
-                strings = [t for op, t in redirects if op == "<<<"]
-                if _stdin_redirects(stage) > 1:
-                    state, detail = "hidden", None  # the shell reads only the last (#2442)
-                elif heredocs:
-                    state, detail = ("shown" if all(bodies[h] for h in heredocs) else "hidden"), None
-                elif strings:
-                    state, detail = ("hidden" if any(EXPANDS.search(t) for t in strings) else "shown"), None
-                elif files:
-                    state, detail = "file", files[-1]
-                elif _stdin_redirects(stage):
-                    state, detail = "hidden", None  # `<&` another descriptor, or `<>` a file
-                else:
-                    state, detail = ("shown" if fed else "hidden"), None
+                state, detail = "hidden", None
+                if provable and position == 0 and not (depth or braces or opened):
+                    state, detail = _proved_feed(stage, bodies)
                 out.append((tuple(found[:2]), list(found[2]) + list(found[3]), state, detail))
-            # A stage piping on more than one redirection to its standard input pipes the last,
-            # which nothing here judges by order, so what it pipes is never shown (#2442).
-            fed = _shown(stage, bool(fed), bodies) and _stdin_redirects(stage) <= 1
+            braces += opened
+            if words[:1] == ["}"]:
+                braces = max(0, braces - 1)
     return out
 
 

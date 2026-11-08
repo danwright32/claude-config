@@ -282,7 +282,7 @@ hook "python3 gen.py > made.md && gh release create v1 $PUB --notes-file made.md
 check "#2398 a notes file this command writes from what it does not show is refused: $out" refused
 
 # Release notes gh reads from standard input (`--notes-file -`, claude-config#2430) are judged where the
-# command shows them (a heredoc, a here-string, echo or printf piped in) or names the file fed in (`<`),
+# command shows them (a heredoc or a here-string on gh itself) or names the file fed in (`<`),
 # and refused anywhere else, since the hook cannot read them: the guard reads them only when gh runs.
 hook "cat named.md | gh release create v1 $PUB --notes-file -"
 check "#2430 notes piped in from what the command does not show are refused: $out" refused
@@ -313,8 +313,10 @@ hook "gh release create v1 $PUB --help --notes-file - ; bash -c 'cat clean.md | 
 check "#2430 and beside a release that posts nothing (--help), which never stands in for it: $out" refused
 hook "gh release create v1 $PUB -F - < clean.md"
 check "#2430 (control) a clean file fed in passes: $out" passed
+# Clean notes piped in from printf passed until the third lessons review of #2442, which found a pipe
+# into gh whose source the reading misjudged; a pipe into gh is now never a form that can be proved.
 hook "printf 'a clean build\n' | gh release create v1 $PUB --notes-file -"
-check "#2430 (control) clean notes the command shows, piped in, pass: $out" passed
+check "#2442 clean notes piped in, even from printf, are refused as unread: $out" refused
 hook "printf 'built from acme-widgets\n' | gh release create v1 $PUB --notes-file -"
 check "#2430 (control) and naming one, they are judged and refused: $out" refused
 hook "gh release create v1 $PUB --notes-file - <<< 'a clean build'"
@@ -351,6 +353,48 @@ EOF"
 check "#2442 a stage piping in a file beside a clean heredoc is refused: $out" refused
 hook "cat <<< 'a clean build' < named.md | gh release create v1 $PUB -F -"
 check "#2442 and beside a clean here-string: $out" refused
+# Notes on standard input are judged shown or read from a file only in a form that can be proved
+# (the third lessons review of #2442): exactly one heredoc, here-string or `<` file on the gh command
+# itself, with no pipe into it, no other redirection reading on any descriptor, no descriptor number
+# on its own redirection, and not inside a shell's string, eval, a function or a subshell. Every
+# other form is refused as unread, whatever the shell would really read.
+hook "cat named.md | gh release create v1 $PUB -F - 3< clean.md"
+check "#2442 a clean file on descriptor 3 never stands in for the notes piped in: $out" refused
+check "#2442 and the refusal says standard input: $out" has "$out" "standard input"
+hook "cat named.md | gh release create v1 $PUB -F - 2<&1"
+check "#2442 a 2<&1 is not a redirection of standard input: $out" refused
+hook "cat named.md | gh release create v1 $PUB -F - 3<&0"
+check "#2442 nor is a 3<&0: $out" refused
+hook "cat named.md | gh release create v1 $PUB -F - 3<<< 'a clean build'"
+check "#2442 a clean here-string on descriptor 3 never stands in for the notes piped in: $out" refused
+hook "cat named.md | gh release create v1 $PUB -F - 3<<'EOF'
+a clean build
+EOF"
+check "#2442 nor a clean heredoc on descriptor 3: $out" refused
+hook "cat named.md | gh release create v1 $PUB -F - {fd}< clean.md"
+check "#2442 nor a clean file on a named descriptor: $out" refused
+hook "exec 3< named.md; gh release create v1 $PUB -F - <<'EOF' 0>&3
+a clean build
+EOF"
+check "#2442 a clean heredoc is refused when standard input is then taken from another descriptor: $out" refused
+hook "cat named.md | gh release create v1 $PUB -F - --title '<' clean.md"
+check "#2442 a quoted < is a word, never a file fed in: $out" refused
+hook "gh release create v1 $PUB -F - <<'EOF'
+a clean build
+EOF
+eval 'cat named.md | gh release create v2 $PUB -F -'"
+check "#2442 a clean heredoc never stands in for a release eval runs beside it: $out" refused
+hook "( gh release create v1 $PUB -F - <<'EOF'
+a clean build
+EOF
+)"
+check "#2442 a release in a subshell is refused as unread: $out" refused
+hook "gh release create v1 $PUB -F - <<'EOF' 2>&1
+a clean build
+EOF"
+check "#2442 (control) a clean heredoc with its error output joined to its output passes: $out" passed
+hook "gh release create v1 $PUB -F - < clean.md 2>/dev/null"
+check "#2442 (control) a clean file fed in with errors discarded passes: $out" passed
 
 hook "gh gist create --public named.md"
 check "#2398 a public gist whose file names one is refused: $out" refused
