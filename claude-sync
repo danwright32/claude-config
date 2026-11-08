@@ -17,7 +17,9 @@
 #   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
 #   claude-sync release           # lift your own hold now rather than waiting for it to run out
+#   claude-sync release "why"     # lift only the hold you took with that label (#2452)
 #   claude-sync release --other S # lift the hold session S took (status names each hold's session)
+#   claude-sync release --force   # lift every hold in force on this Mac, naming each
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 #   claude-sync next-lesson       # the next free lesson number, reserved for ten minutes
 #   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
@@ -11091,6 +11093,14 @@ FAILED
 # its subagents' included, so a subagent's hold is its session's. Anything else (a plain terminal,
 # a value that is not the shape of an id) is "unknown".
 #
+# A hold is named by its session AND its label, the <why> it was taken with (claude-config#2452).
+# Every subagent of a session carries that session's id, so on 2026-11-07 three builders dispatched
+# by one session each took `hold 60 "build #N"`: each hold replaced the last, and each builder's
+# plain release lifted the hold a sibling was still working under. The label was already in every
+# line, so the record's shape is unchanged (L1010); what changed is that `hold` replaces only the
+# caller's line with the SAME label, `release "<label>"` lifts only that line, and a plain release
+# that would have to choose between several lines refuses, naming each, rather than lifting all.
+#
 # The record is PARSED in hooks/lib/hold-record.sh, which the hooks that refuse a payload write
 # without the writing session's own hold read through as well (claude-config#1886), so the tool
 # and those hooks cannot come to two answers about whose hold a line is (L370).
@@ -11104,8 +11114,48 @@ hold_owner_words(){   # $1 = owner
   elif [ "$1" = "$(hold_self)" ]; then printf 'this session'
   else printf 'session %s' "$(hold_record_short "$1")"; fi
 }
-hold_lift_hint(){   # $1 = owner
-  if [ "$1" = unknown ] || [ "$1" = "$(hold_self)" ]; then printf 'claude-sync release'
+# A label as the record keeps it: one line, runs of spaces folded to one, no space at either end.
+# The record is split on spaces and rejoined with one, so a label kept any other way would never
+# compare equal to itself read back. hold and release both pass what they were given through this.
+hold_label(){   # $@ = the words given
+  local l="$*"
+  l="${l//$'\n'/ }"; l="${l//$'\t'/ }"; l="${l//$'\037'/ }"
+  printf '%s' "$l" | awk '{ $1 = $1; printf "%s", $0 }'
+}
+# A label as it is typed after release: in double quotes, or shell quoted when it holds a character
+# double quotes would not keep.
+hold_label_words(){   # $1 = a label
+  case "$1" in
+    *[\"\\\$\`]*) printf '%q' "$1" ;;
+    *) printf '"%s"' "$1" ;;
+  esac
+}
+# The end of a hold as a clock time in Eastern time, labelled, the way every time of day is said.
+hold_until_words(){   # $1 = ends, epoch
+  local at
+  at="$(TZ=America/New_York date_from_epoch "$1" '+%-I:%M %p ET')"
+  [ -z "$at" ] || printf 'until %s' "$at"
+}
+# How many live holds a plain release, or a release --other naming this owner, would have to choose
+# between: the caller's own and unowned ones count together, since a plain release lifts both.
+hold_group_count(){   # $1 = owner  $2 = the rows the hold is among
+  local me
+  me="$(hold_self)"
+  if [ "$1" = unknown ] || [ "$1" = "$me" ]; then
+    printf '%s\n' "$2" | awk -F '\037' -v me="$me" '$1 == "live" && ($5 == me || $5 == "unknown") { n++ } END { printf "%d", n }'
+  else
+    printf '%s\n' "$2" | awk -F '\037' -v o="$1" '$1 == "live" && $5 == o { n++ } END { printf "%d", n }'
+  fi
+}
+# The command that lifts one hold from where this run stands. The label is named only when the
+# plain form would have to choose between more than one hold, and would therefore refuse.
+hold_lift_hint(){   # $1 = owner  $2 = label  $3 = the rows the hold is among
+  local n
+  n="$(hold_group_count "$1" "${3:-}")"
+  if [ "$1" = unknown ] || [ "$1" = "$(hold_self)" ]; then
+    if [ "${n:-0}" -gt 1 ]; then printf 'claude-sync release %s' "$(hold_label_words "$2")"
+    else printf 'claude-sync release'; fi
+  elif [ "${n:-0}" -gt 1 ]; then printf 'claude-sync release --other %s %s' "$(hold_record_short "$1")" "$(hold_label_words "$2")"
   else printf 'claude-sync release --other %s' "$(hold_record_short "$1")"; fi
 }
 
@@ -11249,12 +11299,13 @@ hold_live_left(){
 # deletes it (hold_remaining), while the write goes on into a file nobody can see: a hold that
 # printed success and is gone.
 #
-# Each session's hold is its own line (claude-config#1863), so a hold touches only the caller's own:
-# another session's hold is kept as it is, whatever its length, and both are in force. The caller's
-# own hold is never SHORTENED either; asking for less than it already has keeps the longer one and
-# says so.
+# Each hold is its own line (claude-config#1863), named by its session and its label (#2452), so a
+# hold touches only the caller's own line of that label: another session's hold, or the same
+# session's under another label (a sibling subagent's), is kept as it is, whatever its length, and
+# all are in force. The caller's own hold is never SHORTENED either; asking for less than it
+# already has keeps the longer one and says so.
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
-  local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows rc=0 own_left own_why st ends taken host o w
+  local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows after rc=0 own_left st ends taken host o w
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
   # Taking a hold rewrites every session's line in the record, which needs the reader (#1886).
   hold_reader_loaded || die "no hold was taken, and the hold record at $SYNC_HOLD_FILE was left exactly as it was: $(hold_reader_missing_why)"
@@ -11267,9 +11318,7 @@ do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   mins=$(( 10#$mins ))
   [ "$mins" -gt 0 ] || mins="$dflt"
   shift 2>/dev/null || true
-  why="$*"
-  why="${why//$'\n'/ }"
-  why="${why//$'\t'/ }"
+  why="$(hold_label "$@")"
   [ -n "$why" ] || why="a session is committing by hand"
   owner="$(hold_self)"
   hold_lock || rc=$?
@@ -11277,29 +11326,31 @@ do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   now="$(date +%s)"
   until=$(( now + mins * 60 ))
   rows="$(hold_rows "$now")"
-  own_left=0; own_why=""
+  # The caller's own hold is the line with its session AND this label (#2452): a line of the same
+  # session under another label is a sibling's hold, kept as it is and counted beside this one.
+  own_left=0
   while IFS=$'\037' read -r st ends taken host o w; do
-    if [ "$st" = live ] && [ "$o" = "$owner" ] && [ $(( 10#$ends - now )) -gt "$own_left" ]; then
-      own_left=$(( 10#$ends - now )); own_why="$w"
+    if [ "$st" = live ] && [ "$o" = "$owner" ] && [ "$w" = "$why" ] && [ $(( 10#$ends - now )) -gt "$own_left" ]; then
+      own_left=$(( 10#$ends - now ))
     fi
   done <<HOLDROWS
 $rows
 HOLDROWS
   if [ "$own_left" -gt 0 ] && [ $(( now + own_left )) -ge "$until" ]; then
     hold_unlock
-    echo "Your watcher hold was already in force for another $(duration_in_words "$own_left" exact) ($own_why), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: claude-sync release"
+    echo "Your watcher hold was already in force for another $(duration_in_words "$own_left" exact) ($why), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: $(hold_lift_hint "$owner" "$why" "$rows")"
     return 0
   fi
-  # Every other session's live hold, as it was, and this session's new one in place of its old.
+  # Every other live hold, as it was, and this one in place of the caller's old line of this label.
   tmp="$SYNC_HOLD_FILE.writing.$$"
-  if ! { printf '%s\n' "$rows" | awk -F '\037' -v me="$owner" '$1 == "live" && $5 != me'
-         printf 'live\037%s\037%s\037%s\037%s\037%s\n' "$until" "$now" "$(sync_hostname)" "$owner" "$why"
-       } | hold_write_rows; then
+  after="$(printf '%s\n' "$rows" | awk -F '\037' -v me="$owner" -v w="$why" '$1 == "live" && !($5 == me && $6 == w)'
+           printf 'live\037%s\037%s\037%s\037%s\037%s\n' "$until" "$now" "$(sync_hostname)" "$owner" "$why")"
+  if ! printf '%s\n' "$after" | hold_write_rows; then
     hold_unlock
     die "no hold was taken: the record could not be written at $SYNC_HOLD_FILE, so the watcher is NOT held and goes on sending."
   fi
-  # Read back the way the watcher reads it: this session's hold, with the end just asked for, live.
-  if [ ! -f "$SYNC_HOLD_FILE" ] || ! hold_rows "$(date +%s)" | awk -F '\037' -v me="$owner" -v e="$until" '$1 == "live" && $5 == me && $2 == e { found = 1 } END { exit found ? 0 : 1 }'; then
+  # Read back the way the watcher reads it: this hold, with the end just asked for, live.
+  if [ ! -f "$SYNC_HOLD_FILE" ] || ! hold_rows "$(date +%s)" | awk -F '\037' -v me="$owner" -v e="$until" -v w="$why" '$1 == "live" && $5 == me && $2 == e && $6 == w { found = 1 } END { exit found ? 0 : 1 }'; then
     hold_unlock
     # A directory where the record belongs takes the rename INTO it, so ours is removed from there.
     rm -f -- "$SYNC_HOLD_FILE/${tmp##*/}" 2>/dev/null || true
@@ -11310,9 +11361,10 @@ HOLDROWS
   # it, as #1854 shipped, date refused it, so the "until" clause was never once printed. In Eastern
   # time and labelled, as every time of day said to Dan is.
   at="$(TZ=America/New_York date_from_epoch "$until" '+%-I:%M %p ET')"
-  echo "Watcher held off for $(duration_in_words $(( mins * 60 )) exact)${at:+, until $at} ($why). It resumes on its own when that runs out, or now with: claude-sync release"
+  echo "Watcher held off for $(duration_in_words $(( mins * 60 )) exact)${at:+, until $at} ($why). It resumes on its own when that runs out, or now with: $(hold_lift_hint "$owner" "$why" "$after")"
   while IFS=$'\037' read -r st ends taken host o w; do
-    [ "$st" = live ] && [ "$o" != "$owner" ] || continue
+    [ "$st" = live ] || continue
+    [ "$o" = "$owner" ] && [ "$w" = "$why" ] && continue
     echo "The watcher is also held by $(hold_owner_words "$o") ($w) for another $(duration_in_words $(( 10#$ends - now )) exact), and stays held until every hold has ended."
   done <<HOLDROWS
 $rows
@@ -11326,15 +11378,33 @@ HOLDROWS
 # the watcher then sent that session's half finished work. Another session's hold is lifted only by
 # naming it, as status shows it: release --other <session>. Every lift names the hold it lifted, and
 # every hold still in force afterwards is named with the command that lifts it.
-do_release(){   # [--other <session>]
-  local target="" now rows rc=0 st ends taken host o w matched lifted=0 kept="" keep_n=0
+#
+# A hold is named by its session AND its label (#2452), since every subagent of a session shares
+# the session's id. So:
+#   release "<label>"                 lifts the caller's own (or an unowned) hold of that label only
+#   release                           lifts the caller's own or unowned hold when there is exactly
+#                                     ONE; with several it refuses, naming each with its end and the
+#                                     label that lifts it, because lifting all frees a hold a sibling
+#                                     agent of the same session is still working under
+#   release --other <session> [label] lifts that session's hold, refusing as above when it holds
+#                                     several and no label is given
+#   release --force                   lifts every hold in force on this Mac, naming each, for the
+#                                     person at the keyboard who has decided none is needed
+# A label or session that matches nothing lifts nothing and says whose holds are in force and until
+# when. The refusals to choose exit non-zero, so a caller cannot read one as a release.
+do_release(){   # [--other <session> [label]] | [--force] | [label]
+  local target="" label="" force=0 now rows rc=0 st ends taken host o w matched lifted=0 kept="" keep_n=0 me would_n would=""
   case "${1:-}" in
     '') ;;
     --other)
       [ -n "${2:-}" ] || die "nothing was released: --other needs the session whose hold to lift, as claude-sync status names it: claude-sync release --other <session>"
       case "$2" in *[!A-Za-z0-9._-]*) die "nothing was released: '$2' is not a session name. claude-sync status names each hold's session." ;; esac
-      target="$2" ;;
-    *) die "nothing was released: release takes no argument except --other <session>, and '$1' is not that. A plain release lifts your own hold; claude-sync status names the others." ;;
+      target="$2"; shift 2; label="$(hold_label "$@")" ;;
+    --force)
+      [ "$#" -eq 1 ] || die "nothing was released: --force takes nothing after it, because it lifts every hold in force on this Mac. To lift one hold, name its label: claude-sync release \"<label>\""
+      force=1 ;;
+    -*) die "nothing was released: release takes --other <session>, --force, or the label a hold was taken with, and '$1' is none of those. claude-sync status names each hold in force." ;;
+    *) label="$(hold_label "$@")" ;;
   esac
   [ -n "$SYNC_HOLD_FILE" ] || die "nothing was released: $(not_users_own_home), so this Mac's watcher hold is not its to lift. Name a hold file in SYNC_HOLD_FILE."
   if [ ! -e "$SYNC_HOLD_FILE" ]; then
@@ -11362,17 +11432,60 @@ do_release(){   # [--other <session>]
       die "nothing was released: '$target' names more than one session holding ($(printf '%s\n' "$matched" | tr '\n' ' ' | sed 's/ $//')), so which hold to lift is not decided. Give more of the session id."
     fi
   fi
-  # Which live holds this release lifts: its own and unowned ones, or the one named.
-  hold_release_lifts(){   # $1 = owner -> 0 when this release lifts that owner's hold
-    if [ -n "$target" ]; then [ "$1" = "$matched" ]
-    else [ "$1" = "$(hold_self)" ] || [ "$1" = unknown ]; fi
+  me="$(hold_self)"
+  # Which live holds this release lifts: every one under --force; the named session's (of that
+  # label, when one is given); else the caller's own and unowned ones (of that label, when given).
+  hold_release_lifts(){   # $1 = owner  $2 = label -> 0 when this release lifts that hold
+    [ "$force" = 1 ] && return 0
+    if [ -n "$target" ]; then
+      [ "$1" = "$matched" ] || return 1
+    else
+      [ "$1" = "$me" ] || [ "$1" = unknown ] || return 1
+    fi
+    [ -z "$label" ] || [ "$2" = "$label" ]
   }
   while IFS=$'\037' read -r st ends taken host o w; do
     [ "$st" = live ] || continue
-    if hold_release_lifts "$o"; then lifted=$(( lifted + 1 )); else kept="$kept$st"$'\037'"$ends"$'\037'"$taken"$'\037'"$host"$'\037'"$o"$'\037'"$w"$'\n'; keep_n=$(( keep_n + 1 )); fi
+    if hold_release_lifts "$o" "$w"; then
+      lifted=$(( lifted + 1 ))
+      would="$would$st"$'\037'"$ends"$'\037'"$taken"$'\037'"$host"$'\037'"$o"$'\037'"$w"$'\n'
+    else
+      kept="$kept$st"$'\037'"$ends"$'\037'"$taken"$'\037'"$host"$'\037'"$o"$'\037'"$w"$'\n'; keep_n=$(( keep_n + 1 ))
+    fi
   done <<HOLDROWS
 $rows
 HOLDROWS
+  # A release asked to lift ONE hold that matches several refuses rather than lifting them all
+  # (#2452): one of them may be a sibling agent's, still working under it. And --other with a label
+  # that session does not hold refuses, as --other naming no session does. Both lift nothing and
+  # exit non-zero, and name each hold concerned, its end, and the command that lifts it.
+  if [ "$force" != 1 ] && [ -z "$label" ] && [ "$lifted" -gt 1 ]; then
+    hold_unlock
+    if [ -n "$target" ]; then
+      echo "claude-sync: nothing was released: session $(hold_record_short "$matched") holds $lifted watcher holds, and --other without a label cannot tell which one to lift, so it lifted none. Each one, with the command that lifts it:" >&2
+    else
+      echo "claude-sync: nothing was released: $lifted watcher holds could be yours to lift (taken by this session, or by no session), and a plain release cannot tell which one is yours, so it lifted none. Each one, with the command that lifts it:" >&2
+    fi
+    while IFS=$'\037' read -r st ends taken host o w; do
+      [ -n "$st" ] || continue
+      echo "  the hold by $(hold_owner_words "$o") ($w), in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"): $(hold_lift_hint "$o" "$w" "$rows")" >&2
+    done <<WOULDROWS
+$would
+WOULDROWS
+    echo "Only once you know none of them is still needed, lift every hold in force on this Mac at once with: claude-sync release --force" >&2
+    return 1
+  fi
+  if [ -n "$target" ] && [ -n "$label" ] && [ "$lifted" -eq 0 ]; then
+    hold_unlock
+    echo "claude-sync: nothing was released: session $(hold_record_short "$matched") holds no watcher hold labelled $(hold_label_words "$label"). What it does hold, with the command that lifts each:" >&2
+    while IFS=$'\037' read -r st ends taken host o w; do
+      [ "$st" = live ] && [ "$o" = "$matched" ] || continue
+      echo "  ($w), in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"): $(hold_lift_hint "$o" "$w" "$rows")" >&2
+    done <<HOLDROWS
+$rows
+HOLDROWS
+    return 1
+  fi
   # Expired and unreadable lines go in the same rewrite: none of them holds anything.
   if ! printf '%s' "$kept" | hold_write_rows; then
     hold_unlock
@@ -11380,27 +11493,36 @@ HOLDROWS
   fi
   hold_unlock
   while IFS=$'\037' read -r st ends taken host o w; do
-    [ "$st" = live ] && hold_release_lifts "$o" || continue
+    [ -n "$st" ] || continue
     if [ "$keep_n" -eq 0 ] && [ "$lifted" -eq 1 ]; then
       echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))") by $(hold_owner_words "$o")${w:+ ($w)}; the next edit sends normally."
     else
       echo "Watcher hold released, the one taken $(age_in_words "$(( now - 10#$taken ))") by $(hold_owner_words "$o")${w:+ ($w)}."
     fi
-  done <<HOLDROWS
-$rows
-HOLDROWS
+  done <<WOULDROWS
+$would
+WOULDROWS
   if [ "$lifted" -gt 1 ] && [ "$keep_n" -eq 0 ]; then echo "No hold is left, so the next edit sends normally."; fi
+  local none_of="No watcher hold of yours was in force"
+  [ -z "$label" ] || none_of="No watcher hold of yours labelled $(hold_label_words "$label") was in force"
   while IFS=$'\037' read -r st ends taken host o w; do
     [ -n "$st" ] || continue
     if [ "$lifted" -gt 0 ]; then
-      echo "The watcher is still held: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact). Lift it with: $(hold_lift_hint "$o")"
+      echo "The watcher is still held: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"). Lift it with: $(hold_lift_hint "$o" "$w" "$kept")"
     else
-      echo "No watcher hold of yours was in force, so nothing was released: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact). Lift it with: $(hold_lift_hint "$o")"
+      echo "$none_of, so nothing was released: the hold by $(hold_owner_words "$o") ($w) stays in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"). Lift it with: $(hold_lift_hint "$o" "$w" "$kept")"
     fi
   done <<KEPTROWS
 $kept
 KEPTROWS
-  if [ "$lifted" -eq 0 ] && [ "$keep_n" -eq 0 ]; then echo "No watcher hold was in force, so nothing was released."; fi
+  # The person at the keyboard (no session) is the one --force is for, so it is named to them only.
+  if [ "$lifted" -eq 0 ] && [ "$keep_n" -gt 0 ] && [ "$me" = unknown ]; then
+    echo "Only once you know none of them is still needed, lift every hold in force on this Mac at once with: claude-sync release --force"
+  fi
+  if [ "$lifted" -eq 0 ] && [ "$keep_n" -eq 0 ]; then
+    if [ -n "$label" ]; then echo "No watcher hold labelled $(hold_label_words "$label") was in force, so nothing was released."
+    else echo "No watcher hold was in force, so nothing was released."; fi
+  fi
   return 0
 }
 
@@ -12398,16 +12520,17 @@ report_my_push(){
 
 # Every hold in force, one line each, with whose it is and the command that lifts it from here
 # (claude-config#1863): a plain release for this session's own or an unowned one, --other for
-# another session's.
+# another session's, each with the label when the plain form would have to choose (#2452).
 report_watcher_hold(){
-  local now st ends taken host owner why
+  local now st ends taken host owner why rows
   hold_remaining >/dev/null || return 0
   now="$(date +%s)"
+  rows="$(hold_rows "$now")"
   while IFS=$'\037' read -r st ends taken host owner why; do
     [ "$st" = live ] || continue
-    echo "watcher hold: the automatic send is held for another $(duration_in_words $(( 10#$ends - now )) exact) by $(hold_owner_words "$owner") ($why). Lift it with: $(hold_lift_hint "$owner")"
+    echo "watcher hold: the automatic send is held for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"), by $(hold_owner_words "$owner") ($why). Lift it with: $(hold_lift_hint "$owner" "$why" "$rows")"
   done <<HOLDROWS
-$(hold_rows "$now")
+$rows
 HOLDROWS
   return 0
 }

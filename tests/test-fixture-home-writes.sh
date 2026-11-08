@@ -333,7 +333,9 @@ check "control watch: replaces the real pid file whose watcher has gone" lacks "
 # (claude-config#1854), so a five minute control would keep the planted record and prove nothing.
 out="$(run_as "$OWN" hold -- 2000 a control hold)"
 check "control hold: writes the real hold marker" grep -q 'a control hold' "$HOLD"
-out="$(run_as "$OWN" release)"
+# --force, because the planted hold and the control hold are two holds under different labels, and
+# a plain release that would have to choose between two lifts neither (claude-config#2452).
+out="$(run_as "$OWN" release -- --force)"
 check "control release: removes the real hold marker" test ! -e "$HOLD"
 
 # The sync log, appended to exactly as before for this user's own config, its earlier lines kept.

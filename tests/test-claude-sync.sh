@@ -18655,10 +18655,12 @@ check "#1854 status reads the same record and says the same length" \
   "line_has \"\$out_54s\" 'watcher hold' '1 hour 30 minutes' 'building the nudge skill'"
 
 # A second, SHORTER hold must not cut the first one short: that is a hold somebody was promised
-# being lifted early by somebody else, with nothing said to either of them.
+# being lifted early by somebody else, with nothing said to either of them. Under the same label,
+# because that is the same hold (#2452); a hold under another label is a second hold beside it,
+# which the #2452 section tests.
 until_54a="$(awk 'NR==1{print $1}' "$H54_HOLD" 2>/dev/null)"
 out_54k=""; rc_54k=0
-out_54k="$(h54_env bash "$SCRIPT" hold 5 "a quick commit" 2>&1)" || rc_54k=$?
+out_54k="$(h54_env bash "$SCRIPT" hold 5 "building the nudge skill" 2>&1)" || rc_54k=$?
 dbg "#1854 shorter hold over a longer one: rc=$rc_54k $out_54k"
 check "#1854 a shorter hold over a longer one succeeds" "[ '$rc_54k' = 0 ]"
 check "#1854 and keeps the longer hold's expiry" "[ \"\$(awk 'NR==1{print \$1}' '$H54_HOLD')\" = '$until_54a' ]"
@@ -18956,6 +18958,148 @@ dbg "#1886 status with no reader: $out_63s"
 check "#1886 status with the reader missing still says the watcher is held" "line_has \"\$out_63s\" 'watcher hold' 'hold-record.sh'"
 check "#1886 and clears nothing, the expired line included" "cmp -s '$H63_HOLD' '$H63/hold-before-no-reader'"
 rm -f "$H63_HOLD" "$H63/hold-before-no-reader"
+
+
+section "== a hold is named by its session AND its label, and release frees only the one its caller took (#2452) =="
+# #1863 gave each SESSION one hold, but every subagent a session dispatches carries that session's
+# id. On 2026-11-07 three builders from one session each took `hold 60 "build #N"`: each hold
+# replaced the last, and each builder's plain release lifted the hold a sibling was still working
+# under. Now a hold is one line per session AND label, a second hold with a new label is counted
+# beside the first, release "<label>" lifts only that one, and a plain release that would have to
+# pick between several refuses, naming each with its end and the command that lifts it.
+H52="$WORK/h2452"; mkdir -p "$H52/home/hooks"
+echo '{"hooks":{}}' > "$H52/home/settings.json"
+printf '# rules before any hold\n' > "$H52/home/CLAUDE.md"
+git init -q --bare "$H52/bare.git"; git clone -q "$H52/bare.git" "$H52/repo" 2>/dev/null
+H52_HOLD="$H52/hold-marker"
+H52_S="ssssssss-1111-4111-8111-111111111111"
+H52_T="tttttttt-2222-4222-8222-222222222222"
+h52_env(){ CLAUDE_HOME="$H52/home" SYNC_REPO="$H52/repo" SYNC_HOLD_FILE="$H52_HOLD" SYNC_NO_NOTIFY=1 SYNC_NO_SEND_TESTS=1 env "$@"; }
+h52_s(){ h52_env CLAUDE_CODE_SESSION_ID="$H52_S" "$@"; }
+h52_t(){ h52_env CLAUDE_CODE_SESSION_ID="$H52_T" "$@"; }
+h52_commits(){ git -C "$H52/repo" rev-list --count HEAD 2>/dev/null || echo 0; }
+h52_lines(){ grep -c -- "$1" "$H52_HOLD" 2>/dev/null || true; }
+
+# TWO BUILDERS OF ONE SESSION, each with its own label: both holds are kept.
+out_52a=""; rc_52a=0
+out_52a="$(h52_s bash "$SCRIPT" hold 60 "build #2442" 2>&1)" || rc_52a=$?
+out_52b=""; rc_52b=0
+out_52b="$(h52_s bash "$SCRIPT" hold 30 "build #2445" 2>&1)" || rc_52b=$?
+dbg "#2452 first builder holds: rc=$rc_52a $out_52a"
+dbg "#2452 second builder holds: rc=$rc_52b $out_52b"
+check "#2452 a second hold from the same session with another label is taken, not kept under the first" \
+  "[ '$rc_52b' = 0 ] && line_has \"\$out_52b\" 'held off for 30 minutes' 'build #2445'"
+check "#2452 and the record holds both, each under the session" \
+  "grep -q 'session=$H52_S build #2442\$' '$H52_HOLD' && grep -q 'session=$H52_S build #2445\$' '$H52_HOLD'"
+check "#2452 and the second builder is told the first hold is also in force" "line_has \"\$out_52b\" 'also held' 'build #2442'"
+check "#2452 and is told to lift its own by its label, since a plain release would have to choose" \
+  "line_has \"\$out_52b\" 'held off' 'claude-sync release \"build #2445\"'"
+# The same label again is the same hold: lengthened in place, never a second line.
+h52_s bash "$SCRIPT" hold 45 "build #2445" >/dev/null 2>&1 || true
+check "#2452 the same label held again replaces its own line rather than adding one" "[ \"\$(h52_lines 'build #2445')\" = 1 ]"
+out_52st="$(h52_s bash "$SCRIPT" status 2>&1 || true)"
+check "#2452 status names each of the session's holds with the label that lifts it" \
+  "line_has \"\$out_52st\" 'watcher hold' 'release \"build #2442\"' && line_has \"\$out_52st\" 'watcher hold' 'release \"build #2445\"'"
+
+# A PLAIN RELEASE that would have to pick between them refuses and lifts nothing.
+out_52p=""; rc_52p=0
+out_52p="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52p=$?
+dbg "#2452 plain release among two of the session's holds: rc=$rc_52p $out_52p"
+check "#2452 a plain release among two of the session's own holds fails" "[ '$rc_52p' != 0 ]"
+check "#2452 and lifts neither" "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 1 ]"
+check "#2452 and names each hold, when it ends, and the label that lifts it" \
+  "line_has \"\$out_52p\" 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release \"build #2442\"' && line_has \"\$out_52p\" 'build #2445' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release \"build #2445\"'"
+check "#2452 and says how to lift them all at once" "line_has \"\$out_52p\" 'release --force' 'every'"
+check "#2452 and never says it released anything" "case \"\$out_52p\" in *'hold released'*) false ;; *) true ;; esac"
+
+# The watcher stays held while both are in force.
+printf '# rules edited under two holds\n' > "$H52/home/CLAUDE.md"
+c52_before="$(h52_commits)"
+h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#2452 the watcher sends nothing while the session's two holds are in force" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+
+# A LABEL NOBODY HOLDS lifts nothing and names what is in force, with its end.
+out_52n=""; rc_52n=0
+out_52n="$(h52_s bash "$SCRIPT" release "build #9999" 2>&1)" || rc_52n=$?
+dbg "#2452 release of a label nobody holds: rc=$rc_52n $out_52n"
+check "#2452 release naming a label nobody holds lifts nothing" \
+  "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 1 ]"
+check "#2452 and says so, naming the holds in force and when each ends" \
+  "line_has \"\$out_52n\" 'nothing was released' 'build #9999' && line_has \"\$out_52n\" 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET'"
+
+# THE MATCHING LABEL lifts that hold only.
+out_52r=""; rc_52r=0
+out_52r="$(h52_s bash "$SCRIPT" release "build #2445" 2>&1)" || rc_52r=$?
+dbg "#2452 release by label: rc=$rc_52r $out_52r"
+check "#2452 release by its label lifts that hold, naming it" "[ '$rc_52r' = 0 ] && line_has \"\$out_52r\" 'released' 'build #2445'"
+check "#2452 and leaves the sibling's hold in the record" "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 0 ]"
+check "#2452 and says the watcher is still held by it, until when" "line_has \"\$out_52r\" 'still held' 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET'"
+check "#2452 and never says the next edit sends" "case \"\$out_52r\" in *'sends normally'*) false ;; *) true ;; esac"
+c52_before="$(h52_commits)"
+h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#2452 and the watcher still sends nothing" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+
+# ANOTHER SESSION'S LABEL is not the caller's to lift, even named.
+h52_t bash "$SCRIPT" hold 20 "T works on a skill" >/dev/null 2>&1 || true
+out_52o=""; rc_52o=0
+out_52o="$(h52_s bash "$SCRIPT" release "T works on a skill" 2>&1)" || rc_52o=$?
+dbg "#2452 release of another session's label: rc=$rc_52o $out_52o"
+check "#2452 release naming another session's label leaves that hold in place" "[ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+check "#2452 and says whose it is, until when, and how to lift it" \
+  "line_has \"\$out_52o\" 'session tttttttt' 'T works on a skill' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release --other tttttttt'"
+
+# RELEASE --OTHER on a session holding two refuses until the label is named.
+h52_t bash "$SCRIPT" hold 20 "T second job" >/dev/null 2>&1 || true
+out_52q=""; rc_52q=0
+out_52q="$(h52_s bash "$SCRIPT" release --other tttttttt 2>&1)" || rc_52q=$?
+dbg "#2452 --other on a session with two holds: rc=$rc_52q $out_52q"
+check "#2452 release --other on a session holding two fails and lifts neither" \
+  "[ '$rc_52q' != 0 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ] && [ \"\$(h52_lines 'T second job')\" = 1 ]"
+check "#2452 and names each with the command that lifts it" \
+  "line_has \"\$out_52q\" 'T second job' 'release --other tttttttt \"T second job\"'"
+out_52ql=""; rc_52ql=0
+out_52ql="$(h52_s bash "$SCRIPT" release --other tttttttt "T second job" 2>&1)" || rc_52ql=$?
+check "#2452 and release --other with the label lifts only that one" \
+  "[ '$rc_52ql' = 0 ] && [ \"\$(h52_lines 'T second job')\" = 0 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+
+# A PERSON AT THE KEYBOARD (no session id): a plain release leaves the sessions' holds, naming them,
+# and --force lifts every hold, naming each one it lifted.
+out_52k=""; rc_52k=0
+out_52k="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release 2>&1)" || rc_52k=$?
+dbg "#2452 terminal plain release: rc=$rc_52k $out_52k"
+check "#2452 a terminal's plain release leaves every session's hold in place" \
+  "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
+check "#2452 and names each, with --force as the way to lift them all" \
+  "line_has \"\$out_52k\" 'nothing was released' 'build #2442' 'until' && line_has \"\$out_52k\" 'every hold' 'release --force'"
+out_52x=""; rc_52x=0
+out_52x="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release --force extra 2>&1)" || rc_52x=$?
+check "#2452 release --force with anything after it refuses and lifts nothing" \
+  "[ '$rc_52x' != 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ]"
+out_52f=""; rc_52f=0
+out_52f="$(h52_env -u CLAUDE_CODE_SESSION_ID bash "$SCRIPT" release --force 2>&1)" || rc_52f=$?
+dbg "#2452 terminal release --force: rc=$rc_52f $out_52f"
+check "#2452 release --force lifts every hold in force" "[ '$rc_52f' = 0 ] && [ ! -e '$H52_HOLD' ]"
+check "#2452 and names each one it lifted" \
+  "line_has \"\$out_52f\" 'released' 'build #2442' && line_has \"\$out_52f\" 'released' 'T works on a skill'"
+
+# ONE OF THE SESSION'S HOLDS EXPIRES: only that one is cleared, and the watcher stays held.
+{
+  printf '%s %s %s session=%s build #2442\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" "somehost" "$H52_S"
+  printf '%s %s %s session=%s build #2445\n' "$(( $(date +%s) - 60 ))" "$(( $(date +%s) - 3600 ))" "somehost" "$H52_S"
+} > "$H52_HOLD"
+printf '# rules edited while a sibling hold expired\n' > "$H52/home/CLAUDE.md"
+c52_before="$(h52_commits)"
+out_52e="$(h52_s SYNC_IN_WATCH=1 bash "$SCRIPT" send 2>&1 || true)"
+dbg "#2452 one of the session's holds expired: $out_52e"
+check "#2452 an expired hold beside a live one of the same session is cleared alone" \
+  "[ \"\$(h52_lines 'build #2445')\" = 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ]"
+check "#2452 and the watcher stays held by the live one" "[ \"\$(h52_commits)\" = '$c52_before' ]"
+# With one hold of its own left, a plain release lifts it as before.
+out_52l=""; rc_52l=0
+out_52l="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52l=$?
+check "#2452 a plain release with one hold of the session's own lifts it" \
+  "[ '$rc_52l' = 0 ] && [ ! -e '$H52_HOLD' ] && line_has \"\$out_52l\" 'released' 'build #2442'"
+rm -f "$H52_HOLD"
 
 
 section "== a watch daemon older than the claude-sync on disk refuses to send (#420) =="
