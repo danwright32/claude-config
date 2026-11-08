@@ -653,14 +653,26 @@ ps__runs_tool() {   # $1 = one command, $2 = gh | git, $3 = the subcommand, $4 =
   local w k=0 last=-1 tool=0 sub=0 act=0
   PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
   [ -n "${4:-}" ] || act=1
+  # With no reader there is no list of gh's aliases (`gh pr new` is gh pr create), so for the pr and
+  # issue groups any action counts as the one asked about: the group word alone decides, the reading
+  # that sees more, never fewer (claude-config#2424). The words after the action, when it is written,
+  # are still its own. Only gh is asked about with an action, so an action names gh's groups.
+  local any_act=0
+  if [ -n "${4:-}" ]; then
+    case "$3" in pr|issue) any_act=1 ;; esac
+  fi
   read -r -a words <<< "$1"
   for w in ${words[@]+"${words[@]}"}; do
     w="${w#[(\{]}"; w="${w%%[)\}]*}"
     [ "${w##*/}" = "$2" ] && tool=1   # gh-reader: the crude reading, when there is no other
-    if [ "$w" = "$3" ] && [ "$sub" = 0 ]; then sub=1; [ -n "${4:-}" ] || last=$k; fi
+    if [ "$w" = "$3" ] && [ "$sub" = 0 ]; then
+      sub=1
+      if [ -z "${4:-}" ] || [ "$any_act" = 1 ]; then last=$k; fi
+    fi
     if [ -n "${4:-}" ] && [ "$w" = "$4" ] && [ "$act" = 0 ]; then act=1; last=$k; fi
     k=$((k + 1))
   done
+  [ "$any_act" = 1 ] && act=1
   [ "$tool$sub$act" = 111 ] || return 1
   PS_RUN_SUB="$3"; PS_RUN_ACT="${4:-}"
   [ "$last" -ge 0 ] && PS_RUN_ARGS=("${words[@]:$((last + 1))}")

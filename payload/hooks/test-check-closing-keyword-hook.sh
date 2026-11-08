@@ -168,6 +168,42 @@ run_nopy "the visible override still clears the missing detector refusal" $ALLOW
 run "the control still allows the same pr create with python3 present" $ALLOW \
   'gh pr create --title x --body "Part of #897, which stays open."'
 
+# Every fallback with no reader acts on gh's pr group, never on the word create alone, since `gh pr
+# new` is gh's other name for gh pr create and no fallback holds a list of gh's aliases
+# (claude-config#2424): with no python3, with push-scope.sh missing, and with a payload no reader parses.
+run_nopy "#2424 with no python3 gh pr new is refused as gh pr create is" $BLOCK \
+  'gh pr new --title x --body "Part of #897, which stays open."' 'python3'
+run_nopy "#2424 and with gh's flags in front of the group" $BLOCK \
+  'gh -R o/x pr new --title x --body "Part of #897, which stays open."' 'python3'
+NOLIB="$NOPY_ROOT/nolib"; mkdir -p "$NOLIB"
+cp "$HOOK" "$NOLIB/check-closing-keyword.sh"
+nolib_run() {   # $1 = description, $2 = expected exit, $3 = command; the hook with no lib/ beside it
+  local payload got
+  payload="$(python3 -c '
+import json, sys
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": "/tmp"}))
+' "$3")"
+  printf '%s' "$payload" | bash "$NOLIB/check-closing-keyword.sh" >/dev/null 2>&1; got=$?
+  if [ "$got" -eq "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1 (wanted exit $2, got $got)"; fi
+}
+nolib_run "#2424 control: with push-scope.sh missing gh pr create is refused" $BLOCK \
+  'gh pr create --title x --body "Part of #897, which stays open."'
+nolib_run "#2424 with push-scope.sh missing gh pr new is refused too" $BLOCK \
+  'gh pr new --title x --body "Part of #897, which stays open."'
+nolib_run "#2424 control: with push-scope.sh missing a command naming no pull request passes" $ALLOW \
+  'ls -la'
+unparsed_run() {   # $1 = description, $2 = expected exit, $3 = a payload no reader parses
+  local got
+  printf '%s' "$3" | "$HOOK" >/dev/null 2>&1; got=$?
+  if [ "$got" -eq "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1 (wanted exit $2, got $got)"; fi
+}
+unparsed_run "#2424 control: a payload no reader parses naming gh pr create is refused" $BLOCK \
+  '{"tool_input":{"command":"gh pr create --title x --body \"Part of #897\"'
+unparsed_run "#2424 a payload no reader parses naming gh pr new is refused too" $BLOCK \
+  '{"tool_input":{"command":"gh pr new --title x --body \"Part of #897\"'
+unparsed_run "#2424 control: a payload no reader parses naming no pull request passes" $ALLOW \
+  '{"tool_input":{"command":"ls -la'
+
 rm -rf "$NOPY_ROOT"
 
 echo

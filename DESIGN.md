@@ -1617,7 +1617,10 @@ text `create` before reading a command, so `gh issue new` and `gh pr new` passed
 cheap tests now look only for the group's word (`issue`, `pr`), and the action is read by `gh_path`,
 which knows every alias; `test-gh-write-aliases.sh` fails the day the table gives either group a name
 that lacks that word, so no second alias list is kept. With no reader at all, the crude fallback of
-`ps__runs_tool` still matches only the literal words asked about. The work names gate reads whether
+`ps__runs_tool` acts on the group word alone for gh's pr and issue groups, so `gh pr new` is seen as
+the create it is and any other action of the group is asked about too, and check-closing-keyword.sh's
+fallbacks (its library missing, python3 missing, a payload no reader parses) act on the word `pr`
+rather than `pr create` (#2424). The work names gate reads whether
 a gist is public from `gh api gists/<id>` (refused when no account can read it) and judges `gh gist
 edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
 new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and

@@ -118,8 +118,19 @@ check_eq "ps_is_git_push does not take a commit for a push" "no" "$(asks ps_is_g
 BROKEN="$WORK/broken-sw.py"; printf 'import sys\nsys.exit(3)\n' > "$BROKEN"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh -R o/x pr create" pr create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
 check_eq "a crashed reader still lets a pr create be seen" "yes" "$crashed"
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh run view 3" pr create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
+check_eq "control: the crude reading does not take another group's command for a pr create" "no" "$crashed"
+# With no reader there is no list of gh's aliases, so for the pr and issue groups the crude reading
+# acts on the group word alone (claude-config#2424): gh pr new is gh pr create, and any other action
+# of the group is read as the one asked about too, the reading that sees more, never fewer.
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr new --fill" pr create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
+check_eq "#2424 a crashed reader still lets gh pr new be seen as a pr create" "yes" "$crashed"
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh -R o/x issue new --title T" issue create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
+check_eq "#2424 and gh issue new as an issue create" "yes" "$crashed"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr view 3" pr create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
-check_eq "control: the crude reading does not take a pr view for a create" "no" "$crashed"
+check_eq "#2424 any action of the pr group counts with no reader, so a pr view is asked about as a create" "yes" "$crashed"
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_is_gh_pr_create "gh pr new --fill"; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
+check_eq "#2424 ps_is_gh_pr_create with a crashed reader sees gh pr new" "yes" "$crashed"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_git "$3 push origin main" push; then echo "yes:${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$BROKEN" "$G")"
 check_eq "and the crude reading keeps a push's own words, its remote and branch" "yes:origin main" "$crashed"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr -R o/x create --fill" pr create; then echo "yes:${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$BROKEN")"
