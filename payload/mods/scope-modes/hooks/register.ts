@@ -42,7 +42,7 @@ import {
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
 import { committedHosts, tabsAfter, type Browser, type BrowserTabs, type TestHosts } from './browser.ts'
-import { wakeCheck } from './wakecheck.ts'
+import { wakeCheck, workedOn } from './wakecheck.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
   answerChoices,
@@ -1205,6 +1205,8 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   // Every repository the night's notes name is read, so a private one the events feed leaves out
   // is still checked (#834 review). No notes file is no repositories; one that cannot be read is said.
   const repos: string[] = []
+  // The issues and pull requests the notes say a session worked, which explain a milestone they moved (#2393).
+  const worked: string[] = []
   const unread: string[] = []
   if (typeof record.generation === 'string') {
     const notes = notesOf(home, record.generation)
@@ -1212,8 +1214,10 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
       if (await $.fs.exists(notes))
         for (const line of (await $.fs.read(notes)).split('\n')) {
           try {
-            const repo = (JSON.parse(line) as { repo?: unknown }).repo
+            const note = JSON.parse(line) as { repo?: unknown }
+            const repo = note?.repo
             if (typeof repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(repo)) repos.push(repo)
+            worked.push(...workedOn(note))
           } catch {
             // A line that is not JSON names no repository; the report says it could not read it.
           }
@@ -1225,7 +1229,7 @@ const overnightCheck = async ($: EngineInterface, record: SleepRecord | null, re
   let found
   try {
     // #2016: the installed LESSONS.md is dated by the engine's own stat, which reads the same on Linux.
-    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
+    found = await wakeCheck((argv, timeoutMs) => run($, argv, timeoutMs), { since: record.since, home, repos, worked, github: githubOf($), now: () => $.clock.now(), mtimeOf: async p => (await $.fs.stat(p)).mtimeMs })
   } catch (err) {
     found = { hits: [], unmeasured: [`the overnight check failed (${msg(err)})`] }
   }

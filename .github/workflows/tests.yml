@@ -64,7 +64,8 @@ jobs:
     #
     # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
     # defaults, and they are ordered with room between them: a stall is noticed at eight minutes,
-    # the absolute ceiling is thirty, and the platform's backstop is forty.
+    # the absolute ceiling is thirty, and the platform's backstop is sixty (forty until 2026-11-08,
+    # below).
     #
     # RAISED 2026-09-19 (claude-config#473), from a 960s ceiling under a 20 minute backstop, and
     # this time against a measurement rather than a choice. The sentence above used to say the
@@ -109,9 +110,17 @@ jobs:
     # second workflow cannot arrive without a timeout and none of these three numbers can cross
     # over without something saying so. That check is also why the backstop moved: it requires the
     # job's timeout to EXCEED the suite's own ceiling, so a thirty minute ceiling cannot sit under
-    # a twenty minute backstop. Forty minutes is above it with room for the other eighty two suites
-    # to finish afterwards, against a job that measured about fourteen minutes on 2026-09-19.
-    timeout-minutes: 40
+    # a twenty minute backstop. Forty minutes was above it with room for the other eighty two
+    # suites to finish afterwards, against a job that measured about fourteen minutes on 2026-09-19.
+    #
+    # Sixty since 2026-11-08. The job had grown to 30 to 39 minutes on a passing run (282 suites;
+    # the slowest test-claude-sync.sh 558s, test-merge-when-ready.sh 458s, test-run-all-tests.sh
+    # 419s, test-push-scope.sh 337s on main's run of 03:30 UTC), and on the slower runner group
+    # (#2403, about 27% slower) it crossed forty: of the 16 runs started from 02:15 to 04:55 UTC
+    # that night, 6 were cancelled at forty minutes with nothing failing, which stopped every
+    # merge. Raising the ceiling only buys room; the growth itself is still unmeasured and is the
+    # thing to cut (L299), so this number is a backstop to come down again, not a budget.
+    timeout-minutes: 60
     steps:
       # FIRST, before anything that takes time (claude-config#1901). The runner reads this job's
       # timeout-minutes above from this file and holds every flake recheck to end before it, so a

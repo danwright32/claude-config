@@ -35,8 +35,8 @@
 #
 # Seams, for the tests: WN_MERGE_READ_TRIES (3 in all) and WN_MERGE_READ_RETRY_SECONDS (2, capped at
 # 5), both honoured only with HOOK_TESTS_RUNNING=1 (claude-config#2231); WN_MERGE_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
-# merge-when-ready.sh sets, when it is unset; either is clamped to 15), WN_MERGE_SLEEP (sleep), all
-# chosen, not measured; WN_MERGE_SCANNER (the scanner file, honoured only with HOOK_TESTS_RUNNING=1);
+# merge-when-ready.sh sets, when it is unset; either is clamped to 15), all chosen, not measured;
+# WN_MERGE_SLEEP (sleep, honoured only with HOOK_TESTS_RUNNING=1, claude-config#2317); WN_MERGE_SCANNER (the scanner file, honoured only with HOOK_TESTS_RUNNING=1);
 # WN_MERGE_CLOCK_FILE (a test clock that moves this hook's clock forward only, so it can make the
 # gate refuse sooner and never later, wn_clock_catch_up).
 
@@ -173,7 +173,12 @@ if whole_above_zero "$READ_DEADLINE" READ_DEADLINE; then
 else
   READ_DEADLINE=0
 fi
-READ_SLEEP="${WN_MERGE_SLEEP:-sleep}"
+# The command run between reads is named from the environment only under the test marker
+# (claude-config#2317): one named in Claude Code's environment that never returned would hold this
+# hook past its timeout, where it is killed and gives no verdict. Anywhere else it is the sleep on
+# the PATH.
+READ_SLEEP=sleep
+[ "${HOOK_TESTS_RUNNING:-}" = 1 ] && [ -n "${WN_MERGE_SLEEP:-}" ] && READ_SLEEP="$WN_MERGE_SLEEP"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
 TRIED_WITHIN=". Tried within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
 read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }

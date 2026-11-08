@@ -649,3 +649,27 @@ describe('pipeline: the text a command substitution puts in a word (#2141)', () 
     expect(ran("echo $(cat <<'EOF'\n$(git push)\nEOF")).not.toContain('git push')
   })
 })
+
+// #2407: a # where a word would begin starts a comment to the end of the line, as the shell reads it,
+// so a script's comment lines are no commands and an apostrophe in one opens no quote. A # inside a
+// word or quotes (a#b, ${#x}, $#, "c#d") stays text.
+describe('comments (#2407)', () => {
+  test('a comment line, or the rest of a line after a #, is no command, and its apostrophe opens no quote', () => {
+    expect(commands("# it's a comment\necho x")).toEqual([['echo', 'x']])
+    expect(commands("echo x # it's a comment\nls")).toEqual([['echo', 'x'], ['ls']])
+    expect(commands('echo a;# c\nls')).toEqual([['echo', 'a'], ['ls']])
+    expect(commands('(# c\nls)')).toEqual([['('], ['ls'], [')']])
+  })
+  test('a # inside a word or quotes stays text', () => {
+    expect(commands("echo a#b ${#x} $# \"c#d\" 'e#f' \\#g")).toEqual([['echo', 'a#b', '${#x}', '$#', 'c#d', 'e#f', '#g']])
+  })
+  test("a shell's script, from a heredoc or -c, is read without its comments and its #! line", () => {
+    expect(commands("bash <<'D'\n#!/bin/bash\n# it's read only\ngrep -n x \"$1\" # don't write\nD")).toEqual([['grep', '-n', 'x', '$1']])
+    expect(commands("bash -c '# c\necho y'")).toEqual([['echo', 'y']])
+  })
+  test('a heredoc opener in a comment opens no heredoc, so the lines after it are still read as commands', () => {
+    expect(commands('# cat <<EOF is how\necho a\nEOF\nls')).toEqual([['echo', 'a'], ['EOF'], ['ls']])
+    // One outside the comment on the same line still opens its heredoc.
+    expect(commands("cat <<'EOF' # it's text\nbody\nEOF\nls")).toEqual([['cat', '<<EOF'], ['ls']])
+  })
+})
