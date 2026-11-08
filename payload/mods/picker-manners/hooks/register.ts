@@ -105,10 +105,12 @@ export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =
 // below). #2408: the engine skips a listener that throws without the guard hearing of it (PR #2405),
 // so anything stopping the work being started ($.clock.after throwing) is logged here and never
 // thrown: the guard keeps his answer, and the question stays open on its issue. What the work itself
-// meets is logged by recordOnIssues and reportingFailure.
+// meets is logged by recordOnIssues and reportingFailure. The timer is offTheDialog's, which the noun
+// waits check reads as work after the noun answered; a function written in place handed to
+// reportingFailure here would be read as the noun's own code, gh's 20 s included (#2333).
 export const checkOffAnswered = async ($: EngineInterface, e: { question: string; answer: string; options: readonly string[] }) => {
   try {
-    $.clock.after(0, reportingFailure($, () => recordOnIssues($, e.question, e.answer, e.options)))
+    offTheDialog($, () => recordOnIssues($, e.question, e.answer, e.options))
   } catch (err) {
     const named = issuesNamedIn(e.question)
     const where = named.length ? `${named.map(x => `${x}'s`).join(', ')} Open questions` : "its issue's Open questions"
