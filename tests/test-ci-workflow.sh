@@ -263,7 +263,8 @@ fi
 # a run's log then names the hardware behind each group. Read from the step's code with comments
 # stripped, so a comment naming the processor cannot satisfy it (L135).
 env_step_code(){ # env_step_code <workflow>
-  code_of "$1" | awk '/name:[[:space:]]*Record the environment the suite is judged in/ { s = 1; next } s && /^[[:space:]]*- (name|uses|run):/ { exit } s { print }'
+  # Reads to the end rather than leaving at the next step, so the pipeline never ends early.
+  code_of "$1" | awk '/name:[[:space:]]*Record the environment the suite is judged in/ && !done { s = 1; next } s && /^[[:space:]]*- (name|uses|run):/ { s = 0; done = 1 } s { print }'
 }
 processor_printed(){ # processor_printed <workflow>
   local step re='echo "processor: \$\(.*(/proc/cpuinfo|lscpu)'
