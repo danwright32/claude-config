@@ -737,7 +737,7 @@ def _shown(stage, fed, bodies):
             return False  # it copies a file the command does not show
         if heredocs:
             return all(bodies[h] for h in heredocs)
-        strings = [t for op, t in redirects if op == "<<<"]
+        strings = [t for op, t in redirects if _bare(op) == "<<<"]
         if strings:
             return not any(EXPANDS.search(t) for t in strings)
         if any(_bare(op).startswith("<") for op, _ in redirects):
