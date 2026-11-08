@@ -24,7 +24,9 @@ Two routes are judged:
     is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
-    path with the interpreter its #! names (claude-config#2400). The one script let through is /nudge, at
+    path with the interpreter its #! names (claude-config#2400); a Python script counts as able to
+    unless it imports only modules known to be unable to (PY_INERT). The one script let through is
+    /nudge, at
     skills/nudge/nudge.py beside this hooks folder, by its real path; a copy anywhere else is refused
     like any other script that posts.
 
@@ -230,12 +232,39 @@ IMPORT_MAX_FILES = 300
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
 # What lets a script act on a data file as more than data: sending a request (whose address the file
-# can hold) or running code (which the file can be). A Python or JavaScript script, or a module it
-# imports, naming any of these still has the data files it is handed read. Read from the text, comments
-# included, which can only refuse more.
-PY_ACTS = re.compile(r"\b(urllib|urlopen|requests|httpx|aiohttp|http\.client|pycurl|socket|websockets?|"
-                     r"subprocess|os\.(system|popen|exec\w*|spawn\w*)|exec|execfile|eval|compile|runpy|"
-                     r"__import__|import_module|pty)\b")
+# can hold), running code (which the file can be), or writing it somewhere that runs later. A
+# JavaScript script, or a module it imports, naming any of JS_ACTS still has the data files it is
+# handed read. Read from the text, comments included, which can only refuse more.
+#
+# A Python script is judged the other way round (lessons review at 56b9d7f): a list of the ways to act
+# missed urllib3, httplib2, smtplib, ftplib, asyncio streams and importlib's exec_module, and a list
+# like that always misses the next one (L96). So a Python script counts as unable to act only when
+# every module it imports from outside the script's own files is in PY_INERT, modules that cannot
+# send, run code or write a file, and it uses none of PY_RUNS, PY_REACH or PY_WRITES (py_acts).
+# Anything else counts as able to act. A dotted entry allows only that submodule: `import os.path`
+# binds os, so os used for anything but os.path counts as acting.
+PY_INERT = frozenset({
+    "__future__", "abc", "argparse", "array", "base64", "binascii", "bisect", "calendar", "cmath",
+    "collections", "copy", "csv", "dataclasses", "datetime", "decimal", "difflib", "enum", "fnmatch",
+    "fractions", "functools", "glob", "hashlib", "heapq", "html", "itertools", "json", "math", "numbers",
+    "os.path", "pathlib", "pprint", "random", "re", "shlex", "statistics", "string", "struct", "sys",
+    "textwrap", "time", "typing", "unicodedata", "warnings", "zoneinfo"})
+# Builtins that run code, start a program (help's pager) or reach a namespace the script never
+# imported. Used at all, not only called, so `f = exec` counts too; re.compile, an attribute, does not.
+PY_RUNS = frozenset({"exec", "eval", "compile", "execfile", "__import__", "breakpoint", "help", "getattr",
+                     "setattr", "delattr", "vars", "globals", "locals", "__builtins__", "__loader__",
+                     "__spec__"})
+# Attributes (and imported names) that reach another module or a frame's namespace, change where
+# Python finds modules, or evaluate a string as code: sys.modules, sys.path, a frame's f_globals,
+# typing's forward references. Any _private attribute and any dunder one counts too (py_acts).
+PY_REACH = frozenset({"modules", "path_hooks", "meta_path", "path_importer_cache", "f_globals",
+                      "f_builtins", "f_locals", "f_back", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
+                      "get_type_hints", "ForwardRef", "evaluate_forward_ref"})
+PY_DUNDER_OK = frozenset({"__init__", "__name__", "__doc__", "__qualname__"})
+# Methods that write or move a file (pathlib's), beside open() and argparse.FileType with a mode
+# that writes.
+PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", "rename", "symlink_to",
+                       "hardlink_to", "link_to", "chmod", "mkdir"})
 JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
                      r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
                      r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
@@ -722,10 +751,17 @@ class Judge:
             path = self.py_path(os.environ.get("PYTHONPATH", ""), d)
         interp = next((w for w in words[:3] if PY_RUNTIME.match(os.path.basename(w))), None)
         saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp}
+        # An export read inside a script this command runs in its own shell ends with that shell; one
+        # read inside a sourced script (`source`, `.`) really exports into the caller, so it is kept
+        # (claude-config#2409).
+        sourced = bool(words) and words[0] in ("source", ".")
+        saved_exported = self.exported
         try:
             return self.judge(d, text, wrapper, why, depth, whole)
         finally:
             self.py_cmd = saved
+            if not sourced:
+                self.exported = saved_exported
 
     def judge(self, d, text, wrapper, why, depth, whole):
         sw = self.sw
@@ -829,14 +865,14 @@ class Judge:
         option. So every word naming a file is read, which can only refuse more (lessons review,
         2026-11-05, round 3).
 
-        Except a file the script is handed as DATA (claude-config#2362): one after the first word
-        naming a file (the script, whatever any option table says), shaped like data (data_shaped), is
-        an argument the script reads, not code the program runs, so text in it naming an endpoint is
-        not a send. It is still read when the script can act on it as more than data (acts): sending a
-        request, whose address the file can hold, or running code, which the file can be."""
-        # Which of the files read as code is the script is the same option table question, so a data
-        # file is judged against ALL of them, wherever each stands: in `node --require ./a.js post.mjs
-        # msg.json` the script is post.mjs, not the first file (lessons review, 2026-11-07).
+        Except a file a script is handed as DATA (claude-config#2362): one after the first word naming
+        a file (always read as code), shaped like data (data_shaped), is an argument a script reads,
+        not code the program runs, so text in it naming an endpoint is not a send. Which of the files
+        read as code is the script is the same option table question, so a data file is judged
+        against EVERY one of them, wherever each stands (in `node --require ./a.js post.mjs msg.json`
+        the script is post.mjs, not the first file; lessons review, 2026-11-07), and is still read when
+        any of them can act on it as more than data (acts): sending a request, whose address the file
+        can hold, or running code, which the file can be."""
         code, data = [], []
         for w in words[1:]:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
@@ -884,9 +920,10 @@ class Judge:
         (curl)", "runs the file it is handed (source)"), or None when it only reads what it is handed.
 
         A shell script acts when one of its commands sends a request, or runs, sources or evals a
-        file or command named by the arguments it was handed (or a variable set from them). A Python
-        or JavaScript script acts when it, or a local module it imports, names a way to send a request
-        or to run code (PY_ACTS, JS_ACTS). A script of any other kind, one that cannot be read, and
+        file or command named by the arguments it was handed (or a variable set from them). A
+        JavaScript script acts when it, or a local module it imports, names a way to send a request or
+        to run code (JS_ACTS). A Python script acts unless it, and every local module it imports, is
+        seen to be unable to (py_acts). A script of any other kind, one that cannot be read, and
         one whose imports cannot all be followed are taken to act: only a script seen to do neither
         has its data files left unread. Arguments a script passes on to ANOTHER program are not
         followed there: that program is judged for what it names, not for what it does with them."""
@@ -902,16 +939,126 @@ class Judge:
         kind = self.language(real, first, lang)
         if not kind:
             return "is a kind of script the gate does not read for what it does with its arguments"
-        pattern = JS_ACTS if kind == "js" else PY_ACTS
-        hit = pattern.search(body)
-        if hit:
-            return f"can send a request or run code ({hit.group(0).strip()})"
-        for why, _, target, found in self.modules("it", real, os.path.dirname(real), body, kind):
+        root = os.path.dirname(real)
+        if kind == "py":
+            why = self.py_acts(body, real, root)
+            if why:
+                return why
+        else:
+            hit = JS_ACTS.search(body)
+            if hit:
+                return f"can send a request or run code ({hit.group(0).strip()})"
+        for why, _, target, found in self.modules("it", real, root, body, kind):
             if why:
                 return f"imports a module the gate cannot follow ({why})"
-            hit = pattern.search(found)
+            if kind == "py":
+                inner = self.py_acts(found, target, root)
+                if inner:
+                    return f"imports {os.path.basename(target)}, which {inner}"
+                continue
+            hit = JS_ACTS.search(found)
             if hit:
                 return f"can send a request or run code through {os.path.basename(target)} ({hit.group(0).strip()})"
+        return None
+
+    def py_acts(self, text, cur, root):
+        """acts() for one Python file's text (cur its file, root the script's folder): how it can act
+        on what it is handed, as a phrase, or None when it is seen unable to.
+
+        It is unable to only when every module it imports from outside the script's own files is in
+        PY_INERT, and it uses no builtin in PY_RUNS, no attribute in PY_REACH (or any _private or
+        dunder one bar PY_DUNDER_OK), no sys.path, no PY_WRITES method, and no open() or FileType
+        whose mode writes. A local module it imports is not judged here: modules() reaches it and
+        acts() judges it with this same reading, and an import placed nowhere is refused there. Text
+        this python3 cannot parse counts as acting."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            return "could not be parsed to see what it imports"
+        cur_dir = os.path.dirname(cur)
+        # Only this file's own sys.path changes: fewer folders in front can only leave an import to be
+        # placed in the standard library, where it must then be inert, never the other way.
+        inserts = ([], [])
+        self.py_inserts(text, cur, inserts)
+
+        nodes = list(ast.walk(tree))
+        unknown = "a module the gate does not know to be unable to send a request or run code"
+        bound = set()  # each name an import binds, whose attributes are another module's namespace
+        restricted = set()  # (a, b) for `import a.b` where only a.b is inert, so a.<other> acts
+        for node in nodes:
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    top = a.name.split(".")[0]
+                    bound.add(a.asname or top)
+                    if self.resolve_py(0, a.name, (), cur_dir, root, inserts) != []:
+                        continue  # local (followed by modules()) or placed nowhere (refused there)
+                    if a.name not in PY_INERT and top not in PY_INERT:
+                        return f"imports {a.name}, {unknown}"
+                    if not a.asname and top not in PY_INERT:
+                        restricted.add((top, a.name.split(".")[1]))
+            elif isinstance(node, ast.ImportFrom):
+                names = tuple(a.name for a in node.names)
+                bound.update(a.asname or a.name for a in node.names)
+                for n in names:
+                    if n in PY_RUNS or n in PY_REACH or n.startswith("_") or n == "*":
+                        return f"imports {n} from {node.module or '.'}, which reaches past what the gate reads"
+                module = node.module or ""
+                if node.level or self.resolve_py(0, module, names, cur_dir, root, inserts) != []:
+                    continue
+                if module == "sys" and "path" in names:
+                    return "changes where Python finds modules (sys.path)"
+                if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
+                        not all(f"{module}.{n}" in PY_INERT for n in names):
+                    return f"imports {module}, {unknown}"
+        # A module's namespace holds the modules it imported (pathlib.os, os.path.os, json.codecs), so
+        # an attribute chain from an imported name may not name a standard library module off the list.
+        stdlib = set(getattr(sys, "stdlib_module_names", ())) | set(sys.builtin_module_names)
+        called = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+        cleared = set()  # id() of each restricted name used as a.<its inert submodule>
+        for node in nodes:
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and \
+                    (node.value.id, node.attr) in restricted:
+                cleared.add(id(node.value))
+        restricted_names = {top for top, _ in restricted}
+        for node in nodes:
+            if isinstance(node, ast.Name):
+                if node.id in PY_RUNS:
+                    return f"can run code or reach past what the gate reads ({node.id})"
+                if node.id in PY_REACH - {"modules"}:
+                    return f"can evaluate a string as code ({node.id})"
+                if node.id in restricted_names and id(node) not in cleared:
+                    return f"uses {node.id} for more than {', '.join(sorted(f'{t}.{s}' for t, s in restricted))}"
+                if node.id == "open" and id(node) not in called:
+                    return "can write a file (open, passed on rather than called)"
+            elif isinstance(node, ast.Attribute):
+                a = node.attr
+                if isinstance(node.value, ast.Name) and node.value.id == "sys" and a == "path":
+                    return "changes where Python finds modules (sys.path)"
+                if a in PY_REACH or (a.startswith("_") and a not in PY_DUNDER_OK):
+                    return f"reaches past what the gate reads ({a})"
+                base = node.value
+                while isinstance(base, ast.Attribute):
+                    base = base.value
+                # sys holds no module but sys.modules (refused above), and sys.platform is a string.
+                if isinstance(base, ast.Name) and base.id in bound and base.id != "sys" and a in stdlib \
+                        and a not in PY_INERT and (base.id, a) not in restricted:
+                    return f"reaches the {a} module through {base.id}"
+            elif isinstance(node, ast.Call):
+                f = node.func
+                name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+                if isinstance(f, ast.Attribute) and name in PY_WRITES:
+                    return f"can write a file ({name})"
+                if name in ("open", "FileType"):
+                    if any(k.arg is None for k in node.keywords) or any(isinstance(x, ast.Starred) for x in node.args):
+                        return f"can write a file ({name} given its arguments unpacked)"
+                    at = 1 if isinstance(f, ast.Name) and name == "open" else 0
+                    mode = next((k.value for k in node.keywords if k.arg == "mode"),
+                                node.args[at] if len(node.args) > at else None)
+                    if mode is not None and not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+                                                 and not set(mode.value) & set("wax+")):
+                        return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
         return None
 
     def shell_acts(self, body, d):

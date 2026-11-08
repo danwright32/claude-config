@@ -518,6 +518,15 @@ run_bash "PYTHONPATH=$T/pp/lib python3 $T/pp/app/run.py"
 says "a script that really posts still gets the posts wording" "REFUSED: this command posts to Slack"
 run_bash "python3 $T/pp/app/run.py"
 refused "the PYTHONPATH script run without it, its import placed nowhere"
+# An export inside a script run in its own shell ends with that shell, so it must not place the
+# imports of the commands after it; a sourced one really exports into the caller (claude-config#2409).
+printf '%s\n' '#!/bin/bash' "export PYTHONPATH=$T/pp/okdir" > "$T/pp/setexp.sh"
+run_bash "bash $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+refused "an export inside a script run by bash does not place the next command's import"
+run_bash "source $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+allowed "an export inside a sourced script places the next command's import"
+run_bash ". $T/pp/setexp.sh && python3 $T/pp/app/run.py"
+allowed "the same sourced with a dot"
 run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
 refused "inline Python importing a module placed nowhere"
 
@@ -585,6 +594,54 @@ printf '%s\n' 'import json, sys, urllib.request' 'm = json.load(open(sys.argv[1]
   'urllib.request.urlopen(urllib.request.Request(m["url"], data=m["text"].encode()))' > "$T/ds/post.py"
 run_bash "python3 $T/ds/post.py $T/ds/msg.json"
 refused "a Python script that sends a request, handed a data file naming the endpoint"
+# A hand list of ways to send or run code always misses one (lessons review at 56b9d7f): urllib3,
+# httplib2, smtplib, ftplib, asyncio streams and importlib's exec_module each slipped past it, and
+# the data file each was handed went unread. A Python script now counts as unable to act only when
+# every module it imports is one that cannot send, run code or write, so each of these is refused.
+# urllib3 and httplib2 are made installed in a throwaway virtual environment beside the scripts, so
+# the test does not depend on what this Mac has installed (placed nowhere is refused anyway).
+mkdir -p "$T/dv/.venv/lib/python3/site-packages/urllib3" "$T/dv/.venv/lib/python3/site-packages/httplib2" "$T/dv/lib"
+printf '%s\n' 'home = /usr/bin' > "$T/dv/.venv/pyvenv.cfg"
+printf '%s\n' '' > "$T/dv/.venv/lib/python3/site-packages/urllib3/__init__.py"
+printf '%s\n' '' > "$T/dv/.venv/lib/python3/site-packages/httplib2/__init__.py"
+cp "$T/ds/msg.json" "$T/dv/msg.json"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/dv/job.txt"
+printf '%s\n' 'import json, sys, urllib3' 'm = json.load(open(sys.argv[1]))' \
+  'urllib3.PoolManager().request("POST", m["url"], body=m["text"])' > "$T/dv/u3.py"
+printf '%s\n' 'import json, sys, httplib2' 'm = json.load(open(sys.argv[1]))' \
+  'httplib2.Http().request(m["url"], "POST", body=m["text"])' > "$T/dv/h2.py"
+printf '%s\n' 'import json, smtplib, sys' 'm = json.load(open(sys.argv[1]))' \
+  'smtplib.SMTP("localhost").sendmail("a@b", ["c@d"], m["url"])' > "$T/dv/mail.py"
+printf '%s\n' 'import ftplib, io, json, sys' 'm = json.load(open(sys.argv[1]))' \
+  'ftplib.FTP("localhost").storbinary("STOR x", io.BytesIO(m["url"].encode()))' > "$T/dv/ftp.py"
+printf '%s\n' 'import asyncio, json, sys' 'async def go(m):' '    r, w = await asyncio.open_connection("slack.com", 443, ssl=True)' \
+  '    w.write(m["url"].encode())' 'asyncio.run(go(json.load(open(sys.argv[1]))))' > "$T/dv/aio.py"
+printf '%s\n' 'import importlib.machinery, importlib.util, sys' \
+  'loader = importlib.machinery.SourceFileLoader("job", sys.argv[1])' \
+  'mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("job", loader))' 'loader.exec_module(mod)' > "$T/dv/load.py"
+printf '%s\n' 'import json, sys' 'print(eval(json.load(open(sys.argv[1]))["text"]))' > "$T/dv/ev.py"
+printf '%s\n' 'import json, os.path, sys' 'm = json.load(open(sys.argv[1]))' 'os.system("curl -d x " + m["url"])' > "$T/dv/ospath.py"
+printf '%s\n' 'import json, sys' 'm = json.load(open(sys.argv[1]))' 'sys.modules["os"].system("curl " + m["url"])' > "$T/dv/sysmod.py"
+printf '%s\n' 'import json, sys' 'm = json.load(open(sys.argv[1]))' 'open("/tmp/x.sh", "w").write("curl " + m["url"])' > "$T/dv/writes.py"
+printf '%s\n' 'import smtplib' 'def send(text):' '    smtplib.SMTP("localhost").sendmail("a@b", ["c@d"], text)' > "$T/dv/lib_mailer.py"
+printf '%s\n' 'import json, sys' 'import lib_mailer' 'lib_mailer.send(json.load(open(sys.argv[1]))["url"])' > "$T/dv/via.py"
+for acts in "u3.py msg.json" "h2.py msg.json" "mail.py msg.json" "ftp.py msg.json" "aio.py msg.json" \
+  "load.py job.txt" "ev.py msg.json" "ospath.py msg.json" "sysmod.py msg.json" "writes.py msg.json" "via.py msg.json"; do
+  run_bash "cd $T/dv && python3 $acts"
+  refused "a Python script that can act on what it is handed, handed a data file naming the endpoint: $acts"
+done
+run_bash "cd $T/dv && python3 u3.py msg.json"
+says "the refusal names the module the gate does not know to be inert" "urllib3"
+# The controls: a script importing only modules that cannot send, run code or write, which prints the
+# data file it is handed, still has that file read as data. re.compile is a regular expression, not
+# the compile builtin (claude-config#2413).
+printf '%s\n' 'import json, sys' 'print(json.load(open(sys.argv[1]))["text"])' > "$T/dv/show.py"
+printf '%s\n' 'import json, re, sys' 'from os import path' 'from typing import Any' 'pat = re.compile(r"chat\.\w+")' \
+  'm: Any = json.load(open(sys.argv[1]))' 'print(path.basename(sys.argv[1]), pat.findall(m["url"]))' > "$T/dv/rx.py"
+for reads in "show.py msg.json" "rx.py msg.json"; do
+  run_bash "cd $T/dv && python3 $reads"
+  allowed "a Python script importing only modules that cannot act, handed a data file naming the endpoint: $reads"
+done
 printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
 printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
 printf '%s\n' '#!/bin/bash' 'exec bash "$@"' > "$T/ds/run-it.sh"
