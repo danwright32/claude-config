@@ -64,7 +64,8 @@ jobs:
     #
     # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
     # defaults, and they are ordered with room between them: a stall is noticed at eight minutes,
-    # the absolute ceiling is thirty, and the platform's backstop is forty.
+    # the absolute ceiling is thirty, and the platform's backstop is sixty (forty until 2026-11-08,
+    # below).
     #
     # RAISED 2026-09-19 (claude-config#473), from a 960s ceiling under a 20 minute backstop, and
     # this time against a measurement rather than a choice. The sentence above used to say the
