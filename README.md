@@ -1819,8 +1819,10 @@ three updates, which on a busy day (2026-10-16: several merges at once, 15 to 30
 restart to a person. The first update is made at once; after that it waits until the base's tip
 has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges costs one fresh check
 run rather than one each, and only the deadline bounds how many updates it makes. is-it-live's
-window for a merge made in the background (`WAIT_MS`, twenty four hours) is kept at twice the longest
-a run can last, its wait in line plus its deadline (below), which the helper's suite checks.
+window for a merge made in the background (`WAIT_MS`, twenty four hours) is kept at least twice the
+longest a run lasts in a line standing still, its wait in line plus its deadline (below), which the
+helper's suite checks; past it, a merge whose helper still holds a place in line is asked about
+still (#2403).
 Settling answered a base that moves, but not the helpers moving it: on 2026-10-22 a work pull request sat in
 the helper about 112 minutes while four other pull requests merged under its 23 minute checks, each
 one restarting them (claude-config#1515). So each run now takes its repository's turn
@@ -3265,8 +3267,9 @@ importing a helper that posts (their `npm test` globs are not read, so `npm test
 
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
-own folder as Python finds it. A module not on disk there is the standard library or an installed
-package and is not read; a relative import that names nothing there is refused. Code given inline
+own folder as Python finds it. A module not beside the script is looked for where Python looks next
+(below); the standard library and installed packages are not read, and an import placed nowhere, or
+a relative import that names nothing there, is refused. Code given inline
 (`node -e`, `python3 -c`) or fed on standard input has its imports followed from the folder it runs
 in. Over the 110 Python files in this payload, run as `python3 <file>`, the refused count stayed at 2.
 
@@ -3293,19 +3296,37 @@ naming an endpoint), and so is every later file not shaped like data. A later fi
 review's `issue-spool.sh clear` over a session transcript, and `node titles.js issues.json` over a
 saved `gh` listing, were both refused on 2026-11-06 and now pass. Which of the files read as code is
 the script depends on each program's options, so such a file is judged against every one of them,
-and is still read when any of them can act on it as more than data: a shell script that runs `curl`
-(or its kind), or runs, sources or evals a file named by its arguments; a JavaScript script, or a
-local module it imports, that names a way to send a request (`fetch`, `axios`, ...) or run code
-(`child_process`, `eval`, a `require` of a computed path, ...); a Python script unless it, and every
+and is still read when any of them can act on it as more than data. Each language is judged by what
+cannot act (#2434), so anything not seen to be unable to counts as acting: a shell script that runs
+`curl` (or its kind), runs, sources or evals a file named by its arguments, or hands its arguments
+(or a variable set from them) to anything but a short list of programs that cannot send a request or
+run code (`cat`, `grep`, `jq`, `wc`, `printf`, `mv`, `rm` and the like, `SH_INERT`), its own
+functions, `git` reading a repository, `find` without `-exec`, `awk` whose program runs no command,
+or a script the gate reads and sees cannot act; so `gh`, `nc` and `node send.js "$1"` count. A
+JavaScript script unless it, and every local module it imports, imports only node builtins that
+cannot send, run code or write (`fs` for reading, `path`, `url`, `util`, `readline` and the like,
+`JS_INERT`) and names no global that sends or runs code (`fetch`, `WebSocket`, `eval`, `Function`,
+`Worker`, a `.constructor`, a `require` of a computed name, or any word the old list named, such as
+`got`, so nothing refused before passes) and no `fs` method that writes; any package counts, so
+`request`, `worker_threads` and `dns` do. Measured 2026-11-07 by handing each script a data file
+naming `chat.postMessage`: of 268 JavaScript and TypeScript files in repo-digest, NurseDex's
+`scripts/`, Overture, Ovation and playeditapp, 91 of the 144 that passed now refuse (most import
+`vitest`, a Deno `https://` module or `node:test`); of this payload's 416 shell scripts, most of the
+321 that passed now refuse, chiefly by handing their arguments to a function from a library they
+source, which the gate does not follow. None that refused now passes. A Python script unless it, and every
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,
 `sys.modules`, `sys.path`, a module reached through another, a file opened to write). The Python
 reading is a list of what is inert rather than of what acts, because a list of ways to act missed
 `urllib3`, `httplib2`, `smtplib`, `ftplib`, `asyncio` and `importlib` (lessons review at 56b9d7f);
-`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind. A later file with a script's
-extension, a `#!` or no extension at all is read as before, since a wrapper may run it. Arguments a
-script passes on to another program are not followed there. Cost: the clear line takes about 0.21 s
+`re.compile` is not the `compile` builtin and does not count (#2413). And a script of any other kind.
+The JavaScript and shell readings were lists of what acts until #2434, and missed the `request`
+package, `worker_threads`, `dns` and every program off the list of senders. A shell script's writes
+are not counted, since every shell script that keeps state writes (`issue-spool.sh clear` moves its
+spool files into place), and neither are its data reaching a program through a pipe or code written
+into the script itself (a heredoc fed to `python3 -`). A later file with a script's extension, a `#!`
+or no extension at all is read as before, since a wrapper may run it. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
@@ -5640,10 +5661,14 @@ the foreground or the background, and the card tool refusing a number for that r
 whatever the session owes under it, so a misreading costs one refusal, never one per turn end; an
 owed PR is named once however many runs merged it, and a card made since GitHub's time for the merge
 settles every run that found it merged (#1943). A helper run in the background is asked again at
-each turn end for up to twenty four hours (`WAIT_MS`, twice the helper's three hours in line with
-the line standing still plus its three hour deadline from taking the turn, a ratio the helper's
-suite checks, #1271, #1604; since #2351 a line that keeps moving never ends the helper, so a run
-behind a very long moving line can outlast it) and owed once GitHub says it merged. That question
+each turn end for `WAIT_MS`, twenty four hours, at least twice the helper's three hours in line with
+the line standing still plus its three hour deadline from taking the turn (a ratio the helper's
+suite checks, #1271, #1604), and owed once GitHub says it merged. Since #2351 a line that keeps
+moving never ends the helper, so a run behind a very long moving line can outlast that window. Past
+it the merge is asked about still while its helper holds a place in the repository's line
+(`hooks/lib/merge-in-line.sh` reads the line's tickets, a live run being one whose pid runs with the
+start time it recorded), and let go once it holds none, or once that cannot be read, so a helper
+still running is never taken for one that finished or failed (#2403). That question
 is mod-kit's
 one check of whether a pull request merged (`hooks/prmerged.ts`, copied byte for byte into each mod
 using it), which the goal box asks too: as each account gh is logged in to, by the repository the
@@ -6873,8 +6898,11 @@ nothing, so neither is held nor read as a sender; a string handed to a query bui
 one), a database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
-run command that itself posts to Slack, each string of a `script:` step that posts to Slack, read as
-JavaScript), never step or job names, needs lists, input descriptions or other run commands; a
+run command that itself posts to Slack, each string of a GitHub `script:` step that posts to Slack,
+read as JavaScript, and every string of a GitLab or Bitbucket script, a list, block or one string,
+whose shell posts to Slack: a job's before_script and script are one shell, after_script another,
+so a message one item sets for a later item to post is shown (#2401, #2416)), never step or job
+names, needs lists, input descriptions or other run commands; a
 `script:` block in any YAML file is code, never plain values; a nested template literal is one
 string, the strings inside it wording of their own, and the message Dan is shown is checked only for
 the words between its filled in values, never the code that fills them (#2371); and a file in no
@@ -7086,7 +7114,11 @@ a read of that same variable counts, never another function's variable sharing i
 Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
 and that includes a function written in place and handed to a mod helper that only gives it to a
 timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
-does with that parameter, never by its name (#2299).
+does with that parameter, never by its name (#2299). Only the function the timer is handed counts:
+one written in place, or the one a mod function that only makes a function hands back. The rest of
+the timer's arguments is worked out as the timer is set, so it is the noun's own code: the delay, a
+call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
+a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
