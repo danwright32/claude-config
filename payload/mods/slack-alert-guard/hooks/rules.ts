@@ -191,14 +191,17 @@ const importedModules = (text: string): string[] => {
 // or load, a call that opens, reads or renders a file, cat, a shell source line, or $(< file); or one
 // that builds a path to read later (path.join, resolve, Path, __dirname), as `const T = path.join(...)`
 // before `readFileSync(T)` does; or curl's data or form argument taking a file's text by `@`, as a
-// workflow's `curl ... --data-binary @alerts/late.txt` posts it (#2368). Matched on lower cased text.
+// workflow's `curl ... --data-binary @alerts/late.txt` posts it (#2368). Matched on lower cased text,
+// so every alternative is written lower case: `Path(` and `URL(` are read as path( and url( (#2416).
 const READS =
-  /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file|join|resolve|Path|URL)\s*\(|__dirname|__file__|import\.meta|\$\(\s*<|^\s*\.\s+\S|(^|\s)(-d|--data(-[a-z]+)?)(\s+|=)['"]?@|(^|\s)(-f|--form)\s+['"]?[\w-]+=@/
+  /\b(import|require|from|export|cat|source)\b|\b(include|load\w*|open|read\w*|render\w*|\w*template\w*|send_?file|join|resolve|path|url)\s*\(|__dirname|__file__|import\.meta|\$\(\s*<|^\s*\.\s+\S|(^|\s)(-d|--data(-[a-z]+)?)(\s+|=)['"]?@|(^|\s)(-f|--form)\s+['"]?[\w-]+=@/
 
 /**
- * Whether a sender's text names a template's path, both given relative to the repository root.
- * Read as a path (a token holding a slash, or a file name with the template's extension): a
- * relative one resolved from the sender's folder or the root must be the template itself; any other
+ * Whether a sender's text imports or reads a template, both given relative to the repository root.
+ * Only the lines of its code (comments left out) that import or read a file (READS) are searched, so
+ * a path the sender only names, as `git add` or a list of tracked files does, never counts. In
+ * those lines, read as a path (a token holding a slash, or a file name with the template's
+ * extension): a relative one resolved from the sender's folder or the root must be the template itself; any other
  * shares at least its last two segments, or is the bare file name with its extension. Read as a
  * module (a dotted name, or what a python import line names): its last two names match, or the
  * whole of an imported one does. A bare word that only shares the template's name never counts.
@@ -531,8 +534,11 @@ export const ciWorkflow = (path: string): boolean =>
 
 // The keys whose value is text a step posts: a Slack action's payload or message, a message env value.
 const MESSAGE_KEY = /(^|[-_.])(text|message|msg|title|pretext|fallback|payload|blocks|body|summary|content|subject|footer|header)$/i
-// The keys whose value can be a YAML list of shell commands: GitLab's script lists, and Bitbucket's script (#2401).
-const SCRIPT_LIST_KEY = /^(script|before_script|after_script)$/
+// The keys whose value can be a YAML list of shell commands: GitLab's script lists, and Bitbucket's
+// script and after-script (#2401, #2416).
+const SCRIPT_LIST_KEY = /^(script|before_script|after_script|after-script)$/
+// The script lists that run in a shell of their own, apart from the job's other lists (#2416).
+const AFTER_KEY = /^after[-_]script$/
 
 /** A YAML scalar as the shell receives it: a quoted one with its quoting undone, a plain one as written. */
 const yamlScalar = (s: string): string => {
@@ -579,14 +585,74 @@ const listCommands = (lines: string[], from: number, indent: number): string[] =
 }
 
 /**
+ * The commands of a YAML flow list (`script: ["a", "b"]`) opening in `raw` on line `from`, read on
+ * over the lines after it until the list closes: each item with its quoting undone (#2416). A quote
+ * opens only at an item's start, as YAML reads one, so `echo don't` is a plain item. This reads
+ * YAML's commas, brackets and quoting, not a shell command's, so mod-kit's command reader
+ * ($.modkit.commands) is no use here: it glues a flow list's brackets and commas onto its words.
+ */
+export const flowCommands = (lines: string[], from: number, raw: string): string[] => {
+  const text = [raw, ...lines.slice(from + 1)].join('\n')
+  const items: string[] = []
+  let cur = ''
+  let depth = 0
+  const read = () => [...items, cur].map(s => yamlScalar(s.trim())).filter(Boolean)
+  FLOW_TOKEN.lastIndex = 0
+  for (let m = FLOW_TOKEN.exec(text); m; m = FLOW_TOKEN.exec(text)) {
+    let t = m[0]
+    // A scalar's quote counts only at an item's start, and a comment's hash only after a space.
+    if ((/^["']/.test(t) && cur.trim()) || (t.startsWith('#') && !/\s/.test(text[m.index - 1] ?? ' '))) {
+      t = t.slice(0, 1)
+      FLOW_TOKEN.lastIndex = m.index + 1
+    } else if (t.startsWith('#')) continue
+    if (t === '[' || t === '{') {
+      if (++depth > 1) cur += t
+    } else if (t === ']' || t === '}') {
+      if (--depth === 0) return read()
+      cur += t
+    } else if (t === ',' && depth === 1) {
+      items.push(cur)
+      cur = ''
+    } else cur += t.replace(/\n/g, ' ')
+  }
+  return read()
+}
+
+// The pieces of a YAML flow list, in the file's token idiom (HASH_TOKENS): a quoted scalar read whole
+// with its escapes (\" in double quotes, '' in single), a comment, a bracket, brace or comma, a line
+// break, or a run of anything else.
+const FLOW_TOKEN = /"(?:\\[\s\S]|[^"\\])*"?|'(?:''|[^'])*'?|#[^\n]*|[[\]{},]|\n|[^[\]{},"'#\n]+/y
+
+/**
+ * The line that opens the mapping a key at line `i` and column `column` sits in: the key's own line
+ * when it opens a list item (`- script:`), else the nearest line above it indented less than it.
+ */
+const mappingOf = (lines: string[], i: number, column: number, item: boolean): number => {
+  if (item) return i
+  for (let j = i - 1; j >= 0; j--) {
+    const l = lines[j] as string
+    if (l.trim() && !l.trim().startsWith('#') && /^\s*/.exec(l)![0].length < column) return j
+  }
+  return -1
+}
+
+/**
  * The text a CI workflow can post (Dan's item 1, #2371): the value of a message key (a Slack step's
  * payload, text or message, a MESSAGE env value), each string inside a JSON payload, and the strings
  * of a run command that itself posts to Slack (a curl to a webhook), a JSON body's strings included.
- * Step and job names, needs lists, input descriptions and every other run command are left out.
+ * A GitLab or Bitbucket script is a run command too, written as a list (block or flow), a block, or
+ * one string: the lists one shell runs (a job's before_script and script, or after_script on its
+ * own) are read together as one run block, so when any of it posts to Slack, every string in it is
+ * shown, a message one item sets for a later item to post included (#2401, #2416). A script block in
+ * a GitHub workflow is github-script's JavaScript, read as code. Step and job names, needs lists,
+ * input descriptions and every other run command are left out. `path` is the file's path.
  */
-export const ciMessages = (text: string): string[] => {
+export const ciMessages = (text: string, path: string): string[] => {
   const lines = text.split('\n')
-  const out: string[] = []
+  // Each key's messages in file order; a shell's place is held by its key until all its lists are read.
+  const parts: (string[] | string)[] = []
+  const shells = new Map<string, string[]>()
+  const github = /(^|\/)\.github\/workflows\//.test(path)
   const strings = (t: string): string[] => stringsOf(t, true).flatMap(s => [s.text, ...(s.text.trimStart().startsWith('{') ? literalsOf(s.text, true) : [])])
   for (let i = 0; i < lines.length; i++) {
     const m = /^(\s*)(-\s+)?([\w.-]+):(?:\s+(.*))?$/.exec(lines[i] as string)
@@ -594,26 +660,52 @@ export const ciMessages = (text: string): string[] => {
     const indent = (m[1] as string).length + (m[2] ?? '').length
     const key = m[3] as string
     const raw = (m[4] ?? '').trim()
+    const at = i
     let value = raw
     if (/^[|>][-+]?\d*$/.test(raw)) {
       const block: string[] = []
       while (i + 1 < lines.length && (!(lines[i + 1] as string).trim() || /^\s*/.exec(lines[i + 1] as string)![0].length > indent)) block.push(lines[++i] as string)
       value = block.join('\n').trim()
     }
-    // A script list (GitLab, Bitbucket) is a run block written one command per item: each item that
-    // posts to Slack is read as a run command that posts, and an item that posts nothing never is (#2401).
-    // Its lines are left for this loop too, so nothing read before is read any less.
-    if (!raw && SCRIPT_LIST_KEY.test(key)) for (const c of listCommands(lines, i + 1, indent)) if (slackMarked(c)) out.push(...strings(c))
+    // A script (GitLab, Bitbucket) is a run block, whatever its YAML shape: its commands join those of
+    // the other lists its shell runs, read once the whole file is (#2401, #2416). A list's lines are
+    // left for this loop too, and a script value still takes the paths below, so nothing read before
+    // is read any less. A GitHub script block or string is JavaScript, read below as it always was.
+    if (SCRIPT_LIST_KEY.test(key)) {
+      const shellText = !github || key !== 'script'
+      const cmds = !raw
+        ? listCommands(lines, at + 1, indent)
+        : raw.startsWith('[')
+          ? flowCommands(lines, at, raw)
+          : !shellText
+            ? []
+            : value !== raw
+              ? [value]
+              : [yamlScalar(value)]
+      if (cmds.length) {
+        const shell = `${mappingOf(lines, at, indent, m[2] !== undefined)}${AFTER_KEY.test(key) ? ' after' : ''}`
+        if (!shells.has(shell)) {
+          shells.set(shell, [])
+          parts.push(shell)
+        }
+        shells.get(shell)!.push(...cmds)
+      }
+    }
     if (!value) continue
     if (MESSAGE_KEY.test(key)) {
-      if (/^["'{[]/.test(value)) out.push(...literalsOf(value, true))
-      else out.push(value)
-    } else if (key === 'run' && slackMarked(value)) out.push(...strings(value))
+      if (/^["'{[]/.test(value)) parts.push(literalsOf(value, true))
+      else parts.push([value])
+    } else if (key === 'run' && slackMarked(value)) parts.push(strings(value))
     // A script step (github-script) that posts to Slack is JavaScript: each string in it, a piece of
     // a concatenation included, is wording, and the code around them never is (#2371, Dan's item 5).
-    else if (key === 'script' && slackMarked(value)) out.push(...stringsOf(value, false, true).filter(s => !s.query).map(s => s.text))
+    else if (key === 'script' && slackMarked(value)) parts.push(stringsOf(value, false, true).filter(s => !s.query).map(s => s.text))
   }
-  return out
+  return parts.flatMap(p => {
+    if (typeof p !== 'string') return p
+    const cmds = shells.get(p) ?? []
+    // An item that posts is read whatever the rest of its shell holds, so no shape hides it (#2401).
+    return cmds.some(slackMarked) || slackMarked(cmds.join('\n')) ? cmds.flatMap(strings) : []
+  })
 }
 
 /** The message text among a file's literals, each kept as often as it appears. */

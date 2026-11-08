@@ -91,7 +91,7 @@ const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeo
     return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [] }))
   }
   // A CI workflow posts only what a Slack step carries, never its names, needs or commands (#2371).
-  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text).map(t => ({ text: t, literal: [] }))
+  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [] }))
   const strings = stringsOf(text, lang !== 'c', lang === 'c' && isJs(path)).filter(s => !s.query)
   const yaml = lang === 'yaml' ? plainYamlValues(text).map(t => ({ text: t, literal: [] })) : []
   return [...strings.map(s => ({ text: s.text, literal: s.literal })), ...yaml]
