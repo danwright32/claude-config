@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
+import { draftHold, markLanded, registerDrafts } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
@@ -196,8 +197,18 @@ const mergesIn = async ($: EngineInterface, command: string, cwd: string): Promi
   return { calls: out, ...(skew === undefined ? {} : { skew }) }
 }
 
+// #2436: a merge landed. Said to Dan when it cannot be kept, since the draft reply it owes would
+// otherwise never be asked for.
+const landed = async ($: EngineInterface) => {
+  try {
+    await markLanded($)
+  } catch (err) {
+    $.ui.toast(`Is it live could not note a merge for the Slack thread's draft reply: ${msg(err)}`)
+  }
+}
+
 // What each merge in a finished Bash call owes, kept, and the line its result carries.
-const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, how: { failed: boolean; background: boolean; agent: boolean }, session: string): Promise<string[]> => {
+const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, how: { failed: boolean; background: boolean; agent: boolean; task?: string }, session: string): Promise<string[]> => {
   const lines: string[] = []
   const added: IsItLiveOwed[] = []
   for (const m of calls) {
@@ -223,7 +234,7 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
       // could only ask in the session's folder (#2000).
       const seen = !named && 'url' in p && p.url ? await repoOfLink($, p.url, undefined) : undefined
       const repo = named ?? seen
-      o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}), ...(repo ? { repo } : {}) }
+      o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}), ...(repo ? { repo } : {}), ...(how.task ? { task: how.task } : {}) }
     } else if (p.kind === 'unproven' && !how.failed) {
       o = { key: named ? `${named}#${m.pr}` : `#${m.pr}@${at}`, how: 'unproven', pr: m.pr, at, cwd, why: p.why, ...(named ? { repo: named } : {}) }
     }
@@ -235,6 +246,8 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
     const keys = new Set(added.map(o => o.key))
     await $.state.set(owedRef, [...(await owedOf($)).filter(o => !keys.has(o.key)), ...added])
   }
+  // #2436: a merge GitHub confirmed owes the session's Slack thread its draft reply from here.
+  if (added.some(o => o.how === 'merged')) await landed($)
   return lines
 }
 
@@ -269,7 +282,10 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
       }
       const a = await askPr(prReaders($), { pr: o.pr, ...(o.repo ? { repo: o.repo } : {}), cwd: o.cwd })
       if (a.kind === 'closed' || a.kind === 'not a pr') continue
-      if (a.kind === 'merged') x = { key: `${fold(a.repo)}#${o.pr}`, how: 'merged', pr: o.pr, at: owedFrom(o.at, a), cwd: o.cwd, repo: a.repo }
+      if (a.kind === 'merged') {
+        x = { key: `${fold(a.repo)}#${o.pr}`, how: 'merged', pr: o.pr, at: owedFrom(o.at, a), cwd: o.cwd, repo: a.repo }
+        await landed($)
+      }
     }
     if (kept.some(k => k.key === (x as IsItLiveOwed).key)) continue
     if (x.how !== 'waiting' && (await carded($, x))) continue
@@ -277,6 +293,32 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
   }
   await $.state.set(owedRef, kept)
   return kept.filter(o => o.how !== 'waiting')
+}
+
+// The turn end's refusal for merges still owed a card, or undefined: refused once per merge in a
+// chain of turn ends (the classic.Stop hook below says why).
+const cardHold = async ($: EngineInterface, e: { stop_hook_active?: boolean }): Promise<string | undefined> => {
+  let owed: IsItLiveOwed[]
+  try {
+    owed = await owedNow($)
+  } catch (err) {
+    $.ui.toast(`Is it live could not check this turn's merges for a card: ${msg(err)}`)
+    return undefined
+  }
+  if (!owed.length) return undefined
+  const held = (await $.state.get(refusedRef)).value
+  const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
+  const fresh = owed.filter(o => !before.keys.includes(o.key))
+  if (!fresh.length) {
+    const untold = owed.filter(o => !before.told.includes(o.key))
+    if (untold.length) {
+      $.ui.toast(letGoOf(untold))
+      await $.state.set(refusedRef, { keys: before.keys, told: [...before.told, ...untold.map(o => o.key)] })
+    }
+    return undefined
+  }
+  await $.state.set(refusedRef, { keys: [...before.keys, ...fresh.map(o => o.key)], told: before.told })
+  return refusalOf(owed)
 }
 
 // #771: the card's facts showed up to four times after a merge, the last being Claude's own reply
@@ -485,7 +527,8 @@ export const register: Register = on => {
       }
       if (!calls.length) return unread.length ? { ...done, context: [...(done.context ?? []), ...unread] } : done
       const background = input.run_in_background === true || typeof (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId === 'string'
-      const lines = [...(await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined }, session)), ...unread]
+      const task = (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId
+      const lines = [...(await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined, ...(typeof task === 'string' ? { task } : {}) }, session)), ...unread]
       return lines.length ? { ...done, context: [...(done.context ?? []), ...lines] } : done
     } catch (err) {
       // Said where Claude reads it: a merge this missed would otherwise go unseen (fail loud).
@@ -498,32 +541,23 @@ export const register: Register = on => {
   // hooks beneath (wind down, the overnight driver), whose block is kept beside this one. Refused
   // once per merge in a chain of turn ends, so a card that cannot be made (GitHub not answering)
   // never traps the turn, a sleeping worker's included: the next end in the chain goes ahead, said.
+  // #2436: the draft reply a Slack thread the session started from is owed is held here too, after
+  // the card's check has asked GitHub about the background merges, so a merge that landed since the
+  // last turn end counts and one still in flight does not (drafts.ts).
   on('classic.Stop', async ($, e, next) => {
     const r = await next(e)
     if ((await $.state.get(interactiveRef)).value !== true) return r
-    let owed: IsItLiveOwed[]
+    const ours = [await cardHold($, e)]
     try {
-      owed = await owedNow($)
+      ours.push(await draftHold($, e, await owedOf($)))
     } catch (err) {
-      $.ui.toast(`Is it live could not check this turn's merges for a card: ${msg(err)}`)
-      return r
+      $.ui.toast(`Is it live could not check whether a Slack thread is owed a draft reply: ${msg(err)}`)
     }
-    if (!owed.length) return r
-    const held = (await $.state.get(refusedRef)).value
-    const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
-    const fresh = owed.filter(o => !before.keys.includes(o.key))
-    if (!fresh.length) {
-      const untold = owed.filter(o => !before.told.includes(o.key))
-      if (untold.length) {
-        $.ui.toast(letGoOf(untold))
-        await $.state.set(refusedRef, { keys: before.keys, told: [...before.told, ...untold.map(o => o.key)] })
-      }
-      return r
-    }
-    await $.state.set(refusedRef, { keys: [...before.keys, ...fresh.map(o => o.key)], told: before.told })
-    const ours = refusalOf(owed)
-    return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
+    const block = [r.block, ...ours].filter((s): s is string => typeof s === 'string' && s !== '').join('\n\n')
+    return block ? { ...r, block } : r
   })
+
+  registerDrafts(on)
 
   // #771: the call's own row is Claude Code's echo of the tool's input, which carried every fact the
   // card under it shows (the changed text, checked, see, the message). Drawn naming the change

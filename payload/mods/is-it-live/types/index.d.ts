@@ -53,8 +53,39 @@ declare module 'claude-code' {
        * and those whose letting go has been said (#1244): each is refused once per chain.
        */
       refused: { keys: string[]; told: string[] }
+      /**
+       * #2436: the Slack threads this session started from, oldest first: each one Dan pasted a
+       * link to, and the first one the main session read when it had none.
+       */
+      threads: IsItLiveThread[]
+      /**
+       * #2436: the order of this session's thread events, counted up by one for each merge learned
+       * of and each draft saved or skipped, so which came first never rests on two clock readings.
+       */
+      step: number
+      /** #2436: the step at which this session last learned a merge of its own landed. */
+      landed: number
+      /** #2436: the draft holds already refused in this chain of turn ends, and those let go and said, as `refused`. */
+      draftRefused: { keys: string[]; told: string[] }
     }
   }
+}
+
+/**
+ * A Slack thread a session started from (#2436): its channel and its parent message's time, the
+ * link Dan pasted when he pasted one, how it was found, when (ms since the epoch), and the step at
+ * which its last draft reply was saved or Dan chose to skip one (`settled`). A merge landing at a
+ * later step owes the thread a draft.
+ * Every draft saved to the thread settles it, whichever prompt led to it, so the card's own message
+ * for a requester in that thread (#2435) settles it too, with no second record.
+ */
+export type IsItLiveThread = {
+  channel: string
+  ts: string
+  link?: string
+  from: 'link' | 'read'
+  at: number
+  settled?: number
 }
 
 /**
@@ -75,4 +106,6 @@ export type IsItLiveOwed = {
   selector?: string
   named?: string
   why?: string
+  /** #2436: for a `waiting` merge, the background task Claude Code started for the helper, as its result named it. */
+  task?: string
 }
