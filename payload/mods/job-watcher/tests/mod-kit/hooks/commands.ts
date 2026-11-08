@@ -135,6 +135,23 @@ const readDelimiter = (s: string, j: number): { end: string; quoted: boolean } |
 // backticks in the body (#831).
 type Heredoc = { at: number; body: string; quoted: boolean }
 
+// Where a line's comment starts (#2407): the first # where a word would begin, outside quotes read
+// on that line alone, or the line's length. A << after it opens no heredoc, as the shell reads it; a
+// # misjudged as one only leaves a heredoc's lines to be read as commands, never drops any.
+const commentStart = (line: string): number => {
+  let quote: string | undefined
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i] as string
+    if (quote) {
+      if (c === quote) quote = undefined
+      else if (c === '\\' && quote === '"') i++
+    } else if (c === '\\') i++
+    else if (c === '"' || c === "'") quote = c
+    else if (c === '#' && commentAt(line, i)) return i
+  }
+  return line.length
+}
+
 // A heredoc body is text, not commands, so it is dropped before anything else is read: left in, an
 // apostrophe in it would open a quote that swallows the commands after it. Each body is kept with
 // where its << stands in the text left, so a reader that judges what a heredoc feeds can have it
@@ -175,7 +192,9 @@ export const dropHeredocs = (cmd: string): { text: string; heredocs: Heredoc[]; 
       continue
     }
     out.push(line)
+    const comment = commentStart(line)
     for (const m of line.matchAll(OPENING)) {
+      if ((m.index ?? 0) >= comment) break
       const d = readDelimiter(line, (m.index ?? 0) + m[0].length)
       if (d) open.push({ end: d.end, tabs: m[1] === '-', at: offset + (m.index ?? 0), quoted: d.quoted })
     }
@@ -393,6 +412,14 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
         dollar(c, quote === '"' && !(c === '$' && leftAsWritten(cmd, i, true)))
         word += c
       }
+      continue
+    }
+    // A # where a word would begin starts a comment to the end of the line (#2407), as the shell reads
+    // it: left in, a script's comment lines were read as commands and an apostrophe in one opened a
+    // quote. The newline is left to end the command. A # inside a word or quotes is text.
+    if (c === '#' && !inWord) {
+      const nl = cmd.indexOf('\n', i)
+      i = (nl < 0 ? cmd.length : nl) - 1
       continue
     }
     // A clause's pattern is no command: its words are dropped at the ) that ends it, and an esac

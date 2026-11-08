@@ -14,9 +14,10 @@ export const BUDGET_MS = 10_000
 /** One deadline for the whole read of a file's facts, under 75% of the budget (L743). */
 export const DEADLINE_MS = 7_000
 /**
- * The most files a folder named only by its path (a folder handed to a script, or a copy's folder
- * destination, #2321) may hold that the area check could hold, for each to be judged one by one; past
- * it the command is held whole, as a write whose files cannot be named. Each file judged runs two git
+ * The most files a folder a command writes may hold that the area check could hold, for each to be
+ * judged one by one: a write marked as reaching the whole folder (find with exec, git putting a folder
+ * back, #2373) or a folder named only by its path (a folder handed to a script, or a copy's folder
+ * destination, #2321). Past it the command is held whole, as a write whose files cannot be named. Each file judged runs two git
  * processes (about 10 ms each, measured 2026-11-06), and a whole checkout here holds 1075 source files,
  * so an unbounded walk would outrun the hook's 10 s budget: 25 keeps the walk near a second under load.
  */
@@ -87,12 +88,15 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * A file a Bash command writes (#2142), read from mod-kit's one reader of a command ($.modkit.writes):
  * a path, judged as that file's first edit would be (`tree` where the write may reach every file
  * under it, so each one there that could be held is judged too, `heldUnder` choosing them; a path
- * without `tree` that the disk says is a folder is judged the same way, at most FOLDER_JUDGE_MAX files
- * one by one, #2321), or a write
- * whose file cannot be named, with why, which is held unless nothing in the repository could hold it.
+ * without `tree` that the disk says is a folder is judged the same way, #2321; either way at most
+ * FOLDER_JUDGE_MAX files one by one, #2373), or a write whose file cannot be named, with why, which
+ * is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
+ * `runs` is every script a path was handed to, present only when that is the command's one way of
+ * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every one
+ * of them is read as writing nothing there (scriptProgram, scriptWrite; #2426 lessons review).
  */
-export type ShellTarget = { word: string; path: string; tree?: true } | { word: string; unread: string; folder?: string }
+export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string }
 
 const literalExt = (word: string): string | undefined => /\.([A-Za-z0-9]+)$/.exec(word.slice(word.lastIndexOf('/') + 1))?.[1]?.toLowerCase()
 // A name whose extension is written out and is no source one is never judged, whatever its folder is.
@@ -102,6 +106,76 @@ const mayBeSource = (word: string) => {
 }
 
 type ModKitRun = NonNullable<ModKitWrites['runs']>[number]
+
+/** The script a path was handed to, as mod-kit named the run (#2407). */
+export type ShellRun = { what: string; path?: string; tool?: true }
+
+const PLAIN_NAME = /^[A-Za-z0-9._+-]+$/
+
+/**
+ * The command that feeds a script file's text to its interpreter on standard input (#2407), so
+ * mod-kit's one reader of what a command writes reads the script as the program it runs: a shell's
+ * script as the commands it runs, another language's as code its judge reads. The interpreter is the
+ * one mod-kit named the run by (`a bash script file`), or, for a script run directly, its first
+ * line's `#!`, through env where it names env; the `#!` line is a comment to every interpreter that
+ * runs the file, and is not fed. A module or tool, a script run directly with no `#!`, or an
+ * interpreter that is not one plain name is `unread`, with why. The delimiter is one the text does
+ * not hold. Whether mod-kit could read the program at all is readAsProgram's question.
+ */
+export const scriptProgram = (run: ShellRun, text: string): { command: string; name: string; delimiter: string } | { unread: string } => {
+  if (run.tool) return { unread: `${run.what} is no file that can be read` }
+  const first = text.startsWith('#!') ? (text.split('\n', 1)[0] as string) : undefined
+  let name = /^a (\S+) script file$/.exec(run.what)?.[1]
+  if (name === undefined && run.what === 'a script file run directly') {
+    if (first === undefined) return { unread: 'it is run directly with no #! line naming what runs it' }
+    const words = first.slice(2).trim().split(/\s+/)
+    const base = (w: string | undefined) => (w ?? '').slice((w ?? '').lastIndexOf('/') + 1)
+    name = base(words[0])
+    if (name === 'env') name = base(words.slice(1).find(w => !w.startsWith('-') && !w.includes('=')))
+  }
+  if (!name || !PLAIN_NAME.test(name)) return { unread: `what runs it (${name || run.what}) cannot be told` }
+  const body = first === undefined ? text : text.slice(first.length + 1)
+  let delimiter = 'AREA_CHECK_SCRIPT'
+  for (let n = 1; body.includes(delimiter); n++) delimiter = `AREA_CHECK_SCRIPT_${n}`
+  return { command: `${name} <<'${delimiter}'\n${body}\n${delimiter}`, name, delimiter }
+}
+
+const SOURCES = new Set(['source', '.'])
+
+/**
+ * Why the commands mod-kit's pipeline gives for the command scriptProgram built leave what the script
+ * writes unread (#2407), or null. A shell's script comes back as the commands it runs, another
+ * language's as the command carrying its program's text; a command still holding the heredoc's word
+ * with no program text is an interpreter mod-kit does not read. And a script it runs in turn, by an
+ * interpreter, by its path or through source, writes what no word names, which mod-kit's writes give
+ * only for one handed arguments, so each is named here. A program run by its bare name (make, npm) is
+ * read as the area check reads the same command typed on its own.
+ */
+export const unreadPart = (commands: readonly { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }[], delimiter: string): string | null => {
+  for (const c of commands) {
+    const head = c.words[0] ?? ''
+    const text = typeof c.program === 'object' && c.program !== null && 'text' in c.program
+    if (c.words.some(w => w.includes(delimiter)) && !text) return `${head} is no interpreter whose program mod-kit reads`
+    if (c.script && !c.script.stdin) return `it runs the script ${c.script.files[0] ?? head}, whose writes are not read`
+    if (head.includes('/') || (SOURCES.has(head) && c.words.length > 1)) return `it runs ${SOURCES.has(head) ? c.words[1] : head}, whose writes are not read`
+  }
+  return null
+}
+
+/**
+ * Why a script, its writes read by mod-kit from its own text (#2407), may write into a folder it is
+ * handed, or null when it writes nothing the area check could judge. Any file it writes, named or
+ * not, wherever it lands, and any script it runs in turn, whose writes are not read, counts: only a
+ * script whose text writes no such file at all lets the folder it is handed go unjudged, so a script
+ * whose writes cannot be placed is held, never passed.
+ */
+export const scriptWrite = (w: ModKitWrites, home?: string): string | null => {
+  const run = w.runs?.[0]
+  if (run) return `it runs ${run.what} (${run.script}), whose writes are not read`
+  const t = shellTargets(w, home)[0]
+  if (!t) return null
+  return 'path' in t ? `it writes ${t.word}` : `it writes ${t.word}: ${t.unread}`
+}
 
 /**
  * Whether a run is a findings note to the installed spool helper (#2254):
@@ -152,11 +226,22 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  */
 export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const out: ShellTarget[] = []
-  const seen = new Set<string>()
+  const seen = new Map<string, ShellTarget>()
   const add = (t: ShellTarget) => {
     const k = 'path' in t ? `p\n${t.path}` : `u\n${t.word}`
-    if (seen.has(k)) return
-    seen.add(k)
+    const had = seen.get(k)
+    // One path reached twice is judged by what both routes may do, so a merge only ever narrows the
+    // exemption (#2426 lessons review): a path the command also writes itself is that write, not only a
+    // word a script is handed (#2407); a path handed to two scripts keeps both, each to be read; and a
+    // write reaching the whole folder keeps that reach.
+    if (had) {
+      if (!('path' in had) || !('path' in t)) return
+      if (t.tree) had.tree = true
+      if (!had.runs || !t.runs) delete had.runs
+      else for (const r of t.runs) if (!had.runs.some(h => h.what === r.what && h.path === r.path && h.tool === r.tool)) had.runs.push(r)
+      return
+    }
+    seen.set(k, t)
     out.push(t)
   }
   const named = (word: string, path: string | undefined, folder: string | undefined, why: string, tree?: true) => {
@@ -174,9 +259,10 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   }
   for (const r of w.runs ?? []) {
     if (spoolNote(r, home)) continue
+    const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
     for (const a of r.args) {
       const literal = a.path ? undefined : quotedName(r, a)
-      if (a.path) add({ word: a.word, path: a.path })
+      if (a.path) add({ word: a.word, path: a.path, runs: [run] })
       else if (literal) add({ word: a.word, path: literal })
       else if (a.folder) {
         if (mayBeSource(a.word)) add({ word: a.word, unread: `${a.word} is a pattern handed to ${r.what}`, folder: a.folder })
