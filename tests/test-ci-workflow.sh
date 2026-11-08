@@ -254,6 +254,37 @@ else
   check "#1901 the runner can read the suite job's timeout-minutes from the real workflow" "read '$m'"
 fi
 
+# ---------------------------------------------------------------------------
+# #2403: the environment step names the processor, not only how many cores there are.
+# ---------------------------------------------------------------------------
+# CI's runners come in two speeds, the slower about 27% slower on every suite (#1494, #2369), and
+# every runner reports 4 cores and the same image, so the cores line cannot say which machine a run
+# had. The processor model can, so the step prints it from /proc/cpuinfo (lscpu reads the same), and
+# a run's log then names the hardware behind each group. Read from the step's code with comments
+# stripped, so a comment naming the processor cannot satisfy it (L135).
+env_step_code(){ # env_step_code <workflow>
+  code_of "$1" | awk '/name:[[:space:]]*Record the environment the suite is judged in/ { s = 1; next } s && /^[[:space:]]*- (name|uses|run):/ { exit } s { print }'
+}
+processor_printed(){ # processor_printed <workflow>
+  local step
+  step="$(env_step_code "$1")"
+  if [ -z "$step" ]; then echo "no environment step was found"; return; fi
+  if printf '%s\n' "$step" | grep -Eq 'echo "processor: \$\(.*(/proc/cpuinfo|lscpu)'; then
+    echo ok
+  else
+    echo "the environment step does not echo \"processor: \$(...)\" read from /proc/cpuinfo or lscpu"
+  fi
+}
+printf 'jobs:\n  suite:\n    steps:\n      - name: Record the environment the suite is judged in\n        run: |\n          echo "cores: $(nproc)"\n          # echo "processor: $(lscpu)"\n      - name: Next\n        run: echo "processor: $(lscpu)"\n' > "$TMPROOT/no-processor.yml"
+r="$(processor_printed "$TMPROOT/no-processor.yml")"
+[ "$r" != ok ] \
+  && check "#2403 an environment step printing cores but no processor is refused, whatever its comments or the next step say" ok \
+  || check "#2403 an environment step printing cores but no processor is refused, whatever its comments or the next step say" "it passed"
+r="$(processor_printed "$REAL")"
+[ "$r" = ok ] \
+  && check "#2403 the real environment step prints the processor model" ok \
+  || check "#2403 the real environment step prints the processor model" "$r"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
