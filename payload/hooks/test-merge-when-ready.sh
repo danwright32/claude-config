@@ -223,10 +223,16 @@ export PATH="$BIN:$PATH"
 # --- the injected sleep: runs the next step the test queued, then returns at once -----------------
 # It also moves the injected clock on by the seconds asked (claude-config#1271), so a wait for main to
 # be still for minutes, and a deadline hours long, are crossed in no real time at all.
+# The clock is read with the shell's own read, never a cat that may find no process to run under load,
+# and written whole through a rename (claude-config#2327): a read that failed used to write the bare
+# seconds asked as the time, and a write cut short left an empty clock, either one a jump of about a
+# million seconds for the next read. A clock it cannot read stops it, loudly, with the clock untouched.
 cat > "$BIN/fake-sleep" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$ST/sleeps"
-printf '%s' "$(( $(cat "$ST/clock") + $1 ))" > "$ST/clock"
+c=""; read -r c < "$ST/clock"
+case "$c" in ''|*[!0-9]*) echo "fake sleep: the injected clock in $ST/clock reads '$c', not a time" >&2; exit 1 ;; esac
+printf '%s' "$(( c + $1 ))" > "$ST/clock.$$" && mv -f "$ST/clock.$$" "$ST/clock"
 if [ -s "$ST/on-sleep" ]; then
   step="$(head -1 "$ST/on-sleep")"; tail -n +2 "$ST/on-sleep" > "$ST/on-sleep.tmp"; mv "$ST/on-sleep.tmp" "$ST/on-sleep"
   eval "$step"
@@ -1447,6 +1453,35 @@ check "#2399 control: under the test marker the sleep named in MWR_SLEEP does th
 check "#2399 control: under the test marker the clock named in MWR_NOW is read" "read" "$(cat "$ST/decoy-nows" 2>/dev/null)"
 check_eq "#2399 control: and the sleep on the PATH is not run" "" "$(cat "$ST/path-sleeps" 2>/dev/null)"
 
+# A read of the injected clock that gives no time is asked again (claude-config#2327). The clock is a
+# command the helper runs, so a read can come back empty when that command could not run (no process
+# to spare under load, a clock file a full disk left empty), and the helper read the real clock in
+# its place: one look at an epoch near 1.8 billion, against the suite's clock near a million, crossed
+# every deadline and line budget at once. Injected (2327 evidence), one empty read was enough to stop
+# the "three ahead" case below at its line budget with the line still moving. Here every fourth read
+# answers nothing, and the run must come out exactly as a run on a whole clock does.
+cat > "$BIN/gappy-now" <<'EOS'
+#!/usr/bin/env bash
+n=$(( $(cat "$ST/now-reads" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$ST/now-reads"
+[ $(( n % 4 )) -eq 0 ] && exit 0
+cat "$ST/clock"
+EOS
+chmod +x "$BIN/gappy-now"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' ':' ':' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(MWR_NOW="$BIN/gappy-now" MWR_DEADLINE_SECONDS=900 run 7 --squash)"; rc=$?
+check_eq "#2327 a clock read that answers nothing now and then does not stop the run" "0" "$rc"
+check "#2327 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_not "#2327 never out of time" "Out of time" "$out"
+check_eq "#2327 every elapsed figure it said is on the injected clock (none past the 90s it ran)" "" "$(grep -oE '^merge-when-ready: \[[^]]*\]' <<<"$out" | grep -vE '\[(0s|[0-9]{1,2}s|1m [0-9]{2}s)\]')"
+check_not "#2327 and it never said it read the real clock" "real clock" "$out"
+check "#2327 control: the clock did answer nothing on some reads" "yes" "$( [ "$(cat "$ST/now-reads" 2>/dev/null || echo 0)" -ge 4 ] && echo yes || echo no)"
+# A clock that never answers is said, naming the setting, rather than read past in silence (L11).
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/mute-now"; chmod +x "$BIN/mute-now"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_NOW="$BIN/mute-now" run 7 --squash)"; rc=$?
+check "#2327 a clock that never answers is said, naming MWR_NOW" "the clock named in MWR_NOW ($BIN/mute-now) gave no time in 3 reads, so the real clock is read instead" "$out"
+
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
 # recognises a merge through the shared reader (mt_runs_merge or mt_is_pr_merge) must be asked, or
@@ -2155,10 +2190,23 @@ check_eq "#1521 an unmerged commit does not stop the merge" "0" "$rc"
 check_eq "#1521 a worktree with commits the pull request never held is kept" "yes" "$(there)"
 check "#1521 saying why" "keeping agent-x [feat/x]: it has commits PR #7 never held" "$out"
 
-# A process standing in it keeps it.
+# A process standing in it keeps it. The process stays until it is stopped here, and the helper runs
+# only once the system shows it standing in the worktree, read the way the check reads it (lsof, else
+# /proc), so the case waits on the condition it is about rather than on how soon a busy Mac schedules
+# a background job, and no lifetime of its own can end before the helper looks (L290, claude-config#2327).
+stands_in(){ # stands_in <pid> <folder>: the system shows that process's working directory as the folder
+  if command -v lsof >/dev/null 2>&1; then lsof -a -p "$1" -d cwd -F n 2>/dev/null | grep -qxF "n$2"
+  else [ "$(readlink "/proc/$1/cwd" 2>/dev/null)" = "$2" ]; fi
+}
 wt_fresh
-(cd "$AGENT" && exec sleep 120) &
+(cd "$AGENT" && exec tail -f /dev/null) &
 WBUSY=$!
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  # A bound only so a process that never gets there cannot hold the suite (600 looks a tenth of a
+  # second apart, a setting); that is its own failure, said as such.
+  looks=0; until stands_in "$WBUSY" "$AGENT" || [ "$looks" -ge 600 ]; do sleep 0.1; looks=$((looks + 1)); done
+  check_eq "#2327 the busy process is seen standing in the worktree before the merge is asked" "yes" "$(stands_in "$WBUSY" "$AGENT" && echo yes || echo no)"
+fi
 out="$(wrun 7 --squash)"; rc=$?
 kill "$WBUSY" 2>/dev/null; wait "$WBUSY" 2>/dev/null
 check_eq "#1521 a busy worktree does not stop the merge" "0" "$rc"
@@ -2818,7 +2866,11 @@ check "#1676 naming the review" "lessons review" "$seen1"
 # killed the record stays behind, and says nothing.
 fresh "$OLD" 0 "$PENDING"
 printf '%s\n' "( $MP_LIBS && mp_waiting \$PPID \$(cat \"\$ST/clock\") ) && echo believed > \"\$ST/verdict-alive\"; echo \$PPID > \"\$ST/helper-pid\"; kill -9 \$PPID" > "$ST/on-sleep"
-out="$(run 7 --squash)"; rc=$?
+# The shell running the helper reports the kill ("Killed: 9 bash $HELPER") on its own stderr, which is
+# not the helper's output and nothing here reads. It is dropped: printed into the suite's own output, at
+# the tail of every run, it was read as a helper killed at its deadline and blamed for a failure two
+# sections earlier (claude-config#2327).
+out="$(run 7 --squash 2>/dev/null)"; rc=$?
 hp="$(cat "$ST/helper-pid" 2>/dev/null)"
 check_eq "#1676 control: while the run is alive and waiting, its record is believed" "believed" "$(cat "$ST/verdict-alive" 2>/dev/null)"
 check_eq "#1676 a run killed outright leaves its record behind" "yes" "$( [ -n "$hp" ] && [ -e "$MWR_PHASE_DIR/$hp" ] && echo yes || echo no)"
