@@ -1,5 +1,7 @@
 /** One background job this session is running, as the status bar (#610) shows it. */
 export type JobsEntry = {
+  /** The task id Claude Code gave the job when it started it, the id its Bash result names (#2436). */
+  id: string
   /** A short name: the name Claude gave a kept job ("dev server"), else its command cut short. */
   label: string
   /** How long it has run, in milliseconds, at the moment the list was read. */

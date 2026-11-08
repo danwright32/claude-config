@@ -381,12 +381,21 @@ slug="${repo:-$(mt_remote_slug)}"
 [ -n "$slug" ] || usage "this checkout has no GitHub origin; name the repository with --repo owner/name."
 
 # The clock is a seam like the sleep (L524): MWR_NOW names a command printing epoch seconds, under the
-# test marker only (see NOW_CMD). One that
-# prints anything else is not believed, and the real clock is read instead.
+# test marker only (see NOW_CMD). A read that gives no time is asked again, up to three reads in all
+# (claude-config#2327): the command can fail to run at all under load, and one read of the real clock
+# in the middle of a run on the injected one crosses every deadline at once. Only a clock that gives
+# no time three times running is read past, to the real clock, and that is said on stderr, since
+# stdout is the time the caller reads.
 now(){
-  local t=""
-  [ -n "$NOW_CMD" ] && t="$("$NOW_CMD" 2>/dev/null)"
-  case "$t" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$t" ;; esac
+  local t="" reads=0
+  if [ -n "$NOW_CMD" ]; then
+    while [ "$reads" -lt 3 ]; do
+      t="$("$NOW_CMD" 2>/dev/null)"; reads=$((reads + 1))
+      case "$t" in ''|*[!0-9]*) ;; *) printf '%s' "$t"; return 0 ;; esac
+    done
+    printf 'merge-when-ready: the clock named in MWR_NOW (%s) gave no time in %s reads, so the real clock is read instead.\n' "$NOW_CMD" "$reads" >&2
+  fi
+  date +%s
 }
 t0="$(now)"
 # This run, as lib/merge-target.sh's record of refused sign ins names it (claude-config#1626), handed
@@ -796,6 +805,25 @@ retarget(){   # $1 = pull request number
   printf '%s, exit %s' "${out:0:300}" "$rc"
   return 1
 }
+# Moves one pull request stacked on the merged branch. GitHub often moves it onto the base itself
+# between the list and this move, and then answers the move "A pull request already exists for
+# base branch ..." (claude-config#2431: #2419 and #2405 on 2026-11-07, each leaving the branch for a
+# second run). That answer is judged by the state it leaves: the pull request's base is read again,
+# and one already on the merged one's base returns 2, moved by GitHub. A base that cannot be read,
+# or names anything else, is the refusal GitHub's first answer was.
+move_stacked(){   # $1 = pull request number; 0 moved here, 2 already moved, 1 refused
+  local why now
+  why="$(retarget "$1")" && return 0
+  case "$why" in
+    *"A pull request already exists"*)
+      if now="$(gh_as api "repos/$slug/pulls/$1" 2>/dev/null)" \
+        && [ "$(printf '%s' "$now" | jq -r '.base.ref // ""' 2>/dev/null)" = "$base" ]; then
+        return 2
+      fi ;;
+  esac
+  printf '%s' "$why"
+  return 1
+}
 # THE MERGED BRANCH'S AGENT WORKTREE GOES AT THE MERGE (claude-config#1521). On 2026-10-22 this
 # repository held 66 agent worktrees, about 2.5 GB, 63 of them for merged pull requests: the sweep
 # (check-stale-worktrees.sh, started by stale-worktree-nudge.sh) ran only at a session's first
@@ -854,7 +882,7 @@ tidy_worktree(){
 }
 
 finish_branch(){   # $1 = the sentence saying it merged; always stops
-  local said="$1" left n why moved="" failed="" del rrc
+  local said="$1" left n why mrc moved="" already="" failed="" del rrc
   merged_now=1
   # Merged: the turn is passed on now, not after the branch and worktree are tidied (#1515).
   turn_leave
@@ -873,9 +901,15 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
   [ "$rrc" -eq 0 ] || stop 4 "$left: $(signin_or_unread "the open pull requests based on it" "$rrc" list), and deleting it would close every one. Run the same command again to finish."
   for n in $stacked; do
     case "$n" in ''|*[!0-9]*) stop 4 "$left: GitHub listed '$n' among the pull requests based on it, which is not a number." ;; esac
-    if why="$(retarget "$n")"; then moved="$moved #$n"; else failed="$failed #$n ($why)"; fi
+    why="$(move_stacked "$n")"; mrc=$?
+    case "$mrc" in
+      0) moved="$moved #$n" ;;
+      2) already="$already #$n" ;;
+      *) failed="$failed #$n ($why)" ;;
+    esac
   done
   [ -z "$moved" ] || say "Moved the pull request(s) based on $branch onto $base:$moved."
+  [ -z "$already" ] || say "GitHub had already moved$already onto $base itself."
   [ -z "$failed" ] || stop 4 "$left: GitHub would not move$failed onto $base, and deleting the branch would close them.${moved:+ Already moved:$moved.} Move them by hand, or run the same command again to finish."
   # Judged by the state left, never by the answers: a pull request still based on the branch now
   # (one GitHub said yes about, or one opened meanwhile) would be closed by the delete.

@@ -5663,10 +5663,32 @@ traps a turn, a sleeping worker's included: the next end in the chain goes ahead
 what is still owed. What is owed is session state, so a new session owes nothing for another's
 merges. The `classic.Stop` hook runs only while the managed settings file is in place
 (`tools/sec-default-bypassed-hooks.tsv`); without it the line on the merge's result still shows.
+The same turn end also asks for a draft reply to the Slack thread the session started from (#2436,
+Dan, 2026-11-07: "slack thread start = draft response saved. every time"). A thread is recorded,
+per session, when Dan's own typed prompt (mod-kit's `isDans`) holds a Slack message link (a link to
+a reply names its parent through `thread_ts`), and when the main session reads a thread with
+`slack_read_thread` while it has none recorded; a thread a subagent reads, or a later one, is
+research. A merge GitHub confirms, or a background merge a turn end hears has merged, marks a
+merge landed. Answering the issue's open question the same day, Dan chose one draft after the
+session's last merge from the thread, not one after each; a turn end cannot know a merge is the
+last, so it holds only when a merge landed after the thread's last draft or skip and no merge of
+the session is in flight: a helper merge still waiting in is it live's own record whose background
+task the job watcher still lists (its list carries each job's task id for this). A helper that
+ended without merging is no longer in flight; with no job list to read, a waiting merge is taken as
+in flight. The hold tells the session to write the reply, run `/no-ai-tells`, ask Dan with
+`AskUserQuestion` carrying `metadata.source` `is-it-live-draft:<channel>:<thread ts>`, whose two
+answers the mod words (Save as a draft, Skip this time), and on Save save that exact text with
+`slack_send_message_draft` to the channel and thread, never a send; Slack keeps one attached draft
+per channel and refuses another with `attached_draft_exists`, which the hold says to resolve with
+Dan. Any draft Slack saved to that thread, under any Slack server and from any part of the session
+(the card's message for a thread requester, #2435, included), or Dan's Skip, settles it until the
+next merge. Which came first is kept as a count of steps in the session, never two clock readings.
+Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+The mod never calls a Slack tool.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271
+#617, #663, #707, #771, #1244, #1271, #2436
 
 </td></tr>
 <tr><td>
@@ -6562,10 +6584,12 @@ line and carried on the next tool call instead. While the Mac is asleep the conv
 woken (it reaches Claude, never Dan) and the agent is noted for the morning report (#1234). A
 session list that cannot be asked is said as such and asked again once a minute later; an unreadable
 record is named (#753). The status bar reads this session's jobs through `$.jobs.list()` and the
-quiet agents through `$.jobs.agents()`. A look still running is never overlapped by a second, a
-session start's included; one that has not finished in ten minutes is given up, said to Claude once,
-and acts on nothing after, and no second stop is sent while one is unanswered. Keeping a job asks
-mod-kit's screen first, so a name or reason carrying a secret never reaches the status bar. A
+quiet agents through `$.jobs.agents()`; each listed job carries its task id, which is it live reads
+to tell whether a merge helper it waits on is still running (#2436). A look still running is
+never overlapped by a second, a session start's included; one that has not finished in ten
+minutes is given up, said to Claude once, and acts on nothing after, and no second stop is sent
+while one is unanswered. Keeping a job asks mod-kit's screen first, so a name or reason carrying
+a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
