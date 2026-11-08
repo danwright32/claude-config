@@ -4955,12 +4955,11 @@ check "and reports no unapplied changes"              "! grep -qi 'not applied' 
 HCR2="$WORK/hcrepo2"; git clone -q "$HCBARE" "$HCR2" 2>/dev/null
 HCH2="$WORK/hchome2"; mkdir -p "$HCH2"; echo '{"hooks":{}}' > "$HCH2/settings.json"
 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH2" SYNC_REPO="$HCR2" bash "$SCRIPT" pull >/dev/null 2>&1
-# Their work is published from its own healthy clone via sync, which carries no
-# send guard. Publishing it from a Mac this test has deliberately wedged would
+# Their work lands from a clone of its own with plain git, which no send guard
+# can refuse. Publishing it from a Mac this test has deliberately wedged would
 # make the control depend on the very bug it is the control for.
 HCR3="$WORK/hcrepo3"; git clone -q "$HCBARE" "$HCR3" 2>/dev/null
-HCH3="$WORK/hchome3"; mkdir -p "$HCH3"; echo '{"hooks":{}}' > "$HCH3/settings.json"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$HCH3" SYNC_REPO="$HCR3" bash "$SCRIPT" pull >/dev/null 2>&1
+HCH3="$WORK/hchome3"; mkdir -p "$HCH3/hooks"
 echo 'THEIR-WORK' > "$HCH3/hooks/hc-theirs.sh"
 fixture_land "$HCR3" hooks/hc-theirs.sh "$HCH3/hooks/hc-theirs.sh"   # the other Mac's publish, not a sync of its own (claude-config#2460)
 check "their work really was published"            "[ -f '$HCR3/payload/hooks/hc-theirs.sh' ]"
