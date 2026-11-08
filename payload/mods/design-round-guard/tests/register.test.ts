@@ -166,6 +166,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const reads: string[] = []
   const storeGets: string[] = []
   const toasts: string[] = []
+  // Every line the guard writes to its log, and where to (#2288).
+  const logged: { text: string; to?: string }[] = []
   const at ={ cwd: init.cwd ?? '/w/slate', session: 's1' }
   const clock = mock.clock(on, { now: T0 })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : init.env?.[e.name] }) as never)
@@ -317,6 +319,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   })
   on('ui.log', ($, e) => {
     const text = String((e as { text?: string }).text ?? '')
+    logged.push({ text, to: (e as { to?: string }).to })
     if (text.startsWith('CARD ')) cards.push(JSON.parse(text.slice(5)))
     return { value: undefined } as never
   })
@@ -352,7 +355,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (tool === 'Bash' && ctl.readFailsAfterRun) ctl.unreadable = ctl.readFailsAfterRun
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed, sealChecks, opened, readAttempted }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, logged, blobs, writes, removed, sealChecks, opened, readAttempted }
 }
 type W = ReturnType<typeof world>
 
@@ -636,6 +639,26 @@ test('the guard says it recorded an answer only once it has: never for one it re
   const shown = w.asked[w.asked.length - 1]?.questions[0]
   expect(heard).toEqual([{ call: expect.any(String), question: shown?.question, answer: SKIP_YES, options: [SKIP_YES, SKIP_NO, NOT_LOOK] }])
   expect(heard[0]?.question).toContain(SKIP_QUESTION)
+})
+// #2288: a mod listening for the announcement that throws was caught with nothing said anywhere, so
+// the failure is written to the guard's log, while Dan's answer stays recorded and is told as read.
+test('an announcement that throws is logged, and the answer it followed stays recorded (#2288)', withKit, async ($, on) => {
+  const w = world($, on)
+  // A listener's own throw never reaches the guard (the engine skips that hook and goes on, even
+  // through a rethrowing .catch, measured while writing this), so the call itself is made to fail:
+  // $.designRound is provided here with an answered that rejects.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, designRound: { answered: async () => { throw new Error('the issue could not be reached') } } }
+  })
+  const skipped = await askSkip($, w, refusalOf(await call($, PAGE)), SKIP_YES)
+  expect(refusalOf(skipped)).toBe('')
+  expect(contextOf(skipped)).toContain(`Dan answered ${SKIP_YES}`)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  const lines = w.logged.filter(l => l.text.includes('the issue could not be reached'))
+  expect(lines).toHaveLength(1)
+  expect(lines[0]?.text.startsWith('design-round-guard: ')).toBe(true)
+  expect(lines[0]?.to).toBe('debug')
 })
 // Lessons review of PR #2274: Not a look or wording change lets one call through and records nothing
 // for the issue, whose next look changing edit is held and asked about again, so it is never said as
