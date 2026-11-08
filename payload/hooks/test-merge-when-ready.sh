@@ -194,6 +194,10 @@ case "$*" in
     case " $* " in *" --squash "*|*" -s "*|*" --merge "*|*" -m "*|*" --rebase "*|*" -r "*) ;;
       *) echo "--merge, --rebase, or --squash required when not running interactively" >&2; exit 1 ;;
     esac
+    printf '%s\n' "$(rd clock)" >> "$ST/merge-times"
+    # merge-fails holds one error per line, each spent by one merge that merges nothing, as GitHub's
+    # "Something went wrong" did on 2026-11-05 (claude-config#2289).
+    if e="$(pop merge-fails)"; then printf '%s\n' "$e" >&2; exit 1; fi
     pinned="$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')"
     # GitHub refuses to merge a pull request whose head is not its branch's tip, whatever the pin
     # (Bidspoke #2577, claude-config#1458).
@@ -207,6 +211,8 @@ case "$*" in
     [ -s "$ST/tip-after-merge" ] && cp "$ST/tip-after-merge" "$ST/branch-tip"
     # gh pr merge --delete-branch deletes the branch through the API as soon as the merge lands.
     case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
+    # merge-lands-fails: the merge lands, and gh prints an error anyway (claude-config#2289).
+    [ -s "$ST/merge-lands-fails" ] && { cat "$ST/merge-lands-fails" >&2; rm -f "$ST/merge-lands-fails"; exit 1; }
     ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
 esac
@@ -736,7 +742,9 @@ check "#1061 the retry is said, with GitHub's own error" "connection reset by pe
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+# With no wait on the network (claude-config#2303, measured in its own section below), as in every
+# run here whose network never comes back: these measure the four tries and how the stop says them.
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1061 a compare that keeps failing still stops" "1" "$rc"
 check "#1061 naming the last error" "TLS handshake timeout" "$out"
 check "#1061 and saying it could not confirm the head contains main's tip" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
@@ -760,7 +768,7 @@ check_eq "#1061 after one retry wait for it" "1" "$(count sleeps '^7$')"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1061 a pull request read that keeps failing stops" "1" "$rc"
 check "#1061 naming GitHub's last error" "TLS handshake timeout" "$out"
 check_eq "#1061 nothing merged" "0" "$(count gh-calls 'pr merge')"
@@ -842,7 +850,7 @@ check_not "#1675 never said as a refused sign in" "refused the sign in" "$out"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1675 a connection never made on any try still stops" "1" "$rc"
 check "#1675 said as the connection, four times, naming what it was reading" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub (error connecting to api.github.com)" "$out"
 check "#1675 and that GitHub never answered" "GitHub never answered" "$out"
@@ -853,7 +861,7 @@ check_eq "#1675 nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1675 a compare gh could never connect for stops" "1" "$rc"
 check "#1675 and says so" "could not connect to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_eq "#1675 and nothing merged" "0" "$(count gh-calls 'pr merge')"
@@ -872,7 +880,7 @@ check "#1735 the retry is said as the connection" "Could not connect to GitHub r
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$DIAL" > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1735 a dial that fails on every try still stops" "1" "$rc"
 check "#1735 said as the connection, four times, with the error" "could not connect to GitHub 4 times reading pull request #7 in acme/widget from GitHub ($DIAL)" "$out"
 check_not "#1735 never as a pull request that could not be read" "could not read pull request" "$out"
@@ -883,12 +891,207 @@ check_eq "#1735 nothing merged" "0" "$(count gh-calls 'pr merge')"
 RESET='Get "https://api.github.com/repos/acme/widget/compare/main...x": read tcp 10.0.0.2:57411->140.82.112.6:443: read: connection reset by peer'
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$RESET" > "$ST/compare-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=0 run 7 --squash)"; rc=$?
 check_eq "#1735 a compare whose connection is reset on every try stops" "1" "$rc"
 check "#1735 each retry says the connection was lost" "Lost the connection to GitHub reading whether #7 contains the tip of main (try 1 of 4" "$out"
 check "#1735 and the stop says it was lost four times" "lost the connection to GitHub 4 times reading whether #7 contains the tip of main" "$out"
 check_not "#1735 never that gh could not reach GitHub" "could not reach it" "$out"
 check_eq "#1735 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A network outage is waited through, not stopped on after four tries (claude-config#2303). On
+# 2026-11-05 an outage of about 40 minutes stopped all ten helpers a session had queued, each after
+# four tries a minute apart, and every one had to be started again by hand with the queue order
+# rebuilt. A read the network never carried to GitHub is safe to ask again, so while every try fails
+# that way the helper keeps waiting, saying it is waiting on the network with how long, up to
+# MWR_NET_WAIT_SECONDS (3600 by default), and carries on when GitHub answers. The sections above run
+# with that wait at 0, since they measure the four tries and their wording. Every wait here is the
+# injected sleep (L524): an outage of 40 minutes is crossed in no real time.
+net_back_at(){ local i; for i in $(seq 1 600); do printf '[ "$(cat "$ST/clock")" -lt %s ] || rm -f "$ST/view-down"\n' "$1" >> "$ST/on-sleep"; done; }
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"; net_back_at 1002400
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 a pull request read through a 40 minute outage merges" "0" "$rc"
+check "#2303 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2303 it waited past the 40 minutes" "yes" "$( [ "$(( $(cat "$ST/clock") - 1000000 ))" -ge 2400 ] && echo yes || echo no)"
+check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 21s reading pull request #7" "$out"
+check "#2303 and how long it will wait" "stops once it has waited 60m (MWR_NET_WAIT_SECONDS)" "$out"
+# Not measured, worked out from the settings this suite sets: said at the end of the first round, then
+# on the first try at least the heartbeat after the last line, so the last line before 40m is 38m 09s.
+check "#2303 a later line says the wait has grown" "Waiting on the network: GitHub has not been reachable for 38m 09s" "$out"
+check "#2303 saying when GitHub answers again" "GitHub answered again reading pull request #7 after 40m" "$out"
+check_eq "#2303 the four tries before the wait are said as today, three retry lines" "3" "$(printf '%s\n' "$out" | grep -c 'Could not connect to GitHub reading pull request #7 (try')"
+net_lines="$(printf '%s\n' "$out" | grep -c 'Waiting on the network')"
+check_eq "#2303 the wait is said about every 2 minutes, not on every try ($net_lines lines)" "yes" "$( [ "$net_lines" -ge 15 ] && [ "$net_lines" -le 25 ] && echo yes || echo no)"
+check_not "#2303 never out of time" "Out of time" "$out"
+
+# The outer limit: a network that never comes back still ends in a stop, at MWR_NET_WAIT_SECONDS.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 a network that never comes back still stops" "1" "$rc"
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 at the 60 minute limit, within one round of tries ($waited s)" "yes" "$( [ "$waited" -ge 3600 ] && [ "$waited" -le 3660 ] && echo yes || echo no)"
+check "#2303 the stop says how long it waited on the network" "Stopped: waited 60m " "$out"
+check "#2303 naming the setting" "on the network (MWR_NET_WAIT_SECONDS), and could not connect to GitHub" "$out"
+check "#2303 and what it was reading, as the connection" "times reading pull request #7 in acme/widget from GitHub (error connecting to api.github.com)" "$out"
+check_eq "#2303 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(MWR_NET_WAIT_SECONDS=600 run 7 --squash)"; rc=$?
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 MWR_NET_WAIT_SECONDS sets the limit" "1" "$rc"
+check_eq "#2303 a 10 minute limit stops near 10 minutes ($waited s)" "yes" "$( [ "$waited" -ge 600 ] && [ "$waited" -le 660 ] && echo yes || echo no)"
+
+# Controls (L497): an answer GitHub gave is handled as today, before and during the wait.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 control: GitHub's server failing on every try stops after four as today" "1" "$rc"
+check_eq "#2303 control: three retry waits" "3" "$(count sleeps '^7$')"
+check_not "#2303 control: never said as waiting on the network" "Waiting on the network" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"; printf '%s\n' "$CONNECT" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2303 control: a round with a refused sign in in it is not waited through" "1" "$rc"
+check_eq "#2303 control: four tries" "4" "$(count gh-calls 'pr view 7')"
+check_not "#2303 control: and not said as waiting on the network" "Waiting on the network" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$CONNECT" > "$ST/view-down"
+for _ in $(seq 1 600); do printf '%s\n' '[ "$(cat "$ST/clock")" -lt 1000600 ] || printf "%s\n" "HTTP 502: Bad Gateway (https://api.github.com/graphql)" > "$ST/view-down"' >> "$ST/on-sleep"; done
+out="$(run 7 --squash)"; rc=$?
+waited=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#2303 control: GitHub answering with a server error during the wait stops as today" "1" "$rc"
+check_eq "#2303 control: soon after it answered, not at the limit ($waited s)" "yes" "$( [ "$waited" -lt 700 ] && echo yes || echo no)"
+check "#2303 control: said as GitHub's error" "Bad Gateway" "$out"
+check_eq "#2303 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# GitHub answering the merge itself with "Something went wrong" (claude-config#2289). On 2026-11-05
+# a merge in a work repository stopped three times in three minutes on "GraphQL: Something went wrong
+# while executing your query", with every gate allowing it, and a fourth run five minutes later
+# merged. The pull request is read back first: merged is reported as merged; still open at the same
+# head, every gate is asked again and the merge, pinned to that head, is tried again
+# MWR_MERGE_RETRY_SECONDS (120) later, MWR_MERGE_TRIES (3) times in all, then it stops naming the
+# error. The waits are the injected sleep (L524).
+WRONG='GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug. Please include `AB12:3C4D:5E6F` when reporting this issue.'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n%s\n' "$WRONG" "$WRONG" > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge GitHub answers Something went wrong twice merges on the third try" "0" "$rc"
+check "#2289 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2289 three merge commands" "3" "$(count gh-calls 'pr merge')"
+check_eq "#2289 every one pinned to the head the gates allowed" "3" "$(count gh-calls "pr merge 7 .*--match-head-commit $OLD")"
+check_eq "#2289 every gate asked again before each try" "3" "$(grep -c 'match-head-commit' "$ST/red-gate-payloads")"
+check_eq "#2289 two waits of 2 minutes between the tries" "2" "$(count sleeps '^120$')"
+check "#2289 the retry is said, with GitHub's error and that nothing merged" "GitHub answered the merge of #7 at ${OLD:0:7} with Something went wrong (try 1 of 3: $WRONG), and reading it back shows it still open at that head, so nothing merged" "$out"
+check_eq "#2289 the pull request was read back after each merge" "yes" "$( [ "$(count gh-calls 'pr view 7')" -ge 6 ] && echo yes || echo no)"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n%s\n%s\n%s\n' "$WRONG" "$WRONG" "$WRONG" "$WRONG" > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge GitHub keeps answering Something went wrong stops" "1" "$rc"
+check_eq "#2289 after three tries" "3" "$(count gh-calls 'pr merge')"
+check "#2289 the stop names the error and the tries" "Stopped: GitHub answered the merge of #7 at ${OLD:0:7} with Something went wrong 3 times, 2m apart, and reading it back shows it still open at that head, so nothing merged: $WRONG" "$out"
+check "#2289 and says what to do" "run the same command again" "$out"
+check_eq "#2289 nothing merged" "no" "$( [ -e "$ST/merged" ] && echo yes || echo no)"
+
+# Merged though gh printed the error: the read back reports it merged, with no second merge.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$WRONG" > "$ST/merge-lands-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a merge that landed though GitHub answered Something went wrong is reported merged" "0" "$rc"
+check "#2289 as merged, naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: GraphQL: Something went wrong" "$out"
+check_eq "#2289 and merged once" "1" "$(count gh-calls 'pr merge')"
+
+# The head moving during the wait is judged as a new head: the old head is never merged again.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$WRONG" > "$ST/merge-fails"
+for _ in $(seq 1 20); do printf '%s\n' "grep -q 'pr merge' \"\$ST/gh-calls\" && printf '%s' $NEW > \"\$ST/head\"" >> "$ST/on-sleep"; done
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 a head that moved during the wait merges as the new head" "0" "$rc"
+check "#2289 merged at the new head" "Merged #7 in acme/widget at ${NEW:0:7}" "$out"
+check_eq "#2289 the old head was tried once, never again" "1" "$(count gh-calls "pr merge 7 .*--match-head-commit $OLD")"
+check_eq "#2289 the gates judged the new head before it merged" "yes" "$(grep -q "match-head-commit $NEW" "$ST/red-gate-payloads" && echo yes || echo no)"
+
+# Control (L497): any other merge error stops at once, as before.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'GraphQL: Pull request is not mergeable (mergePullRequest)' > "$ST/merge-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2289 control: another merge error stops at once" "1" "$rc"
+check_eq "#2289 control: one merge command" "1" "$(count gh-calls 'pr merge')"
+check "#2289 control: naming it" "Stopped: gh pr merge did not merge #7 at ${OLD:0:7}: GraphQL: Pull request is not mergeable" "$out"
+
+# The helper writes its own log (claude-config#2304). Started as `... 2>&1 | tee <log>`, a background
+# helper reports tee's exit, not its own: on 2026-11-05 ten helpers stopped on a network outage and
+# every one was reported as "completed (exit code 0)", the same as a merge. With --log=<file> the
+# helper appends everything it says to the file itself, so no pipe is needed and the exit the session
+# is told is the helper's, and it ends the file with that exit and what it means, so the log alone
+# cannot read a stop as a finish either.
+LOGS="$WORKDIR/logs"; mkdir -p "$LOGS"
+fresh "$OLD" 0 "$GREEN"; rm -f "$LOGS/a.log"
+out="$(run 7 --squash --log="$LOGS/a.log")"; rc=$?
+check_eq "#2304 a merge run with --log exits as the helper does" "0" "$rc"
+check "#2304 still says it on its own output" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check "#2304 the log holds what it said" "Merged #7 in acme/widget at ${OLD:0:7}" "$(cat "$LOGS/a.log" 2>/dev/null)"
+check "#2304 the log's last line is the exit and what it means" "merge-when-ready: exit 0: merged" "$(tail -1 "$LOGS/a.log" 2>/dev/null)"
+check_not "#2304 --log is never handed to gh" "--log" "$(grep 'pr merge' "$ST/gh-calls")"
+
+fresh "$OLD" 0 "$GREEN"; rm -f "$LOGS/b.log"; printf '%s' 'CI is red.' > "$ST/red-gate-deny"
+out="$(run 7 --squash --log "$LOGS/b.log")"; rc=$?
+check_eq "#2304 a stopped run with --log exits 1, never 0" "1" "$rc"
+check "#2304 the log holds the stop" "Stopped: block-red-merge.sh refused the merge of #7" "$(cat "$LOGS/b.log" 2>/dev/null)"
+check "#2304 and ends saying it stopped, nothing merged" "merge-when-ready: exit 1: stopped, needing a person; nothing was merged by this stop" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+check_not "#2304 a stopped log never reads as merged" "exit 0" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+
+# A log is appended to, each run marked where it starts, so a log kept across runs reads run by run.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log="$LOGS/b.log")"; rc=$?
+check_eq "#2304 a second run appended to the same log" "2" "$(grep -c '^merge-when-ready: started' "$LOGS/b.log")"
+check "#2304 its own result last" "merge-when-ready: exit 0: merged" "$(tail -1 "$LOGS/b.log" 2>/dev/null)"
+
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log="$LOGS/no-such-folder/c.log")"; rc=$?
+check_eq "#2304 a log that cannot be written is refused before anything" "64" "$rc"
+check "#2304 saying so" "--log $LOGS/no-such-folder/c.log cannot be written" "$out"
+check_eq "#2304 and GitHub was never asked" "0" "$(count gh-calls 'pr view')"
+
+# A relative --log names a file relative to where the caller ran the helper. The helper moves to the
+# top of the checkout before it reads anything, so a path kept as given would send every line after
+# that move into a second file the caller never named (lessons review of #2386). Started from a
+# folder inside the checkout, every line, the exit line included, lands in the one file named.
+mkdir -p "$REPO/sub"; rm -f "$REPO/sub/rel.log" "$REPO/rel.log"
+fresh "$OLD" 0 "$GREEN"
+out="$( (cd "$REPO/sub" && bash "$HELPER" 7 --squash --log=rel.log 2>&1) )"; rc=$?
+check_eq "#2304 a relative --log run still merges" "0" "$rc"
+check "#2304 a relative --log keeps the start line where the caller named it" "merge-when-ready: started for #7" "$(cat "$REPO/sub/rel.log" 2>/dev/null)"
+check "#2304 a relative --log keeps the merge line there too, after the helper moves" "Merged #7 in acme/widget at ${OLD:0:7}" "$(cat "$REPO/sub/rel.log" 2>/dev/null)"
+check_eq "#2304 a relative --log ends with the exit line in the named file" "merge-when-ready: exit 0: merged." "$(tail -1 "$REPO/sub/rel.log" 2>/dev/null)"
+check_eq "#2304 a relative --log writes no second file at the checkout's top" "no" "$([ -e "$REPO/rel.log" ] && echo yes || echo no)"
+rm -f "$REPO/sub/rel.log" "$REPO/rel.log"
+
+# A relative --log whose folder does not exist is refused, naming that folder, before anything runs.
+fresh "$OLD" 0 "$GREEN"
+out="$( (cd "$REPO/sub" && bash "$HELPER" 7 --squash --log=missing/d.log 2>&1) )"; rc=$?
+check_eq "#2304 a relative --log into a missing folder is refused" "64" "$rc"
+check "#2304 naming the folder that does not exist" "does not exist" "$out"
+check_eq "#2304 and GitHub was never asked for it" "0" "$(count gh-calls 'pr view')"
+check_eq "#2304 and nothing was written at the checkout's top" "no" "$([ -e "$REPO/missing" ] && echo yes || echo no)"
+rmdir "$REPO/sub" 2>/dev/null
+
+# An empty --log= names no file, so it is refused rather than the run going on with no log at all.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --log=)"; rc=$?
+check_eq "#2304 an empty --log= is refused" "64" "$rc"
+check "#2304 saying it needs a file" "--log needs a file." "$out"
+check_eq "#2304 and GitHub was never asked for the empty one" "0" "$(count gh-calls 'pr view')"
+
+# Every place that documents running it in the background names --log=, never a pipe into tee.
+for f in "$DIR/../../README.md" "$DIR/../skills/orchestrate/SKILL.md" "$HELPER"; do
+  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
+  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
+done
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
@@ -947,7 +1150,7 @@ check_eq "#1615 and so is the CI gate" "90" "$(sort -u "$ST/red-gate-budgets" | 
 # Its default retry pace: about a minute in all, through the injected sleep.
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": net/http: TLS handshake timeout' > "$ST/compare-down"
-out="$(env -u MWR_READ_RETRY_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
+out="$(env -u MWR_READ_RETRY_SECONDS MWR_NET_WAIT_SECONDS=0 bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
 check_eq "#1061 with no retry setting it still stops when GitHub stays unreachable" "1" "$rc"
 check_eq "#1061 the default retry waits are 20 seconds each, a minute in all" "20 20 20" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
 
