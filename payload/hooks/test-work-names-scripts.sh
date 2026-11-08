@@ -294,6 +294,13 @@ check "#2207 and never reaches the real gh" not_posted
 check "#2207 and says it names another alias: $out" has "$out" "another gh alias"
 guard_args d1 "a clean comment"
 check "#2207 (control) the alias it names, run itself with clean text, runs the real gh: rc=$rc $out" [ "$rc" -eq 0 ]
+# An alias behind a flag is not expanded by this check, which says only that (L11, the lessons review
+# of #2398): it is not an alias named inside another alias.
+guard_args -R danwright-test/public-notes d1 "a clean comment"
+check "#2398 an alias behind a flag gh passes over is refused as cannot tell: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2398 and never reaches the real gh" not_posted
+check "#2398 and says it stands behind a flag: $out" has "$out" "behind the flag -R"
+check "#2398 and never says it is inside an alias: $out" bash -c '[[ "$1" != *"inside an alias"* && "$1" != *"another gh alias"* ]]' _ "$out"
 FAKE_RUNS=copilot FAKE_RUNS_CMD="echo copilot ran" guard_args copilot -p "open a pull request"
 check "#2207 gh copilot, which starts the Copilot CLI, is refused: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2207 and never runs it" bash -c "! grep -q '^RAN|' '$CALLS'"

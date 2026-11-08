@@ -595,21 +595,24 @@ ps__segment_is_push() { ps_runs_git "$1" push; }
 # creation (L673). Leading environment assignments are skipped, including one whose value is a
 # command substitution holding spaces, `GH_TOKEN=$(gh auth token -u name) gh pr create`, which is
 # how a session scopes a call to one of Dan's accounts; `rtk` in front is the same command.
+# The cheap tests look for the group's word, pr, never the action's: ps_runs_gh reads `gh pr new` as
+# the create it is (lib/shell-words.py GH_ACTION_ALIASES, claude-config#2411), and every other name of
+# the pr group holds the word pr (test-gh-write-aliases.sh holds that).
 ps_is_gh_pr_create() {   # $1 = command
   local cmd="$1" seg i end
-  case "$cmd" in *create*) ;; *) return 1 ;; esac
+  case "$cmd" in *pr*) ;; *) return 1 ;; esac
   # The one reading, in this shell, so each command's words are the ones it holds (#1040).
   if ps__read "$cmd" || [ "$?" -eq 3 ]; then
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
     while [ "$i" -lt "$end" ]; do
-      case "${PS__R_TEXT[$i]}" in *create*) ps_runs_gh "${PS__R_TEXT[$i]}" pr create && return 0 ;; esac
+      case "${PS__R_TEXT[$i]}" in *pr*) ps_runs_gh "${PS__R_TEXT[$i]}" pr create && return 0 ;; esac
       i=$((i + 1))
     done
     return 1
   fi
   local loop_input; loop_input="$(ps__crude_cut "$cmd")" || true
   while IFS= read -r seg; do
-    case "$seg" in *create*) ps_runs_gh "$seg" pr create && return 0 ;; esac
+    case "$seg" in *pr*) ps_runs_gh "$seg" pr create && return 0 ;; esac
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT

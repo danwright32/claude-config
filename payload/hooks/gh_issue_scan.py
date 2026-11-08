@@ -48,17 +48,19 @@ BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
 # would take as a different subcommand or action, one outside the gated pairs that no flag in front of
 # it can be taking as a value. The flags written in front of the action are the action's own, as gh
 # reads them (claude-config#1449: dropping them let `gh issue --body-file empty.md edit 5` past the body
-# file rule, and refused `gh issue -m M create`).
-def crude_gh_command(words):
+# file rule, and refused `gh issue -m M create`). The gated pairs are the caller's (kinds), so the work
+# names gate's release, gist and repo commands are read too (claude-config#2398).
+def crude_gh_command(words, kinds=BODY_FILE_COMMANDS):
     names = [w.split("/")[-1] for w in words]
     if "gh" not in names:  # gh-reader: the crude text reading gated_in_text uses
         return None
-    subs = {s for s, _ in BODY_FILE_COMMANDS}
+    subs = {s for s, _ in kinds}
     front, sub, prev = [], None, ""
     for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude text reading gated_in_text uses
         w = words[k]
-        if (sub, w) in BODY_FILE_COMMANDS:
-            return (sub, w, front, list(words[k + 1:]))
+        act = gh_long_form(sub, w)[1] if sub else w  # gh issue new is gh issue create (claude-config#2398)
+        if (sub, act) in kinds:
+            return (sub, act, front, list(words[k + 1:]))
         if sub is None and w in subs:
             sub = w
         elif w.startswith("-") and len(w) > 1:
@@ -98,6 +100,10 @@ try:
     _sw = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_sw)
     gh_command = _sw.gh_command
+    # gh's long name for an alias (claude-config#2398), asked by the crude reading too, so both
+    # readings know one list of gh's aliases, the reader's.
+    gh_long_form = _sw.gh_long_form
+    GH_GROUP_ALIASES = dict(_sw.GH_GROUP_ALIASES)
     # A command run from a string by a shell, eval or env -S (claude-config#1478): (wrapper, string,
     # why), or None. Its string is scanned as a command line of its own.
     wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
@@ -115,6 +121,16 @@ if READER_ERROR is not None:
     def gh_command(words):
         _no_reader()  # a caller asking which gh command some words run is told there is no reader
 
+    def gh_long_form(sub, act):
+        # With no reader there is no list of gh's aliases, so the crude reading sees the long names
+        # only, as it did before claude-config#2398: an alias such as gh issue new goes unseen until
+        # the reader is back, which the refusal naming the missing reader asks for.
+        return sub, act
+
+    # No group's other names either: a gate building on these reads only gh's long names, and the work
+    # names guard then asks about `gh cs` as an alias and refuses it as an extension, never passes it.
+    GH_GROUP_ALIASES = {}
+
 
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
@@ -131,6 +147,21 @@ ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # --help` rather than guessed, because a gate that refuses harmless commands is how
 # the habit of reaching for an override gets learned.
 NON_FILING_FLAGS = {"--help", "-h", "--web", "-w"}
+# Where a command gives one of those words another meaning, only the words that post nothing there
+# (claude-config#2398), each read from that command's help on gh 2.89.0: -h is --homepage to gh repo
+# create and edit, and gh gist create --web makes the gist and then opens it.
+NON_FILING_BY_KIND = {
+    ("repo", "create"): frozenset({"--help"}),
+    ("repo", "edit"): frozenset({"--help"}),
+    ("gist", "create"): frozenset({"--help", "-h"}),
+    # gh gist edit's help lists no -h and no --web (claude-config#2412), so only --help posts nothing.
+    ("gist", "edit"): frozenset({"--help"}),
+}
+
+
+def non_filing_flags(kind):
+    """The flags that make the gh command of kind (sub, act) post nothing."""
+    return NON_FILING_BY_KIND.get(tuple(kind), NON_FILING_FLAGS)
 
 
 def _is_operator(tok):
@@ -522,7 +553,7 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
             # which is absurd and teaches exactly the override habit this exists to
             # avoid. A gate that cries wolf gets ignored. --web hands any of them to a
             # browser form a person completes.
-            if not any(a in NON_FILING_FLAGS for a in args):
+            if not any(a in non_filing_flags(found[:2]) for a in args):
                 creates.append((tuple(found[:2]), args, list(seg_env), place.copy()))
             i = j
             at_head = True
@@ -754,12 +785,19 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
-def flag_values(args, long_flag, short_flag=None):
+def flag_values(args, long_flag, short_flag=None, clustered=False):
     """Every value given to a flag in one create's argument list.
 
     Understands the four forms gh accepts: `--flag value`, `--flag=value`,
     `-f value` and `-fvalue`. A flag with no value, or one followed by another
     flag, contributes nothing, so an empty value can never satisfy a gate.
+
+    clustered: also the short flag written after other one letter flags, `-dF body.md` and
+    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). gh cannot be asked here
+    which letters before it take a value of their own (`-tF` is a title of F), so every such cluster
+    counts, the reading that finds more values, never fewer. Only a caller for whom another value
+    can only refuse more asks for it (the work names gate reading the files a command posts); a
+    gate that a value satisfies never does.
     """
     values = []
     i = 0
@@ -795,6 +833,21 @@ def flag_values(args, long_flag, short_flag=None):
             i += 1
             continue
 
+        # `-dF body.md`, `-dFbody.md`: the short flag after other one letter flags (clustered only).
+        if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
+                and not tok.startswith("--") and short_flag[1] in tok[2:]):
+            rest = tok[tok.index(short_flag[1], 2) + 1:]
+            if rest.startswith("="):
+                rest = rest[1:]
+            if rest:
+                values.append(rest)
+                i += 1
+                continue
+            if i + 1 < n and args[i + 1].strip():
+                values.append(args[i + 1])
+                i += 2
+                continue
+
         i += 1
     return values
 
@@ -814,7 +867,7 @@ def gated_in_text(command, kinds=BODY_FILE_COMMANDS):
     """
     out = []
     for piece in TEXT_PIECE.split(command or ""):
-        found = crude_gh_command(TEXT_WORD.findall(piece))
+        found = crude_gh_command(TEXT_WORD.findall(piece), kinds)
         if found and tuple(found[:2]) in kinds:
             out.append((tuple(found[:2]), list(found[2]) + list(found[3])))
     return out
