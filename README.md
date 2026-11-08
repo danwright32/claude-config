@@ -1656,7 +1656,12 @@ new and the refusal says why.
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
-(claude-config#851). It updates the branch, starts the new head's lessons review alongside its
+(claude-config#851). For a log of the run, add `--log=<file>` rather than piping it into `tee`: a
+background command reports its pipeline's last exit, so `... 2>&1 | tee <log>` reads as exit 0
+however the helper ended, and on 2026-11-05 ten helpers stopped by a network outage were each
+reported "completed (exit code 0)", the same as a merge (claude-config#2304). With `--log` the
+helper appends what it says to the file itself, beside its own output, and ends the file with its
+exit and what it means. It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
 `require-changelog-tag.sh`, `check-closing-merge.sh`, `check-work-names-merge.sh` (#1995),
@@ -1842,7 +1847,19 @@ made and then failed before GitHub's answer arrived (a reset, a read timeout, a 
 "lost the connection to GitHub N times"; neither as GitHub refusing or being unable to show
 something. "error connecting to" stopped #1640 at 41 minutes on 2026-10-24, and `dial tcp ...:
 connect: can't assign requested address` (no local port left to connect from) stopped #1732 at once
-on 2026-10-25, with #1675 installed, because only the first wording was known. The gate's own reads are asked again the same way,
+on 2026-10-25, with #1675 installed, because only the first wording was known. When every try of
+those four failed on the network, the helper does not stop: it keeps asking every 20 seconds,
+saying "Waiting on the network" with how long about every two minutes, and carries on where it was
+once GitHub answers, for up to `MWR_NET_WAIT_SECONDS` (3600, a setting) from when the read began,
+after which it stops saying how long it waited (claude-config#2303). On 2026-11-05 an outage of
+about 40 minutes stopped all ten queued helpers after their four tries. A round with any answer
+GitHub gave in it, its server failing or a refused sign in included, stops as before. The merge
+itself is never asked again blindly: when GitHub answers it "Something went wrong while executing
+your query", the pull request is read back first, a merge that landed is reported as merged, and one
+still open at the same head goes round again `MWR_MERGE_RETRY_SECONDS` (120) later, where every gate
+is asked again and the merge is pinned to the head they allow, `MWR_MERGE_TRIES` (3) times in all,
+then stops naming the error (claude-config#2289; on 2026-11-05 that answer stopped one merge three
+times in three minutes, and a run five minutes later merged it). The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081),
 and a gate whose read the network failed on every try refuses in those same words, never as GitHub
 refusing or not answering (claude-config#1728).
