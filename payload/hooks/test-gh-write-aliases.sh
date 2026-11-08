@@ -133,7 +133,7 @@ fixture_env(){
 
 # ================================================================ 1. the reader
 read_gh(){   # $@ = a command's words; prints sub and act as gh_command reads them
-  python3 -c '
+  python3 -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("shell_words", sys.argv[1])
 sw = importlib.util.module_from_spec(spec)
@@ -177,7 +177,7 @@ reads "pr ls" gh pr ls
 # every other name gh gives those groups must hold that word, or the cheap test would skip it unread.
 # This fails the day the table gains a name for either group that does not.
 groups_hold_word(){
-  python3 -c '
+  python3 -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("shell_words", sys.argv[1])
 sw = importlib.util.module_from_spec(spec)
@@ -188,6 +188,17 @@ sys.exit(1 if bad else 0)
 ' "$READER"
 }
 check "#2411 every other name of the issue and pr groups holds the word the cheap tests look for" groups_hold_word
+# Loading the reader leaves no bytecode beside it (claude-config#2422, the #2080 class). Python caches
+# a file it loads by path in lib/__pycache__ unless told not to, and test-shell-code-lines.sh asserts
+# lib/ holds no shell-words bytecode, so one run of this suite failed that one in every later full run.
+# Measured with both loaders above pointed at a copy, never the real lib/, so a sibling run cannot race it.
+PYC="$WORK/pyc"; mkdir -p "$PYC"
+cp "$READER" "$PYC/shell-words.py"
+pyc_read="$(READER="$PYC/shell-words.py" read_gh gh pr new)"
+check "#2422 control: the copied reader ran, got '$pyc_read'" [ "$pyc_read" = "pr create" ]
+READER="$PYC/shell-words.py" groups_hold_word >/dev/null
+_pyc="$(ls "$PYC/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
+check "#2422 loading the reader leaves no shell-words bytecode beside it (got $_pyc)" [ "$_pyc" = 0 ]
 
 # ================================================================ 2. the issue field gate
 fields(){   # $1 = the command; stdout in out
