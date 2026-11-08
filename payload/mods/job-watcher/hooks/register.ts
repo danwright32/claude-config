@@ -1463,6 +1463,7 @@ export const register: Register = on => {
         // for one gone silent, how long since its output last changed, read as of now.
         const stall = state === 'stalled' ? (w?.stalledBy ?? null) : null
         return {
+          id: j.id,
           stall,
           quietMs: stall === 'silent' && w ? Math.max(0, now - w.lastGrowth) : null,
           label: j.kept ? j.kept.name : shortCommand(j.command),

@@ -130,11 +130,29 @@ case "$*" in
     n="$(printf '%s\n' "$*" | sed -nE 's#.*pulls/([0-9]+).*#\1#p')"
     b="$(printf '%s\n' "$*" | sed -nE 's#.* base=([^ ]+).*#\1#p')"
     [ -e "$ST/retarget-fails-$n" ] && { echo "gh: Validation Failed (HTTP 422)" >&2; exit 1; }
+    # retarget-already-<n>: GitHub has moved the pull request onto the base itself, after the list
+    # was read, and answers the move as it did for #2419 and #2405 on 2026-11-07
+    # (claude-config#2431). retarget-exists-<n>: the same answer, with the pull request not moved.
+    if [ -e "$ST/retarget-already-$n" ] || [ -e "$ST/retarget-exists-$n" ]; then
+      if [ -e "$ST/retarget-already-$n" ]; then
+        { grep -vx "$n" "$ST/stacked" || true; } > "$ST/stacked.tmp"; mv "$ST/stacked.tmp" "$ST/stacked"
+      fi
+      printf '{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","message":"A pull request already exists for base branch %s and head branch feat/y-%s"}],"status":"422"}\n' "$b" "$n"
+      echo "gh: Validation Failed (HTTP 422)" >&2; exit 1
+    fi
     # retarget-ignored-<n>: GitHub answers as if it moved the pull request, and it did not.
     if [ ! -e "$ST/retarget-ignored-$n" ]; then
       { grep -vx "$n" "$ST/stacked" || true; } > "$ST/stacked.tmp"; mv "$ST/stacked.tmp" "$ST/stacked"
       printf '%s %s\n' "$n" "$b" >> "$ST/retargeted"
     fi
+    printf '{"number":%s,"base":{"ref":"%s"}}\n' "$n" "$b"
+    ;;
+  # One stacked pull request read on its own (claude-config#2431): based on feat/x while stacked
+  # lists it, and on main once it has been moved.
+  "api repos/acme/widget/pulls/"*)
+    fail_read pull
+    n="$(printf '%s\n' "$*" | sed -nE 's#.*pulls/([0-9]+).*#\1#p')"
+    b=main; grep -qx "$n" "$ST/stacked" 2>/dev/null && b=feat/x
     printf '{"number":%s,"base":{"ref":"%s"}}\n' "$n" "$b"
     ;;
   "api -X DELETE repos/acme/widget/git/refs/heads/feat/x"*)
@@ -223,10 +241,16 @@ export PATH="$BIN:$PATH"
 # --- the injected sleep: runs the next step the test queued, then returns at once -----------------
 # It also moves the injected clock on by the seconds asked (claude-config#1271), so a wait for main to
 # be still for minutes, and a deadline hours long, are crossed in no real time at all.
+# The clock is read with the shell's own read, never a cat that may find no process to run under load,
+# and written whole through a rename (claude-config#2327): a read that failed used to write the bare
+# seconds asked as the time, and a write cut short left an empty clock, either one a jump of about a
+# million seconds for the next read. A clock it cannot read stops it, loudly, with the clock untouched.
 cat > "$BIN/fake-sleep" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$ST/sleeps"
-printf '%s' "$(( $(cat "$ST/clock") + $1 ))" > "$ST/clock"
+c=""; read -r c < "$ST/clock"
+case "$c" in ''|*[!0-9]*) echo "fake sleep: the injected clock in $ST/clock reads '$c', not a time" >&2; exit 1 ;; esac
+printf '%s' "$(( c + $1 ))" > "$ST/clock.$$" && mv -f "$ST/clock.$$" "$ST/clock"
 if [ -s "$ST/on-sleep" ]; then
   step="$(head -1 "$ST/on-sleep")"; tail -n +2 "$ST/on-sleep" > "$ST/on-sleep.tmp"; mv "$ST/on-sleep.tmp" "$ST/on-sleep"
   eval "$step"
@@ -1357,15 +1381,124 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1995 a title edited during the wait stops the merge" "1" "$rc"
 check "#1995 in the gate's words" "title now names a work organisation" "$out"
 check_eq "#1995 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
-# The work names gate is named by MWR_WORK_NAMES_GATE only under the test marker (claude-config#2231):
-# a script named there that answers nothing would stand in for a privacy gate on every merge this
-# helper makes. Outside a test run the installed gate beside it is asked, so the stub never is.
+# Every script this helper runs is named from the environment only under the test marker
+# (claude-config#2231 for the work names gate, #2317 for the rest): a script named there would stand
+# in for a merge gate, the lessons review or the worktree check on every merge this helper makes.
+# Outside a test run the installed one beside the helper is run instead. The real installed scripts
+# would reach GitHub and start a real lessons review, so these cases run a copy of the helper from a
+# folder of its own, whose installed scripts are stand ins that log their own name and then answer
+# as this suite's stubs do. Every setting names a decoy that logs and refuses, and outside a test run
+# no decoy may ever run.
+FAKE_HOOKS="$WORKDIR/installed-hooks"
+mkdir -p "$FAKE_HOOKS"
+cp -R "$DIR/lib" "$FAKE_HOOKS/lib"
+FAKE_HELPER="$FAKE_HOOKS/lib/merge-when-ready.sh"
+installed(){ # installed <path inside the fake hooks folder> <the script it hands to>
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >> "$ST/installed-asked"\nexec bash "%s" "$@"\n' "$1" "$2" > "$FAKE_HOOKS/$1"
+}
+installed block-red-merge.sh "$STUBS/red-gate.sh"
+installed pr-review-gate.sh "$STUBS/review-gate.sh"
+installed require-changelog-tag.sh "$STUBS/changelog-gate.sh"
+installed design-score-gate.sh "$STUBS/design-gate.sh"
+installed require-verification-run.sh "$STUBS/verify-gate.sh"
+installed check-closing-merge.sh "$STUBS/closing-gate.sh"
+installed check-work-names-merge.sh "$STUBS/work-names-gate.sh"
+installed lib/pr-review.sh "$STUBS/pr-review.sh"
+# The worktree check hands to the real one, so a removal it allows really happens.
+installed check-stale-worktrees.sh "$DIR/check-stale-worktrees.sh"
+DECOY="$WORKDIR/decoy.sh"
+printf '#!/usr/bin/env bash\nprintf "ran %%s\\n" "$*" >> "$ST/decoys-asked"\necho "decoy: a script named in the environment ran" >&2\njq -nc %s\nexit 3\n' \
+  "'{hookSpecificOutput:{hookEventName:\"PreToolUse\",permissionDecision:\"deny\",permissionDecisionReason:\"decoy\"}}'" > "$DECOY"
+# The wait and the clock name commands this helper runs too, so MWR_SLEEP and MWR_NOW are honoured
+# only under the marker as well (claude-config#2399), and outside a test run the sleep and the date
+# on the PATH run. So these cases put a sleep and a date first on the PATH that record that they ran
+# and then act as the suite's own (the sleep moves the injected clock on and runs the queued step,
+# and date +%s prints the injected clock), and the two settings name decoys that record and act the
+# same. Either way no case here waits for real or reads the real clock (L524).
+REAL_DATE="$(command -v date)"
+CLOCKBIN="$WORKDIR/path-clock"; mkdir -p "$CLOCKBIN"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$ST/path-sleeps"\nexec "%s" "$@"\n' "$BIN/fake-sleep" > "$CLOCKBIN/sleep"
+printf '#!/usr/bin/env bash\nif [ "$*" = "+%%s" ]; then echo read >> "$ST/path-dates"; cat "$ST/clock"; else exec "%s" "$@"; fi\n' "$REAL_DATE" > "$CLOCKBIN/date"
+DECOY_SLEEP="$WORKDIR/decoy-sleep"; DECOY_NOW="$WORKDIR/decoy-now"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "$ST/decoy-sleeps"\nexec "%s" "$@"\n' "$BIN/fake-sleep" > "$DECOY_SLEEP"
+printf '#!/usr/bin/env bash\necho read >> "$ST/decoy-nows"\ncat "$ST/clock"\n' > "$DECOY_NOW"
+chmod +x "$CLOCKBIN/sleep" "$CLOCKBIN/date" "$DECOY_SLEEP" "$DECOY_NOW"
+# fake_in <folder> [VAR=value ...] <command ...>: outside a test run, every setting naming a decoy.
+fake_in(){
+  local d="$1"; shift
+  (cd "$d" && env HOOK_TESTS_RUNNING= MWR_RED_GATE="$DECOY" MWR_REVIEW_GATE="$DECOY" MWR_CHANGELOG_GATE="$DECOY" \
+    MWR_DESIGN_GATE="$DECOY" MWR_VERIFY_GATE="$DECOY" MWR_CLOSING_GATE="$DECOY" MWR_WORK_NAMES_GATE="$DECOY" \
+    MWR_REVIEW_LIB="$DECOY" MWR_WORKTREE_CHECK="$DECOY" MWR_SLEEP="$DECOY_SLEEP" MWR_NOW="$DECOY_NOW" \
+    PATH="$CLOCKBIN:$PATH" "$@" 2>&1)
+}
+for marker in "" 0; do
+  fresh "$OLD" 0 "$GREEN"
+  out="$(fake_in "$REPO" HOOK_TESTS_RUNNING="$marker" bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+  check_eq "#2317 outside a test run (marker '$marker') no script named in the environment is run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+  check_eq "#2317 and the merge goes through the installed gates (marker '$marker')" "0" "$rc"
+  for g in block-red-merge.sh pr-review-gate.sh require-changelog-tag.sh design-score-gate.sh \
+           require-verification-run.sh check-closing-merge.sh check-work-names-merge.sh lib/pr-review.sh; do
+    check "#2317 outside a test run the installed $g is run (marker '$marker')" "$g" "$(cat "$ST/installed-asked" 2>/dev/null)"
+  done
+done
+# Control: under the marker each setting is still the test's own, so the seam the suite uses works.
 fresh "$OLD" 0 "$GREEN"
-out="$(HOOK_TESTS_RUNNING= run 7 --repo acme/widget --squash)"; rc=$?
-check_eq "#2231 outside a test run the work names gate named in the environment is never asked" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
+out="$(fake_in "$REPO" HOOK_TESTS_RUNNING=1 bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+check "#2317 control: under the test marker a script named in the environment is run" "ran" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+check_eq "#2317 control: and its refusal stops the merge" "0" "$(count gh-calls 'pr merge')"
+# The wait and the clock (claude-config#2399): a head whose checks are pending makes the helper wait
+# once, and the queued step turns them green during that wait, so the run both sleeps and reads the
+# clock before it merges.
+for marker in "" 0; do
+  fresh "$OLD" 0 "$PENDING"
+  printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+  out="$(fake_in "$REPO" HOOK_TESTS_RUNNING="$marker" bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+  check_eq "#2399 outside a test run (marker '$marker') the merge goes through after its wait" "0" "$rc"
+  check_eq "#2399 outside a test run (marker '$marker') the sleep named in MWR_SLEEP is never run" "" "$(cat "$ST/decoy-sleeps" 2>/dev/null)"
+  check_eq "#2399 outside a test run (marker '$marker') the clock named in MWR_NOW is never read" "" "$(cat "$ST/decoy-nows" 2>/dev/null)"
+  check "#2399 outside a test run (marker '$marker') the sleep on the PATH does the wait" "30" "$(cat "$ST/path-sleeps" 2>/dev/null)"
+  check "#2399 outside a test run (marker '$marker') the date on the PATH is the clock" "read" "$(cat "$ST/path-dates" 2>/dev/null)"
+done
+# Control: under the marker both settings are the test's own, so the seam every case above uses works.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(fake_in "$REPO" HOOK_TESTS_RUNNING=1 MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" \
+  MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh" MWR_VERIFY_GATE="$STUBS/verify-gate.sh" \
+  MWR_CLOSING_GATE="$STUBS/closing-gate.sh" MWR_WORK_NAMES_GATE="$STUBS/work-names-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh" \
+  MWR_WORKTREE_CHECK= bash "$FAKE_HELPER" 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2399 control: under the test marker the merge goes through after its wait" "0" "$rc"
+check "#2399 control: under the test marker the sleep named in MWR_SLEEP does the wait" "30" "$(cat "$ST/decoy-sleeps" 2>/dev/null)"
+check "#2399 control: under the test marker the clock named in MWR_NOW is read" "read" "$(cat "$ST/decoy-nows" 2>/dev/null)"
+check_eq "#2399 control: and the sleep on the PATH is not run" "" "$(cat "$ST/path-sleeps" 2>/dev/null)"
+
+# A read of the injected clock that gives no time is asked again (claude-config#2327). The clock is a
+# command the helper runs, so a read can come back empty when that command could not run (no process
+# to spare under load, a clock file a full disk left empty), and the helper read the real clock in
+# its place: one look at an epoch near 1.8 billion, against the suite's clock near a million, crossed
+# every deadline and line budget at once. Injected (2327 evidence), one empty read was enough to stop
+# the "three ahead" case below at its line budget with the line still moving. Here every fourth read
+# answers nothing, and the run must come out exactly as a run on a whole clock does.
+cat > "$BIN/gappy-now" <<'EOS'
+#!/usr/bin/env bash
+n=$(( $(cat "$ST/now-reads" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$ST/now-reads"
+[ $(( n % 4 )) -eq 0 ] && exit 0
+cat "$ST/clock"
+EOS
+chmod +x "$BIN/gappy-now"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' ':' ':' "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(MWR_NOW="$BIN/gappy-now" MWR_DEADLINE_SECONDS=900 run 7 --squash)"; rc=$?
+check_eq "#2327 a clock read that answers nothing now and then does not stop the run" "0" "$rc"
+check "#2327 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_not "#2327 never out of time" "Out of time" "$out"
+check_eq "#2327 every elapsed figure it said is on the injected clock (none past the 90s it ran)" "" "$(grep -oE '^merge-when-ready: \[[^]]*\]' <<<"$out" | grep -vE '\[(0s|[0-9]{1,2}s|1m [0-9]{2}s)\]')"
+check_not "#2327 and it never said it read the real clock" "real clock" "$out"
+check "#2327 control: the clock did answer nothing on some reads" "yes" "$( [ "$(cat "$ST/now-reads" 2>/dev/null || echo 0)" -ge 4 ] && echo yes || echo no)"
+# A clock that never answers is said, naming the setting, rather than read past in silence (L11).
+printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN/mute-now"; chmod +x "$BIN/mute-now"
 fresh "$OLD" 0 "$GREEN"
-out="$(HOOK_TESTS_RUNNING=0 run 7 --repo acme/widget --squash)"; rc=$?
-check_eq "#2231 nor with the test marker set to anything but 1" "" "$(cat "$ST/work-names-gate-payloads" 2>/dev/null)"
+out="$(MWR_NOW="$BIN/mute-now" run 7 --squash)"; rc=$?
+check "#2327 a clock that never answers is said, naming MWR_NOW" "the clock named in MWR_NOW ($BIN/mute-now) gave no time in 3 reads, so the real clock is read instead" "$out"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
@@ -1580,6 +1713,41 @@ out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a pull request still based on the branch after the move keeps it in place" "4" "$rc"
 check_eq "#1337 judged by the list read again, not by the answer" "0" "$(count gh-calls 'X DELETE')"
 check "#1337 naming it" "#8" "$out"
+
+# GitHub moved a stacked pull request itself and answers the move with "A pull request already
+# exists" (claude-config#2431): on 2026-11-07 this left the branch twice (#2390 with #2419, #2377
+# with #2405) and called it a move GitHub would not make. Its base is read again, and one already on
+# the merged one's base counts as moved, so the branch is deleted in the same run.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n9\n' > "$ST/stacked"
+: > "$ST/retarget-already-8"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 a stacked pull request GitHub already moved does not leave the branch" "0" "$rc"
+check_eq "#2431 the branch is deleted in the same run" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#2431 and nothing was closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+check "#2431 judged by its base, read again" "api repos/acme/widget/pulls/8" "$(cat "$ST/gh-calls")"
+check "#2431 it says GitHub had already moved it" "GitHub had already moved #8 onto main" "$out"
+check "#2431 and still names the one it moved itself" "#9" "$out"
+check_not "#2431 never calling it a move GitHub would not make" "would not move" "$out"
+
+# Control: the same answer about a pull request still based on the branch is the refusal it was.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+: > "$ST/retarget-exists-8"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 that answer with the pull request still on the branch leaves it in place" "4" "$rc"
+check_eq "#2431 not deleted" "0" "$(count gh-calls 'X DELETE')"
+check "#2431 named as not moved, with GitHub's words" "would not move #8" "$out"
+check "#2431 carrying what GitHub said" "A pull request already exists" "$out"
+
+# Control: a base that cannot be read again is not taken for moved.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+: > "$ST/retarget-already-8"
+printf 'gh: Resource not accessible by integration (HTTP 403)\n' > "$ST/pull-down"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 a base that cannot be read again counts as not moved" "4" "$rc"
+check "#2431 and says so with GitHub's first answer" "would not move #8" "$out"
 
 # The branch now holds commits the merge did not: never deleted. The push lands just after the
 # merge, since one landing before it is a head GitHub would refuse to merge (#1458, section 16).
@@ -2075,10 +2243,26 @@ check_eq "#1521 an unmerged commit does not stop the merge" "0" "$rc"
 check_eq "#1521 a worktree with commits the pull request never held is kept" "yes" "$(there)"
 check "#1521 saying why" "keeping agent-x [feat/x]: it has commits PR #7 never held" "$out"
 
-# A process standing in it keeps it.
+# A process standing in it keeps it. The process stays until it is stopped here, and the helper runs
+# only once the system shows it standing in the worktree, read the way the check reads it (lsof, else
+# /proc), so the case waits on the condition it is about rather than on how soon a busy Mac schedules
+# a background job, and no lifetime of its own can end before the helper looks (L290, claude-config#2327).
+stands_in(){ # stands_in <pid> <folder>: the system shows that process's working directory as the folder
+  local o
+  if command -v lsof >/dev/null 2>&1; then
+    o="$(lsof -a -p "$1" -d cwd -F n 2>/dev/null)"; [[ $'\n'"$o"$'\n' == *$'\n'"n$2"$'\n'* ]]
+  else [ "$(readlink "/proc/$1/cwd" 2>/dev/null)" = "$2" ]; fi
+}
+. "$DIR/lib/hang-wait.sh"
 wt_fresh
-(cd "$AGENT" && exec sleep 120) &
+(cd "$AGENT" && exec tail -f /dev/null) &
 WBUSY=$!
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  # The shared ceiling only a hang reaches (lib/hang-wait.sh), so a process that never gets there
+  # cannot hold the suite; that is its own failure, said as such.
+  hang_wait 'stands_in "$WBUSY" "$AGENT"'
+  check_eq "#2327 the busy process is seen standing in the worktree before the merge is asked" "yes" "$(stands_in "$WBUSY" "$AGENT" && echo yes || echo no)"
+fi
 out="$(wrun 7 --squash)"; rc=$?
 kill "$WBUSY" 2>/dev/null; wait "$WBUSY" 2>/dev/null
 check_eq "#1521 a busy worktree does not stop the merge" "0" "$rc"
@@ -2119,6 +2303,13 @@ wt_fresh
 out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/not-there.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
 check_eq "#1521 a check that is missing still leaves the merge at exit 0" "0" "$rc"
 check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+# Outside a test run the worktree check named in the environment is never run (claude-config#2317):
+# the installed check beside the helper judges, and here removes, the merged branch's worktree.
+wt_fresh
+out="$(fake_in "$WREPO" bash "$FAKE_HELPER" 7 --squash)"; rc=$?
+check_eq "#2317 outside a test run the worktree check named in the environment is never run" "" "$(cat "$ST/decoys-asked" 2>/dev/null)"
+check "#2317 the installed worktree check is run instead" "check-stale-worktrees.sh" "$(cat "$ST/installed-asked" 2>/dev/null)"
+check_eq "#2317 and its removal happens" "no" "$(there)"
 
 # Merged with the branch left in place (stop 4) still removes the worktree, and so does a run that
 # finds the pull request already merged.
@@ -2731,7 +2922,11 @@ check "#1676 naming the review" "lessons review" "$seen1"
 # killed the record stays behind, and says nothing.
 fresh "$OLD" 0 "$PENDING"
 printf '%s\n' "( $MP_LIBS && mp_waiting \$PPID \$(cat \"\$ST/clock\") ) && echo believed > \"\$ST/verdict-alive\"; echo \$PPID > \"\$ST/helper-pid\"; kill -9 \$PPID" > "$ST/on-sleep"
-out="$(run 7 --squash)"; rc=$?
+# The shell running the helper reports the kill ("Killed: 9 bash $HELPER") on its own stderr, which is
+# not the helper's output and nothing here reads. It is dropped: printed into the suite's own output, at
+# the tail of every run, it was read as a helper killed at its deadline and blamed for a failure two
+# sections earlier (claude-config#2327).
+out="$(run 7 --squash 2>/dev/null)"; rc=$?
 hp="$(cat "$ST/helper-pid" 2>/dev/null)"
 check_eq "#1676 control: while the run is alive and waiting, its record is believed" "believed" "$(cat "$ST/verdict-alive" 2>/dev/null)"
 check_eq "#1676 a run killed outright leaves its record behind" "yes" "$( [ -n "$hp" ] && [ -e "$MWR_PHASE_DIR/$hp" ] && echo yes || echo no)"

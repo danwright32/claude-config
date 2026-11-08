@@ -232,7 +232,9 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
 ./claude-sync release           # lift your own hold now instead of waiting for it to run out
+./claude-sync release "why"     # lift only the hold you took with that label
 ./claude-sync release --other S # lift the hold session S took (status names each hold's session)
+./claude-sync release --force   # lift every hold in force on this Mac, naming each
 ./claude-sync cite-scan L2      # which synced files cite that lesson number
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
@@ -364,7 +366,8 @@ the watcher then sent that session's half finished work. Now:
   gives every command a session runs, its subagents' included, so a subagent's hold is its
   session's. A run with no session id (a plain terminal) records `unknown`, and an `unknown` hold
   is anyone's to lift.
-- Several holds can be in force at once, one per session, each with its own end. The watcher is
+- Several holds can be in force at once, one per session and label (see #2452 below), each with
+  its own end. The watcher is
   held while ANY of them is live. Each expires on its own: the watcher clears that one, says so,
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
@@ -376,7 +379,35 @@ the watcher then sent that session's half finished work. Now:
   works). Naming a session that holds nothing, or a start shared by two, refuses and lifts nothing.
   Every release names the hold it lifted, and names every hold still in force with the command
   that lifts it.
-- `status` lists every live hold on its own line, with whose it is and that command.
+- `status` lists every live hold on its own line, with whose it is, the clock time it ends, and
+  that command.
+
+A hold is named by its session AND its label, the `why` it was taken with (#2452). Every subagent
+a session dispatches carries that session's id, so on 2026-11-07 three builders from one session
+each took `hold 60 "build #N"`: each hold replaced the last, and each builder's plain `release`
+lifted the hold a sibling was still working under. The record's shape did not change, since every
+line already carried its label. What changed:
+
+- `hold` replaces only the caller's own line with the SAME label. A second `hold` from the same
+  session under another label is a second hold, kept beside the first and counted; the watcher
+  stays held until every one is released or has expired.
+- `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
+  the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
+  non-zero, and names the holds the caller does hold and any other session's, each with its end and
+  the command that lifts it. A label beginning with a dash goes after `--`: `release -- "-fix"`.
+- A plain `release` lifts the caller's own or `unknown` hold when there is exactly one. With more
+  than one it lifts none, exits non-zero, and names each with its end and `release "<label>"`,
+  because lifting them all would free a hold a sibling agent may still need.
+- `release --other <session> [label]` refuses the same way when that session holds more than one
+  and no label is given.
+- `release --force` lifts every hold in force on this Mac, naming each one it lifted. It is the
+  person at the keyboard's way to clear holds once they know none is still needed, and it is
+  suggested only to a caller with no session id, or alongside a refusal to choose.
+- The success line of `hold`, and every hint `status` and `release` print, name the label only
+  when the plain form would have to choose, so a single hold still reads `claude-sync release`.
+
+A claude-sync from before #2452 still reads every line correctly, but its `hold` keeps only one
+line per session, so it would drop a sibling's line of the same session until that Mac pulls.
 
 Every change to the record (taking, lifting, clearing an expired hold) happens under a lock beside
 it, `.claude-sync-hold.lock`, so two sessions holding in the same instant cannot each write a
@@ -5632,10 +5663,32 @@ traps a turn, a sleeping worker's included: the next end in the chain goes ahead
 what is still owed. What is owed is session state, so a new session owes nothing for another's
 merges. The `classic.Stop` hook runs only while the managed settings file is in place
 (`tools/sec-default-bypassed-hooks.tsv`); without it the line on the merge's result still shows.
+The same turn end also asks for a draft reply to the Slack thread the session started from (#2436,
+Dan, 2026-11-07: "slack thread start = draft response saved. every time"). A thread is recorded,
+per session, when Dan's own typed prompt (mod-kit's `isDans`) holds a Slack message link (a link to
+a reply names its parent through `thread_ts`), and when the main session reads a thread with
+`slack_read_thread` while it has none recorded; a thread a subagent reads, or a later one, is
+research. A merge GitHub confirms, or a background merge a turn end hears has merged, marks a
+merge landed. Answering the issue's open question the same day, Dan chose one draft after the
+session's last merge from the thread, not one after each; a turn end cannot know a merge is the
+last, so it holds only when a merge landed after the thread's last draft or skip and no merge of
+the session is in flight: a helper merge still waiting in is it live's own record whose background
+task the job watcher still lists (its list carries each job's task id for this). A helper that
+ended without merging is no longer in flight; with no job list to read, a waiting merge is taken as
+in flight. The hold tells the session to write the reply, run `/no-ai-tells`, ask Dan with
+`AskUserQuestion` carrying `metadata.source` `is-it-live-draft:<channel>:<thread ts>`, whose two
+answers the mod words (Save as a draft, Skip this time), and on Save save that exact text with
+`slack_send_message_draft` to the channel and thread, never a send; Slack keeps one attached draft
+per channel and refuses another with `attached_draft_exists`, which the hold says to resolve with
+Dan. Any draft Slack saved to that thread, under any Slack server and from any part of the session
+(the card's message for a thread requester, #2435, included), or Dan's Skip, settles it until the
+next merge. Which came first is kept as a count of steps in the session, never two clock readings.
+Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+The mod never calls a Slack tool.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271
+#617, #663, #707, #771, #1244, #1271, #2436
 
 </td></tr>
 <tr><td>
@@ -5682,8 +5735,8 @@ only the save it was drawn for; a second save waits behind the first. Each answe
 a note. Claude Code's own auto-memory writer saves through tool calls, so it is asked about too.
 Skipped when Dan's own latest message, typed or from his phone, gives the rule as an instruction to
 Claude ("from now on", or "always", "never" or "remember" leading a sentence or after "please", "you
-should" or "you must"; never "it ran and never finished"), and not when it limits it ("for
-now", "today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
+should" or "you must"; never "it ran and never finished"), and not when it limits it ("for now",
+"today", "this session"); then Claude is told to say what it saved. A hook that cannot finish
 refuses the write, and says why. It asks only after the settings hooks beneath it have decided, so a
 save the payload write gate refuses is never asked about. Dan's Add to LESSONS.md in the durable
 lesson check's picker (which carries `metadata.source` `durable-lesson` and the rule, stated word
@@ -6050,8 +6103,8 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 Per session modes, each leading the amber line in the band in bold through the status bar, all off
 when the session ends and none carried into a new one. Every phrase counts only as an instruction of
 its own (starting the message, a sentence, a line or a clause), never in passing and never in a
-question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for
-now", "just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
+question. **No build** (`/nobuild`, or Dan's "no coding yet", "stay read only", "read only for now",
+"just file, don't build"; never "read only" in passing): reading, research, tests, scratchpad
 notes, Claude's own memory and plan notes, read only SQL (whatever its strings say), GraphQL reads
 and GitHub issue, milestone and label work go ahead; edits outside the scratchpad, commits,
 branches, PRs, deploys and data changing SQL are refused with the grey card, the shell routes around
@@ -6531,10 +6584,12 @@ line and carried on the next tool call instead. While the Mac is asleep the conv
 woken (it reaches Claude, never Dan) and the agent is noted for the morning report (#1234). A
 session list that cannot be asked is said as such and asked again once a minute later; an unreadable
 record is named (#753). The status bar reads this session's jobs through `$.jobs.list()` and the
-quiet agents through `$.jobs.agents()`. A look still running is never overlapped by a second, a
-session start's included; one that has not finished in ten minutes is given up, said to Claude once,
-and acts on nothing after, and no second stop is sent while one is unanswered. Keeping a job asks
-mod-kit's screen first, so a name or reason carrying a secret never reaches the status bar. A
+quiet agents through `$.jobs.agents()`; each listed job carries its task id, which is it live reads
+to tell whether a merge helper it waits on is still running (#2436). A look still running is
+never overlapped by a second, a session start's included; one that has not finished in ten
+minutes is given up, said to Claude once, and acts on nothing after, and no second stop is sent
+while one is unanswered. Keeping a job asks mod-kit's screen first, so a name or reason carrying
+a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
@@ -7132,7 +7187,10 @@ that session, and when sleep mode ends, by any route, the noon end included, eve
 held something is asked to deliver it where you are then, so every session reports at the same
 moment rather than one popping up minutes after `/sleep` (#1284). No sound, notification or end of turn review reaches you. At
 wake it checks GitHub and the disk for anything outward that happened anyway (issues created,
-milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report.
+milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report. A milestone
+moved only by the night's own work (issues its sessions' notes name, issues closed by pull requests
+they name, issues filed overnight) is left out; any other change to it is named, and when its issue
+events cannot be read it is said as not checked (#2393).
 
 **Which repositories may merge and deploy overnight** (your list, confirmed 2026-10-07, in each
 Mac's own `~/.claude/mods/sleep-repos.local.json` since #1568: it names work repositories, so it is
@@ -7779,8 +7837,8 @@ wrong when it is removed
 
 </td><td>
 
-`claude-sync hold`, and `claude-sync release`, which removes the caller's own line (or a named
-session's, with `--other`)
+`claude-sync hold`, and `claude-sync release`, which removes the caller's own line of the label
+it names, or its only one (or a named session's, with `--other`, or every line, with `--force`)
 
 </td><td>
 
@@ -7789,7 +7847,8 @@ the watcher's send, `claude-sync status`, `claude-sync release`, and the payload
 
 </td><td>
 
-absent means no hold, which is the normal state. One line per hold, one hold per session (#1863):
+absent means no hold, which is the normal state. One line per hold, one hold per session and
+label (#1863, #2452):
 `<ends> <taken> <host> session=<id> <why>`, longest hold first, so a claude-sync or hook from before
 #1863, which reads only the first line, still sees the Mac held for as long as any hold lasts. A
 line with no `session=` field, the single line every hold was before #1863, is read as a hold by

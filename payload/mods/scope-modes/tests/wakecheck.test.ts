@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { GithubOf } from '../hooks/overnight.ts'
-import { wakeCheck, type Ran } from '../hooks/wakecheck.ts'
+import { wakeCheck, workedOn, type Ran } from '../hooks/wakecheck.ts'
 import { githubRepo } from './mod-kit/hooks/repo.ts'
 
 // mod-kit's reader of a remote, as $.modkit.repo answers it: its byte for byte copy (#951).
@@ -41,14 +41,14 @@ const mtimeFrom = (world: World, asked?: string[]) => async (path: string) => {
   if (r.exitCode !== 0) throw new Error(r.stderr)
   return Number(r.stdout)
 }
-const check = async (over: World = {}, read: GithubOf = github) => {
+const check = async (over: World = {}, read: GithubOf = github, worked?: string[]) => {
   const world = { ...QUIET, ...over }
   const asked: string[] = []
   const r = await wakeCheck(async argv => {
     const key = argv.join(' ')
     asked.push(key)
     return world[key] ?? fail(`unexpected: ${key}`)
-  }, { since: SINCE, home: HOME, github: read, now: () => SINCE, mtimeOf: mtimeFrom(world, asked) })
+  }, { since: SINCE, home: HOME, github: read, now: () => SINCE, mtimeOf: mtimeFrom(world, asked), worked })
   return { ...r, asked }
 }
 
@@ -78,7 +78,8 @@ describe('the wake check', () => {
         { repository: { nameWithOwner: 'o/r' }, number: 9, title: 'Found overnight', url: 'https://github.com/o/r/issues/9' },
         { repository: { nameWithOwner: 'o/s' }, number: 3, title: 'Also overnight', url: 'https://github.com/o/s/issues/3' },
       ])),
-      'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'New one', updated_at: AFTER }, { title: 'Old one', updated_at: BEFORE }])),
+      'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 4, title: 'New one', updated_at: AFTER }, { number: 3, title: 'Old one', updated_at: BEFORE }])),
+      'gh api repos/o/r/issues/events?per_page=100&page=1': ok('[]'),
       'gh api repos/o/s/milestones?state=all&per_page=100': ok('[]'),
       'gh run list -R o/s --json workflowName,event,createdAt,url --limit 100': ok('[]'),
       'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok(JSON.stringify([{ sha: 'abcdef1234', commit: { message: 'Add L999\n\nbody' } }])),
@@ -94,7 +95,7 @@ describe('the wake check', () => {
     expect(r.hits).toEqual([
       'Issue created overnight: o/r#9 "Found overnight"',
       'Issue created overnight: o/s#3 "Also overnight"',
-      'Milestone touched overnight: o/r "New one"',
+      'Milestone touched overnight: o/r "New one", by changes nothing the night recorded accounts for: the milestone itself, at 1:00 AM ET on Thu Oct 8 (no issue event in it explains that)',
       'LESSONS.md changed overnight on GitHub: abcdef1 "Add L999"',
       'The installed LESSONS.md changed overnight, at 11:01 PM ET on Wed Oct 7',
       'Deploy run overnight: o/r Deploy (https://github.com/o/r/actions/runs/1)',
@@ -151,9 +152,14 @@ describe('the wake check', () => {
     expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'the runs in o/r from 11:00 PM ET on Wed Oct 7 to 1:00 AM ET on Thu Oct 8 were not read for deploys (only the newest 100 were asked for)'])
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
-    const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
+    const world: World = {
+      ...QUIET,
+      'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 1, title: 'Secret', updated_at: AFTER }])),
+      'gh api repos/o/private/issues/events?per_page=100&page=1': ok('[]'),
+      'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]'),
+    }
     const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'], now: () => SINCE, mtimeOf: mtimeFrom(world) })
-    expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
+    expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret", by changes nothing the night recorded accounts for: the milestone itself, at 1:00 AM ET on Thu Oct 8 (no issue event in it explains that)'])
     expect(r.unmeasured).toEqual([])
   })
   test('the check keeps to its overall deadline, and says what it left unread (L110)', async () => {
@@ -273,5 +279,154 @@ describe('the events, page by page back to sleep (#1160)', () => {
       'the overnight check stopped at its 30 s limit, so the rest of GitHub was not read',
       'the GitHub events from 11:00 PM ET on Wed Oct 7 to 2:21 AM ET on Thu Oct 8 were not read for the repositories to check (page 3: the check stopped at its 30 s limit)',
     ])
+  })
+})
+
+// #2393: GitHub's updated_at says only that a milestone changed, so the night's own merges closing
+// its issues, and the issues it filed into it, were put to Dan every morning as something to look
+// at (2026-11-07, the Ungrouped milestone: "Nothing needed"). The milestone's issue events for the
+// night are read, and only a change nothing the night recorded accounts for is reported, by name.
+describe('a milestone the night\'s own work explains is left out (#2393)', () => {
+  const MS = 'gh api repos/o/r/milestones?state=all&per_page=100'
+  const EVENTS = (p: number) => `gh api repos/o/r/issues/events?per_page=100&page=${p}`
+  const CLOSERS = 'gh issue list -R o/r --state closed --search closed:>=2026-10-08T03:00:00Z --json number,closedByPullRequestsReferences --limit 100'
+  const SEARCH = 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'
+  const at = (hhmmss: string) => `2026-10-08T${hhmmss}Z`
+  const ungrouped = { number: 2, title: 'Ungrouped' }
+  const closed = (n: number, when: string, actor: string, milestone: { number: number; title: string } | null = ungrouped) =>
+    ({ event: 'closed', created_at: when, actor: { login: actor }, issue: { number: n, milestone } })
+  const lead = 'Milestone touched overnight: o/r'
+  const nothing = 'by changes nothing the night recorded accounts for'
+  const unchecked = 'whether milestone "Ungrouped" in o/r was changed only by the night\'s own work was not checked'
+
+  test('a milestone touched only by the night\'s merges and filings is not reported', async () => {
+    const r = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: ok(JSON.stringify([
+        // A label moves no milestone, so it is never counted either way.
+        { event: 'labeled', created_at: at('05:00:02'), actor: { login: 'eve' }, issue: { number: 9, milestone: ungrouped } },
+        // Closed by a merge a session noted as done for this issue.
+        closed(7, at('05:00:00'), 'dan'),
+        // Filed into it overnight: already its own line, as an issue created overnight.
+        { event: 'milestoned', created_at: at('04:30:00'), actor: { login: 'dan' }, milestone: { title: 'Ungrouped' }, issue: { number: 9, milestone: ungrouped } },
+        // Closed by pull request #20, which a session noted, though no note names #8 itself.
+        closed(8, at('04:00:00'), 'dan'),
+        // Before sleep began: not the night's to explain.
+        closed(1, BEFORE, 'eve'),
+      ])),
+      [CLOSERS]: ok(JSON.stringify([
+        { number: 8, closedByPullRequestsReferences: [{ number: 20, repository: { name: 'r', owner: { login: 'o' } } }] },
+        { number: 7, closedByPullRequestsReferences: [] },
+      ])),
+      [SEARCH]: ok(JSON.stringify([{ repository: { nameWithOwner: 'o/r' }, number: 9, title: 'Filed overnight', url: 'u' }])),
+    }, github, ['o/r#7', 'o/r#20'])
+    expect(r.unmeasured).toEqual([])
+    expect(r.hits).toEqual(['Issue created overnight: o/r#9 "Filed overnight"'])
+  })
+
+  test('a change no session made is reported, naming what changed', async () => {
+    const later = { number: 6, title: 'Later' }
+    const r = await check({
+      [MS]: ok(JSON.stringify([
+        { ...ungrouped, updated_at: at('05:00:01') },
+        // Changed with no issue event at all: the milestone itself was edited.
+        { number: 5, title: 'Plans', updated_at: AFTER },
+        // Changed ten minutes after the last issue event, which the night's work explains.
+        { ...later, updated_at: at('05:10:00') },
+      ])),
+      [EVENTS(1)]: ok(JSON.stringify([
+        closed(11, at('05:00:00'), 'eve'),
+        { event: 'demilestoned', created_at: at('04:50:00'), actor: { login: 'eve' }, milestone: { title: 'Ungrouped' }, issue: { number: 12, milestone: null } },
+        closed(7, at('04:00:00'), 'dan', later),
+        closed(1, BEFORE, 'eve'),
+      ])),
+      // #11 was closed by a pull request no session noted.
+      [CLOSERS]: ok(JSON.stringify([{ number: 11, closedByPullRequestsReferences: [{ number: 30, repository: null }] }])),
+    }, github, ['o/r#7'])
+    expect(r.unmeasured).toEqual([])
+    expect(r.hits).toEqual([
+      `${lead} "Ungrouped", ${nothing}: #12 removed from it by eve; #11 closed by eve`,
+      `${lead} "Plans", ${nothing}: the milestone itself, at 1:00 AM ET on Thu Oct 8 (no issue event in it explains that)`,
+      `${lead} "Later", ${nothing}: the milestone itself, at 1:10 AM ET on Thu Oct 8 (no issue event in it explains that)`,
+    ])
+  })
+
+  test('issue events that cannot be read are said as unmeasured, never as explained', async () => {
+    const r = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: fail('HTTP 500: boom'),
+    }, github, ['o/r#7'])
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual([`${unchecked} (its issue events could not be read: page 1: HTTP 500: boom)`])
+  })
+
+  test('closers that cannot be read, an event GitHub gave no time, or events not read back to sleep, are each unmeasured', async () => {
+    const closersFail = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: ok(JSON.stringify([closed(11, at('05:00:00'), 'eve'), closed(1, BEFORE, 'eve')])),
+      [CLOSERS]: fail('HTTP 502: Bad Gateway'),
+    })
+    expect(closersFail.hits).toEqual([])
+    expect(closersFail.unmeasured).toEqual([`${unchecked} (the pull requests that closed its issues could not be read: HTTP 502: Bad Gateway)`])
+
+    const noTime = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: ok(JSON.stringify([closed(7, at('05:00:00'), 'dan'), { event: 'reopened', actor: { login: 'eve' }, issue: { number: 13, milestone: ungrouped } }, closed(1, BEFORE, 'eve')])),
+    }, github, ['o/r#7'])
+    expect(noTime.hits).toEqual([])
+    expect(noTime.unmeasured).toEqual([`${unchecked} (GitHub gave no time for #13 reopened)`])
+
+    // Three full pages, all overnight and all explained, still leave the start of the night unread.
+    const full = (from: number) => Array.from({ length: 100 }, (_, i) => closed(7, new Date(SINCE + (from - i) * 60_000).toISOString(), 'dan'))
+    const partial = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: new Date(SINCE + 400 * 60_000).toISOString() }])),
+      [EVENTS(1)]: ok(JSON.stringify(full(400))),
+      [EVENTS(2)]: ok(JSON.stringify(full(300))),
+      [EVENTS(3)]: ok(JSON.stringify(full(200))),
+    }, github, ['o/r#7'])
+    expect(partial.hits).toEqual([])
+    expect(partial.unmeasured).toEqual([`${unchecked} (its issue events from 11:00 PM ET on Wed Oct 7 to 12:41 AM ET on Thu Oct 8 were not read: GitHub was asked for only the newest 300)`])
+    expect(partial.asked).not.toContain(EVENTS(4))
+  })
+
+  // Lessons review of de0f3ed: a named change must not hide what was not read, or the report names
+  // one change and reads as though the milestone was read whole.
+  test('a named change and what was not read are both said', async () => {
+    const others = 'other changes to milestone "Ungrouped" in o/r were not checked'
+    // Three full pages, the newest change one no session made: the start of the night is still unread.
+    const full = (from: number) => Array.from({ length: 100 }, (_, i) => closed(7, new Date(SINCE + (from - i) * 60_000).toISOString(), 'dan'))
+    const capped = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: new Date(SINCE + 400 * 60_000).toISOString() }])),
+      [EVENTS(1)]: ok(JSON.stringify([closed(11, new Date(SINCE + 400 * 60_000).toISOString(), 'eve'), ...full(399).slice(0, 99)])),
+      [EVENTS(2)]: ok(JSON.stringify(full(300))),
+      [EVENTS(3)]: ok(JSON.stringify(full(200))),
+      [CLOSERS]: ok(JSON.stringify([{ number: 11, closedByPullRequestsReferences: [] }])),
+    }, github, ['o/r#7'])
+    expect(capped.hits).toEqual([`${lead} "Ungrouped", ${nothing}: #11 closed by eve`])
+    expect(capped.unmeasured).toEqual([`${others} (its issue events from 11:00 PM ET on Wed Oct 7 to 12:41 AM ET on Thu Oct 8 were not read: GitHub was asked for only the newest 300)`])
+
+    // One change no session made, and a close whose pull request could not be read.
+    const undecided = await check({
+      [MS]: ok(JSON.stringify([{ ...ungrouped, updated_at: at('05:00:01') }])),
+      [EVENTS(1)]: ok(JSON.stringify([
+        closed(11, at('05:00:00'), 'eve'),
+        { event: 'demilestoned', created_at: at('04:50:00'), actor: { login: 'eve' }, milestone: { title: 'Ungrouped' }, issue: { number: 12, milestone: null } },
+        closed(1, BEFORE, 'eve'),
+      ])),
+      [CLOSERS]: fail('HTTP 502: Bad Gateway'),
+    })
+    expect(undecided.hits).toEqual([`${lead} "Ungrouped", ${nothing}: #12 removed from it by eve`])
+    expect(undecided.unmeasured).toEqual([`${others} (the pull requests that closed its issues could not be read: HTTP 502: Bad Gateway)`])
+  })
+
+  test('the night\'s notes name the issues and pull requests its sessions worked, and nothing else', () => {
+    expect(workedOn({ kind: 'done', repo: 'O/R', issue: 7, pr: 20 })).toEqual(['o/r#7', 'o/r#20'])
+    expect(workedOn({ kind: 'claim', repo: 'o/r', issue: 3 })).toEqual(['o/r#3'])
+    expect(workedOn({ kind: 'parked', repo: 'o/r', issue: 4 })).toEqual(['o/r#4'])
+    // A question names an issue Dan was asked about, which no session changed.
+    expect(workedOn({ kind: 'question', repo: 'o/r', issue: 5 })).toEqual([])
+    expect(workedOn({ kind: 'done', repo: 'not a repo', issue: 5 })).toEqual([])
+    expect(workedOn({ kind: 'done', repo: 'o/r', issue: '5' })).toEqual([])
+    expect(workedOn('not a note')).toEqual([])
   })
 })
