@@ -257,6 +257,20 @@ const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => 
 // there and once in the foreground, leaves a wait for each run, and every one of them becomes the
 // same merge once GitHub says it merged, which the refusal then named once per run. The first kept
 // is the earliest, so any card made since the PR merged settles it.
+// #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so one can
+// still be running past WAIT_MS. Past it, whether the helper still holds a place in its repository's
+// line is asked of lib/merge-in-line.sh, which reads the line's tickets by the line's own rule of a
+// live run, and only its answer "running" keeps the merge waiting, so a helper still running is never
+// let go as though it had finished or failed. "gone", or anything that is no answer, lets it go as
+// before, with which of the two in the log.
+const inLine = async ($: EngineInterface, o: IsItLiveOwed): Promise<string> => {
+  if (!o.repo) return 'its repository was not read, so its line could not be asked'
+  const r = await run($, ['bash', `${(await $.env.get('HOME')) ?? ''}/.claude/hooks/lib/merge-in-line.sh`, o.repo, String(o.pr)])
+  if ('error' in r) return `whether its merge helper is still in line could not be read (${r.error})`
+  const said = (r.out ?? '').trim()
+  return said === 'running' || said === 'gone' ? said : `its line gave no answer ('${said}')`
+}
+
 const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
   const now = await $.clock.now()
   const kept: IsItLiveOwed[] = []
@@ -264,8 +278,11 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
     let x: IsItLiveOwed | undefined = o
     if (o.how === 'waiting') {
       if (now - o.at > WAIT_MS) {
-        $.ui.log(`is-it-live: stopped asking GitHub about #${o.pr}, merged in the background, after ${WAIT_MS / 3_600_000} hours`, { to: 'debug' })
-        continue
+        const line = await inLine($, o)
+        if (line !== 'running') {
+          $.ui.log(`is-it-live: stopped asking GitHub about #${o.pr}, merged in the background, after ${WAIT_MS / 3_600_000} hours: ${line === 'gone' ? 'its merge helper no longer holds a place in line' : line}`, { to: 'debug' })
+          continue
+        }
       }
       const a = await askPr(prReaders($), { pr: o.pr, ...(o.repo ? { repo: o.repo } : {}), cwd: o.cwd })
       if (a.kind === 'closed' || a.kind === 'not a pr') continue

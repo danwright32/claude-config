@@ -215,6 +215,28 @@ if [ "$rc" -eq 0 ]; then MWR_TURN_DIR="$WORKDIR/not-a-folder" turn_join 7 1000; 
 check_eq "#1515 a turn folder that cannot be made is a failure" "1" "$rc"
 check "#1515 naming where" "$WORKDIR/not-a-folder" "$TURN_ERR"
 
+# =================================================================================================
+# 9. Whether a run is still in line for a pull request, asked from outside (claude-config#2403).
+# =================================================================================================
+# is-it-live asks this of a merge it has waited on past its window: lib/merge-in-line.sh answers
+# "running" only on a ticket for that pull request whose run is alive by the same rule the line
+# uses, "gone" otherwise, and it only reads, so asking can never pass anybody over.
+INLINE="$DIR/lib/merge-in-line.sh"
+reset
+other_joins acme/widget 41 1000 "$LIVE" "$LIVE_START" >/dev/null
+other_joins acme/widget 42 1000 "$DEAD" "Thu Jan  1 00:00:00 1970" >/dev/null
+check_eq "#2403 a pull request whose run is alive in line is running" "running" "$(bash "$INLINE" acme/widget 41 2>&1)"
+check_eq "#2403 asked in another case, the same line answers" "running" "$(bash "$INLINE" ACME/Widget 41 2>&1)"
+check_eq "#2403 one whose run has gone is not" "gone" "$(bash "$INLINE" acme/widget 42 2>&1)"
+check_eq "#2403 asking left that dead run's ticket where it was" "2" "$(ls "$MWR_TURN_DIR/acme/widget" | grep -cE '^[0-9]+$')"
+check_eq "#2403 one with no ticket at all is not" "gone" "$(bash "$INLINE" acme/widget 43 2>&1)"
+check_eq "#2403 nor is one in a repository with no line" "gone" "$(bash "$INLINE" acme/other 41 2>&1)"
+out="$(bash "$INLINE" acme/widget 2>&1)"; rc=$?
+check_eq "#2403 asked without a pull request it refuses rather than answering" "2" "$rc"
+check "#2403 saying how it is used" "usage" "$out"
+out="$(bash "$INLINE" acme/widget 4x1 2>&1)"; rc=$?
+check_eq "#2403 a pull request that is not a number is refused too" "2" "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
