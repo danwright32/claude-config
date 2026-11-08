@@ -11343,14 +11343,16 @@ HOLDROWS
   fi
   # Every other live hold, as it was, and this one in place of the caller's old line of this label.
   tmp="$SYNC_HOLD_FILE.writing.$$"
-  after="$(printf '%s\n' "$rows" | awk -F '\037' -v me="$owner" -v w="$why" '$1 == "live" && !($5 == me && $6 == w)'
+  # The label reaches awk through the environment, never -v, which reads a backslash as an escape
+  # and so would never match a label holding one.
+  after="$(printf '%s\n' "$rows" | HOLD_LABEL="$why" awk -F '\037' -v me="$owner" '$1 == "live" && !($5 == me && $6 == ENVIRON["HOLD_LABEL"])'
            printf 'live\037%s\037%s\037%s\037%s\037%s\n' "$until" "$now" "$(sync_hostname)" "$owner" "$why")"
   if ! printf '%s\n' "$after" | hold_write_rows; then
     hold_unlock
     die "no hold was taken: the record could not be written at $SYNC_HOLD_FILE, so the watcher is NOT held and goes on sending."
   fi
   # Read back the way the watcher reads it: this hold, with the end just asked for, live.
-  if [ ! -f "$SYNC_HOLD_FILE" ] || ! hold_rows "$(date +%s)" | awk -F '\037' -v me="$owner" -v e="$until" -v w="$why" '$1 == "live" && $5 == me && $2 == e && $6 == w { found = 1 } END { exit found ? 0 : 1 }'; then
+  if [ ! -f "$SYNC_HOLD_FILE" ] || ! hold_rows "$(date +%s)" | HOLD_LABEL="$why" awk -F '\037' -v me="$owner" -v e="$until" '$1 == "live" && $5 == me && $2 == e && $6 == ENVIRON["HOLD_LABEL"] { found = 1 } END { exit found ? 0 : 1 }'; then
     hold_unlock
     # A directory where the record belongs takes the rename INTO it, so ours is removed from there.
     rm -f -- "$SYNC_HOLD_FILE/${tmp##*/}" 2>/dev/null || true

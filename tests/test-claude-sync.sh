@@ -18997,6 +18997,16 @@ check "#2452 and is told to lift its own by its label, since a plain release wou
 # The same label again is the same hold: lengthened in place, never a second line.
 h52_s bash "$SCRIPT" hold 45 "build #2445" >/dev/null 2>&1 || true
 check "#2452 the same label held again replaces its own line rather than adding one" "[ \"\$(h52_lines 'build #2445')\" = 1 ]"
+# A label holding a backslash compares equal to itself read back: awk -v would read the backslash
+# as an escape, so the hold failed its own read back and the same label held again added a line.
+out_52bs=""; rc_52bs=0
+out_52bs="$(h52_s bash "$SCRIPT" hold 10 'edits C:\temp' 2>&1)" || rc_52bs=$?
+h52_s bash "$SCRIPT" hold 20 'edits C:\temp' >/dev/null 2>&1 || true
+dbg "#2452 backslash label: rc=$rc_52bs $out_52bs"
+check "#2452 a label with a backslash is taken and read back" "[ '$rc_52bs' = 0 ] && line_has \"\$out_52bs\" 'held off for 10 minutes' 'temp'"
+check "#2452 and held again under the same label stays one line" "[ \"\$(grep -c -F 'edits C:\\temp' '$H52_HOLD')\" = 1 ]"
+h52_s bash "$SCRIPT" release 'edits C:\temp' >/dev/null 2>&1 || true
+check "#2452 and release by that label lifts it" "! grep -q -F 'edits C:' '$H52_HOLD'"
 out_52st="$(h52_s bash "$SCRIPT" status 2>&1 || true)"
 check "#2452 status names each of the session's holds with the label that lifts it" \
   "line_has \"\$out_52st\" 'watcher hold' 'release \"build #2442\"' && line_has \"\$out_52st\" 'watcher hold' 'release \"build #2445\"'"
