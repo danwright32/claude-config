@@ -12,6 +12,8 @@
 #     (with the folder it is matched in), git reaching a whole folder, an inline node script handed a
 #     file it writes by position.
 #   - A command writing nothing, a removal, and a name that can only be no source file are not judged.
+#     Nor is a word whose every $ the shell leaves as written (#2320: "^foo.*bar$"), which holds no
+#     value; one holding a $ the shell expands ("$OUT/big.ts", x$'y', "$(") is still unread.
 #   - The known blind spot, measured so it is never claimed away (L460): a program that builds its own
 #     file names, or a script run with no arguments, is not marked unread, so it passes unjudged.
 #   - Every answer register.test.ts gives in place of the reader (its WRITES) is what the real reader
@@ -38,7 +40,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=35
+EXPECTED=42
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -118,6 +120,18 @@ is('a quoted pattern beside a heredoc written into a file still judges that file
 unread('a quoted pattern handed to a tool, which expands its own operands, is still unread', "npx foo 'src/*.ts'", 'src/*.ts', 'a pattern', '/w/app/src')
 unread('a quoted group is still unread', "python3 probe.py '{a,b}.ts'", '{a,b}.ts', 'a pattern', '/w/app')
 is('a word the reader cannot close is still unread beside a quoted pattern', `python3 probe.py 'src/*.ts' "$(`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }, { word: '$(', unread: 'a python3 script file is handed $(, built as the command runs' }])
+
+// #2320: a dollar sign the shell leaves as written (before a closing double quote, or before nothing a
+// name, brace, bracket or quote can start) is text, as a single quoted one is (#1953), so the word
+// holds no value and is not read as built while the command runs. A dollar sign the shell expands,
+// and every other write in the command, are judged as before.
+is('a double quoted regex ending in a dollar sign is handed on as text, as a single quoted one is', 'python3 probe.py "^foo.*bar$"', [])
+is('a dollar sign left bare at the end of a word is text too', 'python3 probe.py foo$', [])
+unread('a dollar sign starting a name in double quotes is still unread', 'python3 probe.py "$OUT/big.ts"', '$OUT/big.ts', 'built as the command runs', undefined)
+unread('a dollar sign before a quote, which bash expands, is still unread', "python3 probe.py x$'y'", 'x$y', 'built as the command runs', undefined)
+unread('a word holding a dollar sign left as text and one expanded is still unread', 'python3 probe.py "a$"$B', 'a$$B', 'built as the command runs', undefined)
+is('a word the reader cannot close is still unread beside a regex left as text', 'python3 probe.py "^foo.*bar$" "$(', [{ word: '$(', unread: 'a python3 script file is handed $(, built as the command runs' }])
+is('a regex left as text beside a redirect into a file still judges that file', 'python3 probe.py "^foo.*bar$" > src/big.ts', [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }])
 
 // register.test.ts answers for the reader with WRITES: each must be what the real reader answers.
 const text = readFileSync(testPath, 'utf8')

@@ -7086,7 +7086,11 @@ a read of that same variable counts, never another function's variable sharing i
 Work a noun's code hands to a timer runs after the noun answered and is not read as its code (#939),
 and that includes a function written in place and handed to a mod helper that only gives it to a
 timer it starts, such as picker manners' `offTheDialog`: the helper is recognised by what its body
-does with that parameter, never by its name (#2299).
+does with that parameter, never by its name (#2299). Only the function the timer is handed counts:
+one written in place, or the one a mod function that only makes a function hands back. The rest of
+the timer's arguments is worked out as the timer is set, so it is the noun's own code: the delay, a
+call given as the callback (`$.clock.after(0, slow())`), and the arguments of a function making call,
+a function written in place there included (#2333).
 Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
 and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
