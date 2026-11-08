@@ -253,9 +253,55 @@ describe('writes: copying, moving and linking', () => {
     expect(read('ln -s lib/ src/').files.some(f => f.tree)).toBe(false)
     expect(read('cp -R -t src lib/').files.some(f => f.tree)).toBe(false)
   })
+  // The trees a command writes, by path and the sources they come from.
+  const trees = (command: string) => read(command).files.filter(f => f.tree).map(f => ({ path: f.path, sources: f.sources }))
+  // A cp source whose last part is a dot (lib/., or . itself) copies what that folder holds into the
+  // destination, on macOS and GNU cp alike, there or not (measured on macOS cp, #2396): a tree.
+  test('cp of a source ending in slash dot writes its contents into the destination, a whole tree', () => {
+    for (const command of ['cp -R lib/. src/', 'cp -R lib/. src', 'cp -a lib/./ src/', 'cp -R -t src lib/.'])
+      expect(trees(command)).toEqual([{ path: `${CWD}/src`, sources: [`${CWD}/lib`] }])
+    // The working folder itself, and through a cd.
+    expect(trees('cp -R . ~/out')).toEqual([{ path: `${HOME}/out`, sources: [CWD] }])
+    expect(trees('cd app && cp -R lib/. ../src/')).toEqual([{ path: `${CWD}/src`, sources: [`${CWD}/app/lib`] }])
+  })
+  test('a cp source that only starts with a dot is a name, with no tree', () => {
+    expect(trees('cp -R lib/.git src/')).toEqual([])
+    expect(trees('cp -R .config src/')).toEqual([])
+  })
+  // ditto merges what a source folder holds into the destination whatever the slash (man ditto; measured
+  // on macOS, #2396), and the words cannot say whether a source is a folder, so the destination is a
+  // tree beside the reading cp gets. -x unpacks an archive into the destination folder, also a tree;
+  // -c makes the destination one archive file, so it is not.
+  test('ditto writes its destination as a whole tree, whatever the slash', () => {
+    expect(trees('ditto lib out')).toEqual([{ path: `${CWD}/out`, sources: [`${CWD}/lib`] }])
+    expect(trees('ditto lib/ out/')).toEqual([{ path: `${CWD}/out`, sources: [`${CWD}/lib`] }])
+    expect(trees('ditto a b out')).toEqual([{ path: `${CWD}/out`, sources: [`${CWD}/a`, `${CWD}/b`] }])
+    expect(trees('ditto --arch arm64 -V lib ~/out')).toEqual([{ path: `${HOME}/out`, sources: [`${CWD}/lib`] }])
+    expect(trees('ditto -xk arch.zip out')).toEqual([{ path: `${CWD}/out`, sources: [`${CWD}/arch.zip`] }])
+    // -rsrc is ditto's old spelling of --rsrc, a copy, though it holds a c (measured on macOS).
+    expect(trees('ditto -rsrc lib out')).toEqual([{ path: `${CWD}/out`, sources: [`${CWD}/lib`] }])
+    // The reading cp gets is kept beside the tree: a file source lands under its own name in a folder.
+    expect(paths('ditto lib/ out/')).toEqual([`${CWD}/out/lib`, `${CWD}/out`])
+  })
+  test('ditto -c writes one archive file, with no tree', () => {
+    expect(trees('ditto -ck lib arch.zip')).toEqual([])
+    expect(trees('ditto -c -k --keepParent lib arch.zip')).toEqual([])
+    expect(paths('ditto -ck lib arch.zip')).toEqual([`${CWD}/arch.zip`])
+  })
   test('rsync writes its local destination, and a remote one is no file here', () => {
     expect(paths('rsync -av --exclude .git notes.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('rsync -av CLAUDE.md host:backup/')).toEqual([])
+  })
+  // rsync copies what a source ending in a slash or slash dot holds into the destination, there or not
+  // (measured on this Mac's rsync 3.4.1, #2396): a tree. A source with neither lands under its own name.
+  test('rsync of a source ending in a slash or slash dot writes its contents into the destination, a whole tree', () => {
+    for (const command of ['rsync -a lib/ src/', 'rsync -a lib/ src', 'rsync -a lib/. src/', 'rsync -a lib/. src', 'rsync -av --exclude .git lib/./ src'])
+      expect(trees(command)).toEqual([{ path: `${CWD}/src`, sources: [`${CWD}/lib`] }])
+    expect(trees('rsync -a lib/ host:src/')).toEqual([])
+  })
+  test('rsync of a source with no slash lands as the folder itself, with no tree', () => {
+    expect(read('rsync -a lib src/').files).toEqual([{ word: 'src/lib', path: `${CWD}/src/lib`, sources: [`${CWD}/lib`] }])
+    expect(trees('rsync -a lib/.git src/')).toEqual([])
   })
   test('dd writes what of= names', () => {
     expect(paths('dd if=rules.md of=CLAUDE.md bs=1k')).toEqual([`${CWD}/CLAUDE.md`])
