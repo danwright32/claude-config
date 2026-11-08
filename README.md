@@ -5632,7 +5632,6 @@ traps a turn, a sleeping worker's included: the next end in the chain goes ahead
 what is still owed. What is owed is session state, so a new session owes nothing for another's
 merges. The `classic.Stop` hook runs only while the managed settings file is in place
 (`tools/sec-default-bypassed-hooks.tsv`); without it the line on the merge's result still shows.
-
 The same turn end also asks for a draft reply to the Slack thread the session started from (#2436,
 Dan, 2026-11-07: "slack thread start = draft response saved. every time"). A thread is recorded,
 per session, when Dan's own typed prompt (mod-kit's `isDans`) holds a Slack message link (a link to
@@ -6555,10 +6554,11 @@ woken (it reaches Claude, never Dan) and the agent is noted for the morning repo
 session list that cannot be asked is said as such and asked again once a minute later; an unreadable
 record is named (#753). The status bar reads this session's jobs through `$.jobs.list()` and the
 quiet agents through `$.jobs.agents()`; each listed job carries its task id, which is it live reads
-to tell whether a merge helper it waits on is still running (#2436). A look still running is never overlapped by a second, a
-session start's included; one that has not finished in ten minutes is given up, said to Claude once,
-and acts on nothing after, and no second stop is sent while one is unanswered. Keeping a job asks
-mod-kit's screen first, so a name or reason carrying a secret never reaches the status bar. A
+to tell whether a merge helper it waits on is still running (#2436). A look still running is
+never overlapped by a second, a session start's included; one that has not finished in ten
+minutes is given up, said to Claude once, and acts on nothing after, and no second stop is sent
+while one is unanswered. Keeping a job asks mod-kit's screen first, so a name or reason carrying
+a secret never reaches the status bar. A
 dispatched agent's stop (`classic.SubagentStop`) is refused while it still holds background work it
 started (a Bash job, a Monitor, an agent it ran in the background), telling it to wait in the
 foreground, finish, or stop the work with TaskStop, then hand back. What is in flight is Claude
