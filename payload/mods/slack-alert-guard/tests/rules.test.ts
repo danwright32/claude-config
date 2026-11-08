@@ -9,6 +9,7 @@ import {
   ciWorkflow,
   codeOf,
   editedText,
+  flowCommands,
   handsOn,
   heldText,
   importSpecs,
@@ -428,6 +429,19 @@ test('a GitLab flow list of commands is read as shell, on one line or several (#
   expect(ci).toContain('Nightly sync finished')
   expect(ci).toContain('Cleanup ran on main')
   expect(ci).not.toContain('Running the unit tests')
+})
+
+test("a GitLab flow list is read as YAML reads one: a quoted item's commas and brackets are its own, a quote opens only at an item's start, and a comment ends its line (#2416)", () => {
+  const lines = [
+    `  script: [ 'echo "Backup, of [orders] is late"', # the backup check`,
+    `    echo don't, "say \\"hi\\" now", echo a#b,`,
+    `    {text: [1, 2]}, 'it''s' ]`,
+    'after: x',
+  ]
+  const raw = (lines[0] as string).slice((lines[0] as string).indexOf('['))
+  expect(flowCommands(lines, 0, raw)).toEqual(['echo "Backup, of [orders] is late"', "echo don't", 'say "hi" now', 'echo a#b', '{text: [1, 2]}', "it's"])
+  // A list that never closes keeps every item it read.
+  expect(flowCommands(['  script: ["a", b'], 0, '["a", b')).toEqual(['a', 'b'])
 })
 
 test('a GitLab script written as one block or one string is shell, while a GitHub script block stays JavaScript (#2416)', () => {
