@@ -266,10 +266,10 @@ env_step_code(){ # env_step_code <workflow>
   code_of "$1" | awk '/name:[[:space:]]*Record the environment the suite is judged in/ { s = 1; next } s && /^[[:space:]]*- (name|uses|run):/ { exit } s { print }'
 }
 processor_printed(){ # processor_printed <workflow>
-  local step
+  local step re='echo "processor: \$\(.*(/proc/cpuinfo|lscpu)'
   step="$(env_step_code "$1")"
   if [ -z "$step" ]; then echo "no environment step was found"; return; fi
-  if printf '%s\n' "$step" | grep -Eq 'echo "processor: \$\(.*(/proc/cpuinfo|lscpu)'; then
+  if [[ "$step" =~ $re ]]; then
     echo ok
   else
     echo "the environment step does not echo \"processor: \$(...)\" read from /proc/cpuinfo or lscpu"

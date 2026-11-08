@@ -192,7 +192,7 @@ jobs:
           # Which processor (claude-config#2403). The runners come in two speeds, the slower about
           # 27% slower on every suite (#1494, #2369), while every one reports 4 cores and the same
           # image, so only the model can name the hardware behind each group.
-          echo "processor: $(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1 | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"
+          echo "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"
 
       - name: A read-only run of the tool itself
         # The self-update gate decides whether a pulled claude-sync is safe to hand control to by
