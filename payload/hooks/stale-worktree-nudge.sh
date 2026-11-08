@@ -22,8 +22,9 @@
 #
 # WHAT IT COSTS, which is the thing that decides whether a per prompt hook is allowed to exist.
 # On every prompt, one glob of the state directory for answers waiting to be said (only when one is
-# there does it ask git which repository this is), and a read of this session's record against the
-# clock. When a run is due, one git call and the start of a process it does not wait for. The run
+# there does it need to know which repository this is, which it remembers per directory, so git is
+# asked once per directory), and a read of this session's record against the clock. When a run is
+# due, that same remembered repository and the start of a process it does not wait for. The run
 # itself makes the one network call, and it starts AT MOST ONCE EVERY STALE_WT_RERUN_MINUTES PER
 # SESSION: the record is written and read BEFORE the run is started, not after it. Written the
 # other way round, deduplicating the message after computing it, the message appeared once and the
