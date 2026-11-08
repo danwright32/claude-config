@@ -54,9 +54,17 @@ async function changeThreads($: EngineInterface, change: (ts: IsItLiveThread[]) 
   throw new Error('the thread list kept changing under it')
 }
 
-/** A merge of this session has landed: every thread's draft is owed from here. */
+/** A merge of this session has landed: every thread's draft is owed from here. Two merges landing at
+ * once can write their steps in either order, so the landed step only ever rises, or a draft settled
+ * between them would count for the later merge too (lessons review of 25bcf07). */
 export async function markLanded($: EngineInterface): Promise<void> {
-  await $.state.set(landedRef, await nextStep($))
+  const n = await nextStep($)
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(landedRef)
+    if ((held.value ?? 0) >= n) return
+    if ((await $.state.set(landedRef, n, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error('the landed step kept changing under it')
 }
 
 async function settle($: EngineInterface, t: { channel: string; ts: string }): Promise<void> {
