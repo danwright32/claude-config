@@ -392,8 +392,9 @@ line already carried its label. What changed:
   session under another label is a second hold, kept beside the first and counted; the watcher
   stays held until every one is released or has expired.
 - `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
-  nobody holds, or one only another session holds, lifts nothing and says whose holds are in force
-  and until when, with the command that lifts each.
+  the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
+  non-zero, and names the holds the caller does hold and any other session's, each with its end and
+  the command that lifts it. A label beginning with a dash goes after `--`: `release -- "-fix"`.
 - A plain `release` lifts the caller's own or `unknown` hold when there is exactly one. With more
   than one it lifts none, exits non-zero, and names each with its end and `release "<label>"`,
   because lifting them all would free a hold a sibling agent may still need.

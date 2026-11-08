@@ -19036,6 +19036,13 @@ check "#2452 release naming a label nobody holds lifts nothing" \
   "[ \"\$(h52_lines 'build #2442')\" = 1 ] && [ \"\$(h52_lines 'build #2445')\" = 1 ]"
 check "#2452 and says so, naming the holds in force and when each ends" \
   "line_has \"\$out_52n\" 'nothing was released' 'build #9999' && line_has \"\$out_52n\" 'build #2442' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET'"
+# A mistyped or already lifted label is a failure, never a success: a builder reading the exit code
+# would otherwise believe its hold gone while it stays in force (L98), as --other with a missing
+# label already does.
+check "#2452 and exits non-zero, saying this session holds no hold by that label" \
+  "[ '$rc_52n' != 0 ] && line_has \"\$out_52n\" 'this session holds no watcher hold labelled' 'build #9999'"
+check "#2452 and names the holds this session does hold, with the command that lifts each" \
+  "line_has \"\$out_52n\" 'build #2445' 'release \"build #2445\"'"
 
 # THE MATCHING LABEL lifts that hold only.
 out_52r=""; rc_52r=0
@@ -19057,6 +19064,15 @@ dbg "#2452 release of another session's label: rc=$rc_52o $out_52o"
 check "#2452 release naming another session's label leaves that hold in place" "[ \"\$(h52_lines 'T works on a skill')\" = 1 ]"
 check "#2452 and says whose it is, until when, and how to lift it" \
   "line_has \"\$out_52o\" 'session tttttttt' 'T works on a skill' 'until [0-9]{1,2}:[0-9]{2} [AP]M ET' 'release --other tttttttt'"
+check "#2452 and exits non-zero, since this session holds nothing by that label" "[ '$rc_52o' != 0 ]"
+# A session holding nothing at all says so, and still names whose holds are in force.
+out_52u=""; rc_52u=0
+out_52u="$(h52_env CLAUDE_CODE_SESSION_ID=uuuuuuuu-3333-4333-8333-333333333333 bash "$SCRIPT" release "build #2442" 2>&1)" || rc_52u=$?
+dbg "#2452 release by a session holding nothing: rc=$rc_52u $out_52u"
+check "#2452 a labelled release from a session holding nothing fails, lifts nothing, and says it holds none" \
+  "[ '$rc_52u' != 0 ] && [ \"\$(h52_lines 'build #2442')\" = 1 ] && line_has \"\$out_52u\" 'this session holds no watcher hold' 'at all'"
+check "#2452 and names the hold by that label as another session's, with how to lift it" \
+  "line_has \"\$out_52u\" 'session ssssssss' 'build #2442' 'release --other ssssssss'"
 
 # RELEASE --OTHER on a session holding two refuses until the label is named.
 h52_t bash "$SCRIPT" hold 20 "T second job" >/dev/null 2>&1 || true
@@ -19109,6 +19125,29 @@ out_52l=""; rc_52l=0
 out_52l="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52l=$?
 check "#2452 a plain release with one hold of the session's own lifts it" \
   "[ '$rc_52l' = 0 ] && [ ! -e '$H52_HOLD' ] && line_has \"\$out_52l\" 'released' 'build #2442'"
+# Releasing that label AGAIN, with no record left at all, is the already lifted case: it fails and
+# says so, while a plain release with nothing held stays a quiet success.
+out_52a2=""; rc_52a2=0
+out_52a2="$(h52_s bash "$SCRIPT" release "build #2442" 2>&1)" || rc_52a2=$?
+dbg "#2452 labelled release with no record: rc=$rc_52a2 $out_52a2"
+check "#2452 a labelled release with no hold in force at all exits non-zero and says so" \
+  "[ '$rc_52a2' != 0 ] && line_has \"\$out_52a2\" 'this session holds no watcher hold labelled' 'build #2442'"
+out_52p2=""; rc_52p2=0
+out_52p2="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52p2=$?
+check "#2452 and a plain release with nothing held still succeeds, saying nothing was released" \
+  "[ '$rc_52p2' = 0 ] && line_has \"\$out_52p2\" 'No watcher hold' 'nothing was released'"
+# A label beginning with a dash is told to be lifted after --, and release takes it there, rather
+# than refusing it as an unknown option so that only --force could lift it.
+h52_s bash "$SCRIPT" hold 20 "-fix" >/dev/null 2>&1 || true
+h52_s bash "$SCRIPT" hold 20 "build #2460" >/dev/null 2>&1 || true
+out_52d=""; rc_52d=0
+out_52d="$(h52_s bash "$SCRIPT" release 2>&1)" || rc_52d=$?
+check "#2452 a label beginning with a dash is named with -- before it" "line_has \"\$out_52d\" '-fix' 'release -- \"-fix\"'"
+out_52dl=""; rc_52dl=0
+out_52dl="$(h52_s bash "$SCRIPT" release -- "-fix" 2>&1)" || rc_52dl=$?
+dbg "#2452 release -- -fix: rc=$rc_52dl $out_52dl"
+check "#2452 and release -- lifts it, and only it" \
+  "[ '$rc_52dl' = 0 ] && [ \"\$(h52_lines '-fix')\" = 0 ] && [ \"\$(h52_lines 'build #2460')\" = 1 ]"
 rm -f "$H52_HOLD"
 
 

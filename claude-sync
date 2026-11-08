@@ -11114,6 +11114,10 @@ hold_owner_words(){   # $1 = owner
   elif [ "$1" = "$(hold_self)" ]; then printf 'this session'
   else printf 'session %s' "$(hold_record_short "$1")"; fi
 }
+# Who is running this release, in words: a session, or a person at a terminal with no session id.
+hold_caller_words(){
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then printf 'this session'; else printf 'this terminal'; fi
+}
 # A label as the record keeps it: one line, runs of spaces folded to one, no space at either end.
 # The record is split on spaces and rejoined with one, so a label kept any other way would never
 # compare equal to itself read back. hold and release both pass what they were given through this.
@@ -11153,7 +11157,10 @@ hold_lift_hint(){   # $1 = owner  $2 = label  $3 = the rows the hold is among
   local n
   n="$(hold_group_count "$1" "${3:-}")"
   if [ "$1" = unknown ] || [ "$1" = "$(hold_self)" ]; then
-    if [ "${n:-0}" -gt 1 ]; then printf 'claude-sync release %s' "$(hold_label_words "$2")"
+    # A label beginning with a dash goes after --, or release would read it as an option.
+    local sep=""
+    [ "${2#-}" = "$2" ] || sep="-- "
+    if [ "${n:-0}" -gt 1 ]; then printf 'claude-sync release %s%s' "$sep" "$(hold_label_words "$2")"
     else printf 'claude-sync release'; fi
   elif [ "${n:-0}" -gt 1 ]; then printf 'claude-sync release --other %s %s' "$(hold_record_short "$1")" "$(hold_label_words "$2")"
   else printf 'claude-sync release --other %s' "$(hold_record_short "$1")"; fi
@@ -11383,7 +11390,8 @@ HOLDROWS
 #
 # A hold is named by its session AND its label (#2452), since every subagent of a session shares
 # the session's id. So:
-#   release "<label>"                 lifts the caller's own (or an unowned) hold of that label only
+#   release "<label>"                 lifts the caller's own (or an unowned) hold of that label only;
+#                                     a label beginning with a dash goes after --: release -- "-fix"
 #   release                           lifts the caller's own or unowned hold when there is exactly
 #                                     ONE; with several it refuses, naming each with its end and the
 #                                     label that lifts it, because lifting all frees a hold a sibling
@@ -11392,8 +11400,9 @@ HOLDROWS
 #                                     several and no label is given
 #   release --force                   lifts every hold in force on this Mac, naming each, for the
 #                                     person at the keyboard who has decided none is needed
-# A label or session that matches nothing lifts nothing and says whose holds are in force and until
-# when. The refusals to choose exit non-zero, so a caller cannot read one as a release.
+# A label or session that matches nothing lifts nothing, exits non-zero, and says whose holds are in
+# force and until when. The refusals to choose exit non-zero too, so a caller cannot read one as a
+# release. Only a plain release with nothing of the caller's to lift is a success that lifts nothing.
 do_release(){   # [--other <session> [label]] | [--force] | [label]
   local target="" label="" force=0 now rows rc=0 st ends taken host o w matched lifted=0 kept="" keep_n=0 me would_n would=""
   case "${1:-}" in
@@ -11405,12 +11414,20 @@ do_release(){   # [--other <session> [label]] | [--force] | [label]
     --force)
       [ "$#" -eq 1 ] || die "nothing was released: --force takes nothing after it, because it lifts every hold in force on this Mac. To lift one hold, name its label: claude-sync release \"<label>\""
       force=1 ;;
-    -*) die "nothing was released: release takes --other <session>, --force, or the label a hold was taken with, and '$1' is none of those. claude-sync status names each hold in force." ;;
+    # A label beginning with a dash, which hold takes, is given after --, as hold_lift_hint names it.
+    --)
+      [ -n "$(hold_label "${@:2}")" ] || die "nothing was released: -- is followed by the label a hold was taken with, and nothing came after it: claude-sync release -- \"<label>\""
+      label="$(hold_label "${@:2}")" ;;
+    -*) die "nothing was released: release takes --other <session>, --force, or the label a hold was taken with (after --, when it begins with a dash), and '$1' is none of those. claude-sync status names each hold in force." ;;
     *) label="$(hold_label "$@")" ;;
   esac
   [ -n "$SYNC_HOLD_FILE" ] || die "nothing was released: $(not_users_own_home), so this Mac's watcher hold is not its to lift. Name a hold file in SYNC_HOLD_FILE."
   if [ ! -e "$SYNC_HOLD_FILE" ]; then
     [ -z "$target" ] || die "nothing was released: no watcher hold is in force, so there is no hold by session $target to lift."
+    # A label names one hold the caller believes it has, so finding none is a failure, never the
+    # quiet success of a plain release with nothing held: a mistyped or already lifted label would
+    # otherwise read as the hold being gone.
+    [ -z "$label" ] || die "nothing was released: no watcher hold is in force, so $(hold_caller_words) holds no watcher hold labelled $(hold_label_words "$label")."
     # Said rather than passed over in silence: "nothing to release" and "released" are different
     # answers, and a release that reports success over a hold somebody else still holds is the
     # one that costs something (L98).
@@ -11488,6 +11505,36 @@ $rows
 HOLDROWS
     return 1
   fi
+  # A label the caller holds no hold by fails the same way (L98): a builder with a mistyped or
+  # already lifted label must not read success while the hold it meant stays in force. It names the
+  # holds the caller does hold, and any by other sessions, each with the command that lifts it.
+  if [ -z "$target" ] && [ -n "$label" ] && [ "$lifted" -eq 0 ]; then
+    hold_unlock
+    local caller own_n
+    caller="$(hold_caller_words)"
+    own_n="$(printf '%s' "$kept" | awk -F '\037' -v me="$me" '$1 == "live" && ($5 == me || $5 == "unknown") { n++ } END { printf "%d", n }')"
+    if [ "${own_n:-0}" -gt 0 ]; then
+      echo "claude-sync: nothing was released: $caller holds no watcher hold labelled $(hold_label_words "$label"). What it does hold, with the command that lifts each:" >&2
+    else
+      echo "claude-sync: nothing was released: $caller holds no watcher hold labelled $(hold_label_words "$label"), nor any other watcher hold at all." >&2
+    fi
+    while IFS=$'\037' read -r st ends taken host o w; do
+      [ -n "$st" ] && { [ "$o" = "$me" ] || [ "$o" = unknown ]; } || continue
+      echo "  ($w), in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"): $(hold_lift_hint "$o" "$w" "$rows")" >&2
+    done <<KEPTROWS
+$kept
+KEPTROWS
+    if [ "$keep_n" -gt "${own_n:-0}" ]; then
+      echo "Held by other sessions, which only release --other lifts:" >&2
+      while IFS=$'\037' read -r st ends taken host o w; do
+        [ -n "$st" ] && [ "$o" != "$me" ] && [ "$o" != unknown ] || continue
+        echo "  the hold by $(hold_owner_words "$o") ($w), in force for another $(duration_in_words $(( 10#$ends - now )) exact), $(hold_until_words "$ends"): $(hold_lift_hint "$o" "$w" "$rows")" >&2
+      done <<KEPTROWS
+$kept
+KEPTROWS
+    fi
+    return 1
+  fi
   # Expired and unreadable lines go in the same rewrite: none of them holds anything.
   if ! printf '%s' "$kept" | hold_write_rows; then
     hold_unlock
@@ -11505,8 +11552,8 @@ HOLDROWS
 $would
 WOULDROWS
   if [ "$lifted" -gt 1 ] && [ "$keep_n" -eq 0 ]; then echo "No hold is left, so the next edit sends normally."; fi
+  # A labelled release that lifted nothing returned above, so what follows is a plain release's.
   local none_of="No watcher hold of yours was in force"
-  [ -z "$label" ] || none_of="No watcher hold of yours labelled $(hold_label_words "$label") was in force"
   while IFS=$'\037' read -r st ends taken host o w; do
     [ -n "$st" ] || continue
     if [ "$lifted" -gt 0 ]; then
@@ -11521,10 +11568,7 @@ KEPTROWS
   if [ "$lifted" -eq 0 ] && [ "$keep_n" -gt 0 ] && [ "$me" = unknown ]; then
     echo "Only once you know none of them is still needed, lift every hold in force on this Mac at once with: claude-sync release --force"
   fi
-  if [ "$lifted" -eq 0 ] && [ "$keep_n" -eq 0 ]; then
-    if [ -n "$label" ]; then echo "No watcher hold labelled $(hold_label_words "$label") was in force, so nothing was released."
-    else echo "No watcher hold was in force, so nothing was released."; fi
-  fi
+  if [ "$lifted" -eq 0 ] && [ "$keep_n" -eq 0 ]; then echo "No watcher hold was in force, so nothing was released."; fi
   return 0
 }
 
