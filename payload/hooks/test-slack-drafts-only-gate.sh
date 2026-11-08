@@ -530,6 +530,86 @@ allowed "the same sourced with a dot"
 run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
 refused "inline Python importing a module placed nowhere"
 
+echo "slack drafts only: a sys.path entry handed to python through a shell variable is placed (claude-config#2449)"
+
+# tests/test-mods.sh runs `python3 - "$ROOT/tools/lib" <<'PY'` and imports ts_source after
+# sys.path.insert(0, sys.argv[1]), ROOT set at the top of the script. The #2358 gate could not place
+# that entry, so it refused the whole suite (exit 2, measured 2026-11-07). The same script, one tree
+# whose helper only saves a draft and one whose helper posts: each shape is allowed in the first and
+# refused in the second, so the placed module is judged, never assumed harmless.
+av_tree() { # av_tree <dir> <helper body file>: the tree's helper, and every script shape beside it
+  mkdir -p "$1/tests" "$1/tools/lib"
+  cp "$2" "$1/tools/lib/av_helper.py"
+  local top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+  printf '%s\n' '#!/bin/bash' "$top" 'fc="$(python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' \
+    'from av_helper import save' 'save("hi")' 'PY' ')"' > "$1/tests/stdin.sh"
+  printf '%s\n' '#!/bin/bash' "$top" \
+    "out=\"\$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import av_helper' \"\$DIR/../tools/lib\")\"" > "$1/tests/inline.sh"
+  printf '%s\n' '#!/bin/bash' 'python3 - "first" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/lib" <<'"'PY'" \
+    'import sys' 'sys.path.insert(0, sys.argv[2])' 'import av_helper' 'PY' > "$1/tests/subst.sh"
+  printf '%s\n' '#!/bin/bash' "$top" 'PYTHONPATH="$ROOT/tools/lib" python3 - <<'"'PY'" 'import av_helper' 'PY' > "$1/tests/pypath.sh"
+  printf '%s\n' '#!/bin/bash' "$top" 'export LIBDIR="$ROOT/tools/lib"' \
+    "python3 -c 'import os, sys; sys.path.insert(0, os.environ[\"LIBDIR\"]); import av_helper'" > "$1/tests/environ.sh"
+  # The guards the payload's suites open with, which either do not exit or end the script, and a
+  # NAME=value in front of one command, which sets it for that command alone.
+  printf '%s\n' '#!/bin/bash' 'if [ -z "${BASH_VERSION:-}" ]; then' '  echo "not bash" >&2' '  exit 2' 'fi' \
+    'true || { echo "no"; exit 1; }' 'true || exit $?' "$top" 'ROOT=/nowhere/2449 true' \
+    'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$1/tests/guard.sh"
+}
+printf '%s\n' 'from pathlib import Path' 'def save(text):' '    Path("drafts/out.md").write_text(text)' > "$T/av_ok.py"
+printf '%s\n' 'import json, urllib.request' 'def save(text):' \
+  '    urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": text}).encode())' > "$T/av_posts.py"
+av_tree "$T/av/ok" "$T/av_ok.py"
+av_tree "$T/av/posts" "$T/av_posts.py"
+for shape in stdin inline subst pypath environ guard; do
+  run_bash "bash $T/av/ok/tests/$shape.sh"
+  allowed "a sys.path entry from a shell variable, at a helper that only saves a draft: tests/$shape.sh"
+  run_bash "bash $T/av/posts/tests/$shape.sh"
+  refused "the same entry at a helper that posts: tests/$shape.sh"
+done
+# Run as the session runs the suite: by a path relative to the command's directory.
+run_bash "cd $T/av/ok && bash tests/stdin.sh"
+allowed "the test-mods.sh shape run by its relative path"
+run_bash "cd $T/av/posts && bash tests/stdin.sh"
+says "the refusal names the placed helper that posts" "av_helper.py"
+
+# The controls: wherever the gate cannot be sure what the argument holds when python starts, the
+# entry is placed nowhere and the import is refused, as before.
+C="$T/av/ok/tests"
+printf '%s\n' '#!/bin/bash' 'python3 - "$NOT_SET_2449/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/unset.sh"
+# Set first to the tree whose helper posts, then, only when X is set, to this one: read in order, the
+# last assignment is this tree's, but python is handed the posting tree whenever X is unset.
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' "ROOT=\"$T/av/posts\"" \
+  'if [ -n "${X:-}" ]; then' '  ROOT="$(cd "$DIR/.." && pwd)"' 'fi' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/twice.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '[ -n "${X:-}" ] && ROOT="$(cd "$DIR/.." && pwd)"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/cond.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' \
+  "python3 - '\$ROOT/tools/lib' <<'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/quoted.sh"
+printf '%s\n' 'ROOT=/nowhere/2449' > "$T/av/ok/tools/rebind.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' '. "$ROOT/tools/rebind.sh"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/rebind.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' '. "$NOT_SET_2449/lib.sh"' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/unsourced.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'ROOT="$(cd "$DIR/.." && pwd)"' \
+  'python3 - $NOT_SET_2449 "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[2])' 'import av_helper' 'PY' > "$C/split.sh"
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '( ROOT="$(cd "$DIR/.." && pwd)" )' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/subshell.sh"
+# Set only inside a guard that then exits, so whenever python runs, the guard did not and ROOT is empty.
+printf '%s\n' '#!/bin/bash' 'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'if [ -z "${X:-}" ]; then' \
+  '  ROOT="$(cd "$DIR/.." && pwd)"' '  exit 0' 'fi' \
+  'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$C/inguard.sh"
+for why in "unset:a variable the script never sets" "twice:a variable set again inside an if" \
+  "inguard:a variable set only inside a guard that exits" \
+  "cond:a variable set only when an && runs" "quoted:the variable in single quotes, which python gets as written" \
+  "rebind:a variable a sourced file sets again" "unsourced:a sourced file the gate cannot find" \
+  "split:an unquoted unknown word before the argument, which can split into any number" \
+  "subshell:a variable set only inside a subshell"; do
+  run_bash "bash $C/${why%%:*}.sh"
+  refused "an entry the gate cannot be sure of is placed nowhere and refused: ${why#*:}"
+done
+
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
 refused "python3 -c importing a helper that posts"
