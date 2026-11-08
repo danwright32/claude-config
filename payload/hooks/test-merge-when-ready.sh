@@ -130,11 +130,29 @@ case "$*" in
     n="$(printf '%s\n' "$*" | sed -nE 's#.*pulls/([0-9]+).*#\1#p')"
     b="$(printf '%s\n' "$*" | sed -nE 's#.* base=([^ ]+).*#\1#p')"
     [ -e "$ST/retarget-fails-$n" ] && { echo "gh: Validation Failed (HTTP 422)" >&2; exit 1; }
+    # retarget-already-<n>: GitHub has moved the pull request onto the base itself, after the list
+    # was read, and answers the move as it did for #2419 and #2405 on 2026-11-07
+    # (claude-config#2431). retarget-exists-<n>: the same answer, with the pull request not moved.
+    if [ -e "$ST/retarget-already-$n" ] || [ -e "$ST/retarget-exists-$n" ]; then
+      if [ -e "$ST/retarget-already-$n" ]; then
+        { grep -vx "$n" "$ST/stacked" || true; } > "$ST/stacked.tmp"; mv "$ST/stacked.tmp" "$ST/stacked"
+      fi
+      printf '{"message":"Validation Failed","errors":[{"resource":"PullRequest","code":"custom","message":"A pull request already exists for base branch %s and head branch feat/y-%s"}],"status":"422"}\n' "$b" "$n"
+      echo "gh: Validation Failed (HTTP 422)" >&2; exit 1
+    fi
     # retarget-ignored-<n>: GitHub answers as if it moved the pull request, and it did not.
     if [ ! -e "$ST/retarget-ignored-$n" ]; then
       { grep -vx "$n" "$ST/stacked" || true; } > "$ST/stacked.tmp"; mv "$ST/stacked.tmp" "$ST/stacked"
       printf '%s %s\n' "$n" "$b" >> "$ST/retargeted"
     fi
+    printf '{"number":%s,"base":{"ref":"%s"}}\n' "$n" "$b"
+    ;;
+  # One stacked pull request read on its own (claude-config#2431): based on feat/x while stacked
+  # lists it, and on main once it has been moved.
+  "api repos/acme/widget/pulls/"*)
+    fail_read pull
+    n="$(printf '%s\n' "$*" | sed -nE 's#.*pulls/([0-9]+).*#\1#p')"
+    b=main; grep -qx "$n" "$ST/stacked" 2>/dev/null && b=feat/x
     printf '{"number":%s,"base":{"ref":"%s"}}\n' "$n" "$b"
     ;;
   "api -X DELETE repos/acme/widget/git/refs/heads/feat/x"*)
@@ -1660,6 +1678,41 @@ out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a pull request still based on the branch after the move keeps it in place" "4" "$rc"
 check_eq "#1337 judged by the list read again, not by the answer" "0" "$(count gh-calls 'X DELETE')"
 check "#1337 naming it" "#8" "$out"
+
+# GitHub moved a stacked pull request itself and answers the move with "A pull request already
+# exists" (claude-config#2431): on 2026-11-07 this left the branch twice (#2390 with #2419, #2377
+# with #2405) and called it a move GitHub would not make. Its base is read again, and one already on
+# the merged one's base counts as moved, so the branch is deleted in the same run.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n9\n' > "$ST/stacked"
+: > "$ST/retarget-already-8"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 a stacked pull request GitHub already moved does not leave the branch" "0" "$rc"
+check_eq "#2431 the branch is deleted in the same run" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#2431 and nothing was closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+check "#2431 judged by its base, read again" "api repos/acme/widget/pulls/8" "$(cat "$ST/gh-calls")"
+check "#2431 it says GitHub had already moved it" "GitHub had already moved #8 onto main" "$out"
+check "#2431 and still names the one it moved itself" "#9" "$out"
+check_not "#2431 never calling it a move GitHub would not make" "would not move" "$out"
+
+# Control: the same answer about a pull request still based on the branch is the refusal it was.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+: > "$ST/retarget-exists-8"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 that answer with the pull request still on the branch leaves it in place" "4" "$rc"
+check_eq "#2431 not deleted" "0" "$(count gh-calls 'X DELETE')"
+check "#2431 named as not moved, with GitHub's words" "would not move #8" "$out"
+check "#2431 carrying what GitHub said" "A pull request already exists" "$out"
+
+# Control: a base that cannot be read again is not taken for moved.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+: > "$ST/retarget-already-8"
+printf 'gh: Resource not accessible by integration (HTTP 403)\n' > "$ST/pull-down"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2431 a base that cannot be read again counts as not moved" "4" "$rc"
+check "#2431 and says so with GitHub's first answer" "would not move #8" "$out"
 
 # The branch now holds commits the merge did not: never deleted. The push lands just after the
 # merge, since one landing before it is a head GitHub would refuse to merge (#1458, section 16).
