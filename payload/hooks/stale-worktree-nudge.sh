@@ -108,8 +108,12 @@ fi
 # satisfies: a top level "session_id" whose value holds no escape. A JSON string cannot hold a bare
 # quote, so the pattern cannot match one inside the prompt text. Anything else (no id, an empty
 # one, an escape in it) is read by python3 as before, which falls back to the transcript path.
+# Matched through payload_match, as every hook reading its raw payload is (#1885): a byte that is not
+# UTF-8 before the id would hide it from =~ in the session locale, so a miss is asked again under C.
+# BASH_REMATCH is the matching try's.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 session_re='"session_id"[[:space:]]*:[[:space:]]*"([^"\\]*)"'
-if [[ $input =~ $session_re ]] && [ -n "${BASH_REMATCH[1]}" ]; then
+if payload_match "$input" "$session_re" && [ -n "${BASH_REMATCH[1]}" ]; then
   session="${BASH_REMATCH[1]}"
 else
   session="$(printf '%s' "$input" | python3 -c '
