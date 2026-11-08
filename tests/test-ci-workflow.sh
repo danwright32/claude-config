@@ -258,8 +258,8 @@ fi
 # #2403: the environment step names the processor, not only how many cores there are.
 # ---------------------------------------------------------------------------
 # CI's runners come in two speeds, the slower about 27% slower on every suite (#1494, #2369), and
-# every runner reports 4 cores and the same image, so the cores line cannot say which machine a run
-# had. The processor model can, so the step prints it from /proc/cpuinfo (lscpu reads the same), and
+# the core count and image the step prints do not differ between the two (read from main's logs on
+# 2026-11-07 for #2369), so the cores line cannot say which machine a run had. The processor model can, so the step prints it from /proc/cpuinfo (lscpu reads the same), and
 # a run's log then names the hardware behind each group. Read from the step's code with comments
 # stripped, so a comment naming the processor cannot satisfy it (L135).
 env_step_code(){ # env_step_code <workflow>

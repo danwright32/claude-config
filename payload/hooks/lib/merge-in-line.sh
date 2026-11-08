@@ -4,8 +4,8 @@
 # repository's line to merge that pull request (claude-config#2403). Prints "running" when a ticket for
 # it names a run that is alive, by the line's own rule (merge-turn.sh's turn_alive: dead only when the
 # system says the pid is not running, or runs with another start time), and "gone" otherwise. Exits 0
-# with either answer, and 2, printing how it is used, when either argument is missing or malformed, so
-# a caller can tell an answer from a failure to ask (L98).
+# with either answer, and 2 when it could not ask (an argument missing or malformed, or a line that is
+# there but cannot be read), saying why, so a caller can tell an answer from a failure to ask (L98).
 #
 # WHY. is-it-live asks GitHub about a merge the helper makes in the background for WAIT_MS, 24 hours
 # (a setting, not measured), and since claude-config#2351 a helper behind a long line that keeps moving has no fixed longest, so
@@ -23,7 +23,17 @@ case "$2" in ''|*[!0-9]*) usage ;; esac
 # shellcheck source=merge-turn.sh
 . "$lib/merge-turn.sh" || { printf 'merge-in-line.sh: could not load %s/merge-turn.sh\n' "$lib" >&2; exit 2; }
 
-turn_open "$1"
+unread(){ printf 'merge-in-line.sh: could not read the line at %s (%s)\n' "$TURN_REPO_DIR" "$1" >&2; exit 2; }
+turn_open "$1" || unread "turn_open failed"
+# No folder at all is an empty line, so "gone"; one that is there but cannot be listed, or sits under
+# something that is not a folder, is no answer, since nothing was read to say nobody is in it (L98).
+if [ -e "$TURN_REPO_DIR" ]; then
+  [ -d "$TURN_REPO_DIR" ] && [ -r "$TURN_REPO_DIR" ] && [ -x "$TURN_REPO_DIR" ] || unread "not a folder this can list"
+else
+  up="$TURN_REPO_DIR"
+  while [ -n "$up" ] && [ ! -e "$up" ]; do up="${up%/*}"; done
+  [ -z "$up" ] || [ -d "$up" ] || unread "$up is not a folder"
+fi
 for n in $(turn_tickets); do
   f="$TURN_REPO_DIR/$n"
   [ "$(turn_field "$f" pr)" = "$2" ] || continue

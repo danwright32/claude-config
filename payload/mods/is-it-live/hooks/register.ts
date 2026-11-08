@@ -248,15 +248,6 @@ const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => 
   return Object.entries(verdicts).some(([k, v]) => k.endsWith(`#${o.pr}`) && v.at >= o.at)
 }
 
-// The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
-// owed, one closed, past its wait or naming no pull request is let go, and a merge with a card is
-// settled. A background merge is asked through mod-kit's one check (#1991), shared with the goal box:
-// as each account, by its repository (in the folder only where none was read), and a merge GitHub
-// confirms counts whatever its time, since the helper may have been run again after it merged; the
-// answer's number and link make it this pull request, not the time. Kept once per key (#1943): the helper run twice in the background for one PR, or once
-// there and once in the foreground, leaves a wait for each run, and every one of them becomes the
-// same merge once GitHub says it merged, which the refusal then named once per run. The first kept
-// is the earliest, so any card made since the PR merged settles it.
 // #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so one can
 // still be running past WAIT_MS. Past it, whether the helper still holds a place in its repository's
 // line is asked of lib/merge-in-line.sh, which reads the line's tickets by the line's own rule of a
@@ -271,6 +262,15 @@ const inLine = async ($: EngineInterface, o: IsItLiveOwed): Promise<string> => {
   return said === 'running' || said === 'gone' ? said : `its line gave no answer ('${said}')`
 }
 
+// The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
+// owed, one closed, past its wait or naming no pull request is let go, and a merge with a card is
+// settled. A background merge is asked through mod-kit's one check (#1991), shared with the goal box:
+// as each account, by its repository (in the folder only where none was read), and a merge GitHub
+// confirms counts whatever its time, since the helper may have been run again after it merged; the
+// answer's number and link make it this pull request, not the time. Kept once per key (#1943): the helper run twice in the background for one PR, or once
+// there and once in the foreground, leaves a wait for each run, and every one of them becomes the
+// same merge once GitHub says it merged, which the refusal then named once per run. The first kept
+// is the earliest, so any card made since the PR merged settles it.
 const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
   const now = await $.clock.now()
   const kept: IsItLiveOwed[] = []

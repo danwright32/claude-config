@@ -190,8 +190,8 @@ jobs:
           # the budget reads the number rather than the sentence (L188).
           echo "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"
           # Which processor (claude-config#2403). The runners come in two speeds, the slower about
-          # 27% slower on every suite (#1494, #2369), while every one reports 4 cores and the same
-          # image, so only the model can name the hardware behind each group.
+          # 27% slower on every suite (#1494, #2369), while the core count and image printed above
+          # do not differ between them, so only the model can name the hardware behind each group.
           echo "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"
 
       - name: A read-only run of the tool itself

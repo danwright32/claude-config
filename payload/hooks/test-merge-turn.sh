@@ -236,6 +236,12 @@ check_eq "#2403 asked without a pull request it refuses rather than answering" "
 check "#2403 saying how it is used" "usage" "$out"
 out="$(bash "$INLINE" acme/widget 4x1 2>&1)"; rc=$?
 check_eq "#2403 a pull request that is not a number is refused too" "2" "$rc"
+# A line that is there but cannot be read is no answer, never "gone": nothing was read to say so.
+: > "$WORKDIR/line-is-a-file"
+out="$(MWR_TURN_DIR="$WORKDIR/line-is-a-file" bash "$INLINE" acme/widget 41 2>&1)"; rc=$?
+check_eq "#2403 a turn folder that is a file is a failure to ask" "2" "$rc"
+check "#2403 naming where it looked" "$WORKDIR/line-is-a-file" "$out"
+[[ "$out" != *gone* ]] && ok || bad "#2403 and it never says gone (said: $out)"
 
 echo
 echo "passed: $pass, failed: $fail"
