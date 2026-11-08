@@ -223,7 +223,10 @@ def main():
     if not isinstance(data, dict):
         return 0
     command = (data.get("tool_input") or {}).get("command") or ""
-    if "issue" not in command or "create" not in command:
+    # The group's word only, never the action's: gh_issue_scan reads `gh issue new` as the create it
+    # is (lib/shell-words.py GH_ACTION_ALIASES, claude-config#2411), and every other name of the
+    # issue group holds the word issue (test-gh-write-aliases.sh holds that).
+    if "issue" not in command:
         return 0
     line = gate.session_line()
     if not line:

@@ -548,6 +548,13 @@ for c in 'gh -R o/x pr create --fill' 'gh pr -R o/x create --fill' 'gh --repo=o/
          'rtk gh -R o/x pr create' 'env GH_TOKEN=x gh pr --repo o/x create' 'sudo -u dan gh -Ro/x pr create'; do
   if ps_is_gh_pr_create "$c"; then check "#1188 a pr create is seen: $c" ok; else check "#1188 a pr create is seen: $c" "not seen"; fi
 done
+# gh pr new is gh's other name for gh pr create (claude-config#2411): read by the one reading of gh's
+# words (lib/shell-words.py gh_path), never by looking for the text create first.
+for c in 'gh pr new --fill' 'gh -R o/x pr new --fill' 'rtk gh pr new --title t --body b' "sh -c 'gh pr new --fill'"; do
+  if ps_is_gh_pr_create "$c"; then check "#2411 a pr new is seen as the creation it is: $c" ok; else check "#2411 a pr new is seen as the creation it is: $c" "not seen"; fi
+done
+if ps_is_gh_pr_create 'echo "gh pr new --fill"'; then check "#2411 a pr new inside a quoted argument is not a creation" "seen"
+else check "#2411 a pr new inside a quoted argument is not a creation" ok; fi
 if ps_is_gh_pr_create 'gh --fill pr create'; then check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" "seen"
 else check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" ok; fi
 for c in "env A=1 git push" "sudo git push origin main" "env -u X sudo -E git -C \"$SP\" push"; do

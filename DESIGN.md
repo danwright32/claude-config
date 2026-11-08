@@ -1596,6 +1596,37 @@ destination updates the checkout and writes nothing to GitHub; with one, it copi
 commits there, so a public destination is refused a `--source` that is not public, and passes from
 its parent, which GitHub keeps public for every public fork.
 
+gh's other names for its writes, and public text outside pull requests and issues (#2398). gh
+answers to `gh pr new`, `gh issue new`, `gh release new`, `gh gist new`, `gh repo new`, `gh secret
+remove`, `gh variable remove` and `gh pr co` as to their long forms, and to `a11y`, `cs`, `at`,
+`rs`, `ext`, `extensions`, `agent`, `agents` and `agent-tasks` for its command groups (each read
+from the ALIASES section of that command's help on gh 2.89.0). They live in one table in
+`lib/shell-words.py` (`GH_GROUP_ALIASES`, `GH_ACTION_ALIASES`), and `gh_path` returns the long form,
+so every gate asking `gh_command` or `tool_field` reads them, and the work names guard's list of
+gh's own commands takes the group names from the same table. The aliases of `list` (`ls`) are left
+as written: list writes nothing, and a gate reading list as a harmless read would otherwise pass a
+command it now asks about. Release notes are read from `--notes-file` by the issue field gate's
+body file rule, `--generate-notes` and `--notes-from-tag` are refused for a public repository since
+their text is not on this machine, a public gist's files are read the same way (standard input is
+refused when no file is named; a `-` is refused by the command hook and read by the guard), and `gh repo create` is judged on its own
+text for a public repository with or without `--push`, as is `gh repo edit`.
+
+The checks that skip a command before reading it, and gh's other names (#2411, #2412). The session
+line check after filing an issue, the skill audit's S1 and `ps_is_gh_pr_create` each looked for the
+text `create` before reading a command, so `gh issue new` and `gh pr new` passed them unread. Their
+cheap tests now look only for the group's word (`issue`, `pr`), and the action is read by `gh_path`,
+which knows every alias; `test-gh-write-aliases.sh` fails the day the table gives either group a name
+that lacks that word, so no second alias list is kept. With no reader at all, the crude fallback of
+`ps__runs_tool` still matches only the literal words asked about. The work names gate reads whether
+a gist is public from `gh api gists/<id>` (refused when no account can read it) and judges `gh gist
+edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
+new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and
+standard input. `gh repo edit --visibility public` on a repository not yet public that no work owner
+owns is refused outright, since it publishes every file, commit and issue unread. A body or notes
+file inside clustered short flags is read through `flag_values(..., clustered=True)`, asked for only
+by the work names gate, where another file can only refuse more; the issue field gate, which a value
+can satisfy, keeps the plain reading.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

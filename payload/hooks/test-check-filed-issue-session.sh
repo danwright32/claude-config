@@ -91,6 +91,17 @@ for cmd in "${shapes[@]}"; do
   case "$out" in *'"additionalContext"'*) check "$name: Claude is told" ok ;; *) check "$name: Claude is told" "$out" ;; esac
 done
 
+# gh issue new is gh's other name for gh issue create (claude-config#2411): the issue it files is
+# read back the same way, by the one reading of gh's words, never skipped for lacking the text create.
+for cmd in "gh issue new --title t --body-file body.md $FIELDS" "gh -R danwright32/demo issue new --title t -F body.md $FIELDS"; do
+  body $'What broke.\n'
+  out="$(run "$cmd" "$URL")"
+  [ "$(edits)" = 1 ] && check "#2411 $cmd: the missing line is added on GitHub" ok || check "#2411 $cmd: the missing line is added on GitHub" "$(cat "$TMP/gh.log")"
+done
+body $'What broke.\n'
+out="$(run "echo gh issue new is only named here" "$URL")"
+[ "$(calls)" = 0 ] && check "#2411 (control) a command only naming gh issue new reads nothing" ok || check "#2411 (control) a command only naming gh issue new reads nothing" "$(cat "$TMP/gh.log")"
+
 # A body that already carries the line is read and left alone, with nothing said.
 body $'What broke.\n\n'"$LINE"$'\n'
 out="$(run "${shapes[0]}" "$URL")"
