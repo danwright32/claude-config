@@ -162,11 +162,11 @@ const SCRIPT_WORKFLOW = [
 ].join('\n')
 
 test("a workflow's script step that posts to Slack is read as JavaScript: each piece of a concatenation is wording, and the code around it never is (Dan item 5)", () => {
-  const ci = wordingOf(ciMessages(SCRIPT_WORKFLOW))
+  const ci = wordingOf(ciMessages(SCRIPT_WORKFLOW, '.github/workflows/alert.yml'))
   expect(ci).toEqual(['Nightly backup of ', ' failed on '])
   expect(renderedProblem('Nightly backup of orders failed on refs/heads/main', ci)).toBeUndefined()
   // A script step that posts nothing to Slack is a step like any other.
-  expect(ciMessages(SCRIPT_WORKFLOW.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'))).toEqual([])
+  expect(ciMessages(SCRIPT_WORKFLOW.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'), '.github/workflows/alert.yml')).toEqual([])
   // Outside a CI workflow (a composite action), a script block's lines are code, never plain values.
   const values = plainYamlValues(SCRIPT_WORKFLOW)
   expect(values.some(v => v.includes('const text'))).toBe(false)
@@ -340,7 +340,7 @@ test('a CI workflow is read for the text a Slack step posts, never its names, ne
   ].join('\n')
   expect(ciWorkflow('.github/workflows/deploy.yml')).toBe(true)
   expect(ciWorkflow('config/locales/en.yml')).toBe(false)
-  expect(wordingOf(ciMessages(wf))).toEqual(['Deploy of ${{ github.sha }} finished', 'Deploy failed on main', 'Release notes are ready'])
+  expect(wordingOf(ciMessages(wf, '.github/workflows/deploy.yml'))).toEqual(['Deploy of ${{ github.sha }} finished', 'Deploy failed on main', 'Release notes are ready'])
 })
 
 // A GitLab pipeline whose script lists post to Slack (#2401): each list item is one shell command.
@@ -364,11 +364,19 @@ const GITLAB_PIPELINE = [
   '',
 ].join('\n')
 
-test('a GitLab script list is read item by item as run commands: an item that posts to Slack shows its message, one that does not is left out (#2401)', () => {
+test('a GitLab script list is read as one run block: when an item posts to Slack, every item of the shell it runs in shows its strings (#2401, #2416)', () => {
   expect(ciWorkflow('.gitlab-ci.yml')).toBe(true)
-  expect(wordingOf(ciMessages(GITLAB_PIPELINE))).toEqual(['Deploy failed on main', 'Backup of orders is late', 'Nightly sync finished', 'Cleanup ran on main'])
+  // before_script and script run in one shell, so both are read; after_script runs in its own.
+  expect(wordingOf(ciMessages(GITLAB_PIPELINE, '.gitlab-ci.yml'))).toEqual([
+    'Preparing the release',
+    'Deploying the site now',
+    'Deploy failed on main',
+    'Backup of orders is late',
+    'Nightly sync finished',
+    'Cleanup ran on main',
+  ])
   // A pipeline whose script lists post nothing to Slack holds nothing.
-  expect(ciMessages(GITLAB_PIPELINE.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'))).toEqual([])
+  expect(ciMessages(GITLAB_PIPELINE.replace(/SLACK_WEBHOOK_URL/g, 'DEPLOY_HOOK'), '.gitlab-ci.yml')).toEqual([])
   // A Bitbucket step's script list is read the same way.
   const bitbucket = [
     'pipelines:',
@@ -381,7 +389,83 @@ test('a GitLab script list is read item by item as run commands: an item that po
     '',
   ].join('\n')
   expect(ciWorkflow('bitbucket-pipelines.yml')).toBe(true)
-  expect(wordingOf(ciMessages(bitbucket))).toEqual(['Deploy of main is stuck'])
+  expect(wordingOf(ciMessages(bitbucket, 'bitbucket-pipelines.yml'))).toEqual(['Starting the deploy', 'Deploy of main is stuck'])
+})
+
+// #2416: the shapes #2401 left unread. Each one hides a Slack message that a GitHub run block shows.
+test('a message set in one GitLab script item and posted by a later item is shown, and a job that posts nothing still holds nothing (#2416)', () => {
+  const wf = [
+    'deploy:',
+    '  before_script:',
+    '    - export WHERE="the production cluster"',
+    '  script:',
+    '    - export MSG="Deploy failed on main"',
+    '    - curl -X POST --data "{\\"text\\":\\"$MSG\\"}" "$SLACK_WEBHOOK_URL"',
+    'test:',
+    '  script:',
+    '    - echo "Running the unit tests"',
+    '',
+  ].join('\n')
+  const ci = wordingOf(ciMessages(wf, '.gitlab-ci.yml'))
+  expect(ci).toContain('Deploy failed on main')
+  expect(ci).toContain('the production cluster')
+  expect(ci).not.toContain('Running the unit tests')
+})
+
+test('a GitLab flow list of commands is read as shell, on one line or several (#2416)', () => {
+  const wf = [
+    'notify:',
+    '  script: [\'export MSG="Backup of orders is late"\', \'curl -X POST --data \'\'{"text":"Nightly sync finished"}\'\' "$SLACK_WEBHOOK_URL"\']',
+    '  after_script: [',
+    '    "curl -X POST --data \'{\\"text\\":\\"Cleanup ran on main\\"}\' $SLACK_WEBHOOK_URL",',
+    '  ]',
+    'quiet:',
+    '  script: ["echo \\"Running the unit tests\\""]',
+    '',
+  ].join('\n')
+  const ci = wordingOf(ciMessages(wf, '.gitlab-ci.yml'))
+  expect(ci).toContain('Backup of orders is late')
+  expect(ci).toContain('Nightly sync finished')
+  expect(ci).toContain('Cleanup ran on main')
+  expect(ci).not.toContain('Running the unit tests')
+})
+
+test('a GitLab script written as one block or one string is shell, while a GitHub script block stays JavaScript (#2416)', () => {
+  const wf = [
+    'notify:',
+    '  script: |',
+    '    export MSG="Deploy of main is stuck"',
+    '    curl -X POST --data \'{"text":"Backup of orders is late"}\' "$SLACK_WEBHOOK_URL"',
+    'page:',
+    '  script: "curl -X POST --data \'{\\"text\\":\\"Nightly sync finished\\"}\' $SLACK_WEBHOOK_URL"',
+    '',
+  ].join('\n')
+  const ci = wordingOf(ciMessages(wf, '.gitlab-ci.yml'))
+  expect(ci).toContain('Deploy of main is stuck')
+  expect(ci).toContain('Backup of orders is late')
+  expect(ci).toContain('Nightly sync finished')
+  // A GitHub workflow's script block is github-script's JavaScript, read as it always was.
+  expect(wordingOf(ciMessages(SCRIPT_WORKFLOW, '.github/workflows/alert.yml'))).toEqual(['Nightly backup of ', ' failed on '])
+})
+
+test("a Bitbucket step's after-script list is read like its script list (#2416)", () => {
+  const bitbucket = [
+    'pipelines:',
+    '  default:',
+    '    - step:',
+    '        name: Deploy',
+    '        script:',
+    '          - npm ci',
+    '        after-script:',
+    "          - curl -X POST --data '{\"text\":\"Deploy of main is stuck\"}' \"$SLACK_WEBHOOK_URL\"",
+    '',
+  ].join('\n')
+  expect(wordingOf(ciMessages(bitbucket, 'bitbucket-pipelines.yml'))).toEqual(['Deploy of main is stuck'])
+})
+
+test('a path built by Path or URL, as the READS comment says, is a read: its line is matched on lower cased text (#2416)', () => {
+  expect(refersTo('app/notify.py', 'TPL = Path("templates/backup.txt")\nbody = TPL.read_text()\n', 'app/templates/backup.txt')).toBe(true)
+  expect(refersTo('lib/notify.ts', "const TPL = new URL('templates/deploy.txt', base)\nconst body = await fetch(TPL)\n", 'lib/templates/deploy.txt')).toBe(true)
 })
 
 test('a sender naming a template only in a comment does not refer to it', () => {

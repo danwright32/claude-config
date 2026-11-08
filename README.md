@@ -6818,8 +6818,11 @@ nothing, so neither is held nor read as a sender; a string handed to a query bui
 one), a database select list, a SQL statement or
 fragment, and a code template a program writes out are not message text; in a CI workflow only what
 a Slack step posts counts (a payload, text or message value, a MESSAGE env value, the strings of a
-run command that itself posts to Slack, each string of a `script:` step that posts to Slack, read as
-JavaScript), never step or job names, needs lists, input descriptions or other run commands; a
+run command that itself posts to Slack, each string of a GitHub `script:` step that posts to Slack,
+read as JavaScript, and every string of a GitLab or Bitbucket script, a list, block or one string,
+whose shell posts to Slack: a job's before_script and script are one shell, after_script another,
+so a message one item sets for a later item to post is shown (#2401, #2416)), never step or job
+names, needs lists, input descriptions or other run commands; a
 `script:` block in any YAML file is code, never plain values; a nested template literal is one
 string, the strings inside it wording of their own, and the message Dan is shown is checked only for
 the words between its filled in values, never the code that fills them (#2371); and a file in no
