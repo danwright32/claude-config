@@ -2195,16 +2195,19 @@ check "#1521 saying why" "keeping agent-x [feat/x]: it has commits PR #7 never h
 # /proc), so the case waits on the condition it is about rather than on how soon a busy Mac schedules
 # a background job, and no lifetime of its own can end before the helper looks (L290, claude-config#2327).
 stands_in(){ # stands_in <pid> <folder>: the system shows that process's working directory as the folder
-  if command -v lsof >/dev/null 2>&1; then lsof -a -p "$1" -d cwd -F n 2>/dev/null | grep -qxF "n$2"
+  local o
+  if command -v lsof >/dev/null 2>&1; then
+    o="$(lsof -a -p "$1" -d cwd -F n 2>/dev/null)"; [[ $'\n'"$o"$'\n' == *$'\n'"n$2"$'\n'* ]]
   else [ "$(readlink "/proc/$1/cwd" 2>/dev/null)" = "$2" ]; fi
 }
+. "$DIR/lib/hang-wait.sh"
 wt_fresh
 (cd "$AGENT" && exec tail -f /dev/null) &
 WBUSY=$!
 if [ "$CAN_SEE_USE" -eq 1 ]; then
-  # A bound only so a process that never gets there cannot hold the suite (600 looks a tenth of a
-  # second apart, a setting); that is its own failure, said as such.
-  looks=0; until stands_in "$WBUSY" "$AGENT" || [ "$looks" -ge 600 ]; do sleep 0.1; looks=$((looks + 1)); done
+  # The shared ceiling only a hang reaches (lib/hang-wait.sh), so a process that never gets there
+  # cannot hold the suite; that is its own failure, said as such.
+  hang_wait 'stands_in "$WBUSY" "$AGENT"'
   check_eq "#2327 the busy process is seen standing in the worktree before the merge is asked" "yes" "$(stands_in "$WBUSY" "$AGENT" && echo yes || echo no)"
 fi
 out="$(wrun 7 --squash)"; rc=$?
