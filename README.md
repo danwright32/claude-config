@@ -3273,8 +3273,14 @@ or a script the gate reads and sees cannot act; so `gh`, `nc` and `node send.js 
 JavaScript script unless it, and every local module it imports, imports only node builtins that
 cannot send, run code or write (`fs` for reading, `path`, `url`, `util`, `readline` and the like,
 `JS_INERT`) and names no global that sends or runs code (`fetch`, `WebSocket`, `eval`, `Function`,
-`Worker`, a `.constructor`, a `require` of a computed name) and no `fs` method that writes; any package
-counts, so `request`, `worker_threads` and `dns` do. A Python script unless it, and every
+`Worker`, a `.constructor`, a `require` of a computed name, or any word the old list named, such as
+`got`, so nothing refused before passes) and no `fs` method that writes; any package counts, so
+`request`, `worker_threads` and `dns` do. Measured 2026-11-07 by handing each script a data file
+naming `chat.postMessage`: of 268 JavaScript and TypeScript files in repo-digest, NurseDex's
+`scripts/`, Overture, Ovation and playeditapp, 91 of the 144 that passed now refuse (most import
+`vitest`, a Deno `https://` module or `node:test`); of this payload's 416 shell scripts, most of the
+321 that passed now refuse, chiefly by handing their arguments to a function from a library they
+source, which the gate does not follow. None that refused now passes. A Python script unless it, and every
 local module it imports, imports only modules on a short list that cannot send, run code or write
 (`json`, `csv`, `re`, `sys`, `os.path`, `pathlib`, `typing`, `argparse` and the like, `PY_INERT`) and
 uses no builtin that runs code or reaches past them (`exec`, `eval`, the `compile` builtin, `getattr`,

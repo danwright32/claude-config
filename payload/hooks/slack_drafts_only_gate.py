@@ -286,14 +286,26 @@ JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|
                      r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
                      r"mainModule)\b")
 JS_DYNAMIC = re.compile(r"""\brequire\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
+# word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
+# real scripts were refused only by one of these words).
+JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
+                     r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
+                     r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
+                     r"""\b(require|import)\s*\(\s*[^'"`\s)]|['"](node:)?(https?|net|tls|http2|dgram)['"]""")
 # fs's methods that write, move or remove a file, or open one to (a stream or a handle). The short
-# names a reader may use for something else (open, rename, rm) count only where called.
+# names a script may define for itself (link, open, rename: repo-digest's format.ts has a link()) count
+# where called as a method (`fsp.rm(`, fs reached through a helper too), and called bare only in a
+# script that imports fs (JS_FS), where `import { rm } from "fs/promises"` binds them.
 JS_WRITES = re.compile(r"\b(writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|copyFile|"
                        r"copyFileSync|cpSync|renameSync|symlink|symlinkSync|linkSync|chmod|chmodSync|lchmod|"
                        r"lchmodSync|chown|chownSync|lchown|lchownSync|fchmod|fchmodSync|fchown|fchownSync|mkdirSync|"
                        r"mkdtemp|mkdtempSync|rmSync|rmdirSync|unlinkSync|truncateSync|ftruncate|ftruncateSync|"
                        r"utimes|utimesSync|lutimes|lutimesSync|futimes|futimesSync|openSync|writeSync|writev|"
-                       r"writevSync)\b|\b(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+                       r"writevSync)\b")
+JS_WRITES_SHORT = re.compile(r"\b(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+JS_WRITES_METHOD = re.compile(r"\.\s*(cp|rename|link|mkdir|rm|rmdir|unlink|truncate|open)\s*\(")
+JS_FS = {"fs", "fs/promises"}
 # And a shell script (claude-config#2434): a command handed the script's arguments acts unless it is a
 # function the script defines (its body is read as the script's own commands), a script the gate
 # reads and sees cannot act (acts), code written into the script itself (a heredoc, -c), or one of
@@ -303,12 +315,13 @@ JS_WRITES = re.compile(r"\b(writeFile|writeFileSync|appendFile|appendFileSync|cr
 # state writes, with a redirection or by moving a file (issue-spool.sh clear moves each spool file into
 # place), so the programs that only copy, move or remove a file (cp, mv, tee, ln, rm) are here too.
 SH_INERT = frozenset({
-    "[", "[[", ":", "basename", "case", "cat", "cd", "cmp", "column", "comm", "cp", "cut", "date", "declare", "diff",
+    "[", "[[", ":", "basename", "case", "cat", "cd", "chmod", "cmp", "column", "comm", "cp", "cut", "date", "declare", "diff",
     "dirname", "du", "echo", "egrep", "exit", "export", "expr", "false", "fgrep", "file", "fold", "for", "getopts",
-    "grep", "head", "hexdump", "jq", "ln", "local", "ls", "md5", "md5sum", "mkdir", "mktemp", "mv", "nl", "od",
+    "grep", "head", "hexdump", "jq", "kill", "ln", "local", "ls", "md5", "md5sum", "mkdir", "mktemp", "mv", "nl", "od",
     "paste", "popd", "printf",
     "pushd", "read", "readlink", "readonly", "realpath", "return", "rev", "rg", "rm", "rmdir", "seq", "set",
-    "sha1sum", "sha256sum", "shasum", "shift", "sort", "stat", "strings", "tac", "tail", "tee", "test", "touch", "tr",
+    "sha1sum", "sha256sum", "shasum", "shift", "sleep", "sort", "stat", "strings", "tac", "tail", "tee", "test",
+    "touch", "tr",
     "true", "typeset", "uniq", "unset", "wait", "wc"})
 # git, only for the subcommands that read a repository (issue-spool.sh finds a checkout's common dir
 # with rev-parse), and with no option that names a program or setting to run or a file to write.
@@ -1024,23 +1037,27 @@ class Judge:
     def js_acts(text):
         """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
         a phrase, or None when it is seen unable to. It is unable to only when every module it imports
-        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC or
-        JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
+        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC,
+        JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
         judges it with this same reading, and one that is not there is refused there."""
         code = js_code(text)
+        uses_fs = False
         for m in IMPORT_SPEC.finditer(code):
             spec = m.group(2)
             bare = spec.split("?", 1)[0]
             if "${" not in spec and (bare.startswith(("./", "../", "/", "file://")) or bare in (".", "..")):
                 continue
-            if "${" in spec or (spec[5:] if spec.startswith("node:") else spec) not in JS_INERT:
+            name = spec[5:] if spec.startswith("node:") else spec
+            if "${" in spec or name not in JS_INERT:
                 return f"imports a module the gate does not know to be unable to send a request, run code or write a file ({spec})"
-        hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code)
+            uses_fs = uses_fs or name in JS_FS
+        hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code) or JS_ACTS.search(text)
         if hit:
             return f"can send a request or run code ({hit.group(0).strip()})"
-        hit = JS_WRITES.search(code)
+        hit = JS_WRITES.search(code) or JS_WRITES_METHOD.search(code) or \
+            (JS_WRITES_SHORT.search(code) if uses_fs else None)
         if hit:
-            return f"can write a file ({hit.group(0).strip(' (')})"
+            return f"can write a file ({hit.group(0).strip(' (.')})"
         return None
 
     def py_acts(self, text, cur, root):
@@ -1227,6 +1244,9 @@ class Judge:
                 if inner:
                     return f"hands its arguments to {os.path.basename(operand)}, which {inner}"
                 continue
+            if name in ("done", "}", ")", "fi", "esac"):
+                return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
+                        f"({name} {' '.join(words[1:3])})")
             return (f"hands its arguments to a program the gate does not know to be unable to send a "
                     f"request or run code ({name})")
         return None
