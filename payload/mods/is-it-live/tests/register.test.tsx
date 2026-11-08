@@ -186,6 +186,8 @@ type World = {
   /** #1991: the accounts plain `gh auth status` names, and the token `gh auth token -u` gives for each. */
   logins: string[]
   tokens: Record<string, string>
+  /** #2403: what lib/merge-in-line.sh answers, asked of a background merge past its window. */
+  inLine?: Gh
   /** #2436: what Slack answers a draft, the answer Dan picks in a question, and the job watcher's running task ids ('unreadable' refuses). */
   slackDraft: { text: string; isError?: true }
   answer?: string
@@ -253,6 +255,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv], how) : a.startsWith('gh issue view') && w.issueView ? w.issueView([...e.argv], how) : undefined
     const g: Gh = how.cwd !== undefined && w.gone.includes(how.cwd)
       ? { exitCode: 1, stdout: '', stderr: `chdir: ${how.cwd}: no such file or directory` }
+      : a.includes('merge-in-line.sh') && w.inLine
+      ? w.inLine
       : viewed
       ? viewed
       : a === 'gh auth status'
@@ -1071,6 +1075,47 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
   expect((await turnEnd($)).block).toBeUndefined()
   prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
   expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+// #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so it can be
+// running still past WAIT_MS. Past it, the merge is asked about only while lib/merge-in-line.sh says
+// the helper holds a place in line; one whose helper is gone, or that cannot be asked, is let go as
+// before. A helper still running is never let go, so its merge, made at hour 26, is still owed a card.
+const HOUR = 3_600_000
+const pastWindow = async ($: unknown, on: On, inLine: Gh | undefined) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), ...(inLine ? { inLine } : {}) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --repo ${REPO} --squash`, { run_in_background: true })
+  expect((await turnEnd($)).block).toBeUndefined()
+  // Inside the window the line is never asked: no process per turn end for an ordinary wait.
+  expect(w.runs.some(r => r.join(' ').includes('merge-in-line.sh'))).toBe(false)
+  await w.clock.advance(25 * HOUR)
+  const quiet = await turnEnd($)
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: T0 + 26 * HOUR }
+  await w.clock.advance(HOUR)
+  return { w, quiet, after: await turnEnd($) }
+}
+
+test('a background merge whose helper is still in line past the window is waited on still, and owed its card once it merges (#2403)', withKit, async ($, on) => {
+  const { w, quiet, after } = await pastWindow($, on, { exitCode: 0, stdout: 'running\n' })
+  // Still running is neither finished nor failed: nothing owed while it is open.
+  expect(quiet.block).toBeUndefined()
+  const asked = w.runs.find(r => r.join(' ').includes('merge-in-line.sh')) as string[]
+  expect(asked.slice(-2)).toEqual([REPO, '412'])
+  expect(asked.join(' ')).toContain('/Users/dan/.claude/hooks/lib/merge-in-line.sh')
+  expect(after.block).toContain(`${REPO}#412`)
+})
+
+test('a background merge past the window whose helper has left the line is let go (#2403)', withKit, async ($, on) => {
+  const { after } = await pastWindow($, on, { exitCode: 0, stdout: 'gone\n' })
+  expect(after.block).toBeUndefined()
+})
+
+test('a background merge past the window is let go when whether its helper is in line cannot be read, never kept on an answer it did not get (#2403)', withKit, async ($, on) => {
+  const { after } = await pastWindow($, on, { exitCode: 2, stdout: '', stderr: 'usage: merge-in-line.sh <owner/name> <pull request number>' })
+  expect(after.block).toBeUndefined()
 })
 
 // #1991: a merge the helper makes in the background stays waiting until a turn end hears from GitHub

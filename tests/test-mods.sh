@@ -2612,9 +2612,70 @@ export const register = on => {
   })
 }
 TS
+  # #2333: only the function a noun's timer is handed runs later: a function written in place, or the
+  # one a mod function that only makes a function hands back. Everything else in the timer's arguments
+  # is worked out as the timer is set, before the noun answers, so it is the noun's own code: a call
+  # given as the callback, a call that runs its argument at once, the delay, and a function written
+  # in place and handed to a function making helper (picker manners' designRound.answered as it was).
+  mknounmod "$M12W" timer-given-call timergivencall <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+export const register = on => {
+  on('timergivencall.press', ($, e, next) => {
+    $.clock.after(0, slow($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" timer-runs-at-once timerrunsnow <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const run = (work: () => unknown) => {
+  void work()
+  return () => undefined
+}
+export const register = on => {
+  on('timerrunsnow.press', ($, e, next) => {
+    $.clock.after(0, run(() => slow($)))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" timer-delay-call timerdelay <<'TS'
+const pause = ($) => {
+  void $.process.run(['/bin/sleep', '13'])
+  return 0
+}
+export const register = on => {
+  on('timerdelay.press', ($, e, next) => {
+    setTimeout(() => undefined, pause($))
+    return { value: true }
+  })
+}
+TS
+  mknounmod "$M12W" timer-maker-given-inline timermakerinline <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const reporting = ($, work: () => Promise<unknown>) => () => void work().catch(err => $.ui.log(String(err)))
+export const register = on => {
+  on('timermakerinline.press', ($, e, next) => {
+    $.clock.after(0, reporting($, () => slow($)))
+    return { value: true }
+  })
+}
+TS
+  # What a function making helper hands the timer is the deferred function itself, so its body is not
+  # the noun's code when nothing the noun writes is worked out at the call.
+  mknounmod "$M12W" timer-maker-defers timermaker <<'TS'
+const slow = async ($) => (await $.process.run(['/bin/sleep', '13'])).exitCode
+const later = ($) => () => void slow($)
+export const register = on => {
+  on('timermaker.press', ($, e, next) => {
+    $.clock.after(0, later($))
+    return { value: true }
+  })
+}
+TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"53 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"58 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -2630,14 +2691,14 @@ TS
       && check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" ok \
       || check "a promise made outside the noun's code is named as one a noun returns at ${at%%/*}'s line" "$out"
   done
-  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1 awaited-timer/hooks/register.ts:5 helper-runs-inline/hooks/register.ts:1 helper-arms-with-call/hooks/register.ts:1 helper-given-value/hooks/register.ts:1 helper-in-held-promise/hooks/register.ts:1 helper-timer-in-promise/hooks/register.ts:1; do
+  for at in slow-process/hooks/register.ts:4 long-process-timeout/hooks/register.ts:5 awaited-not-deferred/hooks/register.ts:1 awaited-timer/hooks/register.ts:5 helper-runs-inline/hooks/register.ts:1 helper-arms-with-call/hooks/register.ts:1 helper-given-value/hooks/register.ts:1 helper-in-held-promise/hooks/register.ts:1 helper-timer-in-promise/hooks/register.ts:1 timer-given-call/hooks/register.ts:1 timer-runs-at-once/hooks/register.ts:1 timer-delay-call/hooks/register.ts:2 timer-maker-given-inline/hooks/register.ts:1; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'process.run' \
       && check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" ok \
       || check "a noun's own process.run with no timeout under 10 s is named at ${at%%/*}'s line (#802)" "$out"
   done
   printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
     && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
-  for m in short-process process-in-hook shorthand-timeout string-then-comments model-timed timer-defers timer-inline-code helper-defers helper-defers-wrapped helper-defers-in-callback; do
+  for m in short-process process-in-hook shorthand-timeout string-then-comments model-timed timer-defers timer-inline-code helper-defers helper-defers-wrapped helper-defers-in-callback timer-maker-defers; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
   done
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \
@@ -2647,7 +2708,7 @@ TS
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes" ok || check "$m passes" "$out"
   done
   # Cut down to the mods that pass, the run passes, so the failure above is theirs alone.
-  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred awaited-timer helper-runs-inline helper-arms-with-call helper-given-value helper-in-held-promise helper-timer-in-promise; do rm -rf "${M12W:?}/$m"; done
+  for m in waits-in-map passed-to-listener called-back-later through-helper named-executor long-timer unrelated-timer on-noun-event asks-a-person lost-executor made-in-hook kept-in-variable kept-in-other-file raced-long slow-process long-process-timeout model-call same-local-waits same-local-args param-scope-ends shorthand-method awaited-not-deferred awaited-timer helper-runs-inline helper-arms-with-call helper-given-value helper-in-held-promise helper-timer-in-promise timer-given-call timer-runs-at-once timer-delay-call timer-maker-given-inline; do rm -rf "${M12W:?}/$m"; done
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 0 ] && check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" ok \
     || check "a noun bounded under 10 s, a comment and a wait outside any noun all pass" "exit=$code out=$out"
