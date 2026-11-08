@@ -2,8 +2,10 @@
 # The work names guard on gh (claude-config#2183). gh-guard-path.sh puts this folder first on every
 # session's PATH, so a gh that a script runs (a python subprocess, a shell loop) reaches this before
 # the real gh, where the command hook only ever saw the script's own command line. A gh pr or issue
-# command, and every gh api call, is judged by work_names_publish_gate.py with the real text it is
-# about to send; everything else runs the real gh at once.
+# command, every gh api call, a gh repo, release or gist write, a command with a flag in front of it
+# and any first word that is not gh's own (an alias or an extension) is judged by
+# work_names_publish_gate.py with the real text it is about to send; everything else runs the real
+# gh at once.
 #
 # The real gh is the first one on PATH past this folder. The judge is handed it by path and runs the
 # real gh itself, with the same arguments, standard input and exit code, once the text is cleared.
@@ -38,10 +40,21 @@ judged=0
 for a in "$@"; do
   case "$a" in pr|issue|api) judged=1; break ;; esac
 done
-# gh repo create --push and gh repo sync publish commits gh pushes or copies itself (#2326).
-if [ "${1:-}" = repo ]; then
-  for a in "${@:2}"; do
-    case "$a" in create|new|sync) judged=1; break ;; esac
+# gh repo create --push and gh repo sync publish commits gh pushes or copies itself (#2326); gh repo
+# create and edit set a description, gh release create and edit post notes, and gh gist create posts
+# files, all public text (#2398). Any of these words anywhere counts, wherever gh's flags stand, so
+# gh release list still runs at once and a write is never let skip the judge by a flag in front of it.
+case " $* " in
+  *" repo "*|*" release "*|*" gist "*)
+    for a in "$@"; do
+      case "$a" in create|new|edit|sync) judged=1; break ;; esac
+    done ;;
+esac
+# A flag in front is passed over by gh, so the command after it is unknown here (#2398): `gh -R o/x
+# notely` runs an extension. It is judged, unless gh is asked only for its help or version.
+if [ "$judged" -eq 0 ] && [ "${1:-}" != "${1#-}" ]; then
+  for a in "$@"; do
+    case "$a" in --help|-h|--version) ;; *) judged=1; break ;; esac
   done
 fi
 case "${1:-}" in

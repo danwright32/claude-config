@@ -1011,6 +1011,37 @@ def past_runners(rest, passed=None):
 # is a command named merge to gh, which it has none of, and it runs nothing (measured: `gh --web pr
 # view 1` answers `unknown command "view"`).
 GH_NO_VALUE = {"--help", "-h", "--version"}
+# gh's other names for its commands (claude-config#2398), each read from the ALIASES section of the
+# command's own help on gh 2.89.0 (`gh <group> --help`, `gh <group> <action> --help`, for every group
+# and action `gh help` lists), and read here as the long form, so every gate asking gh_command or
+# tool_field about `gh issue create` is asking about `gh issue new` too. `gh pr new` and `gh issue
+# new` were read as (pr, new) and (issue, new), which no gate judged as a create, so text posted
+# through them skipped the work names check and an issue filed through them skipped the milestone,
+# priority and category check.
+#
+# GH_GROUP_ALIASES is every other name of a command group. GH_ACTION_ALIASES is every alias of an
+# action that writes (create, delete, checkout), keyed by the group's long name. The aliases of list
+# (`ls` in 17 groups) are left as written on purpose: list writes nothing, and a gate that reads list
+# as a harmless read would pass `gh pr ls` where it now asks, which this change must never do. An alias
+# a level further down (`gh repo autolink new`) is past the two words this reading names.
+GH_GROUP_ALIASES = {
+    "a11y": "accessibility", "cs": "codespace", "at": "attestation", "rs": "ruleset", "ext": "extension",
+    "extensions": "extension", "agent": "agent-task", "agents": "agent-task", "agent-tasks": "agent-task",
+}
+GH_ACTION_ALIASES = {
+    ("pr", "new"): "create", ("issue", "new"): "create", ("release", "new"): "create",
+    ("gist", "new"): "create", ("repo", "new"): "create", ("secret", "remove"): "delete",
+    ("variable", "remove"): "delete", ("pr", "co"): "checkout",
+}
+
+
+def gh_long_form(sub, act):
+    """(sub, act) as gh's long names: a group alias and a write action's alias read as what gh runs
+    for them (GH_GROUP_ALIASES, GH_ACTION_ALIASES); anything else unchanged."""
+    sub = GH_GROUP_ALIASES.get(sub, sub)
+    return sub, GH_ACTION_ALIASES.get((sub, act), act)
+
+
 # git's own options in front of its subcommand that take the next word as their value (`git -C <dir>
 # push`, `git -c k=v commit`); every other option there stands alone. The subcommand is the first
 # word that is not an option (git.c handle_options).
@@ -1019,7 +1050,8 @@ GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-pat
 
 def gh_path(words):
     """The words after `gh` as gh reads them: (sub, act, front, after). sub and act are the
-    subcommand and its action as cobra finds them (empty when absent; `api` takes no action), front
+    subcommand and its action as cobra finds them, by their long names (gh_long_form), empty when
+    absent (`api` takes no action), front
     is the words written in front of the action, in order, for the subcommand to read as its own,
     and after is every word after the action (after `api` for gh api)."""
     path, front = [], []
@@ -1040,8 +1072,7 @@ def gh_path(words):
         j += 1
         if len(path) == 2 or path[0] == "api":
             break
-    sub = path[0] if path else ""
-    act = path[1] if len(path) > 1 else ""
+    sub, act = gh_long_form(path[0] if path else "", path[1] if len(path) > 1 else "")
     return sub, act, front, words[j:]
 
 

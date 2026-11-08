@@ -488,8 +488,11 @@ def exits_shell(path: str, rel: str):
     for n, cmd in shell_commands(text):
         # A line whose text names neither cannot run one, so it is never read: the reading is not
         # started for every line of every helper, and a reader that cannot be loaded is reported
-        # only for a helper that has a call to check (the lessons review of #1188).
-        if "gh" not in cmd or "create" not in cmd:
+        # only for a helper that has a call to check (the lessons review of #1188). Only the group's
+        # word is looked for, never the action's: gh_path reads `gh issue new` as the create it is
+        # (lib/shell-words.py GH_ACTION_ALIASES, claude-config#2411), and every other name of the
+        # issue group holds the word issue (test-gh-write-aliases.sh holds that).
+        if "gh" not in cmd or "issue" not in cmd:
             continue
         try:
             if not runs_gh_issue_create(cmd):
