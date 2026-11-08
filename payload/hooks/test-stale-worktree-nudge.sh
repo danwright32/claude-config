@@ -388,9 +388,9 @@ REAL_BASH="$(command -v bash)"
 CPROJ="$TMP/count-proj"; mkdir -p "$CPROJ"; G -C "$CPROJ" init -q -b main
 CSTATE="$TMP/count-state"
 COUNT_LOG=""; STARTED=0
-count_prompt(){ # count_prompt <session id>: sets STARTED, the processes one prompt starts, the bash running the hook included
+count_prompt(){ # count_prompt <session id> [dir]: sets STARTED, the processes one prompt starts, the bash running the hook included
   COUNT_LOG="$TMP/count.$1.$RANDOM"; : >"$COUNT_LOG"
-  ( cd "$CPROJ" && printf '{"session_id":"%s"}' "$1" | PATH="$CB:$PATH" SHIM_LOG="$COUNT_LOG" \
+  ( cd "${2:-$CPROJ}" && printf '{"session_id":"%s"}' "$1" | PATH="$CB:$PATH" SHIM_LOG="$COUNT_LOG" \
       STALE_WT_CHECK="$STUB" STALE_WT_STATE_DIR="$CSTATE" "$REAL_BASH" "$SCRIPT" >/dev/null 2>&1 )
   STARTED=$(( 1 + $(grep -c . "$COUNT_LOG") ))
 }
@@ -411,6 +411,43 @@ count_prompt k1
 held_to_timeout "a later prompt while another repository's answer waits to be said"
 count_prompt k2
 held_to_timeout "a first prompt while another repository's answer waits"
+case "$(cat "$COUNT_LOG")" in *git*) bad "#2453 the repository a directory is in is remembered, not asked of git on every prompt ($(tr '\n' ' ' <"$COUNT_LOG"))" ;; *) ok ;; esac
+# The prompt that says an answer: the most valuable one, and it claims the answer by a rename.
+CKEY="$(printf '%s' "$CPROJ" | shasum | cut -c1-12)"
+printf 'removed here\n' >"$CSTATE/claude-stale-worktrees-repo-$CKEY.result.1700000000.2"
+count_prompt k1
+held_to_timeout "a prompt saying this repository's answer"
+check_eq "#2453 and the answer is claimed" "" "$(cd "$CSTATE" && ls -- *"$CKEY".result.* 2>/dev/null)"
+case "$(cd "$CSTATE" && ls -- *"$CKEY".shown.* 2>/dev/null)" in '') bad "#2453 and kept as said, a .shown file" ;; *) ok ;; esac
+# The same in a directory no prompt has been in before, which must ask git and shasum first.
+mkdir -p "$CPROJ/sub"
+printf 'removed here again\n' >"$CSTATE/claude-stale-worktrees-repo-$CKEY.result.1700000000.3"
+count_prompt k1 "$CPROJ/sub"
+held_to_timeout "a first prompt in a new directory saying its repository's answer"
+
+# A remembered repository that is no longer one is not believed: a prompt there starts no run.
+GONE="$TMP/gone-repo"; mkdir -p "$GONE"; G -C "$GONE" init -q -b main
+(cd "$GONE" && printf '{"session_id":"g1"}' | STALE_WT_CHECK="$STUB" bash "$SCRIPT" >/dev/null 2>&1); settle g1
+before="$(calls)"
+rm -rf "$GONE/.git"
+(cd "$GONE" && printf '{"session_id":"g2"}' | STALE_WT_CHECK="$STUB" bash "$SCRIPT" >/dev/null 2>&1); settle g2
+check_eq "#2453 a remembered repository whose .git is gone is asked again, and starts no run" "$before" "$(calls)"
+
+# Said answers are kept, and a run deletes those over a day old, always keeping the newest.
+PKEY="$(printf '%s' "$PROJ" | shasum | cut -c1-12)"
+SHOWN="$STATE_DIR/claude-stale-worktrees-repo-$PKEY.shown"
+# The answers this suite's earlier prompts said, and the one the no session section left waiting,
+# which this section's first prompt would say, so these two are the only said answers.
+rm -f "$SHOWN".* "$STATE_DIR/claude-stale-worktrees-repo-$PKEY".result.*
+: >"$SHOWN.91"; : >"$SHOWN.92"
+python3 -c 'import os, sys, time; os.utime(sys.argv[1], (time.time() - 3 * 86400,) * 2); os.utime(sys.argv[2], (time.time() - 2 * 86400,) * 2)' "$SHOWN.91" "$SHOWN.92"
+STUB_RC=0 fire p1; settle p1
+check_eq "#2453 a run deletes a said answer over a day old" no "$([ -e "$SHOWN.91" ] && echo yes || echo no)"
+check_eq "#2453 but keeps the newest, however old" yes "$([ -e "$SHOWN.92" ] && echo yes || echo no)"
+: >"$SHOWN.93"
+STUB_RC=0 fire p2; settle p2
+check_eq "#2453 and deletes it once a newer one is kept" no "$([ -e "$SHOWN.92" ] && echo yes || echo no)"
+check_eq "#2453 keeping the newer" yes "$([ -e "$SHOWN.93" ] && echo yes || echo no)"
 # The session id is read by bash's own pattern match now, with python3 only for what that cannot
 # read, so each kind of payload is still keyed on the session it came from.
 key_of(){ # key_of <payload>: the session record one prompt with it leaves behind

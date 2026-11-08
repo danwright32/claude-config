@@ -36,10 +36,12 @@
 # 2026-11-07) against its 5 s timeout, so the reminder was lost on exactly the busy days it is for.
 # Under a 48 spawner window a subshell cost nothing measurable while each program started cost 0.17
 # to 0.23 s and python3 0.47, and the hook started ten of them besides bash (cat, python3 for the
-# session id, shasum and cut twice, mkdir twice, date, git). It now reads its input and the session
-# id in bash, names the session's record after the id rather than a hash, and cuts with bash: a
-# later prompt starts date alone, and the worst prompt date, git and shasum. Its suite counts them
-# on every path and holds them, at the worst cost measured, to the timeout.
+# session id, shasum and cut twice, mkdir twice, date, git), and two renames more to say an answer.
+# It now reads its input and the session id in bash, names the session's record after the id
+# rather than a hash, remembers which repository a directory is in, and claims an answer in one
+# rename: most prompts start date alone, saying an answer adds mv, and only the first prompt ever
+# in a directory asks git and shasum. Its suite counts them on every path and holds them, at the
+# worst cost measured, to the timeout.
 #
 # AGAIN EVERY THREE HOURS, not only at the first prompt (claude-config#1521). This ran once per
 # session, on the premise that a worktree going stale part way through a session is removed by the
@@ -120,20 +122,45 @@ print(d.get("session_id") or d.get("transcript_path") or "")
 ' 2>/dev/null || true)"
 fi
 
+# Which repository this directory is in, and its key, asked of git and shasum once per directory
+# and then remembered beside the records (#2453): asked on every prompt with an answer waiting, the
+# two programs were most of what such a prompt cost on a loaded Mac. A remembered answer is used
+# only while it still holds: written for this exact directory, which still lies under its top, the
+# top still a repository, and this directory not since made a repository of its own. Anything else
+# asks again and remembers anew (a directory reached through a symlink, whose path git names
+# differently, always asks, which is the cost before this was remembered, never a wrong answer).
+# Two prompts writing it at once write the same three lines, and a half written one fails the test
+# above and is asked again, so it needs no lock.
 top=""; rkey=""
 which_repo(){
   [ -n "$top" ] && return 0
+  local dkey="${PWD//[^A-Za-z0-9_.-]/_}" c cpwd ctop ckey
+  [ "${#dkey}" -le 100 ] || dkey="${dkey: -100}"
+  local cache="$STATE_DIR/claude-stale-worktrees-dir-$dkey.repo"
+  if [ -f "$cache" ]; then
+    { c="$(<"$cache")"; } 2>/dev/null
+    cpwd="${c%%$'\n'*}"; c="${c#*$'\n'}"; ctop="${c%%$'\n'*}"; ckey="${c#*$'\n'}"
+    if [ "$cpwd" = "$PWD" ] && [ -n "$ctop" ] && [ -e "$ctop/.git" ] \
+       && { [ "$ctop" = "$PWD" ] || { [[ $PWD == "$ctop"/* ]] && [ ! -e "$PWD/.git" ]; }; } \
+       && [[ $ckey =~ ^[0-9a-f]{12}$ ]]; then
+      top="$ctop"; rkey="$ckey"; return 0
+    fi
+  fi
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [ -n "$top" ] || return 1
   # The same twelve characters `| cut -c1-12` gave, cut by bash rather than a second program.
   rkey="$(printf '%s' "$top" | shasum)"
   rkey="${rkey:0:12}"
+  [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n%s\n%s\n' "$PWD" "$top" "$rkey" >"$cache" 2>/dev/null || true
 }
 
 # --- say what a finished run left to say ----------------------------------
-# Claimed by a rename before it is read, so of two sessions at once exactly one says it. The last
-# one said is kept as .shown rather than deleted, so "said" and "never written" stay two different
-# states on disk (L258).
+# Claimed by a rename before it is read, so of two sessions at once exactly one says it. It is
+# renamed straight to its said name, .shown.<this process>, rather than deleted, so "said" and
+# "never written" stay two different states on disk (L258), and in one rename rather than two
+# (#2453): a claim then a second rename to one shared .shown cost a program start more. The runner
+# deletes said answers a day old, keeping the newest (lib/stale-worktree-run.py).
 said=""
 shopt -s nullglob
 waiting=("$STATE_DIR"/claude-stale-worktrees-repo-*.result.*)
@@ -142,10 +169,9 @@ if [ "${#waiting[@]}" -gt 0 ] && which_repo; then
   for f in "${waiting[@]}"; do
     case "$f" in "$STATE_DIR/claude-stale-worktrees-repo-$rkey.result."*) ;; *) continue ;; esac
     case "$f" in *.tmp.*) continue ;; esac
-    claimed="$STATE_DIR/claude-stale-worktrees-repo-$rkey.claimed.$$"
-    mv "$f" "$claimed" 2>/dev/null || continue
-    said="$said$(<"$claimed")"$'\n'
-    mv -f "$claimed" "$STATE_DIR/claude-stale-worktrees-repo-$rkey.shown" 2>/dev/null || true
+    shown="$STATE_DIR/claude-stale-worktrees-repo-$rkey.shown.$$"
+    mv "$f" "$shown" 2>/dev/null || continue
+    said="$said$(<"$shown")"$'\n'
   done
 fi
 [ -z "$said" ] || printf '%s' "$said"
