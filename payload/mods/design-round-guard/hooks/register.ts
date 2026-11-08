@@ -1723,10 +1723,17 @@ export const register: Register = on => {
     // otherwise (#2261), so never for a one call Not a look or wording change pass, for any mod reading
     // what the guard recorded: picker manners checks the question off on its issue only then. Said
     // after the write, so it changes nothing the guard decides. A mod listening says its own failures
-    // (picker manners logs whatever its issue write meets); one that throws is caught here, so his
-    // answer, recorded all the same, is never told to Claude as unread.
+    // (picker manners logs whatever its issue write meets), and the engine skips a listener that
+    // throws. The call itself failing is caught here and written to the guard's log (#2288), so his
+    // answer, recorded all the same, is never told to Claude as unread, and the failure is not silent.
     const recorded = (question: string, answer: string, options: { label: string }[]) =>
-      $.designRound.answered({ call: String(e.tool_use_id ?? ''), question, answer, options: options.map(o => o.label) }).catch(() => undefined)
+      $.designRound.answered({ call: String(e.tool_use_id ?? ''), question, answer, options: options.map(o => o.label) }).catch(async err => {
+        try {
+          await $.ui.log(`design-round-guard: the answer is recorded, but announcing it to the mods that read it failed: ${message(err)}`, { to: 'debug' })
+        } catch {
+          // Nowhere left to say it; the answer itself is recorded all the same.
+        }
+      })
     // What Claude is told beside Dan's answer, in the dialog's own result; a refusal carries none.
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
     // Dan's answer kept for each subject, one at a time: what was kept, and, when a write failed,
