@@ -896,6 +896,49 @@ cp /bin/cat "$T/ds/cat-bin"
 run_bash "cd $T/ds && ./cat-bin session.jsonl"
 allowed "a compiled program run by its own path over a data file that names an endpoint"
 
+echo "slack drafts only: which word is the code is read from each program's own options (claude-config#2439)"
+
+# The refusal measured 2026-11-07: python3 -I -c "<read only analysis>" <transcript .jsonl>. One table
+# of options for every interpreter said -I takes a value (ruby's -I does), so it swallowed -c, the
+# code went unseen, and the transcript the code reads was taken for the script and refused.
+run_bash "python3 -I -c 'import json, sys; print(sum(1 for _ in open(sys.argv[1])))' $T/ds/session.jsonl"
+allowed "python3 -I -c over a transcript that names an endpoint, read only"
+run_bash "node -e 'const fs = require(\"fs\"); console.log(fs.readFileSync(process.argv[1], \"utf8\").length)' $T/ds/issues.json"
+allowed "node -e over a data file that names an endpoint, read only"
+# The same table said -E holds code (perl's does) for every program, and that -c does, so a script run
+# after python's -E, bash's -e (errexit), ruby's -E (an encoding) or php's -c (an ini file) went unread,
+# and node -r loaded a module before -e unread. Each is a script that posts, so each is refused.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/post.sh"
+cp "$T/alert.py" "$T/ds/post.rb"
+cp "$T/alert.py" "$T/ds/post.php"
+printf '%s\n' "memory_limit = 256M" > "$T/ds/php.ini"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST" });' > "$T/ds/post-req.js"
+for runs in "python3 -E $T/alert.py" "python3 -IE $T/alert.py" "python3 -I $T/alert.py" "python3 -I -W ignore $T/alert.py" \
+  "bash -e $T/ds/post.sh" "bash -xe $T/ds/post.sh" "sh -e $T/ds/post.sh" "ruby -E UTF-8 $T/ds/post.rb" \
+  "php -c $T/ds/php.ini $T/ds/post.php" "node -r $T/ds/post-req.js -e 1" "node --require $T/ds/post-req.js -p 1"; do
+  run_bash "$runs"
+  refused "a script that posts, run behind an option that is not code for that program: $runs"
+done
+# Code given inline is judged as a script file is for the data files it is handed: when it can act on
+# them, they are read. Before, python3 -c never read them at all (only -I's wrong table read them, as
+# code), so code handing its argument to bash, or posting it, passed.
+for acts in "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json" \
+  "python3 -I -c 'import json, sys, urllib.request; urllib.request.urlopen(json.load(open(sys.argv[1]))[\"url\"])' $T/ds/msg.json" \
+  "node -e 'fetch(require(process.argv[1]).url, { method: \"POST\" })' $T/ds/msg.json" \
+  "perl -ne 'print' $T/ds/session.jsonl"; do
+  run_bash "$acts"
+  refused "inline code that can act on a data file naming the endpoint, or that the gate cannot judge: ${acts%% *}"
+done
+run_bash "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json"
+says "that refusal names the data file" "msg.json"
+# A file with no extension handed to inline code may be a script, as for a script file, so it is read
+# as code; and a data file still read as the program's script is refused as before.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/noext"
+for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c 1"; do
+  run_bash "$runs"
+  refused "a file whose role cannot be told is still read as code: $runs"
+done
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
