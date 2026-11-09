@@ -52,9 +52,25 @@ case "$*" in
     if [ -n "${FAKE_PR_ERR:-}" ]; then printf '%s\n' "$FAKE_PR_ERR" >&2; exit 1; fi
     cat "$FAKE_PR_JSON" ;;
   *"api graphql"*) printf '%s\n' "${FAKE_NODE_JSON:-}" ;;
+  # The lookup of each closing keyword's number (claude-config#2464), from "owner/name#N kind state"
+  # lines in $FAKE_ISSUES (kind issue, pr, fail, or other-account: a 404 under the active account
+  # that answers under another account's token); an unlisted number is an open issue.
+  *"api repos/"*"/issues/"*)
+    ref="$*"; ref="${ref#api repos/}"; n="${ref##*/issues/}"; ref="${ref%%/issues/*}#$n"
+    kind=issue; state=open
+    line="$(grep -m 1 -i -- "^$ref " "${FAKE_ISSUES:-/dev/null}")"
+    [ -n "$line" ] && read -r _ kind state <<< "$line"
+    [ "$kind" = other-account ] && { [ "${GH_TOKEN:-}" = tok ] && kind=issue || kind=fail; }
+    case "$kind" in
+      fail) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
+      pr) printf '{"number":%s,"state":"%s","pull_request":{"url":"x"}}\n' "$n" "$state" ;;
+      *) printf '{"number":%s,"state":"%s"}\n' "$n" "$state" ;;
+    esac ;;
 esac
 SH
 chmod +x "$WORK/bin/gh"
+printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/widget#60 pr closed" \
+  "acme/widget#404 fail" "acme/widget#77 other-account open" > "$WORK/issues"
 
 pr_json() {  # $1 = body, $2 = closing issue numbers in acme/widget, space separated ; $3 = url
   python3 -c '
@@ -71,7 +87,7 @@ run_hook() {
   hook_out="$(printf '{"tool_input":{"command":%s},"cwd":%s}' \
       "$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
       "$(printf '%s' "$WORK/repo" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
-    | ( cd "$WORK/repo" && env PATH="$WORK/bin:$PATH" FAKE_PR_JSON="$WORK/pr.json" FAKE_GH_LOG="$WORK/gh.log" \
+    | ( cd "$WORK/repo" && env -u CLOSING_KEYWORD_LOOKUP PATH="$WORK/bin:$PATH" FAKE_PR_JSON="$WORK/pr.json" FAKE_GH_LOG="$WORK/gh.log" FAKE_ISSUES="$WORK/issues" \
           CLOSING_SLEEP=true "$@" bash "$HOOK" 2>&1 ))"
   hook_rc=$?
 }
@@ -129,6 +145,32 @@ expect_allow "a pull request that closes nothing"
 run_hook "gh pr view 7 --json body"
 expect_allow "a command that merges nothing"
 if [ -s "$WORK/gh.log" ]; then fail "a command that merges nothing still asked GitHub: $(cat "$WORK/gh.log")"; else pass; fi
+
+# 2b. Every closing keyword and number pair is looked up (claude-config#2464). The description of
+# #2456 put "fix" before the open pull request #2451 in passing; GitHub listed nothing as closing,
+# this gate let it through on the empty list, and the merge closed #2451 unmerged.
+pr_json "6 were cancelled, including the p0 fix #2451 and batch #2438, which" "" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "#2464 a closing word before an open pull request, with nothing listed, is refused" "names pull request #2451"
+expect_deny "#2464 the refusal quotes the phrase to reword" "including the p0 fix #2451"
+grep -q "api repos/acme/widget/issues/2451" "$WORK/gh.log" && pass || fail "#2464 the pull request was not looked up through gh api: $(cat "$WORK/gh.log")"
+pr_json "This is the follow up fix #12 asked for." "12" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "#2464 a listed issue whose closing word sits mid sentence is refused" "not at the start of a line or sentence"
+pr_json "Closes #404." "" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_deny "#2464 a lookup that fails under every account refuses, saying why" "HTTP 404"
+grep -q "auth token -u danwright32" "$WORK/gh.log" && pass || fail "#2464 a failed lookup was not tried under the other logged in accounts: $(cat "$WORK/gh.log")"
+pr_json "Closes #77." "" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_allow "#2464 an issue another logged in account can see is looked up under that account"
+pr_json "the earlier fix #60 landed first" "" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_allow "#2464 a closing word before a closed pull request closes nothing"
+pr_json "Adds the reader. Part of #20." "" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash"
+expect_allow "#2464 a body with no closing word and nothing listed"
+if grep -q "issues/" "$WORK/gh.log"; then fail "#2464 a body with no closing word still looked something up: $(cat "$WORK/gh.log")"; else pass; fi
 
 # 3. The deliberate override, visible in the command.
 pr_json "This does not close #4358." "4358" > "$WORK/pr.json"

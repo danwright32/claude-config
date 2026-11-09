@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesPushedInto, branchesTouched, choiceFor, closingComments, filesWritten, issueRefs, neverMergeSaid, prLinks, prRefs, quoteOf, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, statedNextStep, whatIsLeft, whoseFiles, type LeftBranch, type LeftClosed, type IssueLeft, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 
@@ -440,6 +440,46 @@ describe("a branch that is not this session's, and Dan's answer to leave a branc
     const asked: Reading = { ...inherited, branch: left.branch, branchLeft: { ...left, files: ['notes.md'] } }
     expect(outstanding({ ...asked, dirty: ['notes.md'] })).toEqual([])
     expect(outstanding({ ...asked, dirty: ['notes.md', 'new.ts'] })).toEqual([UNCOMMITTED('new.ts')])
+  })
+})
+
+// #2533: a local branch made only to push one commit into another branch's PR (git worktree add
+// <path> origin/<pr-branch> -b <local>, then git push origin HEAD:<pr-branch>) was deleted once that
+// PR merged, and never existed on GitHub; winding down went on saying there was no PR for it, and
+// Dan's answer to leave_branch did not settle it, so the session could not finish.
+describe('a branch with no PR that is gone, left on his answer, or pushed into another branch (#2533)', () => {
+  const noPr: Reading = { ...merged, pr: null, deploy: null }
+  test('a branch gone both here and from GitHub has nothing left to finish but uncommitted work this session wrote', () => {
+    expect(outstanding({ ...noPr, branchGone: true })).toEqual([])
+    expect(outstanding({ ...noPr, branchGone: true, dirty: ['notes.md'] })).toEqual([UNCOMMITTED('notes.md')])
+  })
+  const left: LeftBranch = { repo: 'o/r', branch: 'scope-modes-616', files: [], why: 'its commit shipped in PR #40' }
+  test("Dan's answer to leave the branch as it is settles the question of its PR, and is said as what kept it", () => {
+    expect(outstanding({ ...noPr, branchHere: true, branchLeft: left })).toEqual([])
+    expect(settledByBranchChoice({ ...noPr, branchHere: true, branchLeft: left })).toBe(true)
+    // A file changed since he answered still asks again.
+    expect(outstanding({ ...noPr, branchHere: true, branchLeft: left, dirty: ['new.ts'] })).toEqual([UNCOMMITTED('new.ts')])
+  })
+  test('a branch still here, or only on GitHub, with no PR and no answer, still holds as before', () => {
+    expect(outstanding({ ...noPr, branchHere: true })).toEqual(['there is no PR for scope-modes-616 yet'])
+    expect(outstanding({ ...noPr, branchHere: false, branchOnGitHub: true })).toEqual(['there is no PR for scope-modes-616 yet'])
+    // Only a measured gone drops it: one not read, as on a gone checkout, holds.
+    expect(outstanding({ ...noPr, branchHere: { unreadable: 'boom' } })).toEqual(['there is no PR for scope-modes-616 yet'])
+  })
+  const pushed = (...lines: string[][]) => branchesPushedInto(lines.map(w => ({ words: w, git: gitOf(w) })))
+  test('a push into another branch by refspec is read as from where to where; HEAD is the branch checked out', () => {
+    expect(pushed(['git', 'push', 'origin', 'HEAD:fix-pr'])).toEqual([{ from: null, to: 'fix-pr' }])
+    expect(pushed(['git', 'push', '-o', 'ci.skip', 'origin', '+local:refs/heads/fix-pr'])).toEqual([{ from: 'local', to: 'fix-pr' }])
+    expect(pushed(['git', 'push', 'origin', 'refs/heads/a:b'])).toEqual([{ from: 'a', to: 'b' }])
+  })
+  test('a push of a branch to itself, a deletion, a tag or no refspec pushes into no other branch', () => {
+    expect(pushed(['git', 'push', '-u', 'origin', 'fix-700'])).toEqual([])
+    expect(pushed(['git', 'push', 'origin', 'fix-700:fix-700'])).toEqual([])
+    expect(pushed(['git', 'push', 'origin', 'HEAD'])).toEqual([])
+    expect(pushed(['git', 'push', 'origin', ':old'])).toEqual([])
+    expect(pushed(['git', 'push', 'origin', '--delete', 'old'])).toEqual([])
+    expect(pushed(['git', 'push', 'origin', 'v1:refs/tags/v1'])).toEqual([])
+    expect(pushed(['git', 'push'])).toEqual([])
   })
 })
 
