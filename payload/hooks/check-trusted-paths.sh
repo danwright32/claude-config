@@ -120,7 +120,9 @@ def paths_in(text):
         end = m.end(1)
         while True:
             more = MORE.match(text, end)
-            if not more:
+            # A word holding a wildcard ends the readings: cut back to the folder before it, the
+            # reading would name a parent that exists and make a gone path read as present.
+            if not more or GLOB.search(more.group()):
                 break
             end = more.end()
             readings.append(text[m.start(1):end])
@@ -131,8 +133,13 @@ def paths_in(text):
         rs = []
         for r in readings:
             r = clean(r)
-            if r not in ("", "/", "~/") and r not in rs:
-                rs.append(r)
+            if r in ("", "/", "~/") or r in rs:
+                continue
+            # A longer reading must still extend the first one. Anything cleaning cut back to less
+            # than it could only name a parent folder, never the path.
+            if rs and not (r.startswith(rs[0]) and len(r) > len(rs[0])):
+                continue
+            rs.append(r)
         # Keyed on every reading, not the shortest, so "Apps/Two Words" and "Apps/Two Other" in one
         # entry stay two paths and one being present cannot answer for the other.
         if not rs or tuple(rs) in seen:

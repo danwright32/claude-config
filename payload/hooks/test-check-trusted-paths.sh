@@ -173,6 +173,15 @@ case "$out" in
   *) check "and is reported" "it said: $out" ;;
 esac
 
+# A wildcard word after a gone path must not make it present: a longer reading holding it would be
+# cut back to the folder before the wildcard, which exists.
+GLOBWORD="$(mksettings globword.json "      \"**Old**: $FAKEHOME/Apps/Pewter moved, see *.log for why\"")"
+out="$(run "$GLOBWORD")"; code=$?
+case "$out" in
+  *"\`$FAKEHOME/Apps/Pewter\`"*) check "a gone path followed by a wildcard word is still reported" ok ;;
+  *) check "a gone path followed by a wildcard word is still reported" "exit=$code, it said: $out" ;;
+esac
+
 # The same gone path written twice in one entry, with different words after each, is one line.
 TWICE="$(mksettings twice.json "      \"**Old**: $FAKEHOME/Apps/Gone is old; $FAKEHOME/Apps/Gone moved away\"")"
 out="$(run "$TWICE")"; code=$?
