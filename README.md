@@ -2228,9 +2228,24 @@ A fourth gate reads the same library for a different thing an agent does to its 
   the flags, `--fixup`, `--no-force`, and the main session are untouched. A payload it cannot read
   is refused when it names an amend or a force, as `no-verify-gate.sh` does with a skip.
 
+One more gate holds a rule the briefs give every agent, for everyone:
+
+- `temp-worktree-gate.sh` (PreToolUse, Bash and EnterWorktree) refuses a git worktree placed under a
+  temp folder a restart empties: `/tmp`, `/private/tmp`, `/var/folders` (with or without
+  `/private`), or a path starting with `$TMPDIR`, `$TMP` or `$TEMP`, by `git worktree add`, `git
+  worktree move` or EnterWorktree's `path`, and names the repository's `.claude/worktrees/<name>`
+  instead (claude-config#2528). On 2026-11-09 a restart emptied `/private/tmp` and took an agent's
+  worktree holding an uncommitted fix; #2490 said the rule in prose, and this makes it hold. The
+  reading is `lib/temp-worktree.py` over the shared shell reader, so it sees through rtk, env, a cd,
+  `git -C` and a `bash -c` string, takes a relative path from where the command runs, and resolves
+  symbolic links; list, remove and prune pass, `/var/tmp` (which a restart keeps) passes, and so does
+  a worktree of a repository that is itself in a temp folder. It judges the main session too. A path
+  in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
+  is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
+
 ### What a push actually waits on
 
-Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2473,6 +2488,18 @@ the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (loa
 since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a
 subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a
 subagent's `git push --force`, refused
+
+</td></tr>
+<tr><td>
+
+`temp-worktree-gate.sh` (#2528)
+
+</td><td>
+
+2026-11-09: 0.034 to 0.038 seconds on `git push -u origin feat/x` from the main checkout, which
+names no worktree and leaves before anything loads; 0.040 to 0.043 seconds on the same push from a
+folder under `.claude/worktrees/`, whose name makes it read the command; 0.098 to 0.102 seconds on
+`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59
 
 </td></tr>
 <tr><td>
