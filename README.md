@@ -5649,10 +5649,11 @@ It asks only on a card the message is shown on (live or none, not yet marked sen
 earlier card asked for a draft to the same thread or person it says this draft replaces that one:
 Slack keeps one attached draft per channel and has no tool to change it, so on
 `attached_draft_exists` Dan deletes the earlier draft in Slack and the session saves again. A
-missing thread is never swapped for a DM. A message waits until Mark sent: a later card for the same PR that names nobody
-keeps it, and one Dan marked sent stays sent. Cards are kept per repository in the mod's store,
-under the repository as GitHub's own link for the PR names it and in one case, so a card Claude
-typed in another case or under an old name is found; `/live` lists them and every unsent message.
+missing thread is never swapped for a DM. A message waits until Mark sent: a later card for the
+same PR that names nobody keeps it, and one Dan marked sent stays sent. Cards are kept per
+repository in the mod's store, under the repository as GitHub's own link for the PR names it and in
+one case, so a card Claude typed in another case or under an old name is found;
+`/live` lists them and every unsent message.
 Other mods read the newest card's state for a PR through `$.isItLive.verdict({ repo, pr })` (null
 when no card has been made in this session; the repo in any case), which is how winding down knows
 the deploy is live. The card's result row is mod-kit's boxed card, its state word leading the title
