@@ -28,23 +28,82 @@ HOOK="$DIR/check-closing-keyword.sh"
 pass=0
 fail=0
 
-# run <description> <expected-exit> <command-string>
+# Every closing keyword and number pair is looked up (claude-config#2464), never against GitHub here:
+# the stub reads "owner/name#N kind state" lines (kind issue, pr or fail), an unlisted number being an
+# open issue. The commands run in a checkout whose origin is acme/widget, so a bare #N is acme/widget's.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/closing-keyword-hook.XXXXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+LOOKUP_TABLE="$WORK/table"
+printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/other#5 pr open" \
+  "acme/widget#404 fail" > "$LOOKUP_TABLE"
+cat > "$WORK/lookup.sh" <<'STUB'
+#!/usr/bin/env bash
+kind=issue; state=open
+line="$(grep -i -- "^$1#$2 " "$LOOKUP_TABLE" | head -1)"
+[ -n "$line" ] && read -r _ kind state <<< "$line"
+case "$kind" in
+  fail) echo "HTTP 404: Not Found (https://api.github.com/repos/$1/issues/$2)" >&2; exit 1 ;;
+  pr) printf '{"number":%s,"state":"%s","pull_request":{"url":"x"}}' "$2" "$state" ;;
+  *) printf '{"number":%s,"state":"%s"}' "$2" "$state" ;;
+esac
+STUB
+chmod +x "$WORK/lookup.sh"
+export LOOKUP_TABLE CLOSING_KEYWORD_LOOKUP="$WORK/lookup.sh"
+REPO="$WORK/widget"
+mkdir -p "$REPO"
+git -C "$REPO" init -q
+git -C "$REPO" remote add origin https://github.com/acme/widget.git
+RUN_CWD="$REPO"
+HOOK_MSG=""
+
+# run <description> <expected-exit> <command-string> [<a needle the message must carry>]
 run() {
-  local desc="$1" want="$2" command="$3"
+  local desc="$1" want="$2" command="$3" needle="${4:-}"
   local payload got
   payload="$(python3 -c '
 import json, sys
-print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": "/tmp"}))
-' "$command")"
-  printf '%s' "$payload" | "$HOOK" >/dev/null 2>&1
+print(json.dumps({"tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2]}))
+' "$command" "$RUN_CWD")"
+  HOOK_MSG="$(printf '%s' "$payload" | "$HOOK" 2>&1 >/dev/null)"
   got=$?
   if [ "$got" -eq "$want" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
-    echo "FAIL: $desc (wanted exit $want, got $got)"
+    echo "FAIL: $desc (wanted exit $want, got $got): ${HOOK_MSG:0:400}"
+  fi
+  if [ -n "$needle" ]; then
+    case "$HOOK_MSG" in
+      *"$needle"*) pass=$((pass+1)) ;;
+      *) fail=$((fail+1)); echo "FAIL: $desc: the message did not carry [$needle], said: ${HOOK_MSG:0:400}" ;;
+    esac
   fi
 }
+
+BLOCK=2
+ALLOW=0
+
+# --- claude-config#2464: a closing word in passing before a pull request (the #2456 description) ---
+run "#2464 the #2456 sentence, before an open pull request, is refused" $BLOCK \
+  'gh pr create --title x --body "6 were cancelled, including the p0 fix #2451 and batch #2438, which"' \
+  "names pull request #2451"
+run "#2464 the refusal quotes the phrase to reword" $BLOCK \
+  'gh pr create --title x --body "6 were cancelled, including the p0 fix #2451 and batch #2438, which"' \
+  "including the p0 fix #2451"
+run "#2464 a bare #N is looked up in the repository --repo names" $BLOCK \
+  'gh pr create -R acme/other --title x --body "Closes #5"' "pull request"
+run "#2464 control: the same #5 in the checkout's own repository is an open issue, and passes" $ALLOW \
+  'gh pr create --title x --body "Closes #5"'
+run "#2464 a lookup that fails refuses, saying why" $BLOCK \
+  'gh pr create --title x --body "Closes #404."' "HTTP 404"
+run "#2464 a closing word mid sentence before an open issue is refused" $BLOCK \
+  'git commit -m "Tidies the follow up fix #12 asked for"' "not at the start of a line or sentence"
+run "#2464 a commit message whose Closes line is in a heredoc passes" $ALLOW \
+  $'git commit -F - <<\'EOF\'\nTidy the reader\n\nCloses #12\nEOF'
+RUN_CWD="/tmp"
+run "#2464 with no repository to look a bare #N up in, it refuses rather than passes" $BLOCK \
+  'git commit -m "Closes #12"' "which repository"
+RUN_CWD="$REPO"
 
 BLOCK=2
 ALLOW=0

@@ -45,15 +45,46 @@ list closes nothing and is not judged. A bare #12 is the pull request's own repo
 `text` mode nothing is listed yet, so every issue a keyword is followed by counts as closing, and a
 bare #12 is only ever the same issue as another bare #12.
 
+EVERY PAIR, LOOKED UP (claude-config#2464). The rules above read only the sentence, so a closing
+word written in passing ("including the p0 fix #2451") passed, and on 2026-11-08 merging #2456
+closed the open pull request #2451 unmerged. GitHub closes a pull request named after a closing
+word just as it closes an issue, but never lists one in closingIssuesReferences. So every keyword
+and number pair is now looked up (gh api repos/<owner>/<name>/issues/<n>, whose pull_request field
+tells a pull request), and the text is refused where a pair names:
+
+  an OPEN PULL REQUEST, wherever the pair sits: merging would close it unmerged. To mean "this
+               replaces #N", write "Supersedes #N" and close it by hand.
+  an OPEN ISSUE the change does not mean to close, which is how "means to close" is read here: a
+               pair means to close when its keyword starts a line (past indentation, a list marker
+               or a quote mark) or starts a sentence (right after a full stop, question or
+               exclamation mark), or follows such a pair on its line with nothing but commas, "and"
+               or semicolons between ("Closes #12, closes #13"). A keyword anywhere else is a word
+               in a sentence ("the follow up fix #12"), and GitHub closes the issue all the same.
+               In `text` mode the start of a quoted argument counts as a line start too, so
+               `-m "Closes #12"` is one. In `pr` mode only an issue GitHub lists closes, so an
+               unlisted one is not judged, and a listed one is never looked up again.
+
+A closed issue or pull request is not judged: merging cannot close it again. A lookup that fails,
+that answers in a shape that is not GitHub's, or a bare #N with no repository to look it up in
+(`text` mode with no <owner/name>) is refused with its reason, never passed (L98). A number
+already refused for its sentence is not looked up, since nothing the lookup says could clear it.
+
+CLOSING_KEYWORD_LOOKUP names an executable run as `<it> <owner/name> <n>` in place of gh, printing
+the same JSON, for the tests; CLOSING_LOOKUP_BUDGET_SECONDS (10) bounds every lookup together.
+
 Two hooks ask this, so the rule is the same where text is written and where a pull request merges:
 check-closing-keyword.sh (a pull request or commit being written) and check-closing-merge.sh (the
 body GitHub holds, at merge, claude-config#1550).
+
+    closing-keyword.py text [<owner/name>]   the repository a bare #N belongs to, when known
 """
 import json
 import os
 import re
 import io
+import subprocess
 import sys
+import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -168,11 +199,168 @@ def findings(text, closing, slug):
     return out
 
 
+# Where a pair means to close (claude-config#2464, the docstring's "means to close"): its keyword is
+# what its line holds first, past indentation, list markers and quote marks; or it starts a sentence;
+# or, in text mode, it starts a quoted argument; or it follows such a pair on its line with nothing
+# but commas, semicolons or "and" between.
+LINE_START = re.compile(r"[ \t]*(?:(?:[-*+>]|\d+[.)])[ \t]*)*")
+AFTER_SENTENCE = re.compile(r"[.!?][)\]\"'*_]*[ \t]+$")
+AFTER_QUOTE = re.compile(r"(?:^|[\s=])\$?[\"']$")
+CHAINED = re.compile(r"[\s,;]*(?:and\b[\s,]*)?", re.IGNORECASE)
+SLUG = re.compile(r"[\w.-]+/[\w.-]+")
+
+
+def means_to_close(text, m, prev, text_mode):
+    """Whether the pair `m` sits where a pair that means to close sits. `prev` is (end, verdict) of
+    the pair before it on the same line, or None."""
+    prefix = text[text.rfind("\n", 0, m.start()) + 1:m.start()]
+    if LINE_START.fullmatch(prefix) or AFTER_SENTENCE.search(prefix):
+        return True
+    if text_mode and AFTER_QUOTE.search(prefix):
+        return True
+    return bool(prev and prev[1] and CHAINED.fullmatch(text[prev[0]:m.start()]))
+
+
+class LookupFailed(Exception):
+    pass
+
+
+def _number(value, default):
+    try:
+        n = float(value)
+        return n if n > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+class Lookup:
+    """(kind, state) of an issue or pull request, from gh api repos/<repo>/issues/<n>.
+
+    Tried under the active gh account, then under each other logged in account with its token
+    scoped to the one call, never `gh auth switch`: a repository owned by one of Dan's accounts
+    answers 404 under the other (the reasoning mt_pr_view in lib/merge-target.sh records)."""
+
+    def __init__(self):
+        self.exe = os.environ.get("CLOSING_KEYWORD_LOOKUP") or ""
+        self.budget = _number(os.environ.get("CLOSING_LOOKUP_BUDGET_SECONDS"), 10.0)
+        self.deadline = time.monotonic() + self.budget
+        self.accounts = None
+        self.seen = {}
+
+    def _run(self, argv, env=None):
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise LookupFailed("the lookup budget of %g seconds was spent before it could be asked" % self.budget)
+        try:
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=left, env=env)
+        except FileNotFoundError:
+            raise LookupFailed("%s is not on PATH" % argv[0])
+        except subprocess.TimeoutExpired:
+            raise LookupFailed("no answer within the lookup budget of %g seconds" % self.budget)
+        except OSError as exc:
+            raise LookupFailed("%s could not run: %s" % (argv[0], exc))
+        return p.returncode, p.stdout, p.stderr
+
+    def _fetch(self, repo, number):
+        if self.exe:
+            rc, out, err = self._run([self.exe, repo, str(number)])
+            if rc != 0:
+                raise LookupFailed(last_line(err) or "the lookup exited %d" % rc)
+            return out
+        argv = ["gh", "api", "repos/%s/issues/%d" % (repo, number)]
+        rc, out, err = self._run(argv)
+        if rc == 0:
+            return out
+        first = last_line(err) or "gh exited %d" % rc
+        if self.accounts is None:
+            _, so, se = self._run(["gh", "auth", "status"])
+            self.accounts = sorted(set(re.findall(r"account ([A-Za-z0-9_.-]+)", so + se)))
+        for account in self.accounts:
+            trc, token, _ = self._run(["gh", "auth", "token", "-u", account])
+            if trc != 0 or not token.strip():
+                continue
+            env = dict(os.environ, GH_TOKEN=token.strip())
+            rc, out, _ = self._run(argv, env)
+            if rc == 0:
+                return out
+        raise LookupFailed(first + " (under every logged in gh account)" if self.accounts else first)
+
+    def __call__(self, repo, number):
+        key = (repo, number)
+        if key not in self.seen:
+            try:
+                answer = json.loads(self._fetch(repo, number))
+                if not isinstance(answer, dict) or not isinstance(answer.get("state"), str):
+                    raise ValueError("no state")
+                self.seen[key] = ("pull request" if answer.get("pull_request") else "issue",
+                                  answer["state"].lower())
+            except LookupFailed as exc:
+                self.seen[key] = exc
+            except ValueError:
+                self.seen[key] = LookupFailed("the answer was not GitHub's shape for an issue or a pull request")
+        if isinstance(self.seen[key], LookupFailed):
+            raise self.seen[key]
+        return self.seen[key]
+
+
+def last_line(text):
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1][:300] if lines else ""
+
+
+def pair_findings(text, slug, listed, already, lookup, text_mode):
+    """[(key, reason)] for each keyword and number pair naming an open pull request, or an open issue
+    the text does not mean to close, or one that could not be looked up (claude-config#2464).
+
+    `listed` is the set of keys GitHub will close (pr mode), or None (text mode, where every issue a
+    keyword is followed by counts). Keys in `already` were refused for their sentence and are skipped."""
+    text = text or ""
+    out = []
+    seen = set()
+    prev = None
+    for m in CLOSING.finditer(text):
+        key = ref_key(m, slug)
+        if prev and text.rfind("\n", 0, m.start()) >= prev[0]:
+            prev = None
+        meant = means_to_close(text, m, prev, text_mode)
+        prev = (m.end(), meant)
+        if key in already or key in seen:
+            continue
+        phrase = quote(sentence_before(text, m.start()), m.group(0))
+        if listed is not None and key in listed:
+            kind, state = "issue", "open"
+        elif key[0] is None:
+            seen.add(key)
+            out.append((key, "cannot tell which repository %s is in, so \"%s\" could not be looked up to tell a pull request from an issue" % (show(key, slug), phrase)))
+            continue
+        else:
+            try:
+                kind, state = lookup(key[0], key[1])
+            except LookupFailed as exc:
+                seen.add(key)
+                out.append((key, "could not look up %s#%d (%s), so whether \"%s\" closes a pull request or an open issue is unknown, and unknown is not neither" % (key[0], key[1], exc, phrase)))
+                continue
+        if state != "open":
+            continue
+        if kind == "pull request":
+            seen.add(key)
+            out.append((key, "\"%s\" names pull request %s, and GitHub closes a pull request named after a closing word, so merging this closes it unmerged" % (phrase, show(key, slug))))
+        elif not meant and (listed is None or key in listed):
+            seen.add(key)
+            out.append((key, "\"%s\" puts a closing word before issue %s not at the start of a line or sentence, so it reads as a passing mention, yet GitHub closes the issue on merge" % (phrase, show(key, slug))))
+    return out
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     if mode == "text":
-        for key, reason in findings(io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read(), None, None):
-            print("%s: %s" % (show(key, None), reason))
+        # A slug that is not owner/name is no repository at all: a bare #N then refuses, unlooked up.
+        slug = argv[2] if len(argv) > 2 and SLUG.fullmatch(argv[2]) else None
+        text = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
+        found = findings(text, None, slug)
+        found += pair_findings(text, slug, None, {k for k, _ in found}, Lookup(), True)
+        for key, reason in found:
+            print("%s: %s" % (show(key, slug), reason))
         return 0
     if mode == "pr" and len(argv) > 2:
         slug = argv[2]
@@ -185,10 +373,13 @@ def main(argv):
         except (ValueError, KeyError, TypeError) as exc:
             sys.stderr.write("closing-keyword.py: the pull request could not be read: %s\n" % exc)
             return 3
-        for key, reason in findings(view.get("body") or "", closing, slug):
+        body = view.get("body") or ""
+        found = findings(body, closing, slug)
+        found += pair_findings(body, slug, closing, {k for k, _ in found}, Lookup(), False)
+        for key, reason in found:
             print("%s: %s" % (show(key, slug), reason))
         return 0
-    sys.stderr.write("usage: closing-keyword.py text | closing-keyword.py pr <owner/name>\n")
+    sys.stderr.write("usage: closing-keyword.py text [<owner/name>] | closing-keyword.py pr <owner/name>\n")
     return 64
 
 

@@ -92,7 +92,26 @@ payload="$(ps_clean_payload "$payload")"
 parsed="$(ps_parse_payload "$payload" raw)" \
   || ps_unparsed_refuse "$payload" check-closing-keyword.sh SKIP_CLOSING_CHECK "a pull request body or a commit message" '*pr create*' '*pr edit*' '*pr *' '*git commit*'
 cmd="${parsed%%$'\x1f'*}"
+cwd="${parsed#*$'\x1f'}"
 [ -n "$cmd" ] || exit 0
+
+# The repository a gh command names with -R or --repo, from the words gh itself reads as the
+# subcommand's (PS_RUN_ARGS, set by ps_runs_gh), never the string: a body quoting "--repo x/y" names
+# nothing. HOST/OWNER/REPO keeps its last two parts.
+cc_repo_flag() {
+  local w next=0 v=""
+  for w in ${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"}; do
+    if [ "$next" = 1 ]; then v="$w"; break; fi
+    case "$w" in
+      -R|--repo) next=1 ;;
+      --repo=*) v="${w#--repo=}"; break ;;
+      -R?*) v="${w#-R}"; break ;;
+    esac
+  done
+  case "$v" in */*/*) v="${v#*/}" ;; esac
+  printf '%s' "$v"
+}
+gh_repo=""
 
 # Only the commands that can actually link an issue: a PR body/title, or a commit message.
 #
@@ -120,6 +139,7 @@ else
   while IFS= read -r -d $'\x1e' seg; do
     if ps_runs_gh "$seg" pr create || ps_runs_gh "$seg" pr edit; then
       is_target=1
+      gh_repo="$(cc_repo_flag)"
       break
     fi
   done <<LOOP_INPUT
@@ -148,7 +168,15 @@ if [ ! -f "$DETECTOR" ]; then
   echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
   exit 2
 fi
-findings="$(printf '%s' "$cmd" | python3 "$DETECTOR" text 2>/dev/null)"; det_rc=$?
+# The repository a bare #N is looked up in (claude-config#2464): the one the gh command names, else
+# the origin of the directory the command runs in, read as mt_remote_slug in lib/merge-target.sh reads
+# it. Anything that is not owner/name leaves the detector no repository, and a bare #N then refuses.
+slug="$gh_repo"
+if [ -z "$slug" ] && [ -n "$cwd" ]; then
+  slug="$(git -C "$cwd" config --get remote.origin.url 2>/dev/null \
+    | sed -E 's#^git@github\.com:##; s#^https://github\.com/##; s#\.git$##')"
+fi
+findings="$(printf '%s' "$cmd" | python3 "$DETECTOR" text "$slug" 2>/dev/null)"; det_rc=$?
 if [ "$det_rc" -ne 0 ]; then
   echo "BLOCKED: $DETECTOR failed (exit $det_rc) reading this text, so whether it puts a closing keyword in front of an issue it says it is not closing is unknown. That is the detector failing, not the text passing." >&2
   echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
@@ -158,18 +186,22 @@ fi
 [ -n "$findings" ] || exit 0
 
 cat >&2 <<EOF
-BLOCKED: a closing keyword next to an issue this text says it is not closing.
+BLOCKED: a closing keyword in front of a number this text should not close, or one that could
+not be checked.
 
 $findings
 
-GitHub will CLOSE that issue on merge whatever the sentence around the keyword says. Its
-linked-issue parser matches the keyword plus the reference and reads nothing else: a "not",
-a "would have", a "which" or a "Part of" elsewhere is invisible to it. "It does not close
-#897" closed Overture #897 on a PR that said it did not.
+GitHub will CLOSE whatever a closing word sits in front of on merge, issue or pull request,
+whatever the sentence around it says. Its linked-issue parser matches the keyword plus the
+reference and reads nothing else: a "not", a "would have", a "which" or a "Part of" elsewhere
+is invisible to it. "It does not close #897" closed Overture #897 on a PR that said it did
+not, and "the p0 fix #2451", in passing, closed pull request #2451 unmerged.
 
-Rewrite it so the keyword is never next to the number:
+Reword each phrase quoted above so the closing word is never in front of the number:
   "Part of #897, which stays open."
   "#897 stays open: this fixes only the ratchet."
+  "the p0 change in #2451", or "Supersedes #2451" for a pull request this replaces.
+An issue this change does finish goes on a line of its own: "Closes #897".
 
 Override (a doc that must quote the broken phrasing): SKIP_CLOSING_CHECK=1 <command>
 EOF
