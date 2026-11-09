@@ -203,7 +203,12 @@ becomes public unread, and a body or notes file named inside clustered short fla
 is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
 standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
-on gh itself with nothing piped in, and refused otherwise (#2442). Still not covered: gh run by
+on gh itself with nothing piped in, and refused otherwise (#2442); since #2443 a pull request's,
+issue's or comment's body read from standard input (`--body-file -`, `--body-file=-`, `-F-`) is
+judged the same way. Since #2469 a notes, body or gist file the command writes from a stage that
+redirects standard input more than once (`cat <<'EOF' < other.md > notes.md`) is refused, since the
+shell feeds that stage only the last; the issue field gate still reads such a file from the
+command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
@@ -3353,6 +3358,23 @@ ms on `run-all-tests.sh`. An earlier reading of 21 ms for a skipped call, 20 cal
 around the gate, was not reproduced by these and is replaced by them. Following imports (2026-11-06,
 median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
 before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
+
+The gate stops itself after 11 seconds (`BUDGET_SECONDS`), inside the 15 its registration declares,
+and refuses saying it ran out of time and which file it was about to read or whose commands it was
+judging (#2432). Before, a call it could
+not finish was killed at the timeout, and Claude Code's `[command hook 42]: timed out; blocking
+because onFailure is "block"` said nothing of why, so it read the same as a send. That was every try
+of the TO FILE THESE clear line on the work MacBook on 2026-11-07, while the gate of that day read
+the session transcript handed to `issue-spool.sh` as a shell script: the first 2 MB, about 12,800
+commands, 5.0 to 5.6 seconds on this Mac at load averages of 14 to 90. #2415 had already stopped
+reading such data files as code; the same line now takes 0.27 seconds against a 248 MB transcript
+(load average 14, 2026-11-09). A file the gate cannot tell from a script (a large file with no
+extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
+and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
+distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
+real one.
 
 ## Read only queries are approved without asking
 

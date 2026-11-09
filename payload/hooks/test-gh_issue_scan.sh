@@ -64,6 +64,9 @@ elif mode == "env":
 elif mode == "found":
     # Each gh command that posts a body from a file, as sub act (#1435).
     print("|".join("%s %s" % kind for kind, _, _, _ in g.scan_gh_in_context(cmd, "/start", {}, g.BODY_FILE_COMMANDS)))
+elif mode == "mixed":
+    # Each file the command writes from a stage redirecting standard input more than once (#2469).
+    print(" ".join(p for p, _ in g.mixed_input_writes(cmd, "/start", {"HOME": "/h"})))
 elif mode == "writesat":
     # Where each file the command writes lands, starting in /start (#1436).
     print("|".join(p or "NO" for _, _, _, p in g.file_writes_in_context(cmd, "/start", {"HOME": "/h"})))
@@ -202,6 +205,22 @@ writes_is "a heredoc inside a quoted body is not read as one" "" "gh issue creat
 hi > b.md
 EOF
 )\""
+# A stage with a heredoc and a file both on standard input writes whatever the shell fed it last
+# (claude-config#2469). The issue field gate still reads that write as shown, as before, since a
+# hidden write makes it stand down; only the work names gate refuses it, through mixed_input_writes.
+writes_is "#2469 a heredoc beside a file still reads as shown here, for the issue field gate" "b.md:w:shown" "$(printf "cat <<'EOF' < a.md > b.md\nhi\nEOF")"
+mixed_is() { # mixed_is <description> <expected> <command>
+  local got; got="$(ask mixed "$3")"
+  [ "$got" = "$2" ] && check "$1" ok || check "$1" "got [$got], wanted [$2]"
+}
+mixed_is "#2469 a heredoc and a file on one stage" "b.md" "$(printf "cat <<'EOF' < a.md > b.md\nhi\nEOF")"
+mixed_is "#2469 a here-string and a file, whichever is last" "b.md c.md" "cat <<< hi < a.md > b.md; cat < a.md <<< hi > c.md"
+mixed_is "#2469 tee's operand too" "b.md" "tee b.md <<< hi < a.md"
+mixed_is "#2469 a heredoc with standard input then taken from a descriptor" "b.md" "$(printf "cat <<'EOF' 0>&3 > b.md\nhi\nEOF")"
+mixed_is "#2469 a here-string beside a file opened on <>, which that stage may write too" "a.md b.md" "cat <<< hi <> a.md > b.md"
+mixed_is "#2469 (control) one heredoc alone" "" "$(printf "cat <<'EOF' > b.md\nhi\nEOF")"
+mixed_is "#2469 (control) a file alone" "" "cat < a.md > b.md"
+mixed_is "#2469 (control) a pipe into a here-string stage is one redirection" "" "printf x | cat <<< hi > b.md"
 
 # ---------------------------------------------------------------------------
 # Unreadable is its own answer, not zero creates. Zero means "nothing to gate" and lets the command
