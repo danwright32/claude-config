@@ -75,7 +75,7 @@ has "carries Dan's three tier decision date" '2026-11-09'
 # security and compliance work even when it is also a mechanical kind, Opus for everything else.
 # Judged per bullet, so a word sitting on the wrong tier's line fails rather than passing because
 # it appears somewhere in the section.
-bullet() { grep -i -F -- "$1" <<< "$section" | grep '^- ' | head -n 1; }
+bullet() { awk -v t="$1" '/^- / && index(tolower($0), tolower(t)) { print; exit }' <<< "$section"; }
 fable_line="$(bullet 'model: "fable"')"
 opus_line="$(bullet 'model: "opus"')"
 sonnet_line="$(bullet 'model: "sonnet"')"

@@ -118,13 +118,13 @@ PY
 check "the hook is registered at SessionStart" "$wired"
 
 # ---- 4. the global CLAUDE.md points at the announced number ----
-cap_line="$(grep -F '[Agent cap]' "$CLAUDE_MD" 2>/dev/null | head -n 1)"
+cap_line="$(grep -m 1 -F '[Agent cap]' "$CLAUDE_MD" 2>/dev/null)"
 check "the global CLAUDE.md cap rule names the [Agent cap] line" "$([ -n "$cap_line" ] && echo ok || echo "no [Agent cap] in $CLAUDE_MD")"
 check "and names the hook that is the number's home" \
   "$(grep -q -F 'hooks/agent-cap.sh' <<< "$cap_line" && echo ok || echo "no hooks/agent-cap.sh on the line")"
 # Its fallback, the one number the static file must state, is the hook's default (L41).
-word="$(grep -o -E '(one|two|three|four|five|six|seven|eight|nine|ten) when no such line arrived' <<< "$cap_line" | head -n 1)"
-word="${word%% *}"
+word="$(grep -o -E '(one|two|three|four|five|six|seven|eight|nine|ten) when no such line arrived' <<< "$cap_line")"
+word="${word%%[[:space:]]*}"
 case "$word" in
   one) n=1 ;; two) n=2 ;; three) n=3 ;; four) n=4 ;; five) n=5 ;; six) n=6 ;; seven) n=7 ;; eight) n=8 ;; nine) n=9 ;; ten) n=10 ;; *) n="" ;;
 esac
@@ -161,8 +161,8 @@ scan() { # scan <root>   prints file:line:text for every hand written cap under 
   # Quoted text is a record of what somebody said, so it is removed before the line is judged again.
   printf '%s\n' "$hits" | while IFS= read -r hit; do
     stripped="$(printf '%s' "$hit" | sed -E 's/"[^"]*"//g')"
-    printf '%s\n' "$stripped" | grep -q -i -E "${PATS[@]}" || continue
-    printf '%s\n' "$hit" | grep -q -E "$EXEMPT_RE" && continue
+    grep -q -i -E "${PATS[@]}" <<< "$stripped" || continue
+    grep -q -E "$EXEMPT_RE" <<< "$hit" && continue
     printf '%s\n' "$hit"
   done
 }
