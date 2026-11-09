@@ -318,7 +318,7 @@ check "#2430 (control) a clean file fed in passes: $out" passed
 hook "printf 'a clean build\n' | gh release create v1 $PUB --notes-file -"
 check "#2442 clean notes piped in, even from printf, are refused as unread: $out" refused
 hook "printf 'built from acme-widgets\n' | gh release create v1 $PUB --notes-file -"
-check "#2430 (control) and naming one, they are judged and refused: $out" refused
+check "#2430 (control) and naming one, the notes are refused unread: $out" refused
 hook "gh release create v1 $PUB --notes-file - <<< 'a clean build'"
 check "#2430 (control) a clean here-string passes: $out" passed
 hook "gh release create v1 $PUB --notes-file - <<'EOF'
@@ -395,6 +395,104 @@ EOF"
 check "#2442 (control) a clean heredoc with its error output joined to its output passes: $out" passed
 hook "gh release create v1 $PUB -F - < clean.md 2>/dev/null"
 check "#2442 (control) a clean file fed in with errors discarded passes: $out" passed
+
+# A file written by a stage with more than one redirection of standard input holds whatever the shell
+# fed it last, which may be a file nobody was shown, so a notes or body file written that way is
+# refused in a public repository, never judged from the clean heredoc beside it (claude-config#2469).
+# Only this gate refuses it: the issue field gate still reads the write as shown (test-gh_issue_scan.sh).
+hook "cat <<'EOF' < named.md > notes.md
+a clean build
+EOF
+gh release create v1 $PUB --notes-file notes.md"
+check "#2469 a notes file written from a clean heredoc and a file is refused: $out" refused
+check "#2469 and the refusal says the file was written from more than one standard input: $out" \
+  has "$out" "more than one"
+check "#2469 and names the file: $out" has "$out" "notes.md"
+hook "cat <<'EOF' < named.md > notes.md
+a clean build
+EOF
+gh release create v1 $PUB -F notes.md"
+check "#2469 and given with -F: $out" refused
+hook "cat <<'EOF' < named.md > body.md
+a clean build
+EOF
+gh pr create $PUB --head x --title T --body-file body.md"
+check "#2469 a pull request body file written that way is refused: $out" refused
+hook "cat <<'EOF' < named.md > body.md
+a clean build
+EOF
+gh issue create $PUB --title T -F body.md"
+check "#2469 and an issue's, given with -F: $out" refused
+hook "cat <<< 'a clean build' < named.md > notes.md; gh release create v1 $PUB --notes-file notes.md"
+check "#2469 a clean here-string beside a file is refused the same way: $out" refused
+hook "cat < named.md <<< 'a clean build' > notes.md; gh release create v1 $PUB --notes-file notes.md"
+check "#2469 whichever comes last: $out" refused
+hook "cat <<'EOF' < named.md > notes.md
+a clean build
+EOF
+gh release create v1 $PUB -F - < notes.md"
+check "#2469 and fed to gh on standard input: $out" refused
+hook "cat <<'EOF' > notes.md
+a clean build
+EOF
+gh release create v1 $PUB --notes-file notes.md"
+check "#2469 (control) a notes file written from one clean heredoc passes: $out" passed
+hook "cat <<'EOF' < named.md > notes.md
+a clean build
+EOF
+gh release create v1 $PRIV --notes-file notes.md"
+check "#2469 (control) and written that way for a private repository it passes: $out" passed
+# Where the writes cannot be read for the mixed input check, the file is refused as one whose writer
+# could not be read, never passed as judged from the command (L11).
+unread="$(cd "$CO" && GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
+def broken(*a, **k):
+    raise g.scan.Unreadable("a test stand in")
+g.scan.mixed_input_writes = broken
+cmd = "cat <<'"'"'EOF'"'"' > notes.md\nclean\nEOF\ngh release create v1 --notes-file notes.md"
+place = g.scan.scan_gh_in_context(cmd, ".", {}, {("release", "create")})[0][3]
+try:
+    print(g._body_files(["--notes-file", "notes.md"], cmd, place, g.NOTES_FILE_FLAGS))
+except g.CannotTell as e:
+    print("CANNOT TELL: %s" % e)' "$HERE/work_names_publish_gate.py" 2>&1)"
+check "#2469 a mixed input check that cannot read the writes refuses, saying so: $unread" \
+  has "$unread" "CANNOT TELL: what writes the file it posts from could not be read (a test stand in)"
+
+# A pull request or issue body gh reads from standard input (`--body-file -`, `--body-file=-`, `-F-`,
+# claude-config#2443) is judged by the rule release notes are (#2430, #2442): shown in one heredoc or
+# here-string on gh itself, read from one file fed in with `<`, and refused in every other form.
+hook "gh pr create $PUB --head x --title T --body-file - < named.md"
+check "#2443 a pull request body fed from a file naming one is refused: $out" refused
+check "#2443 and the refusal names the file: $out" has "$out" "named.md"
+hook "gh pr create $PUB --head x --title T --body-file=- < named.md"
+check "#2443 and in the --body-file=- form: $out" refused
+hook "gh issue create $PUB --title T -F- < named.md"
+check "#2443 an issue body in the -F- form: $out" refused
+hook "gh issue create $PUB --title T -F - < named.md"
+check "#2443 and the -F - form: $out" refused
+hook "gh pr comment 7 $PUB -F - < named.md"
+check "#2443 a comment's body fed from a file naming one: $out" refused
+hook "cat clean.md | gh pr create $PUB --head x --title T --body-file -"
+check "#2443 a body piped in, which the hook cannot read, is refused: $out" refused
+check "#2443 and the refusal says standard input: $out" has "$out" "standard input"
+hook "gh issue create $PUB --title T -F- <<'EOF'
+seen in acme-widgets
+EOF"
+check "#2443 a heredoc body naming one is refused: $out" refused
+hook "gh pr create $PUB --head x --title T -F - <<'EOF' < named.md
+a clean body
+EOF"
+check "#2443 a clean heredoc beside a file fed in is refused: $out" refused
+hook "gh pr create $PUB --head x --title T --body-file - < not-there.md"
+check "#2443 a body fed from a file that is not there is refused: $out" refused
+hook "gh issue create $PUB --title T --body-file=- <<'EOF'
+a clean body
+EOF"
+check "#2443 (control) a clean heredoc body passes: $out" passed
+hook "gh pr create $PUB --head x --title T -F- < clean.md"
+check "#2443 (control) a clean file fed in passes: $out" passed
+hook "cat named.md | gh pr create $PRIV --head x --title T --body-file -"
+check "#2443 (control) a body on standard input for a private repository passes: $out" passed
 
 hook "gh gist create --public named.md"
 check "#2398 a public gist whose file names one is refused: $out" refused
@@ -563,6 +661,29 @@ check "#2398 and never posts them" not_posted
 FEED="$WORK/feed-named" guard_args release create v1 --repo danwright-test/public-notes --notes-file=-
 check "#2430 the guard refuses release notes on standard input it did not read (--notes-file=-): rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2430 and never posts them" not_posted
+# The same holds for a pull request or issue body (claude-config#2443): each spelling the guard does not
+# read is refused, never posted unread, clean bytes included.
+printf 'Clean notes\n' > "$WORK/feed-clean"
+FEED="$WORK/feed-named" guard_args pr create --repo danwright-test/public-notes --head x --title T --body-file=-
+check "#2443 the guard refuses a body on standard input it did not read (--body-file=-): rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2443 and never posts it" not_posted
+FEED="$WORK/feed-named" guard_args issue create --repo danwright-test/public-notes --title T -F-
+check "#2443 and in the -F- form: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2443 and never posts it" not_posted
+FEED="$WORK/feed-named" guard_args pr create --repo danwright-test/public-notes --head x --title T -dF-
+check "#2443 and after other one letter flags (-dF-): rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2443 and never posts it" not_posted
+FEED="$WORK/feed-clean" guard_args issue comment 7 --repo danwright-test/public-notes --body-file=-
+check "#2443 and refuses clean bytes it did not read: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2443 and never posts them" not_posted
+FEED="$WORK/feed-named" guard_args pr create --repo danwright-test/public-notes --head x --title T --body-file -
+check "#2443 a body sent as a lone - is read and refused: rc=$rc $out" [ "$rc" -ne 0 ]
+check "#2443 and never posts it" not_posted
+FEED="$WORK/feed-clean" guard_args pr create --repo danwright-test/public-notes --head x --title T --body-file -
+check "#2443 (control) a clean body sent as a lone - posts: rc=$rc $out" [ "$rc" -eq 0 ]
+check "#2443 (control) with the same bytes the script sent" [ "$(cat "$STDIN_SAVE" 2>/dev/null)" = "Clean notes" ]
+FEED="$WORK/feed-clean" guard_args pr create --repo danwright-test/private-notes --head x --title T --body-file=-
+check "#2443 (control) a body on standard input for a private repository posts: rc=$rc $out" [ "$rc" -eq 0 ]
 FEED="$WORK/feed-named" guard_args gist create --public -
 check "#2398 the guard refuses a public gist sent on standard input naming one: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2398 and never posts it" not_posted

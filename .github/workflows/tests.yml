@@ -220,6 +220,25 @@ jobs:
         # the rest; that is the point, not a duplicate.
         run: bash payload/hooks/test-check-home-paths.sh
 
+      # Every hidden Chrome the suites start is the shared Playwright's headless shell, never Google
+      # Chrome (claude-config#2191), and it is found here the same way as on the Macs: install-playwright.sh
+      # puts it under HOME at the version shared-playwright.json pins, in the folder that file names
+      # (read from it, never written twice). Cached on that file, so a run downloads it only when the pin
+      # moves. An install that fails fails the job by name, rather than leaving every browser section of
+      # the design rounds suites to report unmeasured.
+      - name: Where the separate headless Chrome goes
+        id: hidden-chrome
+        run: echo "root=$HOME/$(jq -r .root payload/skills/design-rounds/score/shared-playwright.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the separate headless Chrome
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.hidden-chrome.outputs.root }}
+          key: design-score-playwright-${{ runner.os }}-${{ hashFiles('payload/skills/design-rounds/score/shared-playwright.json') }}
+
+      - name: Install the separate headless Chrome
+        run: bash payload/skills/design-rounds/score/install-playwright.sh
+
       - name: Install the pinned TypeScript compiler
         # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
         # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
