@@ -239,6 +239,7 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
+./claude-sync hold --extend 30 "why" # renew your own hold of that label
 ./claude-sync release           # lift your own hold now instead of waiting for it to run out
 ./claude-sync release "why"     # lift only the hold you took with that label
 ./claude-sync release --other S # lift the hold session S took (status names each hold's session)
@@ -355,7 +356,7 @@ files as `sync from <host>`. It holds the watcher only: `claude-sync send` typed
 works, because the person asking is not the thing being held off. The hold fails open, which is the
 point of the expiry: a hold that outlived the session that took it would silently stop the sync,
 which is the hardest failure here to notice. It defaults to 30 minutes (`SYNC_HOLD_MINUTES`, a chosen number and not a measurement: what it
-costs to be wrong is one more `hold` or one earlier `release`), lifts
+costs to be wrong is one `hold --extend` or one earlier `release`), lifts
 itself when that runs out and says so, is listed by `claude-sync status` for as long as it is live,
 and `claude-sync release` ends it early. A marker nothing can read is cleared and reported in those
 words, never treated as a hold and never treated as absent.
@@ -380,7 +381,7 @@ the watcher then sent that session's half finished work. Now:
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
   length, and named on the line after the success line. The caller's own hold is never shortened:
-  asking for less than it already has keeps the longer one and says so.
+  renewing it for less than it already has keeps the longer one and says so.
 - `release` lifts only the caller's own hold, plus any `unknown` one. Another session's hold is
   lifted only by naming it: `claude-sync release --other <session>`, where the session is the
   short name `status` shows (the first eight characters of its id; any unique start of the id
@@ -396,9 +397,21 @@ each took `hold 60 "build #N"`: each hold replaced the last, and each builder's 
 lifted the hold a sibling was still working under. The record's shape did not change, since every
 line already carried its label. What changed:
 
-- `hold` replaces only the caller's own line with the SAME label. A second `hold` from the same
-  session under another label is a second hold, kept beside the first and counted; the watcher
-  stays held until every one is released or has expired.
+- A second `hold` from the same session under another label is a second hold, kept beside the
+  first and counted; the watcher stays held until every one is released or has expired.
+- A second `hold` from the same session under the SAME label is refused (#2468): it exits
+  non-zero, says no hold was taken, leaves the record exactly as it was, and names the hold already
+  in force and `claude-sync hold --extend <minutes> "<label>"`. Until #2468 it replaced the line,
+  which is how a builder extended its own hold, but a sibling builder that picked the same label
+  replaced the first builder's line just as silently, shortening or ending a hold it was still
+  working under. The two cannot be told apart from the record, since both carry the session's id
+  and the label, so renewing became its own explicit act.
+- `hold --extend [minutes] [why]` renews the caller's own line of that label in place, never
+  adding a second line, and never shortening it. With no live hold of that label it takes nothing
+  and exits non-zero, saying the hold it meant to renew may have run out or been released, and
+  naming the plain `hold` that takes a new one: a renewal that quietly took a fresh hold would hide
+  the gap in which the watcher was free to send. `--extend` comes straight after `hold`, before
+  the minutes, so a label beginning with a dash is still read as a label.
 - `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
   the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
   non-zero, and names the holds the caller does hold and any other session's, each with its end and
@@ -3286,6 +3299,16 @@ names it and is refused like a script run directly would be; a helper that names
 saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
 `scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
 importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
+
+Import text written inside an ordinary string literal is data and is not followed (#2484, narrowing
+signed off by Dan on 2026-11-09): an esbuild stdin entry or a fixture string naming `./missing.js`
+no longer refuses a script for a module nothing loads. A string is still followed wherever the code
+the walk reaches can run a string as code (`JS_SINK`: eval, `Function` and `.constructor`, vm, a
+Worker, Miniflare's script or modules source, a child process, a `data:` or `blob:` URL, a page's
+evaluate, Deno, Bun, the global object by a computed name, or a computed `require` or `import()`).
+The gate cannot trace which string reaches the sink (a variable, a function, another module), so once
+any file reached names one, the walk starts again following every string, as before. Measured over
+1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
 
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
@@ -7027,7 +7050,11 @@ word slack or postMessage and the template's name in a form a reference takes (a
 file name with its extension, after its folder and a dot, or on a python import line, never a word
 the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
 each, all within 3 seconds per call, following files that
-re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
+`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
+so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
+component that itself sends, or imports a send helper, is still its sender, and a file with any
+other importer is followed as before. A search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
 holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
@@ -7036,7 +7063,7 @@ name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519
 
 </td></tr>
 </tbody>
@@ -7963,7 +7990,8 @@ wrong when it is removed
 
 </td><td>
 
-`claude-sync hold`, and `claude-sync release`, which removes the caller's own line of the label
+`claude-sync hold` (a second line of the same session and label refused, renewed with
+`--extend`, #2468), and `claude-sync release`, which removes the caller's own line of the label
 it names, or its only one (or a named session's, with `--other`, or every line, with `--force`)
 
 </td><td>

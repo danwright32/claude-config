@@ -400,6 +400,106 @@ done
 printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/cmt/open.ts"
 run_bash "node $T/imp/cmt/open.ts"
 refused "an import after a block comment that never closes"
+
+# Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
+# narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
+# esbuild stdin entry and a Miniflare module source as strings was refused for modules nothing loads,
+# and the builder got past it by assembling the strings by concatenation. A string is still followed
+# wherever the code the script reaches can run a string as code (eval, new Function, vm, a Worker,
+# Miniflare's script or modules source, a child process, a data: URL), because a string reaches that
+# sink through a variable, a function or another module the gate cannot trace.
+mkdir -p "$T/imp/str"
+printf '%s\n' 'export const post = () => fetch("https://slack.com/api/chat.postMessage");' > "$T/imp/str/poster.js"
+cat > "$T/imp/str/data.ts" <<'TS'
+import { join } from "node:path";
+const entry = "import { handler } from './missing-entry.js'";
+const opts = { stdin: { contents: "export * from './src/missing-stdin.ts'", resolveDir: join(".", "src") } };
+const tpl = `export { x } from "./missing-template.js"; ${entry}`;
+const req = 'const m = require("./missing-required.js"); await import("./missing-dynamic.js");';
+const doc = "import { post } from './poster.js'";
+console.log(entry, opts, tpl, req, doc);
+TS
+run_bash "node $T/imp/str/data.ts"
+allowed "import text inside ordinary string literals (missing modules and a posting one) is not followed"
+# The controls: a real import beside those strings is still followed, missing or posting.
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'import { gone } from "./not-here";'; } > "$T/imp/str/data-real.ts"
+run_bash "node $T/imp/str/data-real.ts"
+refused "a real import of a missing module beside import text in strings"
+says "that refusal names the real import, not a string" "./not-here"
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'const { post } = await import("./poster.js");' 'post();'; } > "$T/imp/str/data-posts.ts"
+run_bash "node $T/imp/str/data-posts.ts"
+refused "a real dynamic import of a posting helper beside import text in strings"
+says "that refusal names the posting helper" "poster.js"
+# A script whose own code posts is refused however its imports read.
+printf '%s\n' 'const doc = "import { a } from \"./missing.js\"";' \
+  'await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: doc });' > "$T/imp/str/sends.ts"
+run_bash "node $T/imp/str/sends.ts"
+refused "a script that posts to Slack itself, beside import text in a string"
+
+# Miniflare's script or modules source is code Miniflare runs, so its import text is still followed:
+# missing, it is refused as a module the gate cannot see; present and posting, as a post.
+cat > "$T/imp/str/mf-missing.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const worker = `export { handler as default } from "./outbound.js";`;
+const mf = new Miniflare({ modules: true, script: worker });
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-missing.ts"
+refused "a Miniflare script source importing a module the gate cannot find"
+says "that refusal names the module in the source string" "./outbound.js"
+cat > "$T/imp/str/mf-posts.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const mf = new Miniflare({
+  modules: [{ type: "ESModule", path: "worker.mjs", contents: "import { post } from './poster.js'; export default { fetch: () => post() };" }],
+});
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-posts.ts"
+refused "a Miniflare modules source importing a helper that posts to Slack"
+says "that refusal names the posting helper reached through the source string" "poster.js"
+
+# Each other sink that runs a string as code keeps its strings followed, held directly or through a
+# variable, and so does a string another module hands to a sink in the script.
+mkdir -p "$T/imp/str/sinks"
+cp "$T/imp/str/poster.js" "$T/imp/str/sinks/poster.js"
+cat > "$T/imp/str/sinks/eval.ts" <<'TS'
+eval("import('./poster.js').then((m) => m.post())");
+TS
+cat > "$T/imp/str/sinks/function.ts" <<'TS'
+const src = "return import('./poster.js')";
+new Function(src)();
+TS
+cat > "$T/imp/str/sinks/vm.ts" <<'TS'
+import vm from "node:vm";
+vm.runInNewContext("import('./poster.js')");
+TS
+cat > "$T/imp/str/sinks/worker.ts" <<'TS'
+import { Worker } from "node:worker_threads";
+new Worker("import('./poster.js')", { eval: true });
+TS
+cat > "$T/imp/str/sinks/child.ts" <<'TS'
+import { execSync } from "node:child_process";
+execSync(`node --input-type=module -e "import './poster.js'"`);
+TS
+cat > "$T/imp/str/sinks/data-url.ts" <<'TS'
+await import("data:text/javascript,import './poster.js'");
+TS
+cat > "$T/imp/str/sinks/constructor.ts" <<'TS'
+const f = (async () => {}).constructor;
+await f("await import('./poster.js')")();
+TS
+for sink in eval function vm worker child data-url constructor; do
+  run_bash "node $T/imp/str/sinks/$sink.ts"
+  refused "a string handed to code that runs it ($sink), importing a helper that posts"
+  says "the $sink refusal names the posting helper" "poster.js"
+done
+cat > "$T/imp/str/src.ts" <<'TS'
+export const src = "import { post } from './poster.js'; post();";
+TS
+printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals-imported.ts"
+run_bash "node $T/imp/str/evals-imported.ts"
+refused "a string from another module handed to eval in the script, importing a helper that posts"
+says "that refusal names the posting helper" "poster.js"
 # Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
 # lies beyond is unseen, so it is refused; a short chain of the same shape passes.
 mkdir -p "$T/imp/chain" "$T/imp/short"
