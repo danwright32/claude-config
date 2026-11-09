@@ -175,9 +175,10 @@ export const sent = (card: StepsCard, i: number, isSent: boolean, forgetPress = 
   ...card,
   steps: card.steps.map((s, k) => {
     if (k !== i) return s
-    if (isSent) return { ...s, isSent, isPressed: true }
-    // No longer sent, so no longer held for a running turn either (#2437).
+    // Held for no turn, either way: a press holds it afresh when a turn runs, and a step answered
+    // "not done" keeps none from the press before (#2437).
     const { heldAt: _held, toldAt: _told, ...open } = s
+    if (isSent) return { ...open, isSent, isPressed: true }
     if (!forgetPress) return { ...open, isSent }
     const { isPressed: _pressed, ...rest } = open
     return { ...rest, isSent }
@@ -346,6 +347,13 @@ export const donePrompt = (i: number): string => `step ${i + 1} done`
 // one and a pressed one alike (#939).
 const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: donePrompt(i) }]
 
+// A sent step's words (#2437): pressed while a turn ran, it says whether Claude has read it yet, so
+// a Done waiting for the turn's next step never reads as ignored.
+const sentWords = (s: StepsCard['steps'][number]): string => {
+  if (s.heldAt === undefined) return 'sent'
+  return s.toldAt === undefined ? 'sent, Claude reads it at its next step' : 'sent, Claude has it'
+}
+
 /**
  * The card's lines: the amber heading, "waiting on you" after it while any step is Dan's to do,
  * then each step on its own line. Every unfinished step is open (#1239), bold in the terminal's own
@@ -362,13 +370,6 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * lines end and the next step's title starts reads at a glance now every step is open at once; none
  * under the heading, none after the last step.
  */
-// A sent step's words (#2437): pressed while a turn ran, it says whether Claude has read it yet, so
-// a Done waiting for the turn's next step never reads as ignored.
-const sentWords = (s: StepsCard['steps'][number]): string => {
-  if (s.heldAt === undefined) return 'sent'
-  return s.toldAt === undefined ? 'sent, Claude reads it at its next step' : 'sent, Claude has it'
-}
-
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardLine[] => {
   // While any unfinished step is Dan's to do, the heading says it waits on him (#863), on the card's
   // own line rather than a row of its own beside the card, so the band and the pane state it once.
