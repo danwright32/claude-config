@@ -98,6 +98,16 @@ eq "suite_isolate refuses a mode it does not know" 2 "$rc"
 # "every" replaces what was inherited, which is what the runner needs.
 r="$(WRAPPED_REFUSAL_LEDGER_DIR=/elsewhere bash -c '. "$1"; suite_isolate "$2" every; printf %s "$WRAPPED_REFUSAL_LEDGER_DIR"' _ "$LIB" "$W/run")"
 eq "every replaces an inherited seam" "$W/run/wrapped-refusals" "$r"
+# Each seam is set by a line naming it (never printf -v "$var", which the Slack drafts gate cannot
+# follow, #2465), so every listed seam must land exactly where the list points it.
+r="$(env "${unsets[@]}" bash -c '. "$1"; suite_isolate "$2" every || exit 9
+  suite_isolation_seams | while read -r v rel; do [ "${!v:-}" = "$2/$rel" ] || printf "%s=%s " "$v" "${!v:-}"; done' _ "$LIB" "$W/each")"
+eq "every listed seam is set to its own place in the folder" "" "$r"
+# A seam added to the list with no line setting it is refused, never skipped and left at the real record.
+r="$(env "${unsets[@]}" bash -c '. "$1"; suite_isolation_seams(){ printf "%s\n" "NEW_SEAM_2465 new"; }
+  suite_isolate "$2" every; printf "rc=%s new=%s" "$?" "${NEW_SEAM_2465:-}"' _ "$LIB" "$W/each" 2>&1)"
+says "a listed seam with no line setting it is refused (2)" "rc=2 new=" "$r"
+says "naming the seam" "the seam NEW_SEAM_2465 is listed but suite_isolate has no line setting it" "$r"
 
 # ---- 2. the runner reads the same list ----
 RUNNER="$HOOKS/run-all-tests.sh"
