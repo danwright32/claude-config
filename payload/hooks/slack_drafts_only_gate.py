@@ -1362,6 +1362,14 @@ class Judge:
                 continue
             words.append(raw if re.search(r"[$`]", raw) else re.sub(r"""['"]""", "", raw))
             k += 1
+            if raw.endswith("=") and k < len(toks) and toks[k] == ("op", "("):
+                # NAME=( ... ): the words inside are the array's values, not names (local -a q=("" x)
+                # read "" as a name nobody could spell, claude-config#2465). With no ) it closes on
+                # (sh_tokens can keep it inside a $(( )) word), the words are read as before, each
+                # one judged as a name where the command binds names.
+                close = next((i for i in range(k + 1, len(toks)) if toks[i] == ("op", ")")), None)
+                if close is not None:
+                    k = close + 1
         if not words:
             return False
         w0, args = words[0], words[1:]
@@ -1653,6 +1661,20 @@ class Judge:
         start = len(rest) - len(rest[end:].lstrip())
         return rest[start:self.sh_word_end(rest, start)] or None
 
+    @staticmethod
+    def sh_strip_openers(t):
+        """t with what opens or carries on a compound command taken off its front (a function's
+        `name() {`, `function name {`, if, then, do, while, until, else, !, a brace), so the command
+        it runs is the one judged: `f() { eval "$1=1"; }` on one line read as a call to f() and its
+        eval went unseen (claude-config#2465)."""
+        t = t.strip()
+        while True:
+            m = SH_FUNC_DEF.match(t) or re.match(r"function\s+[A-Za-z_][\w:.-]*(?:\s*\(\s*\))?", t) or \
+                re.match(r"(?:if|then|elif|else|do|while|until|time|!|\{)(?=[\s;&|]|$)", t)
+            if not m or m.end() == 0:
+                return t
+            t = t[m.end():].lstrip()
+
     def sh_bound_in(self, path, names, cwd, cwd_known, word, depth, seen):
         """The names among names that a sourced file binds, anywhere in it (a function's body too, as
         it can be called later), or in a file it sources, whose path is worked out from the file's
@@ -1682,7 +1704,9 @@ class Judge:
             return set(names)
         known = None
         for (d, t), p in zip(cmds, parts):
-            if self.sh_indirect(t):
+            if len(p["scope"]) > 1:
+                continue  # a subshell's or a substitution's (h="$(eval ...)"): it binds nothing here
+            if self.sh_indirect(self.sh_strip_openers(t)):
                 return set(names)
             if self.sh_source_target(t) is None:
                 continue

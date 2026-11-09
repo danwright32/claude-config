@@ -920,6 +920,39 @@ refused "a function sourcing a relative path, whose directory when it is called 
 says "that refusal says the sourced path could not be worked out" "cannot work out"
 run_bash ". \"\$NOT_SET_2465/lib/x.sh\""
 refused "a command sourcing a file whose path the gate cannot work out"
+# The variables a script set are still followed past a helper it sources (claude-config#2465), so long
+# as the helper binds no name through a variable. whole-number.sh and disk-clean-units.sh returned
+# their result with printf -v "$2", which binds a name only running can tell, so every variable was
+# lost after them and the next sourced path refused; they print now, and the caller captures.
+mkdir -p "$T/sv/posts/help" "$T/sv/quiet/help"
+for tree in posts quiet; do
+  printf '%s\n' 'num() { case "${1-}" in ""|*[!0-9]*) return 1 ;; esac; printf "%s" "${1#"${1%%[!0]*}"}"; }' \
+    'arr() { local -a q=("" "@x"); local pr=( -name .none ); printf "%s" "${#q[@]}${pr[0]}"; }' \
+    'home() { local h; h="$(eval "printf %s ~root")"; printf "%s" "$h"; }' > "$T/sv/$tree/help/prints.sh"
+  printf '%s\n' 'num() { printf -v "$2" "%s" "$1"; }' > "$T/sv/$tree/help/outparam.sh"
+  printf '%s\n' 'grab() { eval "$1=1"; }' > "$T/sv/$tree/help/evals.sh"
+  for kind in prints outparam evals; do
+    printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"\$ROOT/help/$kind.sh\"" 'n="$(num 007)" || n=5' '. "$ROOT/lib/x.sh"' \
+      > "$T/sv/$tree/past-$kind.sh"
+  done
+done
+run_bash "bash $T/sv/quiet/past-prints.sh"
+allowed "a script's variables are followed past a sourced helper that prints its result, arrays and a \$(eval) in it"
+run_bash "bash $T/sv/posts/past-prints.sh"
+refused "and the file sourced after it is read: one that posts is refused"
+says "that refusal names the file sourced after the helper" "lib/x.sh"
+for kind in outparam evals; do
+  run_bash "bash $T/sv/quiet/past-$kind.sh"
+  refused "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
+  says "that refusal says the next sourced path could not be worked out" "cannot work out"
+done
+# The real helpers: a script sourcing each, then a file through a variable path, is followed.
+for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh hang-wait.sh full-run-slot.sh \
+              disk-clean-predicates.sh; do
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/$helper\"" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/real-$helper"
+  run_bash "bash $T/sv/quiet/real-$helper"
+  allowed "a script's variables are followed past the real lib/$helper"
+done
 printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
 run_bash "python3 $T/ds/runner.py $T/ds/job.txt"

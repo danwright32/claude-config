@@ -37,48 +37,52 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 # ---------------------------------------------------------------------------
 if [ -f "$LIB" ] && . "$LIB" && type whole_above_zero >/dev/null 2>&1; then
   check "lib/whole-number.sh loads and defines whole_above_zero" ok
-  # A value that passes is handed back with its leading zeros cut, so bash arithmetic, which reads a
+  # A value that passes is printed with its leading zeros cut, so bash arithmetic, which reads a
   # leading zero as octal, gets the number that was meant: 0500 was 320 there, and 08 an error.
   for pair in 1:1 5:5 05:5 007:7 08:8 09:9 0500:500 10:10 100:100 300:300 21600:21600; do
-    in="${pair%%:*}"; want="${pair#*:}"; got=unset
-    if whole_above_zero "$in" got; then
-      [ "$got" = "$want" ] && check "'$in' is a whole number above zero, handed back as $want" ok \
-                           || check "'$in' is a whole number above zero, handed back as $want" "handed back [$got]"
+    in="${pair%%:*}"; want="${pair#*:}"
+    if got="$(whole_above_zero "$in")"; then
+      [ "$got" = "$want" ] && check "'$in' is a whole number above zero, printed as $want" ok \
+                           || check "'$in' is a whole number above zero, printed as $want" "printed [$got]"
     else
-      check "'$in' is a whole number above zero, handed back as $want" "refused"
+      check "'$in' is a whole number above zero, printed as $want" "refused"
     fi
   done
-  check "and arithmetic on 08 handed back is 8, not an error" "$(whole_above_zero 08 got && [ "$((got + 1))" = 9 ] 2>/dev/null && echo ok || echo "got [$got]")"
+  check "and arithmetic on 08 printed is 8, not an error" "$(got="$(whole_above_zero 08)" && [ "$((got + 1))" = 9 ] 2>/dev/null && echo ok || echo "got [$got]")"
   # Zero however written is zero (#1948): 00 and 000 were read as numbers above zero. A value that
-  # fails leaves the name as it was, so the caller's own default or refusal is all that happens.
+  # fails prints nothing, so the caller's own default or refusal after the || is all that happens.
   for v in 0 00 000 0000000000 '' ' ' abc 5s s5 -1 -0 +5 1.5 '1 2' ' 5' '5 ' $'5\n' 0x10; do
-    got=kept
-    if whole_above_zero "$v" got; then
-      check "'$v' is refused" "it passed"
+    if got="$(whole_above_zero "$v")"; then
+      check "'$v' is refused" "it passed, printing [$got]"
     else
-      [ "$got" = kept ] && check "'$v' is refused, and the name is left alone" ok \
-                        || check "'$v' is refused, and the name is left alone" "it was set to [$got]"
+      [ -z "$got" ] && check "'$v' is refused, printing nothing" ok \
+                    || check "'$v' is refused, printing nothing" "it printed [$got]"
     fi
   done
-  # The value reaches the caller's variable whatever it is called, a local of the caller's own and
-  # the names the helper might have used for itself included (printf -v writes the nearest one).
-  scoped(){ local v w whole frac; whole_above_zero 07 v; whole_above_zero 0500 w; decimal_above_zero 00.5 whole; decimal_above_zero 3 frac; printf '%s|%s|%s|%s' "$v" "$w" "$whole" "$frac"; }
-  [ "$(scoped)" = "7|500|0.5|3" ] && check "a caller's own locals receive the value, whatever they are called" ok \
-                                  || check "a caller's own locals receive the value, whatever they are called" "got [$(scoped)]"
-  # A name that is not one is refused rather than handed to printf -v, which would write elsewhere.
-  for bad in '' 'a-b' '1x' 'x y' 'x[0]' '_wn_v'; do
-    if whole_above_zero 5 "$bad" 2>/dev/null; then check "a name of '$bad' is refused" "it passed"
-    else check "a name of '$bad' is refused" ok; fi
-  done
+  # The value is PRINTED, never set into a variable the caller names (claude-config#2465): the old
+  # second argument is ignored, so a name handed to it, the helper's own old prefix included, is
+  # left exactly as it was, and nothing outside the capture changes.
+  # (called through a variable here, so it runs in this shell where a variable set would show)
+  untouched=kept; _wn_v=kept
+  said="$(whole_above_zero 07 untouched)"; wn_fn=whole_above_zero; "$wn_fn" 0500 _wn_v >/dev/null
+  [ "$said|$untouched|$_wn_v" = "7|kept|kept" ] && check "it prints the value and sets no variable it is named" ok \
+    || check "it prints the value and sets no variable it is named" "printed [$said], untouched [$untouched], _wn_v [$_wn_v]"
+  # A caller's own local receives it by capture, whatever it is called, the helper's own locals'
+  # names included (whole, frac, v), with no trailing newline to trip a comparison.
+  scoped(){ local v w whole frac; v="$(whole_above_zero 07)"; w="$(whole_above_zero 0500)"; whole="$(decimal_above_zero 00.5)"; frac="$(decimal_above_zero 3)"; printf '%s|%s|%s|%s' "$v" "$w" "$whole" "$frac"; }
+  [ "$(scoped)" = "7|500|0.5|3" ] && check "a caller's own locals receive the value by capture, whatever they are called" ok \
+                                  || check "a caller's own locals receive the value by capture, whatever they are called" "got [$(scoped)]"
+  [ "$(whole_above_zero 42 | od -An -c | tr -d ' ')" = "42" ] && check "it prints no newline after the value" ok \
+    || check "it prints no newline after the value" "printed [$(whole_above_zero 42 | od -An -c)]"
   # No argument at all is the empty string, and under set -u is still a refusal rather than an error.
-  if (set -u; whole_above_zero) 2>/dev/null; then
+  if (set -u; ignored="$(whole_above_zero)") 2>/dev/null; then
     check "no argument is refused" "it passed"
   else
     check "no argument is refused" ok
   fi
-  # It decides; it never prints, so a caller can use it in a condition without its words leaking.
-  said="$(whole_above_zero 00 got; whole_above_zero 5 got; whole_above_zero x got)"
-  [ -z "$said" ] && check "it prints nothing" ok || check "it prints nothing" "it said [$said]"
+  # A refusal prints nothing on either stream, so a caller's message is the only thing said.
+  said="$(whole_above_zero 00 2>&1)$(whole_above_zero x 2>&1)$(decimal_above_zero 0.0 2>&1)"
+  [ -z "$said" ] && check "a refusal prints nothing" ok || check "a refusal prints nothing" "it said [$said]"
 else
   check "lib/whole-number.sh loads and defines whole_above_zero" "missing or did not define it: $LIB"
 fi
@@ -88,21 +92,20 @@ fi
 if type decimal_above_zero >/dev/null 2>&1; then
   check "lib/whole-number.sh defines decimal_above_zero" ok
   for pair in 2:2 0.5:0.5 00.5:0.5 .5:0.5 1.25:1.25 010:10 5.:5 0.05:0.05 007.10:7.10; do
-    in="${pair%%:*}"; want="${pair#*:}"; got=unset
-    if decimal_above_zero "$in" got; then
-      [ "$got" = "$want" ] && check "'$in' is a number above zero, handed back as $want" ok \
-                           || check "'$in' is a number above zero, handed back as $want" "handed back [$got]"
+    in="${pair%%:*}"; want="${pair#*:}"
+    if got="$(decimal_above_zero "$in")"; then
+      [ "$got" = "$want" ] && check "'$in' is a number above zero, printed as $want" ok \
+                           || check "'$in' is a number above zero, printed as $want" "printed [$got]"
     else
-      check "'$in' is a number above zero, handed back as $want" "refused"
+      check "'$in' is a number above zero, printed as $want" "refused"
     fi
   done
   for v in 0 00 0.0 0.00 0.000 00.000 .0 0. . '' abc 1.2.3 -1 -0.5 '1 ' 1e3 +1; do
-    got=kept
-    if decimal_above_zero "$v" got; then
-      check "'$v' is refused as a decimal" "it passed"
+    if got="$(decimal_above_zero "$v")"; then
+      check "'$v' is refused as a decimal" "it passed, printing [$got]"
     else
-      [ "$got" = kept ] && check "'$v' is refused as a decimal, and the name is left alone" ok \
-                        || check "'$v' is refused as a decimal, and the name is left alone" "it was set to [$got]"
+      [ -z "$got" ] && check "'$v' is refused as a decimal, printing nothing" ok \
+                    || check "'$v' is refused as a decimal, printing nothing" "it printed [$got]"
     fi
   done
 else
@@ -124,9 +127,17 @@ root = sys.argv[1]
 ALT = r"(?:'[^']*'|\"[^\"]*\"|[^\s|()'\";]+)"
 PATTERN = re.compile(r"(?:^|(?<=[\s(;]))(" + ALT + r"(?:\|" + ALT + r")*)\)")
 CUT = re.compile(r"%%\[!0\]\*")
-# A call naming no variable to hand the value back in: the value is then used as written, leading
-# zeros and all, and bash arithmetic reads those as octal. One way everywhere, so every call names one.
-CALL = re.compile(r"(?<!-F )(?<!type )(?<!-v )\b(?:whole|decimal)_above_zero[ \t]+(\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;|&)\"']+)[ \t]*(?=$|[;|&)#}]|then\b)")
+# A call whose printed value is not captured: the value is then used as written, leading zeros and
+# all, and bash arithmetic reads those as octal, or (the form before claude-config#2465, naming a
+# variable to set) it is printed into the output and the variable never set. One way everywhere, so
+# every call is the whole of a $( ). A call is the name where a command starts; the name in a
+# message, a declare -F or type asking whether it exists, and a declaration of the function are not.
+CALL = re.compile(r"(?:^|[;&|!({]|\b(?:if|then|else|elif|do|while|until)\b)[ \t]*"
+                  r"((?:whole|decimal)_above_zero)\b(?![ \t]*\(\))")
+CAPTURED = re.compile(r"\$\([ \t]*$")
+# A capture under local, declare, export or readonly: the line's status is that builtin's, 0, so the
+# refusal after the || never runs. Assign on a line of its own.
+MASKED = re.compile(r"^[ \t]*(?:local|declare|typeset|export|readonly)\b[^;|&#]*\$\([ \t]*(?:whole|decimal)_above_zero\b")
 DIGITS_ARM = re.compile(r"\[!0-9\.?\]\*\)")
 found = []
 for rel in sys.stdin.read().split("\n"):
@@ -161,8 +172,10 @@ for rel in sys.stdin.read().split("\n"):
                 break
         if not hit and CUT.search(line):
             hit = "leading zeros cut by hand"
-        if not hit and CALL.search(line):
-            hit = "a call naming no variable to hand the value back in"
+        if not hit and MASKED.search(line):
+            hit = "a capture under local, declare or export, whose status hides a refusal"
+        if not hit and any(not CAPTURED.search(line[:m.start(1)]) for m in CALL.finditer(line)):
+            hit = "a call whose printed value is not captured"
         if hit:
             found.append(f"{rel}:{n}: {hit}: {line.strip()}")
 print("\n".join(found))
@@ -179,7 +192,9 @@ trap 'rm -rf "$TMPROOT"' EXIT
 E="''"; N='*[!0-9]*'; ND='*[!0-9.]*'; Z='0'; C='%%[!''0]*'
 W='whole''_above_zero'; D='decimal''_above_zero'
 mkdir -p "$TMPROOT/payload/hooks" "$TMPROOT/.github/workflows"
-# Nine that are, each on a line of its own so a finding names which, and a tenth in a workflow.
+# Thirteen that are, each on a line of its own so a finding names which, and one in a workflow. The
+# last four were the right way to call the helper before claude-config#2465, when it set the variable
+# it was named instead of printing, and the capture under local hides a refusal.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s|%s) x=5 ;; esac\n' "$E" "$N" "$Z"
@@ -191,18 +206,24 @@ mkdir -p "$TMPROOT/payload/hooks" "$TMPROOT/.github/workflows"
   printf 'case "$p" in %s|%s|.|%s|0.0) exit 4 ;; esac\n' "$E" "$ND" "$Z"
   printf '%s "$x" || x=5\n' "$W"
   printf 'if %s "${1:-}"; then n=1; fi\n' "$D"
+  printf '%s "$x" x || x=5\n' "$W"
+  printf 'if %s "${1:-}" n; then [ "$n" -ge 3 ]; fi\n' "$W"
+  printf '%s "$p" p || exit 4\n' "$D"
+  printf '  local n="$(%s "$1")" || return 1\n' "$W"
 } > "$TMPROOT/payload/hooks/probe.sh"
 cp "$TMPROOT/payload/hooks/probe.sh" "$TMPROOT/claude-sync"
 printf 'jobs:\n  a:\n    steps:\n      - run: case "$n" in %s|%s|%s) n=1 ;; esac\n' "$E" "$N" "$Z" > "$TMPROOT/.github/workflows/w.yml"
-# And thirteen that are not.
+# And fifteen that are not.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s) x=5 ;; esac\n' "$E" "$N"
   printf 'case "$gf" in %s) a ;; 1) b ;; %s|%s) c ;; esac\n' "$Z" "$E" "$N"
   printf '# case "$x" in %s|%s|%s) was the old check\n' "$E" "$N" "$Z"
-  printf '%s "$x" x || x=5\n' "$W"
-  printf 'if %s "${1:-}" n; then [ "$n" -ge 3 ]; fi\n' "$W"
-  printf '%s "$p" p || exit 4\n' "$D"
+  printf 'x="$(%s "$x")" || x=5\n' "$W"
+  printf 'if n="$(%s "${1:-}")"; then [ "$n" -ge 3 ]; fi\n' "$W"
+  printf 'p="$( %s "$p")" || exit 4\n' "$D"
+  printf '{ . lib/whole-number.sh && declare -F %s >/dev/null; } || exit 1\n' "$W"
+  printf 'type %s >/dev/null 2>&1 || exit 1\n' "$D"
   printf '%s() {\n' "$W"
   printf 'case "$x" in %s|%s|1%s) x=5 ;; esac\n' "$E" "$N" "$Z"
   printf 'case "$x" in %s) zero ;; *) many ;; esac\n' "$Z"
@@ -216,11 +237,11 @@ cp "$TMPROOT/payload/hooks/probe.sh" "$TMPROOT/payload/hooks/notes.md"
 
 probe="$(printf 'payload/hooks/probe.sh\nclaude-sync\n.github/workflows/w.yml\npayload/hooks/notes.md\n' | python3 -c "$SCAN" "$TMPROOT")"; probe_rc=$?
 [ "$probe_rc" = 1 ] && check "the scan fails on the old check" ok || check "the scan fails on the old check" "exit $probe_rc"
-for l in 2 4 7 8 9 10 11 12 13; do
+for l in 2 4 7 8 9 10 11 12 13 14 15 16 17; do
   case "$probe" in *"payload/hooks/probe.sh:$l:"*) check "and finds the shape on line $l of the probe" ok ;;
     *) check "and finds the shape on line $l of the probe" "it said: $probe" ;; esac
 done
-[ "$(printf '%s\n' "$probe" | grep -c '^payload/hooks/probe.sh:')" = 9 ] \
+[ "$(printf '%s\n' "$probe" | grep -c '^payload/hooks/probe.sh:')" = 13 ] \
   && check "and nothing else in the probe" ok \
   || check "and nothing else in the probe" "it said: $probe"
 case "$probe" in *"claude-sync:2:"*) check "and reads claude-sync, which has no .sh" ok ;;

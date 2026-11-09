@@ -705,7 +705,10 @@ ps__tool_field() {   # $1 = a tool_field, $2 = gh | git | rtk, $3 = subcommand, 
     local _last=$(( ${#PS_RUN_ARGS[@]} - 1 ))
     if [ "$_last" -ge 0 ]; then
       PS_RUN_ARGS[$_last]="${PS_RUN_ARGS[$_last]%$'\n'}"
-      case "$field" in *$'\x1f') unset "PS_RUN_ARGS[$_last]" ;; esac
+      # Dropped by a slice, never unset "PS_RUN_ARGS[$_last]": a subscript holding a variable can
+      # bind any name its value spells, so the Slack drafts gate stops following a script's
+      # variables past it (claude-config#2465).
+      case "$field" in *$'\x1f') PS_RUN_ARGS=("${PS_RUN_ARGS[@]:0:$_last}") ;; esac
     fi
   fi
   [ "$PS_RUN_SUB" = "$3" ] || return 1

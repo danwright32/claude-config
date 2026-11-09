@@ -113,6 +113,16 @@ check "dcu_human turns a GB at a billion bytes" "$(eq "$(dcu_human 976563)" "1.0
 check "dcu_human writes an empty size as 0 KB" "$(eq "$(dcu_human 0)" "0 KB")"
 check "dcu_human never writes 0 KB for a few bytes" "$(eq "$(dcu_human 1)" "1 KB")"
 check "dcu_human never writes 0 for an unread size" "$(eq "$(dcu_human "")" "size unknown")"
+# Printed for the caller to capture, never set into a variable the caller names (claude-config#2465):
+# printf -v "$1" bound a name the Slack drafts gate cannot read without running the file, so it lost
+# track of every variable in every script sourcing this library. dcu_human_to was that form.
+check "dcu_human_to, which set a variable it was named, is gone" \
+  "$(declare -F dcu_human_to >/dev/null && echo "it is still defined" || echo ok)"
+dcu_seen=kept; dcu_fn=dcu_human; dcu_said="$("$dcu_fn" 2048 dcu_seen)"; "$dcu_fn" 2048 dcu_seen >/dev/null
+check "dcu_human prints the size and sets no variable it is named" "$(eq "$dcu_said|$dcu_seen" "2 MB|kept")"
+check "lib/disk-clean-units.sh binds no name through a variable" \
+  "$(dcu_binds="$(grep -nE '^[^#]*(printf[[:space:]]+-v|eval[[:space:]]|declare[[:space:]]+-n)' "$DIR/../../hooks/lib/disk-clean-units.sh")"
+     [ -z "$dcu_binds" ] && echo ok || echo "it does: $dcu_binds")"
 check "dcu_docker_kib reads Docker's decimal GB" "$(eq "$(dcu_docker_kib 1.5GB)" 1464843)"
 check "dcu_docker_kib reads kB" "$(eq "$(dcu_docker_kib 2048kB)" 2000)"
 check "dcu_docker_kib reads 0B as 0" "$(eq "$(dcu_docker_kib 0B)" 0)"
