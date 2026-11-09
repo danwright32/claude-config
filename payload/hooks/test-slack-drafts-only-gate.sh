@@ -940,6 +940,95 @@ for plain in "git push -u origin HEAD:fix/2302-slack-drafts-only" "git status" "
 done
 rm -rf "$errf" "$NOPY"
 
+echo "slack drafts only: a call it cannot judge in time is refused with its own reason (claude-config#2432)"
+
+# On 2026-11-07 the TO FILE THESE line, bash lib/issue-spool.sh clear <project> <transcript .jsonl>
+# <stamp .manifest>, was refused on every try on the work MacBook with "[command hook 42]: timed out;
+# blocking because onFailure is block": Claude Code killed this gate at its 15 second timeout. The
+# gate of that day read the session transcript as a shell script, the first 2 MB of it (MAX_FILE),
+# about 12,000 commands: 5.6 seconds here at a load average of 90, and past 15 on that Mac. A gate
+# killed at its timeout says nothing of why, so a call it ran out of time on read the same as one
+# that sends. Now the gate stops itself inside its timeout and says it ran out of time.
+#
+# Timed by an injected clock, never the real one (L524, L290): under a test run,
+# SLACK_GATE_TICK_BUDGET makes the clock count the gate's steps (each command judged, each file
+# read) and the budget that many steps, so a case is decided by how much the gate reads, whatever
+# the Mac's load. The clear line below took 895 steps on the real issue-spool.sh (2026-11-09); with
+# the transcript read as code, as on 2026-11-07, it took 12,819.
+TICKS=6000
+mkdir -p "$T/big/proj"
+python3 - "$T/big/session.jsonl" <<'PY'
+# A transcript sized past the most the gate reads of any file (2 MB, MAX_FILE), as the real ones are
+# (248 MB for one session on 2026-11-08), of JSON lines that read as shell commands, the first naming
+# the endpoint the way a conversation about the gate does. The endpoint is put together here, so
+# this suite run by hand is not itself refused for feeding python3 a script that names it.
+import json, sys
+endpoint = "chat." + "post" + "Message"
+with open(sys.argv[1], "w") as f:
+    f.write(json.dumps({"type": "user", "message": {"content": "curl -X POST https://slack.com/api/" + endpoint + " -d text=hi"}}) + "\n")
+    i = 0
+    while f.tell() < 3 * 1024 * 1024:
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+                "input": {"command": "cd /tmp/x%d && git status && echo 'a;b|c' && ls -la | head -%d" % (i, i % 50)}}]}}) + "\n")
+        i += 1
+PY
+printf '%s\n' '{"keys":{}}' > "$T/big/claude-issue-findings.session.manifest"
+# The same bytes with no extension: a file the gate cannot tell from a script, so it reads it as one.
+cp "$T/big/session.jsonl" "$T/big/session"
+printf '%s\n' '#!/usr/bin/env bash' 'wc -l "$1"' > "$T/big/count.sh"
+
+run_budget() { # run_budget <tick budget> <command>: run_bash under a test run with the step clock
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+lacks() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; *) check "$1" ok ;; esac; }
+
+CLEAR="bash $DIR/lib/issue-spool.sh clear $T/big/proj $T/big/session.jsonl $T/big/claude-issue-findings.session.manifest"
+run_budget "$TICKS" "$CLEAR"
+allowed "the TO FILE THESE clear line over a 3 MB transcript naming chat.postMessage is judged within $TICKS steps"
+
+# The control: a file it must read as code, sized the same, runs out of the same budget, and the
+# refusal says it ran out of time rather than claiming a send.
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a 3 MB file read as code that runs past the budget is refused, not left to the timeout"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and names the file whose commands it was judging" "judging the commands in $T/big/session ("
+lacks "and does not claim the command posts" "posts to Slack:"
+# Run out before a file is read, and the refusal names that file rather than the last one read.
+run_budget 1 "$CLEAR"
+refused "a budget that passes before the script is read refuses"
+says "and names the file it was about to read" "about to read $DIR/lib/issue-spool.sh ("
+
+# The step clock is a test seam only: outside a test run the setting is ignored, so a one step
+# budget there still lets a small clear through.
+errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj $T/ds/session.jsonl $T/ds/claude-issue-findings.session.manifest")" \
+  | env -u HOOK_TESTS_RUNNING SLACK_GATE_TICK_BUDGET=1 bash "$HOOK" 2>"$errf")"; RC=$?
+ERR="$(cat "$errf")"; rm -f "$errf"
+allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
+
+# The budget sits inside the timeout the settings give the gate, with room for python3 to start and
+# for the one file it may be reading when the budget passes (MAX_FILE read as commands took 2.8
+# seconds under a profiler at a load average of 222 on 2026-11-09).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
+[ -n "$SETTINGS" ] || room="neither settings.hooks.json nor settings.json is in $DIR/.., so there is no timeout to compare"
+[ -z "$SETTINGS" ] || room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
+import json, re, sys
+timeout = None
+for g in json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", []):
+    for h in g.get("hooks", []):
+        if h.get("command", "").endswith("hooks/slack-drafts-only-gate.sh"):
+            timeout = h.get("timeout")
+m = re.search(r"^BUDGET_SECONDS = (\d+)$", open(sys.argv[2]).read(), re.M)
+if timeout is None or not m:
+    print("no registered timeout or no BUDGET_SECONDS line to compare"); sys.exit()
+print("ok" if int(m.group(1)) <= timeout - 4 else "BUDGET_SECONDS %s leaves under 4 of the %s second timeout" % (m.group(1), timeout))
+PY
+)"
+check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
+
 echo "slack drafts only: it is wired"
 
 . "$DIR/lib/settings-file.sh"
