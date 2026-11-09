@@ -466,7 +466,7 @@ r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SAY_
   '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
 check "#2465 and with none set, nothing is refused" "$([ "$r" = "0|" ] && echo ok || echo "got: $r")"
 check "#2465 lib/full-run-slot.sh holds no eval" \
-  "$(grep -nE '^[^#]*\beval[[:space:]]' "$DIR/lib/full-run-slot.sh" >/dev/null && echo "it does" || echo ok)"
+  "$(grep -nE '^[^#]*(^|[^[:alnum:]_])eval[[:space:]]' "$DIR/lib/full-run-slot.sh" >/dev/null && echo "it does" || echo ok)"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

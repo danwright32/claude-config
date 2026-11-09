@@ -36,7 +36,7 @@ eq "#1620 a condition that becomes true while it waits is met" 0 "$rc"
 # Slack drafts gate lost every variable of every suite sourcing this. It is still met, and it sets nothing.
 eq "#2465 hang_wait's condition is still evaluated as written" 0 "$(bash -c ". '$LIB'; hang_wait '[ 1 -eq 1 ] && true'; echo \$?")"
 eq "#2465 and it sets nothing in the caller" "kept" "$(bash -c ". '$LIB'; x=kept; hang_wait 'x=changed; true'; printf %s \"\$x\"")"
-eq "#2465 window_wait's condition sets nothing in the caller either" "kept" "$(bash -c ". '$LIB'; x=kept; window_wait 3 'x=changed; true'; printf %s \"\$x\"")"
+eq "#2465 window_wait's condition sets nothing in the caller either" "kept" "$(bash -c ". '$LIB'; x=kept; window_wait \"\$HANG_S\" 'x=changed; true'; printf %s \"\$x\"")"
 # One that never holds gives up at the ceiling, here set to one second, with 1.
 eq "#1620 a condition that never holds gives up at the ceiling with 1" 1 "$(SUITE_HANG_SECONDS=1 bash -c ". '$LIB'; hang_wait false 0.05; echo \$?")"
 
