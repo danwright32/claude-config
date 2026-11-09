@@ -322,7 +322,7 @@ m = re.search(r'case "\$\{1:-\}" in\n(.*?)\) ;;', t, re.S)
 print("\n".join(w for w in re.sub(r"[\s\\]", "", m.group(1)).split("|") if w not in ('""', "-*")) if m else "")
 PY
 skipped="$(python3 "$WORK/skip-list.py" "$GUARD")"
-builtin="$(GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
+builtin="$(GATE_DIR="$HERE" python3 -B -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
 print("\n".join(sorted(g.BUILTIN)))' "$HERE/work_names_publish_gate.py" 2>&1)"
 check "#2207 bin/gh's skip list was read: $(printf '%s\n' "$skipped" | grep -c .) words" [ "$(printf '%s\n' "$skipped" | grep -c .)" -ge 25 ]
