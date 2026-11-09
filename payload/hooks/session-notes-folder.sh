@@ -17,6 +17,9 @@
 
 set -uo pipefail
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
+  printf '%s\n' "$1" >&2
+  printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 python3 "$HOOK_DIR/lib/session_notes.py" start 2>/dev/null \
-  || printf '{"systemMessage": "The session notes folder (claude-config#2490) was not set up: lib/session_notes.py could not run, so a handoff note written in the scratchpad is lost if this Mac restarts."}\n'
+  || hook_allow_notice "The session notes folder (claude-config#2490) was not set up: lib/session_notes.py could not run, so a handoff note written in the scratchpad is lost if this Mac restarts."
 exit 0

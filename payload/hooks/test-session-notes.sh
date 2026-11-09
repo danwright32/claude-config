@@ -17,6 +17,11 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/settings-file.sh" || {
+  echo "FAIL: $(basename "$0"): lib/settings-file.sh is missing, so the hook's registration cannot be read."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
 HOOK="$DIR/session-notes-folder.sh"
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -124,7 +129,7 @@ check_not "5 a session id that is not a plain name is never made into a path" "/
 reg="$(python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
-print(" ".join(h["command"] for g in d["hooks"].get("SessionStart", []) for h in g["hooks"]))' "$DIR/../settings.hooks.json")"
+print(" ".join(h["command"] for g in d["hooks"].get("SessionStart", []) for h in g["hooks"]))' "$(hook_settings_file "$DIR/..")")"
 check "6 registered on SessionStart" "hooks/session-notes-folder.sh" "$reg"
 # The status bar's compact tool checks a note's path in TypeScript, which cannot import this
 # library, so the folder's root is spelled in both; this keeps the two spellings one.

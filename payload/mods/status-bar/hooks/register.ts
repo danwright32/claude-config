@@ -266,14 +266,15 @@ const placeNote = async ($: EngineInterface, note: string): Promise<{ note: stri
   const mine = (key: string) => `${root}/${key}/${id}/${NOTE_NAME}`
   if (note.startsWith(`${root}/`)) {
     const parts = note.slice(root.length + 1).split('/')
-    if (parts.length === 3 && parts[2] === NOTE_NAME && parts[0] !== '' && parts[1] !== '') {
-      if (parts[1] !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(parts[0])}.` }
+    const [key, sess, name] = parts
+    if (parts.length === 3 && name === NOTE_NAME && key && sess) {
+      if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
       return { note }
     }
   }
   const legacy = LEGACY_NOTE.exec(note)
-  if (legacy) {
-    const [, key, sess] = legacy
+  const [, key, sess] = legacy ?? []
+  if (key && sess) {
     if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
     const target = mine(key)
     const there = await $.fs.stat(target).then(() => true, () => false)
