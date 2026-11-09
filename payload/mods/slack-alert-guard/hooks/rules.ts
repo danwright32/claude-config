@@ -317,6 +317,21 @@ export const importTerms = (text: string): string[] => {
   return [...out]
 }
 
+/**
+ * Whether a file is a UI component (#2519): a React file (.tsx, .jsx) in a components, screens or
+ * views folder, never a test. Dan, 2026-11-09: a file imported only by UI components is not on a
+ * path that posts to Slack, so the search for its sender settles there rather than following the
+ * components on. A React file elsewhere (an email, a Slack message built in JSX) is not one, and a
+ * component that itself sends is still found by the sender check. Swift view files need no rule,
+ * as the search never follows a Swift file (mayHandOn).
+ */
+const UI_DIRS = new Set(['components', 'screens', 'views'])
+export const uiComponent = (rel: string): boolean => {
+  const e = extOf(rel)
+  if ((e !== 'tsx' && e !== 'jsx') || testFile(rel)) return false
+  return rel.split('/').slice(0, -1).some(s => UI_DIRS.has(s.toLowerCase()))
+}
+
 /** Whether a template may be handed on through this file: a JavaScript, TypeScript or python one. */
 const LINK_EXTS = new Set([...JS, 'py'])
 export const mayHandOn = (rel: string): boolean => {

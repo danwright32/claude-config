@@ -1095,6 +1095,73 @@ test(`a template handed on through ${REEXPORT_HOPS} files is followed; through m
   expect(w.ran).toEqual([])
 })
 
+// claude-config#2519, Dan 2026-11-09: a rule, not a deeper search. A file imported only by UI
+// components (React files in a components, screens or views folder) is not on a path that posts to
+// Slack, so it settles there; a file with any other importer is judged as before, and a UI file that
+// itself sends is still found by the sender check.
+const CARD = '/w/app/components/DeployCard.tsx'
+const CARD_TEXT = "import { deployFailed } from '../lib/templates/deploy'\nexport const DeployCard = ({ id }: { id: string }) => <p>{deployFailed(id)}</p>\n"
+const uiImports = (name: string, from: string, used: string) => `import { ${used} } from '${from}'\nexport const ${name} = () => <${used} id="1" />\n`
+// Four components deep, one past what the guard follows, as the 14 components behind a work
+// repository's logic-card.ts were.
+const UI_CHAIN = {
+  [CARD]: CARD_TEXT,
+  '/w/app/components/DeployPanel.tsx': uiImports('DeployPanel', './DeployCard', 'DeployCard'),
+  '/w/app/components/DeployList.tsx': uiImports('DeployList', './DeployPanel', 'DeployPanel'),
+  '/w/app/screens/Deploys.tsx': uiImports('Deploys', '../components/DeployList', 'DeployList'),
+}
+
+test('a template imported only by UI components settles there, never followed past them', withKit, async ($, on) => {
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN } })
+  const before = grepped(w)
+  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The template's importers were searched for, and no search was made for the component's own: no
+  // git grep looked for its name (a word after -e), though one listed the component's lines.
+  expect(grepped(w)).toBeGreaterThan(before)
+  const patterns = w.gits.flatMap(g => g.argv.filter((_, i) => g.argv[i - 1] === '-e'))
+  expect(patterns.length).toBeGreaterThan(0)
+  expect(patterns.some(p => /deploycard/i.test(p))).toBe(false)
+})
+
+test('a template imported by a UI component and by any other file is judged as before', withKit, async ($, on) => {
+  // The other importer leads past what the guard follows: held as could not check, as without the component.
+  const deep = {
+    '/w/app/lib/emails/alpha.tsx': "import { deployFailed } from '../templates/deploy'\nexport const Alpha = () => <p>{deployFailed('1')}</p>\n",
+    '/w/app/lib/emails/bravo.tsx': "export { Alpha } from './alpha'\n",
+    '/w/app/lib/emails/charlie.tsx': "export { Alpha } from './bravo'\n",
+    '/w/app/lib/emails/delta.tsx': "export { Alpha } from './charlie'\n",
+  }
+  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN, ...deep } })
+  const why = refusalOf(await call($, RETEMPLATE))
+  expect(why).toContain('could not check')
+  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
+  expect(w.ran).toEqual([])
+  // The other importer sends nothing, and the component is imported by a file that posts it to
+  // Slack: the component is followed as before, and that file is named as the sender.
+  for (const r of Object.keys(deep)) delete w.files[r]
+  const CARD_POST = '/w/app/lib/card-post.ts'
+  w.files['/w/app/lib/format.ts'] = "import { deployFailed } from './templates/deploy'\nexport const formatted = (id: string) => deployFailed(id).trim()\n"
+  w.files[CARD_POST] = "import { DeployCard } from '../components/DeployCard'\nexport const post = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: String(DeployCard({ id: '1' })) }) })\n"
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD_POST} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a UI component that sends the template to Slack itself, or through a send helper, is still held', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      ...UI_CHAIN,
+      [CARD]: "import { deployFailed } from '../lib/templates/deploy'\nexport const DeployCard = ({ id }: { id: string }) => <button onClick={() => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })} />\n",
+    },
+  })
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD} sends to Slack`)
+  w.files[POST] = POST_TEXT
+  w.files[CARD] = "import { deployFailed } from '../lib/templates/deploy'\nimport { postAlert } from '../src/lib/notify/post'\nexport const DeployCard = ({ id }: { id: string }) => <button onClick={() => postAlert(deployFailed(id))} />\n"
+  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
 test('a re-export cycle ends: with a sender beside it the edit is held, with none it passes', withKit, async ($, on) => {
   const ALPHA = '/w/app/lib/alpha.ts'
   const BRAVO = '/w/app/lib/bravo.ts'

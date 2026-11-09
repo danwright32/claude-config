@@ -9,6 +9,7 @@ import type {
   ScopeModesLeftBranch,
   ScopeModesOpened,
   ScopeModesPlace,
+  ScopeModesPushedInto,
   ScopeModesScope,
   ScopeModesTarget,
 } from '../types/index.d.ts'
@@ -110,6 +111,7 @@ import { isNewer, placeFile, placeSaid, placeText, readPlace, type PlaceHow, typ
 import { PAGE_TOOL } from './mod-kit/deliver.ts'
 import {
   branchChoiceFor,
+  branchesPushedInto,
   branchesTouched,
   choiceFor,
   CLEANUP_TOOL,
@@ -177,6 +179,7 @@ const placeSeenRef = { plugin: 'scope-modes', key: 'placeSeen' } as const
 const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
 const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
 const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
+const pushedIntoRef = { plugin: 'scope-modes', key: 'pushedInto' } as const
 const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
@@ -3820,7 +3823,9 @@ const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: 
 
 // `choices` are Dan's recorded answers about PRs (#2433), the one about the PR read found by the
 // repository its kept reading's link names and its number, as the finish check finds it.
-type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[] }
+// `into` are the branches this session pushed the target's branch into (#2533), whose PR is its PR
+// when it has none of its own.
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[]; into?: readonly string[] }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
@@ -3871,19 +3876,25 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     } else {
       if (t.pr && seen?.pr?.state === 'MERGED') pr = seen.pr
       else {
-        const res = t.pr
-          ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
-          : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
-        if (res.exitCode !== 0) {
-          if (poll) await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
-          return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
-        }
-        try {
-          const j = JSON.parse(res.stdout) as PrJson | PrJson[]
-          const one = Array.isArray(j) ? j[0] : j
-          pr = one && typeof one.number === 'number' ? one : null
-        } catch {
-          return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+        // By its number once found; else by its own branch, then by each branch this session pushed
+        // it into (#2533), whose PR carries its commits.
+        pr = null
+        for (const head of t.pr ? [''] : [t.branch, ...(o.into ?? []).filter(b => b !== t.branch)]) {
+          const res = t.pr
+            ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
+            : await gh(['pr', 'list', '--head', head, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+          if (res.exitCode !== 0) {
+            if (poll) await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
+            return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
+          }
+          try {
+            const j = JSON.parse(res.stdout) as PrJson | PrJson[]
+            const one = Array.isArray(j) ? j[0] : j
+            pr = one && typeof one.number === 'number' ? one : null
+          } catch {
+            return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+          }
+          if (pr) break
         }
       }
       issues = new Map(seen?.issues)
@@ -3962,6 +3973,16 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       }
     }
   }
+  // The session's own branch with no PR found (#2533): gone both here and from GitHub, nothing of it is
+  // left to put in one. Asked here first, so a branch still here costs one git call; a read that fails
+  // is never read as gone, so the branch holds as before.
+  if (readsPr && !t.pr && r.pr === null && r.branch && !(gone && !main)) {
+    const here = await git(['branch', '--list', r.branch])
+    if (here.exitCode === 0 && here.stdout.trim() === '') {
+      const remote = await git(['ls-remote', '--exit-code', '--heads', 'origin', r.branch])
+      if (remote.exitCode === 2) r.branchGone = true
+    }
+  }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
   if (r.pr && !('unreadable' in r.pr) && r.pr.state === 'MERGED') {
     r.deploy = await readDeploy($, { number: r.pr.number, url: prUrl })
@@ -3992,7 +4013,8 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
   }
   // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
   // Only what this session wrote is its unfinished work; the rest is kept to be said once (#1108).
-  if ((t.isDefault || inherited) && r.pr === null && !gone) {
+  // With no PR, on any branch: the session's own one gone or left on Dan's answer counts it too (#2533).
+  if (r.pr === null && !gone && !t.pr) {
     const split = await uncommittedOwn($, t.root)
     if ('unreadable' in split) r.dirty = split
     else {
@@ -4091,7 +4113,10 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
       // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
       // answer to leave_branch, by repository and name (#1074).
       const choices = await leftOpenOf($)
-      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices })
+      // The branches this session pushed its branch into (#2533): with no PR of its own, theirs is its PR.
+      const ownBranch = t.branch
+      const into = ((await $.state.get(pushedIntoRef)).value ?? []).filter(p => p.from === ownBranch).map(p => p.to)
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices, into })
       t = await keepFound($, t, found)
       const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
@@ -4435,16 +4460,26 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
   try {
     const cmds = await readCommands($, raw)
     const { named, current } = branchesTouched(cmds)
+    const pushed = branchesPushedInto(cmds)
     const add = [...named]
     const moved = cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
-    if (current && agentId === undefined && !moved) {
+    // The branch checked out where the call ran, read only where it is known and needed.
+    let here: string | undefined
+    if ((current || pushed.some(p => p.from === null)) && agentId === undefined && !moved) {
       const dir = cmds.find(c => c.git?.dir !== undefined)?.git?.dir
       const path = dir === undefined ? await $.session.cwd() : dir.startsWith('/') ? dir : undefined
       const at = path ? await $.modkit.branch({ path }) : null
       if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
-      if (at && !('unreadable' in at) && at.branch) add.push(at.branch)
+      if (at && !('unreadable' in at) && at.branch) here = at.branch
     }
+    if (current && here) add.push(here)
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
+    // Which branch each push into another came from (#2533), so the finish check reads that one's PR.
+    const into = pushed.flatMap(p => {
+      const from = p.from ?? here
+      return from && from !== p.to ? [{ from, to: p.to }] : []
+    })
+    await addToList({ get: () => $.state.get(pushedIntoRef), set: (l, v) => $.state.set(pushedIntoRef, l, { ifVersion: v }) }, into, (a, b) => a.from === b.from && a.to === b.to)
   } catch (err) {
     // A skew is said once, never on every call that notes a branch (#1281), with what it costs
     // until then, since every later note is dropped too (lessons review).
@@ -5659,6 +5694,7 @@ export const register: Register = on => {
     await $.state.set(openedRef, [] as ScopeModesOpened[])
     await $.state.set(leftOpenRef, [] as ScopeModesLeftAsIs[])
     await $.state.set(branchesRef, [] as string[])
+    await $.state.set(pushedIntoRef, [] as ScopeModesPushedInto[])
     await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])

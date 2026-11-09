@@ -49,8 +49,9 @@ export type ModKit = {
    * Draws this tool call's result row as the boxed card, in place of the tool's own text result,
    * which the model still reads. Only mod-kit draws a result row (tools/check-mod-shared-parts.sh),
    * so a mod's own tool shows its card through this. Rejects a card with no tool use id, no title,
-   * or a line or run that is not plain data of the right shape. Kept in memory: after a reload an
-   * earlier row is drawn as the tool's text result again.
+   * or a line or run that is not plain data of the right shape. Kept for the session in mod-kit's
+   * $.state, so a reload of mod-kit still draws the row as its card (#2512); rejects when the
+   * session cannot keep it, and the row is then the tool's text result.
    */
   card: (input: ModKitCard) => Promise<void>
   /**
@@ -612,8 +613,9 @@ declare module 'claude-code' {
      * this session is known to be on (account and org ids, '' for none, null for a file that could
      * not be read), noted at its start and moved by every modkit.login once it has been raised (#1235).
      * `holds`: each mod's hold on its reload while it waits on work (#2100), kept here so a reload of
-     * mod-kit or of the holding mod keeps it.
+     * mod-kit or of the holding mod keeps it. `cards`: each tool result row's card, by its
+     * tool_use_id (#2512), kept here so a reload of mod-kit still draws the row as its card.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null; holds: ModKitHold[] }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null; holds: ModKitHold[]; cards: StateFamily<ModKitCard> }
   }
 }
