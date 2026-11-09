@@ -569,6 +569,15 @@ test('a deploying card asks for no draft yet; the live card for it does, with th
   expect(said(l)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
 })
 
+test("a later card naming someone else never takes the earlier requester's Slack target for its draft (#2435)", withKit, async ($, on) => {
+  world(on)
+  const kris = { requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is going out.', slack: { user_id: 'U0123ABCD' } }
+  await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...kris })
+  const r = await card($, { ...CARD, requester: { name: 'Ana', via: 'named' }, message: 'The venue filter is live now.' })
+  expect(said(r)).not.toContain('U0123ABCD')
+  expect(said(r)).toContain('a DM to Ana')
+})
+
 test('a live card for a Slack requester with no thread known says to find it or tell Dan, and never to send (#2435)', withKit, async ($, on) => {
   world(on)
   const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' })

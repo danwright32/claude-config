@@ -491,9 +491,11 @@ export const register: Register = on => {
     if (requester && message) {
       kept.requester = requester
       kept.message = message
-      // Where its draft goes: this call's, else what an earlier card for the PR gave, so a live
-      // call need not repeat the thread a deploying call named (#2435).
-      const to = slack ?? before?.slack
+      // Where its draft goes: this call's, else what an earlier card for the PR gave for the same
+      // requester, so a live call need not repeat the thread a deploying call named (#2435). An
+      // earlier card for someone else keeps its target: Kris's DM is never where Ana's draft goes.
+      const same = before?.requester?.name === requester.name && before?.requester?.via === requester.via
+      const to = slack ?? (same ? before?.slack : undefined)
       if (to) kept.slack = to
       // A message already marked sent stays sent only while it is the same message.
       if (before?.sentAt !== undefined && before.message === message) kept.sentAt = before.sentAt
