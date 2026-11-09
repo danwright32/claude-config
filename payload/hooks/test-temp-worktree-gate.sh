@@ -43,7 +43,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # The session's folder: a repository path that is not under any temp folder. Nothing is made there;
 # the gate only reads the path.
-REPO="/Users/nobody/Apps/proj"
+REPO="/opt/work/apps/proj"
 
 # A stand in for git, so the repository the gate finds is the one each case names. With STUB_COMMON
 # set, `git rev-parse ... --git-common-dir` prints it; unset, it fails as git does outside a
@@ -132,8 +132,8 @@ refused "--reason=value before the path" 'git worktree add --reason=keep --lock 
 refused "after --" 'git worktree add -- /tmp/wt-2528' "$SUGGEST"
 refused "a move into /tmp" 'git worktree move .claude/worktrees/wt-2528 /tmp/wt-2528' "$SUGGEST"
 # The repository is found by git where it can be: from a worktree, the main checkout's folder.
-STUB_COMMON="/Users/nobody/Apps/main/.git" refused "the suggestion is the main checkout's .claude/worktrees" \
-  'git worktree add /tmp/wt-2528' "/Users/nobody/Apps/main/.claude/worktrees/wt-2528"
+STUB_COMMON="/opt/work/apps/main/.git" refused "the suggestion is the main checkout's .claude/worktrees" \
+  'git worktree add /tmp/wt-2528' "/opt/work/apps/main/.claude/worktrees/wt-2528"
 # The main session is judged the same as an agent: a restart takes either one's worktree.
 run_hook "$(bash_payload 'git worktree add /tmp/wt-2528' a1b2c3d4)"
 if [ "$RC" -eq 2 ]; then check "an agent's temp worktree is refused" ok; else check "an agent's temp worktree is refused" "exit $RC: ${ERR:0:300}"; fi
