@@ -39,7 +39,8 @@ esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
 FAKEHOME="$TMPROOT/home"
-mkdir -p "$FAKEHOME/Apps/Present" "$FAKEHOME/Apps/TildeHere" "$FAKEHOME/My Apps/Spaced"
+mkdir -p "$FAKEHOME/Apps/Present" "$FAKEHOME/Apps/TildeHere" "$FAKEHOME/My Apps/Spaced" \
+  "$FAKEHOME/Apps/Brass Lantern" "$FAKEHOME/Apps/Tin  Whistle"
 
 run() { # run <settings file>   -> stdout and stderr together, exit code kept
   HOME="$FAKEHOME" TRUSTED_PATHS_SETTINGS_FILE="$1" bash "$CHECK" 2>&1
@@ -119,6 +120,58 @@ done
 lines="$(printf '%s\n' "$out" | grep -c 'is not on this Mac')"
 [ "$lines" -eq 2 ] && check "one line per missing path" ok \
   || check "one line per missing path" "counted $lines in: $out"
+
+# ---------------------------------------------------------------------------
+# A bare path whose folder name holds a space (claude-config#2549). The Trusted repos entry lists
+# checkouts bare, as <path> (<remote url>), <path> (<remote url>), so a folder like "Brass Lantern"
+# was cut at its space, read as Apps/Brass, and reported missing on every prompt although it is
+# there. It is read whole when the longer reading exists; a reading made by gluing a gone path to
+# the words after it never makes that path present.
+# ---------------------------------------------------------------------------
+BARE_SPACED="$(mksettings bare-spaced.json "      \"**Trusted repos**: $FAKEHOME/Apps/Brass Lantern (https://github.com/example/brass.git), $FAKEHOME/Apps/Present (https://github.com/example/present.git), ~/Apps/Brass Lantern (https://github.com/example/brass.git)\",
+      \"**Also**: $FAKEHOME/Apps/Brass Lantern, the main one, and $FAKEHOME/Apps/Tin  Whistle.\"")"
+out="$(run "$BARE_SPACED")"; code=$?
+[ "$code" -eq 0 ] && check "a bare path with a space in its folder name, present, exits 0" ok \
+  || check "a bare path with a space in its folder name, present, exits 0" "exit=$code, said: $out"
+[ -z "$out" ] && check "and is not reported cut at its space" ok \
+  || check "and is not reported cut at its space" "it said: $out"
+
+BARE_SPACED_GONE="$(mksettings bare-spaced-gone.json "      \"**Trusted repos**: $FAKEHOME/Apps/Copper Kettle (https://github.com/example/copper.git), $FAKEHOME/Apps/Brass Lantern (https://github.com/example/brass.git)\",
+      \"**Moved**: $FAKEHOME/Apps/Pewter moved to $FAKEHOME/Apps/Present last week\",
+      \"**Next door**: $FAKEHOME/Apps/Iron $FAKEHOME/Apps/Present\"")"
+out="$(run "$BARE_SPACED_GONE")"; code=$?
+[ "$code" -eq 1 ] && check "a bare spaced path that is gone exits 1" ok \
+  || check "a bare spaced path that is gone exits 1" "exit=$code, said: $out"
+case "$out" in
+  *"\`$FAKEHOME/Apps/Copper\`"*) check "and is still reported when no reading of it exists" ok ;;
+  *) check "and is still reported when no reading of it exists" "it said: $out" ;;
+esac
+case "$out" in
+  *"\`$FAKEHOME/Apps/Pewter\`"*) check "a gone path followed by words is still reported" ok ;;
+  *) check "a gone path followed by words is still reported" "it said: $out" ;;
+esac
+case "$out" in
+  *"\`$FAKEHOME/Apps/Iron\`"*) check "a gone path followed by a present one is still reported" ok ;;
+  *) check "a gone path followed by a present one is still reported" "it said: $out" ;;
+esac
+case "$out" in
+  *"Apps/Brass"*) check "the present spaced path beside them is not reported" "it said: $out" ;;
+  *) check "the present spaced path beside them is not reported" ok ;;
+esac
+lines="$(printf '%s\n' "$out" | grep -c 'is not on this Mac')"
+[ "$lines" -eq 3 ] && check "one line for each of the three gone paths" ok \
+  || check "one line for each of the three gone paths" "counted $lines in: $out"
+
+# Two spaced paths sharing their first word in one entry stay two paths: the present one must not
+# answer for the gone one.
+SHARED_WORD="$(mksettings shared-word.json "      \"**Trusted repos**: $FAKEHOME/Apps/Brass Lantern (https://github.com/example/brass.git), $FAKEHOME/Apps/Brass Bell (https://github.com/example/bell.git)\"")"
+out="$(run "$SHARED_WORD")"; code=$?
+[ "$code" -eq 1 ] && check "a gone spaced path beside a present one sharing its first word exits 1" ok \
+  || check "a gone spaced path beside a present one sharing its first word exits 1" "exit=$code, said: $out"
+case "$out" in
+  *"\`$FAKEHOME/Apps/Brass\`"*) check "and is reported" ok ;;
+  *) check "and is reported" "it said: $out" ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Read only. The settings file is never changed by the check.
