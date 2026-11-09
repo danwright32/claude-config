@@ -539,6 +539,75 @@ test('a deploying card naming who asked, with no message yet, is made, and says 
   expect(await shown($)).toEqual(['engine band'])
 })
 
+// #2435, Dan, 2026-11-07: "anytime you have a message for someone you should save it in a draft in
+// slack as well". The mod never calls Slack: the card's answer tells the session to save the draft,
+// and only once the card says the change is out. The band is unchanged.
+const ASKED_IN = { channel_id: 'C0123ABCD', thread_ts: '1730900000.123456' }
+
+test('a live card with a message for a Slack requester tells the session to save it as a draft reply in that thread, and calls no Slack tool itself (#2435)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: ASKED_IN })
+  expect(r.deny).toBeUndefined()
+  expect(said(r)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
+  expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
+  expect(said(r)).toContain('/no-ai-tells')
+  expect(w.slackCalls).toEqual([])
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+})
+
+test('a deploying card asks for no draft yet; the live card for it does, with the thread an earlier call gave (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: ASKED_IN }
+  const d = await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...ask })
+  expect(said(d)).not.toContain('slack_send_message_draft')
+  const f = await card($, { ...CARD, ...ask, deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(said(f)).not.toContain('slack_send_message_draft')
+  // A live card naming nobody keeps the earlier message, and where its draft goes.
+  const { requester: _r, message: _m, slack: _s, ...bare } = { ...CARD, ...ask }
+  const l = await card($, bare)
+  expect(said(l)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
+})
+
+test('a live card for a Slack requester with no thread known says to find it or tell Dan, and never to send (#2435)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' })
+  expect(r.deny).toBeUndefined()
+  expect(said(r)).toContain('No Slack thread was given')
+  expect(said(r)).toContain('save nothing and tell Dan')
+  expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
+})
+
+test('a person Dan named gets a draft DM by user id, and a message Dan marked sent asks for no draft (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is live now.', slack: { user_id: 'U0123ABCD' } }
+  const r = await card($, { ...CARD, ...ask })
+  expect(said(r)).toContain('slack_send_message_draft with channel_id "U0123ABCD"')
+  expect(said(r)).toContain('a DM to Kris')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
+  expect(said(await card($, { ...CARD, ...ask }))).not.toContain('slack_send_message_draft')
+})
+
+test('a second live card for the same thread says its draft replaces the first; the same card again asks only if not saved (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, slack: ASKED_IN }
+  const first = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' })
+  expect(said(first)).not.toContain('replaces')
+  const again = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' })
+  expect(said(again)).toContain('already asked for on an earlier card for #412')
+  const second = await card($, { ...CARD, ...ask, pr: 413, message: 'Both venue fixes are live now.' })
+  expect(said(second)).toContain('An earlier card (#412) already asked for a draft in that thread')
+  expect(said(second)).toContain('replaces')
+  expect(said(second)).toContain('attached_draft_exists')
+})
+
+test('a card refuses Slack fields with nobody named, and a malformed thread, before GitHub is asked (#2435)', withKit, async ($, on) => {
+  const w = world(on)
+  expect((await card($, { ...CARD, slack: ASKED_IN })).deny).toContain('slack is only for the person a message is for')
+  expect((await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'Live now.', slack: { thread_ts: '1730900000.123456' } })).deny).toContain('slack.thread_ts needs slack.channel_id')
+  expect(w.runs).toEqual([])
+})
+
 test('a Copy the clipboard refuses says so, rather than seeming to work', withKit, async ($, on) => {
   const w = world(on, { copied: false })
   await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live now.' })

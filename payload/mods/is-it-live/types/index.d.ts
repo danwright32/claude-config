@@ -16,6 +16,10 @@ export type IsItLiveCard = {
   message?: string
   /** When Dan pressed Mark sent; absent while the message waits. */
   sentAt?: number
+  /** Where the message's Slack draft goes (#2435): the thread a Slack requester asked in, or a user id for a DM. */
+  slack?: { channel_id?: string; thread_ts?: string; user_id?: string }
+  /** The place (card.ts draftKeyOf) a card's answer last asked the session to save this message's draft to. */
+  draftAsked?: string
 }
 
 /** What the newest card for a merged PR says about its deploy (#687), and when it was made. */
