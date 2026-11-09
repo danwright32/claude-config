@@ -110,6 +110,10 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
 // sender since it could not tell which file sends it (#2364).
 const MOST_READ = 200
 
+// How much of a command's output $.process.run keeps, in MiB: the first 4194304 bytes, the rest
+// dropped and the result marked isStdoutTruncated (read from Claude Code 2.1.319's own runner).
+const STDOUT_KEPT_MIB = 4
+
 /** Repository paths in their order, as groups whose `:(literal)` pathspecs come to at most PATHSPEC_BYTES each. */
 const pathspecGroups = (rels: string[]): string[][] => {
   const groups: string[][] = []
@@ -193,8 +197,11 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       if (ms <= 0) end(late)
       const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...args], { timeoutMs: ms })
       if (hits.exitCode === 1) return ''
-      if (hits.exitCode !== 0 || hits.isStdoutTruncated)
+      if (hits.exitCode !== 0)
         end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+      // Cut short is not git failing: said as "exit 0: no message" it hid which listing ran long, and
+      // read the same from a session still running an older copy of this search (2026-11-09).
+      if (hits.isStdoutTruncated) end({ unchecked: `git grep listing the names of the files that ${what} printed more than the ${STDOUT_KEPT_MIB} MiB Claude Code keeps of a command's output, so it could not be read whole` })
       return hits.stdout
     }
     // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is

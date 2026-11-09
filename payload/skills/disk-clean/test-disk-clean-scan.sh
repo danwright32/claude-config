@@ -421,13 +421,20 @@ fresh
 BIG=3000
 mkdir -p "$H/Library/Caches"
 i=1; while [ "$i" -le "$BIG" ]; do mkdir "$H/Library/Caches/c$i"; i=$((i + 1)); done
+# The caches are dated long ago, so each one passes the 30 day floor with a single find, as an old
+# cache on a real Mac does. Made today, each met the floor's change branch instead, which runs find
+# three times, every find through the harness's guard (a bash process each): that is what made
+# this section cost about a tenth of a second an item once the floor came in (claude-config#2187),
+# and what this suite's wall clock had to cover on a loaded Mac (#2260).
+aged "$H/Library/Caches"
 mkdir -p "$H/.Trash"; i=1; while [ "$i" -le 1000 ]; do : > "$H/.Trash/t$i"; i=$((i + 1)); done
 # This section asks whether every item is recorded, never how fast: the per category time bound is
-# section 3's subject. Through this harness the caches category costs about a tenth of a second an
-# item, so this scan took 325 s at a load of 24 on 12 cores, and in a full run on 2026-11-04 (load 23 to
-# 83) the caches category ran past the scan's default 600 s bound and recorded 2177 of its 3000
-# (claude-config#2260). So the bound here is the suite's own wall clock, which only a hang outlasts,
-# the way lib/hang-wait.sh bounds a wait.
+# section 3's subject. With the caches made today this scan took 325 s at a load of 24 on 12 cores
+# (measured 2026-11-05), and in a full run on 2026-11-04 (load 23 to 83) the caches category ran
+# past the scan's default 600 s bound and recorded 2177 of its 3000 (claude-config#2260). Dating
+# them long ago halved it: 259 s made today against 129 s and 120 s dated long ago, at a load of 10
+# to 28 on 12 cores (measured 2026-11-09). The bound here stays the suite's own wall clock, which
+# only a hang outlasts, the way lib/hang-wait.sh bounds a wait.
 start="$(date +%s)"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS="$SUITE_WALL_DEFAULT" bash "$SCAN" --only caches,trash
 took=$(( $(date +%s) - start ))
@@ -438,6 +445,8 @@ check "and so did the Trash" "$(eq "$(dcr_header "$REC" status.trash)" measured)
 check "every cache is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "caches"' | wc -l | tr -d ' ')" "$BIG")"
 check "every Trash entry is in the record" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "trash"' | wc -l | tr -d ' ')" 1000)"
 check "none is unreadable" "$(eq "$(dcr_items "$REC" | awk -F "$S" '$5 == "unreadable"' | wc -l | tr -d ' ')" 0)"
+check "every cache went the whole way through its rules and the 30 day floor, to offerable" \
+  "$(eq "$(dcr_items "$REC" | awk -F "$S" '$2 == "caches" && $5 == "offerable"' | wc -l | tr -d ' ')" "$BIG")"
 check "du was run in batches, never once per item" "$([ "$(dc_calls du | wc -l | tr -d ' ')" -lt 50 ] && echo ok || echo "$(dc_calls du | wc -l | tr -d ' ') du calls")"
 
 # ================================================================================================
