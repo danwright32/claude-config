@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, held as heldFor, heldNote, heldSteps, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, unheld, untoldSteps, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { ASKED_PANE, FOLLOW_MS, follow, PANES, UNASKED_PANE } from './place.ts'
 import { clearTurnPages, notePinned, pagesAtStop, registerPages } from './pages.ts'
@@ -55,7 +55,7 @@ const persist = async ($: EngineInterface) => {
     const { key } = await projectKeys($)
     if (card && nextStep(card) !== undefined) {
       const { isCarried: _carried, ...kept } = card
-      await $.store.set(key, { ...kept, steps: kept.steps.map(({ isSent: _sent, ...s }) => s) })
+      await $.store.set(key, { ...kept, steps: kept.steps.map(({ isSent: _sent, heldAt: _held, toldAt: _told, ...s }) => s) })
     } else await $.store.delete(key)
   } catch (err) {
     $.ui.toast(`The manual steps could not be saved for the next session: ${message(err)}.`)
@@ -367,14 +367,32 @@ const giveBackDropped = async ($: EngineInterface, mine: number) => {
 }
 
 // Done on step `i` (0 based), any unfinished step not already sent (#1239).
+// #2437: a Done pressed while a main turn runs is not queued behind it, since a running turn never
+// takes in a mod's prompt (measured on Claude Code 2.1.319): it is held, told to the turn on its next
+// tool result (the tool.call hook below), and sent as "step N done" at the turn's end only if the
+// step is still unrecorded. A turn that cannot be read is read as none, so the Done goes as a prompt
+// as before and is never lost.
 const pressDone = async ($: EngineInterface, i: number) => {
+  let running: string | null = null
+  try {
+    running = await runningTurnOf($)
+  } catch (err) {
+    $.ui.log(`manual-steps: could not read whether a turn is running, so the Done goes as a prompt: ${message(err)}`, { to: 'debug' })
+  }
+  const at = running === null ? 0 : await now($)
   const n = await change($, card => {
     const s = card?.steps[i]
     if (!card || !s || s.finished || s.isSent) return { card, out: undefined }
-    return { card: sent(card, i, true), out: i }
+    const marked = sent(card, i, true)
+    return { card: running === null ? marked : heldFor(marked, [i], 'heldAt', at), out: i }
   })
   if (n === undefined) return
   await refresh($)
+  if (running === null) await sendDone($, n)
+}
+
+// "step N done" for step `n` (0 based), which waits until the session is idle.
+const sendDone = async ($: EngineInterface, n: number) => {
   try {
     // #2132: the prompt waits until the session is idle, and mod-kit's reload of manual-steps in
     // that time would drop it, so the reload is held back until it is sent, for at most an hour.
@@ -395,6 +413,19 @@ const pressDone = async ($: EngineInterface, i: number) => {
     return
   }
   armFallback($)
+}
+
+// At a main turn's end (#2437): each Done held for that turn and still unrecorded goes as its
+// prompt now the session is idle, so a turn that read the note but never called steps_done, or
+// made no tool call after the press, still answers it. A step the turn recorded is not sent again.
+const sendHeld = async ($: EngineInterface) => {
+  const steps = await change($, card => {
+    const ks = heldSteps(card)
+    return card && ks.length ? { card: unheld(card, ks), out: ks } : { card, out: [] as number[] }
+  })
+  if (!steps.length) return
+  await refresh($)
+  for (const k of steps) await sendDone($, k)
 }
 
 // What each Copy on a step copies, and what its toast calls it.
@@ -667,6 +698,15 @@ export const register: Register = on => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
     await setRunningTurn($, null)
+    // #2437: Dones held for this turn go as prompts, off the hook, so no prompt is ever sent from
+    // inside a hook the turn's end is waiting on. A turn Dan stopped (Esc) sends none, as Esc drops a
+    // queued prompt: they stay sent, and the fallback below gives their Done back (#734).
+    if (heldSteps((await $.state.get(cardRef)).value ?? null).length) {
+      if (e.reason === 'aborted') {
+        await change($, card => (card ? { card: unheld(card, heldSteps(card)), out: undefined } : { card, out: undefined }))
+        await refresh($)
+      } else $.clock.after(0, () => void sendHeld($).catch(err => $.ui.log(`manual-steps: could not send a Done held for the turn that ended: ${message(err)}`, { to: 'debug' })))
+    }
     const waiting = (await $.state.get(waitingRef)).value ?? null
     if (!waiting || waiting.turnId !== e.turnId) {
       // A step still sent whose turn has not started may be queued behind this one, or dropped
@@ -683,6 +723,23 @@ export const register: Register = on => {
 
   // Both tools are answered here and never passed down, so the guards beneath (the secret guard) are
   // asked through mod-kit's screen before a value is drawn with Copy or kept (#707).
+  // #2437: a Done pressed mid turn rides on the main turn's next tool result as context, which
+  // reaches the turn's very next request (measured on Claude Code 2.1.319), once per press. A
+  // subagent's call is not the main turn's, and a refusal carries no context, so the next one does.
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || r.deny !== undefined || !interactive) return r
+    if (!untoldSteps((await $.state.get(cardRef)).value ?? null).length) return r
+    const at = await now($)
+    const notes = await change($, card => {
+      const ks = untoldSteps(card)
+      return card && ks.length ? { card: heldFor(card, ks, 'toldAt', at), out: ks.map(k => heldNote(card, k)) } : { card, out: [] as string[] }
+    })
+    if (!notes.length) return r
+    await refresh($)
+    return { ...r, context: [...(r.context ?? []), ...notes] }
+  })
+
   on('tool.call', { tool: TOOL }, async ($, e) => {
     const refused = await $.modkit.screen(e)
     if (refused) return refused

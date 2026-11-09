@@ -384,7 +384,7 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       return
     }
     // #1239: every unfinished step is open, so Dan can work ahead while Claude has yet to read a Done.
-    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
+    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: `  ${sentWords(s)}`, dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location

@@ -880,13 +880,17 @@ test('an interrupted turn brings Done back too', withKit, async ($, on) => {
 })
 
 test('only the end of the turn "step N done" started counts: one already running, or a subagent\'s, leaves it sent', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
   const w = world(on)
   await start($)
   await hand($, [step()])
-  // Done pressed while Claude was busy: the prompt waits behind the running turn.
+  // Done pressed while Claude was busy: held for the running turn, and sent as its prompt once that
+  // turn ends without recording it (#2437).
   await turnStart($, 'fix the tests', 'T1')
   await press($, 'done-1')
   await turnEnd($, 'T1')
+  await clock.settle()
+  expect(w.prompts).toEqual(['step 1 done'])
   await turnEnd($, 'T9', 'answer', 'agent-1')
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   // Its own turn runs, and Claude answers in it: nothing comes back and nothing is said.
@@ -909,14 +913,16 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
   await hand($, [step()])
   await turnStart($, 'fix the tests', 'T1')
   await press($, 'done-1')
-  // Claude works on past the bound: a prompt waiting behind a running turn is never taken for dropped.
+  // Claude works on past the bound: a Done held for a running turn is never taken for dropped.
   await clock.advance(DROPPED_AFTER_MS * 3)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
-  // Esc: the running turn ends interrupted, and the queued prompt goes with it.
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent, Claude reads it at its next step')
+  // Esc: the running turn ends interrupted, and the held Done is not sent after it (#2437), as a
+  // queued prompt goes with Esc.
   await turnEnd($, 'T1', 'aborted')
   await clock.advance(DROPPED_AFTER_MS - 1)
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(w.toasts).toEqual([])
+  expect(w.prompts).toEqual([])
   await clock.advance(1)
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toEqual([RELEASED])
@@ -936,7 +942,7 @@ test('a reload in the middle of a turn keeps it running, so a Done pressed then 
   await start($)
   await press($, 'done-1')
   await clock.advance(DROPPED_AFTER_MS * 3)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent, Claude reads it at its next step')
   expect(w.toasts).toEqual([])
 })
 
@@ -1929,15 +1935,16 @@ test('the tools say every step is open with its own Done, ask what a step needs 
 // waited an hour. So a Done pressed mid turn rides on the turn's next tool result instead, and the
 // "step N done" prompt is sent at the turn's end only when the turn never recorded the step.
 type ToolCalls = { tool: { call: (e: object) => Promise<{ context?: readonly string[]; deny?: string }> } }
-// The engine's Bash beneath the mod, registered with the world, before the test first calls $.
+// The engine's Read beneath the mod (the kit stand-in answers Bash itself), registered with the world, before the test first calls $.
 const busyWorld = (on: On) => {
   const w = world(on)
-  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }) as never)
-  return w
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }) as never)
+  // A held Done goes off the turn end's hook, on the clock, so a test settles it.
+  return { ...w, clock: mock.clock(on, { now: 0 }) }
 }
 let bashCalls = 0
 const toolRuns = ($: Engine, agentId?: string) =>
-  ($ as unknown as ToolCalls).tool.call({ tool: 'Bash', tool_use_id: `b${++bashCalls}`, command: 'ls', ...(agentId ? { agentId } : {}) })
+  ($ as unknown as ToolCalls).tool.call({ tool: 'Read', tool_use_id: `r${++bashCalls}`, file_path: '/repo/README.md', ...(agentId ? { agentId } : {}) })
 const told = (r: { context?: readonly string[] }) => (r.context ?? []).filter(c => c.includes('pressed Done'))
 
 test('a Done pressed mid turn reaches that turn at its next tool call, never queued behind it (#2437)', withKit, async ($, on) => {
@@ -1964,6 +1971,7 @@ test('a Done the running turn records is not sent again when that turn ends (#24
   await toolRuns($)
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/Step 1 recorded/)
   await turnEnd($, 't1')
+  await w.clock.settle()
   expect(w.prompts).toEqual([])
   expect(w.toasts).toEqual([])
 })
@@ -1976,6 +1984,7 @@ test('a Done the running turn never records is sent as "step N done" once it end
   await press($, 'done-1')
   await toolRuns($)
   await turnEnd($, 't1')
+  await w.clock.settle()
   expect(w.prompts).toEqual(['step 1 done'])
 })
 
@@ -1986,6 +1995,7 @@ test('a Done pressed after the turn made its last tool call is sent at its end (
   await turnStart($, 'Build the thing', 't1')
   await press($, 'done-1')
   await turnEnd($, 't1')
+  await w.clock.settle()
   expect(w.prompts).toEqual(['step 1 done'])
 })
 
@@ -1997,6 +2007,7 @@ test("a subagent's tool call does not carry the Done, and a subagent's end does 
   await press($, 'done-1')
   expect(told(await toolRuns($, 'agent-1'))).toEqual([])
   await turnEnd($, 't1', 'answer', 'agent-1')
+  await w.clock.settle()
   expect(w.prompts).toEqual([])
   expect(told(await toolRuns($))).toHaveLength(1)
 })
