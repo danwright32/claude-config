@@ -135,6 +135,18 @@ rm -rf "$ROOT/node_modules"
 got="$(HOME="$H" env -u DESIGN_ROUNDS_CHROME python3 "$LOOKUP" 2>&1)"; rc=$?
 check_eq "with no shared Playwright at all the lookup refuses with exit 2" "2" "$rc"
 check "naming the command that installs it" "install-playwright.sh" "$got"
+# A copy of the lookup whose shared-playwright.json is missing, then names no root: a refusal saying
+# so, never a traceback.
+mkdir -p "$TMP/pinless"
+cp "$LOOKUP" "$TMP/pinless/headless_chrome.py"
+got="$(HOME="$H" env -u DESIGN_ROUNDS_CHROME python3 "$TMP/pinless/headless_chrome.py" 2>&1)"; rc=$?
+check_eq "with no shared-playwright.json beside it the lookup refuses with exit 2" "2" "$rc"
+check "saying the file could not be read" "could not be read" "$got"
+check_not "and never as a traceback" "Traceback" "$got"
+printf '{"version": "1.63.0"}\n' > "$TMP/pinless/shared-playwright.json"
+got="$(HOME="$H" env -u DESIGN_ROUNDS_CHROME python3 "$TMP/pinless/headless_chrome.py" 2>&1)"; rc=$?
+check_eq "with a shared-playwright.json naming no root it refuses with exit 2" "2" "$rc"
+check "saying so" "names no root" "$got"
 
 # --- 3. DESIGN_ROUNDS_CHROME ---
 fake_bundle "$TMP/Google Chrome.app" "$DAN_ID" "Google Chrome"

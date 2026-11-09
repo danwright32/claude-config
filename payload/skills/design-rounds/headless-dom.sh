@@ -57,8 +57,9 @@
 # started any other way, and test-headless-chrome.sh holds both.
 #
 # Exit 0 with the page; 124 when no complete page came within the deadline; Chrome's own exit code
-# when it ended without one, or 1 when that code was 0. Nothing is printed on stdout unless the page
-# is complete.
+# when it ended without one, or 1 when that code was 0; 126, in either mode and before anything runs,
+# when HEADLESS_DOM_CHROME is the Chrome Dan uses or cannot be told from it (no headless_chrome.py to
+# ask, claude-config#2191). Nothing is printed on stdout unless the page is complete.
 set -u
 REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chrome binary}"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

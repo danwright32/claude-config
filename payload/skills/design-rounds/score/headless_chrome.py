@@ -81,8 +81,15 @@ def vet(path):
 
 
 def shared_root(home):
-    with open(PIN, encoding="utf-8") as fh:
-        rel = json.load(fh)["root"]
+    """The shared Playwright's folder under home, as shared-playwright.json names it; NoHiddenChrome,
+    saying so, when that file is missing, unreadable or names no root."""
+    try:
+        with open(PIN, encoding="utf-8") as fh:
+            rel = json.load(fh).get("root")
+    except (OSError, ValueError, AttributeError) as err:
+        raise NoHiddenChrome("%s, which names the shared Playwright's folder, could not be read (%s)" % (PIN, err))
+    if not isinstance(rel, str) or not rel:
+        raise NoHiddenChrome("%s names no root folder for the shared Playwright" % PIN)
     return os.path.join(home, rel)
 
 
