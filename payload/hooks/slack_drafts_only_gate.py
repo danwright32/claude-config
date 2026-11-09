@@ -134,9 +134,17 @@ JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", 
 
 
 def js_code(text):
-    """A JavaScript or TypeScript file's text with each // and /* */ comment blanked to spaces, its
-    newlines kept, so an import shown in a comment is not read as one (claude-config#2397, the rule
-    the alert guard got in #2368: a script is read by the code it runs, never a comment).
+    """js_scan's code alone: the text with its comments blanked."""
+    return js_scan(text)[0]
+
+
+def js_scan(text):
+    """(code, quoted): a JavaScript or TypeScript file's text with each // and /* */ comment blanked
+    to spaces, its newlines kept, so an import shown in a comment is not read as one
+    (claude-config#2397, the rule the alert guard got in #2368: a script is read by the code it runs,
+    never a comment); and, for each index of the text, whether it lies inside a string literal or a
+    template literal's text (its quotes included, the code inside each ${...} not), so an import
+    written inside a string can be told from one written as code (claude-config#2484).
 
     Strings, template literals (with the code inside each ${...}) and regex literals are stepped
     over, so a // or /* inside one (a URL, a pattern) opens nothing. Every misreading is bounded on
@@ -145,6 +153,7 @@ def js_code(text):
     hide every import after it."""
     out = list(text)
     n = len(text)
+    quoted = bytearray(n)
     i = 0
     if text.startswith("#!"):
         i = text.find("\n") if "\n" in text else n
@@ -159,18 +168,23 @@ def js_code(text):
 
     def template(k):
         """Step through a template literal's text from k; the index after its closing backtick, or the
-        index of a ${ (its code is read as code), or n."""
+        index of a ${ (its code is read as code), or n. Each index stepped over is marked quoted."""
+        start = k
         while k < n:
             c = text[k]
             if c == "\\":
                 k += 2
             elif c == "`":
-                return k + 1, False
+                k += 1
+                break
             elif c == "$" and text.startswith("${", k):
+                quoted[start:k + 2] = b"\x01" * (k + 2 - start)
                 return k + 2, True
             else:
                 k += 1
-        return n, False
+        k = min(k, n)
+        quoted[start:k] = b"\x01" * (k - start)
+        return k, False
 
     while i < n:
         c = text[i]
@@ -194,10 +208,13 @@ def js_code(text):
             k = i + 1
             while k < n and text[k] not in (c, "\n"):
                 k += 2 if text[k] == "\\" else 1
+            end = min(k + 1, n)
+            quoted[i:end] = b"\x01" * (end - i)
             i = k + 1
             last = c
             continue
         if c == "`":
+            quoted[i] = 1
             i, entered = template(i + 1)
             if entered:
                 braces.append(depth)
@@ -248,7 +265,7 @@ def js_code(text):
             continue
         last = c
         i += 1
-    return "".join(out)
+    return "".join(out), quoted
 # A Python script's imports are followed the same way: a script is Python by its .py, its #!, or a
 # python interpreter running a file with no extension.
 PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
@@ -319,6 +336,28 @@ JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|
                      r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
                      r"mainModule)\b")
 JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# What can run a string as code, so that import text inside a string is an import after all
+# (claude-config#2484, signed off by Dan on 2026-11-09: import text in an ordinary string literal is not
+# followed, a string handed to something that runs it as code still is). eval, Function and the routes
+# to it (.constructor), vm and Module's compiler (and the module builtin, whose hooks rewrite source),
+# a Worker (eval: true), Miniflare's script or modules source, a child process (node -e, a shell),
+# a data: or blob: URL handed to import() or a Worker, a page evaluating code (puppeteer, playwright,
+# jsdom's runScripts), Deno and Bun, the global object reached by a computed name (which reaches eval
+# unnamed), plus a require or import() of a computed name (JS_DYNAMIC), which loads a data: URL as
+# readily as a file. A string reaches a sink through a variable, a function or another module the gate
+# cannot trace, so when any file the walk reaches names one, every string in the walk is followed
+# (Judge.modules). Read from the text, comments included, which can only follow more. setTimeout and
+# setInterval are not here: node, deno and bun each refuse a string callback (measured 2026-11-09).
+JS_SINK = re.compile(r"\b(eval|Function|Worker|SharedWorker|importScripts|ShadowRealm|vm|SourceTextModule|"
+                     r"SyntheticModule|runInContext|runInNewContext|runInThisContext|compileFunction|_compile|"
+                     r"Module|Miniflare|miniflare|child_process|execSync|execFile|execFileSync|spawn|spawnSync|"
+                     r"execa|execaSync|execaNode|execaCommand|zx|shelljs|tinyexec|pty|Deno|Bun|createObjectURL|"
+                     r"runScripts|Reflect)\b|['\"`](node:)?module['\"`]|"
+                     r"\.\s*(constructor|binding|_linkedBinding|dlopen|mainModule|evaluate|evaluateHandle|"
+                     r"evaluateOnNewDocument|addScriptTag|addInitScript|setContent)\b|"
+                     r"\b(globalThis|global|self|window)\s*(\?\.\s*)?\[|\b(data|blob):(?:[A-Za-z]+/|['\"`,;])|"
+                     r"\$\s*`")
+SINK = object()  # what Judge.walk gives on reaching a file that names a JS_SINK
 # The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
 # word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
 # real scripts were refused only by one of these words).
@@ -610,7 +649,32 @@ class Judge:
     def modules(self, start, origin, root, body, kind):
         """Each local module a script's imports reach, as (None, how it is reached, its file, its text),
         each once; or, where an import cannot be followed, (the reason, None, None, None) and no more.
-        The one walk both imports() and acts() read, so the two cannot disagree about what is reached."""
+        The one walk both imports() and acts() read, so the two cannot disagree about what is reached.
+
+        A JavaScript walk first leaves out import text written inside a string literal, which nothing
+        loads (claude-config#2484). Where any file it reaches can run a string as code (JS_SINK,
+        JS_DYNAMIC), it starts again following every string, as every walk did before, and gives only
+        the modules the first walk had not, so each is still given once."""
+        if kind != "js":
+            yield from self.walk(start, origin, root, body, kind, True)
+            return
+        given = set()
+        for item in self.walk(start, origin, root, body, kind, False):
+            if item is SINK:
+                break
+            if item[2]:
+                given.add(item[2])
+            yield item
+        else:
+            return
+        for item in self.walk(start, origin, root, body, kind, True):
+            if item[2] in given:
+                continue
+            yield item
+
+    def walk(self, start, origin, root, body, kind, strings):
+        """modules() with import text inside JavaScript strings followed or not (strings); not
+        following them, it gives SINK, and stops, on reaching a file that can run a string as code."""
         seen = {origin} if origin else set()
         queue = [(origin, root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
@@ -618,7 +682,10 @@ class Judge:
             cur, cur_dir, text, chain = queue.pop(0)
             if kind == "py":
                 self.py_inserts(text, cur, inserts)
-            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts):
+            elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
+                yield SINK
+                return
+            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings):
                 via = f"{chain}, which imports {spec}"
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
@@ -652,12 +719,16 @@ class Judge:
         self.unfollowed = why
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ())):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
-        empty list."""
+        empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
+        or a template's text is left out (claude-config#2484)."""
         if kind == "js":
-            for m in IMPORT_SPEC.finditer(js_code(text)):
+            code, quoted = js_scan(text)
+            for m in IMPORT_SPEC.finditer(code):
+                if not strings and quoted[m.start()]:
+                    continue
                 spec = m.group(2)
                 if "${" in spec:
                     continue
