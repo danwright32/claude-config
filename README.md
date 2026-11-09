@@ -6229,9 +6229,9 @@ GraphQL point. The one old reading a turn end keeps is of a PR last read as left
 on Dan's answer (#2433, after a session with 19 folded PRs left closed ran out of the minute's looks
 before the last of them at every stop for over half an hour): those are read after every other PR,
 so the looks go first to what can still finish, are still read whenever a look is spare, so a reopen
-or push from outside is seen, and keep their reading only while the look is held and only when it was
-read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is never
-kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
+or push from outside is seen, and keep their reading only while the look is held and only when it
+was read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is
+never kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
 another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
 checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
 turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
