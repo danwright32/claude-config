@@ -55,6 +55,10 @@ fi
 python3 - "$SETTINGS" <<'PY'
 import json, os, re, sys
 
+# A JSON string can spell a lone surrogate, which no encoder writes; replaced, the finding is still
+# printed rather than lost to a traceback.
+sys.stdout.reconfigure(errors="replace")
+
 path = sys.argv[1]
 try:
     with open(path, encoding="utf-8", errors="replace") as fh:

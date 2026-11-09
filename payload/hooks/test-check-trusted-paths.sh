@@ -160,6 +160,18 @@ out="$(run "$NOPATHS")"; code=$?
 [ "$code" -eq 0 ] && [ -z "$out" ] && check "entries holding no path are silent" ok \
   || check "entries holding no path are silent" "exit=$code, said: $out"
 
+# JSON can spell a lone surrogate (\udcff), which Python decodes into a string no encoder will write.
+# A missing path holding one must still be reported, not end in a traceback on the way out.
+SURR="$(mksettings surrogate.json "      \"Checkout at \`/nowhere/caf\\udcff/app\`\"")"
+out="$(run "$SURR")"; code=$?
+[ "$code" -eq 1 ] && check "a missing path holding a lone surrogate exits 1" ok \
+  || check "a missing path holding a lone surrogate exits 1" "exit=$code, said: $out"
+case "$out" in
+  *Traceback*) check "and is reported without a traceback" "it said: $out" ;;
+  *"/nowhere/caf"*) check "and is reported without a traceback" ok ;;
+  *) check "and is reported without a traceback" "it did not name the path: $out" ;;
+esac
+
 BROKEN="$TMPROOT/broken.json"
 printf '{\n  "autoMode": {\n    "environment": [\n      "/x",\n  }\n' > "$BROKEN"
 out="$(run "$BROKEN")"; code=$?
