@@ -29,6 +29,9 @@ claude-stale-worktrees-repo-<key>.*:
                      died part way is noticed (a start with no finish, and the lock free).
   .result.<t>.<pid>  something the person should be told, written whole (a temporary name, then a
                      rename) so the nudge never reads half of one. The nudge says each one once.
+  .shown.<pid>       an answer the nudge has said, which it claims by renaming the .result to this.
+                     Kept so "said" and "never written" stay two states (L258); a run deletes those
+                     over a day old, always keeping the newest (claude-config#2453).
 Exit 2 from the check (gh unreadable, not a repository) is recorded and not said: nobody can act on
 it from a prompt (L36, L112). Any exit the check never returns on purpose is said, because that is
 the check itself broken.
@@ -84,6 +87,28 @@ def tell(base, repo, when, lines):
     write_whole("%s.result.%010d.%d" % (base, when, os.getpid()), body)
 
 
+SHOWN_KEEP_SECONDS = 86400
+
+
+def prune_shown(base):
+    """Delete the answers the nudge has said that are over a day old, keeping the newest whatever
+    its age. Judged by each file's own modification time, the time it was written, against the real
+    clock, the only clock that time is on."""
+    shown = []
+    for path in glob.glob(glob.escape(base) + ".shown.*"):
+        try:
+            shown.append((os.path.getmtime(path), path))
+        except OSError:
+            pass  # claimed and gone between the glob and the look
+    shown.sort()
+    for mtime, path in shown[:-1]:
+        if time.time() - mtime > SHOWN_KEEP_SECONDS:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def parse():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", required=True)
@@ -131,6 +156,7 @@ def run(args):
             os.remove(told)
         except OSError:
             pass
+    prune_shown(base)
     notes = []
     previous = read_record(last_path)
     if previous and isinstance(previous.get("started"), int) and "finished" not in previous:

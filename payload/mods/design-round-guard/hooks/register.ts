@@ -272,8 +272,9 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   nothing asked, and is kept under `auto:<call key>` (DesignRoundAutoPass) saying why (Dan,
 //   2026-11-05: "If you're confident that nothing on screen changes don't ask me to make a decision
 //   and just skip design rounds automatically"). Only when every file the call waits on is one: any
-//   JSX, string, comment, number, look word, stylesheet or swapped import, a mod's hook file, an issue
-//   whose answers cannot be read, and a pass that cannot be kept, stay held and asked as before.
+//   JSX, string, comment, number, look word, stylesheet or swapped import, a mod's hook file, and an
+//   issue whose answers cannot be read stay held and asked as before. A pass that cannot be kept is
+//   not made either: the call waits on Dan, unless he already let this very call through (#2348).
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
