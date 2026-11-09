@@ -3355,7 +3355,8 @@ median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s 
 before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
 The gate stops itself after 11 seconds (`BUDGET_SECONDS`), inside the 15 its registration declares,
-and refuses saying it ran out of time and which file it was reading (#2432). Before, a call it could
+and refuses saying it ran out of time and which file it was about to read or whose commands it was
+judging (#2432). Before, a call it could
 not finish was killed at the timeout, and Claude Code's `[command hook 42]: timed out; blocking
 because onFailure is "block"` said nothing of why, so it read the same as a send. That was every try
 of the TO FILE THESE clear line on the work MacBook on 2026-11-07, while the gate of that day read

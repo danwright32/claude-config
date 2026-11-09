@@ -397,9 +397,14 @@ def judge_tool(tool, tool_input):
 
 
 class OutOfTime(BaseException):
-    """Raised by Judge.tick once the budget has passed. A BaseException, so the `except Exception`
-    around a script read as commands (script) and every other one in the walk lets it through to
-    main() rather than reading it as a script that could not be parsed."""
+    """Raised by Judge.tick once the budget has passed, carrying what the walk was doing, as the
+    phrase out_of_time() puts after "while". A BaseException, so the `except Exception` around a
+    script read as commands (script_body) and every other one in the walk lets it through to main()
+    rather than reading it as a script that could not be parsed."""
+
+    def __init__(self, doing):
+        super().__init__(doing)
+        self.doing = doing
 
 
 def budget_clock():
@@ -423,11 +428,12 @@ def budget_clock():
 class Judge:
     def __init__(self, sw):
         self.sw = sw
-        # The walk's clock and budget (budget_clock), the moment it started, and what it was reading
-        # last, for the refusal tick() raises (claude-config#2432).
+        # The walk's clock and budget (budget_clock), the moment it started, and the script whose
+        # commands are being judged (None for the command line itself), for the refusal tick()
+        # raises (claude-config#2432).
         self.clock, self.budget = budget_clock()
         self.started = self.clock()
-        self.reading = None
+        self.walking = None
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
@@ -467,28 +473,33 @@ class Judge:
         return out
 
     def tick(self, reading=None):
-        """One step of the walk: each command judged (record) and each file read whole. Notes the
-        file, when one is about to be read, and raises OutOfTime once the budget has passed, so the
-        gate refuses with its own reason inside its timeout rather than being killed at it."""
+        """One step of the walk: each command judged (record, no argument) and each file about to be
+        read whole (its path). Raises OutOfTime once the budget has passed, so the gate refuses with
+        its own reason inside its timeout rather than being killed at it, saying which file it was
+        about to read, or whose commands it was judging."""
+        if self.clock() - self.started <= self.budget:
+            return
         if reading is not None:
-            self.reading = reading
-        if self.clock() - self.started > self.budget:
-            raise OutOfTime()
+            raise OutOfTime(f"about to read {self.sized(reading)}")
+        if self.walking is not None:
+            raise OutOfTime(f"judging the commands in {self.sized(self.walking)}")
+        raise OutOfTime("judging the command line itself")
 
-    def out_of_time(self):
+    @staticmethod
+    def sized(path):
+        """A path with its size, for the refusal; the path alone when its size cannot be read."""
+        try:
+            return f"{path} ({os.path.getsize(path)} bytes)"
+        except OSError:
+            return path
+
+    def out_of_time(self, doing):
         """The refusal for a walk that ran past its budget: it says the gate ran out of time, what it
-        was reading, and that this is no finding that the call posts (L11)."""
+        was doing (OutOfTime.doing), and that this is no finding that the call posts (L11)."""
         spent = (f"{BUDGET_SECONDS} seconds" if self.budget == BUDGET_SECONDS and self.clock is time.monotonic
                  else f"its budget of {self.budget} step{'' if self.budget == 1 else 's'}")
-        what = "the command line"
-        if self.reading:
-            try:
-                size = f", {os.path.getsize(self.reading)} bytes"
-            except OSError:
-                size = ""
-            what = f"{self.reading}{size}, which it reads as code"
         return (f"BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after "
-                f"{spent}, inside the time limit Claude Code gives it, while reading {what}. Whether this "
+                f"{spent}, inside the time limit Claude Code gives it, while {doing}. Whether this "
                 f"command sends a Slack message was not checked, and this is not a finding that it does "
                 f"(claude-config#2432). Run it again once the Mac is less busy. If it is refused the same "
                 f"way again, the gate is reading more than it can judge in time (a large file with no "
@@ -510,13 +521,12 @@ class Judge:
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge:
             return None  # /nudge, the one exemption (Dan, 2026-11-05)
-        reading = self.reading
         self.tick(path)
-        reason = self.script_body(word, path, real, d, depth, shell_hint, lang)
-        # Once read, the walk is back to what it was reading before. Not on OutOfTime, which passes
-        # straight through here so the refusal names the file the budget ran out in.
-        self.reading = reading
-        return reason
+        walking, self.walking = self.walking, path
+        try:
+            return self.script_body(word, path, real, d, depth, shell_hint, lang)
+        finally:
+            self.walking = walking  # once read, back to the commands of the file that ran it
 
     def script_body(self, word, path, real, d, depth, shell_hint, lang):
         """script() for a file that is there and is not /nudge."""
@@ -2084,8 +2094,8 @@ def main():
     judge = Judge(load_reader())
     try:
         reason = judge.line(cmd, cwd, 0, cmd)
-    except OutOfTime:
-        print("refuse\n" + judge.out_of_time())
+    except OutOfTime as e:
+        print("refuse\n" + judge.out_of_time(e.doing))
         return
     if reason:
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives

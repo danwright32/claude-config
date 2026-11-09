@@ -993,8 +993,12 @@ allowed "the TO FILE THESE clear line over a 3 MB transcript naming chat.postMes
 run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
 refused "a 3 MB file read as code that runs past the budget is refused, not left to the timeout"
 says "that refusal says the gate ran out of time" "ran out of time"
-says "and names the file it was reading" "$T/big/session"
+says "and names the file whose commands it was judging" "judging the commands in $T/big/session ("
 lacks "and does not claim the command posts" "posts to Slack:"
+# Run out before a file is read, and the refusal names that file rather than the last one read.
+run_budget 1 "$CLEAR"
+refused "a budget that passes before the script is read refuses"
+says "and names the file it was about to read" "about to read $DIR/lib/issue-spool.sh ("
 
 # The step clock is a test seam only: outside a test run the setting is ignored, so a one step
 # budget there still lets a small clear through.
