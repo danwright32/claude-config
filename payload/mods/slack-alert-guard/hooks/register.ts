@@ -6,6 +6,8 @@ import {
   CHANGE,
   GUARD,
   HEADER,
+  MARKER_PREFILTER,
+  PATHSPEC_BYTES,
   REEXPORT_HOPS,
   SCAN_MS,
   SENDER_PREFILTER,
@@ -197,6 +199,29 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
 // sender since it could not tell which file sends it (#2364).
 const MOST_READ = 200
 
+// How much of a command's output $.process.run keeps, in MiB: the first 4194304 bytes, the rest
+// dropped and the result marked isStdoutTruncated (read from Claude Code 2.1.319's own runner).
+const STDOUT_KEPT_MIB = 4
+
+/** Repository paths in their order, as groups whose `:(literal)` pathspecs come to at most PATHSPEC_BYTES each. */
+const pathspecGroups = (rels: string[]): string[][] => {
+  const groups: string[][] = []
+  let group: string[] = []
+  let bytes = 0
+  for (const r of rels) {
+    const size = new TextEncoder().encode(r).length + ':(literal)'.length + 1
+    if (group.length && bytes + size > PATHSPEC_BYTES) {
+      groups.push(group)
+      group = []
+      bytes = 0
+    }
+    group.push(r)
+    bytes += size
+  }
+  if (group.length) groups.push(group)
+  return groups
+}
+
 // posts: the file is in a repository, is no test, and posts to Slack by itself. maybe: the search
 // could not tell whether a file sends the template (more files to read than it reads, or a send
 // helper search that failed), so the edit is held for Dan to approve, never refused
@@ -217,8 +242,8 @@ const end = (found: Found): never => {
 /**
  * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
  * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
- * repository to files holding the word slack or postMessage and a line naming the template in a form
- * a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
+ * repository to files that could carry a marker (MARKER_PREFILTER) and hold a line naming the template
+ * in a form a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
  * deep; a chain going further is could not check. A template is sent too by a file that uses it and
@@ -261,31 +286,72 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       if (ms <= 0) end(late)
       const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...args], { timeoutMs: ms })
       if (hits.exitCode === 1) return ''
-      if (hits.exitCode !== 0 || hits.isStdoutTruncated)
+      if (hits.exitCode !== 0)
         end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+      // Cut short is not git failing: said as "exit 0: no message" it hid which listing ran long, and
+      // read the same from a session still running an older copy of this search (2026-11-09).
+      if (hits.isStdoutTruncated) end({ unchecked: `git grep listing the names of the files that ${what} printed more than the ${STDOUT_KEPT_MIB} MiB Claude Code keeps of a command's output, so it could not be read whole` })
       return hits.stdout
     }
-    // Every file holding the word slack or postMessage, listed once for the whole search: a sender is
-    // one of these that names a level, as a file holding both was before (#2371).
-    const slackWords = new Set((await grep(`mention Slack beside ${path}`, ['-l', '-E', '-e', SENDER_PREFILTER, '--', '.'])).split('\u0000').filter(Boolean))
+    // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is
+    // read as a sender or a link (#2290, #2361, #2368). A file in a language the guard does not list as
+    // code (a .vue, a .sql posting through pg_net) may still send, so only prose is ruled out.
+    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && !isProseFile(r))
+    // Every file that could carry a Slack marker, listed once for the whole search: a sender is one of
+    // these that names a level (#2371). A file that only mentions Slack is not one (MARKER_PREFILTER).
+    // The files holding the word slack or postMessage are listed first, as git finds those fast, and
+    // only they are searched for a marker, which over all of a large work repository took a second where this takes 0.6.
+    const slackWords = candidates((await grep(`mention Slack beside ${path}`, ['-l', '-E', '-e', SENDER_PREFILTER, '--', '.'])).split('\u0000').filter(Boolean))
+    const markable = new Set<string>()
+    for (const group of pathspecGroups(slackWords))
+      for (const r of (await grep(`could post to Slack beside ${path}`, ['-l', '-E', '-e', MARKER_PREFILTER, '--', ...group.map(r => `:(literal)${r}`)])).split('\u0000')) if (r) markable.add(r)
     /**
      * The files naming any of `level` in a form a reference takes (namePatterns), the template itself
-     * left out, in the order git lists them. git lists each line holding one of the names, as fixed
-     * strings; the shape is tested here on those lines alone, as `-e word --and -e shape` tested it
-     * in git, which took seconds for a widely imported module's importers (#2462).
+     * left out, in the order git lists them. git first lists only the names of the files holding one
+     * of the names as a whole word, and of those the search keeps the ones it can use: a file that
+     * could send (markable) or hand the template on (mayHandOn), no test or prose. Only their lines
+     * are listed, as fixed strings, and the shape is tested here on those lines alone, as `-e word
+     * --and -e shape` tested it in git, which took seconds for a widely imported module's importers
+     * (#2462). Listing every line naming a word in the whole repository (#2481) ran to 9.9 MB in a
+     * work repository, past the 4 MiB $.process.run keeps, so a widely imported file's edit was held as could
+     * not check. The kept files go to git by name in groups of at most PATHSPEC_BYTES; a group whose
+     * lines still come back cut short is listed again in halves, and a single file whose lines alone
+     * do is read whole and its lines tested here, so a listing too long is never read as no reference.
      */
     const naming = async (level: string[]): Promise<string[]> => {
       const name = namePatterns(level)
       const shape = new RegExp(name.shape, 'i')
+      const what = `name ${path} or hand it on`
+      // -w: every shape has the name between characters that cannot be part of one, so a file holding
+      // it only inside a longer word (db in feedback) is never listed, which keeps a common short name's
+      // listing small.
+      const words = ['-F', '-w', ...name.words.flatMap(w => ['-e', w])]
+      const listed = candidates((await grep(what, ['-l', ...words, '--', '.'])).split('\u0000').filter(Boolean)).filter(r => r !== templateRel && (markable.has(r) || mayHandOn(r)))
       const out = new Set<string>()
-      // -w: every shape has the name between characters that cannot be part of one, so a line holding
-      // it only inside a longer word (db in feedback) is never printed, which keeps a common short
-      // name's listing small.
-      for (const line of (await grep(`name ${path} or hand it on`, ['-F', '-w', ...name.words.flatMap(w => ['-e', w]), '--', '.'])).split('\n')) {
-        const cut = line.indexOf('\u0000')
-        if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
+      const lines = async (group: string[]): Promise<void> => {
+        const ms = await left()
+        if (ms <= 0) end(late)
+        const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...words, '--', ...group.map(r => `:(literal)${r}`)], { timeoutMs: ms })
+        if (hits.exitCode === 1) return
+        if (hits.exitCode !== 0) end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+        if (!hits.isStdoutTruncated) {
+          for (const line of hits.stdout.split('\n')) {
+            const cut = line.indexOf('\u0000')
+            if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
+          }
+          return
+        }
+        const half = Math.ceil(group.length / 2)
+        if (half < group.length) {
+          await lines(group.slice(0, half))
+          await lines(group.slice(half))
+          return
+        }
+        const rel = group[0] as string
+        if ((await textOf(rel, what)).split('\n').some(line => shape.test(line))) out.add(rel)
       }
-      return candidates([...out].filter(r => r !== templateRel))
+      for (const group of pathspecGroups(listed)) await lines(group)
+      return listed.filter(r => out.has(r))
     }
     // Every file read in this search, so a file listed at two levels is read once and counted once.
     const texts = new Map<string, string>()
@@ -308,10 +374,6 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     }
     const sends = `send ${path} to Slack`
     const handsOnTo = `hand ${path} on to the file that sends it`
-    // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is
-    // read as a sender or a link (#2290, #2361, #2368). A file in a language the guard does not list as
-    // code (a .vue, a .sql posting through pg_net) may still send, so only prose is ruled out.
-    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && !isProseFile(r))
     /**
      * Of the files using the template (a copy builder, a notice builder), the first that imports a
      * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
@@ -355,7 +417,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     for (let hop = 0; ; hop++) {
       // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
       const named = await naming(level)
-      const rels = named.filter(r => slackWords.has(r))
+      const rels = named.filter(r => markable.has(r))
       budget(rels)
       for (const rel of rels) {
         // Only what a file runs can send: a comment naming the template beside a Slack webhook's name

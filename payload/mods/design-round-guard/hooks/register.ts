@@ -375,7 +375,65 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // one file its characters name (#1951).
 // `unexpanded`, for a file a run is handed whose every $ is in single quotes or after a backslash
 // (mod-kit's mark, #1953), which holds no variable's value.
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[] }
+// `unread`, for a write reaching a whole folder whose files cannot be listed (#2395), says why.
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string }
+
+// A path without its `.` segments or a trailing slash (`lib/.` and `lib/` are lib), as git lists it.
+const plainPath = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/+$/, '$1')
+
+// #2395: every file under a folder, by git in the checkout it is in: each one tracked there and each
+// one git would track (`--others --exclude-standard`), so a screen file new on the branch counts and
+// an ignored build folder does not. The area check reads a folder by its own tracked list of the
+// default branch (underTree), cached with its ranking, a different question: a screen file new on
+// this branch is one the design round guard must see. A folder in no checkout is in no project
+// (`tree: null`); a checkout git cannot list says why, so the write is held, failing closed.
+const filesUnder = async ($: EngineInterface, folder: string): Promise<{ tree: string | null; files: string[] } | { unread: string }> => {
+  const at = plainPath(folder)
+  let tree: string | null
+  try {
+    tree = await $.modkit.workingTree({ path: at })
+  } catch (err) {
+    return { unread: `the disk could not say which checkout ${at} is in: ${message(err)}` }
+  }
+  if (tree === null) return { tree: null, files: [] }
+  const rel = at === tree ? '' : relTo(at, tree)
+  try {
+    const r = await $.process.run(['git', '-C', tree, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', `:(top,literal)${rel}`], { timeoutMs: 5000 })
+    if (r.exitCode !== 0) return { unread: `git could not list them: ${r.stderr.trim().split('\n')[0] || `exit ${r.exitCode}`}` }
+    if (r.isStdoutTruncated) return { unread: 'git listed more of them than could be read' }
+    return { tree, files: [...new Set(r.stdout.split('\0').filter(Boolean))].map(f => `${tree}/${f}`) }
+  } catch (err) {
+    return { unread: `git could not list them: ${message(err)}` }
+  }
+}
+
+// #2395: a write marked `tree` reaches every file under its folder (a find -exec on the folder, rm -r,
+// git putting back a whole folder, and since #2372 a macOS cp -R of a folder ending in a slash), and a
+// copy also lands every file under each of its sources there, under the same name below it. Each such
+// file that could change the look is a target of its own, judged as a named one would be: a removal
+// stays a removal, and what git puts back is read from where it puts it back from. Files that change
+// no look are left out, so a folder holding none adds nothing. A folder whose files cannot be listed,
+// or a copy from a folder in no checkout, whose files cannot be listed either, is a target that
+// cannot be followed, held, where the folder written is in a checkout.
+const underTargets = async ($: EngineInterface, x: { word: string; path: string; sources?: string[]; removes?: true; from?: string }): Promise<Target[]> => {
+  const dest = plainPath(x.path)
+  const look = (p: string) => shapeKind(p) !== null || isModHookTs(p)
+  const here = await filesUnder($, dest)
+  if ('unread' in here) return [{ word: x.word, unread: `${x.word} reaches every file under it, and the files under it cannot be listed: ${here.unread}` }]
+  if (here.tree === null) return []
+  const out: Target[] = here.files.filter(look).map(p => ({ word: p, path: p, ...(x.removes ? { removes: true as const } : {}), ...(x.from !== undefined ? { from: x.from } : {}) }))
+  for (const s of x.sources ?? []) {
+    const src = plainPath(s)
+    const from = await filesUnder($, src)
+    if ('unread' in from || from.tree === null) {
+      out.push({ word: x.word, unread: `${x.word} gets every file under ${src}, and the files under ${src} cannot be listed: ${'unread' in from ? from.unread : 'it is in no checkout'}` })
+      continue
+    }
+    // A file source lists only itself, and lands under its own name, read as a write of it already.
+    for (const f of from.files) if (f.startsWith(`${src}/`) && look(f)) out.push({ word: `${dest}/${f.slice(src.length + 1)}`, path: `${dest}/${f.slice(src.length + 1)}` })
+  }
+  return out
+}
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -393,16 +451,28 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const targets: Target[] = []
   // Whether the command names the session's scratchpad, where a round's files go (#1191).
   const scratch = namesScratchpad(command, at.session, at.temps)
-  for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}), ...(f.values ? { values: f.values } : {}) })
+  // A write, removal or putting back marked `tree`, read for the files under its folder (#2395).
+  const trees: Parameters<typeof underTargets>[1][] = []
+  for (const f of w.files) {
+    targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}), ...(f.values ? { values: f.values } : {}) })
+    if (f.tree && f.path) trees.push({ word: f.word, path: f.path, ...(f.sources ? { sources: f.sources } : {}) })
+  }
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes)
-    if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}) })
+    if (c.does === 'remove' || c.does === 'truncate') {
+      targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}) })
+      if (c.tree && c.path) trees.push({ word: c.word, path: c.path, ...(c.does === 'remove' ? { removes: true as const } : {}) })
+    }
   // What git itself changes (#1136, Dan, 2026-10-13): a checkout of a path or a restore puts a file
   // back, git rm and git mv take it away or move it, each changing the look as a write does. A git
   // pathspec matched across folders (`:/x`, a pattern) has no path, so it is held as a write that
   // cannot be followed, or judged as a pattern. What a checkout or restore puts back is judged by the
   // lines it changes, as an edit is (#1158).
-  for (const g of w.byGit ?? []) targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+  for (const g of w.byGit ?? []) {
+    targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+    if (g.tree && g.path) trees.push({ word: g.word, path: g.path, ...(g.does === 'remove' ? { removes: true as const } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+  }
+  for (const x of trees) targets.push(...(await underTargets($, x)))
   // A script file the command runs (#1586, measured live on 2026-10-23: `python3 gen.py app/page.tsx`
   // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
   // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
@@ -1013,6 +1083,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   let read: { logic?: boolean } = {}
   let why = ''
   for (const t of targets) {
+    // A whole folder whose files cannot be listed (#2395) may hold a look changing file: held, saying why.
+    if (t.unread !== undefined) {
+      unsureFiles.push(t.word)
+      why ||= t.unread
+      continue
+    }
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
     // the checkout its folder is in, wherever mod-kit's write reader could place it (#1123): relative
     // or spelled from the top of the disk or home, a cd before it followed. A folder in no checkout is

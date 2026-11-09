@@ -30,6 +30,12 @@ export const CHANGE = 'Change wording'
 export const SCAN_MS = 3000
 /** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
 export const REEXPORT_HOPS = 3
+/**
+ * The most bytes of file names one git grep is handed: the files whose lines are listed go to git
+ * by name, in groups no larger than this, well inside macOS's 1 MB limit on a command line and its
+ * environment together.
+ */
+export const PATHSPEC_BYTES = 200_000
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
@@ -88,6 +94,28 @@ export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(t
  * to it). The marker itself is still decided by slackMarked alone.
  */
 export const SENDER_PREFILTER = 'slack|postmessage'
+
+/**
+ * The files that could carry a Slack marker, as git grep -E -i lists them: each marker's run of
+ * characters that holds no space or line break, so a file the marker matches in its code always
+ * holds one (a comment is blanked to a single space, which none of these runs can hold). A file that
+ * only mentions Slack (a design page, a settings label) holds none, so it is never listed as one
+ * that might send, and its lines are never listed either: a work repository's design pages, which mention Slack
+ * on lines of up to 730 KB, made one listing 9.9 MB after #2481. Written as POSIX ERE, with no \b
+ * or \w, which macOS git grep -E does not read, and with a sign in brackets where the markers have
+ * one, so this file is not itself read as a Slack poster; a test holds every marker to it.
+ */
+export const MARKER_PREFILTER = [
+  'hooks\\.slack\\.com',
+  'chat[._]postmessage',
+  '@slack[/]',
+  'slack[_]sdk',
+  'slack-go[/]',
+  'slack_[a-z0-9_]*(webhook|token|channel)',
+  '(send|post|notify|alert)[a-z0-9_]*slack',
+  'slack[a-z0-9_]*\\.(send|post|notify|chat)',
+  'slack[a-z0-9_]*(send|post|notify|message|alert)',
+].join('|')
 
 /**
  * Whether a path, relative to its repository's root, is a test: a .test. or .spec. file, a _test or

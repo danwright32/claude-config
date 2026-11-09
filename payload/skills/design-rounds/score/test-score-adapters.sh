@@ -120,7 +120,10 @@ if [ -z "$PW" ]; then
     [ -f "$cand/package.json" ] && { PW="$cand"; break; }
   done
 fi
-CHROME_APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# The Chrome the "chrome" channel draws in: the separate build every hidden Chrome runs, from the one
+# lookup (claude-config#2191), never the Google Chrome Dan uses. Empty when there is none, which every
+# section below says as unmeasured.
+CHROME_APP="$(python3 "$HERE/headless_chrome.py" 2>/dev/null)" || CHROME_APP=""
 APP="$T/app"
 mkdir -p "$APP"
 git init -q "$APP"
