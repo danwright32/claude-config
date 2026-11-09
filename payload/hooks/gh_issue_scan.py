@@ -766,6 +766,34 @@ def file_writes_in_context(command, cwd=None, environ=None):
     it was written, not the one its spelling names after the cd. A cd in a pipeline of several stages
     runs in a subshell of its own, so only a lone command's is followed.
     """
+    return [w[:4] for w in _writes_in_context(command, cwd, environ)]
+
+
+def _stdin_redirections(stage):
+    """How many times a stage redirects standard input: each heredoc, each redirection that reads
+    (`<`, `<<<`, `<&`, `<>`, on any descriptor, the count that refuses more) and each one aimed at
+    descriptor 0 (`0>&3`)."""
+    _words, redirects, heredocs = stage
+    fds = [op[:len(op) - len(_bare(op))] for op, _ in redirects]
+    return len(heredocs) + sum(1 for (op, _), fd in zip(redirects, fds)
+                               if "<" in op or (fd and set(fd) == {"0"}))
+
+
+def mixed_input_writes(command, cwd=None, environ=None):
+    """Every file the command writes from a stage that redirects standard input more than once, as
+    (path, where it lands or None), read as file_writes_in_context reads them (claude-config#2469).
+
+    The shell gives a stage only its last redirection of standard input, so `cat <<'EOF' < named.md
+    > notes.md` writes named.md, not the heredoc _shown judges it by. _shown is left as it is, since
+    the issue field gate stands down on a write that is not shown and a stricter reading there would
+    loosen it; the work names gate refuses these files instead.
+    Raises Unreadable when the command cannot be tokenized."""
+    return [(w[0], w[3]) for w in _writes_in_context(command, cwd, environ)
+            if _stdin_redirections(w[4]) > 1]
+
+
+def _writes_in_context(command, cwd, environ):
+    """file_writes_in_context's writes, each with the stage that makes it as a fifth field."""
     pipelines, bodies = _stages(command)
     place = Place(cwd, environ if environ is not None else {})
     subshells = []
@@ -786,7 +814,7 @@ def file_writes_in_context(command, cwd=None, environ=None):
                 appends = any(w in ("-a", "--append") for w in rest)
                 targets += [(w, appends) for w in rest if not w.startswith("-")]
             targets += [(t, op.endswith(">>")) for op, t in stage[1] if ">" in op and not op.endswith("&")]
-            writes += [(t, appends, shown, resolve_path(t, place)[0]) for t, appends in targets]
+            writes += [(t, appends, shown, resolve_path(t, place)[0], stage) for t, appends in targets]
             fed = shown
         if len(stages) == 1:
             words = stages[0][0]

@@ -746,13 +746,23 @@ printf '%s\n' "$J" '(() => {}).constructor(m.text)();' > "$T/dj/ctor.js"
 printf '%s\n' 'const request = require("request");' 'module.exports = (u) => request.post(u);' > "$T/dj/lib-req.js"
 printf '%s\n' 'const send = require("./lib-req.js");' "$J" 'send(m.url);' > "$T/dj/via.js"
 printf '%s\n' "$J" 'require(m.text);' > "$T/dj/dyn.js"
+# process.getBuiltinModule loads a builtin by a string with no require or import (claude-config#2476),
+# so it is read as the require it is, and refused where its argument cannot be read.
+printf '%s\n' 'const dns = process.getBuiltinModule("dns");' "$J" 'dns.resolveTxt(m.text + "." + m.url, () => {});' > "$T/dj/gbm-dns.js"
+printf '%s\n' "$J" 'const { Worker } = process.getBuiltinModule("node:worker_threads");' 'new Worker(m.text, { eval: true });' > "$T/dj/gbm-worker.js"
+printf '%s\n' "$J" 'const c = process.getBuiltinModule("cluster");' 'c.fork({ U: m.url });' > "$T/dj/gbm-cluster.js"
+printf '%s\n' "$J" 'const i = process[`getBuiltinModule`](`inspector`);' 'i.open(9229);' > "$T/dj/gbm-inspector.js"
+printf '%s\n' "$J" 'const mod = process.getBuiltinModule(m.text);' 'mod.request(m.url);' > "$T/dj/gbm-dyn.js"
+printf '%s\n' "$J" 'const load = process.getBuiltinModule;' 'load(m.text).request(m.url);' > "$T/dj/gbm-alias.js"
 # A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
 # 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
 printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
 printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
   'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
 for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
-  "ctor.js:constructor" "via.js:request" "dyn.js:require" "words.js:(got)"; do
+  "ctor.js:constructor" "via.js:request" "dyn.js:require" "words.js:(got)" "gbm-dns.js:(dns)" \
+  "gbm-worker.js:(node:worker_threads)" "gbm-cluster.js:(cluster)" "gbm-inspector.js:getBuiltinModule" \
+  "gbm-dyn.js:getBuiltinModule" "gbm-alias.js:getBuiltinModule"; do
   run_bash "cd $T/dj && node ${acts%%:*} msg.json"
   refused "a JavaScript script that can act on what it is handed, handed a data file naming the endpoint: ${acts%%:*}"
   says "that refusal names what lets ${acts%%:*} act" "${acts#*:}"
@@ -766,6 +776,10 @@ printf '%s\n' '// const request = require("request"); was the old way' 'import {
   'process.stdout.write(fmt(path.basename(process.argv[2]) + " " + m.text) + "\n");' > "$T/dj/show.mjs"
 run_bash "cd $T/dj && node show.mjs msg.json"
 allowed "a JavaScript script importing only modules that cannot act, handed a data file naming the endpoint"
+printf '%s\n' 'const fs = process.getBuiltinModule("node:fs");' 'const m = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));' \
+  'console.log(m.text);' > "$T/dj/gbm-fs.js"
+run_bash "cd $T/dj && node gbm-fs.js msg.json"
+allowed "a script loading only fs through process.getBuiltinModule, handed a data file naming the endpoint"
 # A function of the script's own named like an fs method (repo-digest's format.ts has a link()) is not
 # fs's when the script imports no fs.
 printf '%s\n' 'const link = (u, t) => `<${u}|${t}>`;' 'process.stdin.on("data", (b) => console.log(link(process.argv[2], String(b))));' \
@@ -818,6 +832,34 @@ run_bash "bash $T/ds/load.sh $T/ds/hook.conf"
 refused "a shell script that sources the file it is handed, which posts"
 run_bash "bash $T/ds/run-it.sh $T/ds/hook.conf"
 refused "a shell script that runs the file it is handed, which posts"
+# A file sourced through a variable path is read once the path is worked out (claude-config#2465):
+# `. "$ROOT/lib/x.sh"` was never read, so a sourced helper that posts passed the gate.
+mkdir -p "$T/sv/posts/lib" "$T/sv/quiet/lib"
+cp "$T/ds/hook.conf" "$T/sv/posts/lib/x.sh"
+printf '%s\n' 'echo "hi"' > "$T/sv/quiet/lib/x.sh"
+for tree in posts quiet; do
+  printf '%s\n' '#!/bin/bash' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/run.sh"
+  printf '%s\n' '#!/bin/bash' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'source "${ROOT}/lib/x.sh"' > "$T/sv/$tree/braces.sh"
+done
+for shape in run braces; do
+  run_bash "bash $T/sv/posts/$shape.sh"
+  refused "a script sourcing, through a variable path, a file that posts: $shape.sh"
+  says "that refusal names the sourced file" "lib/x.sh"
+  run_bash "bash $T/sv/quiet/$shape.sh"
+  allowed "the same script sourcing a file that does not post: $shape.sh"
+done
+run_bash "ROOT=$T/sv/posts; . \"\$ROOT/lib/x.sh\""
+refused "a command sourcing, through a variable it set, a file that posts"
+run_bash "ROOT=$T/sv/quiet; . \"\$ROOT/lib/x.sh\""
+allowed "a command sourcing, through a variable it set, a file that does not post"
+# The session's HOME is the one the command runs with, so a file sourced from it is read, not refused.
+mkdir -p "$T/svhome"
+cp "$T/sv/quiet/lib/x.sh" "$T/svhome/env.sh"
+HOME="$T/svhome" run_bash ". \"\$HOME/env.sh\""
+allowed "a command sourcing a file under HOME that does not post"
+cp "$T/sv/posts/lib/x.sh" "$T/svhome/env.sh"
+HOME="$T/svhome" run_bash ". \"\$HOME/env.sh\""
+refused "a command sourcing a file under HOME that posts"
 printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
 run_bash "python3 $T/ds/runner.py $T/ds/job.txt"

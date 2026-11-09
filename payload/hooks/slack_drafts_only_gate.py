@@ -92,9 +92,11 @@ JS_BANG = re.compile(r"^#!.*\b(node|nodejs|deno|bun|tsx|ts-node)\b")
 # The .js a TypeScript ESM file writes for its own sibling, which is a .ts on disk.
 JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx": (".tsx",)}
 # Every way a module names another: import ... from 'x', export ... from 'x', import 'x', import('x'),
-# require('x'). Read from the code with its comments blanked (js_code): an import written in a comment
-# is an example, and following it refused every suite importing a harness that shows one (#2397).
-IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# require('x'), and process.getBuiltinModule('x'), which loads a builtin by its name with no require or
+# import (claude-config#2476). Read from the code with its comments blanked (js_code): an import written
+# in a comment is an example, and following it refused every suite importing a harness that shows one
+# (#2397).
+IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\()\s*(['"`])([^'"`\n]+)\1""")
 # What can stand before a / that opens a regex literal rather than divides: punctuation, or a keyword.
 JS_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
 JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void",
@@ -273,7 +275,8 @@ PY_WRITES = frozenset({"write_text", "write_bytes", "touch", "unlink", "rmdir", 
 # counts as unable to act only when every module it imports from outside its own files is in JS_INERT
 # (node builtins that cannot send, run code or write, `node:` prefix or not), and it names none of
 # JS_RUNS (the globals that send or run code, and the routes from an object to Function or a loader),
-# no require or import() of a computed name (JS_DYNAMIC), and none of JS_WRITES. fs is here for
+# no require, process.getBuiltinModule or import() of a computed name, and neither of the first two named
+# anywhere but in a call on a string (JS_DYNAMIC), and none of JS_WRITES. fs is here for
 # reading, as pathlib is for Python, and its writing methods are JS_WRITES. Any package counts as
 # able to act. JS_RUNS is read from the text, comments included, which can only refuse more; the
 # imports, JS_DYNAMIC and JS_WRITES from the code with comments blanked (js_code), so an import shown
@@ -285,7 +288,7 @@ JS_INERT = frozenset({
 JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval|Function|Worker|SharedWorker|"
                      r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
                      r"mainModule)\b")
-JS_DYNAMIC = re.compile(r"""\brequire\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
 # The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
 # word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
 # real scripts were refused only by one of these words).
@@ -817,6 +820,17 @@ class Judge:
             end = self.sh_word_end(text, m.end())
             v = self.sh_word(text[m.end():end], d, lambda n: self.sh_var(n, seen + (name,)), ctx["script"], True)[0]
         ctx["values"][name] = v
+        return v
+
+    def sh_source_var(self, name):
+        """sh_var for a sourced file's path, which also takes HOME from the session when the text never
+        binds it: the command runs with the session's HOME, and `. "$HOME/.cargo/env"` is common."""
+        v = self.sh_var(name)
+        text = self.shell["text"]
+        if v is None and name == "HOME" and name not in self.shell["pending"] and \
+                not re.search(r"(?<![\w$])HOME(?:\[[^\]\n]*\])?\+?=", text) and \
+                not re.search(SH_BINDERS.format(name), text):
+            return os.environ.get("HOME") or None
         return v
 
     def sh_pythonpath(self, value, text, d):
@@ -1404,7 +1418,19 @@ class Judge:
                 return self.imports(f"the script {name} reads from its input", None, here, fed, lang) if lang else None
             return None
         if name in ("source", "."):
-            return self.script(words[1], d, depth, True) if len(words) > 1 else None
+            if len(words) < 2:
+                return None
+            # A path built from a variable or a substitution is worked out with the resolver (#2449)
+            # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
+            # sourced helper that posts passed. A literal path is read as it always was, ~ included.
+            # One that still cannot be worked out is not read, as before: refusing it refused 402 of
+            # this repository's scripts on 2026-11-08 (every hook suite, through the `local` path
+            # lib/suite-deadline.sh sources), so that waits on the resolver reading those forms.
+            raw = self.sh_source_target(text)
+            if raw and re.search(r"[$`]", raw):
+                v, splits = self.sh_word(raw, d, self.sh_source_var, self.shell["script"], False)
+                return self.script(v, d, depth, True) if v is not None and not splits else None
+            return self.script(words[1], d, depth, True)
         if "/" in words[0]:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"

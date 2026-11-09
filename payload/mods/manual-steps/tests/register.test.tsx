@@ -880,13 +880,17 @@ test('an interrupted turn brings Done back too', withKit, async ($, on) => {
 })
 
 test('only the end of the turn "step N done" started counts: one already running, or a subagent\'s, leaves it sent', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
   const w = world(on)
   await start($)
   await hand($, [step()])
-  // Done pressed while Claude was busy: the prompt waits behind the running turn.
+  // Done pressed while Claude was busy: held for the running turn, and sent as its prompt once that
+  // turn ends without recording it (#2437).
   await turnStart($, 'fix the tests', 'T1')
   await press($, 'done-1')
   await turnEnd($, 'T1')
+  await clock.settle()
+  expect(w.prompts).toEqual(['step 1 done'])
   await turnEnd($, 'T9', 'answer', 'agent-1')
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   // Its own turn runs, and Claude answers in it: nothing comes back and nothing is said.
@@ -909,14 +913,16 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
   await hand($, [step()])
   await turnStart($, 'fix the tests', 'T1')
   await press($, 'done-1')
-  // Claude works on past the bound: a prompt waiting behind a running turn is never taken for dropped.
+  // Claude works on past the bound: a Done held for a running turn is never taken for dropped.
   await clock.advance(DROPPED_AFTER_MS * 3)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
-  // Esc: the running turn ends interrupted, and the queued prompt goes with it.
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent, Claude reads it at its next step')
+  // Esc: the running turn ends interrupted, and the held Done is not sent after it (#2437), as a
+  // queued prompt goes with Esc.
   await turnEnd($, 'T1', 'aborted')
   await clock.advance(DROPPED_AFTER_MS - 1)
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(w.toasts).toEqual([])
+  expect(w.prompts).toEqual([])
   await clock.advance(1)
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toEqual([RELEASED])
@@ -925,7 +931,7 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
-// the middle of a turn: the turn is still running, so a Done pressed then waits behind it as before,
+// the middle of a turn: the turn is still running, so a Done pressed then is held for it (#2482),
 // and never comes back while that turn runs.
 test('a reload in the middle of a turn keeps it running, so a Done pressed then is never released while it runs (#1703)', withKit, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
@@ -936,7 +942,7 @@ test('a reload in the middle of a turn keeps it running, so a Done pressed then 
   await start($)
   await press($, 'done-1')
   await clock.advance(DROPPED_AFTER_MS * 3)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent, Claude reads it at its next step')
   expect(w.toasts).toEqual([])
 })
 
@@ -1921,4 +1927,153 @@ test('Copy, Copy link and Open on a later step act on that step, not the first (
 test('the tools say every step is open with its own Done, ask what a step needs from an earlier one, and record in order (#1239)', () => {
   expect(STEPS_DESCRIPTION).toMatch(/needs/)
   expect(VERDICT_DESCRIPTION).toMatch(/ask Dan whether every earlier step is done/i)
+})
+
+// #2437: a mod's $.prompt.submit waits until the session is idle, and a running turn never takes it
+// in (measured on Claude Code 2.1.319: a plugin's queued prompt ran only after the turn ended, while
+// a tool.call hook's context reached the turn's very next request). Under a long /goal turn a Done
+// waited an hour. So a Done pressed mid turn rides on the turn's next tool result instead, and the
+// "step N done" prompt is sent at the turn's end only when the turn never recorded the step.
+type ToolCalls = { tool: { call: (e: object) => Promise<{ context?: readonly string[]; deny?: string }> } }
+// The engine's Read beneath the mod (the kit stand-in answers Bash itself), registered with the world, before the test first calls $.
+const busyWorld = (on: On) => {
+  const w = world(on)
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }) as never)
+  // A held Done goes off the turn end's hook, on the clock, so a test settles it.
+  return { ...w, clock: mock.clock(on, { now: 0 }) }
+}
+let bashCalls = 0
+const toolRuns = ($: Engine, agentId?: string) =>
+  ($ as unknown as ToolCalls).tool.call({ tool: 'Read', tool_use_id: `r${++bashCalls}`, file_path: '/repo/README.md', ...(agentId ? { agentId } : {}) })
+const told = (r: { context?: readonly string[] }) => (r.context ?? []).filter(c => c.includes('pressed Done'))
+
+test('a Done pressed mid turn reaches that turn at its next tool call, never queued behind it (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  expect(w.prompts).toEqual([])
+  const first = await toolRuns($)
+  expect(told(first)).toHaveLength(1)
+  expect(told(first)[0]).toContain('step 1')
+  expect(told(first)[0]).toContain('steps_done')
+  // Said once: the next tool result carries nothing more.
+  expect(told(await toolRuns($))).toEqual([])
+})
+
+test('a Done the running turn records is not sent again when that turn ends (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Second' })])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await toolRuns($)
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/Step 1 recorded/)
+  await turnEnd($, 't1')
+  await w.clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(w.toasts).toEqual([])
+})
+
+test('a Done the running turn never records is sent as "step N done" once it ends (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await toolRuns($)
+  await turnEnd($, 't1')
+  await w.clock.settle()
+  expect(w.prompts).toEqual(['step 1 done'])
+})
+
+test('a Done pressed after the turn made its last tool call is sent at its end (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await turnEnd($, 't1')
+  await w.clock.settle()
+  expect(w.prompts).toEqual(['step 1 done'])
+})
+
+test("a subagent's tool call does not carry the Done, and a subagent's end does not send it (#2437)", withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  expect(told(await toolRuns($, 'agent-1'))).toEqual([])
+  await turnEnd($, 't1', 'answer', 'agent-1')
+  await w.clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(told(await toolRuns($))).toHaveLength(1)
+})
+
+test('the card says a Done pressed mid turn waits for Claude, then that Claude has it (#2437)', withKit, async ($, on) => {
+  busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  const waiting = (await stepLines($)).join('\n')
+  expect(waiting).toContain("sent, Claude reads it at its next step")
+  await toolRuns($)
+  const has = (await stepLines($)).join('\n')
+  expect(has).toContain('sent, Claude has it')
+})
+
+test('a running turn that cannot be read sends the Done as its prompt at once, and says why (#2437)', withKit, async ($, on) => {
+  const w = world(on)
+  on('state.get', async ($s, e, next) => ((e as { key?: string }).key === 'runningTurn' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  await press($, 'done-1')
+  expect(w.prompts).toEqual(['step 1 done'])
+  expect((await stepLines($)).join('\n')).toContain('Turn on the WAF rule  sent')
+  expect(w.logs.some(l => l.startsWith('manual-steps: could not read whether a turn is running, so the Done goes as a prompt'))).toBe(true)
+})
+
+test('a held Done that cannot be sent at the turn end is said, and its Done comes back (#2437)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }) as never)
+  const s = { failing: false }
+  on('state.set', async ($s, e, next) => (s.failing && (e as { key?: string }).key === 'card' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  s.failing = true
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(w.logs.some(l => l.startsWith('manual-steps: could not send a Done held for the turn that ended'))).toBe(true)
+  s.failing = false
+  await clock.advance(DROPPED_AFTER_MS)
+  expect(w.toasts).toEqual([RELEASED])
+})
+
+test('a held Done answered not done, pressed again while idle, goes once and is held for nothing (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await toolRuns($)
+  expect(await call($, VERDICT, { step: 1, checked: 'not-done' })).not.toMatch(/^refused/)
+  await turnEnd($, 't1')
+  await w.clock.settle()
+  expect(w.prompts).toEqual([])
+  await press($, 'done-1')
+  expect(w.prompts).toEqual(['step 1 done'])
+  const lines = (await stepLines($)).join('\n')
+  expect(lines).toContain('Turn on the WAF rule  sent')
+  expect(lines).not.toContain('Claude')
+  await turnStart($, 'step 1 done', 't2')
+  await turnEnd($, 't2')
+  await w.clock.settle()
+  expect(w.prompts).toEqual(['step 1 done'])
 })
