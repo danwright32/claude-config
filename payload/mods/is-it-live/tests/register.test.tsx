@@ -539,6 +539,84 @@ test('a deploying card naming who asked, with no message yet, is made, and says 
   expect(await shown($)).toEqual(['engine band'])
 })
 
+// #2435, Dan, 2026-11-07: "anytime you have a message for someone you should save it in a draft in
+// slack as well". The mod never calls Slack: the card's answer tells the session to save the draft,
+// and only once the card says the change is out. The band is unchanged.
+const ASKED_IN = { channel_id: 'C0123ABCD', thread_ts: '1730900000.123456' }
+
+test('a live card with a message for a Slack requester tells the session to save it as a draft reply in that thread, and calls no Slack tool itself (#2435)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: ASKED_IN })
+  expect(r.deny).toBeUndefined()
+  expect(said(r)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
+  expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
+  expect(said(r)).toContain('/no-ai-tells')
+  expect(w.slackCalls).toEqual([])
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+})
+
+test('a deploying card asks for no draft yet; the live card for it does, with the thread an earlier call gave (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: ASKED_IN }
+  const d = await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...ask })
+  expect(said(d)).not.toContain('slack_send_message_draft')
+  const f = await card($, { ...CARD, ...ask, deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(said(f)).not.toContain('slack_send_message_draft')
+  // A live card naming nobody keeps the earlier message, and where its draft goes.
+  const { requester: _r, message: _m, slack: _s, ...bare } = { ...CARD, ...ask }
+  const l = await card($, bare)
+  expect(said(l)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
+})
+
+test("a later card naming someone else never takes the earlier requester's Slack target for its draft (#2435)", withKit, async ($, on) => {
+  world(on)
+  const kris = { requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is going out.', slack: { user_id: 'U0123ABCD' } }
+  await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...kris })
+  const r = await card($, { ...CARD, requester: { name: 'Ana', via: 'named' }, message: 'The venue filter is live now.' })
+  expect(said(r)).not.toContain('U0123ABCD')
+  expect(said(r)).toContain('a DM to Ana')
+})
+
+test('a live card for a Slack requester with no thread known says to find it or tell Dan, and never to send (#2435)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' })
+  expect(r.deny).toBeUndefined()
+  expect(said(r)).toContain('No Slack thread was given')
+  expect(said(r)).toContain('save nothing and tell Dan')
+  expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
+})
+
+test('a person Dan named gets a draft DM by user id, and a message Dan marked sent asks for no draft (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'named' }, message: 'The venue filter is live now.', slack: { user_id: 'U0123ABCD' } }
+  const r = await card($, { ...CARD, ...ask })
+  expect(said(r)).toContain('slack_send_message_draft with channel_id "U0123ABCD"')
+  expect(said(r)).toContain('a DM to Kris')
+  await press($, 'is-it-live:sent-acme-hq-scheduler-412')
+  expect(said(await card($, { ...CARD, ...ask }))).not.toContain('slack_send_message_draft')
+})
+
+test('a second live card for the same thread says its draft replaces the first; the same card again asks only if not saved (#2435)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, slack: ASKED_IN }
+  const first = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' })
+  expect(said(first)).not.toContain('replaces')
+  const again = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' })
+  expect(said(again)).toContain('already asked for on an earlier card for #412')
+  const second = await card($, { ...CARD, ...ask, pr: 413, message: 'Both venue fixes are live now.' })
+  expect(said(second)).toContain('An earlier card (#412) already asked for a draft in that thread')
+  expect(said(second)).toContain('replaces')
+  expect(said(second)).toContain('attached_draft_exists')
+})
+
+test('a card refuses Slack fields with nobody named, and a malformed thread, before GitHub is asked (#2435)', withKit, async ($, on) => {
+  const w = world(on)
+  expect((await card($, { ...CARD, slack: ASKED_IN })).deny).toContain('slack is only for the person a message is for')
+  expect((await card($, { ...CARD, requester: { name: 'Kris', via: 'slack' }, message: 'Live now.', slack: { thread_ts: '1730900000.123456' } })).deny).toContain('slack.thread_ts needs slack.channel_id')
+  expect(w.runs).toEqual([])
+})
+
 test('a Copy the clipboard refuses says so, rather than seeming to work', withKit, async ($, on) => {
   const w = world(on, { copied: false })
   await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live now.' })
@@ -1078,9 +1156,9 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
 })
 
 // #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so it can be
-// running still past WAIT_MS. Past it, the merge is asked about only while lib/merge-in-line.sh says
-// the helper holds a place in line; one whose helper is gone, or that cannot be asked, is let go as
-// before. A helper still running is never let go, so its merge, made at hour 26, is still owed a card.
+// running still past WAIT_MS. Past it, the merge is let go only once lib/merge-in-line.sh says the
+// helper is gone. A helper still running, or one whose line cannot be read (#2466), is never let go,
+// so its merge, made at hour 26, is still owed a card.
 const HOUR = 3_600_000
 const pastWindow = async ($: unknown, on: On, inLine: Gh | undefined) => {
   const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
@@ -1113,9 +1191,40 @@ test('a background merge past the window whose helper has left the line is let g
   expect(after.block).toBeUndefined()
 })
 
-test('a background merge past the window is let go when whether its helper is in line cannot be read, never kept on an answer it did not get (#2403)', withKit, async ($, on) => {
-  const { after } = await pastWindow($, on, { exitCode: 2, stdout: '', stderr: 'usage: merge-in-line.sh <owner/name> <pull request number>' })
-  expect(after.block).toBeUndefined()
+// #2466: a check that fails to answer is not "gone". Whether the helper is still in line is then not
+// known, so the merge is never let go as though it had finished: it is waited on still, said once
+// in plain words, and its merge at hour 26 is owed its card as a running one's is.
+const UNREAD = `Is it live: whether the merge helper for ${REPO}#412 is still in line could not be read`
+for (const [what, answer, why] of [
+  ['the check exits with an error', { exitCode: 2, stdout: '', stderr: 'merge-in-line.sh: could not read the line at /x (not a folder this can list)' }, 'could not read the line at /x'],
+  ['the check answers nothing', { exitCode: 0, stdout: '' }, "it gave no answer ('')"],
+  ['the check answers something that is no answer', { exitCode: 0, stdout: 'syntax error near line 3\n' }, "it gave no answer ('syntax error near line 3')"],
+] as const) {
+  test(`a background merge past the window is waited on still, and said, when ${what} (#2466)`, withKit, async ($, on) => {
+    const { w, quiet, after } = await pastWindow($, on, answer)
+    expect(quiet.block).toBeUndefined()
+    const said = w.toasts.filter(t => t.startsWith(UNREAD))
+    // Said once, however many turn ends ask, naming why and that the merge is still waited on.
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain(why)
+    expect(said[0]).toContain('so its merge is still waited on')
+    expect(after.block).toContain(`${REPO}#412`)
+  })
+}
+
+test('a check that could not be read and then answers gone lets the merge go (#2466)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), inLine: { exitCode: 2, stdout: '', stderr: 'boom' } })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --repo ${REPO} --squash`, { run_in_background: true })
+  await w.clock.advance(25 * HOUR)
+  expect((await turnEnd($)).block).toBeUndefined()
+  w.w.inLine = { exitCode: 0, stdout: 'gone\n' }
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: T0 + 26 * HOUR }
+  await w.clock.advance(HOUR)
+  expect((await turnEnd($)).block).toBeUndefined()
 })
 
 // #1991: a merge the helper makes in the background stays waiting until a turn end hears from GitHub

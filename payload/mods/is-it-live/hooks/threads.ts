@@ -71,7 +71,8 @@ export const threadOfSource = (source: unknown): { channel: string; ts: string }
 }
 
 const saveWith = (t: SlackThread) => `slack_send_message_draft with channel_id "${t.channel}" and thread_ts "${t.ts}"`
-const NEVER = 'Never call slack_send_message or slack_schedule_message.'
+/** Said with every instruction to save a Slack draft, here and on the card (card.ts, #2435). */
+export const NEVER = 'Never call slack_send_message or slack_schedule_message.'
 const EXISTS = "If Slack answers attached_draft_exists, an earlier draft for that channel is already in Dan's Drafts: Slack keeps one per channel, so tell him to edit or delete it, then ask again."
 
 /** What Dan choosing Save as a draft tells the session. */
