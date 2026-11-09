@@ -764,8 +764,8 @@ check("the settled file gives designFrameTrouble, the one reading of a frame's r
       "function designFrameTrouble(report)" in told_src, told_src[-2500:])
 
 # --- in a real browser, where there is one ------------------------------------------------------------
-# Found by the same lookup as every other block (claude-config#1452): the Mac's Chrome, or one on
-# PATH, which is how CI's Linux runner has it.
+# Found by the same lookup as every other block (claude-config#1452): TEST_CHROME, from the one
+# headless_chrome lookup, the separate build on the Macs and on CI's Linux runner alike (#2191).
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
 if not TEST_CHROME:
     print("SUITE-PART-UNMEASURED no hidden Chrome (%s), so the settled file's frames were not drawn in a browser" % NO_CHROME_WHY)
