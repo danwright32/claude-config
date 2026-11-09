@@ -3818,8 +3818,9 @@ const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: 
   return Array.isArray(all) ? whoseFiles(all, root, await writtenOf($)) : all
 }
 
-// `choice` is Dan's recorded answer about the PR read by number, when he gave one (#2433).
-type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choice?: ScopeModesLeftAsIs }
+// `choices` are Dan's recorded answers about PRs (#2433), the one about the PR read found by the
+// repository its kept reading's link names and its number, as the finish check finds it.
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[] }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
@@ -3861,7 +3862,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     const held = poll ? await heldLook($, poll, now) : undefined
     // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none,
     // unless its last reading was of a PR left as it is on Dan's choice (#2433).
-    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, o.choice))))) return { reading: { ...r, pr: { unreadable: held } } }
+    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, await seenChoice($, seen, slug, o.choices)))))) return { reading: { ...r, pr: { unreadable: held } } }
     if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
@@ -4028,6 +4029,14 @@ const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)
 // owner/name a PR's link names, read by mod-kit's one reader of a github.com link (#961), or
 // undefined for no link or none it names.
 const repoOfLink = async ($: EngineInterface, url: string | undefined): Promise<string | undefined> => (url ? ((await $.modkit.linkRepo({ link: url })) ?? undefined) : undefined)
+// Dan's answer about the PR a kept reading is of (#2433): by the repository its link names, else the
+// one it was read in, and its number; with neither there is no answer to find, so nothing is kept.
+const seenChoice = async ($: EngineInterface, s: PrSeen, slug: string | undefined, choices: readonly ScopeModesLeftAsIs[] = []): Promise<ScopeModesLeftAsIs | undefined> => {
+  const n = s.pr?.number
+  if (typeof n !== 'number') return undefined
+  const home = (await repoOfLink($, typeof s.pr?.url === 'string' ? s.pr.url : undefined).catch(() => undefined)) ?? slug
+  return home ? choiceFor(choices, home, n) : undefined
+}
 // How a PR left as it is on Dan's choice is listed: by number, repository and the reason he was asked
 // about, those left open and those left closed (#1033) each in a sentence of its own.
 const keptLine = (d: ScopeModesLeftAsIs) => `PR #${d.number} in ${d.repo} (${d.why})`
@@ -4082,7 +4091,7 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
       // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
       // answer to leave_branch, by repository and name (#1074).
       const choices = await leftOpenOf($)
-      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine) })
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices })
       t = await keepFound($, t, found)
       const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
@@ -4117,8 +4126,7 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const choice = choiceFor(choices, o.repo, o.number)
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, ...(choice ? { choice } : {}) })
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, choices })
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))

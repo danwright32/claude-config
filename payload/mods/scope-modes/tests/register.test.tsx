@@ -7202,6 +7202,26 @@ test('a PR that cannot be read still holds winding down, however settled the oth
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the PR could not be read \(no pull requests found\)\. Left closed by Dan's choice: PR #801/)
 })
 
+test("the branch's own PR left open on Dan's choice keeps its settled reading past the look budget too (#2433)", withDeps, async ($, on) => {
+  const own = { ...merged('OPEN'), pr: { ...merged('OPEN').pr, headRefOid: 'ccc3333' } }
+  const { w, clock } = world(on, { branchHere: false, branchOnGitHub: false, verdict: null, created: 'https://github.com/o/r/pull/40\n', ask: 'Leave it open' })
+  w.o.gh = { ...own, others: [{ ...openPr(40, 'eee5555'), state: 'MERGED' }] }
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title other', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  await call($ as never, leave(12, { why: 'the client signs off next week' }))
+  // #40, merged, has no is it live card yet, which needs no look; #12 is read by its number from the second stop.
+  const card = /^Winding down is not finished: PR #40 has no is it live card yet/
+  expect((await stop($ as never)).block).toMatch(card)
+  expect((await stop($ as never)).block).toMatch(card)
+  w.o.poll = { budget: 0 }
+  const held = (await stop($ as never)).block ?? ''
+  expect(held).toMatch(card)
+  expect(held).toMatch(/ Left open by Dan's choice: PR #12 in o\/r /)
+  expect(held).not.toMatch(/could not be read/)
+})
+
 // The branch's own PR has no is it live card yet, so every stop but the last holds for that alone.
 for (const [what, cmd] of [
   ['pushed to', 'git push origin fix-31'],
