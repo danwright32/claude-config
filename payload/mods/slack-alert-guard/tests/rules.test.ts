@@ -2,6 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
+  MARKER_PREFILTER,
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
@@ -637,10 +638,37 @@ test("the files a module's imports can be are named as git pathspecs, by path, n
 })
 
 test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {
-  // The repository is searched for SENDER_PREFILTER before any file is read, so a marker that could
-  // match text holding neither word would never see its file read.
+  // The repository is searched for SENDER_PREFILTER before any file is read (the files a send helper
+  // could be, and the files then searched for MARKER_PREFILTER), so a marker that could match text
+  // holding neither word would never see its file read.
   for (const m of MARKERS) expect(/slack|postmessage/i.test(m.source)).toBe(true)
   expect(SENDER_PREFILTER).toBe('slack|postmessage')
+})
+
+test('the files listed as able to post include every file a Slack marker matches in its code, and not one that only mentions Slack', () => {
+  // A comment between a helper's name and its parenthesis is blanked to a space in the code, so the
+  // marker matches the code and not the text; the prefilter must still list the file by its text.
+  const posts = [
+    'await fetch("https://hooks.slack.com/services/T0/B0/x")',
+    'await client.chat.postMessage({ channel, text })',
+    "import { WebClient } from '@slack/web-api'",
+    'from slack_sdk import WebClient',
+    'import "github.com/slack-go/slack"',
+    'const url = process.env.SLACK_ALERTS_WEBHOOK_URL',
+    'await notifySlack /* why */ (text)',
+    "import { postSlackAlert } from './notify'",
+    "const alertSlack = require('./slack')",
+    'await slackClient.send /* now */ (text)',
+    'await slackSendMessage(text)',
+  ]
+  const prefilter = new RegExp(MARKER_PREFILTER, 'i')
+  // Every marker is seen to match one of these in its code, so a marker added later needs a line here.
+  for (const m of MARKERS) expect(posts.some(p => m.test(codeOf('notify.ts', p)))).toBe(true)
+  for (const p of posts) expect(prefilter.test(p)).toBe(true)
+  for (const p of ['<h1>Slack alert preview</h1>', 'label: "Slack channel"', '// posts to Slack', 'window.postMessage(data)'])
+    expect(prefilter.test(p)).toBe(false)
+  // git grep -E on macOS reads none of these escapes, so the prefilter is written without them.
+  expect(/\\[bwsdBWSD]/.test(MARKER_PREFILTER)).toBe(false)
 })
 
 // claude-config#2284. Dan, 2026-11-05, rejecting "Post this Slack message from ...?" twice: "You

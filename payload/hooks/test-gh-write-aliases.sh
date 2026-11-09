@@ -318,7 +318,7 @@ check "#2430 (control) a clean file fed in passes: $out" passed
 hook "printf 'a clean build\n' | gh release create v1 $PUB --notes-file -"
 check "#2442 clean notes piped in, even from printf, are refused as unread: $out" refused
 hook "printf 'built from acme-widgets\n' | gh release create v1 $PUB --notes-file -"
-check "#2430 (control) and naming one, they are judged and refused: $out" refused
+check "#2430 (control) and naming one, the notes are refused unread: $out" refused
 hook "gh release create v1 $PUB --notes-file - <<< 'a clean build'"
 check "#2430 (control) a clean here-string passes: $out" passed
 hook "gh release create v1 $PUB --notes-file - <<'EOF'
