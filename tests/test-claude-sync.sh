@@ -24436,6 +24436,80 @@ dbg "#1535 status with a removal not received: $out_ml5"
 check "#1535 a mod the shared repo removed and this Mac still runs is named" \
   "line_has \"\$out_ml5\" 'mods behind the shared repo' 'side-mod'"
 
+section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
+# Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
+# for a sync that publishes a change and 162 for the pull receiving it, git being about half the
+# cost. Some of them asked a question whose answer could not have changed since the last time the
+# same run asked it. These hold the run to asking once, and the controls hold the answers to what
+# they were. The counts come from a git that records each call before running the real one.
+unset SYNC_NO_GIT
+FPBARE="$WORK/fewer-bare.git"; git init -q --bare "$FPBARE"
+FPRA="$WORK/fewer-repoA"; git clone -q "$FPBARE" "$FPRA" 2>/dev/null
+FPHA="$WORK/fewer-homeA"; mkdir -p "$FPHA/skills/s"
+mkskill "$FPHA/skills/s/SKILL.md" 'one'; echo '{"hooks":{}}' > "$FPHA/settings.json"
+fprun(){ # fprun <home> <repo> <command>
+  env CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_HOSTNAME="$(basename "$1")" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" "$3" 2>&1
+}
+fprun "$FPHA" "$FPRA" sync >/dev/null
+FPRB="$WORK/fewer-repoB"; git clone -q "$FPBARE" "$FPRB" 2>/dev/null
+FPHB="$WORK/fewer-homeB"; mkdir -p "$FPHB"; echo '{"hooks":{}}' > "$FPHB/settings.json"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+FPGIT="$WORK/fewer-gitcalls"; mkdir -p "$FPGIT/bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/calls"\nexec "%s" "$@"\n' "$FPGIT" "$(command -v git)" > "$FPGIT/bin/git"
+chmod +x "$FPGIT/bin/git"
+mkskill "$FPHA/skills/s/SKILL.md" 'two'
+fprun "$FPHA" "$FPRA" sync >/dev/null
+: > "$FPGIT/calls"
+out_fp="$(PATH="$FPGIT/bin:$PATH" fprun "$FPHB" "$FPRB" pull)"
+dbg "#2472 the counted pull said: $out_fp"
+check "#2472 the fixture: the pull received the other Mac's change" \
+  "grep -q 'two' '$FPHB/skills/s/SKILL.md'"
+check "#2472 the fixture: the counting git saw the pull (else the counts below prove nothing)" \
+  "[ \"\$(grep -c 'rev-parse' '$FPGIT/calls')\" -gt 3 ]"
+# The paths the shared repo changed that this Mac has not applied are read by three steps of one
+# apply, and nothing in between moves HEAD, the applied marker or the shared branch.
+check "#2472 a receiving pull works out what it has not applied once, not once per step that reads it" \
+  "[ \"\$(grep -c 'merge-base --all' '$FPGIT/calls')\" -eq 1 ]"
+# Where an unfinished rebase would be is two paths, and git answers both in one call.
+check "#2472 the fixture: the pull did ask where a rebase would be" \
+  "grep -q -- '--git-path rebase-merge' '$FPGIT/calls'"
+check "#2472 and asks for both places a rebase can be in one call" \
+  "[ \"\$(grep -c -- '--git-path' '$FPGIT/calls')\" -eq \"\$(grep -c -- '--git-path rebase-merge --git-path rebase-apply' '$FPGIT/calls')\" ]"
+# The control for the answer: a rebase the apply backend left unfinished lives in rebase-apply, the
+# second of the two, and is still found there.
+FPRAP="$WORK/fewer-rebase-apply"; git init -q -b main "$FPRAP"
+printf 'base\n' > "$FPRAP/f.txt"; git -C "$FPRAP" add f.txt; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -m base
+git -C "$FPRAP" checkout -q -b side
+printf 'side\n' > "$FPRAP/f.txt"; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -am side
+git -C "$FPRAP" checkout -q main
+printf 'main\n' > "$FPRAP/f.txt"; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -am main
+git -C "$FPRAP" checkout -q side
+git -C "$FPRAP" -c user.name=t -c user.email=t@e rebase --apply main >/dev/null 2>&1 || true
+check "#2472 the fixture: the apply backend left its rebase in rebase-apply, not rebase-merge" \
+  "[ -d '$FPRAP/.git/rebase-apply' ] && [ ! -d '$FPRAP/.git/rebase-merge' ]"
+out_fprap="$(CLAUDE_HOME="$FPHB" SYNC_REPO="$FPRAP" SYNC_HOSTNAME=fewer-rap SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2472 status over a rebase-apply rebase: $out_fprap"
+check "#2472 a rebase left in rebase-apply is still reported as stopping the clone" \
+  "grep -q 'left mid rebase by an earlier run' <<< \"\$out_fprap\""
+# The record of which unloadable skills a notice already named is rewritten by every run, even
+# when nothing is refused and nothing was recorded, which is the same file written back.
+FPREC="$FPRB/.unloadable-notified"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+check "#2472 the fixture: the notice record exists" "[ -f '$FPREC' ] && [ ! -s '$FPREC' ]"
+fp_ino1="$(ls -i "$FPREC" | awk '{print $1}')"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+fp_ino2="$(ls -i "$FPREC" | awk '{print $1}')"
+check "#2472 a run with nothing refused and nothing recorded leaves the notice record as it was" \
+  "[ -n '$fp_ino1' ] && [ '$fp_ino1' = '$fp_ino2' ]"
+# The control: an entry for a folder that is no longer refused is still cleared, and an entry under
+# another notice's key is still kept.
+printf 'applied to this Mac\t/ghost/\nsome other notice\t/kept/\n' > "$FPREC"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+check "#2472 an entry for a folder no longer refused is still cleared from the record" \
+  "! grep -q 'ghost' '$FPREC'"
+check "#2472 and another notice's entry is still kept" \
+  "grep -q 'some other notice' '$FPREC'"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
