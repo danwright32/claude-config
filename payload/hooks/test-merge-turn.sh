@@ -322,6 +322,25 @@ turn_look 1000 3600
 check_eq "#2474 a run at the front waits for the run at the front that holds the turn" "5" "$TURN_HEAD_PR"
 check_eq "#2474 and goes ahead of the waiting run, not the holder" "1" "$TURN_AHEAD"
 
+# A run of a helper started before the front of line existed reads the line in number order, so a
+# run at the front never goes ahead of its ticket (one with no "order 2" line): if it did, once the
+# holder left, both would decide the turn was theirs and update or merge at once.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null          # 1, holding
+observer_looks 900 >/dev/null
+t2="$(other_joins acme/widget 8 950 "$LIVE" "$LIVE_START")"             # 2, an older helper's ticket
+grep -v '^order ' "$MWR_TURN_DIR/acme/widget/$t2" > "$WORKDIR/old-ticket" && mv "$WORKDIR/old-ticket" "$MWR_TURN_DIR/acme/widget/$t2"
+other_joins acme/widget 6 960 "$LIVE" "$LIVE_START" >/dev/null          # 3, a current helper's ticket
+turn_open acme/widget; turn_join 7 1000 first                            # 4
+turn_look 1000 3600
+check_eq "#2474 a run at the front stays behind an older helper's ticket, passing only the current one" "2" "$TURN_AHEAD"
+check_eq "#2474 so it went ahead of one run, not two" "1" "$TURN_OVERTOOK"
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1100 3600
+check_eq "#2474 when the holder leaves, the older helper's run holds the turn, as it believes it does" "8" "$TURN_HEAD_PR"
+check_eq "#2474 and the run at the front does not" "0" "$TURN_MINE"
+check "#2474 a ticket this version writes says it reads the front of the line" "order 2" "$(cat "$MWR_TURN_DIR/acme/widget/$TURN_TICKET")"
+
 # Failure paths: an unknown way of joining is refused, never taken as "first" or as an ordinary place.
 reset
 turn_open acme/widget; turn_join 7 1000 frist; rc=$?

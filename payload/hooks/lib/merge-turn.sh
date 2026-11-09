@@ -24,8 +24,9 @@
 # number order. On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests ahead
 # of it needed to pass CI, and moving it forward meant stopping all five helpers by hand. Each run a
 # ticket at the front passes is told so once (TURN_SAID), and a "first" line that is not exactly
-# "first 1" is not honoured and is said to the runs it would have passed. Only runs of this version
-# order the line this way: a helper started before it reads the line in number order until it stops.
+# "first 1" is not honoured and is said to the runs it would have passed. A helper started before
+# this version reads the line in number order, so its ticket (one without "order 2") is never
+# passed: a run at the front stays behind it, and the two never both believe the turn is theirs.
 #
 # WHEN ITS HOLDER DIES (L409). A file lock outlives the process holding it, so a ticket names its
 # run's pid and that process's start time. A ticket whose pid the system says is not running, or is
@@ -114,7 +115,9 @@ turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front,
   fi
   [ -n "$TURN_PID_START" ] || TURN_PID_START="$(turn_proc_start "$TURN_PID")"
   tmp="$TURN_REPO_DIR/.join.$TURN_PID.$RANDOM"
-  if ! printf 'pr %s\npid %s\nstart %s\njoined %s\n%s' "$1" "$TURN_PID" "$TURN_PID_START" "$2" "$front" > "$tmp" 2>/dev/null; then
+  # "order 2": this run reads the line with its front (see turn_order), so a run at the front may
+  # go ahead of it; a ticket without it is an older helper's, which reads the line in number order.
+  if ! printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n%s' "$1" "$TURN_PID" "$TURN_PID_START" "$2" "$front" > "$tmp" 2>/dev/null; then
     rm -f "$tmp"; TURN_ERR="could not write in $TURN_REPO_DIR"; return 1
   fi
   hw="$(cat "$TURN_REPO_DIR/seq" 2>/dev/null)"; case "$hw" in ''|*[!0-9]*) hw=0 ;; esac
@@ -158,18 +161,31 @@ turn_mark(){   # $1 = ticket, $2 = its pid, $3 = now
 # The order of the line (claude-config#2474): the ticket holding the turn (its mark names its own
 # pid), then the tickets that joined at the front, then the rest, each group by number. A ticket at
 # the front therefore goes ahead of every run still waiting and never ahead of the one holding the
-# turn, which may be merging, and two at the front keep the order they joined in.
+# turn, which may be merging, and two at the front keep the order they joined in. A ticket without
+# "order 2" belongs to a helper started before the front existed, which reads the line in number
+# order: a run at the front stays behind it, since going ahead would leave both believing the turn
+# theirs once the holder left. So each ticket at the front goes in just after the last ticket
+# already placed that is at the front or an older helper's, ahead of the rest.
 turn_order(){
-  local n f pid mark held="" front="" rest=""
+  # placed: the tickets not holding the turn, in order, each marked F (at the front), O (an older
+  # helper's) or N (the rest). Plain words, not an array, so bash 3.2 under set -u reads it empty.
+  local n f pid mark tok before after held="" placed=""
   for n in $(turn_tickets); do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
     pid="$(turn_field "$f" pid)"; mark="$(cat "$f.head" 2>/dev/null)"
-    if [ -n "$mark" ] && [ -n "$pid" ] && [ "${mark#* }" = "$pid" ]; then held="$held $n"
-    elif [ "$(turn_field "$f" first)" = 1 ]; then front="$front $n"
-    else rest="$rest $n"; fi
+    if [ -n "$mark" ] && [ -n "$pid" ] && [ "${mark#* }" = "$pid" ]; then held="$held $n"; continue; fi
+    if [ "$(turn_field "$f" first)" = 1 ]; then
+      before=""; after=""
+      for tok in $placed; do
+        case "$tok" in F*|O*) before="$before $after $tok"; after="" ;; *) after="$after $tok" ;; esac
+      done
+      placed="$before F$n $after"
+    elif [ "$(turn_field "$f" order)" = 2 ]; then placed="$placed N$n"
+    else placed="$placed O$n"; fi
   done
-  printf '%s\n' $held $front $rest
+  for tok in $held; do printf '%s\n' "$tok"; done
+  for tok in $placed; do printf '%s\n' "${tok#?}"; done
 }
 # Tickets this run has already been told about (one that went ahead of it, a front of line mark
 # that was ignored), so each is said once rather than at every look.

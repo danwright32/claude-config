@@ -979,8 +979,9 @@ updated_from=""; updated_at=0; catching_up=""
 # forward: on 2026-11-06 it ended 11 of them 1 to 3 places from the front, the p0 #2319 among them,
 # and each ran again at the back behind about 20 others, so the pull requests that had waited longest
 # merged last. The reason given for it, a line moving for ever without reaching this run, cannot happen
-# within one wait: numbers only grow (lib/merge-turn.sh), so nobody joins ahead of a ticket, and the
-# line can move only as many times as there were tickets ahead when it joined. The waits themselves are
+# within one wait: numbers only grow (lib/merge-turn.sh), so only a run started with --first joins
+# ahead of a ticket (claude-config#2474), and the line can move only as many times as there were
+# tickets ahead when it joined plus those a person sent to the front since. The waits themselves are
 # bounded too, since a run is passed over only after holding the turn MWR_TURN_HOLD_SECONDS, which
 # the deadline counts. So the ceiling is gone, and the line standing still for MWR_LINE_SECONDS is
 # what ends a wait. The count of looks follows the same rule (L704): the looks taken in line up to

@@ -1873,8 +1873,8 @@ changes only the order: the update, the checks, the review and every gate judge 
 other. It is refused, said, and the run joins at the back when the pull request's own checks are
 failing, since it is then not the fix the others need, and not honoured, said, when its checks cannot
 be read. A run at the front that is passed over joins again at the back, so a stuck one cannot take
-the turn again and again. Only helpers started after this change order the line this way; one already
-running reads it in number order until it stops.
+the turn again and again. A helper started before this change reads the line in number order, so a run
+at the front stays behind its place rather than pass it, and the two never both take the turn.
 While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
