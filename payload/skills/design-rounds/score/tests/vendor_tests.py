@@ -27,6 +27,7 @@ EXPECTED = {
     "design_file.py": os.path.join(SKILL_DIR, "design_file.py"),
     "headless-dom.sh": os.path.join(SKILL_DIR, "headless-dom.sh"),
     "shared-playwright.json": os.path.join(SCORE_DIR, "shared-playwright.json"),
+    "headless_chrome.py": os.path.join(SCORE_DIR, "headless_chrome.py"),
     "vendor-score.py": TOOL,
 }
 
@@ -125,10 +126,19 @@ if shutil.which("node"):
     # Chrome is started through headless-dom.sh beside it (claude-config#1537), which Playwright runs
     # as the browser itself, so the copy must be there and runnable.
     p = subprocess.run(["node", "--input-type=module", "-e",
-                        "const m = await import(process.argv[1]); console.log(m.chromeLaunchOptions('chrome', [], {platform: 'darwin'}).executablePath)",
+                        "const m = await import(process.argv[1]); console.log(m.chromeLaunchOptions('chrome', [], {find: () => '/x/hidden-chrome'}).executablePath)",
                         "file://" + os.path.join(V, "capture-web.mjs")], capture_output=True, text=True, env=ENV, cwd=T)
     check("the vendored capture-web.mjs starts Chrome through the headless-dom.sh beside it",
           p.returncode == 0 and os.path.realpath(p.stdout.strip()) == os.path.realpath(os.path.join(V, "headless-dom.sh")), "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
+    # And finds the Chrome it starts through the headless_chrome.py beside it (claude-config#2191): on
+    # this HOME, which holds no shared Playwright, that lookup refuses, naming the shared folder under
+    # this HOME it looked in and claude-config's installer, since the copy carries none.
+    p = subprocess.run(["node", "--input-type=module", "-e",
+                        "const m = await import(process.argv[1]); try { console.log(m.findHiddenChrome()); } catch (e) { console.log('REFUSED ' + e.message); }",
+                        "file://" + os.path.join(V, "capture-web.mjs")], capture_output=True, text=True, env=ENV, cwd=T)
+    check("the vendored capture-web.mjs finds its Chrome through the headless_chrome.py beside it, refusing with none",
+          p.stdout.startswith("REFUSED ") and HOME in p.stdout
+          and "~/.claude/skills/design-rounds/score/install-playwright.sh" in p.stdout, "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
 else:
     print("SUITE-PART-UNMEASURED node is not on PATH, so the vendored capture-web.mjs was not loaded")
 check("and the vendored headless-dom.sh can be run as a program, as Playwright runs it",

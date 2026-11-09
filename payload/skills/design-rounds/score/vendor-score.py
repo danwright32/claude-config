@@ -10,7 +10,8 @@ Dan's decision, 2026-10-20: Slate COPIES the score tools into its repository, si
 
 COPY writes every file the score needs, flat in one folder (capture-web.mjs, design_score.py and the
 helpers it imports, including design_file.py from the design rounds skill one folder up, the
-headless-dom.sh Chrome is started through (copied runnable, claude-config#1537), the shared
+headless-dom.sh Chrome is started through (copied runnable, claude-config#1537), headless_chrome.py,
+which finds the separate build every hidden Chrome runs (claude-config#2191), the shared
 Playwright's settings, and this tool itself), then vendor-manifest.json: the sha256 of each file as
 claude-config had it. It copies from the folder this script is in, or from --from, which must be
 claude-config's own copy (the score folder with design_file.py one folder up), never another vendored
@@ -55,6 +56,9 @@ FILES = {
     # copied runnable (claude-config#1537).
     "headless-dom.sh": os.path.join("..", "headless-dom.sh"),
     "shared-playwright.json": "shared-playwright.json",
+    # The one lookup of the separate build every hidden Chrome runs, never Dan's own Chrome, read by
+    # capture-web.mjs and headless-dom.sh alike (claude-config#2191).
+    "headless_chrome.py": "headless_chrome.py",
     "vendor-score.py": "vendor-score.py",
 }
 INSTALLED = os.path.join("~", ".claude", "skills", "design-rounds", "score")
