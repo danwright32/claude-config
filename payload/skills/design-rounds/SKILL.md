@@ -668,7 +668,9 @@ python3 <app folder for the copy>/vendor-score.py check <app folder for the copy
 ```
 
 `copy` writes the score's files flat in one folder (`capture-web.mjs`, `design_score.py` and its
-helpers, `design_file.py`, the shared Playwright's settings and `vendor-score.py` itself) and
+helpers, `design_file.py`, `headless-dom.sh`, `headless_chrome.py` (the lookup of the separate
+build the `chrome` channel draws in, which needs the shared Playwright on that runner), the shared
+Playwright's settings and `vendor-score.py` itself) and
 `vendor-manifest.json`, each file's hash as claude-config had it. `check` compares the folder with its
 manifest everywhere, CI included, which catches a hand edit, a missing file or a stranger in the
 folder; and, wherever claude-config's copy is on disk (`~/.claude`, or `--against <score folder>`),
