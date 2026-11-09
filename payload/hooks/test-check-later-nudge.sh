@@ -11,7 +11,8 @@
 #   3. the assistant's own text this turn promising to check again on a later day
 # and the controls that must stay silent: a recurring cron, a one shot later today, a memory naming
 # only a past date, "tomorrow" inside a tool result or a quotation, a promise in an EARLIER turn,
-# and a turn that already ran the flow (Dan typed /check-later, or a row was written to the list).
+# and a turn that already ran the flow (Dan typed /check-later, the session started it through the
+# Skill tool, or a row was written to the list).
 #
 # An unreadable transcript must never read as "nothing to check" (L98): it fires, saying so.
 #
@@ -254,6 +255,20 @@ t="$WORK/typed-check-later.jsonl"
 <command-name>/check-later</command-name>"
   L assistant-text "I'll re-check on Nov 5; the row is drafted below." ; } > "$t"
 silent "control: a turn where Dan typed /check-later stays silent" "$t"
+
+# #2532: a session may start the skill itself through the Skill tool, and a turn that did has run
+# the flow just as a typed /check-later has, so the hook stands down rather than sending it again.
+t="$WORK/session-started-check-later.jsonl"; start "$t"
+{ L tool k1 Skill '{"skill":"check-later"}'
+  L result k1 "Launching skill: check-later"
+  L assistant-text "I'll re-check on Nov 5; the row is drafted below." ; } >> "$t"
+silent "a turn where the session started check-later through the Skill tool stays silent" "$t"
+
+t="$WORK/session-started-other-skill.jsonl"; start "$t"
+{ L tool k1 Skill '{"skill":"no-ai-tells","args":"check-later"}'
+  L result k1 "Launching skill: no-ai-tells"
+  L assistant-text "I'll re-check on Nov 5." ; } >> "$t"
+fires "control: a turn that started some other skill still fires" "$t" "check-later"
 
 t="$WORK/other-list.jsonl"; start "$t"
 { L tool c1 CronCreate '{"cron":"0 9 3 11 *","prompt":"recheck","recurring":false}'
