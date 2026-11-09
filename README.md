@@ -22,7 +22,8 @@ back.
   keeps it, and the first pull that finds the script registers it (#1913)
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
   `ultracode` (off since 2026-10-06), the effort level per model, as
-  `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`), and
+  `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`, and for
+  `claude-fable-5-2` since 2026-11-09, when Fable became Dan's default model, #2547), and
   `skillListingMaxDescChars` (300 since 2026-10-15, the characters of each skill description listed
   to Claude on every request), and `outputStyle` (`Explanatory` since 2026-10-30, Dan's choice for
   every session; only a built in style, `default`, `Explanatory` or `Learning`, is accepted, since a

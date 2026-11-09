@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Tests for the builder model rule (claude-config#1961).
 #
-# Dan decided on 2026-11-01 that whether a builder agent runs on Sonnet or Opus is set by a written
-# rule by kind of task, and that the orchestrator may suggest an override for one brief saying why.
-# The running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which model a builder runs
-# on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
+# Dan decided on 2026-11-01 that a builder agent's model is set by a written rule by kind of task,
+# and that the orchestrator may suggest an override for one brief saying why. On 2026-11-09, with
+# Fable his default model, he split it into three tiers (claude-config#2547): Sonnet for three
+# mechanical kinds, Fable for design, security and compliance work, Opus for everything else. The
+# running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which
+# model a builder runs on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
 # Everything else that dispatches builders points at that section by name rather than restating the
 # kinds, because two copies of a list drift (L370).
 #
 # What this holds the files to:
-#   1. the home exists, exactly once, and names each kind the issue measured and the Opus default;
+#   1. the home exists, exactly once, and puts each kind on its tier, with Opus the default;
 #   2. the board carries a Model column and the wave is sent with each row's model;
 #   3. the global CLAUDE.md points builders at the home;
 #   4. any other payload document that sets a model on an Agent call names the home, so a second
@@ -63,14 +65,31 @@ has() { # has <description> <fixed text>   checks the section, case insensitive
   check "the rule $1" "$(grep -q -i -F -- "$2" <<< "$section" && echo ok || echo "no '$2' in the section")"
 }
 has "passes the model on the Agent call for Sonnet" 'model: "sonnet"'
+has "passes the model on the Agent call for Fable" 'model: "fable"'
 has "passes the model on the Agent call for Opus" 'model: "opus"'
 has "lists renames" 'rename'
 has "lists filling in tests" 'filling in tests'
 has "lists fixes for review comments" 'review comment'
-has "keeps design work on Opus" 'design'
-has "keeps security work on Opus" 'security'
-has "keeps compliance work on Opus" 'compliance'
-has "makes Opus the default for anything not listed" 'everything else'
+has "carries Dan's three tier decision date" '2026-11-09'
+# Three tiers, each on its own bullet (Dan, 2026-11-09, claude-config#2547): Fable for design,
+# security and compliance work even when it is also a mechanical kind, Opus for everything else.
+# Judged per bullet, so a word sitting on the wrong tier's line fails rather than passing because
+# it appears somewhere in the section.
+bullet() { grep -i -F -- "$1" <<< "$section" | grep '^- ' | head -n 1; }
+fable_line="$(bullet 'model: "fable"')"
+opus_line="$(bullet 'model: "opus"')"
+sonnet_line="$(bullet 'model: "sonnet"')"
+on_line() { # on_line <description> <line> <fixed text>
+  check "the rule $1" "$(grep -q -i -F -- "$3" <<< "$2" && echo ok || echo "no '$3' on: ${2:-the missing bullet}")"
+}
+on_line "puts design work on Fable" "$fable_line" 'design'
+on_line "puts security work on Fable" "$fable_line" 'security'
+on_line "puts compliance work on Fable" "$fable_line" 'compliance'
+on_line "keeps Fable for them even when they are one of the mechanical kinds" "$fable_line" 'even when'
+on_line "makes Opus the default for anything not listed" "$opus_line" 'everything else'
+check "the Opus bullet no longer claims design, security or compliance" \
+  "$(grep -q -i -E 'design|security|compliance' <<< "$opus_line" && echo "on: $opus_line" || echo ok)"
+on_line "keeps the three mechanical kinds on Sonnet" "$sonnet_line" 'three kinds'
 has "says a fork ignores the model" 'fork ignores'
 has "lets the orchestrator suggest an override, saying why" 'suggest it to Dan with the reason'
 has "carries Dan's decision date" '2026-11-01'
@@ -92,6 +111,10 @@ if [ -n "$CLAUDE_MD" ]; then
     *) pointer_found="no pointer in $CLAUDE_MD" ;;
   esac
   check "the global CLAUDE.md points builders at the rule's section" "$pointer_found"
+  # Its one line summary names the three tiers, so a reader who stops at the pointer is not told
+  # that design work runs on Opus (#2547).
+  check "the pointer's summary names all three models" \
+    "$(grep -q -F 'Sonnet' <<< "$pointer_lines" && grep -q -F 'Fable' <<< "$pointer_lines" && grep -q -F 'Opus' <<< "$pointer_lines" && echo ok || echo "the pointer line does not name Sonnet, Fable and Opus")"
 else
   echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the pointer in its CLAUDE.md was not read"
 fi
@@ -99,7 +122,7 @@ fi
 # ---- 4. any other document setting an Agent model names the home ----
 # Generated lessons files and dated audits record history, not dispatch rules.
 scan() { # scan <root>   prints every markdown file under root that sets an Agent model
-  grep -r -l -E 'model: "(sonnet|opus|haiku)"' --include='*.md' "$1" 2>/dev/null
+  grep -r -l -E 'model: "(sonnet|opus|haiku|fable)"' --include='*.md' "$1" 2>/dev/null
 }
 if [ -n "$PAYLOAD" ]; then
   # Read into a variable first, never through process substitution, whose child bash 3.2 never
@@ -128,6 +151,11 @@ printf 'Dispatch the builder with model: "sonnet".\n' > "$fixture_dir/copy.md"
 seen="$(scan "$fixture_dir")"
 check "the scan finds a document that sets a model" \
   "$([ "$seen" = "$fixture_dir/copy.md" ] && echo ok || echo "the scan returned '$seen'")"
+mkdir -p "$fixture_dir/fable"
+printf 'Dispatch the security builder with model: "fable".\n' > "$fixture_dir/fable/copy.md"
+seen_fable="$(scan "$fixture_dir/fable")"
+check "the scan finds a document that sets the Fable model" \
+  "$([ "$seen_fable" = "$fixture_dir/fable/copy.md" ] && echo ok || echo "the scan returned '$seen_fable'")"
 
 # ---- 5. the style rule: no em or en dash in the skill ----
 # One -e per character, never a \| alternation, which basic regex grep honours on some systems only.

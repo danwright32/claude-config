@@ -1110,7 +1110,10 @@ the write and `payload_path_applied`: applying the file changes nothing. The fil
 for `max` (session only, never saved), any other per model key, the top level `effortLevel`, and a
 model named by an alias, since the full name is read first and an alias there would change nothing.
 The repo stays the only source: a `/effort` pick on one Mac is put back by its next pull. When a new
-model becomes the default, its entry has to be added here, or it runs at its own default.
+model becomes the default, its entry has to be added here, or it runs at its own default. That
+happened on 2026-11-09, when Fable 5.2 became Dan's default: `claude-fable-5-2` was added at `high`
+beside the Opus entry, which stays for the builders and sessions still on Opus (#2547), and the sync
+suite reads the real file to confirm status says nothing for either.
 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
