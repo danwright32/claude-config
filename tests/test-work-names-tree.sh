@@ -115,6 +115,12 @@ check "once the name is gone the same send goes through: $out_fixed" has "$(git 
 # nothing. Each is a refusal handed back, never a clean pass over zero files (L98).
 SWN="$(sed -n '/^scan_work_names(){/,/^}/p' "$SCRIPT")"
 check "scan_work_names was cut from claude-sync whole" has "$SWN" 'die "$refusal"'
+# With what it calls, cut out the same way (claude-config#2530): the runner it shares with the lesson
+# check, the record writer it shares with the secret scan, and is_blank.
+SWN_HELPERS="$(sed -n -e '/^work_names_lib(){/p' -e '/^work_names_run(){/,/^}/p' -e '/^record_send_refused(){/,/^}/p' -e '/^is_blank(){/p' "$SCRIPT")"
+check "the helpers scan_work_names calls were cut from claude-sync" has "$SWN_HELPERS" 'WORK_NAMES_RC'
+SWN="$SWN_HELPERS
+$SWN"
 run_swn(){   # $1 = SYNC_REPO  $2 = SYNC_NO_GIT -> SEND_REFUSED, or "passed"
   local SYNC_REPO="$1" PAYLOAD="$1/payload" SYNC_SELF_PAYLOAD="$ROOT/payload" SYNC_NO_GIT="$2"
   local SCAN_REFUSAL_DEFERRED=1 SEND_REFUSED="" SEND_REFUSED_FILE=""
