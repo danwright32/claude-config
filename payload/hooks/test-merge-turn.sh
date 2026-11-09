@@ -44,6 +44,17 @@ export MWR_TURN_DIR="$WORKDIR/turns"
 other_joins(){   # $1 = slug, $2 = pr, $3 = now, $4 = pid, $5 = start time it claims
   ( TURN_PID="$4"; TURN_PID_START="$5"; turn_open "$1" && turn_join "$2" "$3" && printf '%s' "$TURN_TICKET" )
 }
+# Somebody else joining at the front of the line (claude-config#2474, section 10).
+other_joins_first(){   # $1 = slug, $2 = pr, $3 = now, $4 = pid, $5 = start time it claims
+  ( TURN_PID="$4"; TURN_PID_START="$5"; turn_open "$1" && turn_join "$2" "$3" first && printf '%s' "$TURN_TICKET" )
+}
+# A look by a run that is not in line, as every waiter's look does: it marks the holder as holding.
+observer_looks(){ ( TURN_TICKET=""; turn_open acme/widget; turn_look "$1" 3600 ); }
+# A look from a waiter's own place in line: prints what it was told, then how many are ahead of it.
+waiter_looks(){   # $1 = its ticket, $2.. = the times it looks at
+  ( local tk="$1"; shift; TURN_TICKET="$tk"; TURN_PID="$LIVE"; TURN_PID_START="$LIVE_START"; turn_open acme/widget
+    for t in "$@"; do turn_look "$t" 3600; printf 'said[%s] ahead[%s] head[%s]\n' "$TURN_SAID" "$TURN_AHEAD" "$TURN_HEAD_PR"; done )
+}
 reset(){ rm -rf "$MWR_TURN_DIR"; TURN_TICKET=""; TURN_PID="$$"; TURN_PID_START=""; }
 
 # =================================================================================================
@@ -250,18 +261,7 @@ check "#2403 naming where it looked" "$WORKDIR/line-is-a-file" "$out"
 #     stopping all five helpers. A run joining with "first" goes ahead of every run still waiting,
 #     never ahead of the one holding the turn, and runs joining with "first" keep their own order.
 # =================================================================================================
-# Somebody else joining at the front: its own process, pid and start time.
-other_joins_first(){   # $1 = slug, $2 = pr, $3 = now, $4 = pid, $5 = start time it claims
-  ( TURN_PID="$4"; TURN_PID_START="$5"; turn_open "$1" && turn_join "$2" "$3" first && printf '%s' "$TURN_TICKET" )
-}
-# A look by a run that is not in line, as every waiter's look does: it marks the holder as holding.
-observer_looks(){ ( TURN_TICKET=""; turn_open acme/widget; turn_look "$1" 3600 ); }
-# A look from a waiter's own place in line: prints what it was told, then how many are ahead of it.
-waiter_looks(){   # $1 = its ticket, $2.. = the times it looks at
-  ( local tk="$1"; shift; TURN_TICKET="$tk"; TURN_PID="$LIVE"; TURN_PID_START="$LIVE_START"; turn_open acme/widget
-    for t in "$@"; do turn_look "$t" 3600; printf 'said[%s] ahead[%s] head[%s]\n' "$TURN_SAID" "$TURN_AHEAD" "$TURN_HEAD_PR"; done )
-}
-
+# (other_joins_first, observer_looks and waiter_looks are defined beside other_joins, above.)
 reset
 other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null   # ticket 1, holding the turn
 observer_looks 900 >/dev/null
