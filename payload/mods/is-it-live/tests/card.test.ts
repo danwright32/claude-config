@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { buttonId, cardOf, cardText, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
+import { buttonId, cardOf, cardText, draftKeyOf, draftLineOf, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
 
 // Is it live (claude-config#617): the card's state, words and the message row, settled with Dan on
 // 2026-10-04 (docs/mods-design.md, Is it live).
@@ -157,4 +157,72 @@ test("/live lists the project's recent cards, newest first, and every unsent mes
   expect(liveList(cards)).toBe(['- Live: Sent (#3)', '- Merged, deploying: New (#2)', '- Live: Old (#1)', '', 'Not sent yet:', '- Message for Kris waits until #2 is live.'].join('\n'))
   expect(liveList([{ ...deploying, state: 'live' as const }])).toBe(['- Live: New (#2)', '', 'Not sent yet:', '- Message for Kris (#2): Soon.'].join('\n'))
   expect(liveList([])).toBe('No merged changes have a card in this project yet.')
+})
+
+// ---- #2435: a message for someone else is also saved as a Slack draft, never sent ----
+// Dan, 2026-11-07: "anytime you have a message for someone you should save it in a draft in slack
+// as well". A pasted thread gets a draft reply in that thread; a person named or an issue reporter
+// gets a draft DM (the issue's open question, answered from those words).
+const kris = { name: 'Kris', via: 'slack' as const }
+const THREAD = { channel_id: 'C0123ABCD', thread_ts: '1730900000.123456' }
+
+test('the Slack fields are checked, and only go with someone other than Dan who asked (#2435)', () => {
+  const ask = { requester: kris, message: 'The venue filter is live now.' }
+  expect(reasonToRefuse({ ...base, ...ask, slack: THREAD })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, requester: { name: 'Kris', via: 'named' }, message: 'Live now.', slack: { user_id: 'U0123ABCD' } })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, slack: THREAD })).toContain('slack is only for the person a message is for')
+  expect(reasonToRefuse({ ...base, ...ask, slack: { thread_ts: THREAD.thread_ts } })).toContain('slack.thread_ts needs slack.channel_id')
+  expect(reasonToRefuse({ ...base, ...ask, slack: { channel_id: '#general', thread_ts: 'yesterday' } })).toContain('slack.channel_id must be')
+  expect(reasonToRefuse({ ...base, ...ask, slack: { channel_id: 'C0123ABCD', thread_ts: 'yesterday' } })).toContain('slack.thread_ts must be')
+  expect(reasonToRefuse({ ...base, ...ask, slack: { user_id: 'kris@example.com' } })).toContain('slack.user_id must be')
+})
+
+test('where a draft goes is one key: the thread for a Slack requester, a DM by user id for anyone else, unknown otherwise (#2435)', () => {
+  expect(draftKeyOf(kris, THREAD)).toBe('thread:C0123ABCD:1730900000.123456')
+  expect(draftKeyOf(kris, undefined)).toBeUndefined()
+  expect(draftKeyOf(kris, { user_id: 'U0123ABCD' })).toBeUndefined()
+  expect(draftKeyOf({ name: 'Kris', via: 'named' }, { user_id: 'U0123ABCD' })).toBe('dm:U0123ABCD')
+  expect(draftKeyOf({ name: 'Kris', via: 'issue', issue: 88 }, undefined)).toBeUndefined()
+})
+
+test('a Slack requester with a known thread: a draft reply in it, word for word, after /no-ai-tells, never a send (#2435)', () => {
+  const line = draftLineOf({ requester: kris, message: 'The venue filter is live now.', slack: THREAD })
+  expect(line).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
+  expect(line).toContain('word for word')
+  expect(line).toContain('/no-ai-tells')
+  expect(line).toContain('call this card again with the new message')
+  expect(line).toContain('Never call slack_send_message or slack_schedule_message.')
+  expect(line).toContain('nothing was sent')
+  expect(line).toContain('attached_draft_exists')
+  expect(line).not.toContain('replaces')
+})
+
+test('a Slack requester with no thread known: find it, or save nothing and tell Dan, never a DM instead (#2435)', () => {
+  const line = draftLineOf({ requester: kris, message: 'Live now.' })
+  expect(line).toContain('No Slack thread was given')
+  expect(line).toContain('slack_send_message_draft')
+  expect(line).toContain('save nothing and tell Dan')
+  expect(line).not.toContain('slack_search_users')
+  expect(line).toContain('Never call slack_send_message or slack_schedule_message.')
+})
+
+test('a person named or an issue reporter: a draft DM, by user id when given, else found by name or said not found (#2435)', () => {
+  const dm = draftLineOf({ requester: { name: 'Kris', via: 'named' }, message: 'Live now.', slack: { user_id: 'U0123ABCD' } })
+  expect(dm).toContain('slack_send_message_draft with channel_id "U0123ABCD"')
+  expect(dm).not.toContain('thread_ts')
+  expect(dm).toContain('a DM to Kris')
+  const find = draftLineOf({ requester: { name: 'Ana', via: 'issue', issue: 88 }, message: 'Live now.' })
+  expect(find).toContain('slack_search_users')
+  expect(find).toContain('save nothing and tell Dan')
+  expect(find).toContain('Never call slack_send_message or slack_schedule_message.')
+})
+
+test('a later card for the same thread replaces the draft; the same message asked again is saved only if not saved yet (#2435)', () => {
+  const replace = draftLineOf({ requester: kris, message: 'Both fixes are live now.', slack: THREAD, earlier: { pr: 411, same: false } })
+  expect(replace).toContain('An earlier card (#411) already asked for a draft in that thread')
+  expect(replace).toContain('replaces')
+  expect(replace).toContain('delete it in Slack, then save this one again')
+  const again = draftLineOf({ requester: kris, message: 'Live now.', slack: THREAD, earlier: { pr: 412, same: true } })
+  expect(again).toContain('already asked for on an earlier card for #412')
+  expect(again).toContain('only if it is not saved yet')
 })
