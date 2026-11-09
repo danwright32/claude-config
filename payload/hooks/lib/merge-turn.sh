@@ -14,9 +14,19 @@
 # by creating the next number with ln, which fails when the name exists, so two runs racing can never
 # take the same place and a ticket is never seen half written (it is linked complete from a private
 # file). Numbers only grow (the highest given is kept in seq), so a number is never handed to a
-# second run while a first may still be judging it. The turn is the lowest numbered ticket whose
-# run is alive: every run computes it from the same listing, so there is no separate lock to hand
-# over, and a run that leaves (its ticket removed) passes the turn to the next in line.
+# second run while a first may still be judging it. The turn is the first ticket in line whose run
+# is alive: every run computes it from the same listing, so there is no separate lock to hand over,
+# and a run that leaves (its ticket removed) passes the turn to the next in line.
+#
+# THE FRONT OF THE LINE (claude-config#2474). The line is in number order, except that a ticket
+# joined with "first" goes ahead of every ticket still waiting, though never ahead of the one
+# holding the turn (its .head mark names its own pid), and tickets at the front keep their own
+# number order. On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests ahead
+# of it needed to pass CI, and moving it forward meant stopping all five helpers by hand. Each run a
+# ticket at the front passes is told so once (TURN_SAID), and a "first" line that is not exactly
+# "first 1" is not honoured and is said to the runs it would have passed. A helper started before
+# this version reads the line in number order, so its ticket (one without "order 2") is never
+# passed: a run at the front stays behind it, and the two never both believe the turn is theirs.
 #
 # WHEN ITS HOLDER DIES (L409). A file lock outlives the process holding it, so a ticket names its
 # run's pid and that process's start time. A ticket whose pid the system says is not running, or is
@@ -38,14 +48,17 @@
 # every gate still judges each merge, so a turn wrongly held costs time, never a bad merge.
 #
 #   turn_open <owner/name>      sets TURN_REPO_DIR (the repository's folder; case does not matter)
-#   turn_join <pr> <now>        takes the next place: TURN_TICKET, or returns 1 with TURN_ERR
+#   turn_join <pr> <now> [first] takes the next place, at the front with "first": TURN_TICKET, or
+#                               returns 1 with TURN_ERR (also for any third word but "first")
 #   turn_look <now> <bound>     who holds the turn: TURN_MINE (1 when this run does), TURN_HEAD_PR,
 #                               TURN_HEAD_SINCE, TURN_AHEAD (live tickets ahead of this one),
 #                               TURN_WAITING (live tickets in all), TURN_GONE (1 when this run's
 #                               own ticket is no longer there), TURN_SAID (a line per ticket it
 #                               passed over, saying why), TURN_HEAD_TICKET (the holder's ticket
 #                               number, which changes exactly when the turn passes, so a run in
-#                               line can tell the line moving from it standing still, #1697)
+#                               line can tell the line moving from it standing still, #1697),
+#                               TURN_OVERTOOK (live tickets that joined before this one and are
+#                               now behind it, because it joined at the front, #2474)
 #   turn_leave                  gives up this run's place
 #
 # TURN_PID and TURN_PID_START name the run (this shell and its start time by default).
@@ -89,15 +102,22 @@ turn_tickets(){   # the ticket numbers in the repository's folder, lowest first
   done | sort -n
 }
 
-turn_join(){   # $1 = pull request, $2 = now
-  local tmp n hw max tries=0
+turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front, or nothing
+  local tmp n hw max tries=0 front=""
   TURN_ERR=""; TURN_TICKET=""
+  case "${3:-}" in
+    '') ;;
+    first) front=$'first 1\n' ;;
+    *) TURN_ERR="'$3' is not a way to join the line (only first, or nothing)"; return 1 ;;
+  esac
   if ! mkdir -p "$TURN_REPO_DIR" 2>/dev/null || [ ! -d "$TURN_REPO_DIR" ]; then
     TURN_ERR="could not make $TURN_REPO_DIR"; return 1
   fi
   [ -n "$TURN_PID_START" ] || TURN_PID_START="$(turn_proc_start "$TURN_PID")"
   tmp="$TURN_REPO_DIR/.join.$TURN_PID.$RANDOM"
-  if ! printf 'pr %s\npid %s\nstart %s\njoined %s\n' "$1" "$TURN_PID" "$TURN_PID_START" "$2" > "$tmp" 2>/dev/null; then
+  # "order 2": this run reads the line with its front (see turn_order), so a run at the front may
+  # go ahead of it; a ticket without it is an older helper's, which reads the line in number order.
+  if ! printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n%s' "$1" "$TURN_PID" "$TURN_PID_START" "$2" "$front" > "$tmp" 2>/dev/null; then
     rm -f "$tmp"; TURN_ERR="could not write in $TURN_REPO_DIR"; return 1
   fi
   hw="$(cat "$TURN_REPO_DIR/seq" 2>/dev/null)"; case "$hw" in ''|*[!0-9]*) hw=0 ;; esac
@@ -138,17 +158,60 @@ turn_mark(){   # $1 = ticket, $2 = its pid, $3 = now
   case "$turn_since" in ''|*[!0-9]*) turn_since="$3" ;; esac
 }
 
-turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
-  local now="$1" bound="$2" n f pid start pr seen_own="" head=""
-  TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_HEAD_TICKET=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""
+# The order of the line (claude-config#2474): the ticket holding the turn (its mark names its own
+# pid), then the tickets that joined at the front, then the rest, each group by number. A ticket at
+# the front therefore goes ahead of every run still waiting and never ahead of the one holding the
+# turn, which may be merging, and two at the front keep the order they joined in. A ticket without
+# "order 2" belongs to a helper started before the front existed, which reads the line in number
+# order: a run at the front stays behind it, since going ahead would leave both believing the turn
+# theirs once the holder left. So each ticket at the front goes in just after the last ticket
+# already placed that is at the front or an older helper's, ahead of the rest.
+turn_order(){
+  # placed: the tickets not holding the turn, in order, each marked F (at the front), O (an older
+  # helper's) or N (the rest). Plain words, not an array, so bash 3.2 under set -u reads it empty.
+  local n f pid mark tok before after held="" placed=""
   for n in $(turn_tickets); do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
-    pid="$(turn_field "$f" pid)"; start="$(turn_field "$f" start)"; pr="$(turn_field "$f" pr)"
+    pid="$(turn_field "$f" pid)"; mark="$(cat "$f.head" 2>/dev/null)"
+    if [ -n "$mark" ] && [ -n "$pid" ] && [ "${mark#* }" = "$pid" ]; then held="$held $n"; continue; fi
+    if [ "$(turn_field "$f" first)" = 1 ]; then
+      before=""; after=""
+      for tok in $placed; do
+        case "$tok" in F*|O*) before="$before $after $tok"; after="" ;; *) after="$after $tok" ;; esac
+      done
+      placed="$before F$n $after"
+    elif [ "$(turn_field "$f" order)" = 2 ]; then placed="$placed N$n"
+    else placed="$placed O$n"; fi
+  done
+  for tok in $held; do printf '%s\n' "$tok"; done
+  for tok in $placed; do printf '%s\n' "${tok#?}"; done
+}
+# Tickets this run has already been told about (one that went ahead of it, a front of line mark
+# that was ignored), so each is said once rather than at every look.
+TURN_TOLD="${TURN_TOLD:-}"
+turn_tell(){   # $1 = what about (a key), $2 = the line
+  case " $TURN_TOLD " in *" $1 "*) return 0 ;; esac
+  TURN_TOLD="$TURN_TOLD $1"
+  TURN_SAID="${TURN_SAID}$2"$'\n'
+}
+
+turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
+  local now="$1" bound="$2" n f pid start pr fv seen_own="" head=""
+  TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_HEAD_TICKET=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""; TURN_OVERTOOK=0
+  for n in $(turn_order); do
+    f="$TURN_REPO_DIR/$n"
+    [ -s "$f" ] || continue
+    pid="$(turn_field "$f" pid)"; start="$(turn_field "$f" start)"; pr="$(turn_field "$f" pr)"; fv="$(turn_field "$f" first)"
     if [ "$n" != "$TURN_TICKET" ] && ! turn_alive "$pid" "$start"; then
       rm -f "$f" "$f.head"
       TURN_SAID="${TURN_SAID}#${pr:-?}'s place in line was passed over: its run (pid $pid) is no longer running."$'\n'
       continue
+    fi
+    # A front of line mark that cannot be read is not honoured, and the runs it would have passed
+    # are told so: never silently taken as a place at the front, nor silently dropped.
+    if [ "$fv" != 1 ] && grep -qE '^first( |$)' "$f" 2>/dev/null && [ -n "$TURN_TICKET" ] && [ "$n" -gt "$TURN_TICKET" ]; then
+      turn_tell "ignored:$n" "#${pr:-?}'s place at the front of the line was ignored: its ticket says 'first ${fv}', which is not a front of line mark, so it waits behind this one in the order it joined."
     fi
     if [ -z "$head" ]; then
       turn_mark "$n" "$pid" "$now"
@@ -160,7 +223,17 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
       head="$n"; TURN_HEAD_PR="$pr"; TURN_HEAD_SINCE="$turn_since"; TURN_HEAD_TICKET="$n"
     fi
     TURN_WAITING=$((TURN_WAITING + 1))
-    if [ "$n" = "$TURN_TICKET" ]; then seen_own=1; elif [ -z "$seen_own" ]; then TURN_AHEAD=$((TURN_AHEAD + 1)); fi
+    if [ "$n" = "$TURN_TICKET" ]; then seen_own=1
+    elif [ -z "$seen_own" ]; then
+      TURN_AHEAD=$((TURN_AHEAD + 1))
+      # Ahead of this run though it joined after it: it went to the front, said once to each run
+      # it passed (claude-config#2474).
+      if [ -n "$TURN_TICKET" ] && [ "$fv" = 1 ] && [ "$n" -gt "$TURN_TICKET" ]; then
+        turn_tell "front:$n" "#${pr:-?} went to the front of the line to merge, ahead of this one: its helper was started with --first, for a pull request the others need merged first (a fix to CI they are failing on, say). Every gate still judges its merge."
+      fi
+    elif [ -n "$TURN_TICKET" ] && [ "$n" -lt "$TURN_TICKET" ]; then
+      TURN_OVERTOOK=$((TURN_OVERTOOK + 1))
+    fi
   done
   TURN_SAID="${TURN_SAID%$'\n'}"
   if [ -n "$TURN_TICKET" ] && [ -z "$seen_own" ]; then TURN_GONE=1; return 0; fi
