@@ -301,8 +301,9 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
     if (c === '$' || c === '`') expands = true
   }
   // For `unexpanded`: whether the word being read holds a $ or a backtick the shell hands on as
-  // written (in single quotes, or after a backslash), and one it expands (bare, in double quotes, or
-  // a substitution).
+  // written (in single quotes, after a backslash, or a $ the shell leaves as written wherever it
+  // stands, leftAsWritten, #2320), and one it expands (any other bare or double quoted one, or a
+  // substitution).
   let dollarText = false
   let dollarLive = false
   const dollar = (c: string, live: boolean) => {

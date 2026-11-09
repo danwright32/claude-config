@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Refuse a pull request merge whose body closes an issue it says stays open (claude-config#1550).
+# Refuse a pull request merge whose body closes an issue it says stays open (claude-config#1550),
+# puts a closing word before an open pull request or mid sentence before an issue, or names a number
+# that could not be looked up (claude-config#2464).
 #
 # GitHub honours a closing keyword before an issue reference wherever it sits in a pull request
 # body, in a sentence saying the opposite included (L1018): "This does not close #4358" closed
@@ -15,7 +17,11 @@
 # closing keyword in a negated, conditional, "which" or partial sentence, or also calls the change
 # "Part of #N", or says #N stays open. The rule is lib/closing-keyword.py's, the one reading
 # check-closing-keyword.sh asks too, so a sentence is judged the same written and merged (L263,
-# L370). An issue GitHub does not list closes nothing and is not judged.
+# L370). An issue GitHub does not list closes nothing and is not judged. Since claude-config#2464
+# also any closing word before an open PULL REQUEST, which GitHub closes on merge but never lists
+# (merging #2456 closed the open #2451 that way), and a listed issue whose closing word sits in the
+# middle of a sentence rather than starting a line or sentence: every pair is looked up with gh, and
+# a lookup that fails refuses, with its reason.
 #
 # MEASURED before shipping (L172, L147), over every merged pull request on 2026-10-24: 3 of 633 in
 # claude-config and 12 of 1,925 in Overture would have been refused. Of the 15, 9 merges closed an
@@ -180,25 +186,38 @@ api_slug=$(printf '%s' "$view" | jq -r '.url // ""' | sed -nE 's#^https://github
 closing_count=$(printf '%s' "$view" | jq -r 'if (.closingIssuesReferences | type) == "array" then (.closingIssuesReferences | length) else "unread" end' 2>/dev/null)
 case "$closing_count" in
   ''|unread) deny "Cannot tell whether this merge closes an issue its body says stays open: GitHub's answer about the pull request carried no list of the issues it closes. $OVERRIDE" ;;
-  0) exit 0 ;;   # the merge closes nothing, so nothing it says can be contradicted
 esac
+# An empty list is not a merge that closes nothing: GitHub never lists a pull request there, yet
+# closes one named after a closing word, and merging #2456 closed the open pull request #2451 that
+# way (claude-config#2464). So the body is read whenever it holds a closing word at all. This test
+# is only a sieve, deliberately too broad (any of the three stems, any case, anywhere), so it can let
+# a body through to the detector that holds no pair but never stop one that does; the rule is the
+# detector's alone (L370).
+if [ "$closing_count" = 0 ]; then
+  body_lc=$(printf '%s' "$view" | jq -r '.body // ""' | tr '[:upper:]' '[:lower:]')
+  case "$body_lc" in *clos*|*fix*|*resolv*) ;; *) exit 0 ;; esac
+fi
 [ -n "$api_slug" ] || deny "Cannot tell whether this merge closes an issue its body says stays open: GitHub's answer about the pull request named no repository, so a bare #N in its body cannot be read as an issue. $OVERRIDE"
 
-# The detector needs python3, asked only now that the merge is known to close something, so a
-# machine without it loses nothing on the merges that close nothing (L54).
+# The detector needs python3, asked only now that the body is known to hold a closing word, so a
+# machine without it loses nothing on the merges whose body holds none (L54).
 command -v python3 >/dev/null 2>&1 || deny "Cannot tell whether this merge closes an issue its body says stays open: $(ps_detector_absent_why "python3 is not on PATH" "check-closing-merge.sh reads the body through lib/closing-keyword.py, so with it absent nothing here can tell a sentence that closes an issue from one that says it stays open." "python3") $OVERRIDE"
 [ -f "$DETECTOR" ] || deny "Cannot tell whether this merge closes an issue its body says stays open: $DETECTOR is missing, and it is the rule this gate applies. Restore it with claude-sync pull. $OVERRIDE"
 
 # Its stderr is kept apart, so a warning Python prints on the way is never read as a finding.
 DET_ERR=$(mktemp "${TMPDIR:-/tmp}/closing-merge-det.XXXXXX") || DET_ERR=/dev/null
-findings=$(printf '%s' "$view" | python3 "$DETECTOR" pr "$api_slug" 2>"$DET_ERR"); det_rc=$?
+# The detector looks every pair up with gh, inside what is left of the hook's 30 seconds after the
+# read above, keeping 3 back, at most 10 and at least 1, all chosen and not measured
+# (claude-config#2464). A lookup past it refuses, with that reason, never passes.
+lookup_budget=$((27 - SECONDS)); [ "$lookup_budget" -gt 10 ] && lookup_budget=10; [ "$lookup_budget" -lt 1 ] && lookup_budget=1
+findings=$(printf '%s' "$view" | CLOSING_LOOKUP_BUDGET_SECONDS="${CLOSING_LOOKUP_BUDGET_SECONDS:-$lookup_budget}" python3 "$DETECTOR" pr "$api_slug" 2>"$DET_ERR"); det_rc=$?
 det_why=$(awk 'NF { last = $0 } END { print last }' "$DET_ERR" 2>/dev/null | cut -c1-300)
 [ "$DET_ERR" = /dev/null ] || rm -f "$DET_ERR"
 [ "$det_rc" -eq 0 ] || deny "Cannot tell whether this merge closes an issue its body says stays open: lib/closing-keyword.py gave no verdict (exit $det_rc${det_why:+: $det_why}). That is the detector failing, not the body passing. $OVERRIDE"
 [ -n "$findings" ] || exit 0
 
-deny "Refusing to merge PR #${number:-$pr}: GitHub will close every issue its body puts a closing word in front of, whatever the sentence around it says (L1018), and this body says otherwise about:
+deny "Refusing to merge PR #${number:-$pr}: GitHub will close every issue and pull request its body puts a closing word in front of, whatever the sentence around it says (L1018), and this body does that to:
 
 $findings
 
-If this pull request does NOT finish the issue, write \"Part of #N\" or \"Refs #N\" wherever a closing word sits in front of it, with gh pr edit ${number:-$pr} --body-file <file>, and merge again. If it DOES finish it, take out the sentence saying it does not. An issue linked by hand in the pull request's sidebar is closed the same way, so unlink it there if it should stay open. $OVERRIDE"
+Reword each phrase quoted above with gh pr edit ${number:-$pr} --body-file <file>, and merge again. Before a pull request, or an issue this pull request does NOT finish, write \"Part of #N\", \"Refs #N\" or \"Supersedes #N\" instead of the closing word. An issue it DOES finish goes on a line of its own starting \"Closes #N\", and any sentence saying it does not comes out. A lookup that failed clears once GitHub answers for that number. An issue linked by hand in the pull request's sidebar is closed the same way, so unlink it there if it should stay open. $OVERRIDE"

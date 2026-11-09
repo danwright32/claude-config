@@ -12,8 +12,9 @@
 #     (with the folder it is matched in), git reaching a whole folder, an inline node script handed a
 #     file it writes by position.
 #   - A command writing nothing, a removal, and a name that can only be no source file are not judged.
-#     Nor is a word whose every $ the shell leaves as written (#2320: "^foo.*bar$"), which holds no
-#     value; one holding a $ the shell expands ("$OUT/big.ts", x$'y', "$(") is still unread.
+#     A word whose every $ the shell leaves as written holds no value (#2320): it is judged as the
+#     file it spells (#2402: "src/big$.ts"), or, holding a pattern character too ("^foo.*bar$"), not
+#     at all; one holding a $ the shell expands ("$OUT/big.ts", x$'y', "$(") is still unread.
 #   - The known blind spot, measured so it is never claimed away (L460): a program that builds its own
 #     file names, or a script run with no arguments, is not marked unread, so it passes unjudged.
 #   - Every answer register.test.ts gives in place of the reader (its WRITES) is what the real reader
@@ -40,7 +41,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=42
+EXPECTED=44
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -126,7 +127,11 @@ is('a word the reader cannot close is still unread beside a quoted pattern', `py
 // holds no value and is not read as built while the command runs. A dollar sign the shell expands,
 // and every other write in the command, are judged as before.
 is('a double quoted regex ending in a dollar sign is handed on as text, as a single quoted one is', 'python3 probe.py "^foo.*bar$"', [])
-is('a dollar sign left bare at the end of a word is text too', 'python3 probe.py foo$', [])
+// #2402: such a word names the file it spells, and is judged as that file; one also holding a
+// pattern character (the regex above) still names none.
+is('a dollar sign left bare at the end of a word is text too, naming the file it spells', 'python3 probe.py foo$', [{ word: 'foo$', path: '/w/app/foo$', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
+is('a double quoted name holding a dollar sign left as text is judged as that file', 'python3 probe.py "src/big$.ts"', [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
+is('a single quoted name holding a dollar sign is judged as that file, never as the home folder', "python3 probe.py '$HOME/big.ts'", [{ word: '$HOME/big.ts', path: '/w/app/$HOME/big.ts', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
 unread('a dollar sign starting a name in double quotes is still unread', 'python3 probe.py "$OUT/big.ts"', '$OUT/big.ts', 'built as the command runs', undefined)
 unread('a dollar sign before a quote, which bash expands, is still unread', "python3 probe.py x$'y'", 'x$y', 'built as the command runs', undefined)
 unread('a word holding a dollar sign left as text and one expanded is still unread', 'python3 probe.py "a$"$B', 'a$$B', 'built as the command runs', undefined)
