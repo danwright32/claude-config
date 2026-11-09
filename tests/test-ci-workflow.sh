@@ -381,6 +381,11 @@ part_run "$FX/high.tsv" 1 2
 { [ "$part_rc" -ne 0 ] && grep -q 'part 3' <<< "$part_out"; } \
   && check "#2463 a deal into a part beyond the jobs that run is refused" ok \
   || check "#2463 a deal into a part beyond the jobs that run is refused" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
+# A part number that is not a whole number is refused, and the refusal names what it was given.
+part_run "$FX/deal.tsv" 1x 2
+{ [ "$part_rc" -ne 0 ] && grep -q "got part '1x' of '2'" <<< "$part_out"; } \
+  && check "#2463 a part number that is not a whole number is refused, naming it" ok \
+  || check "#2463 a part number that is not a whole number is refused, naming it" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
 part_run "$FX/absent.tsv" 1 2
 [ "$part_rc" -ne 0 ] \
   && check "#2463 a deal file that is not there is refused" ok \

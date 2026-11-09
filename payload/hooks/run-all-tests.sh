@@ -984,7 +984,9 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
   # otherwise inherit the part and refuse a deal that names none of its fixture's suites (seen on
   # the first CI run of the parts, test-fixture-runner-home.sh, 2026-11-09).
   unset HOOK_TESTS_PART HOOK_TESTS_PARTS HOOK_TESTS_DEALT
-  if ! _part="$(whole_above_zero "$_part")" || ! _parts="$(whole_above_zero "$_parts")" || [ "$_part" -gt "$_parts" ]; then
+  if _wn_got="$(whole_above_zero "$_part")" && _wn_got2="$(whole_above_zero "$_parts")" && [ "$_wn_got" -le "$_wn_got2" ]; then
+    _part="$_wn_got"; _parts="$_wn_got2"
+  else
     echo "run-all-tests: a part run needs HOOK_TESTS_PART and HOOK_TESTS_PARTS as whole numbers, the part no more than the parts (got part '$_part' of '$_parts'). Refusing rather than guessing which suites are this job's." >&2
     exit 1
   fi
