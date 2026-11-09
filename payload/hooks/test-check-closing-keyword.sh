@@ -37,8 +37,35 @@ if [ ! -f "$LIB" ]; then
   exit 1
 fi
 
+# THE LOOKUP, injected (claude-config#2464): every number a closing keyword sits in front of is
+# looked up to tell a pull request from an issue, and this suite never asks GitHub. The stub reads
+# a table of "owner/name#N kind state" lines (kind: issue, pr, fail, junk, or badbyte for a pull
+# request whose title holds a byte that is not UTF-8); a number it does not
+# list is an open issue. Every number it is asked about is logged, so a case can see what was looked up.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/closing-keyword-lookup.XXXXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+LOOKUP_TABLE="$WORK/table"; LOOKUP_LOG="$WORK/log"
+: > "$LOOKUP_TABLE"; : > "$LOOKUP_LOG"
+cat > "$WORK/lookup.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s#%s\n' "$1" "$2" >> "$LOOKUP_LOG"
+kind=issue; state=open
+line="$(grep -m 1 -i -- "^$1#$2 " "$LOOKUP_TABLE")"
+[ -n "$line" ] && read -r _ kind state <<< "$line"
+case "$kind" in
+  fail) echo "HTTP 404: Not Found (https://api.github.com/repos/$1/issues/$2)" >&2; exit 1 ;;
+  pr) printf '{"number":%s,"state":"%s","pull_request":{"url":"x"}}' "$2" "$state" ;;
+  junk) printf 'not json' ;;
+  badbyte) printf '{"number":%s,"state":"%s","title":"caf\377","pull_request":{"url":"x"}}' "$2" "$state" ;;
+  *) printf '{"number":%s,"state":"%s"}' "$2" "$state" ;;
+esac
+STUB
+chmod +x "$WORK/lookup.sh"
+export LOOKUP_TABLE LOOKUP_LOG CLOSING_KEYWORD_LOOKUP="$WORK/lookup.sh"
+
+# Text as written in acme/widget, so a bare #N is acme/widget's.
 detect() {
-  printf '%s' "$1" | python3 "$LIB" text
+  printf '%s' "$1" | python3 "$LIB" text acme/widget
 }
 
 want_flag() {
@@ -110,6 +137,74 @@ want_clean "not part of the closed issue"        "Closes #981. Seeding real titl
 want_clean "a decision the issue left open"      "Closes #3078. The decision #3078 left open is answered here."
 want_clean "which, in an earlier sentence"       "The guard, which was slow, is gone. Closes #12."
 want_clean "would, in an earlier sentence"       "A rewrite would be cleaner. Fixes #12."
+
+# =================================================================================================
+# EVERY keyword and number pair is looked up (claude-config#2464). On 2026-11-08 the description of
+# claude-config#2456 said, in passing, "including the p0 fix #2451 and batch #2438". #2451 was an
+# open pull request, GitHub read "fix #2451" as a closing keyword, and merging #2456 closed it
+# unmerged. GitHub does not list a pull request in closingIssuesReferences, so no rule judging only
+# listed issues could ever see it.
+# =================================================================================================
+printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/widget#60 pr closed" \
+  "acme/widget#61 issue closed" "acme/widget#404 fail" "acme/widget#405 junk" "acme/widget#406 issue merged" \
+  "acme/widget#407 badbyte open" > "$LOOKUP_TABLE"
+
+want_finding() {  # $1 = description, $2 = body, $3 = a needle the finding must carry
+  local out; out="$(detect "$2")"
+  case "$out" in
+    *"$3"*) pass=$((pass+1)) ;;
+    *) fail=$((fail+1)); echo "FAIL: expected a finding carrying [$3]: $1 -> got: $out" ;;
+  esac
+}
+
+want_finding "the #2456 sentence: a closing word in passing before a pull request" \
+  "6 were cancelled at forty minutes with nothing failing, including the p0 fix #2451 and batch #2438, which" \
+  "pull request"
+want_finding "and the refusal shows the phrase to reword" \
+  "6 were cancelled at forty minutes with nothing failing, including the p0 fix #2451 and batch #2438, which" \
+  "including the p0 fix #2451"
+want_finding "a pull request on a Closes line of its own is still a pull request" "Closes #2451" "pull request"
+want_finding "a pull request named by its full reference" "Fixes acme/widget#2451." "pull request"
+want_finding "a pull request named by its URL" "Closes https://github.com/acme/widget/pull/2451" "pull request"
+want_finding "a closing word in the middle of a sentence before an open issue" \
+  "This is the follow up fix #12 asked for." "not at the start of a line or sentence"
+want_finding "an answer whose title holds a byte that is not UTF-8 is still read as a pull request" \
+  "Closes #407." "names pull request #407"
+want_finding "a lookup that fails refuses, with the reason" "Closes #404." "HTTP 404"
+want_finding "a lookup that fails names the reference it could not look up" "Closes #404." "acme/widget#404"
+want_finding "an answer that is not GitHub's issue shape refuses" "Closes #405." "could not look up"
+want_finding "a state that is neither open nor closed refuses rather than reading as closed" \
+  "the earlier fix #406 landed" "could not look up"
+want_finding "a later pair on a line is judged by its own place, not the first pair's" \
+  "Closes #12, and the p0 fix #2451 is unrelated." "pull request"
+
+want_clean "a Closes line of its own before an open issue" "Closes #12"
+want_clean "two pairs chained on one Closes line" "Closes #12, closes #13"
+want_clean "a Closes line in a list" "- Closes #12"
+want_clean "a Closes line in a numbered list" "1. Fixes #12"
+want_clean "a Closes line among other lines" "Summary of the change.
+
+Closes #12
+"
+want_clean "a closing word starting its own sentence" "Adds the reader. Fixes #12 too."
+want_clean "a closing word right after the opening quote of a message" 'commit -m "Closes #12"'
+want_clean "a closing word in passing before a CLOSED pull request closes nothing" "the earlier fix #60 landed"
+want_clean "a closing word in passing before a closed issue closes nothing" "the earlier fix #61 landed"
+want_clean "no pair, nothing looked up" "See #2451 for the p0."
+want_clean "a keyword inside a longer word is no keyword" "The prefix #12 and the suffix #13 stay."
+
+# A number already refused for its sentence is not also looked up: nothing the lookup says can clear it.
+: > "$LOOKUP_LOG"
+detect "This does not close #897." >/dev/null
+if [ ! -s "$LOOKUP_LOG" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a number already refused was looked up: $(cat "$LOOKUP_LOG")"; fi
+
+# With no repository known, a bare #N cannot be looked up, and that refuses rather than passes.
+out="$(printf 'Closes #12' | python3 "$LIB" text)"
+case "$out" in
+  *"which repository"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: a bare #N with no repository known should refuse, said: $out" ;;
+esac
+: > "$LOOKUP_TABLE"
 
 # --- The negation has to GOVERN the keyword, or half the honest PRs in the world are blocked ---
 
@@ -202,6 +297,21 @@ pr_clean "a bare #N is this repository's issue, never another's with the same nu
   "This does not close #5." "acme/other#5"
 pr_clean "a clean close of a listed issue" "Closes #12." "acme/widget#12"
 pr_clean "no body at all" "" "acme/widget#12"
+
+# Pull requests at merge time (claude-config#2464): GitHub lists none in closingIssuesReferences, so
+# an empty list is not a body with nothing to judge.
+printf '%s\n' "acme/widget#2451 pr open" "acme/widget#404 fail" > "$LOOKUP_TABLE"
+pr_flag  "the #2456 body: a closing word before a pull request, with nothing listed" \
+  "including the p0 fix #2451 and batch #2438" "" "pull request"
+pr_flag  "a listed issue whose closing word sits mid sentence closes what the body never declared" \
+  "This is the follow up fix #12 asked for." "acme/widget#12" "not at the start of a line or sentence"
+pr_flag  "a lookup that fails at merge refuses" "Closes #404." "" "HTTP 404"
+pr_clean "an unlisted issue is one GitHub will not close, whatever its sentence" \
+  "the follow up fix #13 asked for" ""
+: > "$LOOKUP_LOG"
+judge "Closes #12." "acme/widget#12"
+if [ ! -s "$LOOKUP_LOG" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: an issue GitHub lists was looked up again: $(cat "$LOOKUP_LOG")"; fi
+: > "$LOOKUP_TABLE"
 
 # A pull request with a null body, as gh prints one with no description.
 out="$(printf '%s' '{"number":7,"url":"https://github.com/acme/widget/pull/7","body":null,"closingIssuesReferences":[{"number":3,"repository":{"name":"widget","owner":{"login":"acme"}}}]}' | python3 "$LIB" pr acme/widget)"; rc=$?
