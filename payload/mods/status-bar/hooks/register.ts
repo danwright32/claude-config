@@ -215,6 +215,8 @@ const COMPACT_TOOL = 'queue_compact'
 // Mac cannot clear (#2490: on 2026-11-09 a restart emptied /private/tmp, and a scratchpad note with it).
 const NOTES_ROOT = (h: string) => `${h}/.claude/state/session-notes`
 const NOTE_NAME = 'handoff.md'
+// A folder name in a note's path, never one that climbs out of the folder it names.
+const plain = (part: string | undefined): part is string => part !== undefined && part !== '' && part !== '.' && part !== '..'
 const NOTE_WHERE = `~/.claude/state/session-notes/<project>/<session>/${NOTE_NAME}`
 // Where the note was kept before #2490, which a session mid stretch may still pass once.
 const LEGACY_NOTE = /^(?:\/private)?\/tmp\/claude-\d+\/([^/]+)\/([^/]+)\/scratchpad\/handoff\.md$/
@@ -267,14 +269,14 @@ const placeNote = async ($: EngineInterface, note: string): Promise<{ note: stri
   if (note.startsWith(`${root}/`)) {
     const parts = note.slice(root.length + 1).split('/')
     const [key, sess, name] = parts
-    if (parts.length === 3 && name === NOTE_NAME && key && sess) {
+    if (parts.length === 3 && name === NOTE_NAME && plain(key) && plain(sess)) {
       if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
       return { note }
     }
   }
   const legacy = LEGACY_NOTE.exec(note)
   const [, key, sess] = legacy ?? []
-  if (key && sess) {
+  if (plain(key) && plain(sess)) {
     if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
     const target = mine(key)
     const there = await $.fs.stat(target).then(() => true, () => false)

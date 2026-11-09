@@ -743,6 +743,22 @@ test("a note in another session's notes folder is refused, naming this session's
   expect(compacts).toHaveLength(0)
 })
 
+test('a note path climbing out of the notes folder with . or .. is refused (#2490)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  for (const key of ['..', '.']) {
+    const out = `/Users/x/.claude/state/session-notes/${key}/s1/handoff.md`
+    files[out] = 'Outside.'
+    mtimes[out] = clock.now()
+    expect(refusal(await queueCompact($, { note: out }))).toContain(`not ${out}`)
+  }
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
 test('with no handoff note the compact tool refuses, and nothing is queued or run (#2025)', withKit, async ($, on) => {
   const { clock, compacts } = world(on)
   await start($, clock)
