@@ -1877,8 +1877,22 @@ the nine hour ceiling #1697 also put on the whole wait, counted from the run's s
 1 to 3 places from the front on 2026-11-06 with the line still moving, and each ran again at the back
 behind about 20 others, so the pull requests that had waited longest merged last. That ceiling is gone,
 and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks it took in line up to
-each move of the line. A wait still ends: nobody can join a line ahead of a run, so it can move only as
-many times as there were pull requests ahead, and the line standing still for three hours ends it.
+each move of the line. A wait still ends: only a run started with `--first` (below) can join a line
+ahead of a run, so it can move only as many times as there were pull requests ahead plus those sent to
+the front, and the line standing still for three hours ends it.
+A pull request the others in line need merged first goes to the front with `--first`
+(claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests
+ahead of it needed to pass CI, and each of them would have held the line for about 50 minutes of mostly
+failing CI; it was moved forward by hand by stopping all five helpers and starting them again after it
+merged. Now `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> --squash --first` joins ahead of every
+run still waiting, never ahead of the run holding the turn (it may be merging), and after any run sent
+to the front before it. It says how many it went ahead of, and each run it passes says so once. It
+changes only the order: the update, the checks, the review and every gate judge its merge as any
+other. It is refused, said, and the run joins at the back when the pull request's own checks are
+failing, since it is then not the fix the others need, and not honoured, said, when its checks cannot
+be read. A run at the front that is passed over joins again at the back, so a stuck one cannot take
+the turn again and again. A helper started before this change reads the line in number order, so a run
+at the front stays behind its place rather than pass it, and the two never both take the turn.
 While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
@@ -3286,6 +3300,16 @@ saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and
 `scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
 importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
 
+Import text written inside an ordinary string literal is data and is not followed (#2484, narrowing
+signed off by Dan on 2026-11-09): an esbuild stdin entry or a fixture string naming `./missing.js`
+no longer refuses a script for a module nothing loads. A string is still followed wherever the code
+the walk reaches can run a string as code (`JS_SINK`: eval, `Function` and `.constructor`, vm, a
+Worker, Miniflare's script or modules source, a child process, a `data:` or `blob:` URL, a page's
+evaluate, Deno, Bun, the global object by a computed name, or a computed `require` or `import()`).
+The gate cannot trace which string reaches the sink (a variable, a function, another module), so once
+any file reached names one, the walk starts again following every string, as before. Measured over
+1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
@@ -3421,6 +3445,24 @@ the name of a built in one, can still write. Suite: `test-read-only-query-allow.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
+
+## A trusted path that has gone is said
+
+Entries in `autoMode.environment` can name a trusted checkout by absolute path, and on the work
+MacBook one pointed at a folder gone for two weeks after a project move, so the classifier trusted
+a checkout that no longer existed and did not recognise the real one (#2491).
+`hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
+absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
+backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
+names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
+is one line and exit 2; no `python3` is exit 3.
+
+It runs on every prompt from `hooks/project-list-nudge.sh`, beside `hooks/check-project-list.sh`,
+and goes through that hook's one notice per distinct answer per session record, so it is said once
+and again only when the answer changes. That record holds a hash of the answer, never its text,
+because on the work MacBook the paths name work repositories. Tests point it elsewhere with
+`TRUSTED_PATHS_SETTINGS_FILE`. Suites: `test-check-trusted-paths.sh`, `test-project-list-nudge.sh`.
 
 ## Tests
 
@@ -4021,6 +4063,14 @@ Every push and pull request also runs the suite on a Linux runner
 (`.github/workflows/tests.yml`). No path filter: the suite reads `README.md` and `DESIGN.md` as
 well as the code, and checks every tracked file for Python bytecode, so filtering by where the code
 lives would skip precisely the change that breaks it.
+
+CI runs the suites as four jobs side by side (claude-config#2463). A `deal` job splits the suites
+into parts of about equal measured time with `HOOK_TESTS_DEAL=4 bash payload/hooks/run-all-tests.sh`,
+each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TESTS_PARTS`), and the
+`suite` job is the one check to wait on: green only when the deal and every part were, and it merges
+each part's timings into the cache the next deal reads. A part refuses outright when the deal does
+not cover exactly the suites the tree holds, so a new suite can never be run by no job.
+`gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
 
 Run ONE section while iterating, which is the fast path:
 
@@ -6266,7 +6316,13 @@ ten while its answer has not moved (the doubling is the one polling policy's,
 session's shared budget, so none is made during a rate limit pause, a turn end then saying why it
 has no reading rather than finishing on an old one, #1482), a merged PR is read once, and a PR's
 closing issues are read only once it has merged and not again once closed; each gh read is one
-GraphQL point. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
+GraphQL point. The one old reading a turn end keeps is of a PR last read as left open or left closed
+on Dan's answer (#2433, after a session with 19 folded PRs left closed ran out of the minute's looks
+before the last of them at every stop for over half an hour): those are read after every other PR,
+so the looks go first to what can still finish, are still read whenever a look is spare, so a reopen
+or push from outside is seen, and keep their reading only while the look is held and only when it
+was read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is
+never kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
 another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
 checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
 turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
@@ -6956,6 +7012,13 @@ names, needs lists, input descriptions or other run commands; a
 string, the strings inside it wording of their own, and the message Dan is shown is checked only for
 the words between its filled in values, never the code that fills them (#2371); and a file in no
 git repository, as a scratchpad script is, is let through even when it posts to Slack itself.
+Text only a model reads is not message text either (#2475): in a JavaScript, TypeScript or python
+file, a string handed to a `system`, `instructions` or `prompt` key or keyword, or to a message's
+`content` beside its `role`, and a top level constant or function whose every use, in its own
+file and in every other file of the repository naming it, is such a value, an import of it under
+its own name, or a part of another such constant. One other use (posted, logged, handed to a
+function, exported under another name), or another file that cannot be read within the search's
+time, and it counts.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
