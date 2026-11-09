@@ -321,6 +321,40 @@ else
   check "#1330 a helper with no load reader beside it fails as before, saying the reader is missing" "exit=$nl_rc out=$nl_out"
 fi
 
+# The helper finds what it sources from inside its functions (lib/suite-isolation.sh when a suite
+# arms, lib/load-average.sh when one is stopped) from the file's own BASH_SOURCE, which the Slack
+# drafts gate can read where it cannot read a global (claude-config#2465). Sourced the ways #1104
+# allows, by a path relative to where the suite stands and by a bare name from the helper's own
+# folder, it must still arm and still read the load: a busy stop says UNMEASURED, rather than
+# refusing to arm or calling the reader missing. Seen to fail with ${BASH_SOURCE[0]%/*}, which turns
+# a bare name into a folder that does not exist.
+sourced_as(){   # sourced_as <name> <folder the suite stands in> <path as its source command writes it>
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cd %q || exit 9\n' "$2"
+    printf '. %q || exit 9\n' "$3"
+    printf 'suite_deadline_arm 60 || exit $?\n'
+    printf 'out="$(bash %q %q)"\n' "$HOLDER" "$TMPROOT/$1.child"
+    printf 'echo finished\n'
+  } > "$TMPROOT/$1.sh"
+  env -u HOOK_TESTS_SLOTS LOAD_AVERAGE_CMD="$(mk_load "$1" 30.5)" LOAD_AVERAGE_CORES=12 \
+    SUITE_WALL_STARTED=$(( now - 1000 )) SUITE_WALL_POLL=0.05 \
+    bash "$TMPROOT/$1.sh" > "$TMPROOT/$1.out" 2>&1 &
+  local p=$!
+  ALL_PIDS="$ALL_PIDS $p"
+  wait_file "$TMPROOT/$1.child" && ALL_PIDS="$ALL_PIDS $(cat "$TMPROOT/$1.child")"
+  if wait_gone "$p"; then wait "$p"; sa_rc=$?; else sa_rc="still running"; fi
+  sa_out="$(cat "$TMPROOT/$1.out")"
+}
+sourced_as relpath "$DIR" lib/suite-deadline.sh
+[ "$sa_rc" = 124 ] && said_mark "$sa_out" && ! said_fail "$sa_out" \
+  && check "#2465 sourced by a relative path, it still arms and still reads the load when stopped" ok \
+  || check "#2465 sourced by a relative path, it still arms and still reads the load when stopped" "exit=$sa_rc out=$sa_out"
+sourced_as barename "$DIR/lib" suite-deadline.sh
+[ "$sa_rc" = 124 ] && said_mark "$sa_out" && ! said_fail "$sa_out" \
+  && check "#2465 sourced by a bare name from its own folder, it still arms and still reads the load when stopped" ok \
+  || check "#2465 sourced by a bare name from its own folder, it still arms and still reads the load when stopped" "exit=$sa_rc out=$sa_out"
+
 # ---------------------------------------------------------------------------
 # The control: a suite that finishes inside its deadline is not touched, and leaves nothing behind.
 # ---------------------------------------------------------------------------
