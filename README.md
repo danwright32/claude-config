@@ -1864,8 +1864,22 @@ the nine hour ceiling #1697 also put on the whole wait, counted from the run's s
 1 to 3 places from the front on 2026-11-06 with the line still moving, and each ran again at the back
 behind about 20 others, so the pull requests that had waited longest merged last. That ceiling is gone,
 and the count of looks (`MWR_MAX_POLLS`) no longer holds against a run the looks it took in line up to
-each move of the line. A wait still ends: nobody can join a line ahead of a run, so it can move only as
-many times as there were pull requests ahead, and the line standing still for three hours ends it.
+each move of the line. A wait still ends: only a run started with `--first` (below) can join a line
+ahead of a run, so it can move only as many times as there were pull requests ahead plus those sent to
+the front, and the line standing still for three hours ends it.
+A pull request the others in line need merged first goes to the front with `--first`
+(claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which the five pull requests
+ahead of it needed to pass CI, and each of them would have held the line for about 50 minutes of mostly
+failing CI; it was moved forward by hand by stopping all five helpers and starting them again after it
+merged. Now `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> --squash --first` joins ahead of every
+run still waiting, never ahead of the run holding the turn (it may be merging), and after any run sent
+to the front before it. It says how many it went ahead of, and each run it passes says so once. It
+changes only the order: the update, the checks, the review and every gate judge its merge as any
+other. It is refused, said, and the run joins at the back when the pull request's own checks are
+failing, since it is then not the fix the others need, and not honoured, said, when its checks cannot
+be read. A run at the front that is passed over joins again at the back, so a stuck one cannot take
+the turn again and again. A helper started before this change reads the line in number order, so a run
+at the front stays behind its place rather than pass it, and the two never both take the turn.
 While it waits in line
 its looks at GitHub grow to three minutes apart as checks' do, since nothing there needs reading
 every minute, while the turn itself is read on this Mac at every base look, so a turn passing is
