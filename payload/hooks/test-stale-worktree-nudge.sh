@@ -103,7 +103,7 @@ fire(){ # fire <session id> [env assignments...]: one prompt in $PROJ
     | env STALE_WT_CHECK="$STUB" "$@" bash "$SCRIPT" 2>"$TMP/err")"
   RC=$?; ERR="$(cat "$TMP/err")"
 }
-skey(){ printf '%s' "$1" | shasum | cut -c1-12; }
+skey(){ printf '%s' "${1//[^A-Za-z0-9_.-]/_}"; }   # the session's record is named after its id (#2453)
 # Wait for every run a session started to end, judged by the runner's own process, never a sleep.
 settle(){ # settle <session id>
   local f="$STATE_DIR/claude-stale-worktrees-$(skey "$1").state" pid
@@ -366,6 +366,106 @@ STATE_DIR="$E2E_STATE" settle e2e
 OUT="$(cd "$REPO" && printf '{"session_id":"e2e"}' | STALE_WT_STATE_DIR="$E2E_STATE" bash "$SCRIPT" 2>/dev/null)"
 check "once it has answered, the removal is said on the next prompt" "removed agent-landed [fix/415-landed]: PR #415 merged" "$OUT"
 check_eq "and the landed worktree is gone" no "$([ -d "$WT/agent-landed" ] && echo yes || echo no)"
+
+# --- every prompt path fits inside the hook's timeout on a loaded Mac (claude-config#2453) ---
+# The hook took 5.2 to 10.5 s in 11 of 24 runs under tools/load-window.sh (measured 2026-11-07),
+# past its 5 s timeout, and Claude Code goes on without a hook it kills, so the reminder was lost.
+# What a loaded Mac makes slow is STARTING A PROCESS: under a 48 spawner window a bash forking a
+# subshell cost nothing measurable while each program it started cost 0.17 to 0.23 s, and python3
+# 0.47 (measured 2026-11-07, load average 41 to 48). The run that took 10.5 s started 11 (bash and
+# ten programs), so each start is charged the worst that implies, 0.96 s, injected here rather than
+# waited for (L290, L524). The processes each prompt path starts are COUNTED through PATH shims
+# (L224), and the charge for them is held against the timeout the settings give the hook (L188).
+LAUNCH_CS=96   # hundredths of a second per process started: 10.5 s over 11, rounded up
+LIMIT_CS=$(( ${TIMEOUT:-5} * 100 ))
+CB="$TMP/count-bin"; mkdir -p "$CB"
+for c in cat date mkdir touch git cut python3 shasum perl openssl md5 cksum mv cp rm ln sed grep \
+         awk head tail tr wc sort uniq dirname basename readlink realpath stat ls find jq xargs tee; do
+  real="$(command -v "$c" 2>/dev/null)" || continue
+  printf '#!/bin/sh\nprintf "%%s\\n" %s >>"$SHIM_LOG"\nexec %s "$@"\n' "$c" "$real" >"$CB/$c"
+  chmod +x "$CB/$c"
+done
+# The run the hook starts is detached and never waited for, so what it starts is not on the prompt
+# path; its nohup stops here, so it neither runs nor lands in a count.
+printf '#!/bin/sh\nexit 0\n' >"$CB/nohup"; chmod +x "$CB/nohup"
+REAL_BASH="$(command -v bash)"
+CPROJ="$TMP/count-proj"; mkdir -p "$CPROJ"; G -C "$CPROJ" init -q -b main
+CSTATE="$TMP/count-state"
+COUNT_LOG=""; STARTED=0
+count_prompt(){ # count_prompt <session id> [dir]: sets STARTED, the processes one prompt starts, the bash running the hook included
+  COUNT_LOG="$TMP/count.$1.$RANDOM"; : >"$COUNT_LOG"
+  ( cd "${2:-$CPROJ}" && printf '{"session_id":"%s"}' "$1" | PATH="$CB:$PATH" SHIM_LOG="$COUNT_LOG" \
+      STALE_WT_CHECK="$STUB" STALE_WT_STATE_DIR="$CSTATE" "$REAL_BASH" "$SCRIPT" >/dev/null 2>&1 )
+  STARTED=$(( 1 + $(grep -c . "$COUNT_LOG") ))
+}
+held_to_timeout(){ # held_to_timeout <path>: STARTED, charged at the worst cost of each, against the timeout
+  if [ $(( STARTED * LAUNCH_CS )) -lt "$LIMIT_CS" ]; then ok; else
+    bad "#2453 $1: $STARTED processes started, $(( STARTED * LAUNCH_CS ))/100 s at the worst measured cost of each, is not inside the ${LIMIT_CS}/100 s timeout ($(tr '\n' ' ' <"$COUNT_LOG"))"
+  fi
+}
+count_prompt k1
+# git, never date, as the premise: a run due always asks git which repository this is, while date
+# is started only by a bash without EPOCHSECONDS (macOS's 3.2 has none, a bash 5 has it).
+case "$(cat "$COUNT_LOG")" in *git*) ok ;; *) bad "#2453 the premise: the shims see the programs the hook starts (it logged: $(tr '\n' ' ' <"$COUNT_LOG"))" ;; esac
+held_to_timeout "a session's first prompt, which starts a run"
+count_prompt k1
+held_to_timeout "a later prompt, with no run due"
+printf 'removed elsewhere\n' >"$CSTATE/claude-stale-worktrees-repo-0123456789ab.result.1700000000.1"
+count_prompt k1
+held_to_timeout "a later prompt while another repository's answer waits to be said"
+count_prompt k2
+held_to_timeout "a first prompt while another repository's answer waits"
+case "$(cat "$COUNT_LOG")" in *git*) bad "#2453 the repository a directory is in is remembered, not asked of git on every prompt ($(tr '\n' ' ' <"$COUNT_LOG"))" ;; *) ok ;; esac
+# The prompt that says an answer: the most valuable one, and it claims the answer by a rename.
+CKEY="$(printf '%s' "$CPROJ" | shasum | cut -c1-12)"
+printf 'removed here\n' >"$CSTATE/claude-stale-worktrees-repo-$CKEY.result.1700000000.2"
+count_prompt k1
+held_to_timeout "a prompt saying this repository's answer"
+check_eq "#2453 and the answer is claimed" "" "$(cd "$CSTATE" && ls -- *"$CKEY".result.* 2>/dev/null)"
+case "$(cd "$CSTATE" && ls -- *"$CKEY".shown.* 2>/dev/null)" in '') bad "#2453 and kept as said, a .shown file" ;; *) ok ;; esac
+# The same in a directory no prompt has been in before, which must ask git and shasum first.
+mkdir -p "$CPROJ/sub"
+printf 'removed here again\n' >"$CSTATE/claude-stale-worktrees-repo-$CKEY.result.1700000000.3"
+count_prompt k1 "$CPROJ/sub"
+held_to_timeout "a first prompt in a new directory saying its repository's answer"
+
+# A remembered repository that is no longer one is not believed: a prompt there starts no run.
+GONE="$TMP/gone-repo"; mkdir -p "$GONE"; G -C "$GONE" init -q -b main
+(cd "$GONE" && printf '{"session_id":"g1"}' | STALE_WT_CHECK="$STUB" bash "$SCRIPT" >/dev/null 2>&1); settle g1
+before="$(calls)"
+rm -rf "$GONE/.git"
+(cd "$GONE" && printf '{"session_id":"g2"}' | STALE_WT_CHECK="$STUB" bash "$SCRIPT" >/dev/null 2>&1); settle g2
+check_eq "#2453 a remembered repository whose .git is gone is asked again, and starts no run" "$before" "$(calls)"
+
+# Said answers are kept, and a run deletes those over a day old, always keeping the newest.
+PKEY="$(printf '%s' "$PROJ" | shasum | cut -c1-12)"
+SHOWN="$STATE_DIR/claude-stale-worktrees-repo-$PKEY.shown"
+# The answers this suite's earlier prompts said, and the one the no session section left waiting,
+# which this section's first prompt would say, so these two are the only said answers.
+rm -f "$SHOWN".* "$STATE_DIR/claude-stale-worktrees-repo-$PKEY".result.*
+: >"$SHOWN.91"; : >"$SHOWN.92"
+python3 -c 'import os, sys, time; os.utime(sys.argv[1], (time.time() - 3 * 86400,) * 2); os.utime(sys.argv[2], (time.time() - 2 * 86400,) * 2)' "$SHOWN.91" "$SHOWN.92"
+STUB_RC=0 fire p1; settle p1
+check_eq "#2453 a run deletes a said answer over a day old" no "$([ -e "$SHOWN.91" ] && echo yes || echo no)"
+check_eq "#2453 but keeps the newest, however old" yes "$([ -e "$SHOWN.92" ] && echo yes || echo no)"
+: >"$SHOWN.93"
+STUB_RC=0 fire p2; settle p2
+check_eq "#2453 and deletes it once a newer one is kept" no "$([ -e "$SHOWN.92" ] && echo yes || echo no)"
+check_eq "#2453 keeping the newer" yes "$([ -e "$SHOWN.93" ] && echo yes || echo no)"
+# The session id is read by bash's own pattern match now, with python3 only for what that cannot
+# read, so each kind of payload is still keyed on the session it came from.
+key_of(){ # key_of <payload>: the session record one prompt with it leaves behind
+  local d="$TMP/key-state.$RANDOM"
+  ( cd "$CPROJ" && printf '%s' "$1" | PATH="$CB:$PATH" SHIM_LOG=/dev/null STALE_WT_CHECK="$STUB" \
+      STALE_WT_STATE_DIR="$d" "$REAL_BASH" "$SCRIPT" >/dev/null 2>&1 )
+  ( cd "$d" 2>/dev/null && ls -- *.state 2>/dev/null )
+}
+check_eq "#2453 a session id is read wherever it sits in the payload" "claude-stale-worktrees-k3.state" \
+  "$(key_of '{"prompt": "say \"session_id\": \"not-me\"", "session_id": "k3"}')"
+check_eq "#2453 an id holding an escape is read by python3, decoded" "claude-stale-worktrees-k_4.state" \
+  "$(key_of '{"session_id":"k\"4"}')"
+check_eq "#2453 with no id, the transcript path keys the record" "claude-stale-worktrees-_t_k5.jsonl.state" \
+  "$(key_of '{"transcript_path":"/t/k5.jsonl"}')"
 
 echo
 echo "passed: $pass, failed: $fail"

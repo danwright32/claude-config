@@ -154,7 +154,8 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
       # starts a background run (#1577). An EMPTY record, as this was, is one the hook treats as due
       # (it cannot say how old it is), so the settling run started the real cleanup check in the
       # background every time this suite ran, and its processes landed in the measured count.
-      printf 'started %s\n' "$(date +%s)" > "$F/tmp/claude-stale-worktrees-$(printf '%s' cost-session | shasum | cut -c1-12).state" ;;
+      # Named after the session id itself since #2453, no longer a hash of it.
+      printf 'started %s\n' "$(date +%s)" > "$F/tmp/claude-stale-worktrees-cost-session.state" ;;
     rule-files-changed.sh)
       # The rule files this session loaded: CLAUDE.md and every bare import, which grows with
       # every section the lessons index is split into, and the mods it loaded, which grow with
