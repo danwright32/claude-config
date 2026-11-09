@@ -258,7 +258,9 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     toldBackground = false
-    // A fresh start (or a reload) reads the running turn from $.state, as a fresh module does.
+    // A fresh start (or a reload) reads the running turn from $.state, as a fresh module does. A turn
+    // left recorded by one that never ended (a crash mid turn) reads as running until the next turn
+    // ends: /rename then waits, and the name still lands on Dan's next message.
     turn.forget()
     const result = await next(e)
     const [id, now] = await Promise.all([$.session.id(), $.clock.now()])

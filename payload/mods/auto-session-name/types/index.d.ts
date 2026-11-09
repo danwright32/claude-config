@@ -29,7 +29,8 @@ export type AutoSessionNameRecord = {
   isRenamedByHand: boolean
   /**
    * A name made but not confirmed as set, applied as `sessionTitle` on Dan's next message unless
-   * that message shows it already took (the fallback route).
+   * that message shows it already took (the fallback route). Armed as soon as the name is made, so
+   * also while no /rename has been asked: a turn running holds /rename back until it ends (#2461).
    */
   pendingTitle: string | null
   /**
