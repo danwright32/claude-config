@@ -36,11 +36,8 @@ const WRITES: Record<string, unknown> = {
   "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
   // #2373: a write reaching a whole folder holding more files that could be held than are judged one by one.
   "find gen -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'gen', path: '/w/app/gen', edits: true, tree: true }], changes: [], unnamed: [] },
-  // #2321: a folder handed to a script, or a copy's folder destination, named by its path alone.
+  // #2321, read since #2527: a folder handed to a script, named by its path alone.
   'python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  'python3 rewrite.py docs': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'docs', path: '/w/app/docs' }] }] },
-  'python3 rewrite.py gen': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'gen', path: '/w/app/gen' }] }] },
-  'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
   // A cp source ending in slash dot copies what lib holds into src, a whole tree (#2396).
   'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [] },
   // ditto merges what a source folder holds into its destination whatever the slash, a tree (#2396).
@@ -55,6 +52,27 @@ const WRITES: Record<string, unknown> = {
   // #2402: a word whose every dollar sign the shell leaves as text names the file it spells.
   'python3 probe.py "src/big$.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', unexpanded: true }] }] },
   'python3 probe.py "src/big.ts$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big.ts$', path: '/w/app/src/big.ts$', unexpanded: true }] }] },
+  // #2321: a copy into a folder, named by its path alone, so the disk says it is a folder.
+  'cp new.ts src': { files: [{ word: 'src', path: '/w/app/src', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
+  'cp new.ts docs': { files: [{ word: 'docs', path: '/w/app/docs', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
+  'cp new.ts gen': { files: [{ word: 'gen', path: '/w/app/gen', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
+  'cp new.ts src/locked': { files: [{ word: 'src/locked', path: '/w/app/src/locked', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
+  'cp new.ts srclink': { files: [{ word: 'srclink', path: '/w/app/srclink', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
+  // #2527: a folder a script is handed, read as the one path it names, and real writes beside one.
+  'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash /w/app/check.sh /w/app/src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '/w/app/check.sh', path: '/w/app/check.sh', args: [{ word: '/w/app/src', path: '/w/app/src' }] }] },
+  './check.sh src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './check.sh', path: '/w/app/check.sh', args: [{ word: 'src', path: '/w/app/src' }] }] },
+  'python3 rewrite.py srclink': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'srclink', path: '/w/app/srclink' }] }] },
+  'python3 rewrite.py src/big.ts': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] },
+  'bash check.sh src/ > src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }], stdout: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] },
+  'bash check.sh src/ && cp lib/new.ts src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', sources: ['/w/app/lib/new.ts'], mayBeFolder: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  "bash check.sh src/ && sed -i '' 's/a/b/' src/big.ts": { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash check.sh src/ | tee src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash check.sh src/ && cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  // #2527: a loop handing a script quoted search terms, plain words, and words it cannot read.
+  "for t in \"*push*\" 'gate'; do bash check.sh --like \"$t\"; done": { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '*push*', folder: '/w/app', quoted: true }, { word: '$t', path: '/w/app/gate' }] }] },
+  'for t in "a" "b"; do bash check.sh --like "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t', path: '/w/app/a' }, { word: '$t', path: '/w/app/b' }] }] },
+  'for t in $(cat list); do bash check.sh "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t' }] }] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or

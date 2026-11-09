@@ -41,7 +41,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=44
+EXPECTED=46
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -87,40 +87,39 @@ const NOTE = `bash ~/.claude/hooks/lib/issue-spool.sh note . "${F}" "builder 225
 is('a findings note to the installed spool helper is not judged, whatever its text holds', NOTE, [])
 is('a findings note chained with an in place edit still judges the edit', `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 is('an edit run by substitution inside the note text is still judged', `bash ~/.claude/hooks/lib/issue-spool.sh note . "$(sed -i '' s/a/b/ src/lib/slack.ts)" "x"`, [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
-// Each path a script is handed carries the script (#2407), so a folder among them is judged by what it writes.
-const COPY = { what: 'a bash script file', path: '/w/app/payload/hooks/lib/issue-spool.sh' }
-const HELPER = { what: 'a bash script file', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh' }
+// Each path a script is handed is marked handed (#2527): judged as that one path, a folder never for its files.
 is('a copy of the spool helper in a checkout is judged as any script', `bash payload/hooks/lib/issue-spool.sh note . "${F}" "builder 2254"`, [
-  { word: 'note', path: '/w/app/note', runs: [COPY] },
-  { word: '.', path: '/w/app', runs: [COPY] },
+  { word: 'note', path: '/w/app/note', handed: true },
+  { word: '.', path: '/w/app', handed: true },
   { word: F, unread: `a bash script file is handed ${F}, built as the command runs` },
-  { word: 'builder 2254', path: '/w/app/builder 2254', runs: [COPY] },
+  { word: 'builder 2254', path: '/w/app/builder 2254', handed: true },
 ])
 is("the spool helper's other subcommands are judged as before", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
-  { word: 'append', path: '/w/app/append', runs: [HELPER] },
-  { word: '.', path: '/w/app', runs: [HELPER] },
+  { word: 'append', path: '/w/app/append', handed: true },
+  { word: '.', path: '/w/app', handed: true },
   { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
 ])
-// #2426 lessons review: one folder handed to two scripts carries both, in either order, so each is read.
-const SCAN = { what: 'a bash script file', path: '/w/app/scan.sh' }
-const REWRITE = { what: 'a python3 script file', path: '/w/app/rewrite.py' }
-is('a folder handed to a scan and then to a rewrite carries both scripts', 'bash scan.sh src/ && python3 rewrite.py src/', [{ word: 'src/', path: '/w/app/src', runs: [SCAN, REWRITE] }])
-is('a folder handed to a rewrite and then to a scan carries both scripts', 'python3 rewrite.py src/ && bash scan.sh src/', [{ word: 'src/', path: '/w/app/src', runs: [REWRITE, SCAN] }])
+// #2527: one folder handed to two scripts is one path handed, in either order, and a loop's quoted
+// search term is handed by its characters, as the term spelled out is (#2255).
+is('a folder handed to a scan and then to a rewrite is one path handed', 'bash scan.sh src/ && python3 rewrite.py src/', [{ word: 'src/', path: '/w/app/src', handed: true }])
+is('a folder handed to a rewrite and then to a scan is one path handed', 'python3 rewrite.py src/ && bash scan.sh src/', [{ word: 'src/', path: '/w/app/src', handed: true }])
+is("a loop's quoted search term is handed by its characters", `for t in "*push*" gate; do bash scan.sh "$t"; done`, [{ word: '*push*', path: '/w/app/*push*', handed: true }, { word: '$t', path: '/w/app/gate', handed: true }])
+unread("a loop whose words cannot be read hands a script a name it cannot read", 'for t in $(cat list); do bash scan.sh "$t"; done', '$t', 'built as the command runs', undefined)
 
 // #2255: text whose every pattern character is quoted reaches a script file as its characters, so it
 // is judged as the one file they name; a pattern the shell or a tool expands, a value filled in as the
 // command runs, and every other write in the command are judged as before.
-is('a quoted pattern handed to a script file is judged as the one file its characters name', "python3 probe.py 'src/*.ts'", [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
-is('quoted prose holding a wildcard and a question mark is judged as the one file it names', "python3 probe.py 'every *.ts file, why?'", [{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?' }])
-is('a pattern quoted in double quotes, or only around its wildcard, is judged the same way', `python3 probe.py "src/*.ts" src/'*'.ts`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+is('a quoted pattern handed to a script file is judged as the one file its characters name', "python3 probe.py 'src/*.ts'", [{ word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
+is('quoted prose holding a wildcard and a question mark is judged as the one file it names', "python3 probe.py 'every *.ts file, why?'", [{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?', handed: true }])
+is('a pattern quoted in double quotes, or only around its wildcard, is judged the same way', `python3 probe.py "src/*.ts" src/'*'.ts`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
 unread('an unquoted pattern handed to a script file is still unread', 'python3 probe.py src/*.ts', 'src/*.ts', 'a pattern', '/w/app/src')
 unread('a dollar sign in double quotes, filled in as the command runs, is still unread', 'python3 probe.py "$OUT/*.ts"', '$OUT/*.ts', 'built as the command runs', undefined)
-is('a variable the command sets to a held file is judged as that file', 'X=src/big.ts; python3 probe.py "$X"', [{ word: '$X', path: '/w/app/src/big.ts', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
-is('a quoted pattern beside a redirect into a file still judges that file', "python3 probe.py 'src/*.ts' > src/big.ts", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
-is('a quoted pattern beside a heredoc written into a file still judges that file', "python3 probe.py 'src/*.ts' && cat > src/big.ts <<'EOF'\nx\nEOF", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+is('a variable the command sets to a held file is judged as that file', 'X=src/big.ts; python3 probe.py "$X"', [{ word: '$X', path: '/w/app/src/big.ts', handed: true }])
+is('a quoted pattern beside a redirect into a file still judges that file', "python3 probe.py 'src/*.ts' > src/big.ts", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
+is('a quoted pattern beside a heredoc written into a file still judges that file', "python3 probe.py 'src/*.ts' && cat > src/big.ts <<'EOF'\nx\nEOF", [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
 unread('a quoted pattern handed to a tool, which expands its own operands, is still unread', "npx foo 'src/*.ts'", 'src/*.ts', 'a pattern', '/w/app/src')
 unread('a quoted group is still unread', "python3 probe.py '{a,b}.ts'", '{a,b}.ts', 'a pattern', '/w/app')
-is('a word the reader cannot close is still unread beside a quoted pattern', `python3 probe.py 'src/*.ts' "$(`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts' }, { word: '$(', unread: 'a python3 script file is handed $(, built as the command runs' }])
+is('a word the reader cannot close is still unread beside a quoted pattern', `python3 probe.py 'src/*.ts' "$(`, [{ word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }, { word: '$(', unread: 'a python3 script file is handed $(, built as the command runs' }])
 
 // #2320: a dollar sign the shell leaves as written (before a closing double quote, or before nothing a
 // name, brace, bracket or quote can start) is text, as a single quoted one is (#1953), so the word
@@ -129,9 +128,9 @@ is('a word the reader cannot close is still unread beside a quoted pattern', `py
 is('a double quoted regex ending in a dollar sign is handed on as text, as a single quoted one is', 'python3 probe.py "^foo.*bar$"', [])
 // #2402: such a word names the file it spells, and is judged as that file; one also holding a
 // pattern character (the regex above) still names none.
-is('a dollar sign left bare at the end of a word is text too, naming the file it spells', 'python3 probe.py foo$', [{ word: 'foo$', path: '/w/app/foo$', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
-is('a double quoted name holding a dollar sign left as text is judged as that file', 'python3 probe.py "src/big$.ts"', [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
-is('a single quoted name holding a dollar sign is judged as that file, never as the home folder', "python3 probe.py '$HOME/big.ts'", [{ word: '$HOME/big.ts', path: '/w/app/$HOME/big.ts', runs: [{ what: 'a python3 script file', path: '/w/app/probe.py' }] }])
+is('a dollar sign left bare at the end of a word is text too, naming the file it spells', 'python3 probe.py foo$', [{ word: 'foo$', path: '/w/app/foo$', handed: true }])
+is('a double quoted name holding a dollar sign left as text is judged as that file', 'python3 probe.py "src/big$.ts"', [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', handed: true }])
+is('a single quoted name holding a dollar sign is judged as that file, never as the home folder', "python3 probe.py '$HOME/big.ts'", [{ word: '$HOME/big.ts', path: '/w/app/$HOME/big.ts', handed: true }])
 unread('a dollar sign starting a name in double quotes is still unread', 'python3 probe.py "$OUT/big.ts"', '$OUT/big.ts', 'built as the command runs', undefined)
 unread('a dollar sign before a quote, which bash expands, is still unread', "python3 probe.py x$'y'", 'x$y', 'built as the command runs', undefined)
 unread('a word holding a dollar sign left as text and one expanded is still unread', 'python3 probe.py "a$"$B', 'a$$B', 'built as the command runs', undefined)
