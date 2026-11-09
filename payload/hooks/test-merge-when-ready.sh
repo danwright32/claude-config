@@ -174,6 +174,19 @@ case "$*" in
     fail_read recent-runs
     if [ -s "$ST/recent-runs" ]; then cat "$ST/recent-runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
     ;;
+  # The jobs of one workflow run (claude-config#2537): jobs-<id> holds how many it has, one when
+  # unset, so a run no test set up is a run that started.
+  "api repos/acme/widget/actions/runs/"*"/jobs"*)
+    fail_read jobs
+    id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/runs/([0-9]+)/jobs.*#\1#p')"
+    n="$(rd "jobs-$id")"
+    printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
+    ;;
+  # A workflow run started again (claude-config#2537): on-rerun is a step run once when it is.
+  "run rerun"*)
+    fail_read rerun
+    if [ -s "$ST/on-rerun" ]; then s="$(cat "$ST/on-rerun")"; : > "$ST/on-rerun"; eval "$s"; fi
+    ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
     # writes some to runs, the shape a repository whose runs have all finished answers with too.
@@ -1242,6 +1255,113 @@ printf '%s\n' 'gh: Resource not accessible by integration (HTTP 403)' > "$ST/run
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1087 a runs read GitHub refuses stops at once" "1" "$rc"
 check_eq "#1087 with no retry wait" "0" "$(count sleeps '^7$')"
+
+# =================================================================================================
+# 9b. A CI start that never began is re-run once (claude-config#2537). On 2026-11-09 pull requests
+#     #2495, #2496 and #2534 stopped with block-red-merge.sh's "PR has NO checks at all": each head's
+#     tests run had completed as a failure with zero jobs ("This run likely failed because of a
+#     workflow file issue") while main's workflow was fine, and `gh run rerun` started each properly.
+#     Only that exact shape is re-run, once per head; a second such failure stops as before.
+# =================================================================================================
+NO_CHECKS='PR has NO checks at all.'
+fs_runs(){ # fs_runs <id> <status> <conclusion> <attempt>: the head's one tests run
+  jq -nc --argjson id "$1" --arg s "$2" --arg c "$3" --argjson a "$4" \
+    '{total_count:1,workflow_runs:[{id:$id,name:"tests",status:$s,conclusion:(if $c == "" then null else $c end),run_attempt:$a}]}'
+}
+
+# Failed with no jobs, re-run, then green: it carries on and merges.
+fresh "$OLD" 0 '[]'
+fs_runs 4201 completed failure 1 > "$ST/runs"; printf '0' > "$ST/jobs-4201"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+printf '%s\n' "printf '%s' '$(fs_runs 4201 queued '' 2)' > \"\$ST/runs\"" > "$ST/on-rerun"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf '%s' '$(fs_runs 4201 completed success 2)' > \"\$ST/runs\"; printf '3' > \"\$ST/jobs-4201\"; : > \"\$ST/red-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 a run that failed with no jobs is re-run and the head then merges" "0" "$rc"
+check_eq "#2537 re-run exactly once" "1" "$(count gh-calls '^run rerun 4201 --repo acme/widget')"
+check "#2537 saying so, naming the run" "re-ran workflow run 4201 (tests)" "$out"
+check "#2537 and why" "failed with no jobs" "$out"
+check_eq "#2537 the gates were asked once, after the re-run went green" "1" "$(grep -c 'gh pr merge' "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+check_eq "#2537 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+
+# Re-run, and the second start fails the same way: it stops as before, with no second re-run.
+fresh "$OLD" 0 '[]'
+fs_runs 4202 completed failure 1 > "$ST/runs"; printf '0' > "$ST/jobs-4202"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+printf '%s\n' "printf '%s' '$(fs_runs 4202 queued '' 2)' > \"\$ST/runs\"" > "$ST/on-rerun"
+printf '%s\n' "printf '%s' '$(fs_runs 4202 completed failure 2)' > \"\$ST/runs\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 a second start failing with no jobs stops" "1" "$rc"
+check_eq "#2537 after only the one re-run" "1" "$(count gh-calls '^run rerun')"
+check "#2537 saying it failed to start again and is not re-run twice" "failed to start again" "$out"
+check "#2537 and stopping on block-red-merge.sh's own refusal" "PR has NO checks at all" "$out"
+check_eq "#2537 nothing was merged" "0" "$(count gh-calls 'pr merge')"
+
+# Already re-run before this helper started (attempt 2): never re-run again, whoever re-ran it.
+fresh "$OLD" 0 '[]'
+fs_runs 4205 completed failure 2 > "$ST/runs"; printf '0' > "$ST/jobs-4205"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 a run already on its second attempt is not re-run" "0" "$(count gh-calls '^run rerun')"
+check_eq "#2537 and it stops as before" "1" "$rc"
+
+# GitHub slow to show the re-run (still attempt 1 a look later): not re-run a second time, and the
+# grace for a head with no checks starts again from the re-run, so it waits rather than stopping.
+# The run sits queued for 210 seconds first, so the re-run comes after the head's own grace is spent.
+fresh "$OLD" 0 '[]'
+fs_runs 4206 queued '' 1 > "$ST/runs"; printf '0' > "$ST/jobs-4206"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+printf '%s\n' : : : : : : \
+  "printf '%s' '$(fs_runs 4206 completed failure 1)' > \"\$ST/runs\"" \
+  : \
+  "printf '%s' '$(fs_runs 4206 queued '' 2)' > \"\$ST/runs\"" \
+  "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf '%s' '$(fs_runs 4206 completed success 2)' > \"\$ST/runs\"; : > \"\$ST/red-gate-deny\"" > "$ST/on-sleep"
+out="$(MWR_NO_CHECKS_GRACE_SECONDS=180 run 7 --squash)"; rc=$?
+check_eq "#2537 a re-run GitHub has not shown yet is waited on, then merges" "0" "$rc"
+check_eq "#2537 with no second re-run" "1" "$(count gh-calls '^run rerun')"
+
+# A run whose jobs ran and failed is a real failure: never re-run.
+fresh "$OLD" 0 "$RED"
+fs_runs 4203 completed failure 1 > "$ST/runs"; printf '3' > "$ST/jobs-4203"
+printf 'a check failed' > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 a failed run with jobs stops as before" "1" "$rc"
+check "#2537 its jobs were read, so the shape was judged" "actions/runs/4203/jobs" "$(cat "$ST/gh-calls")"
+check_eq "#2537 and it was never re-run" "0" "$(count gh-calls '^run rerun')"
+
+# A run that succeeded is never judged at all.
+fresh "$OLD" 0 "$GREEN"
+fs_runs 4207 completed success 1 > "$ST/runs"; printf '0' > "$ST/jobs-4207"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 control: a green run merges" "0" "$rc"
+check_eq "#2537 control: with no jobs read" "0" "$(count gh-calls '/jobs')"
+
+# The run list unreadable: it stops as before, and nothing is re-run.
+fresh "$OLD" 0 '[]'
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 an unreadable run list stops as before" "1" "$rc"
+check "#2537 saying what it could not read" "could not read which workflow runs" "$out"
+check_eq "#2537 and nothing is re-run" "0" "$(count gh-calls '^run rerun')"
+
+# The jobs unreadable: not re-run, saying why, and the checks gate decides as before.
+fresh "$OLD" 0 '[]'
+fs_runs 4204 completed failure 1 > "$ST/runs"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/jobs-down"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 jobs that cannot be read leave the run alone and stop as before" "1" "$rc"
+check "#2537 saying the jobs could not be read" "Could not read the jobs of workflow run 4204" "$out"
+check_eq "#2537 and nothing is re-run" "0" "$(count gh-calls '^run rerun')"
+
+# GitHub refusing the re-run: said, and the checks gate decides as before.
+fresh "$OLD" 0 '[]'
+fs_runs 4208 completed failure 1 > "$ST/runs"; printf '0' > "$ST/jobs-4208"
+printf '%s\n' 'gh: Resource not accessible by integration (HTTP 403)' > "$ST/rerun-down"
+printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2537 a re-run GitHub refuses stops as before" "1" "$rc"
+check "#2537 naming GitHub's answer" "HTTP 403" "$out"
+check_eq "#2537 nothing was merged" "0" "$(count gh-calls 'pr merge')"
 
 # =================================================================================================
 # 10. The changelog record gate is asked too (claude-config#1178). Nine Slate pull requests merged

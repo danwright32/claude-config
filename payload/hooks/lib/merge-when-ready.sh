@@ -131,7 +131,10 @@
 #      is gone), an update GitHub has still not shown four minutes after it, a read GitHub
 #      refused or still did not answer after being asked again, or that gh still could not connect
 #      to GitHub for (claude-config#1675), or a whole deadline shorter than
-#      the repository's recent check runs took (claude-config#1604)
+#      the repository's recent check runs took (claude-config#1604). A head whose CI run finished
+#      as a failure with no jobs (GitHub failing to start it) is not a stop the first time: that run
+#      is re-run once and waited on, and only a second such start stops (claude-config#2537, see
+#      rerun_failed_start)
 #   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
 #      a line that keeps moving never ends it, #2351) or the poll count ran out, or
@@ -636,9 +639,52 @@ read_pr(){   # sets view_env
 read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
-  runs_pending="$MT_RUNS_PENDING"; read_err="$MT_RUNS_ERR"
+  runs_pending="$MT_RUNS_PENDING"; runs_failed="$MT_RUNS_FAILED"; read_err="$MT_RUNS_ERR"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$read_err" && return 5
   return "$rc"
+}
+# A CI START THAT NEVER BEGAN (claude-config#2537). On 2026-11-09 pull requests #2495, #2496 and
+# #2534 stopped on block-red-merge.sh's "PR has NO checks at all": each head's tests run had finished
+# as a failure with zero jobs ("This run likely failed because of a workflow file issue") while main's
+# workflow was fine, during a burst of six or seven runs starting at once, and a plain `gh run rerun`
+# started each properly. So a run of exactly that shape (finished as a failure, for this head, with no
+# jobs at all, on its first attempt) is re-run here, once per head, and said. Nothing else is: a run
+# whose jobs ran and failed is a real failure, and a run on a later attempt has had its re-run, from
+# this helper or anyone, so a second failed start stops exactly as it always did. Nothing is judged
+# green here either: whatever the re-run reports still has to satisfy block-red-merge.sh. A jobs read
+# or a re-run that fails is said and leaves the run alone, so the gate decides as it did before.
+# Returns 0 when it re-ran a run, and moves the head's grace for reporting no checks to now, so a look
+# that comes before GitHub shows the new attempt waits for it rather than stopping.
+rerun_for=""; fs_said=""; runs_failed=""
+say_once(){ case " $fs_said " in *" $1 "*) return 0 ;; esac; fs_said="$fs_said $1"; say "$2"; }
+rerun_failed_start(){
+  local id attempt name out rc jobs
+  [ -n "$runs_failed" ] || return 1
+  while IFS=$'\t' read -r id attempt name; do
+    [ -n "$id" ] || continue
+    # Re-run by this helper and not yet shown by GitHub: not a second failure, so left alone.
+    [ "$attempt" = 1 ] && [ "$rerun_for" = "$head" ] && continue
+    out="$(gh_as api "repos/$slug/actions/runs/$id/jobs?per_page=1" 2>&1 </dev/null)"; rc=$?
+    jobs="$(printf '%s' "$out" | jq -r '.total_count // ""' 2>/dev/null)"
+    case "$jobs" in
+      ''|*[!0-9]*)
+        say_once "jobs:$head:$id" "Could not read the jobs of workflow run $id ($name), which finished as a failure on head ${head:0:7} (${out:0:200}, exit $rc), so whether it ever started is unknown and it is not re-run."
+        continue ;;
+    esac
+    [ "$jobs" -eq 0 ] || continue
+    if [ "$attempt" != 1 ]; then
+      say_once "again:$head:$id" "Head ${head:0:7}: workflow run $id ($name) failed to start again on attempt $attempt, with no jobs, so it is not re-run a second time."
+      continue
+    fi
+    if ! out="$(gh_as run rerun "$id" --repo "$slug" 2>&1 </dev/null)"; then
+      say_once "refused:$head:$id" "Head ${head:0:7}: workflow run $id ($name) failed with no jobs, and GitHub refused to re-run it: ${out:0:300}. It is not re-run."
+      continue
+    fi
+    rerun_for="$head"; head_since="$(now)"; rerun_said="workflow run $id ($name) re-run after it failed to start"
+    say "Head ${head:0:7}: workflow run $id ($name) failed with no jobs, which is GitHub failing to start it (\"This run likely failed because of a workflow file issue\"), not a check failing, so this re-ran workflow run $id ($name) once. A second start failing the same way stops."
+    return 0
+  done <<< "$runs_failed"
+  return 1
 }
 read_compare(){   # sets compare, crc, behind, base_tip
   local rc
@@ -1654,6 +1700,8 @@ while :; do
     [ "$rrc" -eq 0 ] || stop 1 "Stopped: $(signin_or_unread "which workflow runs GitHub has for #$pr's head ${head:0:7}" "$rrc"), so nothing here can tell whether CI is still to report on it. Nothing was merged."
     if [ -n "$runs_pending" ]; then
       waiting="checks still running (workflow runs not finished: $runs_pending)"
+    elif rerun_failed_start; then
+      waiting="checks still running ($rerun_said)"
     elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
       waiting="checks still running (none reported yet)"
     fi
