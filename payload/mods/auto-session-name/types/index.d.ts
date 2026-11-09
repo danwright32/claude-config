@@ -29,7 +29,8 @@ export type AutoSessionNameRecord = {
   isRenamedByHand: boolean
   /**
    * A name made but not confirmed as set, applied as `sessionTitle` on Dan's next message unless
-   * that message shows it already took (the fallback route).
+   * that message shows it already took (the fallback route). Armed as soon as the name is made, so
+   * also while no /rename has been asked: a turn running holds /rename back until it ends (#2461).
    */
   pendingTitle: string | null
   /**
@@ -55,6 +56,10 @@ export type AutoSessionNameRecord = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'auto-session-name': { record: AutoSessionNameRecord | null }
+    'auto-session-name': {
+      record: AutoSessionNameRecord | null
+      /** The main turn running now, or null (#2461): /rename is asked only while none is. */
+      runningTurn: string | null
+    }
   }
 }

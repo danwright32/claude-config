@@ -149,6 +149,7 @@ const world = (on: On, o: Opts = {}) => {
   on('prompt.submit', ($, e) => (o.dropsPrompts ? { drop: 'held by a guard' } : { text: e.text }) as never)
   on('classic.SessionStart', () => ({}))
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('ui.log', ($, e) => {
     ;(e.to === 'debug' ? w.debug : w.logs).push(e.text)
     return { value: undefined }
@@ -159,7 +160,7 @@ const world = (on: On, o: Opts = {}) => {
 
 type T = {
   session: { start: (e: never) => Promise<unknown> }
-  turn: { complete: (e: never) => Promise<unknown> }
+  turn: { complete: (e: never) => Promise<unknown>; start: (e: never) => Promise<unknown> }
   classic: { UserPromptSubmit: (e: never) => Promise<unknown>; SessionStart: (e: never) => Promise<unknown> }
   command: { run: (e: never) => Promise<unknown> }
   prompt: { submit: (e: never) => Promise<unknown> }
@@ -190,6 +191,8 @@ const start = async ($: T, w: World, isInteractive = true) => {
 }
 const turnEnds = ($: T, agentId?: string) =>
   $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't', reason: 'answer', ...(agentId ? { agentId } : {}) } as never)
+// A main turn starts, as the engine raises it for the main loop only (#2461).
+const turnStarts = ($: T, turnId = 't') => $.turn.start({ text: 'Build it', turnId } as never)
 const prompt = ($: T, fields: Record<string, unknown> = {}) =>
   $.classic.UserPromptSubmit({ prompt: 'next thing', source: 'user', ...fields } as never) as Promise<{ sessionTitle?: string }>
 
@@ -795,16 +798,17 @@ test('a failure from an attempt that lost its claim changes nothing for the one 
   expect(w.renames.map(r => r.args)).toEqual(['Taken over name'])
 })
 
-// #701: the ten minute mark can fall in the middle of a turn, and /rename waits for that turn to end,
-// which can be long after the claim's few minutes. The attempt keeps its claim fresh while it waits,
-// so the turn's end finds it held: one Haiku call and one name, as the spec allows.
+// #701: a /rename asked while idle can still wait behind a turn Dan starts in that instant, long
+// after the claim's few minutes (a running turn at the mark queues none at all since #2461, tested
+// below). The attempt keeps its claim fresh while it waits, so the turn's end finds it held: one
+// Haiku call and one name, as the spec allows.
 test('a /rename waiting through a long turn keeps its claim: one Haiku call and one rename', withKit, async ($, on) => {
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
   await start($, w)
   await w.clock.advance(10 * MIN)
-  // The turn running at the ten minute mark goes on for four more minutes, then ends.
+  // The turn that /rename waits behind goes on for four more minutes, then ends.
   await w.clock.advance(4 * MIN)
   await turnEnds($)
   await w.clock.settle()
@@ -825,8 +829,9 @@ test('an attempt whose claim went stale during /rename does not overwrite the re
   on('state.set', async ($, e, next) => {
     if (s.failing) return { deny: 'state store unavailable' } as never
     const r = await next(e)
-    // A hook sees the result in its envelope; only a write that landed counts.
-    if ((r as { value?: { isSet?: boolean } }).value?.isSet) writes.push(e.value as { outcome?: string })
+    // A hook sees the result in its envelope; only a write that landed counts, and only the
+    // record's (the running turn's id is kept beside it, #2461).
+    if ((r as { value?: { isSet?: boolean } }).value?.isSet && e.value !== null && typeof e.value === 'object') writes.push(e.value as { outcome?: string })
     return r
   })
   let release = () => {}
@@ -952,4 +957,83 @@ test('a repository that cannot be read still names the session, without the pref
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
   expect(w.logs).toEqual(['Auto session name named this session without its repository in front: the repository could not be read (git could not read the working copy).'])
+})
+
+// #2461: a mod's /rename waits until the session is idle, and a running turn never takes it in
+// (measured on Claude Code 2.1.319: a plugin's queued command runs only after the turn ends). Under a
+// long /goal turn it waited for hours. So the name is made at the mark, nothing is queued while a
+// turn runs, and the name lands on Dan's next message (a message typed mid turn is taken in at the
+// turn's next tool call, and its UserPromptSubmit sessionTitle took, measured the same day) or at
+// the turn's end, whichever comes first.
+test('a session busy past ten minutes queues no /rename, and the next message names it (#2461)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  await turnStarts($)
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.renames.length).toBe(0)
+  expect((await prompt($)).sessionTitle).toBe('Auto session name mod')
+  // The turn's end then finds it named: nothing queued, Haiku not asked again.
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.length).toBe(0)
+  expect(w.prompts.length).toBe(1)
+  expect((await prompt($, { session_title: 'Auto session name mod' })).sessionTitle).toBeUndefined()
+  expect(w.logs).toEqual([])
+})
+
+test('a session busy past ten minutes with no message from Dan is named at the turn end (#2461)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  await turnStarts($)
+  await w.clock.advance(10 * MIN)
+  await w.clock.advance(60 * MIN)
+  expect(w.renames.length).toBe(0)
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
+  expect(w.prompts.length).toBe(1)
+  // Named, so the next message carries no second name.
+  expect((await prompt($, { session_title: 'Auto session name mod' })).sessionTitle).toBeUndefined()
+})
+
+test('a hand rename made while the name waits behind a running turn is never replaced (#2461)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  await turnStarts($)
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  await $.command.run({ command: 'rename', args: 'Mine' } as never)
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.map(r => r.args)).toEqual(['Mine'])
+  expect((await prompt($, { session_title: 'Mine' })).sessionTitle).toBeUndefined()
+})
+
+test('the next message carries the name with its repository in front while a turn runs (#2461)', withKit, async ($, on) => {
+  const w = world(on, { repo: { root: '/repo', remote: 'git@github.com:danwright32/claude-config.git' } })
+  await start($, w)
+  await turnStarts($)
+  await w.clock.advance(10 * MIN)
+  await w.clock.settle()
+  const r = await prompt($)
+  expect(r.sessionTitle).toContain('Auto session name mod')
+  expect(r.sessionTitle).not.toBe('Auto session name mod')
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.length).toBe(0)
+})
+
+test('a subagent turn ending does not end the main turn, so nothing is queued (#2461)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($, w)
+  await turnStarts($)
+  await w.clock.advance(10 * MIN)
+  await turnEnds($, 'agent-1')
+  await w.clock.settle()
+  expect(w.renames.length).toBe(0)
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
 })

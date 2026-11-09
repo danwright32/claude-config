@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
+import { turnNow } from './mod-kit/turnnow.ts'
 import type { AutoSessionNameRecord as Rec } from '../types/index.d.ts'
 import { cleanName, hasExchange, namePrompt, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from './name.ts'
 
@@ -17,8 +18,9 @@ const HAIKU_MS = 30_000
 // An attempt holds a claim so a second caller (a reload's timer, a turn ending) stands down. A claim
 // older than this belongs to an attempt a reload cut off, and is taken over.
 const CLAIM_MS = 3 * 60_000
-// While an attempt waits on /rename, which waits for the session to go idle and so can outlast the
-// claim by the rest of a long turn, it renews its claim this often, well inside CLAIM_MS (#701).
+// While an attempt waits on /rename it renews its claim this often, well inside CLAIM_MS (#701).
+// /rename is asked only while the session is idle (#2461), so it normally answers at once; a
+// message Dan sends in that instant starts a turn the /rename then waits behind.
 const RENEW_MS = CLAIM_MS / 3
 const WHO = 'Auto session name'
 
@@ -26,6 +28,18 @@ const WHO = 'Auto session name'
 // arrives led by (#2150), and a skew (a member an older loaded mod lacks) as the two mods out of
 // step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
 const errText = (err: unknown) => errorText(err, MOD)
+
+// Whether a main turn is running, by mod-kit's one reader (#2461). A mod's /rename waits until the
+// session is idle and a running turn never takes it in (measured on Claude Code 2.1.319), so under a
+// long /goal turn it waited for hours. So /rename is asked only when no turn runs; while one does,
+// the name waits for Dan's next message (sessionTitle) or the turn's end.
+const turn = turnNow(MOD)
+const turnRef = { plugin: 'auto-session-name', key: 'runningTurn' } as const
+const turnStore = ($: EngineInterface) => ({
+  get: async () => (await $.state.get(turnRef)).value,
+  set: async (id: string | null) => void (await $.state.set(turnRef, id)),
+  log: (line: string) => $.ui.log(line, { to: 'debug' }),
+})
 
 // The one reader and the one writer of the record. A record about another session id (a /clear
 // started a new one) reads as none. Writes are compare and set on the version, retried, so two
@@ -172,13 +186,32 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   }
   name = withRepo(label, name)
 
-  // First route: the built-in /rename, queued by the engine until the session is idle. Its answer
-  // is read by the shape of its success text. A refusal, or an answer that says nothing, falls back
-  // to returning sessionTitle on Dan's next message, which first checks whether the name took.
-  // /rename waits for the session to go idle, so when the ten minute mark fell mid turn it waits out
-  // the rest of that turn, which can be long past CLAIM_MS. While this attempt is alive it keeps its
-  // claim fresh, so the turn's end finds it held and starts no second attempt (#701). A reload drops
-  // this timer with the attempt, and only then does the claim go stale and get taken over.
+  // The fallback is armed as soon as the name is made (#2461): Dan's next message carries it as
+  // sessionTitle unless that message shows a name already, a message typed mid turn included (it is
+  // taken in at the turn's next tool call, and its sessionTitle took, measured on 2.1.319).
+  const armed = await update($, cur => (cur && mine(cur) && cur.outcome === 'waiting' && cur.pendingTitle !== name ? { ...cur, pendingTitle: name } : undefined))
+  if (!armed || armed.outcome !== 'waiting' || !mine(armed)) return
+
+  // /rename only while no main turn runs: queued behind one, it waits out the whole turn, which
+  // under /goal is hours, and a running turn never takes it in (#2461). A turn that cannot be read
+  // is read as running, the side that queues nothing; the name still lands on the next message.
+  let busy = true
+  try {
+    busy = (await turn.running(turnStore($))) !== null
+  } catch (err) {
+    $.ui.log(`${MOD}: could not read whether a turn is running (${errText(err)}), so /rename waits for the turn's end`, { to: 'debug' })
+  }
+  if (busy) {
+    await release()
+    $.ui.log(`${MOD}: a turn is running, so the name waits for the next message or the turn's end`, { to: 'debug' })
+    return
+  }
+
+  // The built-in /rename, asked only while the session is idle, so it runs at once. Its answer is
+  // read by the shape of its success text. A refusal, or an answer that says nothing, leaves the
+  // fallback armed, which first checks whether the name took. The claim is kept fresh while it
+  // waits, so a turn's end starts no second attempt (#701). A reload drops this timer with the
+  // attempt, and only then does the claim go stale and get taken over.
   const renew = $.clock.every(RENEW_MS, () => {
     void $.clock
       .now()
@@ -226,6 +259,10 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     toldBackground = false
+    // A fresh start (or a reload) reads the running turn from $.state, as a fresh module does. A turn
+    // left recorded by one that never ended (a crash mid turn) reads as running until the next turn
+    // ends: /rename then waits, and the name still lands on Dan's next message.
+    turn.forget()
     const result = await next(e)
     const [id, now] = await Promise.all([$.session.id(), $.clock.now()])
     const rec = await update($, cur => (cur ? { ...cur, isInteractive: e.isInteractive } : fresh(id, now, e.isInteractive)))
@@ -262,8 +299,15 @@ export const register: Register = on => {
       if (!cur) return undefined
       const n: Rec = { ...cur, knownTitle: title }
       if (cur.pendingTitle) {
-        if (!title) apply = cur.pendingTitle
         n.pendingTitle = null
+        // A name made while a turn ran, waiting for this message or the turn's end (#2461): set
+        // here it is named, so the turn's end asks no /rename. A name already on the message is
+        // someone else's unless it is this one.
+        if (!title) apply = cur.pendingTitle
+        if (cur.outcome === 'waiting') {
+          n.outcome = !title || title === cur.pendingTitle ? 'named' : 'left'
+          if (apply) n.knownTitle = apply
+        }
       } else if (title && cur.outcome === 'waiting' && cur.claim === null) {
         n.outcome = 'left'
       }
@@ -353,7 +397,16 @@ export const register: Register = on => {
   // inside a hook the turn is waiting on. A subagent's turn is not the session's.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!e.agentId) $.clock.after(0, () => void inBackground($, () => attempt($)))
+    if (e.agentId) return result
+    await turn.ended(turnStore($))
+    $.clock.after(0, () => void inBackground($, () => attempt($)))
+    return result
+  })
+
+  // A main turn running: /rename is not asked until it ends (#2461). Only the main loop raises it.
+  on('turn.start', async ($, e, next) => {
+    const result = await next(e)
+    if (!e.agentId) await turn.started(turnStore($), e.turnId)
     return result
   })
 }
