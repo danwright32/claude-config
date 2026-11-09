@@ -55,6 +55,10 @@ export type AutoSessionNameRecord = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'auto-session-name': { record: AutoSessionNameRecord | null }
+    'auto-session-name': {
+      record: AutoSessionNameRecord | null
+      /** The main turn running now, or null (#2461): /rename is asked only while none is. */
+      runningTurn: string | null
+    }
   }
 }
