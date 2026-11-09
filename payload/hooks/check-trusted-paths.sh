@@ -84,7 +84,8 @@ if not isinstance(entries, list):
     sys.exit(0)
 
 # A delimited span first, taken whole so a path with a space in it is not cut short; then a bare
-# span, which ends at whitespace. Either must start with / or ~/ and must not start with //.
+# span, whose first reading ends at whitespace (MORE below adds the longer ones). Either must start
+# with / or ~/ and must not start with //.
 DELIMITED = re.compile(r"""[`"']((?:~/|/(?!/))[^`"'\n]+)[`"']""")
 BARE = re.compile(r"""(?:^|(?<=[\s(=]))((?:~/|/(?!/))[^\s`"'()]+)""")
 # A bare span can be the start of a path whose folder name holds a space: the Trusted repos entry
@@ -168,6 +169,10 @@ for entry in entries:
         if any(os.path.exists(home + r[1:] if r.startswith("~/") else r) for r in readings):
             continue
         token = readings[0]
+        # The same gone path written twice in one entry, with different words after each, is one
+        # finding, not two lines naming the same path.
+        if any(t == token and e is entry for t, _, e in missing):
+            continue
         missing.append((token, line_of(entry, token), entry))
 
 if not missing:

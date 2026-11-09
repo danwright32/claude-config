@@ -173,6 +173,13 @@ case "$out" in
   *) check "and is reported" "it said: $out" ;;
 esac
 
+# The same gone path written twice in one entry, with different words after each, is one line.
+TWICE="$(mksettings twice.json "      \"**Old**: $FAKEHOME/Apps/Gone is old; $FAKEHOME/Apps/Gone moved away\"")"
+out="$(run "$TWICE")"; code=$?
+lines="$(printf '%s\n' "$out" | grep -c 'is not on this Mac')"
+[ "$code" -eq 1 ] && [ "$lines" -eq 1 ] && check "a gone path written twice in one entry is reported once" ok \
+  || check "a gone path written twice in one entry is reported once" "exit=$code, counted $lines in: $out"
+
 # ---------------------------------------------------------------------------
 # Read only. The settings file is never changed by the check.
 # ---------------------------------------------------------------------------
