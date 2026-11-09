@@ -348,15 +348,25 @@ const GITLAB_TEXT = [
   "    - curl -X POST --data '{\"text\":\"Deploy failed on main\"}' \"$SLACK_WEBHOOK_URL\"",
   '  after_script:',
   "    - 'curl -X POST --data ''{\"text\":\"Cleanup ran on main\"}'' \"$SLACK_WEBHOOK_URL\"'",
+  'test:',
+  '  script:',
+  '    - echo "Running the unit tests"',
+  'page:',
+  '  script: |',
+  '    curl -X POST --data \'{"text":"Backup of orders is late"}\' "$SLACK_WEBHOOK_URL"',
   '',
 ].join('\n')
 
-test("a GitLab script list item that curls Slack is held with its message shown, and an item that posts nothing passes (#2401)", withKit, async ($, on) => {
+test("a GitLab script list that curls Slack is held with its message shown, every item of that shell read together; a job that posts nothing passes (#2401, #2416)", withKit, async ($, on) => {
   const w = world($, on, { files: { [GITLAB]: GITLAB_TEXT } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Deploy failed on main', new_string: 'Deploy failed on main again' }))).toContain('Deploy failed on main again')
   expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Cleanup ran on main', new_string: 'Cleanup ran on main twice' }))).toContain('Cleanup ran on main twice')
+  // An item in the same shell as the curl can set what it posts, as a GitHub run block's line can.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Deploying the site now', new_string: 'Deploying the whole site now' }))).toContain('Deploying the whole site now')
+  // A script block in a GitLab file is shell, so a curl's JSON message is shown.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Backup of orders is late', new_string: 'Backup of orders is very late' }))).toContain('Backup of orders is very late')
   expect(w.ran).toEqual([])
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Deploying the site now', new_string: 'Deploying the whole site now' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GITLAB, old_string: 'Running the unit tests', new_string: 'Running every unit test' }))).toBe('')
   expect(w.ran.length).toBe(1)
 })
 
