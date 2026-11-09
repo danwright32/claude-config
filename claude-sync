@@ -15025,7 +15025,8 @@ case "$cmd" in
   # Read only, LOCK FREE, and silent when nothing is stuck: whether this clone's sync is stuck, as
   # the tab separated records sync_stuck_records describes (claude-config#391). What the per prompt
   # notice runs on every prompt, so it must never wait on the lock the watcher is holding (L110),
-  # and it reads two small files rather than asking the network anything.
+  # and it reads the small records the sync keeps (.behind-skips, .ci-red-since, .watch-stale and
+  # .send-refused) rather than asking the network anything.
   stuck) sync_stuck_records ;;
   # Exit 1 for a fault that holds the lessons file back (with any work name fault said beside it),
   # 3 when the only fault is a work organisation name, which refuses the whole send instead

@@ -132,8 +132,9 @@ so `claude-sync status`, `claude-sync stuck` and the per prompt notice now say t
 which scan, what it found (file and line, never the name), how many sends in a row it has refused
 and since when, and what to change. The lessons file is also asked when a lesson is written, by the
 same scanner: `claude-sync lesson-faults`, which the lesson entry hook runs after every write to it,
-exits 3 and names the line when the file names a work organisation (the hook tells the session that
-wrote it, while it can fix it), `check-lessons` refuses on it too, and `next-lesson` still mints a
+exits 3 and names the line when the file names a work organisation, and 4 when the scan could not
+run, so a scan that judged nothing is never reported as a name found (the hook tells the session
+that wrote it, in words that fit each, while it can fix it), `check-lessons` refuses on either, and `next-lesson` still mints a
 number but warns that every send is refused until the line is fixed.
 
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
