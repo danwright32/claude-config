@@ -472,12 +472,15 @@ jobs:
           n="$(find "$RUNNER_TEMP/measured" -type f | wc -l)"
           echo "$n record(s) written by this part's suites."
           [ "$n" -gt 0 ] || { echo "This part's suites wrote no timing record at all, so the next deal would know nothing new about them." >&2; exit 1; }
+          # One archive, because an artifact refuses a file name holding a colon and the sync suite
+          # names each section's record after its heading (first CI run of the parts, 2026-11-09).
+          tar -C "$RUNNER_TEMP/measured" -cf "$RUNNER_TEMP/measured.tar" .
 
       - name: Hand what this part measured to the suite job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: part-timings-${{ matrix.part }}
-          path: ${{ runner.temp }}/measured
+          path: ${{ runner.temp }}/measured.tar
           retention-days: 1
           if-no-files-found: error
 
@@ -562,11 +565,14 @@ jobs:
         env:
           COUNT: ${{ needs.deal.outputs.count }}
         run: |
-          got="$(find "$RUNNER_TEMP/parts" -mindepth 1 -maxdepth 1 -type d -name 'part-timings-*' | wc -l)"
+          # Counted against the deal, so a part that never ran is caught here too: on the first CI run
+          # of the parts (2026-11-09) GitHub started two of the four matrix jobs and never created
+          # the other two, and a needs result can only speak for the jobs that exist.
+          got="$(find "$RUNNER_TEMP/parts" -name measured.tar -type f | wc -l)"
           echo "Records from $got of $COUNT part(s)."
-          [ "$got" -eq "$COUNT" ] || { echo "Only $got of $COUNT parts handed back what they measured, so the next deal would be made from a store missing the rest." >&2; exit 1; }
+          [ "$got" -eq "$COUNT" ] || { echo "Only $got of $COUNT parts handed back what they measured, so either a part never ran or the next deal would be made from a store missing the rest." >&2; exit 1; }
           mkdir -p "$HOME/.cache/claude-config"
-          for d in "$RUNNER_TEMP"/parts/part-timings-*; do cp -R "$d/." "$HOME/.cache/claude-config/"; done
+          find "$RUNNER_TEMP/parts" -name measured.tar -type f -exec tar -C "$HOME/.cache/claude-config" -xf {} \;
           echo "The store now holds $(find "$HOME/.cache/claude-config/suite-timings" -type f 2>/dev/null | wc -l) suite record(s)."
 
       - name: Save the merged store for the next run
