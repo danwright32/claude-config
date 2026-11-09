@@ -452,8 +452,11 @@ names none). Each frame is scored at the width it declares, so before writing an
 draws every frame in Chrome and measures its window, and refuses a frame whose declared width is not
 the width its window draws, naming the frame, both widths and the fix (claude-config#1422). It is
 measured rather than read from the builder, because a builder usually computes it (`width:
-variant.width`). The Chrome is `DESIGN_ROUNDS_CHROME` when set, else the Mac's, else one on PATH, and a
-terminal design is refused, naming that variable, where there is none. The file says it is the terminal and its
+variant.width`). The Chrome is `DESIGN_ROUNDS_CHROME` when set, else the shared Playwright's headless
+shell (below), found by `score/headless_chrome.py`, and a terminal design is refused, naming the
+install command, where there is none. It is never the Google Chrome Dan uses: a hidden copy of that
+checks in with macOS as `com.google.Chrome`, so a click on Chrome in the Dock can reach the test copy
+instead of his own (claude-config#2191), and `headless-dom.sh` refuses it outright. The file says it is the terminal and its
 `design-frames` block carries `"kind": "terminal"`. The score scores its decisions like any others,
 and measures its pictures only from the terminal adapter's capture (below, claude-config#1414); from
 any other capture it says the picture half is unmeasured, so it is no score. It refuses, writing nothing, a chrome
@@ -652,7 +655,9 @@ It installs the Playwright version `score/shared-playwright.json` pins, and its 
 under `~/.local/share/design-score/playwright` (outside `~/.claude`, so the sync never carries it),
 never prompts, installs nothing when it is already usable, and prints the path to export. About 216 MB
 installed, plus npm's 38 MB download cache, measured 2026-10-20. `--check` says whether it is usable
-and installs nothing.
+and installs nothing. Its headless shell is also the one Chrome every hidden run uses (terminal width
+measuring, the score's `chrome` channel, every suite), on both Macs and in CI, which runs this
+installer first (claude-config#2191); without it those refuse, or the suites say unmeasured.
 
 **A copy for an app's CI.** An app whose CI should run the score (Slate, Dan 2026-10-20) keeps the
 tools in its own repository, since its CI has no `~/.claude`:

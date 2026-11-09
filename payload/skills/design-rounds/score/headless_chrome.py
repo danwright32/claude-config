@@ -45,7 +45,9 @@ class NoHiddenChrome(Exception):
 
 
 def install_hint():
-    return "Install the separate build with: bash %s" % INSTALLER
+    # A vendored copy (vendor-score.py) carries no installer, so it names claude-config's installed one.
+    installer = INSTALLER if os.path.isfile(INSTALLER) else "~/.claude/skills/design-rounds/score/install-playwright.sh"
+    return "Install the separate build with: bash %s" % installer
 
 
 def bundle_id(path):
