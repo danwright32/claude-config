@@ -3273,6 +3273,16 @@ saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and
 `scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
 importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
 
+Import text written inside an ordinary string literal is data and is not followed (#2484, narrowing
+signed off by Dan on 2026-11-09): an esbuild stdin entry or a fixture string naming `./missing.js`
+no longer refuses a script for a module nothing loads. A string is still followed wherever the code
+the walk reaches can run a string as code (`JS_SINK`: eval, `Function` and `.constructor`, vm, a
+Worker, Miniflare's script or modules source, a child process, a `data:` or `blob:` URL, a page's
+evaluate, Deno, Bun, the global object by a computed name, or a computed `require` or `import()`).
+The gate cannot trace which string reaches the sink (a variable, a function, another module), so once
+any file reached names one, the walk starts again following every string, as before. Measured over
+1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
