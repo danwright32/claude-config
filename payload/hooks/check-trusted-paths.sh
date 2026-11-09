@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# check-trusted-paths.sh: say when a path the auto mode classifier is told to trust is not on this
+# Mac (claude-config#2491).
+#
+# autoMode.environment in each Mac's settings.json is a list of free text entries the auto mode
+# classifier reads as its picture of the environment, and some of them name a trusted checkout by
+# absolute path. Nothing checked those paths. On the work MacBook one pointed at a folder that had
+# been gone for two weeks after a project move, so the classifier was told to trust a checkout that
+# no longer existed while the real one went unrecognised. It is the same fault check-project-list.sh
+# catches in the Projects list (a path recording where something happened to be, L153), in a file
+# that check never read, so it is checked the same way: one stat per path.
+#
+# The sync carries neither autoMode list (README "auto mode"), so each Mac's copy is its own and is
+# corrected on that Mac. That is also why this reads only the file and never writes it, and why it
+# prints a path only to the session: on the work MacBook those paths name work repositories, and
+# nothing here may put them in a file.
+#
+# An entry is free text, so only what looks like an absolute path is taken from it: a span starting
+# with / or ~/ at the start of the entry, after a space, or inside backticks or quotes. A backticked
+# or quoted span is taken whole, spaces included; anywhere else a path ends at a space, and trailing
+# punctuation (a full stop, a comma) is dropped. A URL is never read as one, because its slashes
+# follow a colon, and a word like read/write is not, because its slash follows a letter. A glob is
+# cut back to the directory before its first wildcard. ~ is expanded against HOME.
+#
+# Run:  bash ~/.claude/hooks/check-trusted-paths.sh
+#
+# Exit 0 = every path found is there, or there is nothing to check: no settings file, no autoMode
+#          block, or no path in any entry. Silent, because each of those is a normal state on a Mac
+#          that has not set auto mode up.
+# Exit 1 = at least one path is not on this Mac. One line per path, naming it, the line of the
+#          settings file holding the entry, and the entry.
+# Exit 2 = the settings file is there and is not valid JSON, so nothing in it could be checked. One
+#          line, said rather than passed over, because reading nothing and finding nothing wrong
+#          are indistinguishable otherwise (L98).
+# Exit 3 = python3 is not on PATH, so the file could not be read at all. Its own code, because its
+#          remedy is nobody else's (L11).
+#
+# Environment:
+#   TRUSTED_PATHS_SETTINGS_FILE  read this file instead of the settings.json in CLAUDE_HOME
+#                                (default ~/.claude)
+
+set -uo pipefail
+
+SETTINGS="${TRUSTED_PATHS_SETTINGS_FILE:-${CLAUDE_HOME:-$HOME/.claude}/settings.json}"
+
+# No settings file is a Mac that has not set auto mode up, not a fault.
+[ -f "$SETTINGS" ] || exit 0
+
+if ! command -v python3 > /dev/null 2>&1; then
+  echo "check-trusted-paths: python3 is not on PATH, so the auto mode trusted paths in $SETTINGS could not be read or checked."
+  exit 3
+fi
+
+python3 - "$SETTINGS" <<'PY'
+import json, os, re, sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        raw = fh.read()
+except OSError as exc:
+    print(f"check-trusted-paths: {path} could not be read ({exc.strerror}), so its auto mode trusted paths were not checked.")
+    sys.exit(2)
+try:
+    data = json.loads(raw)
+except ValueError as exc:
+    where = f" at line {exc.lineno}" if hasattr(exc, "lineno") else ""
+    print(f"check-trusted-paths: {path} is not valid JSON{where}, so its auto mode trusted paths were not checked.")
+    sys.exit(2)
+
+auto = data.get("autoMode") if isinstance(data, dict) else None
+entries = auto.get("environment") if isinstance(auto, dict) else None
+if isinstance(entries, str):
+    entries = [entries]
+if not isinstance(entries, list):
+    sys.exit(0)
+
+# A delimited span first, taken whole so a path with a space in it is not cut short; then a bare
+# span, which ends at whitespace. Either must start with / or ~/ and must not start with //.
+DELIMITED = re.compile(r"""[`"']((?:~/|/(?!/))[^`"'\n]+)[`"']""")
+BARE = re.compile(r"""(?:^|(?<=[\s(=]))((?:~/|/(?!/))[^\s`"'()]+)""")
+TRAILING = ".,;:!?)]}"
+GLOB = re.compile(r"[*?\[]")
+
+def paths_in(text):
+    found = []
+    spans = []
+    for m in DELIMITED.finditer(text):
+        found.append(m.group(1))
+        spans.append(m.span())
+    for m in BARE.finditer(text):
+        if any(a <= m.start(1) < b for a, b in spans):
+            continue
+        found.append(m.group(1))
+    out = []
+    for p in found:
+        p = p.rstrip()
+        while p and p[-1] in TRAILING:
+            p = p[:-1]
+        g = GLOB.search(p)
+        if g:
+            p = p[: p.rfind("/", 0, g.start()) + 1]
+        if p in ("", "/", "~/") or p in out:
+            continue
+        out.append(p)
+    return out
+
+def line_of(entry, token):
+    # The line of the settings file holding this entry, searched from the autoMode key on so a
+    # path mentioned earlier in the file (a permission rule) does not answer for it.
+    start = raw.find('"autoMode"')
+    start = 0 if start < 0 else start
+    for needle in (json.dumps(entry, ensure_ascii=False)[1:-1], json.dumps(entry)[1:-1], token):
+        i = raw.find(needle, start)
+        if i >= 0:
+            return raw.count("\n", 0, i) + 1
+    return None
+
+def excerpt(entry, limit=100):
+    entry = " ".join(entry.split())
+    return entry if len(entry) <= limit else entry[: limit - 3] + "..."
+
+home = os.environ.get("HOME", "")
+missing = []
+for entry in entries:
+    if not isinstance(entry, str):
+        continue
+    for token in paths_in(entry):
+        full = home + token[1:] if token.startswith("~/") else token
+        if os.path.exists(full):
+            continue
+        missing.append((token, line_of(entry, token), entry))
+
+if not missing:
+    sys.exit(0)
+
+name = os.path.basename(path)
+for token, line, entry in missing:
+    where = f"{name} line {line}" if line else name
+    print(f"check-trusted-paths: auto mode is told to trust `{token}`, which is not on this Mac ({where}, entry: {excerpt(entry)}). "
+          f"The classifier trusts a checkout that is gone and does not recognise where it moved to; correct the path in that entry of {path} on this Mac, since the sync does not carry it.")
+sys.exit(1)
+PY

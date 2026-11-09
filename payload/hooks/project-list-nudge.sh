@@ -29,6 +29,8 @@
 # Environment:
 #   PROJECT_LIST_FILE       passed through: read this file instead of the synced CLAUDE.md
 #   PROJECT_LIST_HOST       passed through: judge as this machine instead of the real hostname
+#   TRUSTED_PATHS_SETTINGS_FILE  passed through to check-trusted-paths.sh: read this settings file
+#                           instead of this Mac's settings.json
 #   PROJECT_LIST_STATE_DIR  where the per session record is kept (default TMPDIR). A DIRECTORY, so
 #                           two sessions at once each get their own and neither is told about the
 #                           other's answer.
@@ -45,17 +47,34 @@ case "${BASH_SOURCE[0]}" in */*) _ps_dir="${BASH_SOURCE[0]%/*}" ;; *) _ps_dir=. 
 case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac
 DIR="$(cd "${DIR:-/}" && pwd)"
 CHECK="$DIR/check-project-list.sh"
-[ -f "$CHECK" ] || exit 0
+# The auto mode trusted paths in this Mac's settings.json, the same kind of stale path in a file
+# the project list check never reads (claude-config#2491). Asked here so its notice goes through
+# the one once per divergence record below rather than a second mechanism of its own.
+TRUSTED="$DIR/check-trusted-paths.sh"
 
-# The answer, and its exit code, which is what separates the three outcomes. Judged by the CODE and
+# Each answer, and its exit code, which is what separates the outcomes. Judged by the CODE and
 # never by a line of the output: a tool's last line is routinely a different measurement than its
 # verdict and is usually the more reassuring of the two (L184).
-answer="$(bash "$CHECK" 2>&1)"; verdict=$?
+#
+# 0 from the project list is "every listed path is there", or "this machine has no block in the
+# list at all", which is also nothing to act on: both Macs read one list and the other one's block
+# is not this Mac's business. 0 from the trusted paths is every path there or nothing to check.
+# Only a check that found something contributes to what is said.
+answer=""
+if [ -f "$CHECK" ]; then
+  out="$(bash "$CHECK" 2>&1)"; verdict=$?
+  [ "$verdict" -ne 0 ] && answer="$out"
+fi
+if [ -f "$TRUSTED" ]; then
+  out="$(bash "$TRUSTED" 2>&1)"; verdict=$?
+  if [ "$verdict" -ne 0 ]; then
+    if [ -n "$answer" ]; then answer="$answer
+$out"; else answer="$out"; fi
+  fi
+fi
 
-# 0 is "every listed path is there", or "this machine has no block in the list at all", which is
-# also nothing to act on: both Macs read one list and the other one's block is not this Mac's
-# business. Nothing to say either way.
-[ "$verdict" -eq 0 ] && exit 0
+# Nothing found by either check is nothing to say.
+[ -z "$answer" ] && exit 0
 
 # Keyed on the session, so two open at once each get their own record.
 session="$(printf '%s' "$input" | python3 -c '
@@ -88,9 +107,13 @@ STATE="$STATE_DIR/claude-project-list-${key}.state"
 # refusal to a list of missing paths all count as a change. A record that cannot be read is treated
 # as no record, which speaks: erring towards saying it once too often is the right direction for a
 # notice that is otherwise silent for ever.
+#
+# The record holds a hash of the answer, never the answer: on the work MacBook the paths in it name
+# work repositories, and telling one answer from another needs none of them (claude-config#2491).
+digest="$(printf '%s' "$answer" | shasum | cut -d' ' -f1)"
 previous="$(cat "$STATE" 2>/dev/null || true)"
-[ "$answer" = "$previous" ] && exit 0
+[ -n "$digest" ] && [ "$digest" = "$previous" ] && exit 0
 
 # Recorded BEFORE speaking, so a notice cannot repeat itself if anything below fails.
-printf '%s' "$answer" > "$STATE" 2>/dev/null || true
+printf '%s' "$digest" > "$STATE" 2>/dev/null || true
 say "$answer"
