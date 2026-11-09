@@ -180,7 +180,7 @@ def repository(base):
         return None
     try:
         r = subprocess.run(["git", "-C", base, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, errors="replace", timeout=10)
     except Exception:
         return None
     out = (r.stdout or "").strip().split("\n")[0] if r.returncode == 0 else ""
