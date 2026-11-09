@@ -112,4 +112,6 @@ export type IsItLiveOwed = {
   why?: string
   /** #2436: for a `waiting` merge, the background task Claude Code started for the helper, as its result named it. */
   task?: string
+  /** #2466: for a `waiting` merge past its window, why whether its helper is still in line could not be read, once said. */
+  unread?: string
 }

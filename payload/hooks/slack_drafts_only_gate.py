@@ -50,6 +50,7 @@ import json
 import os
 import re
 import sys
+import time
 import warnings
 
 # Loading lib/shell-words.py by path must leave no bytecode beside it in the installed lib/ (#2080).
@@ -78,6 +79,15 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
+# How long the gate judges one call before it stops and refuses, saying it ran out of time
+# (claude-config#2432). Inside the 15 second timeout settings.hooks.json gives it: Claude Code kills a
+# gate at its timeout and, with onFailure block, refuses the call with no reason of the gate's own,
+# which read the same as a send. On 2026-11-07 the TO FILE THESE clear line was refused that way on
+# every try on the work MacBook, while the gate read the session transcript as a script. The 4
+# seconds left are for python3 to start and for the one file being read when the budget passes
+# (MAX_FILE read as commands took 2.8 seconds under a profiler at a load average of 222,
+# 2026-11-09); test-slack-drafts-only-gate.sh holds the budget to the registered timeout.
+BUDGET_SECONDS = 11
 PACKAGERS = {"npm", "pnpm", "yarn"}
 NPM_RUN = {"run", "run-script", "rum", "urn"}
 NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "stop": "stop", "restart": "restart"}
@@ -386,9 +396,44 @@ def judge_tool(tool, tool_input):
     return f"REFUSED: {tool} sends a Slack message. " + draft_advice(where)
 
 
+class OutOfTime(BaseException):
+    """Raised by Judge.tick once the budget has passed, carrying what the walk was doing, as the
+    phrase out_of_time() puts after "while". A BaseException, so the `except Exception` around a
+    script read as commands (script_body) and every other one in the walk lets it through to main()
+    rather than reading it as a script that could not be parsed."""
+
+    def __init__(self, doing):
+        super().__init__(doing)
+        self.doing = doing
+
+
+def budget_clock():
+    """(clock, budget): the clock the walk is timed by and the budget it is held to. Real seconds
+    (BUDGET_SECONDS on time.monotonic), except under a test run (HOOK_TESTS_RUNNING=1, the rule the
+    merge helper's seams follow, claude-config#2428), where SLACK_GATE_TICK_BUDGET, a whole number,
+    makes the clock count the gate's steps and the budget that many steps (L524), so a suite decides
+    a case by how much the gate reads rather than by the Mac's load. Outside a test run that setting
+    is ignored, so it cannot loosen or tighten the installed gate."""
+    ticks = os.environ.get("SLACK_GATE_TICK_BUDGET", "")
+    if os.environ.get("HOOK_TESTS_RUNNING") == "1" and ticks.isdigit() and int(ticks) > 0:
+        count = [0]
+
+        def step():
+            count[0] += 1
+            return count[0]
+        return step, int(ticks)
+    return time.monotonic, BUDGET_SECONDS
+
+
 class Judge:
     def __init__(self, sw):
         self.sw = sw
+        # The walk's clock and budget (budget_clock), the moment it started, and the script whose
+        # commands are being judged (None for the command line itself), for the refusal tick()
+        # raises (claude-config#2432).
+        self.clock, self.budget = budget_clock()
+        self.started = self.clock()
+        self.walking = None
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
@@ -427,6 +472,40 @@ class Judge:
             out += Judge.py_path(os.environ.get("PYTHONPATH", "").replace("$", ""), d)
         return out
 
+    def tick(self, reading=None):
+        """One step of the walk: each command judged (record, no argument) and each file about to be
+        read whole (its path). Raises OutOfTime once the budget has passed, so the gate refuses with
+        its own reason inside its timeout rather than being killed at it, saying which file it was
+        about to read, or whose commands it was judging."""
+        if self.clock() - self.started <= self.budget:
+            return
+        if reading is not None:
+            raise OutOfTime(f"about to read {self.sized(reading)}")
+        if self.walking is not None:
+            raise OutOfTime(f"judging the commands in {self.sized(self.walking)}")
+        raise OutOfTime("judging the command line itself")
+
+    @staticmethod
+    def sized(path):
+        """A path with its size, for the refusal; the path alone when its size cannot be read."""
+        try:
+            return f"{path} ({os.path.getsize(path)} bytes)"
+        except OSError:
+            return path
+
+    def out_of_time(self, doing):
+        """The refusal for a walk that ran past its budget: it says the gate ran out of time, what it
+        was doing (OutOfTime.doing), and that this is no finding that the call posts (L11)."""
+        spent = (f"{BUDGET_SECONDS} seconds" if self.budget == BUDGET_SECONDS and self.clock is time.monotonic
+                 else f"its budget of {self.budget} step{'' if self.budget == 1 else 's'}")
+        return (f"BLOCKED: slack-drafts-only-gate.sh ran out of time judging this call: it stopped after "
+                f"{spent}, inside the time limit Claude Code gives it, while {doing}. Whether this "
+                f"command sends a Slack message was not checked, and this is not a finding that it does "
+                f"(claude-config#2432). Run it again once the Mac is less busy. If it is refused the same "
+                f"way again, the gate is reading more than it can judge in time (a large file with no "
+                f"extension handed to a script is read as a script): say so to Dan. To put a message in "
+                f"Slack, call slack_send_message_draft instead.")
+
     def resolve(self, word, d):
         p = os.path.expanduser(word)
         if not os.path.isabs(p):
@@ -442,6 +521,15 @@ class Judge:
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge:
             return None  # /nudge, the one exemption (Dan, 2026-11-05)
+        self.tick(path)
+        walking, self.walking = self.walking, path
+        try:
+            return self.script_body(word, path, real, d, depth, shell_hint, lang)
+        finally:
+            self.walking = walking  # once read, back to the commands of the file that ran it
+
+    def script_body(self, word, path, real, d, depth, shell_hint, lang):
+        """script() for a file that is there and is not /nudge."""
         try:
             with open(real, "rb") as f:
                 body = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -527,6 +615,7 @@ class Judge:
                         yield self.unfollow(f"{start} imports more than {IMPORT_MAX_FILES} modules, past what "
                                             "the gate reads, so it cannot see what they run"), None, None, None
                         return
+                    self.tick(target)
                     try:
                         with open(target, "rb") as f:
                             found = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -971,6 +1060,7 @@ class Judge:
         if real in seen or depth > MAX_DEPTH:
             return set()
         seen.add(real)
+        self.tick(path)
         try:
             with open(real, "rb") as f:
                 text = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -1308,7 +1398,9 @@ class Judge:
         """judge() for one command, with py_cmd set to where the Python it starts looks for imports:
         its own PYTHONPATH assignment (env's too), else one exported earlier in the line, else the
         session's (claude-config#2358). Put back afterwards, so a script read as commands inside it
-        does not change what the rest of this command is judged with."""
+        does not change what the rest of this command is judged with. Each command is one step of
+        the walk's budget (tick)."""
+        self.tick()
         rest, assigns = self.sw.command_rest(text)
         words = self.sw.command_words(rest)
         self.sh_note(text, words, assigns, d)
@@ -1484,6 +1576,7 @@ class Judge:
                 return reason
             code.append((w, path))
         for w, path in data:
+            self.tick(path)
             try:
                 with open(path, "rb") as f:
                     hit = MARKER.search(f.read(MAX_FILE).decode("utf-8", "replace"))
@@ -1536,6 +1629,7 @@ class Judge:
 
     def acts_on(self, real, d, shell_hint, lang):
         """acts() for a script at its real path, once the walk is known not to have come back to it."""
+        self.tick(real)
         try:
             with open(real, "rb") as f:
                 body = f.read(MAX_FILE).decode("utf-8", "replace")
@@ -1998,7 +2092,11 @@ def main():
     cmd = ti["command"]
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
     judge = Judge(load_reader())
-    reason = judge.line(cmd, cwd, 0, cmd)
+    try:
+        reason = judge.line(cmd, cwd, 0, cmd)
+    except OutOfTime as e:
+        print("refuse\n" + judge.out_of_time(e.doing))
+        return
     if reason:
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives
         # up, never matched by its wording) is not a post it found, so it says the check could not be

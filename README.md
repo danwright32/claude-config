@@ -3359,6 +3359,23 @@ around the gate, was not reproduced by these and is replaced by them. Following 
 median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
 before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
+The gate stops itself after 11 seconds (`BUDGET_SECONDS`), inside the 15 its registration declares,
+and refuses saying it ran out of time and which file it was about to read or whose commands it was
+judging (#2432). Before, a call it could
+not finish was killed at the timeout, and Claude Code's `[command hook 42]: timed out; blocking
+because onFailure is "block"` said nothing of why, so it read the same as a send. That was every try
+of the TO FILE THESE clear line on the work MacBook on 2026-11-07, while the gate of that day read
+the session transcript handed to `issue-spool.sh` as a shell script: the first 2 MB, about 12,800
+commands, 5.0 to 5.6 seconds on this Mac at load averages of 14 to 90. #2415 had already stopped
+reading such data files as code; the same line now takes 0.27 seconds against a 248 MB transcript
+(load average 14, 2026-11-09). A file the gate cannot tell from a script (a large file with no
+extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
+and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
+distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
+real one.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
