@@ -155,7 +155,7 @@ grep -q -E '^def judge|WRITE_WORDS *=' "$READ_HOOK" && check "the read hook hold
 # --- reconciliation: exactly one of the two hooks decides every execute_sql statement -----------
 # A statement the read hook approves is never asked about, and one it does not approve always is.
 # Read from the two hooks' outputs, never from the predicate (L721).
-both=0; neither=0; total=0
+total=0
 while IFS= read -r q; do
   total=$((total + 1))
   p="$(payload "$SQL_TOOL" "$q")"
@@ -163,8 +163,8 @@ while IFS= read -r q; do
   b="$(decision "$(run "$HOOK" "$EMPTY_HOME" "$p")")"
   case "$a|$b" in
     "allow rc=0|none rc=0"|"none rc=0|ask rc=0") check "exactly one hook decides [$q]" ok ;;
-    "allow rc=0|ask rc=0") both=$((both + 1)); check "exactly one hook decides [$q]" "the read hook approves it AND this hook asks" ;;
-    *) neither=$((neither + 1)); check "exactly one hook decides [$q]" "read hook: $a, this hook: $b" ;;
+    "allow rc=0|ask rc=0") check "exactly one hook decides [$q]" "the read hook approves it AND this hook asks" ;;
+    *) check "exactly one hook decides [$q]" "read hook: $a, this hook: $b" ;;
   esac
 done <<'SQL'
 select name, version from workflows where active = true order by name
