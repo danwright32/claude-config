@@ -1246,8 +1246,10 @@ const isJob = (x: unknown): x is Job => {
 // #2550: a judge giving no verdict is said in the debug log, by model and why, beside the watcher's
 // other outcomes there. Swallowed, a retired first judge left every verdict to the second with
 // nothing saying so (L551). Dan's line is unchanged: it still says only whether a job was judged.
-const noVerdict = (r: { reason?: string; status?: number; error?: unknown }) =>
-  `no answer: ${[r.reason ?? 'no reason given', r.status, typeof r.error === 'string' ? r.error : undefined].filter(x => x !== undefined && x !== '').join(' ')}`
+// The status is null when the call never reached the API (measured 2026-11-09: a call with no login
+// came back api-error, status null, error authentication_failed), so it is left out then.
+const noVerdict = (r: { reason?: string; status?: number | null; error?: unknown }) =>
+  `no answer: ${[r.reason ?? 'no reason given', r.status ?? undefined, typeof r.error === 'string' ? r.error : undefined].filter(x => x !== undefined && x !== '').join(' ')}`
 const judge = async ($: EngineInterface, prompt: string): Promise<Verdict | undefined> => {
   for (const [i, model] of JUDGES.entries()) {
     let why

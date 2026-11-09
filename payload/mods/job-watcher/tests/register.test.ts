@@ -175,14 +175,15 @@ type Job = {
 /** One agent of the session as $.agent.list() names it (#759). */
 type Agent = { id: string; description: string; type: string; status: string }
 // The rest of the world: failExtra makes every registry write fail; sessions is what the registry
-// lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call).
+// lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call,
+// 'unauthenticated' for the no login answer, whose status is null, measured 2026-11-09, #2550).
 type World = {
   failExtra?: boolean
   /** 'throws once': the first ask fails (the registry mid reload, #753) and every later one answers. */
   sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws' | { throwsOnce: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } }
   /** The session's agents, as $.agent.list() answers; the test may change them as it goes. */
   agents?: Agent[] | 'throws'
-  verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
+  verdict?: (model: string, prompt: string) => string | 'none' | 'throws' | 'unauthenticated'
   /** The test's mocked clock, for commands that answer late and for dating the claims made. */
   clock?: { sleep: (ms: number) => Promise<void>; now?: () => number }
   /** Told of each registry write of the jobs, with the value written. */
@@ -415,6 +416,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     const v = o.verdict?.(req.model, req.prompt) ?? 'none'
     if (v === 'none') return { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: {} } } as never
     if (v === 'throws') throw new Error('the model is blocked')
+    if (v === 'unauthenticated') return { value: { isAnswered: false, reason: 'api-error', status: null, error: 'authentication_failed', usage: {} } } as never
     return { value: { isAnswered: true, text: v, usage: {} } } as never
   })
   on('tool.register', ($, e) => {
@@ -1403,6 +1405,19 @@ test('a first judge that answers nothing or nothing usable is said in the debug 
   expect(judgeLines(w.debug)).toEqual([
     `job-watcher: the leftover judge ${HAIKU} gave no verdict (no answer: api-error 529 overloaded), so the next was asked`,
     `job-watcher: the leftover judge ${HAIKU} gave no verdict (its answer was not a usable verdict), so the next was asked`,
+  ])
+})
+
+test('a judge whose call never reached the API is said without a status (#2550)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'unauthenticated' : KEEP_IT('curl loop')),
+  })
+  await start($)
+  await judged(clock)
+  expect(judgeLines(w.debug)).toEqual([
+    `job-watcher: the leftover judge ${HAIKU} gave no verdict (no answer: api-error authentication_failed), so the next was asked`,
   ])
 })
 
