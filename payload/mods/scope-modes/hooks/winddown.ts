@@ -240,6 +240,11 @@ export type Reading = {
   inherited?: boolean
   /** Dan's choice to leave this branch as it is (#1074), when he made one; never inferred. */
   branchLeft?: LeftBranch
+  /**
+   * The session's branch, with no PR found for it, was read gone both here and from GitHub (#2533):
+   * nothing of it is left to put in a PR. Set only on that measurement; absent holds as before.
+   */
+  branchGone?: boolean
   branchHere: boolean | Unreadable
   branchOnGitHub: boolean | Unreadable
   worktreeOnBranch: boolean | Unreadable
@@ -464,8 +469,10 @@ export const outstanding = (r: Reading): string[] => {
   }
   if (r.pr === null) {
     // A branch that is not the session's (#1074) is read as the default branch is: only its
-    // uncommitted work can be the session's.
-    if (!r.isDefault && !r.inherited) return [`there is no PR for ${r.branch} yet`]
+    // uncommitted work can be the session's. So is the session's own branch once it is gone both here
+    // and from GitHub, which holds nothing to put in a PR, or once Dan chose to leave it as it is,
+    // which answers the question of its PR too (#2533).
+    if (!r.isDefault && !r.inherited && !r.branchGone && !r.branchLeft) return [`there is no PR for ${r.branch} yet`]
     if (isUnreadable(r.dirty)) unread('whether anything is uncommitted', r.dirty)
     else {
       // Dan's answer to leave the branch as it is settles the files he was asked about, never one
@@ -601,32 +608,62 @@ export const branchesTouched = (commands: readonly Cmd[]): { named: string[]; cu
   for (const c of commands) {
     const started = newBranchOf(c)
     if (started?.name) named.push(started.name)
-    const g = c.git
-    if (g?.sub === 'commit') current = true
-    if (g?.sub !== 'push') continue
-    const args = g.args
-    if (args.some(a => a === '-d' || a === '--delete' || a === '--tags' || a === '--mirror' || a === '--all')) continue
-    const words: string[] = []
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i] as string
-      if (PUSH_VALUES.includes(a)) i++
-      else if (!a.startsWith('-')) words.push(a)
-    }
-    // The first word is the remote; the rest are refspecs.
-    const specs = words.slice(1)
-    if (!specs.length) current = true
-    for (const spec of specs) {
-      const s = spec.replace(/^\+/, '')
-      const src = s.includes(':') ? s.slice(0, s.indexOf(':')) : s
-      const dst = (s.includes(':') ? s.slice(s.indexOf(':') + 1) : s).replace(/^refs\/heads\//, '')
-      // An empty source deletes the branch; a tag is no branch.
-      if (s.includes(':') && !src) continue
-      if (dst.startsWith('refs/')) continue
+    if (c.git?.sub === 'commit') current = true
+    const push = pushSpecs(c)
+    if (!push) continue
+    if (!push.written) current = true
+    for (const { dst } of push.specs) {
       if (dst === 'HEAD') current = true
       else if (dst) named.push(dst)
     }
   }
   return { named, current }
+}
+
+/**
+ * The branches a call pushes into another branch by refspec (#2533): `git push origin HEAD:fix-pr`
+ * from a local branch made only to add a commit to fix-pr's PR. `from` is the branch pushed, null for
+ * HEAD (the branch checked out where it runs); a branch pushed to itself pushes into no other.
+ */
+export const branchesPushedInto = (commands: readonly Cmd[]): { from: string | null; to: string }[] => {
+  const out: { from: string | null; to: string }[] = []
+  for (const c of commands)
+    for (const { src, dst } of pushSpecs(c)?.specs ?? []) {
+      if (!dst || dst === 'HEAD' || src === undefined) continue
+      const from = src === 'HEAD' ? null : src.replace(/^refs\/heads\//, '')
+      if (from !== dst) out.push({ from, to: dst })
+    }
+  return out
+}
+
+// A push's refspecs that name a branch, each with its source as written (undefined when it names no
+// destination apart from itself) and its destination branch, and whether it wrote any refspec at all;
+// undefined for a call that is no push of branches (a deletion, tags, a mirror or all).
+const pushSpecs = (c: Cmd): { written: boolean; specs: { src?: string; dst: string }[] } | undefined => {
+  const g = c.git
+  if (g?.sub !== 'push') return undefined
+  const args = g.args
+  if (args.some(a => a === '-d' || a === '--delete' || a === '--tags' || a === '--mirror' || a === '--all')) return undefined
+  const words: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (PUSH_VALUES.includes(a)) i++
+    else if (!a.startsWith('-')) words.push(a)
+  }
+  // The first word is the remote; the rest are refspecs.
+  const written = words.slice(1)
+  const out: { src?: string; dst: string }[] = []
+  for (const spec of written) {
+    const s = spec.replace(/^\+/, '')
+    const colon = s.includes(':')
+    const src = colon ? s.slice(0, s.indexOf(':')) : undefined
+    const dst = (colon ? s.slice(s.indexOf(':') + 1) : s).replace(/^refs\/heads\//, '')
+    // An empty source deletes the branch; a tag is no branch.
+    if (colon && !src) continue
+    if (dst.startsWith('refs/')) continue
+    out.push({ ...(src !== undefined ? { src } : {}), dst })
+  }
+  return { written: written.length > 0, specs: out }
 }
 
 /**
