@@ -39,7 +39,8 @@ fi
 
 # THE LOOKUP, injected (claude-config#2464): every number a closing keyword sits in front of is
 # looked up to tell a pull request from an issue, and this suite never asks GitHub. The stub reads
-# a table of "owner/name#N kind state" lines (kind: issue, pr, fail or junk); a number it does not
+# a table of "owner/name#N kind state" lines (kind: issue, pr, fail, junk, or badbyte for a pull
+# request whose title holds a byte that is not UTF-8); a number it does not
 # list is an open issue. Every number it is asked about is logged, so a case can see what was looked up.
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/closing-keyword-lookup.XXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -55,6 +56,7 @@ case "$kind" in
   fail) echo "HTTP 404: Not Found (https://api.github.com/repos/$1/issues/$2)" >&2; exit 1 ;;
   pr) printf '{"number":%s,"state":"%s","pull_request":{"url":"x"}}' "$2" "$state" ;;
   junk) printf 'not json' ;;
+  badbyte) printf '{"number":%s,"state":"%s","title":"caf\377","pull_request":{"url":"x"}}' "$2" "$state" ;;
   *) printf '{"number":%s,"state":"%s"}' "$2" "$state" ;;
 esac
 STUB
@@ -144,7 +146,8 @@ want_clean "would, in an earlier sentence"       "A rewrite would be cleaner. Fi
 # listed issues could ever see it.
 # =================================================================================================
 printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/widget#60 pr closed" \
-  "acme/widget#61 issue closed" "acme/widget#404 fail" "acme/widget#405 junk" "acme/widget#406 issue merged" > "$LOOKUP_TABLE"
+  "acme/widget#61 issue closed" "acme/widget#404 fail" "acme/widget#405 junk" "acme/widget#406 issue merged" \
+  "acme/widget#407 badbyte open" > "$LOOKUP_TABLE"
 
 want_finding() {  # $1 = description, $2 = body, $3 = a needle the finding must carry
   local out; out="$(detect "$2")"
@@ -165,6 +168,8 @@ want_finding "a pull request named by its full reference" "Fixes acme/widget#245
 want_finding "a pull request named by its URL" "Closes https://github.com/acme/widget/pull/2451" "pull request"
 want_finding "a closing word in the middle of a sentence before an open issue" \
   "This is the follow up fix #12 asked for." "not at the start of a line or sentence"
+want_finding "an answer whose title holds a byte that is not UTF-8 is still read as a pull request" \
+  "Closes #407." "names pull request #407"
 want_finding "a lookup that fails refuses, with the reason" "Closes #404." "HTTP 404"
 want_finding "a lookup that fails names the reference it could not look up" "Closes #404." "acme/widget#404"
 want_finding "an answer that is not GitHub's issue shape refuses" "Closes #405." "could not look up"

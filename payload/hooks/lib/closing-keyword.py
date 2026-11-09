@@ -255,7 +255,9 @@ class Lookup:
         if left <= 0:
             raise LookupFailed("the lookup budget of %g seconds was spent before it could be asked" % self.budget)
         try:
-            p = subprocess.run(argv, capture_output=True, text=True, timeout=left, env=env)
+            # errors="replace": only the answer's kind and state are read, so a byte that is not
+            # UTF-8 in a title must not turn a readable answer into an unreadable one.
+            p = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=left, env=env)
         except FileNotFoundError:
             raise LookupFailed("%s is not on PATH" % argv[0])
         except subprocess.TimeoutExpired:
