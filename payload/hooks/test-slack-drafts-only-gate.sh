@@ -400,6 +400,106 @@ done
 printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/cmt/open.ts"
 run_bash "node $T/imp/cmt/open.ts"
 refused "an import after a block comment that never closes"
+
+# Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
+# narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
+# esbuild stdin entry and a Miniflare module source as strings was refused for modules nothing loads,
+# and the builder got past it by assembling the strings by concatenation. A string is still followed
+# wherever the code the script reaches can run a string as code (eval, new Function, vm, a Worker,
+# Miniflare's script or modules source, a child process, a data: URL), because a string reaches that
+# sink through a variable, a function or another module the gate cannot trace.
+mkdir -p "$T/imp/str"
+printf '%s\n' 'export const post = () => fetch("https://slack.com/api/chat.postMessage");' > "$T/imp/str/poster.js"
+cat > "$T/imp/str/data.ts" <<'TS'
+import { join } from "node:path";
+const entry = "import { handler } from './missing-entry.js'";
+const opts = { stdin: { contents: "export * from './src/missing-stdin.ts'", resolveDir: join(".", "src") } };
+const tpl = `export { x } from "./missing-template.js"; ${entry}`;
+const req = 'const m = require("./missing-required.js"); await import("./missing-dynamic.js");';
+const doc = "import { post } from './poster.js'";
+console.log(entry, opts, tpl, req, doc);
+TS
+run_bash "node $T/imp/str/data.ts"
+allowed "import text inside ordinary string literals (missing modules and a posting one) is not followed"
+# The controls: a real import beside those strings is still followed, missing or posting.
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'import { gone } from "./not-here";'; } > "$T/imp/str/data-real.ts"
+run_bash "node $T/imp/str/data-real.ts"
+refused "a real import of a missing module beside import text in strings"
+says "that refusal names the real import, not a string" "./not-here"
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'const { post } = await import("./poster.js");' 'post();'; } > "$T/imp/str/data-posts.ts"
+run_bash "node $T/imp/str/data-posts.ts"
+refused "a real dynamic import of a posting helper beside import text in strings"
+says "that refusal names the posting helper" "poster.js"
+# A script whose own code posts is refused however its imports read.
+printf '%s\n' 'const doc = "import { a } from \"./missing.js\"";' \
+  'await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: doc });' > "$T/imp/str/sends.ts"
+run_bash "node $T/imp/str/sends.ts"
+refused "a script that posts to Slack itself, beside import text in a string"
+
+# Miniflare's script or modules source is code Miniflare runs, so its import text is still followed:
+# missing, it is refused as a module the gate cannot see; present and posting, as a post.
+cat > "$T/imp/str/mf-missing.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const worker = `export { handler as default } from "./outbound.js";`;
+const mf = new Miniflare({ modules: true, script: worker });
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-missing.ts"
+refused "a Miniflare script source importing a module the gate cannot find"
+says "that refusal names the module in the source string" "./outbound.js"
+cat > "$T/imp/str/mf-posts.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const mf = new Miniflare({
+  modules: [{ type: "ESModule", path: "worker.mjs", contents: "import { post } from './poster.js'; export default { fetch: () => post() };" }],
+});
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-posts.ts"
+refused "a Miniflare modules source importing a helper that posts to Slack"
+says "that refusal names the posting helper reached through the source string" "poster.js"
+
+# Each other sink that runs a string as code keeps its strings followed, held directly or through a
+# variable, and so does a string another module hands to a sink in the script.
+mkdir -p "$T/imp/str/sinks"
+cp "$T/imp/str/poster.js" "$T/imp/str/sinks/poster.js"
+cat > "$T/imp/str/sinks/eval.ts" <<'TS'
+eval("import('./poster.js').then((m) => m.post())");
+TS
+cat > "$T/imp/str/sinks/function.ts" <<'TS'
+const src = "return import('./poster.js')";
+new Function(src)();
+TS
+cat > "$T/imp/str/sinks/vm.ts" <<'TS'
+import vm from "node:vm";
+vm.runInNewContext("import('./poster.js')");
+TS
+cat > "$T/imp/str/sinks/worker.ts" <<'TS'
+import { Worker } from "node:worker_threads";
+new Worker("import('./poster.js')", { eval: true });
+TS
+cat > "$T/imp/str/sinks/child.ts" <<'TS'
+import { execSync } from "node:child_process";
+execSync(`node --input-type=module -e "import './poster.js'"`);
+TS
+cat > "$T/imp/str/sinks/data-url.ts" <<'TS'
+await import("data:text/javascript,import './poster.js'");
+TS
+cat > "$T/imp/str/sinks/constructor.ts" <<'TS'
+const f = (async () => {}).constructor;
+await f("await import('./poster.js')")();
+TS
+for sink in eval function vm worker child data-url constructor; do
+  run_bash "node $T/imp/str/sinks/$sink.ts"
+  refused "a string handed to code that runs it ($sink), importing a helper that posts"
+  says "the $sink refusal names the posting helper" "poster.js"
+done
+cat > "$T/imp/str/src.ts" <<'TS'
+export const src = "import { post } from './poster.js'; post();";
+TS
+printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals-imported.ts"
+run_bash "node $T/imp/str/evals-imported.ts"
+refused "a string from another module handed to eval in the script, importing a helper that posts"
+says "that refusal names the posting helper" "poster.js"
 # Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
 # lies beyond is unseen, so it is refused; a short chain of the same shape passes.
 mkdir -p "$T/imp/chain" "$T/imp/short"
@@ -895,6 +995,49 @@ done
 cp /bin/cat "$T/ds/cat-bin"
 run_bash "cd $T/ds && ./cat-bin session.jsonl"
 allowed "a compiled program run by its own path over a data file that names an endpoint"
+
+echo "slack drafts only: which word is the code is read from each program's own options (claude-config#2439)"
+
+# The refusal measured 2026-11-07: python3 -I -c "<read only analysis>" <transcript .jsonl>. One table
+# of options for every interpreter said -I takes a value (ruby's -I does), so it swallowed -c, the
+# code went unseen, and the transcript the code reads was taken for the script and refused.
+run_bash "python3 -I -c 'import json, sys; print(sum(1 for _ in open(sys.argv[1])))' $T/ds/session.jsonl"
+allowed "python3 -I -c over a transcript that names an endpoint, read only"
+run_bash "node -e 'const fs = require(\"fs\"); console.log(fs.readFileSync(process.argv[1], \"utf8\").length)' $T/ds/issues.json"
+allowed "node -e over a data file that names an endpoint, read only"
+# The same table said -E holds code (perl's does) for every program, and that -c does, so a script run
+# after python's -E, bash's -e (errexit), ruby's -E (an encoding) or php's -c (an ini file) went unread,
+# and node -r loaded a module before -e unread. Each is a script that posts, so each is refused.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/post.sh"
+cp "$T/alert.py" "$T/ds/post.rb"
+cp "$T/alert.py" "$T/ds/post.php"
+printf '%s\n' "memory_limit = 256M" > "$T/ds/php.ini"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST" });' > "$T/ds/post-req.js"
+for runs in "python3 -E $T/alert.py" "python3 -IE $T/alert.py" "python3 -I $T/alert.py" "python3 -I -W ignore $T/alert.py" \
+  "bash -e $T/ds/post.sh" "bash -xe $T/ds/post.sh" "sh -e $T/ds/post.sh" "ruby -E UTF-8 $T/ds/post.rb" \
+  "php -c $T/ds/php.ini $T/ds/post.php" "node -r $T/ds/post-req.js -e 1" "node --require $T/ds/post-req.js -p 1"; do
+  run_bash "$runs"
+  refused "a script that posts, run behind an option that is not code for that program: $runs"
+done
+# Code given inline is judged as a script file is for the data files it is handed: when it can act on
+# them, they are read. Before, python3 -c never read them at all (only -I's wrong table read them, as
+# code), so code handing its argument to bash, or posting it, passed.
+for acts in "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json" \
+  "python3 -I -c 'import json, sys, urllib.request; urllib.request.urlopen(json.load(open(sys.argv[1]))[\"url\"])' $T/ds/msg.json" \
+  "node -e 'fetch(require(process.argv[1]).url, { method: \"POST\" })' $T/ds/msg.json" \
+  "perl -ne 'print' $T/ds/session.jsonl"; do
+  run_bash "$acts"
+  refused "inline code that can act on a data file naming the endpoint, or that the gate cannot judge: ${acts%% *}"
+done
+run_bash "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json"
+says "that refusal names the data file" "msg.json"
+# A file with no extension handed to inline code may be a script, as for a script file, so it is read
+# as code; and a data file still read as the program's script is refused as before.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/noext"
+for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c 1"; do
+  run_bash "$runs"
+  refused "a file whose role cannot be told is still read as code: $runs"
+done
 
 echo "slack drafts only: /nudge is the one script let through"
 
