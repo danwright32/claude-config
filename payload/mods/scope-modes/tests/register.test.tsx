@@ -2531,8 +2531,12 @@ test('away: Claude is told to publish pages for the phone; what needs Dan at the
   expect(note).toMatch(/Dan is away from the Mac.*private claude\.ai page/s)
   // What Claude is told matches what is held (#1269), so it neither avoids testing nor expects a
   // dialog to be answered.
-  expect(note).toMatch(/Do not show a dialog, run a script whose text cannot be read, type or click into anything but a test build/)
+  expect(note).toMatch(/Do not show an AppleScript or JavaScript for Automation dialog on the Mac, run a script whose text cannot be read, type or click into anything but a test build/)
   expect(note).toMatch(/bringing apps forward, opening files and test automation run/)
+  // The dialog it holds is the Mac's, never a picker (#2473, Dan 2026-11-08 ET: "You can absolutely
+  // show dialogues while I'm away. Pickers are fine."), so a session does not hold its questions.
+  expect(note).toMatch(/AskUserQuestion pickers are fine while away: Dan answers them from his phone\./)
+  expect(note).not.toMatch(/Do not show a dialog,/)
   const r = await call($ as never, bash(DIALOG, 'o1'))
   expect(r).toMatch(/^Held: Dan is away from the Mac, so "Show a dialog on the Mac" waits for him to come back\./)
   expect(w.reached).toEqual([])
