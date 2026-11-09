@@ -1366,7 +1366,17 @@ run_and_interrupt() { # run_and_interrupt <runner path>
   # What the runner stopped is waited on as the condition the passing case meets, every suite and
   # child gone, never a fixed second a loaded Mac can outlast (#1743, L290).
   k_none_left(){ local p; for p in $k_started $k_kids; do kill -0 "$p" 2>/dev/null && return 1; done; return 0; }
-  hang_wait k_none_left 0.2
+  # The negative control (a second argument of "leaves") runs a cleanup that leaves grandchildren
+  # behind by design, so for it nothing left is the FAULT, and the passing control runs out a short
+  # window instead (#2463): a hang_wait there waited its whole ceiling on every run.
+  k_wait_t0=$SECONDS
+  k_ctrl_ww=""
+  if [ "${2:-}" = leaves ]; then
+    window_wait 2 k_none_left 0.2; k_ctrl_ww=$?
+  else
+    hang_wait k_none_left 0.2
+  fi
+  k_wait_s=$(( SECONDS - k_wait_t0 ))
   k_runner_left=""
   kill -0 "$k_runner" 2>/dev/null && k_runner_left="$k_runner"
   k_left=""
@@ -1411,11 +1421,20 @@ elif cmp -s "$BROKEN" "$REALTREE"; then
   check "#171 the negative control really is a different implementation" "the edit matched nothing, so this control tests the same code twice"
 else
   check "#171 the negative control really is a different implementation" ok
-  HOOK_KILL_TREE="$BROKEN" run_and_interrupt "$RUNNER"
+  HOOK_KILL_TREE="$BROKEN" run_and_interrupt "$RUNNER" leaves
   case "$k_left" in
     "") check "#171 and a cleanup that misses grandchildren WOULD be caught" "it left nothing behind, so these checks cannot tell the two apart" ;;
     *)  check "#171 and a cleanup that misses grandchildren WOULD be caught" ok ;;
   esac
+  [ "$k_ctrl_ww" = 1 ] \
+    && check "#2463 the negative control's window for its leftovers ran out with them still running" ok \
+    || check "#2463 the negative control's window for its leftovers ran out with them still running" "window_wait ended '$k_ctrl_ww', where 1 (ran out) was wanted"
+  # The broken cleanup leaves its grandchildren behind by design, and they wait on this suite, so
+  # nothing left is a condition this run never meets. Waiting for it with the hang ceiling cost the
+  # whole ceiling on every run, 300 s of every CI job from 2026-10-26 (#2463): only a hang may reach it.
+  [ "$k_wait_s" -lt "$HANG_S" ] \
+    && check "#2463 the negative control's wait for its leftovers ends inside the hang ceiling" ok \
+    || check "#2463 the negative control's wait for its leftovers ends inside the hang ceiling" "it waited ${k_wait_s}s, the whole ${HANG_S}s ceiling, for children it leaves behind by design"
 fi
 
 # ---------------------------------------------------------------------------
