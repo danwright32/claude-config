@@ -4009,6 +4009,14 @@ Every push and pull request also runs the suite on a Linux runner
 well as the code, and checks every tracked file for Python bytecode, so filtering by where the code
 lives would skip precisely the change that breaks it.
 
+CI runs the suites as four jobs side by side (claude-config#2463). A `deal` job splits the suites
+into parts of about equal measured time with `HOOK_TESTS_DEAL=4 bash payload/hooks/run-all-tests.sh`,
+each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TESTS_PARTS`), and the
+`suite` job is the one check to wait on: green only when the deal and every part were, and it merges
+each part's timings into the cache the next deal reads. A part refuses outright when the deal does
+not cover exactly the suites the tree holds, so a new suite can never be run by no job.
+`gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
+
 Run ONE section while iterating, which is the fast path:
 
 ```bash
