@@ -480,6 +480,15 @@ describe('writes: what the words do not name', () => {
     expect(read('patch -p1 < fix.diff').unnamed).toEqual([{ what: 'a patch', words: ['patch', '-p1', '<', 'fix.diff'], inputs: [`${CWD}/fix.diff`] }])
     expect(read('git -C /repo apply fix.patch').unnamed).toEqual([{ what: 'a patch', words: ['git', '-C', '/repo', 'apply', 'fix.patch'], inputs: ['/repo/fix.patch'] }])
   })
+  // Lessons review of #2402 at 4124d43: a folder git is pointed at that cannot be named leaves every
+  // relative name under it unnamed, never resolved in the folder the command runs in.
+  test('git pointed at a folder that cannot be named names no relative path under it', () => {
+    expect(read('git -C "$D" apply fix.patch').unnamed.map(u => u.inputs)).toEqual([[]])
+    expect(read('git -C "$D" checkout -- a.ts').byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a.ts', null]])
+    expect(read(`git -C "$D" checkout -- 'a$.ts'`).byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a$.ts', null]])
+    // Pointed at a folder it can name, a name whose every $ is left as written is resolved there.
+    expect(read(`git -C /repo checkout -- 'a$.ts'`).byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a$.ts', '/repo/a$.ts']])
+  })
   // #1765: a device named as what a command reads (/dev/stdin, /dev/fd/0, /proc/self/fd/0) is never
   // an input, so no guard opens it: a read of one waits for ever on the mod worker's own standard
   // input, and the call it judges never runs. The write is still named, as one whose input is unknown.
@@ -667,8 +676,59 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     const marked = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.unexpanded === true]))
     expect(marked(`python3 s.py 'x$' 'costs $5' \\$HOME "a\\$b"`)).toEqual([[['x$', true], ['costs $5', true], ['$HOME', true], ['a$b', true]]])
     expect(marked(`python3 s.py $P "$P" "a $P" '$P'$Q \`x\` "$(x)"`)).toEqual([[['$P', false], ['$P', false], ['a $P', false], ['$P$Q', false], ['`x`', false], ['$(x)', false]]])
-    // Quoted where the command set the name, it is still the word as written.
-    expect(runs(`P=a.md; python3 s.py '$P'`).map(r => r.args)).toEqual([[{ word: '$P', unexpanded: true }]])
+    // Quoted where the command set the name, it is still the word as written, and names the file it
+    // spells (#2402).
+    expect(runs(`P=a.md; python3 s.py '$P'`).map(r => r.args)).toEqual([[{ word: '$P', path: `${CWD}/$P`, unexpanded: true }]])
+  })
+  // #2402: #2320 taught the area check to read such a word as text, but every $ made absolutePath
+  // name no path, so a script handed "src/big.ts$" was never judged by the file it spells. A word
+  // whose every $ and backtick the shell leaves as written (Command.unexpanded) names that file;
+  // one with any $ the shell expands still names none.
+  test('a word whose every $ the shell leaves as written names the file it spells; one with a $ the shell expands names none (#2402)', () => {
+    const named = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.path ?? null, a.folder ?? null]))
+    expect(named(`python3 probe.py "src/big.ts$" 'x$' 'costs $5' \\$HOME "a\\$b" foo$ "x$/y" 'q\`'`)).toEqual([
+      [
+        ['src/big.ts$', `${CWD}/src/big.ts$`, null],
+        ['x$', `${CWD}/x$`, null],
+        ['costs $5', `${CWD}/costs $5`, null],
+        // A $HOME the shell leaves as written is no home folder.
+        ['$HOME', `${CWD}/$HOME`, null],
+        ['a$b', `${CWD}/a$b`, null],
+        ['foo$', `${CWD}/foo$`, null],
+        ['x$/y', `${CWD}/x$/y`, null],
+        ['q`', `${CWD}/q\``, null],
+      ],
+    ])
+    // A pattern beside a $ left as written still names no path and no folder: Command.literal reads
+    // every $ as an expansion (#1951, #2320), so a quoted regex would read as a pattern matched
+    // against files.
+    expect(named(`python3 s.py 'a$'*.ts "^foo.*bar$"`)).toEqual([[['a$*.ts', null, null], ['^foo.*bar$', null, null]]])
+    // Every other word holding a $ or a backtick names nothing: a real expansion, quoted or bare, a
+    // word mixing one left as written with one expanded, and a word spelled both ways in one command.
+    expect(named(`python3 s.py "$OUT/big.ts" $P '$P'$Q "a$"$B \`x\` "$(x)" x$'y' "\${X}"`)).toEqual([
+      [
+        ['$OUT/big.ts', null, null],
+        ['$P', null, null],
+        ['$P$Q', null, null],
+        ['a$$B', null, null],
+        ['`x`', null, null],
+        ['$(x)', null, null],
+        ['x$y', null, null],
+        ['${X}', null, null],
+      ],
+    ])
+    expect(named(`python3 s.py 'x$y' x$y`)).toEqual([[['x$y', null, null], ['x$y', null, null]]])
+  })
+  test('a redirect, an edit and a cd to a word whose every $ is left as written name the file it spells (#2402)', () => {
+    expect(paths(`echo hi > 'out$.txt'`)).toEqual([`${CWD}/out$.txt`])
+    expect(read(`echo hi > 'out$.txt'`).stdout).toEqual([{ word: 'out$.txt', path: `${CWD}/out$.txt` }])
+    expect(paths(`sed -i '' 's/a/b/' 'src/a$.ts'`)).toEqual([`${CWD}/src/a$.ts`])
+    expect(paths(`cd 'w$' && echo hi > a.txt`)).toEqual([`${CWD}/w$/a.txt`])
+    expect(paths(`rm 'old$.txt'`)).toEqual([])
+    expect(read(`rm 'old$.txt'`).changes).toEqual([{ word: 'old$.txt', path: `${CWD}/old$.txt`, does: 'remove' }])
+    // A write to a word holding a $ the shell expands still names no file.
+    expect(paths(`echo hi > "$OUT/big.ts"`)).toEqual(['(as written) $OUT/big.ts'])
+    expect(paths(`cd "$D" && echo hi > a.txt`)).toEqual(['(as written) a.txt'])
   })
   test('what is no script file run names no run: inline code, standard input, awk -f, a plain command', () => {
     for (const command of [

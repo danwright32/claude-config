@@ -2519,6 +2519,83 @@ check_eq "#1515 a turn folder that cannot be made does not stop a merge" "0" "$r
 check "#1515 but says it goes on without a turn, and where" "Could not take a turn to merge in acme/widget (could not make $WORKDIR/turns-not-a-folder/acme/widget)" "$out"
 check "#1515 and merges through the gates as before" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 
+# The front of the line (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which
+# the five pull requests ahead of it needed to pass CI, and it was moved forward by hand by stopping
+# all five helpers. --first puts a run ahead of every run still waiting, never ahead of the run
+# holding the turn, and says so; every gate still judges its merge.
+# look-turn <slug>: a look from outside the line, as each waiter's look does, marking the holder.
+cat > "$BIN/look-turn" <<EOS
+#!/usr/bin/env bash
+. "$TURN_LIB"
+TURN_TICKET=""; turn_open "\$1" && turn_look "\$(cat "\$ST/clock")" 3600
+EOS
+chmod +x "$BIN/look-turn"
+front_line(){ "$BIN/take-turn" acme/widget 9; "$BIN/look-turn" acme/widget; "$BIN/take-turn" acme/widget 8; }
+
+fresh "$OLD" 0 "$GREEN"
+front_line
+printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"" > "$ST/on-sleep"
+out="$(run 7 --squash --first)"; rc=$?
+check_eq "#2474 a run started with --first merges" "0" "$rc"
+check "#2474 saying it went to the front, ahead of the run waiting" "Joined the line to merge in acme/widget at the front (--first), ahead of 1 pull request waiting" "$out"
+check "#2474 and that it still waits for the run holding the turn" "which #9 holds (1 ahead of it in line)" "$out"
+check "#2474 then takes the turn when #9 leaves, before #8" "It is #7's turn to merge in acme/widget now" "$out"
+check "#2474 and merges through the gates" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#2474 the run it passed keeps its place" "8" "$(ticket_prs)"
+check_eq "#2474 nothing merged while #9 held the turn" "1" "$(count gh-calls 'pr merge')"
+
+# Every gate still judges a run at the front: a refused merge is refused here as anywhere.
+fresh "$OLD" 0 "$GREEN"
+printf 'refused for the test' > "$ST/red-gate-deny"
+out="$(run 7 --squash --first)"; rc=$?
+check_eq "#2474 a run at the front is still stopped by a gate" "1" "$rc"
+check "#2474 by block-red-merge.sh, as before" "block-red-merge.sh refused the merge of #7" "$out"
+check_eq "#2474 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Nobody waiting: --first changes nothing, and says so.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --first)"; rc=$?
+check_eq "#2474 --first with nobody in line merges" "0" "$rc"
+check "#2474 saying --first changed nothing" "--first changed nothing: nobody was waiting in line to merge in acme/widget" "$out"
+
+# Failure paths. A pull request whose own checks are failing is not the fix the others need, and
+# would only hold them up: --first is refused, loudly, and it joins at the back.
+fresh "$OLD" 0 "$RED"
+front_line
+out="$(MWR_MAX_POLLS=2 run 7 --squash --first)"; rc=$?
+check "#2474 --first is refused for a pull request whose own checks fail" "--first was refused for #7: its own checks are failing (tests)" "$out"
+check "#2474 so it waits behind both, at the back" "which #9 holds (2 ahead of it in line)" "$out"
+check_not "#2474 and never says it joined at the front" "at the front (--first)" "$out"
+# Checks that cannot be read: not honoured, said, at the back.
+fresh "$OLD" 0 '"not a list"'
+front_line
+out="$(MWR_MAX_POLLS=2 run 7 --squash --first)"; rc=$?
+check "#2474 --first is not honoured when its checks cannot be read" "--first was not honoured for #7: GitHub's answer did not list its checks" "$out"
+check "#2474 so it waits at the back" "which #9 holds (2 ahead of it in line)" "$out"
+# Pending checks are not failing ones: a fix just pushed goes to the front while its checks run.
+fresh "$OLD" 0 "$PENDING"
+front_line
+out="$(MWR_MAX_POLLS=2 run 7 --squash --first)"; rc=$?
+check "#2474 a pull request whose checks are still running goes to the front" "at the front (--first), ahead of 1 pull request waiting" "$out"
+check "#2474 behind only the holder" "which #9 holds (1 ahead of it in line)" "$out"
+# Passed over while holding the turn, a run at the front joins again at the back, so a pull request
+# stuck at the front cannot take the turn again and again ahead of the rest.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"; \"\$BIN_DIR/take-turn\" acme/widget 9; \"\$BIN_DIR/look-turn\" acme/widget; \"\$BIN_DIR/take-turn\" acme/widget 8" > "$ST/on-sleep"
+out="$(BIN_DIR="$BIN" MWR_MAX_POLLS=3 run 7 --squash --first)"; rc=$?
+check "#2474 a run at the front that is passed over is told its place there is not kept" "Its place at the front (--first) is not kept" "$out"
+check "#2474 and waits behind both, at the back" "which #9 holds (2 ahead of it in line)" "$out"
+# A stop that hands back the command to run again keeps --first in it, or copying it sends the run
+# to the back of the line with nothing said.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --first)"; rc=$?
+check "#2474 the command to run instead still carries --first" "merge-when-ready.sh 7 --repo acme/widget --squash --first" "$out"
+# --first takes no value: anything attached to it is refused before any call, like any other word.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --first=yes)"; rc=$?
+check_eq "#2474 --first=yes is refused" "64" "$rc"
+check_eq "#2474 before any call to GitHub" "" "$(cat "$ST/gh-calls" 2>/dev/null)"
+
 # =================================================================================================
 # 23. A deliberate load window is named beside a failure (claude-config#1618). On 2026-10-23 this
 #     helper stopped five times on GitHub reads at a load average of 342 while a builder's load

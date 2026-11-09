@@ -26,6 +26,7 @@ pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
 check(){ if [[ "$3" == *"$2"* ]]; then ok; else bad "$1"; echo "  expected to contain: $2"; echo "  actual: ${3:0:2000}"; fi; }
+check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1"; echo "  must not contain: $2"; echo "  actual: ${3:0:2000}"; fi; }
 check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi; }
 
 if ! . "$LIB" 2>/dev/null; then
@@ -42,6 +43,17 @@ export MWR_TURN_DIR="$WORKDIR/turns"
 # A holder that is somebody else: its own process, pid and start time, joining at a time given.
 other_joins(){   # $1 = slug, $2 = pr, $3 = now, $4 = pid, $5 = start time it claims
   ( TURN_PID="$4"; TURN_PID_START="$5"; turn_open "$1" && turn_join "$2" "$3" && printf '%s' "$TURN_TICKET" )
+}
+# Somebody else joining at the front of the line (claude-config#2474, section 10).
+other_joins_first(){   # $1 = slug, $2 = pr, $3 = now, $4 = pid, $5 = start time it claims
+  ( TURN_PID="$4"; TURN_PID_START="$5"; turn_open "$1" && turn_join "$2" "$3" first && printf '%s' "$TURN_TICKET" )
+}
+# A look by a run that is not in line, as every waiter's look does: it marks the holder as holding.
+observer_looks(){ ( TURN_TICKET=""; turn_open acme/widget; turn_look "$1" 3600 ); }
+# A look from a waiter's own place in line: prints what it was told, then how many are ahead of it.
+waiter_looks(){   # $1 = its ticket, $2.. = the times it looks at
+  ( local tk="$1"; shift; TURN_TICKET="$tk"; TURN_PID="$LIVE"; TURN_PID_START="$LIVE_START"; turn_open acme/widget
+    for t in "$@"; do turn_look "$t" 3600; printf 'said[%s] ahead[%s] head[%s]\n' "$TURN_SAID" "$TURN_AHEAD" "$TURN_HEAD_PR"; done )
 }
 reset(){ rm -rf "$MWR_TURN_DIR"; TURN_TICKET=""; TURN_PID="$$"; TURN_PID_START=""; }
 
@@ -264,6 +276,112 @@ else
   fi
   chmod 600 "$MWR_TURN_DIR/acme/widget/$locked"
 fi
+
+# =================================================================================================
+# 10. The front of the line (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper,
+#     which the five pull requests ahead of it needed to pass CI, and it was moved forward by hand by
+#     stopping all five helpers. A run joining with "first" goes ahead of every run still waiting,
+#     never ahead of the one holding the turn, and runs joining with "first" keep their own order.
+# =================================================================================================
+# (other_joins_first, observer_looks and waiter_looks are defined beside other_joins, above.)
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null   # ticket 1, holding the turn
+observer_looks 900 >/dev/null
+other_joins acme/widget 8 950 "$LIVE" "$LIVE_START" >/dev/null   # ticket 2, waiting
+turn_open acme/widget; turn_join 7 1000 first; rc=$?
+check_eq "#2474 a run takes a place at the front" "0" "$rc"
+check_eq "#2474 with the next number, like any other" "3" "$TURN_TICKET"
+turn_look 1000 3600
+check_eq "#2474 it never takes the turn from the run holding it" "0" "$TURN_MINE"
+check_eq "#2474 which is still #9's" "9" "$TURN_HEAD_PR"
+check_eq "#2474 only the holder is ahead of it" "1" "$TURN_AHEAD"
+check_eq "#2474 and it knows it went ahead of one run waiting" "1" "$TURN_OVERTOOK"
+out="$(waiter_looks 2 1000 1010)"
+check "#2474 the run it passed is told who went ahead of it" "#7 went to the front of the line" "$(sed -n 1p <<<"$out")"
+check "#2474 and why" "--first" "$(sed -n 1p <<<"$out")"
+check "#2474 the run it passed now has two ahead of it" "ahead[2]" "$(sed -n 1p <<<"$out")"
+check_eq "#2474 and is told once, not at every look" "said[] ahead[2] head[9]" "$(sed -n 2p <<<"$out")"
+# The holder leaves: the turn goes to the front of the line, not to the lowest number.
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1100 3600
+check_eq "#2474 once the holder leaves, the run at the front holds the turn" "1" "$TURN_MINE"
+check "#2474 and the run it passed waits for it" "head[7]" "$(waiter_looks 2 1100)"
+# Control: without "first", the same arrival waits behind both, as before.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null
+observer_looks 900 >/dev/null
+other_joins acme/widget 8 950 "$LIVE" "$LIVE_START" >/dev/null
+turn_open acme/widget; turn_join 7 1000
+turn_look 1000 3600
+check_eq "#2474 control: a run joining without first has both ahead of it" "2" "$TURN_AHEAD"
+check_eq "#2474 control: and went ahead of nobody" "0" "$TURN_OVERTOOK"
+check "#2474 control: the waiter is told nothing about it" "said[] ahead[1]" "$(waiter_looks 2 1000)"
+
+# Two at the front keep their order between themselves, both ahead of the run waiting.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null          # 1, holding
+observer_looks 900 >/dev/null
+other_joins acme/widget 8 950 "$LIVE" "$LIVE_START" >/dev/null          # 2, waiting
+other_joins_first acme/widget 5 960 "$LIVE" "$LIVE_START" >/dev/null    # 3, at the front
+turn_open acme/widget; turn_join 7 1000 first                            # 4, at the front after #5
+turn_look 1000 3600
+check_eq "#2474 the second run at the front has the holder and the first one ahead of it" "2" "$TURN_AHEAD"
+check_eq "#2474 so the first run at the front keeps its place" "9" "$TURN_HEAD_PR"
+check_not "#2474 and it is not told #5 went ahead of it, since #5 was there first" "#5 went to the front" "$TURN_SAID"
+check "#2474 the run waiting is behind both" "ahead[3]" "$(waiter_looks 2 1000)"
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1100 3600
+check_eq "#2474 when the holder leaves, the earlier run at the front holds it" "5" "$TURN_HEAD_PR"
+check_eq "#2474 not the later one" "0" "$TURN_MINE"
+
+# A held turn is never taken by a run at the front, even one whose number is lower than the holder's.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null          # 1
+other_joins_first acme/widget 5 905 "$LIVE" "$LIVE_START" >/dev/null    # 2, at the front, holds it
+observer_looks 905 >/dev/null
+turn_open acme/widget; turn_join 7 1000 first                            # 3
+turn_look 1000 3600
+check_eq "#2474 a run at the front waits for the run at the front that holds the turn" "5" "$TURN_HEAD_PR"
+check_eq "#2474 and goes ahead of the waiting run, not the holder" "1" "$TURN_AHEAD"
+
+# A run of a helper started before the front of line existed reads the line in number order, so a
+# run at the front never goes ahead of its ticket (one with no "order 2" line): if it did, once the
+# holder left, both would decide the turn was theirs and update or merge at once.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null          # 1, holding
+observer_looks 900 >/dev/null
+t2="$(other_joins acme/widget 8 950 "$LIVE" "$LIVE_START")"             # 2, an older helper's ticket
+grep -v '^order ' "$MWR_TURN_DIR/acme/widget/$t2" > "$WORKDIR/old-ticket" && mv "$WORKDIR/old-ticket" "$MWR_TURN_DIR/acme/widget/$t2"
+other_joins acme/widget 6 960 "$LIVE" "$LIVE_START" >/dev/null          # 3, a current helper's ticket
+turn_open acme/widget; turn_join 7 1000 first                            # 4
+turn_look 1000 3600
+check_eq "#2474 a run at the front stays behind an older helper's ticket, passing only the current one" "2" "$TURN_AHEAD"
+check_eq "#2474 so it went ahead of one run, not two" "1" "$TURN_OVERTOOK"
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1100 3600
+check_eq "#2474 when the holder leaves, the older helper's run holds the turn, as it believes it does" "8" "$TURN_HEAD_PR"
+check_eq "#2474 and the run at the front does not" "0" "$TURN_MINE"
+check "#2474 a ticket this version writes says it reads the front of the line" "order 2" "$(cat "$MWR_TURN_DIR/acme/widget/$TURN_TICKET")"
+
+# Failure paths: an unknown way of joining is refused, never taken as "first" or as an ordinary place.
+reset
+turn_open acme/widget; turn_join 7 1000 frist; rc=$?
+check_eq "#2474 an unknown way of joining is refused" "1" "$rc"
+check "#2474 naming what it was given" "frist" "$TURN_ERR"
+check_eq "#2474 and no place is taken" "" "$(ls "$MWR_TURN_DIR/acme/widget" 2>/dev/null | grep -E '^[0-9]+$')"
+# A ticket whose front of line mark cannot be read is not honoured, and every run it would have
+# passed says so, once.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null          # 1, holding
+observer_looks 900 >/dev/null
+turn_open acme/widget; turn_join 7 950                                   # 2, waiting
+t3="$(other_joins acme/widget 5 960 "$LIVE" "$LIVE_START")"
+printf 'first maybe\n' >> "$MWR_TURN_DIR/acme/widget/$t3"
+turn_look 1000 3600
+check_eq "#2474 an unreadable front of line mark does not put #5 ahead" "1" "$TURN_AHEAD"
+check "#2474 it is said that the mark was ignored" "#5's place at the front of the line was ignored" "$TURN_SAID"
+turn_look 1010 3600
+check_eq "#2474 and said once, not at every look" "" "$TURN_SAID"
 
 echo
 echo "passed: $pass, failed: $fail"
