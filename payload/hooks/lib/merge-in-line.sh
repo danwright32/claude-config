@@ -12,7 +12,8 @@
 # WHY. is-it-live asks GitHub about a merge the helper makes in the background for WAIT_MS, 24 hours
 # (a setting, not measured), and since claude-config#2351 a helper behind a long line that keeps moving has no fixed longest, so
 # it can still be running past that window. Rather than let go of a merge whose helper may yet make
-# it, is-it-live asks this, and goes on waiting while the answer is "running".
+# it, is-it-live asks this, and lets the merge go only on "gone": it goes on waiting on "running" and
+# on anything that is no answer (#2466).
 #
 # It only READS the line (L206): unlike turn_look, it never removes a ticket whose run has gone, so
 # asking can never pass anybody over or change who holds the turn.

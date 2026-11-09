@@ -246,17 +246,24 @@ check "#2403 naming where it looked" "$WORKDIR/line-is-a-file" "$out"
 # is no answer either, never skipped on the way to "gone".
 reset
 other_joins acme/widget 41 1000 "$LIVE" "$LIVE_START" >/dev/null
-locked="$(ls "$MWR_TURN_DIR/acme/widget" | grep -E '^[0-9]+$' | head -1)"
-chmod 000 "$MWR_TURN_DIR/acme/widget/$locked"
-if [ -r "$MWR_TURN_DIR/acme/widget/$locked" ]; then
-  echo "  UNMEASURED: #2466 an unreadable ticket (this user can read a mode 000 file)"
+locked=""
+for t in "$MWR_TURN_DIR/acme/widget"/*; do
+  case "${t##*/}" in ''|*[!0-9]*) ;; *) locked="${t##*/}"; break ;; esac
+done
+if [ -z "$locked" ]; then
+  bad "#2466 the line should hold a ticket to make unreadable"
 else
-  out="$(bash "$INLINE" acme/widget 41 2>&1)"; rc=$?
-  check_eq "#2466 a ticket that cannot be read is a failure to ask" "2" "$rc"
-  check "#2466 naming the ticket" "ticket $locked" "$out"
-  [[ "$out" != *gone* ]] && ok || bad "#2466 and it never says gone (said: $out)"
+  chmod 000 "$MWR_TURN_DIR/acme/widget/$locked"
+  if [ -r "$MWR_TURN_DIR/acme/widget/$locked" ]; then
+    echo "SUITE-PART-UNMEASURED #2466 an unreadable ticket: this user can read a mode 000 file"
+  else
+    out="$(bash "$INLINE" acme/widget 41 2>&1)"; rc=$?
+    check_eq "#2466 a ticket that cannot be read is a failure to ask" "2" "$rc"
+    check "#2466 naming the ticket" "ticket $locked" "$out"
+    [[ "$out" != *gone* ]] && ok || bad "#2466 and it never says gone (said: $out)"
+  fi
+  chmod 600 "$MWR_TURN_DIR/acme/widget/$locked"
 fi
-chmod 600 "$MWR_TURN_DIR/acme/widget/$locked"
 
 echo
 echo "passed: $pass, failed: $fail"

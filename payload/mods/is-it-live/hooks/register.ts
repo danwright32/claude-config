@@ -282,7 +282,8 @@ const unreadLineOf = (o: IsItLiveOwed, why: string): string =>
   `Is it live: whether the merge helper for ${o.repo ? `${o.repo}#${o.pr}` : `#${o.pr}`} is still in line could not be read (${why}), so its merge is still waited on.`
 
 // The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
-// owed, one closed, past its wait or naming no pull request is let go, and a merge with a card is
+// owed, one closed, naming no pull request, or past its wait with its helper gone from the line is
+// let go (one past its wait whose line cannot be read is not, #2466), and a merge with a card is
 // settled. A background merge is asked through mod-kit's one check (#1991), shared with the goal box:
 // as each account, by its repository (in the folder only where none was read), and a merge GitHub
 // confirms counts whatever its time, since the helper may have been run again after it merged; the
