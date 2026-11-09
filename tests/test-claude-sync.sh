@@ -13275,7 +13275,7 @@ rm -f "$RFSR/.send-refused"
 # the refusal is met by the session that wrote it rather than by the watcher days later.
 LWNH="$WORK/refused-lessons-home"; mkdir -p "$LWNH"
 printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2. another sound rule.** seen in acme-hq/widgets#4\n' > "$LWNH/LESSONS.md"
-_lwn(){ HOME="$RFSE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" CLAUDE_HOME="$LWNH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+_lwn(){ HOME="${LWN_HOME:-$RFSE}" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" CLAUDE_HOME="$LWNH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
 if out_lwn1="$(_lwn lesson-faults)"; then rc_lwn1=0; else rc_lwn1=$?; fi
 dbg "lesson-faults over a lesson naming the organisation: rc=$rc_lwn1 $out_lwn1"
 check "#2530 lesson-faults refuses a lesson naming a work organisation, with its own exit code" "[ '$rc_lwn1' -eq 3 ]"
@@ -13291,6 +13291,17 @@ printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2
 if out_lwn3="$(_lwn lesson-faults)"; then rc_lwn3=0; else rc_lwn3=$?; fi
 check "#2530 control: the same lesson without the name passes lesson-faults silently" \
   "[ '$rc_lwn3' -eq 0 ] && [ -z \"\$(printf '%s' \"\$out_lwn3\" | tr -d '[:space:]')\" ]"
+# A scan that could not run judged nothing, so it is said as that, with its own exit code, never as
+# a lesson naming an organisation (L11). A registry that will not parse is how the scanner refuses.
+LWNBAD="$WORK/refused-lessons-badhome"; mkdir -p "$LWNBAD/.claude/skills/pennie-dev-update"
+printf '{ not json\n' > "$LWNBAD/.claude/skills/pennie-dev-update/repos.local.json"
+if out_lwn4="$(LWN_HOME="$LWNBAD" _lwn lesson-faults)"; then rc_lwn4=0; else rc_lwn4=$?; fi
+dbg "lesson-faults with a scanner that cannot judge: rc=$rc_lwn4 $out_lwn4"
+check "#2530 a work names scan that could not run exits 4, not 3" "[ '$rc_lwn4' -eq 4 ]"
+check "#2530 and says it could not be checked, never that the file names one" \
+  "line_has \"\$out_lwn4\" 'could not be checked' 'send refuses' && out_lacks \"\$out_lwn4\" 'names a work organisation, at'"
+if out_lwn5="$(LWN_HOME="$LWNBAD" _lwn next-lesson)"; then rc_lwn5=0; else rc_lwn5=$?; fi
+check "#2530 and next-lesson still mints a number when the scan cannot run" "[ '$rc_lwn5' -eq 0 ] && grep -q '^L' <<< \"\$out_lwn5\""
 
 # The desktop notification a sync posts when its send is refused and it still receives names the
 # scan that refused. It said "the secret scan" for every refusal, so a work name read as a leaked

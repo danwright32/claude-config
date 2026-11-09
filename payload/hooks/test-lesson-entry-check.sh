@@ -165,6 +165,16 @@ printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** seen in 
 out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | HOME="$WORK/emptyhome" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" \
        CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
 silent "control: the same lesson without the name is not spoken about" "$out"
+# A scan that could not run judged nothing: said as that, never as a lesson naming an organisation
+# (L11). A registry that will not parse is how the scanner refuses to judge.
+mkdir -p "$WORK/badhome/.claude/skills/pennie-dev-update"
+printf '{ not json\n' > "$WORK/badhome/.claude/skills/pennie-dev-update/repos.local.json"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body, the second\n' > "$HOME_FIX/LESSONS.md"
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | HOME="$WORK/badhome" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" \
+       CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+says "a work names scan that could not run is still said" "$out" '"decision":"block"'
+says "as a check that could not be made" "$out" "could not be checked"
+never_says "and never as a lesson that names one" "$out" "names a work organisation, and this repository is public"
 
 # And it says so ONLY into the session. The tool notifies the desktop on a non interactive failure,
 # which is right for the background sync job and wrong here: it reaches somebody who is already

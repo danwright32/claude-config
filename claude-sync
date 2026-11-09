@@ -2459,16 +2459,17 @@ lesson_work_name_fault(){   # $1 = tree -> the sentence, or nothing
     return 0
   fi
   list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || {
-    printf '%s' "whether $f names a work organisation could not be checked: no scratch file could be made for the scan"; return 0; }
+    printf '%s' "whether $f names a work organisation could not be checked: no scratch file could be made for the scan"; return 4; }
   printf '%s\0' "$f" > "$list"
   work_names_run "$tree" "$list"
   rm -f "$list"
+  # 0 when it judged (the sentence, if any, is a name found), 4 when it could not, so a caller never
+  # reports a scan that judged nothing as a lesson that names one (L11).
   case "$WORK_NAMES_RC" in
     0) return 0 ;;
-    1) printf '%s' "$f names a work organisation, at: $WORK_NAMES_FOUND. Every send from this Mac is refused while it does, so nothing edited here reaches the other Mac. Drop the organisation from that line (write name#123, never owner/name#123), or invent one in a fixture" ;;
-    *) printf '%s' "whether $f names a work organisation could not be checked, and the send refuses on the same ground: $(printf '%s' "$WORK_NAMES_OUT" | tr '\n' ' ' | cut -c1-300)" ;;
+    1) printf '%s' "$f names a work organisation, at: $WORK_NAMES_FOUND. Every send from this Mac is refused while it does, so nothing edited here reaches the other Mac. Drop the organisation from that line (write name#123, never owner/name#123), or invent one in a fixture"; return 0 ;;
+    *) printf '%s' "whether $f names a work organisation could not be checked, and the send refuses on the same ground: $(printf '%s' "$WORK_NAMES_OUT" | tr '\n' ' ' | cut -c1-300)"; return 4 ;;
   esac
-  return 0
 }
 
 # One past the highest number in use, never a gap: a skipped number was skipped
@@ -4311,7 +4312,7 @@ do_next_lesson(){
   # A warning, never a refusal: the number is still good, and the lesson about to be written is not
   # the one at fault. Said here because this is the moment a lesson is about to be added, and the
   # file it goes into already stops every send (claude-config#2530).
-  local wnfault; wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")"
+  local wnfault; wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || true
   is_blank "$wnfault" || echo "claude-sync: warning: $wnfault." >&2
   printf '%s\n' "$num"
 }
@@ -14980,12 +14981,17 @@ case "$cmd" in
   stuck) sync_stuck_records ;;
   # Exit 1 for a fault that holds the lessons file back (with any work name fault said beside it),
   # 3 when the only fault is a work organisation name, which refuses the whole send instead
-  # (claude-config#2530), so the hook that runs this can say which of the two it is (L11).
+  # (claude-config#2530), and 4 when the work names scan could not run, so the hook that runs this
+  # can say which it is (L11).
   lesson-faults)
     faults="$(lesson_publish_faults "$CLAUDE_HOME")"
-    wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")"
+    wnrc=0; wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || wnrc=$?
     if ! is_blank "$faults"; then die "$faults${wnfault:+ $wnfault.}"; fi
-    if ! is_blank "$wnfault"; then echo "claude-sync: $wnfault." >&2; exit 3; fi
+    if ! is_blank "$wnfault"; then
+      echo "claude-sync: $wnfault." >&2
+      [ "$wnrc" -eq 0 ] && exit 3
+      exit 4
+    fi
     ;;
   # Read only: do the generated index files hold every lesson in the LESSONS.md beside them exactly
   # once. verify_lesson_index otherwise runs only INSIDE a write, so the only way to reach it was to
@@ -15007,7 +15013,7 @@ case "$cmd" in
     # second. That is exactly how the cap fault surfaced only after the bold markers were fixed.
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
     lessonfaults="$(lesson_publish_faults "$CLAUDE_HOME")"
-    wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")"   # claude-config#2530
+    wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || true   # claude-config#2530, its words say which
     if ! is_blank "$lessonfaults$wnfault"; then die "${lessonfaults}${lessonfaults:+${wnfault:+ }}${wnfault:+$wnfault.}"; fi
     # A preview: it skips reserved numbers, so it names what the next ask gets, and reserves nothing.
     require_readable_reservations

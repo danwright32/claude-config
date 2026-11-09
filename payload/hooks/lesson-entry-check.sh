@@ -229,6 +229,18 @@ $out
 
 Fix the line, then confirm with: $sync lesson-faults"
 fi
+# Exit 4 is the work names scan unable to run, so nothing about the lesson was judged, and it is
+# said as that rather than as a lesson naming an organisation (L11). The send refuses on the same
+# ground, so it is not left until then.
+if [ "$rc" -eq 4 ]; then
+  block "$WRITTEN could not be checked for work organisation names: the scan could not run, so nothing judged it, and every send from this Mac is refused on the same ground until it can.
+
+What claude-sync lesson-faults said:
+
+$out
+
+Fix what stopped the scan, then confirm with: $sync lesson-faults"
+fi
 
 block "$WRITTEN leaves the file unable to publish. Fix it now, in this session, rather than leaving it: until it is fixed the entry is absent from the generated lessons index (which the lessons core is chosen from and every PR lessons review reads), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and the WHOLE lessons file is held back from the next send, so every other lesson written since is stuck behind it too.
 
