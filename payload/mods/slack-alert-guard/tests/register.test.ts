@@ -1123,7 +1123,7 @@ test('a search over a widely imported module that runs late, or whose listing is
   w.ctl.gitTruncated = true
   const cut = refusalOf(await call($, REHTTP))
   expect(cut).toContain('could not check')
-  expect(cut).toContain('git grep for the files that')
+  expect(cut).toContain('git grep listing the names of the files that')
   expect(w.ran).toEqual([])
 })
 
@@ -1173,7 +1173,29 @@ test('a list of the files naming the template that is cut short holds the edit, 
   w.ctl.stdoutCap = 500
   const why = refusalOf(await call($, REHTTP))
   expect(why).toContain('could not check')
-  expect(why).toContain('git grep for the files that')
+  expect(why).toContain('git grep listing the names of the files that')
+  expect(w.ran).toEqual([])
+})
+
+// 2026-11-09: a session held an edit to a widely imported copy file in a work repository as "git grep
+// for the files that name it or hand it on failed (exit 0: no message)". git had not failed: what it
+// printed was cut short. The words were the same before and after #2508 changed which listing runs,
+// so the hold could not show that the session was still running the copy from before #2508.
+test('a listing cut short is held as cut short, naming the listing, never as git failing with exit 0', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(60, 0) })
+  // Room for the Slack listing, too little for the names of the sixty handlers naming http.
+  w.ctl.stdoutCap = 500
+  const names = refusalOf(await call($, REHTTP))
+  expect(names).toContain('could not check')
+  expect(names).toContain('git grep listing the names of the files that name')
+  expect(names).toContain('more than the 4 MiB')
+  expect(names).not.toContain('exit 0')
+  w.ctl.stdoutCap = Infinity
+  w.ctl.gitTruncated = true
+  const first = refusalOf(await call($, REHTTP))
+  expect(first).toContain('git grep listing the names of the files that mention Slack')
+  expect(first).toContain('more than the 4 MiB')
+  expect(first).not.toContain('exit 0')
   expect(w.ran).toEqual([])
 })
 
