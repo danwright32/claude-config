@@ -480,6 +480,15 @@ describe('writes: what the words do not name', () => {
     expect(read('patch -p1 < fix.diff').unnamed).toEqual([{ what: 'a patch', words: ['patch', '-p1', '<', 'fix.diff'], inputs: [`${CWD}/fix.diff`] }])
     expect(read('git -C /repo apply fix.patch').unnamed).toEqual([{ what: 'a patch', words: ['git', '-C', '/repo', 'apply', 'fix.patch'], inputs: ['/repo/fix.patch'] }])
   })
+  // Lessons review of #2402 at 4124d43: a folder git is pointed at that cannot be named leaves every
+  // relative name under it unnamed, never resolved in the folder the command runs in.
+  test('git pointed at a folder that cannot be named names no relative path under it', () => {
+    expect(read('git -C "$D" apply fix.patch').unnamed.map(u => u.inputs)).toEqual([[]])
+    expect(read('git -C "$D" checkout -- a.ts').byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a.ts', null]])
+    expect(read(`git -C "$D" checkout -- 'a$.ts'`).byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a$.ts', null]])
+    // Pointed at a folder it can name, a name whose every $ is left as written is resolved there.
+    expect(read(`git -C /repo checkout -- 'a$.ts'`).byGit?.map(g => [g.word, g.path ?? null])).toEqual([['a$.ts', '/repo/a$.ts']])
+  })
   // #1765: a device named as what a command reads (/dev/stdin, /dev/fd/0, /proc/self/fd/0) is never
   // an input, so no guard opens it: a read of one waits for ever on the mod worker's own standard
   // input, and the call it judges never runs. The write is still named, as one whose input is unknown.

@@ -640,7 +640,8 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const textWords = new Set<string>()
   const liveWords = new Set<string>()
   const textOnly = (w: string) => textWords.has(w) && !liveWords.has(w)
-  const pathOf = (w: string, at: string | undefined = dir) => absolutePath(w, at, home, textOnly(w))
+  // `at` is always given: undefined is a folder that cannot be named, never the command's own.
+  const pathOf = (w: string, at: string | undefined) => absolutePath(w, at, home, textOnly(w))
   // For a command a find -exec runs, the folders find starts from: a change at one of them is one
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
@@ -674,11 +675,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
   }
-  const named = (w: string, edits?: true, shown?: string) => add(w, pathOf(w), edits ? { edits } : undefined, shown)
+  const named = (w: string, edits?: true, shown?: string) => add(w, pathOf(w, dir), edits ? { edits } : undefined, shown)
   // A redirect target standard output goes into (#1976), named as `files` names it; a device or a
   // process substitution is no file, and one named twice is given once.
   const toStdout = (w: string, shown: string | undefined) => {
-    const path = pathOf(w)
+    const path = pathOf(w, dir)
     if (!w || isPipe(w) || isDevice(path ?? w)) return
     const word = shown ?? asWritten.get(w) ?? w
     if (stdout.some(x => (path ? x.path === path : !x.path && x.word === word))) return
@@ -687,7 +688,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   }
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     tree = tree || foundRoots.includes(word)
-    const path = pathOf(word)
+    const path = pathOf(word, dir)
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
     // A path changed the same way twice is kept once, a tree on either keeping the tree.
@@ -699,7 +700,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const folder = path ? undefined : patternFolder(word, dir, home)
     changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}) })
   }
-  const abs = (p: string) => pathOf(p)
+  const abs = (p: string) => pathOf(p, dir)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
   const expand = (w: string) => w.replace(VARIABLE, (m, braced?: string, bare?: string) => vars.get((braced ?? bare) as string) ?? m)
   // A word as the shell hands it on (#1834): each variable read as its value, the value of one whose
@@ -908,7 +909,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     let writer = OPERAND_WRITERS.has(name)
     if (name === 'cd' || name === 'pushd') {
       const target = rest.find(a => !a.startsWith('-') || a === '-')
-      dir = target === undefined ? home || undefined : target === '-' ? undefined : pathOf(target)
+      dir = target === undefined ? home || undefined : target === '-' ? undefined : pathOf(target, dir)
       continue
     }
     // popd goes back to the folder pushd kept, which this does not keep (#2000).
@@ -1023,11 +1024,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       if (g && (g.sub === 'apply' || g.sub === 'am')) {
         // Checked or summarised, a patch writes nothing.
         if (!g.args.some(a => ['--check', '--stat', '--numstat', '--summary'].includes(a))) {
-          const at = g.dir === undefined ? dir : pathOf(g.dir)
+          const at = g.dir === undefined ? dir : pathOf(g.dir, dir)
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
           unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => pathOf(p, at)).filter((p): p is string => !!p) })
         }
-      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : pathOf(g.dir), does, tree, from)
+      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : pathOf(g.dir, dir), does, tree, from)
     }
     // A script file it runs (#1586): an interpreter's script operand (never one on standard input, nor
     // awk's or sed's program file, whose files are read above), or a script run by its own name. Every
