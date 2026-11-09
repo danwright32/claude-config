@@ -122,7 +122,11 @@ r="$(group_per_commit_on_main "$REAL")"
 min_major_for(){
   case "$1" in
     actions/checkout) echo 5 ;;
-    actions/cache) echo 5 ;;
+    actions/cache|actions/cache/restore|actions/cache/save) echo 5 ;;
+    # The parts hand what they measured to the suite job as artifacts (#2463); both moved to Node 24
+    # at these majors (upload v6, download v7), read from each pinned commit's action.yml.
+    actions/upload-artifact) echo 6 ;;
+    actions/download-artifact) echo 7 ;;
     *) echo "" ;;
   esac
 }
@@ -193,8 +197,11 @@ r="$(actions_pinned "$REAL")"
 # ---------------------------------------------------------------------------
 image_named(){ # image_named <workflow>
   local r
-  r="$(code_of "$1" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p')"
+  # Every job's line, and one image across them (#2463): the jobs that run the suites are several
+  # now, and run-on-linux.sh reproduces CI in ONE container, so two images would leave one unchecked.
+  r="$(code_of "$1" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p' | sort -u)"
   if [ -z "$r" ]; then echo "no runs-on line was found"; return; fi
+  if [ "$(printf '%s\n' "$r" | grep -c .)" -gt 1 ]; then echo "its jobs run on different images ($(printf '%s' "$r" | tr '\n' ' ')), and run-on-linux.sh reproduces one"; return; fi
   case "$r" in
     *-latest*) echo "runs on '$r', which GitHub moves to a new image on a date of its choosing" ;;
     ubuntu-[0-9][0-9].[0-9][0-9]) echo ok ;;
@@ -206,13 +213,18 @@ r="$(image_named "$TMPROOT/latest.yml")"
 [ "$r" != ok ] \
   && check "#597 a job on ubuntu-latest is refused" ok \
   || check "#597 a job on ubuntu-latest is refused" "it passed"
+printf 'jobs:\n  a:\n    runs-on: ubuntu-26.04\n  b:\n    runs-on: ubuntu-24.04\n' > "$TMPROOT/two-images.yml"
+r="$(image_named "$TMPROOT/two-images.yml")"
+[ "$r" != ok ] \
+  && check "#2463 jobs on two different images are refused" ok \
+  || check "#2463 jobs on two different images are refused" "it passed"
 r="$(image_named "$REAL")"
 [ "$r" = ok ] \
   && check "#597 the real workflow names its runner image" ok \
   || check "#597 the real workflow names its runner image" "$r"
 # The container that reproduces CI on a Mac derives its image from this same line and refuses one it
 # has no mapping for. Asked directly, so a move to a new image cannot leave it refusing unnoticed.
-runner="$(code_of "$REAL" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p')"
+runner="$(code_of "$REAL" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p' | sort -u | head -1)"
 grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-on-linux.sh" \
   && check "#597 run-on-linux.sh has an image for '$runner'" ok \
   || check "#597 run-on-linux.sh has an image for '$runner'" "no case arm names it"
@@ -285,6 +297,111 @@ r="$(processor_printed "$REAL")"
 [ "$r" = ok ] \
   && check "#2403 the real environment step prints the processor model" ok \
   || check "#2403 the real environment step prints the processor model" "$r"
+
+# ---------------------------------------------------------------------------
+# #2463: the suites are dealt into parallel jobs by measured cost, and no suite is left out.
+# ---------------------------------------------------------------------------
+# One job ran every suite and took 30 to 40 minutes on main on 2026-11-09. The workflow now deals
+# the suites into parts, one job per part, from what each suite last measured (L315), and the job
+# named `suite` waits for all of them and holds the one verdict. Dealt from a list of suites, a
+# suite left out of every part would run nowhere and read as a pass (L96, L98), so the runner both
+# deals and refuses a deal that does not cover what it discovers, and both are driven here.
+RUNNER="$DIR/../payload/hooks/run-all-tests.sh"
+REPO_ROOT="$(cd "$DIR/.." && pwd)"
+
+# The real tree, dealt into four: every tracked suite is in exactly one part, and every part has
+# work. The count it is held to is git's, not the runner's, so the two readings are independent.
+real_deal="$(HOOK_TESTS_ROOT="$REPO_ROOT" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL=4 bash "$RUNNER" 2>/dev/null)"; rc=$?
+tracked="$(git -C "$REPO_ROOT" ls-files | grep -E '(^|/)test-[^/]*\.sh$' | grep -v '^payload/hooks/run-all-tests\.sh$' | sort)"
+dealt="$(printf '%s\n' "$real_deal" | awk -F'\t' 'NF >= 2 { print $2 }' | sort)"
+dupes="$(printf '%s\n' "$dealt" | uniq -d | head -3 | tr '\n' ' ')"
+missing="$(comm -23 <(printf '%s\n' "$tracked") <(printf '%s\n' "$dealt" | sort -u) | head -3 | tr '\n' ' ')"
+[ "$rc" -eq 0 ] && [ -n "$tracked" ] && [ -z "$missing" ] \
+  && check "#2463 every tracked suite ($(printf '%s\n' "$tracked" | grep -c .)) is dealt to some part of the real tree" ok \
+  || check "#2463 every tracked suite is dealt to some part of the real tree" "rc=$rc, in no part: ${missing:-none}"
+[ -z "$dupes" ] && [ -n "$dealt" ] \
+  && check "#2463 and none is dealt twice" ok \
+  || check "#2463 and none is dealt twice" "twice: ${dupes:-nothing dealt}"
+parts_used="$(printf '%s\n' "$real_deal" | awk -F'\t' 'NF >= 2 { print $1 }' | sort -u | tr '\n' ' ')"
+[ "$parts_used" = "1 2 3 4 " ] \
+  && check "#2463 and each of the four parts has work, and no fifth exists" ok \
+  || check "#2463 and each of the four parts has work, and no fifth exists" "parts: '$parts_used'"
+
+# A throwaway tree, so a deal and a part run can be driven to refuse without the real suites.
+FX="$TMPROOT/deal-tree"
+mkdir -p "$FX/t" "$FX/store"
+for s in a b c d; do
+  printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$FX/t/test-$s.sh"
+done
+git -C "$FX" init -q && git -C "$FX" add t
+# Measured cost, not count: a=100 b=60 c=50 d=10 into two parts puts a with d (110) and b with c
+# (110). Dealt round robin in name order, as a count based split would, a goes with c and b with d.
+printf '100\n' > "$FX/store/t%2Ftest-a.sh"; printf '60\n' > "$FX/store/t%2Ftest-b.sh"
+printf '50\n' > "$FX/store/t%2Ftest-c.sh"; printf '10\n' > "$FX/store/t%2Ftest-d.sh"
+deal2="$(HOOK_TESTS_ROOT="$FX" HOOK_TESTS_TIMINGS="$FX/store" HOOK_TESTS_DEAL=2 bash "$RUNNER" 2>/dev/null)"
+p1="$(printf '%s\n' "$deal2" | awk -F'\t' '$1 == 1 { print $2 }' | sort | tr '\n' ' ')"
+p2="$(printf '%s\n' "$deal2" | awk -F'\t' '$1 == 2 { print $2 }' | sort | tr '\n' ' ')"
+[ "$p1" = "t/test-a.sh t/test-d.sh " ] && [ "$p2" = "t/test-b.sh t/test-c.sh " ] \
+  && check "#2463 suites are dealt by their measured seconds, the longest first into the lightest part" ok \
+  || check "#2463 suites are dealt by their measured seconds, the longest first into the lightest part" "part 1 '$p1', part 2 '$p2'"
+
+part_run(){ # part_run <deal file> <part> <parts> -> the runner's output; its exit code in part_rc
+  part_out="$(HOOK_TESTS_ROOT="$FX" HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKY_OUTPUT= HOOK_TESTS_SLOT=0 \
+    HOOK_TESTS_DEALT="$1" HOOK_TESTS_PART="$2" HOOK_TESTS_PARTS="$3" bash "$RUNNER" 2>&1)"; part_rc=$?
+}
+printf '%s\n' "$deal2" > "$FX/deal.tsv"
+part_run "$FX/deal.tsv" 2 2
+{ [ "$part_rc" -eq 0 ] && grep -q 'test-b.sh' <<< "$part_out" && grep -q 'test-c.sh' <<< "$part_out" \
+    && ! grep -qE 'ok +test-(a|d)\.sh' <<< "$part_out"; } \
+  && check "#2463 a part runs exactly the suites dealt to it" ok \
+  || check "#2463 a part runs exactly the suites dealt to it" "rc=$part_rc: $(tail -3 <<< "$part_out" | tr '\n' ' ')"
+
+# THE GUARD THE BRIEF ASKS FOR: a suite in no part. Added to the tree after the deal was made, it
+# is in no line of it, and every part refuses rather than running without it.
+printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$FX/t/test-e.sh"
+git -C "$FX" add t/test-e.sh
+part_run "$FX/deal.tsv" 1 2
+{ [ "$part_rc" -ne 0 ] && grep -q 'test-e.sh' <<< "$part_out" && ! grep -qE 'ok +test-a\.sh' <<< "$part_out"; } \
+  && check "#2463 a suite dealt to no part makes every part refuse, naming it, and run nothing" ok \
+  || check "#2463 a suite dealt to no part makes every part refuse, naming it, and run nothing" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
+git -C "$FX" rm -q --cached t/test-e.sh && rm -f "$FX/t/test-e.sh"
+
+# A deal naming a suite the tree does not hold is from another commit, so it is refused too.
+{ cat "$FX/deal.tsv"; printf '1\tt/test-gone.sh\t5\tmeasured\n'; } > "$FX/stale.tsv"
+part_run "$FX/stale.tsv" 1 2
+{ [ "$part_rc" -ne 0 ] && grep -q 'test-gone.sh' <<< "$part_out"; } \
+  && check "#2463 a deal naming a suite the tree lacks is refused" ok \
+  || check "#2463 a deal naming a suite the tree lacks is refused" "rc=$part_rc"
+# A suite dealt to a part no job runs is as lost as one dealt to none.
+awk -F'\t' -v OFS='\t' '$1 == 2 { $1 = 3 } { print }' "$FX/deal.tsv" > "$FX/high.tsv"
+part_run "$FX/high.tsv" 1 2
+{ [ "$part_rc" -ne 0 ] && grep -q 'part 3' <<< "$part_out"; } \
+  && check "#2463 a deal into a part beyond the jobs that run is refused" ok \
+  || check "#2463 a deal into a part beyond the jobs that run is refused" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
+part_run "$FX/absent.tsv" 1 2
+[ "$part_rc" -ne 0 ] \
+  && check "#2463 a deal file that is not there is refused" ok \
+  || check "#2463 a deal file that is not there is refused" "it ran"
+
+# The workflow: the parts' matrix comes from the deal job's own count, the part number reaches the
+# runner, and the job named `suite`, the check every merge reads (block-red-merge.sh and
+# merge-when-ready.sh read the whole rollup, so a new job name changes nothing they decide, L305),
+# waits for every part and runs even when one failed, so a red part is a red `suite`.
+wf_code="$(code_of "$REAL")"
+job_block(){ printf '%s\n' "$wf_code" | awk -v j="$1" '$0 ~ "^  "j":[[:space:]]*$" { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }'; }
+fanin="$(job_block suite)"; parts_job="$(job_block parts)"; deal_job="$(job_block deal)"
+[ -n "$fanin" ] && [ -n "$parts_job" ] && [ -n "$deal_job" ] \
+  && check "#2463 the workflow has the deal, parts and suite jobs" ok \
+  || check "#2463 the workflow has the deal, parts and suite jobs" "missing one of them"
+grep -qE 'needs:[[:space:]]*\[[[:space:]]*deal,[[:space:]]*parts[[:space:]]*\]' <<< "$fanin" && grep -qE 'if:[[:space:]]*\$\{\{[[:space:]]*always\(\)' <<< "$fanin" \
+  && check "#2463 the suite job waits for the deal and every part, and runs whatever they did" ok \
+  || check "#2463 the suite job waits for the deal and every part, and runs whatever they did" "needs or always() missing"
+grep -qE 'fromJSON\(needs\.deal\.outputs\.parts\)' <<< "$parts_job" && grep -qE 'HOOK_TESTS_PART:[[:space:]]*\$\{\{[[:space:]]*matrix\.part' <<< "$parts_job" \
+  && check "#2463 the parts matrix is the deal's own list, and each job runs its own part" ok \
+  || check "#2463 the parts matrix is the deal's own list, and each job runs its own part" "not wired"
+grep -qE 'HOOK_TESTS_DEAL:' <<< "$deal_job" \
+  && check "#2463 the deal job deals with the runner itself" ok \
+  || check "#2463 the deal job deals with the runner itself" "no HOOK_TESTS_DEAL in it"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

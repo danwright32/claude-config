@@ -129,11 +129,12 @@ fi
 # killed by hand. A depth marker rather than a lock, because the legitimate case
 # (a suite invoking the runner against a FIXTURE directory) has to keep working,
 # and only the bare re-entry is refused.
-# HOOK_TESTS_LIST_ONLY is exempt, because it runs nothing at all: it prints the directories and
-# exits, so it cannot be the step that recurses, and refusing it makes the one question a suite
+# HOOK_TESTS_LIST_ONLY and HOOK_TESTS_DEAL are exempt, because they run nothing at all: they print and
+# exit, so neither can be the step that recurses, and refusing them makes the questions a suite
 # legitimately asks about the real repo unanswerable from inside a run.
 if [ "${HOOK_TESTS_RUNNING:-0}" = "1" ] && [ "$#" -eq 0 ] \
-   && [ -z "${HOOK_TESTS_ROOT:-}" ] && [ "${HOOK_TESTS_LIST_ONLY:-0}" != "1" ]; then
+   && [ -z "${HOOK_TESTS_ROOT:-}" ] && [ "${HOOK_TESTS_LIST_ONLY:-0}" != "1" ] \
+   && [ -z "${HOOK_TESTS_DEAL:-}" ]; then
   echo "run-all-tests: refusing to run the whole repo from inside a run of the whole repo, which recurses without end. Name the directories to read, or set HOOK_TESTS_ROOT." >&2
   exit 1
 fi
@@ -849,7 +850,13 @@ EOF
   printf '%s' "$n"
 }
 
-echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_of_dirs"
+# A deal (below) prints the deal itself on stdout, which a job writes to a file, so this line goes to
+# stderr there and the file holds nothing but the deal.
+if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
+  echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_of_dirs" >&2
+else
+  echo "run-all-tests: $(printf '%s' "$dirs" | grep -c .) directory(ies), $source_of_dirs"
+fi
 
 ran=0
 failed=0
@@ -888,6 +895,108 @@ SUITES
 done <<EOF
 $dirs
 EOF
+
+# DEALING THE SUITES INTO PARTS, for CI's parallel jobs (claude-config#2463). One job running every
+# suite took 30 to 40 minutes on main on 2026-11-09, so the workflow runs the suites as several
+# jobs, and these are the two halves of that: HOOK_TESTS_DEAL=<n> deals what was just discovered into
+# n parts and prints the deal, running nothing; HOOK_TESTS_DEALT=<file> with HOOK_TESTS_PART=<i> of
+# HOOK_TESTS_PARTS=<n> runs only part i of that deal.
+#
+# Dealt by MEASURED cost, never by count (L315): each suite costs what the timing record last
+# measured it at, the longest is placed first, and each goes into the part with the least so far,
+# so the suite that dominates the run sits in a part of its own share rather than beside a third of
+# the others. A suite with no record yet costs the median of those measured, so a new suite is
+# neither free nor assumed huge. Ties go by path and then by part number, so the same record always
+# gives the same deal, and every job of one run reads the ONE deal file a single job made: dealing
+# in each job from a cache another run might save in between could put a suite in two parts or none.
+#
+# The deal is printed one suite per line, `<part>\t<path in the repo>\t<seconds>\t<measured|median>`.
+# A part run refuses, running nothing, when the deal does not cover exactly what it discovers: a
+# suite in no line would run in no job and read as a pass (L96, L98), and a line naming a suite this
+# tree does not hold means the deal came from another commit.
+_part_rel(){ # _part_rel <suite path> -> its path inside the repo, or the path itself outside one
+  case "$1" in "$root"/*) printf '%s' "${1#"$root"/}" ;; *) printf '%s' "$1" ;; esac
+}
+if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
+  if ! whole_above_zero "$HOOK_TESTS_DEAL" HOOK_TESTS_DEAL; then
+    echo "run-all-tests: HOOK_TESTS_DEAL='$HOOK_TESTS_DEAL' is not a positive whole number of parts. Refusing rather than guessing how many jobs the suites go to." >&2
+    exit 1
+  fi
+  if [ "${#suites[@]}" -lt "$HOOK_TESTS_DEAL" ]; then
+    echo "run-all-tests: ${#suites[@]} suite(s) cannot fill $HOOK_TESTS_DEAL parts, so some job would run nothing. Refusing rather than reporting an empty part as a pass." >&2
+    exit 1
+  fi
+  for s in "${suites[@]}"; do
+    printf '%s\t%s\n' "$(_part_rel "$s")" "$(suite_seconds "$s")"
+  done | awk -F'\t' -v n="$HOOK_TESTS_DEAL" '
+    { path[NR] = $1; sec[NR] = $2; if ($2 != "") { m[++k] = $2 + 0 } }
+    END {
+      # The median of what was measured, the stand in for a suite with no record (1s with none).
+      if (k == 0) { med = 1 } else {
+        for (i = 1; i <= k; i++) for (j = i + 1; j <= k; j++) if (m[j] < m[i]) { t = m[i]; m[i] = m[j]; m[j] = t }
+        med = (k % 2) ? m[(k + 1) / 2] : int((m[k / 2] + m[k / 2 + 1]) / 2)
+        if (med < 1) med = 1
+      }
+      for (i = 1; i <= NR; i++) { how[i] = (sec[i] == "") ? "median" : "measured"; cost[i] = (sec[i] == "") ? med : sec[i] + 0; ord[i] = i }
+      # Longest first, then by path, so equal costs always deal the same way.
+      for (i = 1; i <= NR; i++) for (j = i + 1; j <= NR; j++) {
+        a = ord[i]; b = ord[j]
+        if (cost[b] > cost[a] || (cost[b] == cost[a] && path[b] < path[a])) { ord[i] = b; ord[j] = a }
+      }
+      for (p = 1; p <= n; p++) load[p] = 0
+      for (i = 1; i <= NR; i++) {
+        s = ord[i]; best = 1
+        for (p = 2; p <= n; p++) if (load[p] < load[best]) best = p
+        load[best] += cost[s]
+        printf "%d\t%s\t%d\t%s\n", best, path[s], cost[s], how[s]
+        if (how[s] == "measured") measured++
+      }
+      line = ""
+      for (p = 1; p <= n; p++) line = line sprintf(" part %d %ds;", p, load[p])
+      printf "run-all-tests: dealt %d suite(s) into %d part(s) by measured wall clock for %d of them, the median %ds for the rest:%s\n", NR, n, measured + 0, med, line > "/dev/stderr"
+    }'
+  exit $?
+fi
+if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
+  _part="${HOOK_TESTS_PART:-}"; _parts="${HOOK_TESTS_PARTS:-}"; _deal="${HOOK_TESTS_DEALT:-}"
+  if ! whole_above_zero "$_part" _part || ! whole_above_zero "$_parts" _parts || [ "$_part" -gt "$_parts" ]; then
+    echo "run-all-tests: a part run needs HOOK_TESTS_PART and HOOK_TESTS_PARTS as whole numbers, the part no more than the parts (got part '$_part' of '$_parts'). Refusing rather than guessing which suites are this job's." >&2
+    exit 1
+  fi
+  if [ -z "$_deal" ] || [ ! -s "$_deal" ]; then
+    echo "run-all-tests: part $_part of $_parts was asked for, but the deal HOOK_TESTS_DEALT names ('$_deal') is missing or empty, so which suites are this part's is unknown. Refusing to run any." >&2
+    exit 1
+  fi
+  _discovered=""
+  for s in "${suites[@]}"; do _discovered="$_discovered$(_part_rel "$s")
+"; done
+  # Every refusal is worked out before any is said, so one run names everything wrong with the deal.
+  _deal_problems="$(printf '%s' "$_discovered" | awk -F'\t' -v parts="$_parts" '
+    FNR == NR { if ($0 != "") here[$0] = 1; next }
+    $0 == "" { next }
+    NF < 2 || $1 !~ /^[0-9]+$/ { print "line " FNR " of the deal is not <part><tab><suite>: " $0; next }
+    $1 < 1 || $1 > parts { print $2 " is dealt to part " $1 ", which no job of " parts " runs"; next }
+    ($2 in seen) { print $2 " is dealt twice"; next }
+    { seen[$2] = 1; if (!($2 in here)) print $2 " is in the deal but not in this tree, so the deal is from another commit" }
+    END { for (s in here) if (!(s in seen)) print s " is in this tree but dealt to no part, so no job would run it" }
+  ' - "$_deal")"
+  if [ -n "$_deal_problems" ]; then
+    echo "run-all-tests: refusing to run part $_part of $_parts, because the deal in $_deal does not cover exactly the suites this tree holds:" >&2
+    printf '%s\n' "$_deal_problems" | sed 's/^/  /' >&2
+    exit 1
+  fi
+  _mine="$(awk -F'\t' -v p="$_part" '$1 == p { print $2 }' "$_deal")"
+  _kept=()
+  for s in "${suites[@]}"; do
+    if printf '%s\n' "$_mine" | grep -qxF -- "$(_part_rel "$s")"; then _kept+=("$s"); fi
+  done
+  if [ "${#_kept[@]}" -eq 0 ]; then
+    echo "run-all-tests: part $_part of $_parts holds no suite in $_deal. Refusing to report an empty part as a pass." >&2
+    exit 1
+  fi
+  echo "run-all-tests: part $_part of $_parts: ${#_kept[@]} of ${#suites[@]} suite(s), as dealt in $_deal"
+  suites=("${_kept[@]}")
+fi
 
 ran="${#suites[@]}"
 
