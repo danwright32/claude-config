@@ -584,10 +584,13 @@ HEAD_WORDS = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "t
 EXPANDS = re.compile(r"[$`]")
 
 
-def _cut_heredocs(command):
+def _cut_heredocs(command, spaced=True):
     """The command with every heredoc body taken out, and the bodies.
 
     Each opener is replaced by a token of its own, so a reader can tell which command a body feeds.
+    spaced puts a space either side of each opener and here-string, as the word reader needs; without
+    it each stays against whatever was written before it, so a descriptor number on one (`3<<<`,
+    `3<<EOF`) is still there to be seen (_raw_redirections, the third lessons review of #2442).
     Returns (text, [shown]), one entry per body: True when the body is text the command shows
     verbatim, which a quoted delimiter guarantees and an unquoted one gives only when the body holds
     nothing the shell would expand. A body that never closes ends the text, as the shell reads it.
@@ -616,7 +619,7 @@ def _cut_heredocs(command):
             i += 1
             continue
         if command.startswith("<<<", i):
-            out.append(" <<< ")
+            out.append(" <<< " if spaced else "<<<")
             i += 3
             continue
         if command.startswith("<<", i):
@@ -626,7 +629,7 @@ def _cut_heredocs(command):
             if opener:
                 word, strip_tabs, quoted, i = opener
                 pending.append((word, strip_tabs, quoted))
-                out.append(" " + HEREDOC_MARK % openers + " ")
+                out.append((" %s " if spaced else "%s") % (HEREDOC_MARK % openers))
                 openers += 1
                 continue
         if c == "\n":
@@ -659,7 +662,8 @@ REDIRECT_TOKEN = re.compile(r"\d*[<>&|]+\Z")
 def _stages(command):
     """Every pipeline in the command, as a list of stages, each a (words, redirects, heredocs) triple.
 
-    redirects are (operator, target) pairs; heredocs the indexes of the bodies feeding that stage.
+    redirects are (operator, target) pairs, the operator with any descriptor number written against
+    it (`2>`, `3<`); heredocs the indexes of the bodies feeding that stage.
     A subshell's opening and closing parenthesis are entries of their own, the strings "(" and ")",
     in order among the pipelines, so a reader can tell where a cd inside one ends.
     Raises Unreadable when the command cannot be tokenized.
@@ -689,9 +693,11 @@ def _stages(command):
             stage = ([], [], [])
         elif REDIRECT_TOKEN.match(tok) and ("<" in tok or ">" in tok):
             # Its descriptor number (`2>`, claude-config#2235) is the shell's, never a word of the
-            # command, and the operator is recorded without it, as it always was.
+            # command, and stays on the operator: `3<` reads on descriptor 3, never standard input
+            # (the third lessons review of #2442). A reader asking only which way it goes takes it
+            # off with _bare.
             target = tokens[i + 1] if i + 1 < len(tokens) else ""
-            stage[1].append((tok.lstrip("0123456789"), target))
+            stage[1].append((tok, target))
             i += 1
         else:
             stage[0].append(tok)
@@ -711,6 +717,13 @@ def _name(words):
     return (words[i], words[i + 1:]) if i < len(words) else (None, [])
 
 
+def _bare(op):
+    """A redirection operator without the descriptor number written against it: which way it goes.
+    _shown reads operators this way, as it always has, since file_writes reads it and the issue field
+    gate stands down on a write that is not shown, so a stricter reading there would loosen that gate."""
+    return op.lstrip("0123456789")
+
+
 def _shown(stage, fed, bodies):
     """Whether everything the stage writes out is text the command shows."""
     words, redirects, heredocs = stage
@@ -724,10 +737,10 @@ def _shown(stage, fed, bodies):
             return False  # it copies a file the command does not show
         if heredocs:
             return all(bodies[h] for h in heredocs)
-        strings = [t for op, t in redirects if op == "<<<"]
+        strings = [t for op, t in redirects if _bare(op) == "<<<"]
         if strings:
             return not any(EXPANDS.search(t) for t in strings)
-        if any(op.startswith("<") for op, _ in redirects):
+        if any(_bare(op).startswith("<") for op, _ in redirects):
             return False  # fed from a file
         return fed
     return False
@@ -785,7 +798,139 @@ def file_writes_in_context(command, cwd=None, environ=None):
     return writes
 
 
-def flag_values(args, long_flag, short_flag=None, clustered=False):
+# A descriptor written against a redirection: digits, or a name the shell gives a free descriptor.
+DESCRIPTOR = re.compile(r"\d+|\{[A-Za-z_][A-Za-z0-9_]*\}")
+RAW_HEREDOC = re.compile("\x1fheredoc\\d+\x1f")
+
+
+def _raw_redirections(command):
+    """Every redirection the command makes, read from its text with the quotes still in it, as
+    (written against it, operator) pairs: `3< x` is ("3", "<"), a heredoc opener `3<<EOF` is
+    ("3", "<<"), `cat<<EOF` is ("cat", "<<"). None when the text holds what this reading does not
+    follow: ANSI quoting (`$'...'`), whose backslashes can escape a quote, or a comment, after which
+    the shell reads nothing a word reader sees (the third lessons review of #2442)."""
+    text, _ = _cut_heredocs(command, spaced=False)
+    out, word, quote, i, n = [], "", None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                word += text[i:i + 2]
+                i += 2
+                continue
+            word += c
+            quote = None if c == quote else quote
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            word += text[i:i + 2]
+            i += 2
+            continue
+        if text.startswith("$'", i) or (c == "#" and not word):
+            return None
+        if c in ("'", '"'):
+            quote = c
+            word += c
+            i += 1
+            continue
+        mark = RAW_HEREDOC.match(text, i)
+        if mark:
+            out.append((word, "<<"))
+            word, i = "", mark.end()
+            continue
+        if c in "<>":
+            j = i
+            while j < n and text[j] in "<>&|":
+                j += 1
+            out.append((word, text[i:j]))
+            word, i = "", j
+            continue
+        word = "" if c.isspace() or c in ";&|()" else word + c
+        i += 1
+    return out
+
+
+def _provable(command, pipelines):
+    """Whether this command is one whose standard input redirections can be proved from its words
+    (the third lessons review of #2442). It is not when its text read with the quotes in place makes a
+    different number of redirections than the word reader found (a quoted `'<'` is a word, which the
+    word reader cannot tell from an operator), when any redirection that reads, or that writes onto
+    standard input, carries a descriptor (`3<`, `2<&1`, `3<<<`, `{fd}<`, `0>&3`), or when any stage
+    hands a string to a shell, eval or env -S, whose commands no stage here shows."""
+    raw = _raw_redirections(command)
+    if raw is None:
+        return False
+    stages = [st for p in pipelines if isinstance(p, list) for st in p]
+    if len(raw) != sum(len(st[1]) + len(st[2]) for st in stages):
+        return False
+    for glued, op in raw:
+        if DESCRIPTOR.fullmatch(glued) and not (op.startswith(">") and glued in ("1", "2")):
+            return False
+    return not any(wrapped_words(st[0]) for st in stages)
+
+
+def _proved_feed(stage, bodies):
+    """(state, detail) for the one redirection of standard input on a gh stage: a heredoc or
+    here-string that expands nothing is "shown", a plain `<` is "file", and anything else, more than
+    one, or none at all is "hidden"."""
+    _words, redirects, heredocs = stage
+    reads = [(op, t) for op, t in redirects if "<" in op]
+    if len(heredocs) + len(reads) != 1:
+        return "hidden", None
+    if heredocs:
+        return ("shown" if bodies[heredocs[0]] else "hidden"), None
+    op, target = reads[0]
+    if op == "<<<":
+        return ("hidden" if EXPANDS.search(target) else "shown"), None
+    if op == "<":
+        return "file", target
+    return "hidden", None
+
+
+def stdin_feeds(command, kinds):
+    """What each gh command of kinds the command runs at the head of a stage reads on its standard
+    input (claude-config#2430), as (kind, args, state, detail):
+      "shown"   a heredoc or here-string that expands nothing, so it is judged with the command
+      "file"    a file fed in with `<`; detail is the word naming it
+      "hidden"  everything else
+    Hidden is the default. A command is judged shown or file only in the one form that can be proved
+    (the third lessons review of #2442): exactly one heredoc, here-string or `<` on the gh stage
+    itself, with no descriptor number on it; the first stage of its pipeline, so nothing is piped in;
+    no other redirection that reads, on any descriptor; not inside a subshell, a brace group or a
+    function body; and nowhere in the command a reading redirection with a descriptor, text the word
+    reader may misread, or a string a shell, eval or env -S runs (_provable). A command a shell or
+    eval runs from a string is not seen at all, so a caller for whom standard input matters refuses a
+    command it does not find here.
+    Raises Unreadable when the command cannot be tokenized."""
+    pipelines, bodies = _stages(command)
+    provable = _provable(command, pipelines)
+    out = []
+    depth, braces = 0, 0
+    for stages in pipelines:
+        if stages in ("(", ")"):
+            depth = depth + 1 if stages == "(" else max(0, depth - 1)
+            continue
+        for position, stage in enumerate(stages):
+            words = stage[0]
+            k = 0
+            while k < len(words) and (words[k] in HEAD_WORDS or ASSIGNMENT.match(words[k])):
+                k += 1
+            opened = words[:k].count("{")
+            found = gh_command(words[k:]) if k < len(words) else None
+            # One that posts nothing (--help) is passed over, as scan_gh_in_context passes it over.
+            if found and tuple(found[:2]) in kinds and \
+                    not any(a in non_filing_flags(found[:2]) for a in list(found[2]) + list(found[3])):
+                state, detail = "hidden", None
+                if provable and position == 0 and not (depth or braces or opened):
+                    state, detail = _proved_feed(stage, bodies)
+                out.append((tuple(found[:2]), list(found[2]) + list(found[3]), state, detail))
+            braces += opened
+            if words[:1] == ["}"]:
+                braces = max(0, braces - 1)
+    return out
+
+
+def flag_values(args, long_flag, short_flag=None, clustered=False, takes_value=None):
     """Every value given to a flag in one create's argument list.
 
     Understands the four forms gh accepts: `--flag value`, `--flag=value`,
@@ -793,11 +938,16 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
     flag, contributes nothing, so an empty value can never satisfy a gate.
 
     clustered: also the short flag written after other one letter flags, `-dF body.md` and
-    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). gh cannot be asked here
-    which letters before it take a value of their own (`-tF` is a title of F), so every such cluster
-    counts, the reading that finds more values, never fewer. Only a caller for whom another value
-    can only refuse more asks for it (the work names gate reading the files a command posts); a
+    `-dFbody.md`, which gh reads as `-d -F body.md` (claude-config#2412). With no takes_value, which
+    letters before it take a value of their own (`-tF` is a title of F) is not known, so every such
+    cluster counts, the reading that finds more values, never fewer. Only a caller for whom another
+    value can only refuse more asks for it (the work names gate reading the files a command posts); a
     gate that a value satisfies never does.
+
+    takes_value: the command's one letter flags that take a value, from gh's help, so a cluster is
+    read as gh reads it, stopping at the first of them (claude-config#2423, _cluster_at). A caller
+    gives it where a value read from a letter that is really another flag's value would be wrong in
+    the direction that lets text through, such as the repository a command posts to.
     """
     values = []
     i = 0
@@ -834,9 +984,11 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
             continue
 
         # `-dF body.md`, `-dFbody.md`: the short flag after other one letter flags (clustered only).
-        if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
-                and not tok.startswith("--") and short_flag[1] in tok[2:]):
-            rest = tok[tok.index(short_flag[1], 2) + 1:]
+        at = (_cluster_at(tok, short_flag[1], takes_value)
+              if (clustered and short_flag and len(short_flag) == 2 and tok.startswith("-")
+                  and not tok.startswith("--") and short_flag[1] in tok[2:]) else None)
+        if at is not None:
+            rest = tok[at + 1:]
             if rest.startswith("="):
                 rest = rest[1:]
             if rest:
@@ -850,6 +1002,23 @@ def flag_values(args, long_flag, short_flag=None, clustered=False):
 
         i += 1
     return values
+
+
+def _cluster_at(tok, letter, takes_value):
+    """Where letter stands as a flag of its own in the one letter cluster tok (`-dR`), or None.
+
+    takes_value None: anywhere after the first letter, the reading that finds more. Otherwise the
+    letters of that command that take a value, from gh's help: gh reads a cluster a letter at a time
+    and the first letter taking a value takes the rest of the word, so `-tRelease` is a title and holds
+    no -R, and `-dtR` is a draft titled R (claude-config#2423)."""
+    if takes_value is None:
+        return tok.index(letter, 2)
+    for k in range(1, len(tok)):
+        if tok[k] == letter:
+            return k
+        if tok[k] in takes_value:
+            return None
+    return None
 
 
 # The text of a command that cannot be tokenized, cut where a command could end (a shell operator, a

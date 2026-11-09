@@ -1617,7 +1617,10 @@ text `create` before reading a command, so `gh issue new` and `gh pr new` passed
 cheap tests now look only for the group's word (`issue`, `pr`), and the action is read by `gh_path`,
 which knows every alias; `test-gh-write-aliases.sh` fails the day the table gives either group a name
 that lacks that word, so no second alias list is kept. With no reader at all, the crude fallback of
-`ps__runs_tool` still matches only the literal words asked about. The work names gate reads whether
+`ps__runs_tool` acts on the group word alone for gh's pr and issue groups, so `gh pr new` is seen as
+the create it is and any other action of the group is asked about too, and check-closing-keyword.sh's
+fallbacks (its library missing, python3 missing, a payload no reader parses) act on the word `pr`
+rather than `pr create` (#2424). The work names gate reads whether
 a gist is public from `gh api gists/<id>` (refused when no account can read it) and judges `gh gist
 edit` on a public one as it does `gh gist create`, refusing an editor's text (no file named for the
 new text, and no `--add` or `--remove`, `--desc` alone counted as not ruling the editor out) and
@@ -1626,6 +1629,24 @@ owns is refused outright, since it publishes every file, commit and issue unread
 file inside clustered short flags is read through `flag_values(..., clustered=True)`, asked for only
 by the work names gate, where another file can only refuse more; the issue field gate, which a value
 can satisfy, keeps the plain reading.
+
+The repository inside clustered short flags (#2423). `-dR o/x` posts to o/x, but reading every cluster
+holding an R as `-R` would take `-tRelease` as the repository `elease`. So the work names gate reads
+`--repo` with `flag_values(..., takes_value=...)`, a per command list of the one letter flags that
+take a value (`SHORT_VALUES`, from each command's help), and stops a cluster where gh does, at the
+first letter taking the rest of the word. Every repository read is judged, the last first, so a word
+read as one that gh reads as something else can only refuse more; a command missing from the list
+has every cluster holding R read as naming one.
+
+Release notes on standard input (#2430). `gh release create --notes-file -` reads the notes from
+standard input, which the command hook passed unread. `scan.stdin_feeds` reads each pipeline stage
+running a release, and fails closed (#2442): only exactly one heredoc or here-string that expands
+nothing, or one plain `<` file, written on gh itself with nothing piped in, is judged (the text as
+shown, the file as a notes file is). Anything else is refused: a pipe into gh (even from printf), a
+second redirection, a redirection with a descriptor anywhere in the command (`3<`, `2<&1`,
+`{fd}<`), a subshell, group or function around gh, and a release `stdin_feeds` cannot find (one a
+shell runs from a string). The guard still reads a lone `-` when gh runs; `--notes-file=-` and
+`-F-` it does not read, so they are refused there too.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

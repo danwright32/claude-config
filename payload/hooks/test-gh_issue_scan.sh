@@ -194,6 +194,10 @@ writes_is "tee writes its operands, appending with -a" "b.md:a:shown" "printf hi
 writes_is "a pipe carried onto the next line still feeds tee" "b.md:w:shown" "$(printf 'printf hi |\ntee b.md')"
 writes_is "a heredoc opened on the last line has no body anyone showed" "b.md:w:hidden" "cat > b.md <<'EOF'"
 writes_is "an fd duplication is not a file" "" "echo hi 2>&1"
+# The descriptor a redirection keeps since the third lessons review of #2442 changes nothing here:
+# what a stage writes is read from its operators bare, as before.
+writes_is "a read on descriptor 3 still counts as fed from a file" "b.md:w:hidden" "printf hi | cat 3< a.md > b.md"
+writes_is "a here-string on descriptor 3 still leaves its 3 a file cat copies" "b.md:w:hidden" "cat 3<<< hi > b.md"
 writes_is "a heredoc inside a quoted body is not read as one" "" "gh issue create --body \"\$(cat <<'EOF'
 hi > b.md
 EOF

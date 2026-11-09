@@ -200,8 +200,11 @@ description, and the description and homepage `gh repo create` or `gh repo edit`
 text from (an editor's text and standard input refused), `gh repo edit --visibility public` is
 refused for a repository not yet public that no work owner owns, since every file and issue in it
 becomes public unread, and a body or notes file named inside clustered short flags (`-dF body.md`)
-is read. Still not covered: gh run by its absolute path, a script that rewrites PATH, and curl or
-an API library.
+is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
+gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
+standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
+on gh itself with nothing piped in, and refused otherwise (#2442). Still not covered: gh run by
+its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -366,8 +369,8 @@ the watcher then sent that session's half finished work. Now:
   gives every command a session runs, its subagents' included, so a subagent's hold is its
   session's. A run with no session id (a plain terminal) records `unknown`, and an `unknown` hold
   is anyone's to lift.
-- Several holds can be in force at once, one per session and label (see #2452 below), each with
-  its own end. The watcher is
+- Several holds can be in force at once, one per session and label as #2452 made them (more
+  below), each with its own end. The watcher is
   held while ANY of them is live. Each expires on its own: the watcher clears that one, says so,
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
