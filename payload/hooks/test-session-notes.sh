@@ -28,7 +28,9 @@ check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 
 export CLAUDE_HOME="$WORK/home"; mkdir -p "$CLAUDE_HOME"
 export SESSION_NOTES_TMP="$WORK/tmp"
 UID_NOW="$(id -u)"
-KEY="-Users-x-Apps-proj"
+# A project path under no home directory, so the home path scan has nothing to flag.
+CWD="/opt/work/Apps/proj"
+KEY="-opt-work-Apps-proj"
 S="0a1b2c3d-1111-2222-3333-444455556666"
 TRANSCRIPT="$WORK/projects/$KEY/$S.jsonl"
 NOTES="$CLAUDE_HOME/state/session-notes/$KEY/$S"
@@ -51,7 +53,7 @@ print(d.get("systemMessage", "") if k == "system" else d.get("hookSpecificOutput
 ' "$2" 2>/dev/null; }
 
 # ---- 1. A new session is told its notes folder, which now exists ----
-out="$(fire "$S" "$TRANSCRIPT" /Users/x/Apps/proj)"
+out="$(fire "$S" "$TRANSCRIPT" "$CWD")"
 ctx="$(field "$out" additionalContext)"
 check_eq "1 the answer is for SessionStart" "SessionStart" "$(field "$out" hookEventName)"
 check "1 names the notes folder by its absolute path" "$NOTES" "$ctx"
@@ -66,15 +68,15 @@ check_not "1 with no note yet, nothing claims there is one" "holds handoff.md" "
 
 # The folder is keyed exactly as Claude Code keys the scratchpad and the transcript: the transcript's
 # own folder name, never re-derived from the cwd, which in a worktree is a different path.
-out="$(fire "$S" "$TRANSCRIPT" /Users/x/Apps/proj/.claude/worktrees/agent-1)"
+out="$(fire "$S" "$TRANSCRIPT" $CWD/.claude/worktrees/agent-1)"
 check "1 a session started in a worktree still gets the project's folder" "$NOTES" "$(field "$out" additionalContext)"
 # With no transcript path, the cwd is folded the way Claude Code folds it.
-out="$(fire "$S" - /Users/x/Apps/proj)"
+out="$(fire "$S" - "$CWD")"
 check "1 with no transcript the cwd gives the same key" "$NOTES" "$(field "$out" additionalContext)"
 
 # ---- 2. A note already there is pointed at, so a resumed or compacted session reads it ----
 printf 'Decisions so far.\n' > "$NOTES/handoff.md"
-out="$(fire "$S" "$TRANSCRIPT" /Users/x/Apps/proj resume)"
+out="$(fire "$S" "$TRANSCRIPT" "$CWD" resume)"
 check "2 a note already in the folder is named for reading" "holds handoff.md" "$(field "$out" additionalContext)"
 
 # ---- 3. The switch: a handoff note still in the scratchpad is carried over once, never lost ----
@@ -83,7 +85,7 @@ T2="$WORK/projects/$KEY/$S2.jsonl"
 N2="$CLAUDE_HOME/state/session-notes/$KEY/$S2"
 SC2="$WORK/tmp/claude-$UID_NOW/$KEY/$S2/scratchpad"
 mkdir -p "$SC2"; printf 'Written before the switch.\n' > "$SC2/handoff.md"
-out="$(fire "$S2" "$T2" /Users/x/Apps/proj compact)"
+out="$(fire "$S2" "$T2" "$CWD" compact)"
 ctx="$(field "$out" additionalContext)"
 check_eq "3 the scratchpad note is copied into the notes folder" "Written before the switch." "$(cat "$N2/handoff.md" 2>/dev/null)"
 check "3 and the session is told it was carried over" "copied" "$ctx"
@@ -91,14 +93,14 @@ check "3 naming where it came from" "$SC2/handoff.md" "$ctx"
 check_eq "3 the scratchpad copy is left where it was" "Written before the switch." "$(cat "$SC2/handoff.md" 2>/dev/null)"
 # Once: a later note in the notes folder is never overwritten by the stale scratchpad one.
 printf 'Written after the switch.\n' > "$N2/handoff.md"
-out="$(fire "$S2" "$T2" /Users/x/Apps/proj resume)"
+out="$(fire "$S2" "$T2" "$CWD" resume)"
 check_eq "3 a newer note in the notes folder is never overwritten" "Written after the switch." "$(cat "$N2/handoff.md")"
 check_not "3 and nothing claims a copy was made" "copied" "$(field "$out" additionalContext)"
 
 # ---- 4. The folder cannot be made: said to the session AND to Dan, never silent ----
 S3="0a1b2c3d-1111-2222-3333-aaaabbbbcccc"
 mkdir -p "$WORK/ro"; chmod a-w "$WORK/ro"
-out="$(start_payload "$S3" "$WORK/projects/$KEY/$S3.jsonl" /Users/x/Apps/proj | CLAUDE_HOME="$WORK/ro/home" bash "$HOOK" 2>/dev/null)"; rc=$?
+out="$(start_payload "$S3" "$WORK/projects/$KEY/$S3.jsonl" "$CWD" | CLAUDE_HOME="$WORK/ro/home" bash "$HOOK" 2>/dev/null)"; rc=$?
 check_eq "4 a folder that cannot be made never fails the session start" "0" "$rc"
 check "4 the session is told it could not be made" "could not be created" "$(field "$out" additionalContext)"
 check "4 and that a scratchpad note is lost on restart" "lost" "$(field "$out" additionalContext)"
@@ -109,7 +111,7 @@ chmod u+w "$WORK/ro"
 out="$(printf 'not json' | bash "$HOOK" 2>/dev/null)"; rc=$?
 check_eq "5 an unreadable payload never fails the session start" "0" "$rc"
 check "5 and is said, not dropped" "notes folder" "$(field "$out" system)"
-out="$(fire "../../etc" "$TRANSCRIPT" /Users/x/Apps/proj)"
+out="$(fire "../../etc" "$TRANSCRIPT" "$CWD")"
 check_not "5 a session id that is not a plain name is never made into a path" "/etc" "$(field "$out" additionalContext)"
 [ -e "$CLAUDE_HOME/state/etc" ] && check "5 nothing is created outside the notes root" ok "created" || check "5 nothing is created outside the notes root" ok ok
 
