@@ -931,7 +931,7 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
-// the middle of a turn: the turn is still running, so a Done pressed then waits behind it as before,
+// the middle of a turn: the turn is still running, so a Done pressed then is held for it (#2482),
 // and never comes back while that turn runs.
 test('a reload in the middle of a turn keeps it running, so a Done pressed then is never released while it runs (#1703)', withKit, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
