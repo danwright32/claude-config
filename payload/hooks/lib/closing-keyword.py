@@ -290,7 +290,9 @@ class Lookup:
         if key not in self.seen:
             try:
                 answer = json.loads(self._fetch(repo, number))
-                if not isinstance(answer, dict) or not isinstance(answer.get("state"), str):
+                # Only the two states GitHub has: anything else would compare as "not open" and
+                # pass as closed, so it is a shape this cannot read (L50).
+                if not isinstance(answer, dict) or str(answer.get("state")).lower() not in ("open", "closed"):
                     raise ValueError("no state")
                 self.seen[key] = ("pull request" if answer.get("pull_request") else "issue",
                                   answer["state"].lower())

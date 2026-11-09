@@ -205,8 +205,8 @@ command -v python3 >/dev/null 2>&1 || deny "Cannot tell whether this merge close
 # Its stderr is kept apart, so a warning Python prints on the way is never read as a finding.
 DET_ERR=$(mktemp "${TMPDIR:-/tmp}/closing-merge-det.XXXXXX") || DET_ERR=/dev/null
 # The detector looks every pair up with gh, inside what is left of the hook's 30 seconds after the
-# read above, keeping 3 back, at most 10 and at least 1 (claude-config#2464). A lookup past it
-# refuses, with that reason, never passes.
+# read above, keeping 3 back, at most 10 and at least 1, all chosen and not measured
+# (claude-config#2464). A lookup past it refuses, with that reason, never passes.
 lookup_budget=$((27 - SECONDS)); [ "$lookup_budget" -gt 10 ] && lookup_budget=10; [ "$lookup_budget" -lt 1 ] && lookup_budget=1
 findings=$(printf '%s' "$view" | CLOSING_LOOKUP_BUDGET_SECONDS="${CLOSING_LOOKUP_BUDGET_SECONDS:-$lookup_budget}" python3 "$DETECTOR" pr "$api_slug" 2>"$DET_ERR"); det_rc=$?
 det_why=$(awk 'NF { last = $0 } END { print last }' "$DET_ERR" 2>/dev/null | cut -c1-300)

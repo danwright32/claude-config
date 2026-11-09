@@ -39,7 +39,7 @@ printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/other#
 cat > "$WORK/lookup.sh" <<'STUB'
 #!/usr/bin/env bash
 kind=issue; state=open
-line="$(grep -i -- "^$1#$2 " "$LOOKUP_TABLE" | head -1)"
+line="$(grep -m 1 -i -- "^$1#$2 " "$LOOKUP_TABLE")"
 [ -n "$line" ] && read -r _ kind state <<< "$line"
 case "$kind" in
   fail) echo "HTTP 404: Not Found (https://api.github.com/repos/$1/issues/$2)" >&2; exit 1 ;;

@@ -49,7 +49,7 @@ cat > "$WORK/lookup.sh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s#%s\n' "$1" "$2" >> "$LOOKUP_LOG"
 kind=issue; state=open
-line="$(grep -i -- "^$1#$2 " "$LOOKUP_TABLE" | head -1)"
+line="$(grep -m 1 -i -- "^$1#$2 " "$LOOKUP_TABLE")"
 [ -n "$line" ] && read -r _ kind state <<< "$line"
 case "$kind" in
   fail) echo "HTTP 404: Not Found (https://api.github.com/repos/$1/issues/$2)" >&2; exit 1 ;;
@@ -144,7 +144,7 @@ want_clean "would, in an earlier sentence"       "A rewrite would be cleaner. Fi
 # listed issues could ever see it.
 # =================================================================================================
 printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/widget#60 pr closed" \
-  "acme/widget#61 issue closed" "acme/widget#404 fail" "acme/widget#405 junk" > "$LOOKUP_TABLE"
+  "acme/widget#61 issue closed" "acme/widget#404 fail" "acme/widget#405 junk" "acme/widget#406 issue merged" > "$LOOKUP_TABLE"
 
 want_finding() {  # $1 = description, $2 = body, $3 = a needle the finding must carry
   local out; out="$(detect "$2")"
@@ -167,6 +167,8 @@ want_finding "a closing word in the middle of a sentence before an open issue" \
 want_finding "a lookup that fails refuses, with the reason" "Closes #404." "HTTP 404"
 want_finding "a lookup that fails names the reference it could not look up" "Closes #404." "acme/widget#404"
 want_finding "an answer that is not GitHub's issue shape refuses" "Closes #405." "could not look up"
+want_finding "a state that is neither open nor closed refuses rather than reading as closed" \
+  "the earlier fix #406 landed" "could not look up"
 want_finding "a later pair on a line is judged by its own place, not the first pair's" \
   "Closes #12, and the p0 fix #2451 is unrelated." "pull request"
 

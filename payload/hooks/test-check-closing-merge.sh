@@ -58,7 +58,7 @@ case "$*" in
   *"api repos/"*"/issues/"*)
     ref="$*"; ref="${ref#api repos/}"; n="${ref##*/issues/}"; ref="${ref%%/issues/*}#$n"
     kind=issue; state=open
-    line="$(grep -i -- "^$ref " "${FAKE_ISSUES:-/dev/null}" | head -1)"
+    line="$(grep -m 1 -i -- "^$ref " "${FAKE_ISSUES:-/dev/null}")"
     [ -n "$line" ] && read -r _ kind state <<< "$line"
     [ "$kind" = other-account ] && { [ "${GH_TOKEN:-}" = tok ] && kind=issue || kind=fail; }
     case "$kind" in
@@ -70,7 +70,7 @@ esac
 SH
 chmod +x "$WORK/bin/gh"
 printf '%s\n' "acme/widget#2451 pr open" "acme/widget#2438 pr open" "acme/widget#60 pr closed" \
-  "acme/widget#404 fail" "acme/widget#77 other-account" > "$WORK/issues"
+  "acme/widget#404 fail" "acme/widget#77 other-account open" > "$WORK/issues"
 
 pr_json() {  # $1 = body, $2 = closing issue numbers in acme/widget, space separated ; $3 = url
   python3 -c '
