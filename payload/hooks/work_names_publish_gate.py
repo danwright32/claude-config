@@ -279,6 +279,7 @@ GIST_CREATE = ("gist", "create")
 GIST_EDIT = ("gist", "edit")
 REPO_EDIT = ("repo", "edit")
 NOTES_FILE_FLAGS = ("--notes-file", "-F")
+BODY_FILE_FLAGS = ("--body-file", "-F")
 GENERATED = ("with notes GitHub writes from the pull requests and commits it includes (--generate-notes), "
              "which this check cannot read, so whether they name a work organisation or repository cannot "
              "be told. Write the notes with --notes or --notes-file instead.")
@@ -292,6 +293,17 @@ NOTES_STDIN = ("with notes from standard input (--notes-file -) that the command
                "told. Write the notes with a heredoc in the command, or name the file with --notes-file.")
 NOTES_UNREAD = ("with notes from standard input (--notes-file -), and what it is fed could not be read from "
                 "the command (%s), so whether they name a work organisation or repository cannot be told.")
+# The same for a pull request's, issue's or comment's body from `--body-file -` (claude-config#2443).
+BODY_STDIN = ("with a body from standard input (--body-file -) that the command does not show, which this "
+              "check cannot read here, so whether it names a work organisation or repository cannot be "
+              "told. Write the body with a heredoc in the command, or name the file with --body-file.")
+BODY_UNREAD = ("with a body from standard input (--body-file -), and what it is fed could not be read from "
+               "the command (%s), so whether it names a work organisation or repository cannot be told.")
+# A file written by a stage that redirects standard input more than once holds whatever the shell fed
+# it last, never reliably the text the command shows (claude-config#2469).
+MIXED_INPUT = ("from %s, which this command writes from more than one redirection of standard input (a "
+               "heredoc, <, <<<, <& or <>), and the shell feeds it only the last, so what the file holds "
+               "cannot be told from the command. Write it from one heredoc instead.")
 GIST_STDIN = ("from standard input (it names no file, or names -), which this check cannot read here, so "
               "whether it names a work organisation or repository cannot be told. Name the file instead.")
 GIST_EDIT_STDIN = ("with a file's new text from standard input (-), which this check cannot read here, so "
@@ -463,19 +475,49 @@ def judge_repos(what, slugs, cwd, gh_repo, command, bodies, unseen=()):
     return None
 
 
+def _body_files(args, command, place, flags, clustered=False):
+    """field.body_files, with one more state for this gate alone: "mixed" for a file the command
+    writes from a stage that redirects standard input more than once (scan.mixed_input_writes,
+    claude-config#2469), which the issue field gate reads as shown and this gate refuses. A write is
+    matched to the file as body_files matches it: where both land, else by spelling."""
+    out = field.body_files(args, command, place, flags, clustered=clustered)
+    if not any(state in ("shown", "text") for _w, state, _d in out):
+        return out
+    try:
+        mixed = scan.mixed_input_writes(command, place.start, place.environ)
+    except scan.Unreadable as e:
+        # evaluate stops at a command the scan cannot read, so this is not expected; if it happens the
+        # file is refused as one whose writer could not be read, never judged from the command.
+        raise CannotTell("what writes the file it posts from could not be read (%s)" % e)
+    if not mixed:
+        return out
+    marked = []
+    for word, state, detail in out:
+        if state in ("shown", "text"):
+            path = scan.resolve_path(word, place)[0]
+            if any((lands == path if lands and path else field._same_path(target, word))
+                   for target, lands in mixed):
+                state, detail = "mixed", None
+        marked.append((word, state, detail))
+    return marked
+
+
 def _file_bodies(args, command, place, flags, shown_as):
-    """The files a command posts from, named by flags (field.body_files' rule), as judge's bodies: the
-    text of one read from disk, None for one this command writes from something it does not show.
+    """(bodies, unseen) for the files a command posts from, named by flags (field.body_files' rule):
+    the text of one read from disk, None for one this command writes from something it does not show,
+    and a clause for one written from more than one redirection of standard input (claude-config#2469).
     One whose text is in the command (written from text it shows, or standard input) is judged with
     the command; one missing or unreadable is the issue field gate's to refuse, and gh's. One named
     inside clustered short flags (`-dF body.md`) is read too (claude-config#2412)."""
-    out = []
-    for word, state, detail in field.body_files(args, command, place, flags, clustered=True):
+    bodies, unseen = [], []
+    for word, state, detail in _body_files(args, command, place, flags, clustered=True):
         if state == "hidden":
-            out.append(("%s %s" % (shown_as, word), None))
+            bodies.append(("%s %s" % (shown_as, word), None))
         elif state == "text":
-            out.append(("%s %s" % (shown_as, word), detail))
-    return out
+            bodies.append(("%s %s" % (shown_as, word), detail))
+        elif state == "mixed":
+            unseen.append(MIXED_INPUT % ("%s %s" % (shown_as, word)))
+    return bodies, unseen
 
 
 def judge_release(kind, what, args, envs, place, where, command):
@@ -483,52 +525,57 @@ def judge_release(kind, what, args, envs, place, where, command):
     --notes on the command line, --notes-file read here, and the notes gh has GitHub generate or takes
     from the tag refused in a public repository, since this check cannot read them."""
     slugs, gh_repo = _repo_of(kind, args, envs, place)
-    bodies = _file_bodies(args, command, place, NOTES_FILE_FLAGS, "--notes-file")
-    unseen = ([GENERATED] if _given(args, ("--generate-notes",)) else []) + \
-             ([FROM_TAG] if _given(args, ("--notes-from-tag",)) else [])
-    if _notes_stdin(args):
-        more, unread = _release_stdin(kind, command, place)
+    bodies, unseen = _file_bodies(args, command, place, NOTES_FILE_FLAGS, "--notes-file")
+    unseen += ([GENERATED] if _given(args, ("--generate-notes",)) else []) + \
+              ([FROM_TAG] if _given(args, ("--notes-from-tag",)) else [])
+    if _reads_stdin(args, NOTES_FILE_FLAGS):
+        more, unread = _stdin_bodies(kind, command, place, NOTES_FILE_FLAGS, NOTES_STDIN, NOTES_UNREAD)
         bodies += more
         unseen += unread
     return judge_repos(what, slugs, where, gh_repo, command, bodies, unseen)
 
 
-def _notes_stdin(args):
-    """Whether a gh release command takes its notes from standard input: `--notes-file -` or `-F -`
-    (which scan.flag_values passes over as a flag with no value), `--notes-file=-`, `-F-`, or a `-`
-    after a clustered -F (`-dF -`)."""
+def _reads_stdin(args, flags):
+    """Whether a gh command takes the file flags name (long, short) from standard input: `--notes-file -`
+    or `-F -` (which scan.flag_values passes over as a flag with no value), `--notes-file=-`, `-F-`, or
+    a `-` after a clustered short flag (`-dF -`, `-dF-`)."""
     pairs = zip(args, args[1:])
-    return any(a in NOTES_FILE_FLAGS and b == "-" for a, b in pairs) or \
-        "-" in scan.flag_values(args, *NOTES_FILE_FLAGS, clustered=True)
+    return any(a in flags and b == "-" for a, b in pairs) or \
+        "-" in scan.flag_values(args, *flags, clustered=True)
 
 
-def _release_stdin(kind, command, place):
-    """(bodies, unseen) for release notes gh reads from standard input (`--notes-file -`,
-    claude-config#2430). Text the command shows is judged with the command and adds nothing; a file
-    fed in with `<` is read as a notes file is; anything else is unseen, as is a release reading
-    standard input that scan.stdin_feeds does not find (one a shell runs from a string). Every release
-    of kind in the command reading standard input counts, the reading that refuses more, and fewer
-    found by stdin_feeds than scan_gh_in_context finds is refused, so a release whose notes are shown
-    never stands in for one run from a string beside it (the lessons review of #2430)."""
+def _stdin_bodies(kind, command, place, flags, stdin_clause, unread_clause):
+    """(bodies, unseen) for the text gh reads from standard input for the file flag flags names:
+    release notes (`--notes-file -`, claude-config#2430) and a pull request's, issue's or comment's
+    body (`--body-file -`, claude-config#2443). Text the command shows is judged with the command and
+    adds nothing; a file fed in with `<` is read as a named file is; anything else is stdin_clause, as
+    is a command reading standard input that scan.stdin_feeds does not find (one a shell runs from a
+    string). Every command of kind reading standard input counts, the reading that refuses more, and
+    fewer found by stdin_feeds than scan_gh_in_context finds is refused, so one whose text is shown
+    never stands in for one run from a string beside it (the lessons review of #2430). The guard on
+    gh (gh_main) reads the bytes only for a lone `-`; it judges a command with no redirection, so the
+    `--body-file=-` and `-F-` it did not read are refused here as hidden."""
     try:
-        feeds = [f for f in scan.stdin_feeds(command, {kind}) if _notes_stdin(f[1])]
+        feeds = [f for f in scan.stdin_feeds(command, {kind}) if _reads_stdin(f[1], flags)]
         every = [f for f in scan.scan_gh_in_context(command, place.start, dict(place.environ or {}), {kind})
-                 if _notes_stdin(f[1])]
+                 if _reads_stdin(f[1], flags)]
     except scan.Unreadable as e:
-        return [], [NOTES_UNREAD % e]
+        return [], [unread_clause % e]
     if not feeds or len(feeds) < len(every):
-        return [], [NOTES_STDIN]
+        return [], [stdin_clause]
     bodies, unseen = [], []
     for _kind, _args, state, detail in feeds:
         if state == "hidden":
-            unseen.append(NOTES_STDIN)
+            unseen.append(stdin_clause)
         elif state == "file":
             shown_as = "the file %s fed to it on standard input" % detail
-            for word, got, why in field.body_files(["--notes-file", detail], command, place, NOTES_FILE_FLAGS):
+            for word, got, why in _body_files([flags[0], detail], command, place, flags):
                 if got == "hidden":
                     bodies.append((shown_as, None))
                 elif got == "text":
                     bodies.append((shown_as, why))
+                elif got == "mixed":
+                    unseen.append(MIXED_INPUT % shown_as)
                 elif got in ("missing", "unreadable"):
                     unseen.append(UNREAD_FILE % (shown_as, why))
     return bodies, unseen
@@ -565,9 +612,11 @@ def _gist_files(files, command, place):
     for f in files:
         named += ["--file", f]
     bodies, unseen = [], []
-    for word, state, detail in field.body_files(named, command, place, ("--file",)):
+    for word, state, detail in _body_files(named, command, place, ("--file",)):
         if state == "text":
             bodies.append(("the file %s" % word, detail))
+        elif state == "mixed":
+            unseen.append(MIXED_INPUT % ("the file %s" % word))
         elif state == "hidden":
             bodies.append(("the file %s" % word, None))
         elif state in ("missing", "unreadable"):
@@ -922,8 +971,12 @@ def _judge_text(kind, what, args, envs, place, where, command):
     """judge() for one gh pr or issue command: its body files, and what it posts that is not on its
     command line (claude-config#2326). Raises CannotTell."""
     slugs, gh_repo = _repo_of(kind, args, envs, place)
-    bodies = _file_bodies(args, command, place, ("--body-file", "-F"), "--body-file")
-    unseen = [EDITED] if _given(args, EDITOR_FLAGS) else []
+    bodies, unseen = _file_bodies(args, command, place, BODY_FILE_FLAGS, "--body-file")
+    unseen += [EDITED] if _given(args, EDITOR_FLAGS) else []
+    if _reads_stdin(args, BODY_FILE_FLAGS):
+        more, unread = _stdin_bodies(kind, command, place, BODY_FILE_FLAGS, BODY_STDIN, BODY_UNREAD)
+        bodies += more
+        unseen += unread
     if kind == ("pr", "create"):
         if _given(args, FILL_FLAGS) and not (_given(args, TITLE_FLAGS) and _given(args, BODY_FLAGS)):
             unseen.append(FILLED)

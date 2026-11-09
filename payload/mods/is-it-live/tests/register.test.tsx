@@ -1078,9 +1078,9 @@ test('a merge the helper makes in the background is asked of GitHub at the turn 
 })
 
 // #2403: since #2351 a helper behind a long line that keeps moving has no fixed longest, so it can be
-// running still past WAIT_MS. Past it, the merge is asked about only while lib/merge-in-line.sh says
-// the helper holds a place in line; one whose helper is gone, or that cannot be asked, is let go as
-// before. A helper still running is never let go, so its merge, made at hour 26, is still owed a card.
+// running still past WAIT_MS. Past it, the merge is let go only once lib/merge-in-line.sh says the
+// helper is gone. A helper still running, or one whose line cannot be read (#2466), is never let go,
+// so its merge, made at hour 26, is still owed a card.
 const HOUR = 3_600_000
 const pastWindow = async ($: unknown, on: On, inLine: Gh | undefined) => {
   const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
@@ -1113,9 +1113,40 @@ test('a background merge past the window whose helper has left the line is let g
   expect(after.block).toBeUndefined()
 })
 
-test('a background merge past the window is let go when whether its helper is in line cannot be read, never kept on an answer it did not get (#2403)', withKit, async ($, on) => {
-  const { after } = await pastWindow($, on, { exitCode: 2, stdout: '', stderr: 'usage: merge-in-line.sh <owner/name> <pull request number>' })
-  expect(after.block).toBeUndefined()
+// #2466: a check that fails to answer is not "gone". Whether the helper is still in line is then not
+// known, so the merge is never let go as though it had finished: it is waited on still, said once
+// in plain words, and its merge at hour 26 is owed its card as a running one's is.
+const UNREAD = `Is it live: whether the merge helper for ${REPO}#412 is still in line could not be read`
+for (const [what, answer, why] of [
+  ['the check exits with an error', { exitCode: 2, stdout: '', stderr: 'merge-in-line.sh: could not read the line at /x (not a folder this can list)' }, 'could not read the line at /x'],
+  ['the check answers nothing', { exitCode: 0, stdout: '' }, "it gave no answer ('')"],
+  ['the check answers something that is no answer', { exitCode: 0, stdout: 'syntax error near line 3\n' }, "it gave no answer ('syntax error near line 3')"],
+] as const) {
+  test(`a background merge past the window is waited on still, and said, when ${what} (#2466)`, withKit, async ($, on) => {
+    const { w, quiet, after } = await pastWindow($, on, answer)
+    expect(quiet.block).toBeUndefined()
+    const said = w.toasts.filter(t => t.startsWith(UNREAD))
+    // Said once, however many turn ends ask, naming why and that the merge is still waited on.
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain(why)
+    expect(said[0]).toContain('so its merge is still waited on')
+    expect(after.block).toContain(`${REPO}#412`)
+  })
+}
+
+test('a check that could not be read and then answers gone lets the merge go (#2466)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs), inLine: { exitCode: 2, stdout: '', stderr: 'boom' } })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --repo ${REPO} --squash`, { run_in_background: true })
+  await w.clock.advance(25 * HOUR)
+  expect((await turnEnd($)).block).toBeUndefined()
+  w.w.inLine = { exitCode: 0, stdout: 'gone\n' }
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: T0 + 26 * HOUR }
+  await w.clock.advance(HOUR)
+  expect((await turnEnd($)).block).toBeUndefined()
 })
 
 // #1991: a merge the helper makes in the background stays waiting until a turn end hears from GitHub
