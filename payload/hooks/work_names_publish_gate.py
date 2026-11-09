@@ -485,8 +485,10 @@ def _body_files(args, command, place, flags, clustered=False):
         return out
     try:
         mixed = scan.mixed_input_writes(command, place.start, place.environ)
-    except scan.Unreadable:
-        return out  # body_files has read the command already, and a command it cannot read never gets here
+    except scan.Unreadable as e:
+        # evaluate stops at a command the scan cannot read, so this is not expected; if it happens the
+        # file is refused as one whose writer could not be read, never judged from the command.
+        raise CannotTell("what writes the file it posts from could not be read (%s)" % e)
     if not mixed:
         return out
     marked = []

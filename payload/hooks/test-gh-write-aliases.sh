@@ -442,6 +442,21 @@ a clean build
 EOF
 gh release create v1 $PRIV --notes-file notes.md"
 check "#2469 (control) and written that way for a private repository it passes: $out" passed
+# Where the writes cannot be read for the mixed input check, the file is refused as one whose writer
+# could not be read, never passed as judged from the command (L11).
+unread="$(cd "$CO" && GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
+def broken(*a, **k):
+    raise g.scan.Unreadable("a test stand in")
+g.scan.mixed_input_writes = broken
+cmd = "cat <<'"'"'EOF'"'"' > notes.md\nclean\nEOF\ngh release create v1 --notes-file notes.md"
+place = g.scan.scan_gh_in_context(cmd, ".", {}, {("release", "create")})[0][3]
+try:
+    print(g._body_files(["--notes-file", "notes.md"], cmd, place, g.NOTES_FILE_FLAGS))
+except g.CannotTell as e:
+    print("CANNOT TELL: %s" % e)' "$HERE/work_names_publish_gate.py" 2>&1)"
+check "#2469 a mixed input check that cannot read the writes refuses, saying so: $unread" \
+  has "$unread" "CANNOT TELL: what writes the file it posts from could not be read (a test stand in)"
 
 # A pull request or issue body gh reads from standard input (`--body-file -`, `--body-file=-`, `-F-`,
 # claude-config#2443) is judged by the rule release notes are (#2430, #2442): shown in one heredoc or
