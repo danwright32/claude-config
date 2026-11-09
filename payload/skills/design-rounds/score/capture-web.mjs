@@ -65,8 +65,19 @@ const READY_TIMEOUT_MS = 30_000;
 export const LAUNCH_ARGS = ["--disable-gpu", "--force-color-profile=srgb", "--disable-partial-raster",
   "--disable-lcd-text", "--font-render-hinting=none"];
 
-// Where Playwright's own "chrome" channel finds Google Chrome, which launchChrome runs instead.
-export const CHANNEL_CHROME = { darwin: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", linux: "/opt/google/chrome/chrome" };
+/**
+ * The Chrome the "chrome" channel draws in, from headless_chrome.py, the one lookup every hidden Chrome
+ * is found by (claude-config#2191), beside this file here and in a vendored copy alike: a separate
+ * build, never the Google Chrome Dan uses, whose hidden copies checked in with macOS as
+ * com.google.Chrome and took his click on Chrome in the Dock. Throws its refusal, naming the install
+ * command, when there is none.
+ */
+export function findHiddenChrome({ here = HERE, env = process.env, run = spawnSync } = {}) {
+  const p = run("python3", [join(here, "headless_chrome.py")], { encoding: "utf8", env });
+  if (p.error) throw new Error(`the hidden Chrome could not be looked up: python3 did not run (${p.error.message})`);
+  if (p.status !== 0) throw new Error(`${(p.stderr || "").trim() || "headless_chrome.py found no hidden Chrome"}; or draw with --channel bundled, Playwright's own Chromium`);
+  return p.stdout.trim();
+}
 
 /** headless-dom.sh: beside this file in a vendored copy, one folder up in claude-config's. */
 export function findHeadlessDom(here = HERE) {
@@ -83,13 +94,13 @@ export function findHeadlessDom(here = HERE) {
  * headless-dom.sh in Chrome's place (HEADLESS_DOM_EXEC), which starts it with the copy switched off,
  * folded into Playwright's own --disable-features; "bundled" is Playwright's own Chromium, which makes
  * no copy (measured the same day) and is launched as it was. check-chrome-launches.py fails on a real
- * Chrome launched any other way.
+ * Chrome launched any other way. Since claude-config#2191 the Chrome "chrome" runs is the separate
+ * build findHiddenChrome gives, never Google Chrome, and headless-dom.sh refuses Google Chrome too.
  */
-export function chromeLaunchOptions(channel, args, { here = HERE, platform = process.platform, env = process.env } = {}) {
+export function chromeLaunchOptions(channel, args, { here = HERE, env = process.env, find = findHiddenChrome } = {}) {
   if (channel !== "chrome") return { args };
-  const chrome = CHANNEL_CHROME[platform];
-  if (!chrome) throw new Error(`no Google Chrome location is known on ${platform}; draw with --channel bundled`);
   const headlessDom = findHeadlessDom(here);
+  const chrome = find({ here, env });
   return { executablePath: headlessDom, args, env: { ...env, HEADLESS_DOM_EXEC: "1", HEADLESS_DOM_CHROME: chrome } };
 }
 

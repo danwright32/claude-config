@@ -254,6 +254,28 @@ out="$(MWR_TURN_DIR="$WORKDIR/line-is-a-file" bash "$INLINE" acme/widget 41 2>&1
 check_eq "#2403 a turn folder that is a file is a failure to ask" "2" "$rc"
 check "#2403 naming where it looked" "$WORKDIR/line-is-a-file" "$out"
 [[ "$out" != *gone* ]] && ok || bad "#2403 and it never says gone (said: $out)"
+# #2466: a ticket that is there but cannot be read could be the asked pull request's, alive, so it
+# is no answer either, never skipped on the way to "gone".
+reset
+other_joins acme/widget 41 1000 "$LIVE" "$LIVE_START" >/dev/null
+locked=""
+for t in "$MWR_TURN_DIR/acme/widget"/*; do
+  case "${t##*/}" in ''|*[!0-9]*) ;; *) locked="${t##*/}"; break ;; esac
+done
+if [ -z "$locked" ]; then
+  bad "#2466 the line should hold a ticket to make unreadable"
+else
+  chmod 000 "$MWR_TURN_DIR/acme/widget/$locked"
+  if [ -r "$MWR_TURN_DIR/acme/widget/$locked" ]; then
+    echo "SUITE-PART-UNMEASURED #2466 an unreadable ticket: this user can read a mode 000 file"
+  else
+    out="$(bash "$INLINE" acme/widget 41 2>&1)"; rc=$?
+    check_eq "#2466 a ticket that cannot be read is a failure to ask" "2" "$rc"
+    check "#2466 naming the ticket" "ticket $locked" "$out"
+    [[ "$out" != *gone* ]] && ok || bad "#2466 and it never says gone (said: $out)"
+  fi
+  chmod 600 "$MWR_TURN_DIR/acme/widget/$locked"
+fi
 
 # =================================================================================================
 # 10. The front of the line (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper,
