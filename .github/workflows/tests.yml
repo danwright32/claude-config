@@ -12,10 +12,15 @@ name: tests
 # gets a full unfiltered run, once. Watching every push as well ran the suite TWICE for every
 # commit on a branch with a PR open, since both triggers fire, and the second run tells you nothing
 # the first did not.
+#
+# By hand too (claude-config#2463): `gh workflow run tests.yml --ref <branch>` runs a branch with
+# no pull request open, which is how a change to this workflow can be measured before anyone is
+# asked to review it. Nothing starts it on its own, so it adds no run to any push.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # On a pull request branch a newer push really does supersede the old one, so the older run is
 # cancelled: it tells you nothing you will act on.
@@ -42,7 +47,118 @@ permissions:
   contents: read
 
 jobs:
-  suite:
+  # THREE JOBS WHERE THERE WAS ONE (claude-config#2463). Until 2026-11-09 one job named `suite` ran
+  # every suite, two at a time, and took 30 to 40 minutes on a passing run on main (284 suites; the
+  # per suite durations its logs print summed to 3500 to 4800 seconds over eight runs that day). The
+  # suites are independent, so they now run as PARTS, one job each, side by side:
+  #
+  #   deal   reads what the last run measured and deals the suites into parts by that cost (L315),
+  #          with the runner itself, so the suites are discovered from disk exactly as a full run
+  #          discovers them (L96). One job deals and every part reads its deal, so two parts can
+  #          never disagree about which suites are whose.
+  #   parts  one job per part, each running only its own suites, and refusing outright when the
+  #          deal does not cover exactly the suites its tree holds.
+  #   suite  the fan in, holding the check name every merge already waited on (L305). It runs
+  #          whatever the parts did and is green only when the deal and every part were. It also
+  #          merges what each part measured into the one store the next run deals from.
+  #
+  # The number of parts is the one setting below (HOOK_TESTS_DEAL) and the matrix is read from what
+  # the deal job made of it, never written twice. This repository is public, so its runners cost
+  # nothing; the price of a part is a runner slot held for its length (L307).
+  deal:
+    runs-on: ubuntu-26.04
+    # Every job here exceeds the suite's own thirty minute ceiling, which test-claude-sync.sh holds
+    # for every job in the file (#210). The deal itself takes seconds.
+    timeout-minutes: 35
+    outputs:
+      timings-key: ${{ steps.timings-cache.outputs.cache-matched-key }}
+      parts: ${{ steps.deal.outputs.parts }}
+      count: ${{ steps.deal.outputs.count }}
+      dealt: ${{ steps.deal.outputs.dealt }}
+    steps:
+      # First, as in the parts job, where the runner reads it (claude-config#1901).
+      - name: Record when the job started
+        run: echo "HOOK_TESTS_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Pinned to a commit, with the version beside it, so the code that runs cannot change under
+      # the same tag, and on a major that runs on Node 24 rather than the deprecated Node 20
+      # (claude-config#597). tests/test-ci-workflow.sh refuses a tag, or a major still on Node 20.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # What the last runs MEASURED, carried between them (claude-config#203, #144). Two stores
+      # live here: what each suite cost, which decides the order the runner launches them in, and
+      # what each SECTION of the sync suite cost, which decides how its shards are dealt.
+      #
+      # Without this the runner reported a measured launch order for none of the suites it ran, on
+      # every single run, so CI ordered by file size and dealt its shards by counting sections while
+      # both were measured on a Mac. The one machine whose timing actually matters to a person
+      # waiting was the one machine with no measurements at all.
+      #
+      # A key unique to this run with a prefix to restore from, which is the rolling form: every
+      # run saves what it measured and the next restores the most recent. A cold cache is not a
+      # failure and is not silent either, because both readers SAY which rule they used.
+      #
+      # Restored here only, and saved only by the suite job once every part has added what it
+      # measured: each part restores this same entry by its exact key, so all of them start from
+      # the store the deal was made from.
+      - name: Restore what earlier runs measured
+        id: timings-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/claude-config
+          key: claude-config-timings-${{ github.run_id }}
+          restore-keys: |
+            claude-config-timings-
+
+      - name: A read-only run of the tool itself
+        # The self-update gate decides whether a pulled claude-sync is safe to hand control to by
+        # running exactly this and requiring it to finish. So a non-zero exit here does not fail one
+        # check, it makes the tool declare every good version broken, and the damage surfaces four
+        # sections away as a sync that quietly applied nothing. Run first, and on its own, so that
+        # cause is never again read off a symptom.
+        run: |
+          d="$(mktemp -d)"
+          mkdir -p "$d/home" "$d/repo/payload"
+          printf '{"hooks":{}}\n' > "$d/home/settings.json"
+          set +e
+          out="$(CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash claude-sync status 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          echo "claude-sync status exited $rc"
+          [ "$rc" -eq 0 ]
+
+      - name: No machine specific home path in the synced config
+        # Runs on its own, and first, because this guard exists to catch a line somebody wrote a
+        # moment ago and a check that only runs when it is remembered is not a guard at all (L27).
+        # It is cheap, it fails early, and on this runner payload/ IS the synced tree, which is
+        # exactly what it has to be clean. It runs again inside the step below as one suite among
+        # the rest; that is the point, not a duplicate.
+        run: bash payload/hooks/test-check-home-paths.sh
+
+      - name: Deal the suites into parts by what they measured
+        id: deal
+        env:
+          # How many parts, and so how many jobs run the suites. Four puts the longest part near
+          # the two longest suites (test-claude-sync.sh and test-merge-when-ready.sh, about ten
+          # minutes each on 2026-11-09), so a fifth part would mostly wait on them.
+          HOOK_TESTS_DEAL: 4
+        run: |
+          set -o pipefail
+          bash payload/hooks/run-all-tests.sh > "$RUNNER_TEMP/deal.tsv"
+          cat "$RUNNER_TEMP/deal.tsv"
+          echo "count=$HOOK_TESTS_DEAL" >> "$GITHUB_OUTPUT"
+          echo "parts=[$(seq -s, 1 "$HOOK_TESTS_DEAL")]" >> "$GITHUB_OUTPUT"
+          { echo "dealt<<DEALT_EOF"; cat "$RUNNER_TEMP/deal.tsv"; echo "DEALT_EOF"; } >> "$GITHUB_OUTPUT"
+
+  parts:
+    needs: deal
+    name: suites part ${{ matrix.part }}
+    strategy:
+      # Every part runs to the end however another does, so one red part still reports the rest.
+      fail-fast: false
+      matrix:
+        part: ${{ fromJSON(needs.deal.outputs.parts) }}
     # NAMED, never ubuntu-latest (claude-config#597). GitHub moves ubuntu-latest to Ubuntu 26 on
     # 2026-10-19, and this suite leans on GNU tool and bash behaviour, so an image changing on a date
     # would turn main red with no commit to blame. Ubuntu 26.04 was tried first, on 2026-10-05 (run
@@ -64,8 +180,7 @@ jobs:
     #
     # So the suite's deadlines are set HERE, for this runner, rather than inherited from a Mac's
     # defaults, and they are ordered with room between them: a stall is noticed at eight minutes,
-    # the absolute ceiling is thirty, and the platform's backstop is sixty (forty until 2026-11-08,
-    # below).
+    # the absolute ceiling is thirty, and the platform's backstop is the timeout-minutes below.
     #
     # RAISED 2026-09-19 (claude-config#473), from a 960s ceiling under a 20 minute backstop, and
     # this time against a measurement rather than a choice. The sentence above used to say the
@@ -120,7 +235,11 @@ jobs:
     # that night, 6 were cancelled at forty minutes with nothing failing, which stopped every
     # merge. Raising the ceiling only buys room; the growth itself is still unmeasured and is the
     # thing to cut (L299), so this number is a backstop to come down again, not a budget.
-    timeout-minutes: 60
+    #
+    # FORTY since 2026-11-09 (claude-config#2463): each part runs about a quarter of the suites, so
+    # a part measures nearer ten minutes than forty, and the backstop still sits above the suite's
+    # own thirty minute ceiling as the check above requires.
+    timeout-minutes: 40
     steps:
       # FIRST, before anything that takes time (claude-config#1901). The runner reads this job's
       # timeout-minutes above from this file and holds every flake recheck to end before it, so a
@@ -141,26 +260,17 @@ jobs:
           # which reads exactly like a clean audit (#105). The repo is small and this is cheap.
           fetch-depth: 0
 
-      # What the last runs MEASURED, carried between them (claude-config#203, #144). Two stores
-      # live here: what each suite cost, which decides the order the runner launches them in, and
-      # what each SECTION of the sync suite cost, which decides how its shards are dealt.
-      #
-      # Without this the runner reported a measured launch order for none of the suites it ran, on
-      # every single run, so CI ordered by file size and dealt its shards by counting sections while
-      # both were measured on a Mac. The one machine whose timing actually matters to a person
-      # waiting was the one machine with no measurements at all.
-      #
-      # A key unique to this run with a prefix to restore from, which is the rolling form: every
-      # run saves what it measured and the next restores the most recent. A cold cache is not a
-      # failure and is not silent either, because both readers SAY which rule they used.
-      - name: Restore what earlier runs measured
+      # The store the deal was made from, by its exact key, so the launch order and the sync suite's
+      # shards are dealt from the same numbers in every part. A cold deal restored nothing, and
+      # neither does this.
+      - name: Restore what the deal was made from
         id: timings-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: needs.deal.outputs.timings-key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/claude-config
-          key: claude-config-timings-${{ github.run_id }}
-          restore-keys: |
-            claude-config-timings-
+          key: ${{ needs.deal.outputs.timings-key }}
+          fail-on-cache-miss: true
 
       - name: Record the environment the suite is judged in
         # Printed rather than assumed. Several checks shell out to pgrep, mktemp, rsync, jq and
@@ -194,31 +304,24 @@ jobs:
           # do not differ between them, so only the model can name the hardware behind each group.
           echo "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"
 
-      - name: A read-only run of the tool itself
-        # The self-update gate decides whether a pulled claude-sync is safe to hand control to by
-        # running exactly this and requiring it to finish. So a non-zero exit here does not fail one
-        # check, it makes the tool declare every good version broken, and the damage surfaces four
-        # sections away as a sync that quietly applied nothing. Run first, and on its own, so that
-        # cause is never again read off a symptom.
-        run: |
-          d="$(mktemp -d)"
-          mkdir -p "$d/home" "$d/repo/payload"
-          printf '{"hooks":{}}\n' > "$d/home/settings.json"
-          set +e
-          out="$(CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash claude-sync status 2>&1)"
-          rc=$?
-          set -e
-          printf '%s\n' "$out"
-          echo "claude-sync status exited $rc"
-          [ "$rc" -eq 0 ]
+      # Every hidden Chrome the suites start is the shared Playwright's headless shell, never Google
+      # Chrome (claude-config#2191), and it is found here the same way as on the Macs: install-playwright.sh
+      # puts it under HOME at the version shared-playwright.json pins, in the folder that file names
+      # (read from it, never written twice). Cached on that file, so a run downloads it only when the pin
+      # moves. An install that fails fails the job by name, rather than leaving every browser section of
+      # the design rounds suites to report unmeasured.
+      - name: Where the separate headless Chrome goes
+        id: hidden-chrome
+        run: echo "root=$HOME/$(jq -r .root payload/skills/design-rounds/score/shared-playwright.json)" >> "$GITHUB_OUTPUT"
 
-      - name: No machine specific home path in the synced config
-        # Runs on its own, and first, because this guard exists to catch a line somebody wrote a
-        # moment ago and a check that only runs when it is remembered is not a guard at all (L27).
-        # It is cheap, it fails early, and on this runner payload/ IS the synced tree, which is
-        # exactly what it has to be clean. It runs again inside the step below as one suite among
-        # the rest; that is the point, not a duplicate.
-        run: bash payload/hooks/test-check-home-paths.sh
+      - name: Restore the separate headless Chrome
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.hidden-chrome.outputs.root }}
+          key: design-score-playwright-${{ runner.os }}-${{ hashFiles('payload/skills/design-rounds/score/shared-playwright.json') }}
+
+      - name: Install the separate headless Chrome
+        run: bash payload/skills/design-rounds/score/install-playwright.sh
 
       - name: Install the pinned TypeScript compiler
         # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
@@ -226,7 +329,12 @@ jobs:
         # needs it here. The lockfile pins the version and carries the linux-x64 binary.
         run: npm ci --prefix tools/typescript --no-audit --no-fund
 
-      - name: Every suite in the repo
+      # What is in the store now came from the deal; anything newer than this was written by this
+      # part's suites, and only that is handed to the suite job to merge.
+      - name: Mark the store before the suites run
+        run: touch "$RUNNER_TEMP/before-suites"
+
+      - name: Every suite of this part
         # ONE step, and no list. This used to be four steps naming four directories, which is the
         # hand maintained list the runner itself refuses to keep (L96) written one level up in a
         # file nobody reads when adding a test. Written down 2026-08-21, payload/skills/milestone/
@@ -266,11 +374,19 @@ jobs:
           # oversubscription here costs seconds, and a path that only ever runs on the machine of
           # whoever wrote it is a path CI does not check at all (L88, L98).
           HOOK_TESTS_BUDGET: 4
+          # Which of the deal's parts this job runs (claude-config#2463). The runner refuses a deal
+          # that does not cover exactly the suites this tree holds, so a suite in no part is a red
+          # part, never a suite quietly run nowhere.
+          HOOK_TESTS_PART: ${{ matrix.part }}
+          HOOK_TESTS_PARTS: ${{ needs.deal.outputs.count }}
+          HOOK_TESTS_DEALT: ${{ runner.temp }}/deal.tsv
+          DEALT: ${{ needs.deal.outputs.dealt }}
         # Captured as well as printed, so the step below can assert on what it said. `tee` keeps
         # the log identical to what it was, and the pipeline's exit status is taken from the
         # runner rather than from tee, or a failing suite would be reported as a pass.
         run: |
           set -o pipefail
+          printf '%s\n' "$DEALT" > "$HOOK_TESTS_DEALT"
           bash payload/hooks/run-all-tests.sh 2>&1 | tee "$RUNNER_TEMP/run-all-tests.log"
 
       - name: The measured timings were actually used
@@ -286,6 +402,8 @@ jobs:
         # whether the cache step matched a key rather than on what the numbers happen to be.
         # Judging by the numbers alone would make "cold by design" and "the store stopped being
         # written" the same reading (L11).
+        env:
+          HOOK_TESTS_PART: ${{ matrix.part }}
         run: |
           log="$RUNNER_TEMP/run-all-tests.log"
           [ -s "$log" ] || { echo "The suite log is empty, so nothing was measured about it." >&2; exit 1; }
@@ -319,6 +437,11 @@ jobs:
           slots="$(sed -n 's/.* \([0-9][0-9]*\) slot(s) each.*/\1/p' "$log" | awk 'NR<=1')"
           case "${slots:-}" in ''|*[!0-9]*) slots=0 ;; esac
           if [ -z "$div" ]; then
+            # Only the sync suite divides its own work, and it runs in one part (#2463).
+            if ! awk -F'\t' -v p="$HOOK_TESTS_PART" '$1 == p && $2 == "tests/test-claude-sync.sh" { f = 1 } END { exit !f }' "$RUNNER_TEMP/deal.tsv"; then
+              echo "The sync suite, the one suite that divides its own work, was dealt to another part, so there was nothing here to divide."
+              exit 0
+            fi
             if [ "$slots" -le 1 ]; then
               echo "No suite divided its own work, and the runner gave each suite $slots slot(s), so there was nothing to divide. Nothing is asserted about section timings on this run."
               exit 0
@@ -335,7 +458,35 @@ jobs:
           fi
           echo "Shards dealt from measured section time for $dm of $dt section(s)."
 
+      # What this part's suites measured, for the suite job to merge into the one store the next
+      # deal reads. Only files written since the mark, so one part's stale copy of a suite another
+      # part ran can never overwrite the fresh one. Kept only from a passing part, as the single job
+      # kept its cache only on a pass.
+      - name: Collect what this part measured
+        run: |
+          mkdir -p "$RUNNER_TEMP/measured"
+          if [ -d "$HOME/.cache/claude-config" ]; then
+            cd "$HOME/.cache/claude-config"
+            find . -type f -newer "$RUNNER_TEMP/before-suites" -exec cp --parents {} "$RUNNER_TEMP/measured/" \;
+          fi
+          n="$(find "$RUNNER_TEMP/measured" -type f | wc -l)"
+          echo "$n record(s) written by this part's suites."
+          [ "$n" -gt 0 ] || { echo "This part's suites wrote no timing record at all, so the next deal would know nothing new about them." >&2; exit 1; }
+          # One archive, because an artifact refuses a file name holding a colon and the sync suite
+          # names each section's record after its heading (first CI run of the parts, 2026-11-09).
+          tar -C "$RUNNER_TEMP/measured" -cf "$RUNNER_TEMP/measured.tar" .
+
+      - name: Hand what this part measured to the suite job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: part-timings-${{ matrix.part }}
+          path: ${{ runner.temp }}/measured.tar
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Each changed suite section, run on its own
+        # In the last part only, so it runs once per push as it did in the single job (#2463).
+        if: matrix.part == fromJSON(needs.deal.outputs.count)
         # The suite's sections are independent: every one after the prelude runs alone, and the
         # single real dependency left is declared with a `# needs:` comment. How many that is is
         # not written down here: it changes, and a number in a comment goes stale silently (#140).
@@ -366,3 +517,66 @@ jobs:
           fi
           echo "Diffing against $base"
           bash tests/audit-changed-sections.sh "$base"
+
+  # THE FAN IN, and the name every merge waits on (claude-config#2463, L305). block-red-merge.sh and
+  # merge-when-ready.sh read every check in the rollup rather than one by name, and main has no
+  # branch protection naming a check, but `suite` is the name the history and every reader knows,
+  # so it stays the one verdict: green only when the deal and every part were green. `always()`
+  # makes it run when a part failed, so a red part is a red `suite` rather than a skipped one,
+  # which a reader of the rollup could take for nothing to report.
+  suite:
+    needs: [deal, parts]
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 35
+    steps:
+      # First, as in the parts job, where the runner reads it (claude-config#1901).
+      - name: Record when the job started
+        run: echo "HOOK_TESTS_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: The deal and every part passed
+        env:
+          DEAL: ${{ needs.deal.result }}
+          PARTS: ${{ needs.parts.result }}
+        run: |
+          echo "deal: $DEAL; parts: $PARTS"
+          if [ "$DEAL" != success ] || [ "$PARTS" != success ]; then
+            echo "Not every job that runs the suites passed (the deal $DEAL, the parts $PARTS), so neither do the suites. The failing part's own log names the suite." >&2
+            exit 1
+          fi
+
+      # The store the deal read, then each part's new records over it, saved as the one entry the
+      # next run's deal restores. Saved only here, once every part has passed.
+      - name: Restore what the deal was made from
+        if: needs.deal.outputs.timings-key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/claude-config
+          key: ${{ needs.deal.outputs.timings-key }}
+          fail-on-cache-miss: true
+
+      - name: Fetch what each part measured
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: part-timings-*
+          path: ${{ runner.temp }}/parts
+
+      - name: Merge every part's records into the store
+        env:
+          COUNT: ${{ needs.deal.outputs.count }}
+        run: |
+          # Counted against the deal, so a part that never ran is caught here too: on the first CI run
+          # of the parts (2026-11-09) GitHub started two of the four matrix jobs and never created
+          # the other two, and a needs result can only speak for the jobs that exist.
+          got="$(find "$RUNNER_TEMP/parts" -name measured.tar -type f | wc -l)"
+          echo "Records from $got of $COUNT part(s)."
+          [ "$got" -eq "$COUNT" ] || { echo "Only $got of $COUNT parts handed back what they measured, so either a part never ran or the next deal would be made from a store missing the rest." >&2; exit 1; }
+          mkdir -p "$HOME/.cache/claude-config"
+          find "$RUNNER_TEMP/parts" -name measured.tar -type f -exec tar -C "$HOME/.cache/claude-config" -xf {} \;
+          echo "The store now holds $(find "$HOME/.cache/claude-config/suite-timings" -type f 2>/dev/null | wc -l) suite record(s)."
+
+      - name: Save the merged store for the next run
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/claude-config
+          key: claude-config-timings-${{ github.run_id }}

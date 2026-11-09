@@ -30,6 +30,12 @@ export const CHANGE = 'Change wording'
 export const SCAN_MS = 3000
 /** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
 export const REEXPORT_HOPS = 3
+/**
+ * The most bytes of file names one git grep is handed: the files whose lines are listed go to git
+ * by name, in groups no larger than this, well inside macOS's 1 MB limit on a command line and its
+ * environment together.
+ */
+export const PATHSPEC_BYTES = 200_000
 
 // Files that can post: code and the config that carries a message. Prose files post nothing.
 const CODE = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'sh', 'bash', 'zsh', 'swift', 'kt', 'java', 'php', 'cs', 'rs', 'json', 'yml', 'yaml'])
@@ -88,6 +94,28 @@ export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(t
  * to it). The marker itself is still decided by slackMarked alone.
  */
 export const SENDER_PREFILTER = 'slack|postmessage'
+
+/**
+ * The files that could carry a Slack marker, as git grep -E -i lists them: each marker's run of
+ * characters that holds no space or line break, so a file the marker matches in its code always
+ * holds one (a comment is blanked to a single space, which none of these runs can hold). A file that
+ * only mentions Slack (a design page, a settings label) holds none, so it is never listed as one
+ * that might send, and its lines are never listed either: a work repository's design pages, which mention Slack
+ * on lines of up to 730 KB, made one listing 9.9 MB after #2481. Written as POSIX ERE, with no \b
+ * or \w, which macOS git grep -E does not read, and with a sign in brackets where the markers have
+ * one, so this file is not itself read as a Slack poster; a test holds every marker to it.
+ */
+export const MARKER_PREFILTER = [
+  'hooks\\.slack\\.com',
+  'chat[._]postmessage',
+  '@slack[/]',
+  'slack[_]sdk',
+  'slack-go[/]',
+  'slack_[a-z0-9_]*(webhook|token|channel)',
+  '(send|post|notify|alert)[a-z0-9_]*slack',
+  'slack[a-z0-9_]*\\.(send|post|notify|chat)',
+  'slack[a-z0-9_]*(send|post|notify|message|alert)',
+].join('|')
 
 /**
  * Whether a path, relative to its repository's root, is a test: a .test. or .spec. file, a _test or
@@ -737,6 +765,216 @@ export const wordingChange = (before: string[], after: string[]): { added: strin
     }
   }
   return { added, removed }
+}
+
+// Text only a model reads (#2475). A module a Slack sender imports can hold a model's own
+// instructions beside the words it posts, and those instructions were held as Slack wording, the
+// whole prompt shown in the picker. A string is read only by a model when it is the value of a key
+// only a model reads (system, instructions, prompt, or a message's content beside its role), or sits
+// in a top level declaration whose every use, in its own file and in every other file naming it, is
+// such a value, an import of it by its own name, or a part of another such declaration. One use of
+// any other kind (posted, logged, handed to a function, renamed on export) and it counts as wording,
+// so nothing the guard cannot follow is let through.
+
+/** A stretch of a file's text, from its first character up to but not including `to`. */
+export type Range = { from: number; to: number }
+
+/** The stretches of a file's text that are the inside of a string, and its comments, as stringsOf reads them. */
+export const tokenRanges = (text: string, hash: boolean): { strings: Range[]; comments: Range[] } => {
+  const strings: Range[] = []
+  const comments: Range[] = []
+  for (const m of text.matchAll(new RegExp(hash ? HASH_TOKENS : C_TOKENS, 'g'))) {
+    const from = m.index ?? 0
+    const to = from + m[0].length
+    if (m[1] === undefined && m[2] === undefined && m[3] === undefined) comments.push({ from, to })
+    else strings.push({ from: from + 1, to: to - 1 })
+  }
+  return { strings, comments }
+}
+
+// A file's text with its comments blanked character for character, so every place in it stays where
+// it was.
+const blankComments = (text: string, comments: Range[]): string => {
+  let out = ''
+  let at = 0
+  for (const c of [...comments].sort((a, b) => a.from - b.from)) {
+    if (c.from < at) continue
+    out += text.slice(at, c.from) + text.slice(c.from, c.to).replace(/[^\n]/g, ' ')
+    at = c.to
+  }
+  return out + text.slice(at)
+}
+
+const MODEL_KEYS = 'system|system_?prompt|instructions|prompt'
+// What comes before a model's input: an object's or dict's key after a brace or a comma, or a python
+// keyword argument after a bracket or a comma, the value possibly reached through a module
+// (copy.PROMPT). `const system = x` is a variable, never a key, so it is not one.
+const MODEL_VALUE = new RegExp(`(?:[{,]\\s*["']?(?:${MODEL_KEYS})["']?\\s*:|[(,]\\s*(?:${MODEL_KEYS})\\s*=)\\s*(?:[\\w$]+\\s*\\.\\s*)*$`, 'i')
+const CONTENT_VALUE = /[{,]\s*["']?content["']?\s*:\s*(?:[\w$]+\s*\.\s*)*$/i
+const ROLE = /["']?\brole["']?\s*:/
+
+/**
+ * Whether what stands at `at` in `code` (its comments blanked) is handed to a model: the value of a
+ * system, instructions or prompt key or keyword, or the content of a message object that carries a role.
+ */
+export const modelInput = (code: string, at: number): boolean => {
+  const before = code.slice(Math.max(0, at - 400), at)
+  if (MODEL_VALUE.test(before)) return true
+  if (!CONTENT_VALUE.test(before)) return false
+  const open = code.lastIndexOf('{', at)
+  const close = code.indexOf('}', at)
+  return open >= 0 && close > at && ROLE.test(code.slice(open, close))
+}
+
+/** A top level declaration: its name, where the name is, its whole text, and whether another file can import it. */
+export type Decl = { name: string; at: number; from: number; to: number; open: boolean }
+/** A file read for what only a model reads: its text with comments blanked, its language, its top level declarations. */
+export type ModelReading = { code: string; python: boolean; decls: Decl[] }
+
+const JS_DECL = /^(export\s+)?(?:declare\s+)?(?:(?:const|let|var)\s+([\w$]+)\s*(?::[^=\n]*)?=(?!=)|(?:async\s+)?function\s*\*?\s*([\w$]+)\s*[(<])/
+const PY_DECL = /^(?:([A-Za-z_]\w*)\s*(?::[^=\n]*)?=(?!=)|(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\()/
+const nameRe = (name: string) => new RegExp(`(?<![\\w$])${escapeRe(name)}(?![\\w$])`, 'g')
+const usesOf = (code: string, name: string): number[] => [...code.matchAll(nameRe(name))].map(m => m.index ?? 0)
+const inside = (rs: Range[], i: number) => rs.some(r => i >= r.from && i < r.to)
+// A name in a JavaScript export list under its own name: export { A, B }.
+const EXPORT_LIST = /\bexport\s+(?:type\s+)?\{[\w$\s,]*$/
+const exportListed = (code: string, at: number, name: string): boolean =>
+  EXPORT_LIST.test(code.slice(Math.max(0, at - 400), at)) && /^\s*[,}]/.test(code.slice(at + name.length))
+
+/**
+ * A file read for its top level declarations (#2475). A statement starts on a line beginning with
+ * anything but a space, a closing bracket, a quote or a dot, outside any string, so a line of a
+ * multi line prompt is never taken for one; a declaration runs to the next statement. A python name
+ * not starting with an underscore, or a JavaScript one exported, can be imported by another file.
+ */
+export const modelReading = (text: string, python: boolean, ranges: { strings: Range[]; comments: Range[] }): ModelReading => {
+  const code = blankComments(text, ranges.comments)
+  const starts: number[] = []
+  let i = 0
+  for (const line of code.split('\n')) {
+    if (/^[^\s)\]}'"`.]/.test(line) && !inside(ranges.strings, i)) starts.push(i)
+    i += line.length + 1
+  }
+  starts.push(code.length)
+  const decls: Decl[] = []
+  for (let k = 0; k < starts.length - 1; k++) {
+    const from = starts[k] as number
+    const to = starts[k + 1] as number
+    const m = (python ? PY_DECL : JS_DECL).exec(code.slice(from, to))
+    if (!m) continue
+    const name = (python ? (m[1] ?? m[2]) : (m[2] ?? m[3])) as string
+    const at = from + m[0].search(new RegExp(nameRe(name).source))
+    const open = python ? !name.startsWith('_') : m[1] !== undefined || usesOf(code, name).some(u => exportListed(code, u, name))
+    decls.push({ name, at, from, to, open })
+  }
+  return { code, python, decls }
+}
+
+const hostOf = (r: ModelReading, i: number): Decl | undefined => r.decls.find(d => i >= d.from && i < d.to)
+
+/**
+ * The declarations a change could make read only by a model: those holding a changed string (`starts`),
+ * and every declaration using one of them, so a prompt built from parts is judged as a whole.
+ */
+export const modelCandidates = (r: ModelReading, starts: number[]): Decl[] => {
+  const out = new Set<Decl>()
+  const todo = starts.flatMap(s => hostOf(r, s) ?? [])
+  while (todo.length) {
+    const d = todo.pop() as Decl
+    if (out.has(d)) continue
+    out.add(d)
+    for (const at of usesOf(r.code, d.name)) {
+      const h = hostOf(r, at)
+      if (h && h !== d && !out.has(h)) todo.push(h)
+    }
+  }
+  return [...out]
+}
+
+/**
+ * The names among `candidates` whose uses in other files must be read before they can count as read
+ * only by a model: those another file can import, whose every use here could be a model's.
+ */
+export const foreignNames = (r: ModelReading, candidates: Decl[]): string[] =>
+  candidates
+    .filter(d => d.open)
+    .filter(d =>
+      usesOf(r.code, d.name).every(at => {
+        if (at === d.at) return true
+        const h = hostOf(r, at)
+        return (h !== undefined && h !== d && candidates.includes(h)) || modelInput(r.code, at) || (!r.python && exportListed(r.code, at, d.name))
+      }),
+    )
+    .map(d => d.name)
+
+/** How the other files of a repository use a name: ok when every use is an import of it by its own name or a model's input; model when one is a model's input. */
+export type Foreign = Map<string, { ok: boolean; model: boolean }>
+
+const JS_IMPORT = /\b(?:import|export)\s+(?:type\s+)?\{[\w$\s,]*$/
+const JS_IMPORT_END = /^\s*(?:,[\w$\s,]*)?\}\s*from\b/
+const PY_IMPORT = /(?:^|\n)[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(?:\([\w\s,]*|[\w \t,]*)$/
+const PY_IMPORT_END = /^[ \t]*(?:[,)#\n]|$)/
+
+/** How one other file uses `name` (#2475): an import by its own name is no use, a model's input is a model use, anything else is not ok. */
+export const foreignUse = (rel: string, text: string, name: string): { ok: boolean; model: boolean } => {
+  const lang = languageOf(rel, text)
+  const python = lang === 'python'
+  const code = blankComments(text, tokenRanges(text, lang !== 'c').comments)
+  let model = false
+  for (const at of usesOf(code, name)) {
+    const before = code.slice(Math.max(0, at - 400), at)
+    const after = code.slice(at + name.length)
+    if (python ? PY_IMPORT.test(before) && PY_IMPORT_END.test(after) : JS_IMPORT.test(before) && JS_IMPORT_END.test(after)) continue
+    if (modelInput(code, at)) {
+      model = true
+      continue
+    }
+    return { ok: false, model: false }
+  }
+  return { ok: true, model }
+}
+
+/**
+ * The candidates read only by a model (#2475): every use of one, here and in the other files that
+ * name it (`foreign`, which must carry each name foreignNames gave, or it counts as wording), is a
+ * model's input, an import or export under its own name, or a part of another such declaration, and
+ * at least one is a model's, so a constant used nowhere still counts.
+ */
+export const modelOnlyDecls = (r: ModelReading, candidates: Decl[], foreign: Foreign): Set<Decl> => {
+  const only = new Set<Decl>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const d of candidates) {
+      if (only.has(d)) continue
+      const far = d.open ? foreign.get(d.name) : { ok: true, model: false }
+      if (!far?.ok) continue
+      let ok = true
+      let model = far.model
+      for (const at of usesOf(r.code, d.name)) {
+        if (at === d.at) continue
+        const h = hostOf(r, at)
+        if ((h && h !== d && only.has(h)) || modelInput(r.code, at)) model = true
+        else if (r.python || !exportListed(r.code, at, d.name)) {
+          ok = false
+          break
+        }
+      }
+      if (ok && model) {
+        only.add(d)
+        grew = true
+      }
+    }
+  }
+  return only
+}
+
+/** Whether the string whose text starts at `start` is read only by a model: inside a declaration only a model reads, or itself a model key's value. */
+export const modelLiteral = (r: ModelReading, only: Set<Decl>, start: number): boolean => {
+  for (const d of only) if (start >= d.from && start < d.to) return true
+  let i = start
+  while (i > 0 && /["'`]/.test(r.code[i - 1] ?? '')) i--
+  while (i > 0 && start - i < 6 && /[rRbBfFuU]/.test(r.code[i - 1] ?? '')) i--
+  return modelInput(r.code, i)
 }
 
 // cyrb53, as the design round guard keys a call: the hash finds the record, and the record keeps the text.

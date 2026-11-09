@@ -6,6 +6,8 @@ import {
   CHANGE,
   GUARD,
   HEADER,
+  MARKER_PREFILTER,
+  PATHSPEC_BYTES,
   REEXPORT_HOPS,
   SCAN_MS,
   SENDER_PREFILTER,
@@ -14,8 +16,13 @@ import {
   ciMessages,
   ciWorkflow,
   codeOf,
+  type Decl,
+  type Foreign,
+  type ModelReading,
   editHalves,
   editedText,
+  foreignNames,
+  foreignUse,
   handsOn,
   heldText,
   importSpecs,
@@ -26,6 +33,10 @@ import {
   languageOf,
   mayHandOn,
   mentionsStore,
+  modelCandidates,
+  modelLiteral,
+  modelOnlyDecls,
+  modelReading,
   namePatterns,
   plainYamlValues,
   question,
@@ -39,6 +50,7 @@ import {
   templateLines,
   testFile,
   textTemplate,
+  tokenRanges,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -79,7 +91,9 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-type Lit = { text: string; literal: string[] }
+// start: where the string's text starts in its file, or -1 where it has no one place (a YAML value,
+// a CI step's message).
+type Lit = { text: string; literal: string[]; start: number }
 // Every string a file's text holds, read as its language reads them, past any handed to a query
 // builder call (#2364), with the placeholders JavaScript writes as text (#2361).
 const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, text: string): Promise<Lit[]> => {
@@ -88,13 +102,90 @@ const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeo
     // mod-kit's spans are already the text between the quotes, prefix letters and quotes left out.
     const spans = await $.modkit.pythonText({ code: text })
     const query = new Set(stringsOf(text, true).filter(s => s.query).map(s => s.start))
-    return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [] }))
+    return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [], start: s.from }))
   }
   // A CI workflow posts only what a Slack step carries, never its names, needs or commands (#2371).
-  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [] }))
+  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [], start: -1 }))
   const strings = stringsOf(text, lang !== 'c', lang === 'c' && isJs(path)).filter(s => !s.query)
-  const yaml = lang === 'yaml' ? plainYamlValues(text).map(t => ({ text: t, literal: [] })) : []
-  return [...strings.map(s => ({ text: s.text, literal: s.literal })), ...yaml]
+  const yaml = lang === 'yaml' ? plainYamlValues(text).map(t => ({ text: t, literal: [], start: -1 })) : []
+  return [...strings.map(s => ({ text: s.text, literal: s.literal, start: s.start })), ...yaml]
+}
+
+/**
+ * The strings of each side of an edit that Slack can be sent, those only a model reads left out
+ * (#2475): a JavaScript, TypeScript or python file's changed strings are judged by the declarations
+ * holding them (rules.ts, modelOnlyDecls), and a declaration another file can import counts as read
+ * only by a model only once every other file naming it has been read within the deadline. Anything
+ * that cannot be read in time, or at all, leaves the string counted, so it is held as before.
+ */
+type Side = { text: string; lits: Lit[]; changed: string[] }
+const postable = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, sides: Side[], deadline: number): Promise<Lit[][]> => {
+  const python = lang === 'python'
+  if (!python && !(lang === 'c' && isJs(path))) return sides.map(s => s.lits)
+  const readings: ModelReading[] = []
+  for (const s of sides) {
+    let ranges = tokenRanges(s.text, false)
+    if (python) {
+      const spans = s.text ? await $.modkit.pythonText({ code: s.text }) : []
+      ranges = { strings: spans.filter(x => x.kind !== 'comment'), comments: spans.filter(x => x.kind === 'comment') }
+    }
+    readings.push(modelReading(s.text, python, ranges))
+  }
+  const candidates = sides.map((s, i) => {
+    const changed = new Set(s.changed)
+    return modelCandidates(readings[i] as ModelReading, s.lits.filter(l => l.start >= 0 && changed.has(l.text)).map(l => l.start))
+  })
+  const names = [...new Set(candidates.flatMap((c, i) => foreignNames(readings[i] as ModelReading, c)))]
+  const foreign = await foreignUses($, path, names, deadline)
+  return sides.map((s, i) => {
+    const r = readings[i] as ModelReading
+    const only = modelOnlyDecls(r, candidates[i] as Decl[], foreign)
+    return s.lits.filter(l => l.start < 0 || !modelLiteral(r, only, l.start))
+  })
+}
+
+/**
+ * How the other files of `path`'s repository use each of `names` (#2475): one git grep for the files
+ * naming any of them as a whole word, then a read of each, tests and docs left out since they send
+ * nothing. A name missing from the answer counts as wording: a repository that cannot be named, a
+ * search that fails, is cut short or runs late, more files than MOST_READ, or a file that cannot be read.
+ */
+const foreignUses = async ($: EngineInterface, path: string, names: string[], deadline: number): Promise<Foreign> => {
+  const none: Foreign = new Map()
+  if (!names.length) return none
+  try {
+    // The repository, placed as findSender places it: from the nearest folder that exists, by git's
+    // own spelling of its top and the prefix below it.
+    let dir = path.slice(0, path.lastIndexOf('/')) || '/'
+    while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+    const left = async () => Math.floor(deadline - (await $.clock.now()))
+    let ms = await left()
+    if (ms <= 0) return none
+    const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
+    const [top = '', prefix = ''] = where.exitCode === 0 && !where.isStdoutTruncated ? where.stdout.split('\n') : []
+    if (!top) return none
+    const repo = { top, rel: `${prefix}${path.slice(dir === '/' ? 1 : dir.length + 1)}` }
+    ms = await left()
+    if (ms <= 0) return none
+    const hits = await $.process.run(['git', '-C', repo.top, 'grep', '-l', '-z', '-I', '-w', '-F', '--untracked', '--no-color', ...names.flatMap(n => ['-e', n]), '--', '.'], { timeoutMs: ms })
+    if ((hits.exitCode !== 0 && hits.exitCode !== 1) || hits.isStdoutTruncated) return none
+    const rels = hits.stdout.split('\u0000').filter(r => r && r !== repo.rel && !testFile(r) && !isProseFile(r))
+    if (rels.length > MOST_READ) return none
+    const found: Foreign = new Map(names.map(n => [n, { ok: true, model: false }]))
+    for (const rel of rels) {
+      if ((await $.clock.now()) >= deadline) return none
+      const text = String(await $.fs.read(`${repo.top}/${rel}`))
+      for (const [n, v] of found) {
+        if (!v.ok) continue
+        const u = foreignUse(rel, text, n)
+        found.set(n, { ok: u.ok, model: v.model || u.model })
+      }
+    }
+    return found
+  } catch (err) {
+    $.ui.log(`slack-alert-guard: the uses of ${names.join(', ')} could not be read, so they count as wording: ${message(err)}`, { to: 'debug' })
+    return none
+  }
 }
 
 // The keys of a change Dan has not yet approved; a store that cannot be read throws.
@@ -107,6 +198,29 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
 // The most files the search reads for one template before it holds the call for Dan, naming no
 // sender since it could not tell which file sends it (#2364).
 const MOST_READ = 200
+
+// How much of a command's output $.process.run keeps, in MiB: the first 4194304 bytes, the rest
+// dropped and the result marked isStdoutTruncated (read from Claude Code 2.1.319's own runner).
+const STDOUT_KEPT_MIB = 4
+
+/** Repository paths in their order, as groups whose `:(literal)` pathspecs come to at most PATHSPEC_BYTES each. */
+const pathspecGroups = (rels: string[]): string[][] => {
+  const groups: string[][] = []
+  let group: string[] = []
+  let bytes = 0
+  for (const r of rels) {
+    const size = new TextEncoder().encode(r).length + ':(literal)'.length + 1
+    if (group.length && bytes + size > PATHSPEC_BYTES) {
+      groups.push(group)
+      group = []
+      bytes = 0
+    }
+    group.push(r)
+    bytes += size
+  }
+  if (group.length) groups.push(group)
+  return groups
+}
 
 // posts: the file is in a repository, is no test, and posts to Slack by itself. maybe: the search
 // could not tell whether a file sends the template (more files to read than it reads, or a send
@@ -128,8 +242,8 @@ const end = (found: Found): never => {
 /**
  * The file that sends the template at `path` to Slack (#2248): one in the same git repository that
  * carries a Slack marker and names the template's path or module (refersTo). git grep narrows the
- * repository to files holding the word slack or postMessage and a line naming the template in a form
- * a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
+ * repository to files that could carry a marker (MARKER_PREFILTER) and hold a line naming the template
+ * in a form a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
  * deep; a chain going further is could not check. A template is sent too by a file that uses it and
@@ -172,31 +286,72 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       if (ms <= 0) end(late)
       const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...args], { timeoutMs: ms })
       if (hits.exitCode === 1) return ''
-      if (hits.exitCode !== 0 || hits.isStdoutTruncated)
+      if (hits.exitCode !== 0)
         end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+      // Cut short is not git failing: said as "exit 0: no message" it hid which listing ran long, and
+      // read the same from a session still running an older copy of this search (2026-11-09).
+      if (hits.isStdoutTruncated) end({ unchecked: `git grep listing the names of the files that ${what} printed more than the ${STDOUT_KEPT_MIB} MiB Claude Code keeps of a command's output, so it could not be read whole` })
       return hits.stdout
     }
-    // Every file holding the word slack or postMessage, listed once for the whole search: a sender is
-    // one of these that names a level, as a file holding both was before (#2371).
-    const slackWords = new Set((await grep(`mention Slack beside ${path}`, ['-l', '-E', '-e', SENDER_PREFILTER, '--', '.'])).split('\u0000').filter(Boolean))
+    // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is
+    // read as a sender or a link (#2290, #2361, #2368). A file in a language the guard does not list as
+    // code (a .vue, a .sql posting through pg_net) may still send, so only prose is ruled out.
+    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && !isProseFile(r))
+    // Every file that could carry a Slack marker, listed once for the whole search: a sender is one of
+    // these that names a level (#2371). A file that only mentions Slack is not one (MARKER_PREFILTER).
+    // The files holding the word slack or postMessage are listed first, as git finds those fast, and
+    // only they are searched for a marker, which over all of a large work repository took a second where this takes 0.6.
+    const slackWords = candidates((await grep(`mention Slack beside ${path}`, ['-l', '-E', '-e', SENDER_PREFILTER, '--', '.'])).split('\u0000').filter(Boolean))
+    const markable = new Set<string>()
+    for (const group of pathspecGroups(slackWords))
+      for (const r of (await grep(`could post to Slack beside ${path}`, ['-l', '-E', '-e', MARKER_PREFILTER, '--', ...group.map(r => `:(literal)${r}`)])).split('\u0000')) if (r) markable.add(r)
     /**
      * The files naming any of `level` in a form a reference takes (namePatterns), the template itself
-     * left out, in the order git lists them. git lists each line holding one of the names, as fixed
-     * strings; the shape is tested here on those lines alone, as `-e word --and -e shape` tested it
-     * in git, which took seconds for a widely imported module's importers (#2462).
+     * left out, in the order git lists them. git first lists only the names of the files holding one
+     * of the names as a whole word, and of those the search keeps the ones it can use: a file that
+     * could send (markable) or hand the template on (mayHandOn), no test or prose. Only their lines
+     * are listed, as fixed strings, and the shape is tested here on those lines alone, as `-e word
+     * --and -e shape` tested it in git, which took seconds for a widely imported module's importers
+     * (#2462). Listing every line naming a word in the whole repository (#2481) ran to 9.9 MB in a
+     * work repository, past the 4 MiB $.process.run keeps, so a widely imported file's edit was held as could
+     * not check. The kept files go to git by name in groups of at most PATHSPEC_BYTES; a group whose
+     * lines still come back cut short is listed again in halves, and a single file whose lines alone
+     * do is read whole and its lines tested here, so a listing too long is never read as no reference.
      */
     const naming = async (level: string[]): Promise<string[]> => {
       const name = namePatterns(level)
       const shape = new RegExp(name.shape, 'i')
+      const what = `name ${path} or hand it on`
+      // -w: every shape has the name between characters that cannot be part of one, so a file holding
+      // it only inside a longer word (db in feedback) is never listed, which keeps a common short name's
+      // listing small.
+      const words = ['-F', '-w', ...name.words.flatMap(w => ['-e', w])]
+      const listed = candidates((await grep(what, ['-l', ...words, '--', '.'])).split('\u0000').filter(Boolean)).filter(r => r !== templateRel && (markable.has(r) || mayHandOn(r)))
       const out = new Set<string>()
-      // -w: every shape has the name between characters that cannot be part of one, so a line holding
-      // it only inside a longer word (db in feedback) is never printed, which keeps a common short
-      // name's listing small.
-      for (const line of (await grep(`name ${path} or hand it on`, ['-F', '-w', ...name.words.flatMap(w => ['-e', w]), '--', '.'])).split('\n')) {
-        const cut = line.indexOf('\u0000')
-        if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
+      const lines = async (group: string[]): Promise<void> => {
+        const ms = await left()
+        if (ms <= 0) end(late)
+        const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...words, '--', ...group.map(r => `:(literal)${r}`)], { timeoutMs: ms })
+        if (hits.exitCode === 1) return
+        if (hits.exitCode !== 0) end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+        if (!hits.isStdoutTruncated) {
+          for (const line of hits.stdout.split('\n')) {
+            const cut = line.indexOf('\u0000')
+            if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
+          }
+          return
+        }
+        const half = Math.ceil(group.length / 2)
+        if (half < group.length) {
+          await lines(group.slice(0, half))
+          await lines(group.slice(half))
+          return
+        }
+        const rel = group[0] as string
+        if ((await textOf(rel, what)).split('\n').some(line => shape.test(line))) out.add(rel)
       }
-      return candidates([...out].filter(r => r !== templateRel))
+      for (const group of pathspecGroups(listed)) await lines(group)
+      return listed.filter(r => out.has(r))
     }
     // Every file read in this search, so a file listed at two levels is read once and counted once.
     const texts = new Map<string, string>()
@@ -219,10 +374,6 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     }
     const sends = `send ${path} to Slack`
     const handsOnTo = `hand ${path} on to the file that sends it`
-    // A test sends nothing and a prose file (a doc, a CLAUDE.md, a runbook) posts nothing, so neither is
-    // read as a sender or a link (#2290, #2361, #2368). A file in a language the guard does not list as
-    // code (a .vue, a .sql posting through pg_net) may still send, so only prose is ruled out.
-    const candidates = (rels: string[]) => rels.filter(r => !testFile(r) && !isProseFile(r))
     /**
      * Of the files using the template (a copy builder, a notice builder), the first that imports a
      * Slack send helper, so sends its text through it (#2361): the helper is found by git grep for the
@@ -266,7 +417,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     for (let hop = 0; ; hop++) {
       // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
       const named = await naming(level)
-      const rels = named.filter(r => slackWords.has(r))
+      const rels = named.filter(r => markable.has(r))
       budget(rels)
       for (const rel of rels) {
         // Only what a file runs can send: a comment naming the template beside a Slack webhook's name
@@ -326,31 +477,41 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
   const marked = code && (slackMarked(current) || slackMarked(after))
   try {
     const lang = languageOf(path, current || after)
-    const read = async (t: string): Promise<Lit[]> => (text ? templateLines(t).map(l => ({ text: l, literal: [] })) : await literals($, path, lang, t))
+    const read = async (t: string): Promise<Lit[]> => (text ? templateLines(t).map(l => ({ text: l, literal: [], start: -1 })) : await literals($, path, lang, t))
     const afterLits = await read(after)
+    const beforeLits = await read(before)
     const wording = (lits: Lit[]) => wordingOf(lits.map(l => l.text))
-    const { added, removed } = wordingChange(wording(await read(before)), wording(afterLits))
-    if (!added.length && !removed.length) return PASS
-    let hold: Hold
-    if (added.length) {
-      const fresh = [...new Set(added)]
-      const open = await unapproved($, fresh.map(wordingKey))
-      if (!open.length) return PASS
-      const shown = fresh.filter(s => open.includes(wordingKey(s)))
-      // The placeholders the code writes as text, which the message shown to Dan may carry (#2361).
-      const literal = [...new Set(afterLits.filter(l => shown.includes(l.text)).flatMap(l => l.literal))]
-      hold = { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
-    } else {
+    // The hold for a change, or none when it changes no wording Dan has not approved.
+    const holdOf = async ({ added, removed }: { added: string[]; removed: string[] }): Promise<Hold | undefined> => {
+      if (added.length) {
+        const fresh = [...new Set(added)]
+        const open = await unapproved($, fresh.map(wordingKey))
+        if (!open.length) return undefined
+        const shown = fresh.filter(s => open.includes(wordingKey(s)))
+        // The placeholders the code writes as text, which the message shown to Dan may carry (#2361).
+        const literal = [...new Set(afterLits.filter(l => shown.includes(l.text)).flatMap(l => l.literal))]
+        return { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
+      }
+      if (!removed.length) return undefined
       const keys = await unapproved($, [removalKey(path, removed)])
-      if (!keys.length) return PASS
-      hold = { file: path, added: [], removed, keys }
+      return keys.length ? { file: path, added: [], removed, keys } : undefined
     }
+    const change = wordingChange(wording(beforeLits), wording(afterLits))
+    if (!(await holdOf(change))) return PASS
     // Wording Dan has not approved: held when its file is in a git repository and is no test, and
     // either posts to Slack itself or another file in its repository sends it there.
-    const found = await findSender($, path, (await $.clock.now()) + SCAN_MS, marked)
+    const deadline = (await $.clock.now()) + SCAN_MS
+    const found = await findSender($, path, deadline, marked)
     if ('unchecked' in found) return found
-    if ('posts' in found || 'maybe' in found) return { hold }
-    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : PASS
+    if (!('posts' in found || 'maybe' in found || 'sender' in found)) return PASS
+    // Of that wording, only what Slack can be sent: text only a model reads is left out (#2475), so a
+    // model's instructions beside an alert are never held, nor shown to Dan as one.
+    const [beforeKept, afterKept] = text
+      ? [beforeLits, afterLits]
+      : await postable($, path, lang, [{ text: before, lits: beforeLits, changed: change.removed }, { text: after, lits: afterLits, changed: change.added }], deadline)
+    const hold = await holdOf(wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[])))
+    if (!hold) return PASS
+    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : { hold }
   } catch (err) {
     return { unchecked: message(err) }
   }

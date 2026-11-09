@@ -2,6 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
+  MARKER_PREFILTER,
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
@@ -10,7 +11,15 @@ import {
   codeOf,
   editedText,
   flowCommands,
+  foreignNames,
+  foreignUse,
   handsOn,
+  modelCandidates,
+  modelInput,
+  modelLiteral,
+  modelOnlyDecls,
+  modelReading,
+  tokenRanges,
   heldText,
   importSpecs,
   importTerms,
@@ -637,10 +646,37 @@ test("the files a module's imports can be are named as git pathspecs, by path, n
 })
 
 test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {
-  // The repository is searched for SENDER_PREFILTER before any file is read, so a marker that could
-  // match text holding neither word would never see its file read.
+  // The repository is searched for SENDER_PREFILTER before any file is read (the files a send helper
+  // could be, and the files then searched for MARKER_PREFILTER), so a marker that could match text
+  // holding neither word would never see its file read.
   for (const m of MARKERS) expect(/slack|postmessage/i.test(m.source)).toBe(true)
   expect(SENDER_PREFILTER).toBe('slack|postmessage')
+})
+
+test('the files listed as able to post include every file a Slack marker matches in its code, and not one that only mentions Slack', () => {
+  // A comment between a helper's name and its parenthesis is blanked to a space in the code, so the
+  // marker matches the code and not the text; the prefilter must still list the file by its text.
+  const posts = [
+    'await fetch("https://hooks.slack.com/services/T0/B0/x")',
+    'await client.chat.postMessage({ channel, text })',
+    "import { WebClient } from '@slack/web-api'",
+    'from slack_sdk import WebClient',
+    'import "github.com/slack-go/slack"',
+    'const url = process.env.SLACK_ALERTS_WEBHOOK_URL',
+    'await notifySlack /* why */ (text)',
+    "import { postSlackAlert } from './notify'",
+    "const alertSlack = require('./slack')",
+    'await slackClient.send /* now */ (text)',
+    'await slackSendMessage(text)',
+  ]
+  const prefilter = new RegExp(MARKER_PREFILTER, 'i')
+  // Every marker is seen to match one of these in its code, so a marker added later needs a line here.
+  for (const m of MARKERS) expect(posts.some(p => m.test(codeOf('notify.ts', p)))).toBe(true)
+  for (const p of posts) expect(prefilter.test(p)).toBe(true)
+  for (const p of ['<h1>Slack alert preview</h1>', 'label: "Slack channel"', '// posts to Slack', 'window.postMessage(data)'])
+    expect(prefilter.test(p)).toBe(false)
+  // git grep -E on macOS reads none of these escapes, so the prefilter is written without them.
+  expect(/\\[bwsdBWSD]/.test(MARKER_PREFILTER)).toBe(false)
 })
 
 // claude-config#2284. Dan, 2026-11-05, rejecting "Post this Slack message from ...?" twice: "You
@@ -678,6 +714,93 @@ test('codeOf leaves comments out and keeps code, strings, and code after a close
   expect(job).toContain('curl x\n')
   expect(codeOf('a.json', '{"a": "#b"}\n')).toBe('{"a": "#b"}\n')
   expect(codeOf('a.ts', 'send("see // notify.ts")\n')).toContain('"see // notify.ts"')
+})
+
+// #2475: which strings only a model reads. `model` gives, for each string of a file, whether it is one.
+const model = (text: string, python: boolean, foreign = new Map<string, { ok: boolean; model: boolean }>()) => {
+  const ranges = tokenRanges(text, python)
+  const r = modelReading(text, python, ranges)
+  const starts = ranges.strings.map(s => s.from)
+  const cands = modelCandidates(r, starts)
+  const only = modelOnlyDecls(r, cands, foreign)
+  return Object.fromEntries(ranges.strings.map(s => [text.slice(s.from, s.to), modelLiteral(r, only, s.from)]))
+}
+
+test('a model key, a python keyword argument, or a message content beside its role is a model input; a variable named system is not (#2475)', () => {
+  const at = (code: string, word = 'P') => modelInput(code, code.lastIndexOf(word))
+  expect(at('create({ model: m, system: P })')).toBe(true)
+  expect(at('create({\n  system: copy.P,\n})')).toBe(true)
+  expect(at('create(model=m, system=P)')).toBe(true)
+  expect(at('{ instructions: P }')).toBe(true)
+  expect(at('messages: [{ role: "user", content: P }]')).toBe(true)
+  expect(at('{"content": P, "role": "system"}')).toBe(true)
+  expect(at('const system = P')).toBe(false)
+  expect(at('postMessage({ channel: c, text: P })')).toBe(false)
+  expect(at('{ content: P }')).toBe(false)
+  expect(at('{ system: wrap(P) }')).toBe(false)
+})
+
+test('a prompt constant used only as a model input, or built into one, is read only by a model; an alert beside it, an unused constant and a posted one are not (#2475)', () => {
+  const js = [
+    'const BASE = `You are the nightly editor.',
+    '',
+    'Keep it plain.`',
+    "const SYSTEM = [BASE, 'Never use a dash.'].join('\\n')",
+    'const UNUSED = `Nobody reads this sentence yet.`',
+    'const POSTED = `Deploy failed on production.`',
+    'const run = async () => {',
+    "  await client.messages.create({ system: SYSTEM, messages: [{ role: 'user', content: 'Edit the draft below.' }] })",
+    "  await slack.chat.postMessage({ text: POSTED })",
+    "  await slack.chat.postMessage({ text: 'The digest is ready.' })",
+    '}',
+    '',
+  ].join('\n')
+  const seen = model(js, false)
+  expect(seen['You are the nightly editor.\n\nKeep it plain.']).toBe(true)
+  expect(seen['Never use a dash.']).toBe(true)
+  expect(seen['Edit the draft below.']).toBe(true)
+  expect(seen['Nobody reads this sentence yet.']).toBe(false)
+  expect(seen['Deploy failed on production.']).toBe(false)
+  expect(seen['The digest is ready.']).toBe(false)
+})
+
+test('an exported prompt counts as read only by a model only once other files are known to use it no other way; a renamed export never does (#2475)', () => {
+  const js = 'export const PROMPT = `Edit the draft plainly.`\nexport const go = () => client.messages.create({ system: PROMPT })\n'
+  const ranges = tokenRanges(js, false)
+  const r = modelReading(js, false, ranges)
+  const cands = modelCandidates(r, ranges.strings.map(s => s.from))
+  expect(foreignNames(r, cands)).toContain('PROMPT')
+  expect(model(js, false)['Edit the draft plainly.']).toBe(false)
+  expect(model(js, false, new Map([['PROMPT', { ok: true, model: false }]]))['Edit the draft plainly.']).toBe(true)
+  expect(model(js, false, new Map([['PROMPT', { ok: false, model: false }]]))['Edit the draft plainly.']).toBe(false)
+  const renamed = 'const PROMPT = `Edit the draft plainly.`\nexport { PROMPT as P }\nexport const go = () => client.messages.create({ system: PROMPT })\n'
+  expect(model(renamed, false, new Map([['PROMPT', { ok: true, model: false }]]))['Edit the draft plainly.']).toBe(false)
+})
+
+test('python: a module level prompt handed to a keyword argument is read only by a model; a posted string is not (#2475)', () => {
+  const py = [
+    '_PROMPT = """You are the nightly editor.',
+    'Keep it plain."""',
+    '',
+    'def run(draft):',
+    '    res = client.messages.create(model="m", system=_PROMPT, messages=[{"role": "user", "content": draft}])',
+    '    slack.chat_postMessage(channel="C1", text="The digest is ready.")',
+    '',
+  ].join('\n')
+  const seen = model(py, true)
+  expect(Object.entries(seen).some(([k, v]) => k.includes('You are the nightly editor.') && v)).toBe(true)
+  expect(seen['The digest is ready.']).toBe(false)
+})
+
+test('another file using a prompt: an import by its own name is no use, a model input is, and anything else is not ok (#2475)', () => {
+  expect(foreignUse('a/run.ts', "import {\n  type X,\n  PROMPT,\n} from './editor'\nexport const go = () => c.create({ system: PROMPT })\n", 'PROMPT')).toEqual({ ok: true, model: true })
+  expect(foreignUse('a/index.ts', "export { PROMPT } from './editor'\n", 'PROMPT')).toEqual({ ok: true, model: false })
+  expect(foreignUse('a/run.ts', "import { PROMPT as P } from './editor'\n", 'PROMPT')).toEqual({ ok: false, model: false })
+  expect(foreignUse('a/job.ts', "import { PROMPT } from './editor'\nslack.chat.postMessage({ text: PROMPT })\n", 'PROMPT')).toEqual({ ok: false, model: false })
+  expect(foreignUse('a/run.py', 'from app.editor import (\n    other,\n    PROMPT,\n)\nclient.messages.create(system=PROMPT)\n', 'PROMPT')).toEqual({ ok: true, model: true })
+  expect(foreignUse('a/run.py', 'from app.editor import PROMPT as P\n', 'PROMPT')).toEqual({ ok: false, model: false })
+  // A name only in a comment is no use at all.
+  expect(foreignUse('a/run.ts', '// PROMPT is the editor prompt\n', 'PROMPT')).toEqual({ ok: true, model: false })
 })
 
 test('only prose files are ruled out as senders', () => {

@@ -12,8 +12,12 @@
 #   2. that guard run over this whole repository, so the next hand written launch fails here (L613);
 #   3. HEADLESS_DOM_EXEC, on a stand in Chrome: it becomes Chrome under the same pid, with every
 #      disabled feature folded into the one switch Chrome reads;
-#   4. a real Chrome started that way and killed mid run, and 5. a real Chrome Playwright started
-#      through capture-web.mjs's launchChrome and abandoned by a killed node, each leaving no copy.
+#   4. the real hidden Chrome started that way and killed mid run, and 5. the real hidden Chrome
+#      Playwright started through capture-web.mjs's launchChrome and abandoned by a killed node, each
+#      coming up and putting nothing in Google Chrome's clone folder. Since claude-config#2191 that
+#      Chrome is a separate build that makes no copy, so these no longer test the removal of a copy
+#      (the stand in Chromes in test-make-switcher.sh do); they catch a hidden Chrome that is Google
+#      Chrome again.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/suite-deadline.sh" || {
@@ -73,7 +77,7 @@ EOF
 cat > "$F/score/direct.mjs" <<EOF
 const browser = await pw.chromium.launch({ channel: "chrome", args: LAUNCH_ARGS });
 const other = await pw.chromium.launch({
-  executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  executablePath: "/opt/some-chrome/chrome",
 });
 const opts = { executablePath: process.env.CHROME };
 const bundled = await pw.chromium.launch({ headless: true, args: ["--disable-gpu"] });
@@ -167,12 +171,23 @@ HEADLESS_DOM_EXEC=1 HEADLESS_DOM_CHROME="$TMP/no-such-chrome" "$HEADLESS_DOM" "$
 check_eq "a Chrome that is not there fails" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 check "and says which" "no-such-chrome" "$(cat "$TMP/missing.err")"
 
-# --- 4 and 5. a real Chrome, killed mid run, leaves no copy behind ---
+# --- 4 and 5. the real hidden Chrome, killed mid run, comes up and leaves nothing in the clone folder ---
+#
+# WHAT THESE CAN STILL CATCH (claude-config#2191). Since Google Chrome is never run hidden, the Chrome
+# here is the separate build, which has no app bundle and so never writes to Google Chrome's clone
+# folder at all. The "nothing new in the clone folder" checks below therefore no longer exercise
+# headless-dom.sh's removal of a killed Chrome's copy, and cannot fail on a fault in it: that removal
+# is held by the stand in Chromes that plant copies, in test-make-switcher.sh (#988). What they do
+# still catch is a hidden Chrome that is Google Chrome again, by any route the lookup missed, which
+# would leave its copy here as it did before. What 4 and 5 hold first is that the real hidden build
+# comes up through headless-dom.sh in Chrome's place, and that Playwright draws in it.
 #
 # Other sessions' Chromes add copies to the real folder at any moment, and can only ever ADD them, so
 # a run that shows nothing new proves this run left none, while a run that leaves its copy shows one
 # on every attempt: three attempts tell the two apart (as test-make-switcher.sh's real Chrome check).
-REAL_CHROME="${HEADLESS_CHROME_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# The Chrome is the separate build every hidden Chrome runs, from the one lookup (claude-config#2191),
+# never the Google Chrome Dan uses, whose hidden copies took his click on Chrome in the Dock.
+REAL_CHROME="$(python3 "$DIR/score/headless_chrome.py" 2> "$TMP/lookup.err")" || REAL_CHROME=""
 real_tmp="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}"
 clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
 if [ ! -d "$clones" ]; then
@@ -186,8 +201,8 @@ end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kil
 # Waits, bounded, for a file to hold something (L290).
 await_file(){ hang_wait "[ -s '$1' ]"; }
 
-if [ ! -x "$REAL_CHROME" ]; then
-  echo "SUITE-PART-UNMEASURED no Chrome at $REAL_CHROME, so whether a killed real Chrome leaves its copy behind was not measured"
+if [ -z "$REAL_CHROME" ]; then
+  echo "SUITE-PART-UNMEASURED no hidden Chrome here ($(head -c 300 "$TMP/lookup.err")), so whether a killed real Chrome leaves its copy behind was not measured"
 elif [ ! -d "$clones" ]; then
   echo "SUITE-PART-UNMEASURED no clone folder at $clones, so whether a killed real Chrome leaves its copy behind was not measured"
 else
@@ -207,7 +222,7 @@ else
     [ -z "$got" ] && break
   done
   check_eq "a real Chrome started through headless-dom.sh in Chrome's place came up" "up" "$up"
-  check_eq "and killed while it ran, it left no copy of Chrome in $clones" "" "$got"
+  check_eq "and killed while it ran, nothing new appeared in Google Chrome's clone folder $clones, so it was not Google Chrome (removal itself: test-make-switcher.sh)" "" "$got"
 
   # 5. Started by Playwright through capture-web.mjs's launchChrome, and abandoned by a node that was
   # killed while the page was open, so nothing closed it.
@@ -244,7 +259,7 @@ JS
         echo "SUITE-PART-UNMEASURED no Playwright to launch Chrome with here ($said), so a Playwright Chrome abandoned by a killed run was not measured" ;;
       *)
         check "Playwright drew a page in a real Chrome started through launchChrome" "drawn " "$said"
-        check_eq "and with the node that started it killed, it left no copy of Chrome in $clones" "" "$got" ;;
+        check_eq "and with the node that started it killed, nothing new appeared in Google Chrome's clone folder $clones, so it was not Google Chrome" "" "$got" ;;
     esac
   fi
 fi

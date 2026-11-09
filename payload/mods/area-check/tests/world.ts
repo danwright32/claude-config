@@ -152,6 +152,8 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
     links: Record<string, string>
     existsFails: string[]
     tracked?: string
+    // The line counts git grep -c answers on the default branch, in place of big.ts's alone.
+    lines?: string
   } = {
     folders: [APP, `${APP}/src`, `${APP}/src/lib`, `${APP}/src/pay`, `${APP}/docs`, `${APP}/lib`],
     statFails: [],
@@ -364,7 +366,7 @@ export const world = ($: unknown, on: On, init: Init = {}) => {
         return answer(ok(ctl.numstat ?? NUMSTAT))
       }
       if (sub === 'ls-tree -r --name-only origin/main') return answer(ok((ctl.tracked ?? TRACKED) + '\n'))
-      if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
+      if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok(ctl.lines ?? 'origin/main:src/big.ts:2400\n'))
     }
     if (argv[0] === 'gh' && argv[1] === 'issue' && argv[2] === 'list') {
       const r = ctl.gh(env)

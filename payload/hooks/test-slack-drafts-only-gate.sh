@@ -400,6 +400,106 @@ done
 printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/cmt/open.ts"
 run_bash "node $T/imp/cmt/open.ts"
 refused "an import after a block comment that never closes"
+
+# Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
+# narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
+# esbuild stdin entry and a Miniflare module source as strings was refused for modules nothing loads,
+# and the builder got past it by assembling the strings by concatenation. A string is still followed
+# wherever the code the script reaches can run a string as code (eval, new Function, vm, a Worker,
+# Miniflare's script or modules source, a child process, a data: URL), because a string reaches that
+# sink through a variable, a function or another module the gate cannot trace.
+mkdir -p "$T/imp/str"
+printf '%s\n' 'export const post = () => fetch("https://slack.com/api/chat.postMessage");' > "$T/imp/str/poster.js"
+cat > "$T/imp/str/data.ts" <<'TS'
+import { join } from "node:path";
+const entry = "import { handler } from './missing-entry.js'";
+const opts = { stdin: { contents: "export * from './src/missing-stdin.ts'", resolveDir: join(".", "src") } };
+const tpl = `export { x } from "./missing-template.js"; ${entry}`;
+const req = 'const m = require("./missing-required.js"); await import("./missing-dynamic.js");';
+const doc = "import { post } from './poster.js'";
+console.log(entry, opts, tpl, req, doc);
+TS
+run_bash "node $T/imp/str/data.ts"
+allowed "import text inside ordinary string literals (missing modules and a posting one) is not followed"
+# The controls: a real import beside those strings is still followed, missing or posting.
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'import { gone } from "./not-here";'; } > "$T/imp/str/data-real.ts"
+run_bash "node $T/imp/str/data-real.ts"
+refused "a real import of a missing module beside import text in strings"
+says "that refusal names the real import, not a string" "./not-here"
+{ cat "$T/imp/str/data.ts"; printf '%s\n' 'const { post } = await import("./poster.js");' 'post();'; } > "$T/imp/str/data-posts.ts"
+run_bash "node $T/imp/str/data-posts.ts"
+refused "a real dynamic import of a posting helper beside import text in strings"
+says "that refusal names the posting helper" "poster.js"
+# A script whose own code posts is refused however its imports read.
+printf '%s\n' 'const doc = "import { a } from \"./missing.js\"";' \
+  'await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: doc });' > "$T/imp/str/sends.ts"
+run_bash "node $T/imp/str/sends.ts"
+refused "a script that posts to Slack itself, beside import text in a string"
+
+# Miniflare's script or modules source is code Miniflare runs, so its import text is still followed:
+# missing, it is refused as a module the gate cannot see; present and posting, as a post.
+cat > "$T/imp/str/mf-missing.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const worker = `export { handler as default } from "./outbound.js";`;
+const mf = new Miniflare({ modules: true, script: worker });
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-missing.ts"
+refused "a Miniflare script source importing a module the gate cannot find"
+says "that refusal names the module in the source string" "./outbound.js"
+cat > "$T/imp/str/mf-posts.ts" <<'TS'
+import { Miniflare } from "miniflare";
+const mf = new Miniflare({
+  modules: [{ type: "ESModule", path: "worker.mjs", contents: "import { post } from './poster.js'; export default { fetch: () => post() };" }],
+});
+await mf.dispatchFetch("http://localhost/");
+TS
+run_bash "node $T/imp/str/mf-posts.ts"
+refused "a Miniflare modules source importing a helper that posts to Slack"
+says "that refusal names the posting helper reached through the source string" "poster.js"
+
+# Each other sink that runs a string as code keeps its strings followed, held directly or through a
+# variable, and so does a string another module hands to a sink in the script.
+mkdir -p "$T/imp/str/sinks"
+cp "$T/imp/str/poster.js" "$T/imp/str/sinks/poster.js"
+cat > "$T/imp/str/sinks/eval.ts" <<'TS'
+eval("import('./poster.js').then((m) => m.post())");
+TS
+cat > "$T/imp/str/sinks/function.ts" <<'TS'
+const src = "return import('./poster.js')";
+new Function(src)();
+TS
+cat > "$T/imp/str/sinks/vm.ts" <<'TS'
+import vm from "node:vm";
+vm.runInNewContext("import('./poster.js')");
+TS
+cat > "$T/imp/str/sinks/worker.ts" <<'TS'
+import { Worker } from "node:worker_threads";
+new Worker("import('./poster.js')", { eval: true });
+TS
+cat > "$T/imp/str/sinks/child.ts" <<'TS'
+import { execSync } from "node:child_process";
+execSync(`node --input-type=module -e "import './poster.js'"`);
+TS
+cat > "$T/imp/str/sinks/data-url.ts" <<'TS'
+await import("data:text/javascript,import './poster.js'");
+TS
+cat > "$T/imp/str/sinks/constructor.ts" <<'TS'
+const f = (async () => {}).constructor;
+await f("await import('./poster.js')")();
+TS
+for sink in eval function vm worker child data-url constructor; do
+  run_bash "node $T/imp/str/sinks/$sink.ts"
+  refused "a string handed to code that runs it ($sink), importing a helper that posts"
+  says "the $sink refusal names the posting helper" "poster.js"
+done
+cat > "$T/imp/str/src.ts" <<'TS'
+export const src = "import { post } from './poster.js'; post();";
+TS
+printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals-imported.ts"
+run_bash "node $T/imp/str/evals-imported.ts"
+refused "a string from another module handed to eval in the script, importing a helper that posts"
+says "that refusal names the posting helper" "poster.js"
 # Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
 # lies beyond is unseen, so it is refused; a short chain of the same shape passes.
 mkdir -p "$T/imp/chain" "$T/imp/short"
@@ -896,6 +996,49 @@ cp /bin/cat "$T/ds/cat-bin"
 run_bash "cd $T/ds && ./cat-bin session.jsonl"
 allowed "a compiled program run by its own path over a data file that names an endpoint"
 
+echo "slack drafts only: which word is the code is read from each program's own options (claude-config#2439)"
+
+# The refusal measured 2026-11-07: python3 -I -c "<read only analysis>" <transcript .jsonl>. One table
+# of options for every interpreter said -I takes a value (ruby's -I does), so it swallowed -c, the
+# code went unseen, and the transcript the code reads was taken for the script and refused.
+run_bash "python3 -I -c 'import json, sys; print(sum(1 for _ in open(sys.argv[1])))' $T/ds/session.jsonl"
+allowed "python3 -I -c over a transcript that names an endpoint, read only"
+run_bash "node -e 'const fs = require(\"fs\"); console.log(fs.readFileSync(process.argv[1], \"utf8\").length)' $T/ds/issues.json"
+allowed "node -e over a data file that names an endpoint, read only"
+# The same table said -E holds code (perl's does) for every program, and that -c does, so a script run
+# after python's -E, bash's -e (errexit), ruby's -E (an encoding) or php's -c (an ini file) went unread,
+# and node -r loaded a module before -e unread. Each is a script that posts, so each is refused.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/post.sh"
+cp "$T/alert.py" "$T/ds/post.rb"
+cp "$T/alert.py" "$T/ds/post.php"
+printf '%s\n' "memory_limit = 256M" > "$T/ds/php.ini"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST" });' > "$T/ds/post-req.js"
+for runs in "python3 -E $T/alert.py" "python3 -IE $T/alert.py" "python3 -I $T/alert.py" "python3 -I -W ignore $T/alert.py" \
+  "bash -e $T/ds/post.sh" "bash -xe $T/ds/post.sh" "sh -e $T/ds/post.sh" "ruby -E UTF-8 $T/ds/post.rb" \
+  "php -c $T/ds/php.ini $T/ds/post.php" "node -r $T/ds/post-req.js -e 1" "node --require $T/ds/post-req.js -p 1"; do
+  run_bash "$runs"
+  refused "a script that posts, run behind an option that is not code for that program: $runs"
+done
+# Code given inline is judged as a script file is for the data files it is handed: when it can act on
+# them, they are read. Before, python3 -c never read them at all (only -I's wrong table read them, as
+# code), so code handing its argument to bash, or posting it, passed.
+for acts in "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json" \
+  "python3 -I -c 'import json, sys, urllib.request; urllib.request.urlopen(json.load(open(sys.argv[1]))[\"url\"])' $T/ds/msg.json" \
+  "node -e 'fetch(require(process.argv[1]).url, { method: \"POST\" })' $T/ds/msg.json" \
+  "perl -ne 'print' $T/ds/session.jsonl"; do
+  run_bash "$acts"
+  refused "inline code that can act on a data file naming the endpoint, or that the gate cannot judge: ${acts%% *}"
+done
+run_bash "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json"
+says "that refusal names the data file" "msg.json"
+# A file with no extension handed to inline code may be a script, as for a script file, so it is read
+# as code; and a data file still read as the program's script is refused as before.
+printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/noext"
+for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c 1"; do
+  run_bash "$runs"
+  refused "a file whose role cannot be told is still read as code: $runs"
+done
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
@@ -939,6 +1082,95 @@ for plain in "git push -u origin HEAD:fix/2302-slack-drafts-only" "git status" "
   esac
 done
 rm -rf "$errf" "$NOPY"
+
+echo "slack drafts only: a call it cannot judge in time is refused with its own reason (claude-config#2432)"
+
+# On 2026-11-07 the TO FILE THESE line, bash lib/issue-spool.sh clear <project> <transcript .jsonl>
+# <stamp .manifest>, was refused on every try on the work MacBook with "[command hook 42]: timed out;
+# blocking because onFailure is block": Claude Code killed this gate at its 15 second timeout. The
+# gate of that day read the session transcript as a shell script, the first 2 MB of it (MAX_FILE),
+# about 12,000 commands: 5.6 seconds here at a load average of 90, and past 15 on that Mac. A gate
+# killed at its timeout says nothing of why, so a call it ran out of time on read the same as one
+# that sends. Now the gate stops itself inside its timeout and says it ran out of time.
+#
+# Timed by an injected clock, never the real one (L524, L290): under a test run,
+# SLACK_GATE_TICK_BUDGET makes the clock count the gate's steps (each command judged, each file
+# read) and the budget that many steps, so a case is decided by how much the gate reads, whatever
+# the Mac's load. The clear line below took 895 steps on the real issue-spool.sh (2026-11-09); with
+# the transcript read as code, as on 2026-11-07, it took 12,819.
+TICKS=6000
+mkdir -p "$T/big/proj"
+python3 - "$T/big/session.jsonl" <<'PY'
+# A transcript sized past the most the gate reads of any file (2 MB, MAX_FILE), as the real ones are
+# (248 MB for one session on 2026-11-08), of JSON lines that read as shell commands, the first naming
+# the endpoint the way a conversation about the gate does. The endpoint is put together here, so
+# this suite run by hand is not itself refused for feeding python3 a script that names it.
+import json, sys
+endpoint = "chat." + "post" + "Message"
+with open(sys.argv[1], "w") as f:
+    f.write(json.dumps({"type": "user", "message": {"content": "curl -X POST https://slack.com/api/" + endpoint + " -d text=hi"}}) + "\n")
+    i = 0
+    while f.tell() < 3 * 1024 * 1024:
+        f.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+                "input": {"command": "cd /tmp/x%d && git status && echo 'a;b|c' && ls -la | head -%d" % (i, i % 50)}}]}}) + "\n")
+        i += 1
+PY
+printf '%s\n' '{"keys":{}}' > "$T/big/claude-issue-findings.session.manifest"
+# The same bytes with no extension: a file the gate cannot tell from a script, so it reads it as one.
+cp "$T/big/session.jsonl" "$T/big/session"
+printf '%s\n' '#!/usr/bin/env bash' 'wc -l "$1"' > "$T/big/count.sh"
+
+run_budget() { # run_budget <tick budget> <command>: run_bash under a test run with the step clock
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+lacks() { case "$ERR" in *"$2"*) check "$1" "stderr said '$2': ${ERR:0:400}" ;; *) check "$1" ok ;; esac; }
+
+CLEAR="bash $DIR/lib/issue-spool.sh clear $T/big/proj $T/big/session.jsonl $T/big/claude-issue-findings.session.manifest"
+run_budget "$TICKS" "$CLEAR"
+allowed "the TO FILE THESE clear line over a 3 MB transcript naming chat.postMessage is judged within $TICKS steps"
+
+# The control: a file it must read as code, sized the same, runs out of the same budget, and the
+# refusal says it ran out of time rather than claiming a send.
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a 3 MB file read as code that runs past the budget is refused, not left to the timeout"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and names the file whose commands it was judging" "judging the commands in $T/big/session ("
+lacks "and does not claim the command posts" "posts to Slack:"
+# Run out before a file is read, and the refusal names that file rather than the last one read.
+run_budget 1 "$CLEAR"
+refused "a budget that passes before the script is read refuses"
+says "and names the file it was about to read" "about to read $DIR/lib/issue-spool.sh ("
+
+# The step clock is a test seam only: outside a test run the setting is ignored, so a one step
+# budget there still lets a small clear through.
+errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj $T/ds/session.jsonl $T/ds/claude-issue-findings.session.manifest")" \
+  | env -u HOOK_TESTS_RUNNING SLACK_GATE_TICK_BUDGET=1 bash "$HOOK" 2>"$errf")"; RC=$?
+ERR="$(cat "$errf")"; rm -f "$errf"
+allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
+
+# The budget sits inside the timeout the settings give the gate, with room for python3 to start and
+# for the one file it may be reading when the budget passes (MAX_FILE read as commands took 2.8
+# seconds under a profiler at a load average of 222 on 2026-11-09).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
+[ -n "$SETTINGS" ] || room="neither settings.hooks.json nor settings.json is in $DIR/.., so there is no timeout to compare"
+[ -z "$SETTINGS" ] || room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
+import json, re, sys
+timeout = None
+for g in json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", []):
+    for h in g.get("hooks", []):
+        if h.get("command", "").endswith("hooks/slack-drafts-only-gate.sh"):
+            timeout = h.get("timeout")
+m = re.search(r"^BUDGET_SECONDS = (\d+)$", open(sys.argv[2]).read(), re.M)
+if timeout is None or not m:
+    print("no registered timeout or no BUDGET_SECONDS line to compare"); sys.exit()
+print("ok" if int(m.group(1)) <= timeout - 4 else "BUDGET_SECONDS %s leaves under 4 of the %s second timeout" % (m.group(1), timeout))
+PY
+)"
+check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
 
 echo "slack drafts only: it is wired"
 

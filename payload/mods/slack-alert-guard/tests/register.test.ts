@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, REEXPORT_HOPS, SCAN_MS, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, MARKER_PREFILTER, PATHSPEC_BYTES, REEXPORT_HOPS, SCAN_MS, SENDER_PREFILTER, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -79,8 +79,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // is given, for every file it searches, as measured on a real repository (#2462: 0.09 predicts the
   // 25 to 37 ms of a one name search and the 5.5 to 7.7 s of a 150 name one over 1,430 files);
   // fixed strings (-F) cost nothing here, as they cost about what one short pattern does there.
-  // gitTruncated: git's listing comes back cut short.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, regexMsPerKb: 0, gitTruncated: false, cwd: '/w/app' }
+  // gitTruncated: git's listing comes back cut short. stdoutCap: as $.process.run keeps only the first
+  // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
+  // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
+  // after #2481).
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
@@ -122,27 +125,42 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
           const p = fixed ? a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : a
           return new RegExp(whole ? `(^|[^A-Za-z0-9_])(${p})([^A-Za-z0-9_]|$)` : p, 'i')
         })
-        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts, and
-        // ':(glob,icase)**/name.*' a path matched as a glob from the top, case ignored.
+        // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts,
+        // ':(glob,icase)**/name.*' a path matched as a glob from the top, case ignored, and
+        // ':(literal)path' that one path, exactly as written.
         const specs = argv.slice(argv.indexOf('--') + 1)
         const glob = (g: string) =>
           new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
         const inSpec = (p: string) =>
-          specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))) || (s.startsWith(':(glob,icase)') && glob(s.slice(':(glob,icase)'.length)).test(p.slice(dir.length + 1))))
+          specs.some(
+            s =>
+              s === '.' ||
+              (s.startsWith('*.') && p.endsWith(s.slice(1))) ||
+              (s.startsWith(':(glob,icase)') && glob(s.slice(':(glob,icase)'.length)).test(p.slice(dir.length + 1))) ||
+              (s.startsWith(':(literal)') && s.slice(':(literal)'.length) === p.slice(dir.length + 1)),
+          )
         const searched = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p))
         if (ctl.regexMsPerKb && !fixed) await clock.advance(Math.ceil((given.join('').length / 1000) * searched.length * ctl.regexMsPerKb))
-        const truncated = ctl.gitTruncated
+        // What git printed, as $.process.run hands it back: no more than its first stdoutCap bytes.
+        const listing = (stdout: string) => {
+          const bytes = new TextEncoder().encode(stdout)
+          const cut = bytes.length > ctl.stdoutCap
+          const kept = cut ? new TextDecoder().decode(bytes.subarray(0, ctl.stdoutCap)) : stdout
+          return { value: { exitCode: 0, stdout: kept, stderr: '', isStdoutTruncated: ctl.gitTruncated || cut, isStderrTruncated: false } } as never
+        }
         if (!argv.includes('-l')) {
           // Each line holding a fixed string, after its path and a NUL, as git grep -z prints it.
           const lines = searched.flatMap(p => (files[p] ?? '').split('\n').filter(l => (fixed ? patterns.some(re => re.test(l)) : patterns.every(re => re.test(l)))).map(l => `${p.slice(dir.length + 1)}\u0000${l}\n`))
           printed.push(lines.length)
           if (!lines.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
-          return { value: { exitCode: 0, stdout: lines.join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
+          return listing(lines.join(''))
         }
-        // git grep reads line by line, so each pattern must match within one line of the file.
-        const hits = searched.filter(p => patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
+        // git grep reads line by line, so a pattern must match within one line of the file; a file is
+        // listed when any of the patterns does, or every one with --and.
+        const holds = (p: string) => (re: RegExp) => (files[p] ?? '').split('\n').some(l => re.test(l))
+        const hits = searched.filter(p => (argv.includes('--and') ? patterns.every(holds(p)) : patterns.some(holds(p))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
-        return { value: { exitCode: 0, stdout: hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
+        return listing(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
       }
       throw new Error(`unexpected git command: ${argv.join(' ')}`)
     }
@@ -507,8 +525,9 @@ test('a copy builder used by a route that posts nothing passes', withKit, async 
 
 test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
   const many: Record<string, string> = {}
-  // Each names the template as an import does, and mentions Slack only in a comment, so each must be read (#2371).
-  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// slack channel for deploy news\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
+  // Each names the template as an import does, and names a Slack webhook only in a comment, which git
+  // cannot tell from code, so each must be read (#2371).
+  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// deploy news went to hooks.slack.com\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
   const w = world($, on, { files: { ...sent.files, ...many } })
   const why = refusalOf(await call($, RETEMPLATE))
   expect(why).not.toContain('could not check')
@@ -825,6 +844,117 @@ test('new wording in a template that another file sends to Slack is held, naming
   expect(w.ran.length).toBe(1)
 })
 
+// claude-config#2475: a file that posts to Slack imports a module that holds an editor model's own
+// instructions beside the title it posts. The instructions are text only the model reads, so adding a
+// sentence to them was held as Slack wording, and the picker had to show the whole prompt.
+const EDITOR = '/w/app/src/lib/ai/editor.ts'
+const EDITOR_TEXT = [
+  "import Anthropic from '@anthropic-ai/sdk'",
+  'const client = new Anthropic()',
+  'export const EDITOR_PROMPT = `You are the editor for the nightly digest.',
+  '',
+  'Keep every sentence short and plain.`',
+  'const STYLE = `Never use a dash as punctuation.`',
+  'const SYSTEM = [EDITOR_PROMPT, STYLE].join("\\n")',
+  'export const digestTitle = (n: number) => `Nightly digest: ${n} stories ready`',
+  'export const editDigest = async (draft: string) => {',
+  "  const res = await client.messages.create({ model: 'claude-x', max_tokens: 900, system: SYSTEM, messages: [{ role: 'user', content: draft }] })",
+  '  return String(res.content)',
+  '}',
+  '',
+].join('\n')
+const DIGEST_JOB = '/w/app/src/jobs/digest.ts'
+const DIGEST_JOB_TEXT = [
+  "import { WebClient } from '@slack/web-api'",
+  "import { editDigest, digestTitle } from '../lib/ai/editor'",
+  'const slack = new WebClient(process.env.SLACK_BOT_TOKEN)',
+  "export const run = async (draft: string) => slack.chat.postMessage({ channel: 'C1', text: `${digestTitle(3)}\\n${await editDigest(draft)}` })",
+  '',
+].join('\n')
+const editorWorld = { files: { [EDITOR]: EDITOR_TEXT, [DIGEST_JOB]: DIGEST_JOB_TEXT } }
+const PROMPT_EDIT = { tool: 'Edit', file_path: EDITOR, old_string: 'Keep every sentence short and plain.', new_string: 'Keep every sentence short and plain. Lead with the biggest story.' }
+
+test("an edit to a model's own instructions, in a module a Slack sender imports, passes: only the model reads them (#2475)", withKit, async ($, on) => {
+  const w = world($, on, editorWorld)
+  expect(refusalOf(await call($, PROMPT_EDIT))).toBe('')
+  // A part the prompt is built from is read only by the model too.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: EDITOR, old_string: 'Never use a dash as punctuation.', new_string: 'Never use a dash or a semicolon as punctuation.' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  expect(w.asked).toEqual([])
+})
+
+test('the title the same module hands the Slack sender is still held, and so is a prompt edit made in the same call as one (#2475)', withKit, async ($, on) => {
+  const w = world($, on, editorWorld)
+  const title = { tool: 'Edit', file_path: EDITOR, old_string: 'Nightly digest: ${n} stories ready', new_string: 'Nightly digest: ${n} stories are ready' }
+  const why = refusalOf(await call($, title))
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(why).toContain('Nightly digest: ${n} stories are ready')
+  // A call changing the prompt and the title shows Dan the title alone, never the prompt.
+  const both = refusalOf(await call($, { tool: 'MultiEdit', file_path: EDITOR, edits: [{ old_string: PROMPT_EDIT.old_string, new_string: PROMPT_EDIT.new_string }, { old_string: title.old_string, new_string: title.new_string }] }))
+  expect(both).toContain('Nightly digest: ${n} stories are ready')
+  expect(both).not.toContain('Lead with the biggest story')
+  expect(w.ran).toEqual([])
+})
+
+test('a prompt constant some file also posts, or uses any way but as a model input, is still held as Slack wording (#2475)', withKit, async ($, on) => {
+  // The sender posts the instructions themselves.
+  const POSTS_PROMPT = "import { WebClient } from '@slack/web-api'\nimport { EDITOR_PROMPT } from '../lib/ai/editor'\nconst slack = new WebClient(process.env.SLACK_BOT_TOKEN)\nexport const run = () => slack.chat.postMessage({ channel: 'C1', text: EDITOR_PROMPT })\n"
+  const w = world($, on, { files: { ...editorWorld.files, [DIGEST_JOB]: POSTS_PROMPT } })
+  const why = refusalOf(await call($, PROMPT_EDIT))
+  expect(why).toContain('Lead with the biggest story')
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a prompt constant another file hands to something other than a model is still held: the guard cannot see where that goes (#2475)', withKit, async ($, on) => {
+  const OTHER = '/w/app/src/lib/ai/log.ts'
+  const w = world($, on, { files: { ...editorWorld.files, [OTHER]: "import { EDITOR_PROMPT } from './editor'\nexport const note = () => record(EDITOR_PROMPT)\n" } })
+  expect(refusalOf(await call($, PROMPT_EDIT))).toContain('Lead with the biggest story')
+  // So is one renamed on its way out, which a search by its name could not follow.
+  const ALIAS = "export { EDITOR_PROMPT as PROMPT }\n"
+  w.files[EDITOR] = EDITOR_TEXT + ALIAS
+  delete w.files[OTHER]
+  expect(refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))).toContain('Name each story once')
+  expect(w.ran).toEqual([])
+})
+
+// The prompt reaches a model runner elsewhere through a barrel, which a search by its name still finds.
+const BARREL_AI = { '/w/app/src/lib/ai/index.ts': "export * from './editor'\n" }
+const REVIEW = '/w/app/src/lib/review/run.ts'
+const REVIEW_TEXT = "import { EDITOR_PROMPT } from '../ai'\nexport const review = (d: string) => client.messages.create({ system: EDITOR_PROMPT, messages: [{ role: 'user', content: d }] })\n"
+
+test('a prompt another file imports through a barrel and hands only to a model passes; one whose other uses cannot be read is held (#2475)', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...editorWorld.files, ...BARREL_AI, [REVIEW]: REVIEW_TEXT } })
+  expect(refusalOf(await call($, PROMPT_EDIT))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The guard cannot tell what the runner does with it, so the prompt counts as wording: held, never let through.
+  w.ctl.unreadable = REVIEW
+  const why = refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))
+  expect(why).toContain('Name each story once')
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(w.ran.length).toBe(1)
+})
+
+test('in a file that posts to Slack itself, its model prompt passes and its alert wording is still held (#2475)', withKit, async ($, on) => {
+  const JOB = '/w/app/src/jobs/summary.ts'
+  const JOB_TEXT = [
+    "import { WebClient } from '@slack/web-api'",
+    "import Anthropic from '@anthropic-ai/sdk'",
+    'const slack = new WebClient(process.env.SLACK_BOT_TOKEN)',
+    'const SUMMARY_PROMPT = `Summarise the day in three plain sentences.`',
+    'export const run = async (log: string) => {',
+    "  const res = await new Anthropic().messages.create({ model: 'claude-x', max_tokens: 400, system: SUMMARY_PROMPT, messages: [{ role: 'user', content: log }] })",
+    "  await slack.chat.postMessage({ channel: 'C1', text: `Daily summary is ready: ${String(res.content)}` })",
+    '}',
+    '',
+  ].join('\n')
+  const w = world($, on, { files: { [JOB]: JOB_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'three plain sentences.', new_string: 'three plain sentences, the worst news first.' }))).toBe('')
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'Daily summary is ready', new_string: 'Daily summary is ready to read' }))
+  expect(why).toContain('Daily summary is ready to read')
+  expect(w.ran.length).toBe(1)
+})
+
 test('a text template a script reads and sends is held too, by a Write and by a shell write', withKit, async ($, on) => {
   const TXT = '/w/app/templates/backup.txt'
   const PY = '/w/app/jobs/backup.py'
@@ -842,9 +972,10 @@ test('a template no file sends passes, after a search that ran; so does a file o
   const DIGEST = '/w/app/lib/templates/digest.ts'
   const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
-  // One grep for the files holding a Slack word, once for the search, and one for the files naming
-  // the template, senders and files handing it on alike (#2286, #2462).
-  expect(grepped(w)).toBe(2)
+  // Two greps, once for the search, for the files holding a Slack word and which of those could post,
+  // and one for the files naming the template, senders and files handing it on alike (#2286, #2462);
+  // with none naming it, no lines are listed.
+  expect(grepped(w)).toBe(3)
   // Every git call is bounded by the scan's deadline.
   expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/elsewhere/messages.ts', content: 'export const m = "Disk is full"\n' }))).toBe('')
@@ -974,10 +1105,11 @@ test('a re-export cycle ends: with a sender beside it the edit is held, with non
   delete w.files[NOTIFY]
   const before = grepped(w)
   expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // One grep for the Slack words for the whole search, then each level is one grep for the files
-  // naming it (and at most one for send helpers), and the loop back to alpha.ts adds no level.
+  // One grep for the files that could post for the whole search, then each level is one grep listing
+  // the files naming it, one listing their lines (and at most one for send helpers), and the loop
+  // back to alpha.ts adds no level.
   expect(grepped(w) - before).toBeGreaterThan(2)
-  expect(grepped(w) - before).toBeLessThanOrEqual(2 * (REEXPORT_HOPS + 1))
+  expect(grepped(w) - before).toBeLessThanOrEqual(1 + 3 * (REEXPORT_HOPS + 1))
   expect(w.ran.length).toBe(1)
 })
 
@@ -1066,9 +1198,10 @@ test('a module imported by many files is searched within the limit, and the file
   expect(why).toContain(`which ${POSTER} sends to Slack`)
   expect(w.ran).toEqual([])
   // No regular expression git is asked to test grows with the files being traced: the names go to git
-  // as fixed strings, and only the short Slack word search is a regular expression.
+  // as fixed strings, and the only regular expressions are the two fixed Slack searches.
   const regexes = w.gits.filter(g => g.argv[3] === 'grep' && !g.argv.includes('-F')).flatMap(g => g.argv.filter((_, i) => g.argv[i - 1] === '-e'))
-  expect(Math.max(...regexes.map(r => r.length))).toBeLessThan(100)
+  expect(regexes.length).toBeGreaterThan(0)
+  for (const r of regexes) expect([SENDER_PREFILTER, MARKER_PREFILTER]).toContain(r)
 })
 
 test('a module imported by more files than the guard reads is held for Dan, never let through, and never as could not check', withKit, async ($, on) => {
@@ -1086,8 +1219,9 @@ test('a short common name met only inside longer words lists no lines to test', 
   for (let f = 0; f < 50; f++) others[`/w/app/src/feedback/form${f}.ts`] = `export const feedbackDb${f} = 'feedback ${f}'\n`
   const w = world($, on, { files: { [DB]: 'export const label = `Database is down`\n', ...others } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DB, old_string: 'Database is down', new_string: 'Database is unreachable' }))).toBe('')
-  // The fifty files holding db only inside feedbackDb print nothing for the guard to test.
-  expect(w.printed).toEqual([0])
+  // The fifty files holding db only inside feedbackDb are not listed, so no line is printed to test.
+  expect(w.printed).toEqual([])
+  expect(w.gits.filter(g => g.argv.includes('-F') && g.argv.includes('-l')).length).toBe(1)
 })
 
 test('a search over a widely imported module that runs late, or whose listing is cut short, still holds the edit', withKit, async ($, on) => {
@@ -1100,8 +1234,91 @@ test('a search over a widely imported module that runs late, or whose listing is
   w.ctl.gitTruncated = true
   const cut = refusalOf(await call($, REHTTP))
   expect(cut).toContain('could not check')
-  expect(cut).toContain('git grep for the files that')
+  expect(cut).toContain('git grep listing the names of the files that')
   expect(w.ran).toEqual([])
+})
+
+// After #2481, 2026-11-08: an edit to a widely imported copy file in a work repository was held as could not check. The
+// lines naming its importers, as git listed them, came to 9.9 MB, past what $.process.run keeps (4
+// MiB), almost all of it that repository's design pages: HTML that mentions Slack, with lines of up to 730 KB.
+// Here the cap is scaled down with the pages.
+const designPages = (count: number, bytes: number): Record<string, string> => {
+  const pages: Record<string, string> = {}
+  for (let i = 0; i < count; i++)
+    pages[`/w/app/docs/design/page${i}.html`] = `<h1>Slack alert preview</h1>\n<p>The http route for billing, as Slack shows it ${'x'.repeat(bytes)}</p>\n`
+  return pages
+}
+
+test('a module named on lines too long for one listing, in pages that cannot send it, still gets a verdict', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...widelyImported(60, 0), ...designPages(10, 20_000) } })
+  w.ctl.stdoutCap = 50_000
+  const why = refusalOf(await call($, REHTTP))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain(`which ${POSTER} sends to Slack`)
+})
+
+// A file that can send or hand on the template, one of whose lines alone runs past the cap, as a
+// bundled or generated file's can.
+const LONG = '/w/app/src/alerts/bundled.ts'
+const LONG_TEXT = `import { jsonError } from '../lib/http'\nconst pad = 'http ${'x'.repeat(60_000)}'\nexport const notify = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: jsonError(pad) }) })\n`
+
+test('a file whose one line is longer than a whole listing is read and judged, never passed over', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...widelyImported(60, 0), [LONG]: LONG_TEXT } })
+  w.ctl.stdoutCap = 50_000
+  expect(refusalOf(await call($, REHTTP))).toContain(`which ${LONG} sends to Slack`)
+})
+
+test('a file too long for a listing that then cannot be read holds the edit as could not check', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...widelyImported(60, 0), [LONG]: LONG_TEXT } })
+  w.ctl.stdoutCap = 50_000
+  w.ctl.unreadable = LONG
+  const why = refusalOf(await call($, REHTTP))
+  expect(why).toContain('could not check')
+  expect(why).toContain(LONG)
+  expect(w.ran).toEqual([])
+})
+
+test('a list of the files naming the template that is cut short holds the edit, never reads as none', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(60, 0) })
+  // Room for the Slack listing, too little for the sixty handlers naming http.
+  w.ctl.stdoutCap = 500
+  const why = refusalOf(await call($, REHTTP))
+  expect(why).toContain('could not check')
+  expect(why).toContain('git grep listing the names of the files that')
+  expect(w.ran).toEqual([])
+})
+
+// 2026-11-09: a session held an edit to a widely imported copy file in a work repository as "git grep
+// for the files that name it or hand it on failed (exit 0: no message)". git had not failed: what it
+// printed was cut short. The words were the same before and after #2508 changed which listing runs,
+// so the hold could not show that the session was still running the copy from before #2508.
+test('a listing cut short is held as cut short, naming the listing, never as git failing with exit 0', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(60, 0) })
+  // Room for the Slack listing, too little for the names of the sixty handlers naming http.
+  w.ctl.stdoutCap = 500
+  const names = refusalOf(await call($, REHTTP))
+  expect(names).toContain('could not check')
+  expect(names).toContain('git grep listing the names of the files that name')
+  expect(names).toContain('more than the 4 MiB')
+  expect(names).not.toContain('exit 0')
+  w.ctl.stdoutCap = Infinity
+  w.ctl.gitTruncated = true
+  const first = refusalOf(await call($, REHTTP))
+  expect(first).toContain('git grep listing the names of the files that mention Slack')
+  expect(first).toContain('more than the 4 MiB')
+  expect(first).not.toContain('exit 0')
+  expect(w.ran).toEqual([])
+})
+
+test('the files whose lines are listed are named to git in groups small enough for one command line', withKit, async ($, on) => {
+  const files = widelyImported(60, 0)
+  // Two thousand files with long paths naming http, each of which could hand it on.
+  for (let i = 0; i < 2000; i++) files[`/w/app/src/generated/a-rather-long-folder-name-for-generated-code/${'segment/'.repeat(4)}client${i}.ts`] = `// generated from the http schema\nexport const c${i} = ${i}\n`
+  const w = world($, on, { files })
+  expect(refusalOf(await call($, REHTTP))).toContain(`which ${POSTER} sends to Slack`)
+  const longest = Math.max(...w.gits.map(g => g.argv.reduce((n, a) => n + new TextEncoder().encode(a).length + 1, 0)))
+  expect(longest).toBeLessThanOrEqual(PATHSPEC_BYTES + 10_000)
+  expect(w.gits.filter(g => g.argv.some(a => a.startsWith(':(literal)'))).length).toBeGreaterThan(1)
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {
