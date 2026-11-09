@@ -75,7 +75,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitSlow: the search answers, but only after the clock has moved past the scan's deadline.
   // readMs: each file the guard reads and checks moves the clock this far, standing in for reading
   // and checking a real file on a busy Mac (#2371); cwd: the folder the session is in.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, cwd: '/w/app' }
+  // regexMsPerKb: each git grep moves the clock this far for every kilobyte of regular expression it
+  // is given, for every file it searches, as measured on a real repository (#2462: 0.09 predicts the
+  // 25 to 37 ms of a one name search and the 5.5 to 7.7 s of a 150 name one over 1,430 files);
+  // fixed strings (-F) cost nothing here, as they cost about what one short pattern does there.
+  // gitTruncated: git's listing comes back cut short.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, regexMsPerKb: 0, gitTruncated: false, cwd: '/w/app' }
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
@@ -106,7 +111,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       }
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
-        const patterns = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [new RegExp(a, 'i')] : []))
+        // -F: every pattern a fixed string, and a line matching any of them is listed.
+        const fixed = argv.includes('-F')
+        const given = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [a] : []))
+        const patterns = given.map(a => new RegExp(fixed ? a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : a, 'i'))
         // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts, and
         // ':(glob,icase)**/name.*' a path matched as a glob from the top, case ignored.
         const specs = argv.slice(argv.indexOf('--') + 1)
@@ -114,10 +122,19 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
           new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
         const inSpec = (p: string) =>
           specs.some(s => s === '.' || (s.startsWith('*.') && p.endsWith(s.slice(1))) || (s.startsWith(':(glob,icase)') && glob(s.slice(':(glob,icase)'.length)).test(p.slice(dir.length + 1))))
+        const searched = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p))
+        if (ctl.regexMsPerKb && !fixed) await clock.advance(Math.ceil((given.join('').length / 1000) * searched.length * ctl.regexMsPerKb))
+        const truncated = ctl.gitTruncated
+        if (!argv.includes('-l')) {
+          // Each line holding a fixed string, after its path and a NUL, as git grep -z prints it.
+          const lines = searched.flatMap(p => (files[p] ?? '').split('\n').filter(l => (fixed ? patterns.some(re => re.test(l)) : patterns.every(re => re.test(l)))).map(l => `${p.slice(dir.length + 1)}\u0000${l}\n`))
+          if (!lines.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+          return { value: { exitCode: 0, stdout: lines.join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
+        }
         // git grep reads line by line, so each pattern must match within one line of the file.
-        const hits = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p) && patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
+        const hits = searched.filter(p => patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
-        return ok(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
+        return { value: { exitCode: 0, stdout: hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
       }
       throw new Error(`unexpected git command: ${argv.join(' ')}`)
     }
@@ -1000,6 +1017,72 @@ test('a commented import does not hand a template on, and a Slack marker in a co
   const why = refusalOf(await call($, RETEMPLATE))
   expect(why).toContain(`which ${NOTIFY} sends to Slack`)
   expect(why).not.toContain(`which ${MESSAGES}`)
+})
+
+// claude-config#2462: a module imported by many files, in a repository of many more. Handlers import
+// it, area barrels and routes import the handlers, and one file posting to Slack imports a route, so
+// the module reaches Slack two files away. The cost of git grep is the world's measured one.
+const HTTP = '/w/app/src/lib/http.ts'
+const HTTP_TEXT = 'export const jsonError = (msg: string) => new Response(JSON.stringify({ error: `Request failed: ${msg}` }))\n'
+const REHTTP = { tool: 'Edit', file_path: HTTP, old_string: 'Request failed: ${msg}', new_string: 'Request failed for ${msg}' }
+const POSTER = '/w/app/src/alerts/notify.ts'
+const AREAS = ['billing', 'accounts', 'orders', 'search', 'media', 'auth', 'reports', 'teams', 'webhooks', 'settings']
+const widelyImported = (importers: number, others = 1200): Record<string, string> => {
+  const files: Record<string, string> = { [HTTP]: HTTP_TEXT }
+  const handlers: { area: string; name: string }[] = []
+  for (let i = 0; i < importers; i++) {
+    const area = AREAS[i % AREAS.length] as string
+    const name = `${area}Handler${i}`
+    handlers.push({ area, name })
+    files[`/w/app/src/handlers/${area}/${name}.ts`] =
+      `import { jsonError } from '../../lib/http'\nimport { query } from '../../lib/db'\n\nexport const handle${i} = async (id: string) => (id ? query(id) : jsonError('missing id'))\n`
+  }
+  for (const area of AREAS)
+    files[`/w/app/src/handlers/${area}/index.ts`] = handlers.filter(h => h.area === area).map(h => `export * from './${h.name}'`).join('\n') + '\n'
+  for (let r = 0; r < 60; r++) {
+    const h = handlers[r % handlers.length] as { area: string; name: string }
+    files[`/w/app/src/routes/route${r}.ts`] = `import * as area from '../handlers/${h.area}'\nimport { handle${r % handlers.length} } from '../handlers/${h.area}/${h.name}'\n\nexport const route${r} = { path: '/${h.area}/${r}', area, h: handle${r % handlers.length} }\n`
+  }
+  files[POSTER] =
+    "import { route7 } from '../routes/route7'\nexport const notify = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: `Route ${route7.path} is failing` }) })\n"
+  for (let f = 0; f < others; f++) files[`/w/app/src/other/pkg${f % 40}/mod${f}.ts`] = `import { query } from '../../lib/db'\n\nexport const thing${f} = () => query('select ${f}')\n`
+  return files
+}
+
+test('a module imported by many files is searched within the limit, and the file two away that sends it is named', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(60) })
+  w.ctl.regexMsPerKb = 0.09
+  const why = refusalOf(await call($, REHTTP))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain(`which ${POSTER} sends to Slack`)
+  expect(w.ran).toEqual([])
+  // No regular expression git is asked to test grows with the files being traced: the names go to git
+  // as fixed strings, and only the short Slack word search is a regular expression.
+  const regexes = w.gits.filter(g => g.argv[3] === 'grep' && !g.argv.includes('-F')).flatMap(g => g.argv.filter((_, i) => g.argv[i - 1] === '-e'))
+  expect(Math.max(...regexes.map(r => r.length))).toBeLessThan(100)
+})
+
+test('a module imported by more files than the guard reads is held for Dan, never let through, and never as could not check', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(150) })
+  w.ctl.regexMsPerKb = 0.09
+  const why = refusalOf(await call($, REHTTP))
+  expect(why).not.toContain('could not check')
+  expect(why).toContain('Request failed for ${msg}')
+  expect(w.ran).toEqual([])
+})
+
+test('a search over a widely imported module that runs late, or whose listing is cut short, still holds the edit', withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(60, 0) })
+  w.ctl.gitSlow = SCAN_MS / 2
+  const late = refusalOf(await call($, REHTTP))
+  expect(late).toContain('could not check')
+  expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  w.ctl.gitSlow = 0
+  w.ctl.gitTruncated = true
+  const cut = refusalOf(await call($, REHTTP))
+  expect(cut).toContain('could not check')
+  expect(cut).toContain('git grep for the files that')
+  expect(w.ran).toEqual([])
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {

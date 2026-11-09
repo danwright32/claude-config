@@ -289,8 +289,12 @@ export const importTerms = (text: string): string[] => {
   return [...out]
 }
 
-/** The files a template may be handed on through, as git pathspecs. */
-export const LINK_PATHS = [...JS, 'py'].map(e => `*.${e}`)
+/** Whether a template may be handed on through this file: a JavaScript, TypeScript or python one. */
+const LINK_EXTS = new Set([...JS, 'py'])
+export const mayHandOn = (rel: string): boolean => {
+  const e = extOf(rel)
+  return e !== undefined && LINK_EXTS.has(e)
+}
 
 // A character that cannot be part of a name, and one that also cannot open a quote or a brace, which
 // a python import line never holds (importedModules). Written without \b, which macOS git grep -E
@@ -301,22 +305,26 @@ const BARE = '[^"\'`{}]'
 const BARE_EDGE = '[^A-Za-z0-9_"\'`{}]'
 
 /**
- * What git grep -E, case ignored, is given to list the files that may name any of `rels` (#2371):
- * `word`, the names alone, which git tests first and cheaply, and `shape`, tested only on a line
- * holding one (`-e word --and -e shape`): the name in a form refersTo can accept. That is after a
+ * How the files that may name any of `rels` are listed (#2371, #2462): `words`, the names alone,
+ * which git grep is given as fixed strings, case ignored, and `shape`, a regular expression tested
+ * here, case ignored, on each line git lists: the name in a form refersTo can accept. That is after a
  * slash (a path), as a file name with its extension, after its folder's name and a dot (a dotted
  * module), or on a python import line; a package's index or __init__ is named by its folder, as a
  * whole word. A word the name is only a piece of (et in settings, memory in "kept in memory") is
  * never listed, so a common short name no longer lists a crowd of files to read. Every form
- * refersTo accepts holds one of these, so nothing it would find is left out.
+ * refersTo accepts holds one of these, so nothing it would find is left out. The shape is never
+ * handed to git: for the importers of a widely imported module it runs to tens of kilobytes, which
+ * git tested on every line, 5.5 to 7.7 seconds for 150 names over 1,430 files, where the names as
+ * fixed strings took 55 ms and the shape tested here on the lines they listed 14 ms (#2462).
  */
-export const namePatterns = (rels: string[]): { word: string; shape: string } => {
+export const namePatterns = (rels: string[]): { words: string[]; shape: string } => {
   const words = new Set<string>()
   const shapes = new Set<string>()
   for (const r of rels) {
     const segs = r.split('/')
-    const t = escapeRe(searchTerm(r))
-    words.add(t)
+    const term = searchTerm(r)
+    const t = escapeRe(term)
+    words.add(term)
     if (PACKAGE.has(stemOf(segs[segs.length - 1] ?? '')) && segs.length > 1) {
       shapes.add(`(^|${EDGE})${t}${NAME_END}`)
       continue
@@ -328,8 +336,7 @@ export const namePatterns = (rels: string[]): { word: string; shape: string } =>
     if (dir) shapes.add(`${escapeRe(dir)}\\.${t}${NAME_END}`)
     shapes.add(`^[ \t]*(from|import)([ \t]|[ \t]${BARE}*${BARE_EDGE})${t}(${BARE_EDGE}[^"'\`{}#]*)?(#.*)?$`)
   }
-  const w = [...words]
-  return { word: w.length === 1 ? (w[0] as string) : `(${w.join('|')})`, shape: [...shapes].join('|') }
+  return { words: [...words], shape: [...shapes].join('|') }
 }
 
 // A name written as a git glob matches it as written, its glob signs escaped.
