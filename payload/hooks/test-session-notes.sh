@@ -98,14 +98,19 @@ check_eq "3 a newer note in the notes folder is never overwritten" "Written afte
 check_not "3 and nothing claims a copy was made" "copied" "$(field "$out" additionalContext)"
 
 # ---- 4. The folder cannot be made: said to the session AND to Dan, never silent ----
-S3="0a1b2c3d-1111-2222-3333-aaaabbbbcccc"
-mkdir -p "$WORK/ro"; chmod a-w "$WORK/ro"
-out="$(start_payload "$S3" "$WORK/projects/$KEY/$S3.jsonl" "$CWD" | CLAUDE_HOME="$WORK/ro/home" bash "$HOOK" 2>/dev/null)"; rc=$?
-check_eq "4 a folder that cannot be made never fails the session start" "0" "$rc"
-check "4 the session is told it could not be made" "could not be created" "$(field "$out" additionalContext)"
-check "4 and that a scratchpad note is lost on restart" "lost" "$(field "$out" additionalContext)"
-check "4 Dan is told too" "could not be created" "$(field "$out" system)"
-chmod u+w "$WORK/ro"
+# Root ignores a folder's permissions, so there the folder is made and this cannot be measured (L411).
+if [ "$(id -u)" != 0 ]; then
+  S3="0a1b2c3d-1111-2222-3333-aaaabbbbcccc"
+  mkdir -p "$WORK/ro"; chmod a-w "$WORK/ro"
+  out="$(start_payload "$S3" "$WORK/projects/$KEY/$S3.jsonl" "$CWD" | CLAUDE_HOME="$WORK/ro/home" bash "$HOOK" 2>/dev/null)"; rc=$?
+  check_eq "4 a folder that cannot be made never fails the session start" "0" "$rc"
+  check "4 the session is told it could not be made" "could not be created" "$(field "$out" additionalContext)"
+  check "4 and that a scratchpad note is lost on restart" "lost" "$(field "$out" additionalContext)"
+  check "4 Dan is told too" "could not be created" "$(field "$out" system)"
+  chmod u+w "$WORK/ro"
+else
+  echo "UNMEASURED: running as root, so a folder that cannot be made cannot be set up"
+fi
 
 # ---- 5. A payload it cannot use says so, and never names a folder it did not make ----
 out="$(printf 'not json' | bash "$HOOK" 2>/dev/null)"; rc=$?

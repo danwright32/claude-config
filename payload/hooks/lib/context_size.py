@@ -230,8 +230,13 @@ def note_place(payload):
     it), never the scratchpad, which a restart of the Mac empties. Made here too, for a session
     started before the folder existed.
     """
-    import session_notes
-    r = session_notes.ensure(payload)
+    # Bounded here: a failure must cost only the note's place, never the notice itself, which would
+    # otherwise abort before its band is recorded and be retried, unsaid, on every call.
+    try:
+        import session_notes
+        r = session_notes.ensure(payload)
+    except Exception as err:
+        return "handoff.md", "this session's notes folder could not be set up (%s)" % err
     if r["dir"] is None:
         why = "this session's notes folder could not be worked out (%s)" % r["error"]
         return "handoff.md", why

@@ -166,13 +166,18 @@ check "2 Dan sees it too" "370,000" "$(field "$out" system)"
 check_eq "2 once per band" "" "$(main_fire m1 "$M")"
 # #2490: a notes folder that cannot be made is said, to the session and to Dan, never left for the
 # compact tool to refuse with no reason given.
-M9="$WORK/proj/m9.jsonl"; : > "$M9"
-start "$M9"; agent_call "$M9"; usage "$M9" msg_1 370000
-mkdir -p "$WORK/rohome/state"; chmod a-w "$WORK/rohome/state"
-out="$(printf '{"session_id":"m9","transcript_path":"%s","cwd":"/tmp","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' "$M9" | CLAUDE_HOME="$WORK/rohome" bash "$HOOK" 2>/dev/null)"
-chmod u+w "$WORK/rohome/state"
-check "2 a notes folder that cannot be made is said to the session (#2490)" "could not be created" "$(field "$out" additionalContext)"
-check "2 and to Dan (#2490)" "could not be created" "$(field "$out" system)"
+# Root ignores a folder's permissions, so there the folder is made and this cannot be measured.
+if [ "$(id -u)" != 0 ]; then
+  M9="$WORK/proj/m9.jsonl"; : > "$M9"
+  start "$M9"; agent_call "$M9"; usage "$M9" msg_1 370000
+  mkdir -p "$WORK/rohome/state"; chmod a-w "$WORK/rohome/state"
+  out="$(printf '{"session_id":"m9","transcript_path":"%s","cwd":"/tmp","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' "$M9" | CLAUDE_HOME="$WORK/rohome" bash "$HOOK" 2>/dev/null)"
+  chmod u+w "$WORK/rohome/state"
+  check "2 a notes folder that cannot be made is said to the session (#2490)" "could not be created" "$(field "$out" additionalContext)"
+  check "2 and to Dan (#2490)" "could not be created" "$(field "$out" system)"
+else
+  echo "UNMEASURED: running as root, so a folder that cannot be made cannot be set up (#2490)"
+fi
 G="$WORK/proj/g1.jsonl"; : > "$G"
 goal_set "$G"
 start "$G"
