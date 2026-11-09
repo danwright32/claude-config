@@ -18857,15 +18857,14 @@ out_54s="$(h54_env bash "$SCRIPT" status 2>&1 || true)"
 check "#1854 status reads the same record and says the same length" \
   "line_has \"\$out_54s\" 'watcher hold' '1 hour 30 minutes' 'building the nudge skill'"
 
-# A second, SHORTER hold must not cut the first one short: that is a hold somebody was promised
-# being lifted early by somebody else, with nothing said to either of them. Under the same label,
-# because that is the same hold (#2452); a hold under another label is a second hold beside it,
-# which the #2452 section tests.
+# A SHORTER renewal must not cut the hold short: that is a hold somebody was promised being lifted
+# early, with nothing said. A renewal is --extend under the same label, because that is the same
+# hold (#2452, #2468); the same label without --extend is refused, which the #2452 section tests.
 until_54a="$(awk 'NR==1{print $1}' "$H54_HOLD" 2>/dev/null)"
 out_54k=""; rc_54k=0
-out_54k="$(h54_env bash "$SCRIPT" hold 5 "building the nudge skill" 2>&1)" || rc_54k=$?
+out_54k="$(h54_env bash "$SCRIPT" hold --extend 5 "building the nudge skill" 2>&1)" || rc_54k=$?
 dbg "#1854 shorter hold over a longer one: rc=$rc_54k $out_54k"
-check "#1854 a shorter hold over a longer one succeeds" "[ '$rc_54k' = 0 ]"
+check "#1854 a shorter renewal of a longer hold succeeds" "[ '$rc_54k' = 0 ]"
 check "#1854 and keeps the longer hold's expiry" "[ \"\$(awk 'NR==1{print \$1}' '$H54_HOLD')\" = '$until_54a' ]"
 check "#1854 and says it kept the longer one, naming it" \
   "line_has \"\$out_54k\" 'already' 'building the nudge skill'"
@@ -19197,17 +19196,43 @@ check "#2452 and the record holds both, each under the session" \
 check "#2452 and the second builder is told the first hold is also in force" "line_has \"\$out_52b\" 'also held' 'build #2442'"
 check "#2452 and is told to lift its own by its label, since a plain release would have to choose" \
   "line_has \"\$out_52b\" 'held off' 'claude-sync release \"build #2445\"'"
-# The same label again is the same hold: lengthened in place, never a second line.
-h52_s bash "$SCRIPT" hold 45 "build #2445" >/dev/null 2>&1 || true
-check "#2452 the same label held again replaces its own line rather than adding one" "[ \"\$(h52_lines 'build #2445')\" = 1 ]"
+# The same label again, from the same session, is REFUSED (#2468). Sibling builders share a session
+# id, so a second builder that picked the label a sibling holds would otherwise replace the
+# sibling's line silently and shorten or end its hold. The refusal changes nothing in the record and
+# names --extend, which is how a builder renews its OWN hold.
+cp "$H52_HOLD" "$H52/hold-before-same-label"
+out_52dup=""; rc_52dup=0
+out_52dup="$(h52_s bash "$SCRIPT" hold 5 "build #2445" 2>&1)" || rc_52dup=$?
+dbg "#2468 same session and label again: rc=$rc_52dup $out_52dup"
+check "#2468 a second hold with the same session and label is refused with a non-zero exit" "[ '$rc_52dup' != 0 ]"
+check "#2468 and the refusal names --extend as the way to renew" "line_has \"\$out_52dup\" 'build #2445' 'hold --extend'"
+check "#2468 and says no hold was taken, naming the hold it would have replaced" "line_has \"\$out_52dup\" 'no hold was taken' 'already holds'"
+check "#2468 and the record is left exactly as it was" "cmp -s '$H52_HOLD' '$H52/hold-before-same-label'"
+rm -f "$H52/hold-before-same-label"
+# --extend renews the caller's own line of that label: lengthened in place, never a second line.
+until_52e0="$(grep -- 'build #2445$' "$H52_HOLD" | awk '{print $1}')"
+out_52e=""; rc_52e=0
+out_52e="$(h52_s bash "$SCRIPT" hold --extend 45 "build #2445" 2>&1)" || rc_52e=$?
+dbg "#2468 extend own hold: rc=$rc_52e $out_52e"
+until_52e1="$(grep -- 'build #2445$' "$H52_HOLD" | awk '{print $1}')"
+check "#2468 --extend renews the caller's own hold" "[ '$rc_52e' = 0 ] && line_has \"\$out_52e\" 'held off for 45 minutes' 'build #2445'"
+check "#2468 and the record keeps one line of that label" "[ \"\$(h52_lines 'build #2445')\" = 1 ]"
+check "#2468 and its end moved later" "[ -n '$until_52e0' ] && [ '$until_52e1' -gt '$until_52e0' ]"
+check "#2468 and the other label's hold is untouched" "grep -q 'session=$H52_S build #2442\$' '$H52_HOLD'"
+# --extend with no hold of that label renews nothing: the hold it meant to renew has already lapsed.
+out_52en=""; rc_52en=0
+out_52en="$(h52_s bash "$SCRIPT" hold --extend 20 "build #9999" 2>&1)" || rc_52en=$?
+dbg "#2468 extend with nothing to renew: rc=$rc_52en $out_52en"
+check "#2468 --extend with no hold of that label is refused" "[ '$rc_52en' != 0 ] && line_has \"\$out_52en\" 'no hold was taken' 'build #9999'"
+check "#2468 and writes no line for it" "[ \"\$(h52_lines 'build #9999')\" = 0 ]"
 # A label holding a backslash compares equal to itself read back: awk -v would read the backslash
-# as an escape, so the hold failed its own read back and the same label held again added a line.
+# as an escape, so the hold failed its own read back and the same label renewed added a line.
 out_52bs=""; rc_52bs=0
 out_52bs="$(h52_s bash "$SCRIPT" hold 10 'edits C:\temp' 2>&1)" || rc_52bs=$?
-h52_s bash "$SCRIPT" hold 20 'edits C:\temp' >/dev/null 2>&1 || true
+h52_s bash "$SCRIPT" hold --extend 20 'edits C:\temp' >/dev/null 2>&1 || true
 dbg "#2452 backslash label: rc=$rc_52bs $out_52bs"
 check "#2452 a label with a backslash is taken and read back" "[ '$rc_52bs' = 0 ] && line_has \"\$out_52bs\" 'held off for 10 minutes' 'temp'"
-check "#2452 and held again under the same label stays one line" "[ \"\$(grep -c -F 'edits C:\\temp' '$H52_HOLD')\" = 1 ]"
+check "#2452 and renewed under the same label stays one line" "[ \"\$(grep -c -F 'edits C:\\temp' '$H52_HOLD')\" = 1 ]"
 h52_s bash "$SCRIPT" release 'edits C:\temp' >/dev/null 2>&1 || true
 check "#2452 and release by that label lifts it" "! grep -q -F 'edits C:' '$H52_HOLD'"
 out_52st="$(h52_s bash "$SCRIPT" status 2>&1 || true)"
@@ -24530,6 +24555,80 @@ out_ml5="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
 dbg "#1535 status with a removal not received: $out_ml5"
 check "#1535 a mod the shared repo removed and this Mac still runs is named" \
   "line_has \"\$out_ml5\" 'mods behind the shared repo' 'side-mod'"
+
+section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
+# Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
+# for a sync that publishes a change and 162 for the pull receiving it, git being about half the
+# cost. Some of them asked a question whose answer could not have changed since the last time the
+# same run asked it. These hold the run to asking once, and the controls hold the answers to what
+# they were. The counts come from a git that records each call before running the real one.
+unset SYNC_NO_GIT
+FPBARE="$WORK/fewer-bare.git"; git init -q --bare "$FPBARE"
+FPRA="$WORK/fewer-repoA"; git clone -q "$FPBARE" "$FPRA" 2>/dev/null
+FPHA="$WORK/fewer-homeA"; mkdir -p "$FPHA/skills/s"
+mkskill "$FPHA/skills/s/SKILL.md" 'one'; echo '{"hooks":{}}' > "$FPHA/settings.json"
+fprun(){ # fprun <home> <repo> <command>
+  env CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_HOSTNAME="$(basename "$1")" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" "$3" 2>&1
+}
+fprun "$FPHA" "$FPRA" sync >/dev/null
+FPRB="$WORK/fewer-repoB"; git clone -q "$FPBARE" "$FPRB" 2>/dev/null
+FPHB="$WORK/fewer-homeB"; mkdir -p "$FPHB"; echo '{"hooks":{}}' > "$FPHB/settings.json"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+FPGIT="$WORK/fewer-gitcalls"; mkdir -p "$FPGIT/bin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/calls"\nexec "%s" "$@"\n' "$FPGIT" "$(command -v git)" > "$FPGIT/bin/git"
+chmod +x "$FPGIT/bin/git"
+mkskill "$FPHA/skills/s/SKILL.md" 'two'
+fprun "$FPHA" "$FPRA" sync >/dev/null
+: > "$FPGIT/calls"
+out_fp="$(PATH="$FPGIT/bin:$PATH" fprun "$FPHB" "$FPRB" pull)"
+dbg "#2472 the counted pull said: $out_fp"
+check "#2472 the fixture: the pull received the other Mac's change" \
+  "grep -q 'two' '$FPHB/skills/s/SKILL.md'"
+check "#2472 the fixture: the counting git saw the pull (else the counts below prove nothing)" \
+  "[ \"\$(grep -c 'rev-parse' '$FPGIT/calls')\" -gt 3 ]"
+# The paths the shared repo changed that this Mac has not applied are read by three steps of one
+# apply, and nothing in between moves HEAD, the applied marker or the shared branch.
+check "#2472 a receiving pull works out what it has not applied once, not once per step that reads it" \
+  "[ \"\$(grep -c 'merge-base --all' '$FPGIT/calls')\" -eq 1 ]"
+# Where an unfinished rebase would be is two paths, and git answers both in one call.
+check "#2472 the fixture: the pull did ask where a rebase would be" \
+  "grep -q -- '--git-path rebase-merge' '$FPGIT/calls'"
+check "#2472 and asks for both places a rebase can be in one call" \
+  "[ \"\$(grep -c -- '--git-path' '$FPGIT/calls')\" -eq \"\$(grep -c -- '--git-path rebase-merge --git-path rebase-apply' '$FPGIT/calls')\" ]"
+# The control for the answer: a rebase the apply backend left unfinished lives in rebase-apply, the
+# second of the two, and is still found there.
+FPRAP="$WORK/fewer-rebase-apply"; git init -q -b main "$FPRAP"
+printf 'base\n' > "$FPRAP/f.txt"; git -C "$FPRAP" add f.txt; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -m base
+git -C "$FPRAP" checkout -q -b side
+printf 'side\n' > "$FPRAP/f.txt"; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -am side
+git -C "$FPRAP" checkout -q main
+printf 'main\n' > "$FPRAP/f.txt"; git -C "$FPRAP" -c user.name=t -c user.email=t@e commit -q -am main
+git -C "$FPRAP" checkout -q side
+git -C "$FPRAP" -c user.name=t -c user.email=t@e rebase --apply main >/dev/null 2>&1 || true
+check "#2472 the fixture: the apply backend left its rebase in rebase-apply, not rebase-merge" \
+  "[ -d '$FPRAP/.git/rebase-apply' ] && [ ! -d '$FPRAP/.git/rebase-merge' ]"
+out_fprap="$(CLAUDE_HOME="$FPHB" SYNC_REPO="$FPRAP" SYNC_HOSTNAME=fewer-rap SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2472 status over a rebase-apply rebase: $out_fprap"
+check "#2472 a rebase left in rebase-apply is still reported as stopping the clone" \
+  "grep -q 'left mid rebase by an earlier run' <<< \"\$out_fprap\""
+# The record of which unloadable skills a notice already named is rewritten by every run, even
+# when nothing is refused and nothing was recorded, which is the same file written back.
+FPREC="$FPRB/.unloadable-notified"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+check "#2472 the fixture: the notice record exists" "[ -f '$FPREC' ] && [ ! -s '$FPREC' ]"
+fp_ino1="$(ls -i "$FPREC" | awk '{print $1}')"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+fp_ino2="$(ls -i "$FPREC" | awk '{print $1}')"
+check "#2472 a run with nothing refused and nothing recorded leaves the notice record as it was" \
+  "[ -n '$fp_ino1' ] && [ '$fp_ino1' = '$fp_ino2' ]"
+# The control: an entry for a folder that is no longer refused is still cleared, and an entry under
+# another notice's key is still kept.
+printf 'applied to this Mac\t/ghost/\nsome other notice\t/kept/\n' > "$FPREC"
+fprun "$FPHB" "$FPRB" pull >/dev/null
+check "#2472 an entry for a folder no longer refused is still cleared from the record" \
+  "! grep -q 'ghost' '$FPREC'"
+check "#2472 and another notice's entry is still kept" \
+  "grep -q 'some other notice' '$FPREC'"
 
 suite_profile
 echo ""

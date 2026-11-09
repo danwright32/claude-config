@@ -49,6 +49,7 @@ import {
   stringsOf,
   templateLines,
   testFile,
+  uiComponent,
   textTemplate,
   tokenRanges,
   wordingChange,
@@ -246,7 +247,8 @@ const end = (found: Found): never => {
  * in a form a reference takes (namePatterns, #2371), so only those are read. When none does, the files that hand the template on are followed (#2286): a
  * JavaScript, TypeScript or python file with no Slack marker that names it on an import line and can
  * export it (handsOn). Those are searched for in turn, as the template was, up to REEXPORT_HOPS files
- * deep; a chain going further is could not check. A template is sent too by a file that uses it and
+ * deep; a chain going further is could not check. A level handed on only to UI components
+ * (uiComponent) is none there, never followed past them (Dan, 2026-11-09, #2519). A template is sent too by a file that uses it and
  * imports a Slack send helper (helperUser, #2361), as a copy or notice builder is. A test or a doc is never read as a sender or a
  * link (#2290, #2361). Every git call and read is bounded by `deadline`, and anything that cannot be
  * answered in time, or at all, is could not check, so the call is held rather than let through. More
@@ -441,7 +443,10 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       }
       const user = await helperUser(users)
       if (user !== undefined) return { sender: `${top}/${user}` }
-      if (!next.length) return NONE
+      // A level handed on only to UI components settles here (Dan, 2026-11-09, #2519): a screen's
+      // importers are other screens, and one that sent was found above. Any other file handing it
+      // on means the whole level, components too, is followed as before.
+      if (next.every(r => uiComponent(r))) return NONE
       if (hop === REEXPORT_HOPS)
         return {
           unchecked: `${path} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: ${next.map(r => `${top}/${r}`).join(', ')})`,
