@@ -28,26 +28,27 @@ import { errorText, missingOf } from './skew.ts'
 // accomplished box, green (design round, 2026-10-24).
 //
 // A card is recorded by its tool_use_id when the mod's tool.call hook runs, and its result row is
-// drawn as the card. Kept in memory: after a reload an earlier row is drawn as Claude Code's own
-// row again, which still carries the whole text the model read.
-const cards = new Map<string, ModKitCard>()
-const MAX = 500
-const keep = (card: ModKitCard) => {
-  cards.set(card.toolUseId, card)
-  // Bounded, so a long session cannot grow it without end; the oldest rows are long gone.
-  if (cards.size > MAX) cards.delete(cards.keys().next().value as string)
-}
+// drawn as the card. Kept in $.state, which the engine holds for the session (#2512): Claude Code
+// reloads mod-kit's code mid session (a sync delivering it, at a busy session's turn end), runs it
+// in a fresh module and draws every row again at the load, so a card kept in the module's memory
+// was lost there, and on 2026-11-09 the Goal accomplished box fell back to Claude Code's collapsed
+// text row, its goal and shipped lines hidden. One value per row, so drawing a row reads its own
+// card alone; the engine offers no way to remove one, and a card is a few hundred bytes. The
+// reference is written out at each use, as the engine reads a module's state there.
 
 /** The secret guard's noun as its contract has it (#707); it may not be loaded at all. */
 type SecretGuardScreen = { screen: (call: ModKitCall) => Promise<{ deny: string } | null> }
 
 // A screen that could not ask refuses the call, with the card, rather than let input it could not
 // check reach the mod answering the call (L42).
-const screenFailed = (call: ModKitCall, why: string): { deny: string } => {
-  // A call with no id is refused all the same, drawn as Claude Code's error row, as `blocked` does.
-  if (call.tool_use_id) keep(blockedCard({ toolUseId: call.tool_use_id, guard: 'Secret guard', reason: "Couldn't check this for secrets, so it was stopped.", safeWay: 'Try it again, or ask Dan.' }))
-  return { deny: `Blocked: the secret guard could not be asked about this (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.` }
-}
+// The card is kept by the caller, in $.state (#2512): the engine reads a state write where it is
+// spelled, so it cannot be made here. A call with no id has none, and is refused all the same,
+// drawn as Claude Code's error row, as `blocked` does.
+const screenFailedCard = (call: ModKitCall): ModKitCard | undefined =>
+  call.tool_use_id ? blockedCard({ toolUseId: call.tool_use_id, guard: 'Secret guard', reason: "Couldn't check this for secrets, so it was stopped.", safeWay: 'Try it again, or ask Dan.' }) : undefined
+const screenFailed = (why: string): { deny: string } => ({
+  deny: `Blocked: the secret guard could not be asked about this (${why}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+})
 
 // The band's rows, in $.state so a reload of this module keeps them (a module variable would not).
 const band = { plugin: 'mod-kit', key: 'band' } as const
@@ -318,12 +319,12 @@ export const register: Register = (on, options) => {
       blocked: async input => {
         // A guard's refusal stands without its card, so a call with no id is drawn as Claude Code's error row.
         if (!input.toolUseId) return
-        keep(blockedCard(input))
+        await built.state.set({ plugin: 'mod-kit', key: 'cards', id: input.toolUseId }, blockedCard(input))
       },
       card: async input => {
         const why = cardRefusal(input)
         if (why) throw new Error(why)
-        keep(input)
+        await built.state.set({ plugin: 'mod-kit', key: 'cards', id: input.toolUseId }, input)
       },
       commands: async ({ command }) => commands(command),
       // Read as the shell the call runs in reads it (#1834), found from the session's environment.
@@ -377,7 +378,13 @@ export const register: Register = (on, options) => {
       },
       // Answered by this mod's own hook on the noun's event below, which has the whole $ and so can
       // ask the secret guard wherever its folder sorts; this answers only when that hook failed.
-      screen: async call => screenFailed(call, 'the check itself failed'),
+      screen: async call => {
+        const card = screenFailedCard(call)
+        // The refusal stands whether or not its card can be kept: without it the row is Claude
+        // Code's error row, which carries the same words.
+        if (card) await built.state.set({ plugin: 'mod-kit', key: 'cards', id: card.toolUseId }, card).catch(() => undefined)
+        return screenFailed('the check itself failed')
+      },
       // The bottom of every press (#939): reached only when no publisher's modkit.press hook took it.
       press: async () => ({ isAnswered: false }),
       // Asked by a mod about to draw its own Button, so a false answer is a button drawn as text (#1190).
@@ -429,13 +436,18 @@ export const register: Register = (on, options) => {
       // secret guard whose loaded copy lacks screen is loaded, so it refuses too (L42).
       const missing = missingOf(err)
       if (missing?.kind === 'noun' && missing.noun === 'secretGuard') return { value: null }
-      return { value: screenFailed(e, errorText(err, 'mod-kit')) }
+      const card = screenFailedCard(e)
+      // As in the noun's own answer: the refusal stands whether or not its card can be kept.
+      if (card) await $.state.set({ plugin: 'mod-kit', key: 'cards', id: card.toolUseId }, card).catch(() => undefined)
+      return { value: screenFailed(errorText(err, 'mod-kit')) }
     }
   })
 
-  on('ui.render', { component: 'ToolResult' }, ($, e, next) => {
-    const card = cards.get(e.props.tool_use_id)
-    if (!card) return next(e)
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    const card = (await $.state.get({ plugin: 'mod-kit', key: 'cards', id: e.props.tool_use_id })).value
+    // What an earlier copy of the module left is read as any stored value is (L50): no card, or one
+    // that is not a card's shape, leaves Claude Code's own row, which carries the whole text.
+    if (!card || cardRefusal(card)) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     // Each run its own Text nested in the line's, so a line wraps as one piece of text.
     const runs = (rs: ModKitRun[]) =>

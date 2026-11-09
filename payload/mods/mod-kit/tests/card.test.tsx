@@ -385,6 +385,62 @@ test('a card may name its border colour, drawn on every surface; a border that i
   }
 })
 
+// #2512: on 2026-11-09 the Goal accomplished box reached Dan as Claude Code's own collapsed text
+// row, its goal and shipped lines hidden under "+5 lines", where the green card should have been.
+// The card was kept in the module's memory, and Claude Code reloads a mod's code mid session (a sync
+// delivering mod-kit, at a busy session's turn end), running it again in a fresh module whose memory
+// is empty, and draws every row again at the load. job-watcher measured the same reload (#1695).
+// So a card is kept where the engine holds it for the session, $.state, and a reload still draws it.
+const CARD_STATE = (e: unknown) => (e as { plugin?: string }).plugin === 'mod-kit' && (e as { key?: string }).key === 'cards'
+const earlierCopy = (on: On, recorded: Record<string, unknown>) =>
+  on('state.get', async ($, e, next) => {
+    const answer = (await next(e)) as { value?: { version?: number } }
+    // What an earlier copy of the module left, until this copy writes the card itself.
+    const id = String((e as { id?: string }).id)
+    return (CARD_STATE(e) && answer.value?.version === 0 && id in recorded ? { value: { value: recorded[id], version: 1 } } : answer) as never
+  })
+
+test('a card an earlier copy of mod-kit recorded is still drawn after a reload, and a malformed one is left to Claude Code (#2512)', { plugins: [carder] }, async ($, on) => {
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  const green = { toolUseId: 'rl1', border: 'success', title: [{ text: 'GOAL ACCOMPLISHED', color: 'success', bold: true }], lines: [[{ text: 'Close issue 12' }]] }
+  earlierCopy(on, { rl1: green, rl2: { toolUseId: 'rl2', title: 'not runs', lines: [] } })
+  // No card is drawn in this copy of the module: the row is drawn after the reload alone.
+  const ui = await $.ui.mount({ ...resultRow('rl1'), surface: 'terminal' } as never)
+  expect(await ui.find({ text: 'engine row' })).toBeUndefined()
+  expect(await ui.find({ text: 'GOAL ACCOMPLISHED' })).toBeDefined()
+  expect(await ui.find({ text: 'Close issue 12' })).toBeDefined()
+  expect((await ui.find({ type: 'Box' }))?.props.borderColor).toBe('success')
+  await ui.unmount()
+  // A value an older copy left that is no card is never drawn as one: Claude Code's row stands.
+  const bad = await $.ui.mount({ ...resultRow('rl2'), surface: 'terminal' } as never)
+  expect(await bad.find({ text: 'engine row' })).toBeDefined()
+  await bad.unmount()
+})
+
+test('a card drawn in this copy is kept for the session in $.state, so a reload finds it (#2512)', { plugins: [carder] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  const writes: unknown[] = []
+  on('state.set', async ($, e, next) => {
+    if (CARD_STATE(e)) writes.push([(e as { id?: string }).id, (e as { value?: unknown }).value])
+    return next(e)
+  })
+  const made = (await $.tool.call({ tool: 'Bash', command: 'card', tool_use_id: 'kept1' } as never)) as { deny?: string; text?: string }
+  expect(made.deny ?? made.text).toBe('carded')
+  expect(writes).toHaveLength(1)
+  expect((writes[0] as [string, { toolUseId: string }])[0]).toBe('kept1')
+  expect((writes[0] as [string, { toolUseId: string }])[1].toolUseId).toBe('kept1')
+})
+
+test('a card the session cannot keep is refused, so the mod says so and its text result stands (#2512)', { plugins: [carder] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('state.set', async ($, e, next) => (CARD_STATE(e) ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  const r = (await $.tool.call({ tool: 'Bash', command: 'card', tool_use_id: 'lost1' } as never)) as { deny?: string }
+  expect(String(r.deny)).toMatch(/^refused: /)
+})
+
 test('a card with no tool use id, no title or malformed lines is refused by name, and the row is left to Claude Code', { plugins: [carder] }, async ($, on) => {
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.render', ($, e) => {
