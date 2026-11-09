@@ -52,6 +52,9 @@ const WRITES: Record<string, unknown> = {
   'python3 probe.py "$OUT/big.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$OUT/big.ts' }] }] },
   "python3 probe.py x$'y'": { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'x$y' }] }] },
   'python3 probe.py "$(': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: '$(' }] }] },
+  // #2402: a word whose every dollar sign the shell leaves as text names the file it spells.
+  'python3 probe.py "src/big$.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', unexpanded: true }] }] },
+  'python3 probe.py "src/big.ts$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big.ts$', path: '/w/app/src/big.ts$', unexpanded: true }] }] },
   // #2407: a folder handed to a script whose own text is read for what it writes there.
   'bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   './scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
@@ -606,6 +609,21 @@ test('a script handed a double quoted regex ending in a dollar sign the shell le
     expect([c, why.includes('cannot be read'), why.includes(word)]).toEqual([c, true, true])
   }
   expect(w.passed).toEqual(['Bash python3 probe.py "^foo.*bar$"'])
+})
+
+test('a script handed a word whose every dollar sign the shell leaves as text is judged by the file it spells (#2402)', KIT, async ($, on) => {
+  // src/big$.ts, a source file whose name holds a dollar sign, is the fastest growing large file.
+  const w = world($, on)
+  w.ctl.tracked = `${TRACKED}\nsrc/big$.ts`
+  w.ctl.numstat = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big$.ts', '\x1eSmall change', '10\t2\tsrc/lib/slack.ts'].join('\n')
+  w.ctl.lines = 'origin/main:src/big$.ts:2400\n'
+  w.files[`${APP}/src/big$.ts`] = 'x'
+  const why = refusal(await bash($ as never, w, 'python3 probe.py "src/big$.ts"'))
+  expect(why).toContain('The area check held this Bash command, which writes src/big$.ts.')
+  expect(why).not.toContain('cannot be read')
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  // src/big.ts$ is no source file by its name, so it runs unjudged as such.
+  expect((await bash($ as never, w, 'python3 probe.py "src/big.ts$"', {}, 'b2')).result).toBe('done')
 })
 
 test('a write that cannot be read passes only where nothing could hold it: no checkout, or no fast growing file and no structural issue naming a file', KIT, async ($, on) => {
