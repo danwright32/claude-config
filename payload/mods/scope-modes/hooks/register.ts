@@ -119,6 +119,7 @@ import {
   isLeftClosed,
   issueRefs,
   LEAVE_BRANCH_TOOL,
+  leftByChoice,
   NEW_WORK,
   neverMergeSaid,
   neverMergeWhy,
@@ -3608,9 +3609,31 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // Ref or References (#1812), each read the same way. A number a Refs line names that GitHub
 // says is a pull request (`PR`) is no issue to finish, and is not read again. An open issue's last
 // comment is kept beside it (`last`), for what is left on it when the PR states no next step.
+//
+// A PR left as it is on Dan's recorded choice (#2433) can change only by being reopened or pushed to,
+// yet a turn end read it again with the rest, every one. On 2026-11-07 a session with 19 folded PRs left
+// closed ran out of the minute's looks before the last of them at every stop, said those as unreadable,
+// and spent the next minute's looks on the same reads, for over half an hour. So a reading that showed
+// one settled by his choice is kept (`keptByChoice`) when the policy holds a turn end's look, and the
+// finish check reads those PRs after every other, so the looks go to what can still finish first. With
+// a look to spare it is still read, so a PR reopened or pushed to from outside is seen as soon as there
+// is one. A reading from before this session last ran a push or a reopen (`moves`, counted after each
+// such call) is not kept that way: that call may have been to this PR, so only GitHub's answer now
+// settles it. A PR never read is never kept.
 type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'
-type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number }
+type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number; moves: number }
 const prSeen = new Map<string, PrSeen>()
+// The pushes and reopens this session and its agents have run, counted after each such call ends.
+let prMoves = 0
+// Where a PR's reading is kept: by repository and number, or branch for the branch's own PR not yet found.
+const prKey = (slug: string | undefined, t: Pick<ScopeModesTarget, 'pr' | 'branch'>) => `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
+/** Whether this kept reading is of a PR left as it is on Dan's choice, read since the session last pushed or reopened. */
+const keptByChoice = (s: PrSeen | undefined, choice: ScopeModesLeftAsIs | undefined): boolean => {
+  const pr = s?.pr
+  if (!s || !pr || s.moves !== prMoves) return false
+  const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
+  return leftByChoice({ state, ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}) }, choice)
+}
 const IDLE_MAX_MS = 10 * MIN
 // The repository a closing reference's issue is in (#2065). gh answers it as {id, name, owner: {id,
 // login}} and carries no nameWithOwner there (measured 2026-11-02), which is read first in case gh
@@ -3748,8 +3771,9 @@ const closingReason = async ($: EngineInterface, gh: GhRead, repo: string | unde
 // pauses every loop in the session), and the wait above is the library's: doubled while the PR has
 // not moved, a minute again once it has, within winding down's own ceiling of ten minutes. A look the
 // policy holds keeps the minute's last reading, never a turn end's, which only GitHub's answer now
-// can finish (#1037). A policy that cannot be asked never stops the read: it is said once in the
-// debug log, and the wait falls back to a minute.
+// can finish (#1037), except a PR last read as left as it is on Dan's choice (#2433, keptByChoice).
+// A policy that cannot be asked never stops the read: it is said once in the debug log, and the wait
+// falls back to a minute.
 let pollNoted = false
 const pollOf = async ($: EngineInterface): Promise<Poll | undefined> => {
   const home = await $.env.get('HOME')
@@ -3794,7 +3818,8 @@ const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: 
   return Array.isArray(all) ? whoseFiles(all, root, await writtenOf($)) : all
 }
 
-type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean }
+// `choice` is Dan's recorded answer about the PR read by number, when he gave one (#2433).
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choice?: ScopeModesLeftAsIs }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
@@ -3824,16 +3849,19 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
   if (gone && !slug && readsPr) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
   if (readsPr) {
     const now = await $.clock.now()
-    const key = `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
+    const key = prKey(slug, t)
     const seen = prSeen.get(key)
+    // Counted before GitHub is asked, so a push that ends during the read leaves this reading unkept.
+    const moves = prMoves
     let pr: PrJson | null
     let issues: Map<number, IssueSeen>
     let last: Map<number, string>
     let worked: number[]
     const poll = seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait)) ? undefined : await pollOf($)
     const held = poll ? await heldLook($, poll, now) : undefined
-    // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none.
-    if (held !== undefined && (fresh || !seen)) return { reading: { ...r, pr: { unreadable: held } } }
+    // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none,
+    // unless its last reading was of a PR left as it is on Dan's choice (#2433).
+    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, o.choice))))) return { reading: { ...r, pr: { unreadable: held } } }
     if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
@@ -3898,7 +3926,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
           pollFailed($, err)
         }
       }
-      prSeen.set(key, { pr, issues, last, worked, askedAt: now, wait })
+      prSeen.set(key, { pr, issues, last, worked, askedAt: now, wait, moves })
     }
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
@@ -4049,13 +4077,13 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
           await $.state.set(targetRef, t)
         }
       }
-      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine) })
-      t = await keepFound($, t, found)
       // A PR is left as it is only on Dan's own answer to leave_pr_open, recorded against its
       // repository and number: open at its head (#917), or closed without merging (#1033). With none
       // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
       // answer to leave_branch, by repository and name (#1074).
       const choices = await leftOpenOf($)
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine) })
+      t = await keepFound($, t, found)
       const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
       const keptBranches: ScopeModesLeftBranch[] = []
@@ -4081,12 +4109,16 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
       // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
       const own = opened.length ? await sessionSlug($) : undefined
       const ownLink = found?.url?.toLowerCase()
-      for (const o of opened) {
+      // Those last read as left as it is on Dan's choice are read after the rest (#2433), so the
+      // minute's looks go first to the PRs that can still finish.
+      const keptNow = (o: ScopeModesOpened) => keptByChoice(prSeen.get(prKey(o.repo, { pr: o.number, branch: '' })), choiceFor(choices, o.repo, o.number))
+      for (const o of [...opened.filter(x => !keptNow(x)), ...opened.filter(keptNow)]) {
         const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh })
+        const choice = choiceFor(choices, o.repo, o.number)
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, ...(choice ? { choice } : {}) })
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
@@ -5345,6 +5377,9 @@ export const register: Register = on => {
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
     const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
     const mayWrite = tool === 'Bash' || EDITORS.has(tool)
+    // A call that may push to or reopen a PR (#2433): once it ends, no reading from before it is kept
+    // as settled by Dan's choice. Counted however it ends, since a call that throws may still have run.
+    const mayMovePr = (/\bgit\b/.test(raw) && /\bpush\b/.test(raw)) || (/\bgh\b/.test(raw) && /\breopen\b/.test(raw))
     // A picker in this session's own morning turn (#1285), counted answered or not, so one left
     // unanswered is asked again; a refused one never reached Dan and counts neither way.
     const ownMorningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningPickers?.turnId !== undefined ? morningPickers : undefined
@@ -5360,6 +5395,8 @@ export const register: Register = on => {
       } catch (err) {
         if (ownMorningPicker) ownMorningPicker.unanswered++
         throw err
+      } finally {
+        if (mayMovePr) prMoves++
       }
       const answered = ownMorningPicker ? pickerAnswered(r) : undefined
       if (ownMorningPicker && answered !== undefined) ownMorningPicker[answered ? 'answered' : 'unanswered']++
