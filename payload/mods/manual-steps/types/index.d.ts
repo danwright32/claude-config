@@ -44,6 +44,15 @@ export type StepsStep = {
    * in the store: the turn that would answer it does not reach another session.
    */
   isSent?: boolean
+  /**
+   * Done was pressed while a main turn ran (#2437): rather than a "step N done" queued behind the
+   * turn, which a running turn never takes in, Claude is told on the turn's next tool result, and the
+   * prompt is sent at the turn's end only if the step is still unrecorded. When it was pressed.
+   * Never kept in the store, as isSent is not.
+   */
+  heldAt?: number
+  /** When the note about a Done pressed mid turn rode on a tool result Claude read (#2437). */
+  toldAt?: number
 }
 
 /**
