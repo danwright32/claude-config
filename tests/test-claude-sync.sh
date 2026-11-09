@@ -24449,7 +24449,7 @@ check "#2472 a receiving pull works out what it has not applied once, not once p
 check "#2472 the fixture: the pull did ask where a rebase would be" \
   "grep -q -- '--git-path rebase-merge' '$FPGIT/calls'"
 check "#2472 and asks for both places a rebase can be in one call" \
-  "! grep -- '--git-path' '$FPGIT/calls' | grep -qv -- '--git-path rebase-merge --git-path rebase-apply'"
+  "[ \"\$(grep -c -- '--git-path' '$FPGIT/calls')\" -eq \"\$(grep -c -- '--git-path rebase-merge --git-path rebase-apply' '$FPGIT/calls')\" ]"
 # The control for the answer: a rebase the apply backend left unfinished lives in rebase-apply, the
 # second of the two, and is still found there.
 FPRAP="$WORK/fewer-rebase-apply"; git init -q -b main "$FPRAP"
