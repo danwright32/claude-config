@@ -1155,7 +1155,9 @@ const noteReminded = (id: unknown) => {
 // closes the record while the process goes on watching its jobs, and a Mac waking from sleep leaves
 // every session unseen for a while; neither makes a running process's jobs fair game. The registry's
 // closed list only says which records to read.
-const JUDGES = ['claude-haiku-4-5-20251001', 'claude-sonnet-5-5']
+// #2550: the current Haiku first. A dated id is retired out from under the watcher, and every verdict
+// then quietly comes from the second judge, which is why a judge giving no verdict is said (judge).
+const JUDGES = ['claude-haiku-5-5', 'claude-sonnet-5-5']
 const JUDGE_MS = 30_000
 const STOP_SETTLE_MS = 2_000
 
@@ -1241,15 +1243,25 @@ const isJob = (x: unknown): x is Job => {
   )
 }
 
+// #2550: a judge giving no verdict is said in the debug log, by model and why, beside the watcher's
+// other outcomes there. Swallowed, a retired first judge left every verdict to the second with
+// nothing saying so (L551). Dan's line is unchanged: it still says only whether a job was judged.
+const noVerdict = (r: { reason?: string; status?: number; error?: unknown }) =>
+  `no answer: ${[r.reason ?? 'no reason given', r.status, typeof r.error === 'string' ? r.error : undefined].filter(x => x !== undefined && x !== '').join(' ')}`
 const judge = async ($: EngineInterface, prompt: string): Promise<Verdict | undefined> => {
-  for (const model of JUDGES) {
+  for (const [i, model] of JUDGES.entries()) {
+    let why
     try {
       const r = await $.model.complete({ model, prompt, maxTokens: 200, timeoutMs: JUDGE_MS })
       const v = r.isAnswered ? parseVerdict(r.text) : undefined
       if (v) return v
-    } catch {
+      why = r.isAnswered ? 'its answer was not a usable verdict' : noVerdict(r)
+    } catch (err) {
       // A call the engine refused to send is no verdict; the next model is asked.
+      why = `the engine refused the call: ${message(err)}`
     }
+    const next = i < JUDGES.length - 1 ? 'so the next was asked' : 'and no judge is left'
+    $.ui.log(`job-watcher: the leftover judge ${model} gave no verdict (${why}), ${next}`, { to: 'debug' })
   }
   return undefined
 }
