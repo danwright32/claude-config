@@ -425,7 +425,10 @@ rm -f "$TMP/chrome-last.said"
 if [[ -x "$REAL_CHROME" ]]; then
 
   # And once on the real hidden Chrome: a run leaves the real per user clone folder as it found it
-  # (#988). The separate build has no bundle to copy (#2191), and this still holds that.
+  # (#988). The separate build has no bundle and never writes to Google Chrome's clone folder
+  # (#2191), so this can no longer fail on a fault in headless-dom.sh's removal of a copy, which the
+  # stand in Chromes above hold by planting copies. It still fails if the hidden Chrome is Google
+  # Chrome again by a route the lookup missed.
   # The folder is found here from TMPDIR, and in headless-dom.sh from getconf, so the two do not
   # share one lookup (L70). Other sessions' Chromes add copies to that folder at any moment, and
   # can only ever ADD them, so a run that shows nothing new proves this run made none, while a
@@ -453,7 +456,7 @@ if [[ -x "$REAL_CHROME" ]]; then
       [ -z "$left" ] && break
     done
     check "a real Chrome run hands back its page" "<p>own copy</p>" "$page"
-    check_eq "and leaves no copy of Chrome behind in $real_clones" "" "${left% }"
+    check_eq "and puts nothing new in Google Chrome's clone folder $real_clones, so it was not Google Chrome" "" "${left% }"
   fi
 fi
 

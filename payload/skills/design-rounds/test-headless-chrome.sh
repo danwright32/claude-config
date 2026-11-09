@@ -167,7 +167,16 @@ HEADLESS_DOM_EXEC=1 HEADLESS_DOM_CHROME="$TMP/no-such-chrome" "$HEADLESS_DOM" "$
 check_eq "a Chrome that is not there fails" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 check "and says which" "no-such-chrome" "$(cat "$TMP/missing.err")"
 
-# --- 4 and 5. a real Chrome, killed mid run, leaves no copy behind ---
+# --- 4 and 5. the real hidden Chrome, killed mid run, comes up and leaves nothing in the clone folder ---
+#
+# WHAT THESE CAN STILL CATCH (claude-config#2191). Since Google Chrome is never run hidden, the Chrome
+# here is the separate build, which has no app bundle and so never writes to Google Chrome's clone
+# folder at all. The "nothing new in the clone folder" checks below therefore no longer exercise
+# headless-dom.sh's removal of a killed Chrome's copy, and cannot fail on a fault in it: that removal
+# is held by the stand in Chromes that plant copies, in test-make-switcher.sh (#988). What they do
+# still catch is a hidden Chrome that is Google Chrome again, by any route the lookup missed, which
+# would leave its copy here as it did before. What 4 and 5 hold first is that the real hidden build
+# comes up through headless-dom.sh in Chrome's place, and that Playwright draws in it.
 #
 # Other sessions' Chromes add copies to the real folder at any moment, and can only ever ADD them, so
 # a run that shows nothing new proves this run left none, while a run that leaves its copy shows one
@@ -209,7 +218,7 @@ else
     [ -z "$got" ] && break
   done
   check_eq "a real Chrome started through headless-dom.sh in Chrome's place came up" "up" "$up"
-  check_eq "and killed while it ran, it left no copy of Chrome in $clones" "" "$got"
+  check_eq "and killed while it ran, nothing new appeared in Google Chrome's clone folder $clones, so it was not Google Chrome (removal itself: test-make-switcher.sh)" "" "$got"
 
   # 5. Started by Playwright through capture-web.mjs's launchChrome, and abandoned by a node that was
   # killed while the page was open, so nothing closed it.
@@ -246,7 +255,7 @@ JS
         echo "SUITE-PART-UNMEASURED no Playwright to launch Chrome with here ($said), so a Playwright Chrome abandoned by a killed run was not measured" ;;
       *)
         check "Playwright drew a page in a real Chrome started through launchChrome" "drawn " "$said"
-        check_eq "and with the node that started it killed, it left no copy of Chrome in $clones" "" "$got" ;;
+        check_eq "and with the node that started it killed, nothing new appeared in Google Chrome's clone folder $clones, so it was not Google Chrome" "" "$got" ;;
     esac
   fi
 fi
