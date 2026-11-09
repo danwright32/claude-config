@@ -66,8 +66,9 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # reads with: with neither jq nor python3 the parse below exits 0 first and this question would
 # never be reached (L135, L667).
 #
-# Narrowed, on the raw payload, to the three commands that can link an issue at all, since the
-# refusal must not reach a command this hook was never about (L36, L54). A substring rather than
+# Narrowed, on the raw payload, to git commit and any command naming `pr ` (which covers pr create
+# and pr edit, the two that can link an issue, and also catches harmless ones such as gh pr view),
+# so the refusal stays near the commands this hook is about (L36, L54). A substring rather than
 # the leading token test used below, because with no reader there are no tokens: it can only ever
 # be too broad here, never too narrow. The override is read the same way (L109).
 if ps_reader_missing python3; then
