@@ -366,7 +366,11 @@ check_eq "and a copy is left in place" "there" "$(clone_state "$TMP/rootless-mad
 check "and that is said" "none found" "$(cat "$TMP/rootless.err")"
 unset HEADLESS_DOM_CLONE_DIR
 
-REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# The separate build every hidden Chrome runs, from the one lookup (claude-config#2191), never the
+# Google Chrome Dan uses: its hidden copies, started back to back here, took his click on Chrome in
+# the Dock. With none, every section below that needs it says so as unmeasured, with why.
+REAL_CHROME="$(python3 "$DIR/score/headless_chrome.py" 2> "$TMP/lookup.err")" || REAL_CHROME=""
+[ -n "$REAL_CHROME" ] || echo "SUITE-PART-UNMEASURED no hidden Chrome here: $(head -c 300 "$TMP/lookup.err")"
 CHROME="$REAL_CHROME"
 # Every real Chrome run below is this, so each one names headless-dom.sh where it runs and
 # check-chrome-launches.py can tell it from a Chrome started around it (claude-config#1537).
@@ -420,7 +424,11 @@ rm -f "$TMP/chrome-last.said"
 
 if [[ -x "$REAL_CHROME" ]]; then
 
-  # And once on the real Chrome: a run leaves the real per user clone folder as it found it (#988).
+  # And once on the real hidden Chrome: a run leaves the real per user clone folder as it found it
+  # (#988). The separate build has no bundle and never writes to Google Chrome's clone folder
+  # (#2191), so this can no longer fail on a fault in headless-dom.sh's removal of a copy, which the
+  # stand in Chromes above hold by planting copies. It still fails if the hidden Chrome is Google
+  # Chrome again by a route the lookup missed.
   # The folder is found here from TMPDIR, and in headless-dom.sh from getconf, so the two do not
   # share one lookup (L70). Other sessions' Chromes add copies to that folder at any moment, and
   # can only ever ADD them, so a run that shows nothing new proves this run made none, while a
@@ -448,7 +456,7 @@ if [[ -x "$REAL_CHROME" ]]; then
       [ -z "$left" ] && break
     done
     check "a real Chrome run hands back its page" "<p>own copy</p>" "$page"
-    check_eq "and leaves no copy of Chrome behind in $real_clones" "" "${left% }"
+    check_eq "and puts nothing new in Google Chrome's clone folder $real_clones, so it was not Google Chrome" "" "${left% }"
   fi
 fi
 
@@ -476,7 +484,7 @@ PROBEPY
 }
 
 if [[ ! -x "$CHROME" ]]; then
-  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so the keyboard wiring was not tested. Set SWITCHER_TEST_CHROME."
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so the keyboard wiring was not tested. Install one with score/install-playwright.sh, or set DESIGN_ROUNDS_CHROME."
 else
   keys="$(probe "$TMP/out.html")"
   check_eq "arrows and jump keys move between the options" "Espresso,Ink,Espresso,Ink,Espresso" "$keys"
@@ -550,7 +558,7 @@ SCROLLPY
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
 if [[ ! -x "$CHROME" ]]; then
-  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so keeping the scroll position across a switch was not tested. Set SWITCHER_TEST_CHROME."
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so keeping the scroll position across a switch was not tested. Install one with score/install-playwright.sh, or set DESIGN_ROUNDS_CHROME."
 else
   got="$(scroll_probe "$SCR/out.html")"
   check_eq "a switch keeps how far a scrolling region inside the screen was scrolled, both ways" "600,250" "${got%%|*}"

@@ -8247,6 +8247,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Codebase hygiene
 
+- **L848. A file exclusion in a source scanning guard must be anchored to the directory and
+  suffix it was written for, never a bare name pattern, because any source file elsewhere whose
+  name happens to match is silently exempt from the guard that exists to catch it.**
+  (slate#4677, 2026-11-09)
+  SHORT: Anchor a scanning guard's file exclusion to its directory and suffix; a bare name pattern silently exempts matching source files.
+
 - **L780. When a settled design becomes build work, map EVERY decision in its record to a
   numbered requirement and an issue before the first phase starts, and refuse the plan while any
   decision is unmapped: a decision with no owner ships as whatever the screen already was, and a

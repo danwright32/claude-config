@@ -62,6 +62,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "score"))
+import headless_chrome  # noqa: E402
 import pngio  # noqa: E402
 from design_file import NO_PAGE_KINDS, SCREEN_KINDS, no_page_kinds  # noqa: E402
 
@@ -217,32 +218,19 @@ def shared_screen(name, builder, builder_name):
             "styles": styles, "slot": None, "width": None, "height": None, "source": None}
 
 
-MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-CHROME_ON_PATH = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 HEADLESS_DOM = os.path.join(HERE, "headless-dom.sh")
 
 
 def find_chrome():
-    """The Chrome a terminal design's windows are measured in (claude-config#1422): DESIGN_ROUNDS_CHROME
-    when it is set, else the Mac's Chrome, else one on PATH, as a Linux runner has it. A variable naming
-    nothing runnable is refused rather than passed over, so a typo in it is never a different Chrome."""
-    named = os.environ.get("DESIGN_ROUNDS_CHROME")
-    if named:
-        if os.path.isfile(named) and os.access(named, os.X_OK):
-            return named
-        raise ChromeError("DESIGN_ROUNDS_CHROME names %s, which is not a Chrome this can run, so the terminal "
-                          "windows cannot be measured. Point it at the Chrome binary, or unset it to use %s"
-                          % (named, MAC_CHROME))
-    if os.access(MAC_CHROME, os.X_OK):
-        return MAC_CHROME
-    for name in CHROME_ON_PATH:
-        found = shutil.which(name)
-        if found:
-            return found
-    raise ChromeError("a design drawn in the terminal has each frame's window measured in Chrome before it is "
-                      "written, so the width it is scored at is the width it draws (claude-config#1422), and "
-                      "there is no Chrome at %s or on PATH (%s). Set DESIGN_ROUNDS_CHROME to a Chrome binary"
-                      % (MAC_CHROME, ", ".join(CHROME_ON_PATH)))
+    """The Chrome a terminal design's windows are measured in (claude-config#1422), found by the one
+    lookup every hidden Chrome uses, score/headless_chrome.py: a separate build, never the Google Chrome
+    Dan uses (claude-config#2191). With none, the design is refused, naming the install command."""
+    try:
+        return headless_chrome.find()
+    except headless_chrome.NoHiddenChrome as err:
+        raise ChromeError("a design drawn in the terminal has each frame's window measured in Chrome before it is "
+                          "written, so the width it is scored at is the width it draws (claude-config#1422), and "
+                          "%s" % err)
 
 
 # Added to the settled page, which holds designFrameDocument and designFrameTrouble: each frame drawn in an
