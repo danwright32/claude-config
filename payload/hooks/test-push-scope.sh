@@ -1505,6 +1505,15 @@ ps_unreadable "/usr/bin/git push && /opt/homebrew/bin/gh pr list" \
   || check "#1623 control: a push by git's path is a push" "not seen"
 rm -rf "$WR"
 
+# A field ending in a separator drops the empty last argument the here string's newline made, by a
+# slice rather than unset "PS_RUN_ARGS[$_last]", whose subscript the Slack drafts gate cannot follow
+# (#2465). Two arguments either way, the second without the newline, and no empty third.
+for f in "$(printf 'git\035push\035\035a b\037c\037')" "$(printf 'git\035push\035\035a b\037c')"; do
+  r="$(bash -c '. "$1"; ps__tool_field "$2" git push ""; printf "%s|%s|%s" "${#PS_RUN_ARGS[@]}" "${PS_RUN_ARGS[0]}" "${PS_RUN_ARGS[1]}"' _ "$LIB" "$f")"
+  check "#2465 a field's arguments are read whole, with no empty last one (a field of ${#f} bytes)" \
+    "$([ "$r" = "2|a b|c" ] && echo ok || echo "got [$r]")"
+done
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
