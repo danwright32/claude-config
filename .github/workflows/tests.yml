@@ -12,10 +12,15 @@ name: tests
 # gets a full unfiltered run, once. Watching every push as well ran the suite TWICE for every
 # commit on a branch with a PR open, since both triggers fire, and the second run tells you nothing
 # the first did not.
+#
+# By hand too (claude-config#2463): `gh workflow run tests.yml --ref <branch>` runs a branch with
+# no pull request open, which is how a change to this workflow can be measured before anyone is
+# asked to review it. Nothing starts it on its own, so it adds no run to any push.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # On a pull request branch a newer push really does supersede the old one, so the older run is
 # cancelled: it tells you nothing you will act on.

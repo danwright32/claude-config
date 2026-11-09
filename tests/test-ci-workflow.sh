@@ -397,6 +397,12 @@ grep -qE 'needs:[[:space:]]*\[[[:space:]]*deal,[[:space:]]*parts[[:space:]]*\]' 
 grep -qE 'fromJSON\(needs\.deal\.outputs\.parts\)' <<< "$parts_job" && grep -qE 'HOOK_TESTS_PART:[[:space:]]*\$\{\{[[:space:]]*matrix\.part' <<< "$parts_job" \
   && check "#2463 the parts matrix is the deal's own list, and each job runs its own part" ok \
   || check "#2463 the parts matrix is the deal's own list, and each job runs its own part" "not wired"
+# A branch can be run by hand with no pull request open, which is how a change to this file is
+# measured before review; read from the trigger block with comments stripped.
+triggers="$(code_of "$REAL" | awk '/^on:[[:space:]]*$/ { s = 1; next } s && /^[^[:space:]]/ { s = 0 } s')"
+grep -qE '^[[:space:]]+workflow_dispatch:' <<< "$triggers" \
+  && check "#2463 the workflow can be started by hand on a branch" ok \
+  || check "#2463 the workflow can be started by hand on a branch" "no workflow_dispatch trigger"
 grep -qE 'HOOK_TESTS_DEAL:' <<< "$deal_job" \
   && check "#2463 the deal job deals with the runner itself" ok \
   || check "#2463 the deal job deals with the runner itself" "no HOOK_TESTS_DEAL in it"
