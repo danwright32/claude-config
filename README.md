@@ -203,7 +203,12 @@ becomes public unread, and a body or notes file named inside clustered short fla
 is read. Since #2423 the repository named inside clustered short flags (`-dR o/x`) is read too, as
 gh reads the cluster, and every repository named is judged. Since #2430 release notes read from
 standard input (`--notes-file -`) are judged only when one heredoc, here-string or `<` file sits
-on gh itself with nothing piped in, and refused otherwise (#2442). Still not covered: gh run by
+on gh itself with nothing piped in, and refused otherwise (#2442); since #2443 a pull request's,
+issue's or comment's body read from standard input (`--body-file -`, `--body-file=-`, `-F-`) is
+judged the same way. Since #2469 a notes, body or gist file the command writes from a stage that
+redirects standard input more than once (`cat <<'EOF' < other.md > notes.md`) is refused, since the
+shell feeds that stage only the last; the issue field gate still reads such a file from the
+command, as before. Still not covered: gh run by
 its absolute path, a script that rewrites PATH, and curl or an API library.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
