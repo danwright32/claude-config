@@ -17,11 +17,11 @@
 # nothing here may put them in a file.
 #
 # An entry is free text, so only what looks like an absolute path is taken from it: a span starting
-# with / or ~/ at the start of the entry, after a space, or inside backticks or quotes. A backticked
-# or quoted span is taken whole, spaces included; anywhere else a path ends at a space, and trailing
-# punctuation (a full stop, a comma) is dropped. A URL is never read as one, because its slashes
-# follow a colon, and a word like read/write is not, because its slash follows a letter. A glob is
-# cut back to the directory before its first wildcard. ~ is expanded against HOME.
+# with / or ~/ at the start of the entry, after a space, a ( or an =, or inside backticks or quotes.
+# A backticked or quoted span is taken whole, spaces included; anywhere else a path ends at a space,
+# and trailing punctuation (a full stop, a comma) is dropped. A URL is never read as one, because
+# its slashes follow a colon, and a word like read/write is not, because its slash follows a letter.
+# A glob is cut back to the directory before its first wildcard. ~ is expanded against HOME.
 #
 # Run:  bash ~/.claude/hooks/check-trusted-paths.sh
 #

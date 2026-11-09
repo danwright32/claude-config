@@ -22,9 +22,10 @@
 # It NEVER blocks the prompt. A UserPromptSubmit hook exiting non-zero stops the turn, and a moved
 # project is something to mention, not a reason to refuse to work (L54). Every path here exits 0.
 #
-# The verdict comes from check-project-list.sh rather than being worked out again here, so there is
-# one implementation of the question and no second one to drift (L107). This file decides only WHEN
-# to speak.
+# The verdicts come from check-project-list.sh (a listed project missing) and check-trusted-paths.sh
+# (an auto mode trusted path missing) rather than being worked out again here, so each question has
+# one implementation and no second one to drift (L107). This file decides only WHEN to speak, and
+# joins the two answers into one notice.
 #
 # Environment:
 #   PROJECT_LIST_FILE       passed through: read this file instead of the synced CLAUDE.md
