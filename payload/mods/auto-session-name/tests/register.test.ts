@@ -798,16 +798,17 @@ test('a failure from an attempt that lost its claim changes nothing for the one 
   expect(w.renames.map(r => r.args)).toEqual(['Taken over name'])
 })
 
-// #701: the ten minute mark can fall in the middle of a turn, and /rename waits for that turn to end,
-// which can be long after the claim's few minutes. The attempt keeps its claim fresh while it waits,
-// so the turn's end finds it held: one Haiku call and one name, as the spec allows.
+// #701: a /rename asked while idle can still wait behind a turn Dan starts in that instant, long
+// after the claim's few minutes (a running turn at the mark queues none at all since #2461, tested
+// below). The attempt keeps its claim fresh while it waits, so the turn's end finds it held: one
+// Haiku call and one name, as the spec allows.
 test('a /rename waiting through a long turn keeps its claim: one Haiku call and one rename', withKit, async ($, on) => {
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
   await start($, w)
   await w.clock.advance(10 * MIN)
-  // The turn running at the ten minute mark goes on for four more minutes, then ends.
+  // The turn that /rename waits behind goes on for four more minutes, then ends.
   await w.clock.advance(4 * MIN)
   await turnEnds($)
   await w.clock.settle()

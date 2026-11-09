@@ -18,8 +18,9 @@ const HAIKU_MS = 30_000
 // An attempt holds a claim so a second caller (a reload's timer, a turn ending) stands down. A claim
 // older than this belongs to an attempt a reload cut off, and is taken over.
 const CLAIM_MS = 3 * 60_000
-// While an attempt waits on /rename, which waits for the session to go idle and so can outlast the
-// claim by the rest of a long turn, it renews its claim this often, well inside CLAIM_MS (#701).
+// While an attempt waits on /rename it renews its claim this often, well inside CLAIM_MS (#701).
+// /rename is asked only while the session is idle (#2461), so it normally answers at once; a
+// message Dan sends in that instant starts a turn the /rename then waits behind.
 const RENEW_MS = CLAIM_MS / 3
 const WHO = 'Auto session name'
 
