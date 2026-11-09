@@ -3372,7 +3372,7 @@ reading such data files as code; the same line now takes 0.27 seconds against a 
 extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
 and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
 distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
-the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
@@ -3405,6 +3405,38 @@ What it cannot see, since it reads only the statement's text: the database's own
 over a view that calls a function that writes, an operator or cast the database defined, a function on
 a table's row type called as a column (`t.some_function`), or a function the database defined under
 the name of a built in one, can still write. Suite: `test-read-only-query-allow.sh`.
+
+The rules for "read only" live in one file, `hooks/lib/sql-read-only.py`, which this hook and the
+write question below both load (#2521).
+
+## Database writes ask Dan first
+
+On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
+production database through the claude.ai Supabase `execute_sql`, on both Macs, and auto mode, every
+hook and every prompt let it through (the classifier judged it harmless itself). Dan decided that day
+that he is asked first. `hooks/db-write-ask.sh` answers "ask" (the call goes in front of Dan, with
+the statement and the project named) for:
+
+- any `execute_sql` that `read-only-query-allow.sh` would not approve. Both load
+  `lib/sql-read-only.py`, so a statement the read hook approves is never asked about and every other
+  one is; `test-db-write-ask.sh` runs one set of statements through both hooks and fails unless
+  exactly one of them decides each.
+- every `apply_migration`, whatever its text.
+- anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
+  one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). It
+  is registered with `onFailure: "block"`, so a crash or a timeout refuses the call rather than letting
+  a write through unasked.
+
+It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
+pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
+`updateSobjectRecord`, `deleteSobjectRecord`, or the whole `mcp__claude_ai_SFDC_USE` server). Such a
+rule lets those writes skip auto mode entirely, and the work MacBook's file held all three on
+2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
+on that Mac. The message comes on each call of one of those tools and on every database question,
+never on a read it passes.
+
+What it does not cover: a database tool on any other connector, which is not asked about until it is
+named in the hook and its registration. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.

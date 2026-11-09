@@ -309,6 +309,17 @@
         ]
       },
       {
+        "matcher": "mcp__claude_ai_Supabase__(execute_sql|apply_migration)|mcp__claude_ai_SFDC_USE__(createSobjectRecord|updateSobjectRecord|deleteSobjectRecord)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/db-write-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "Bash|mcp__.*__slack_(send_message|send_message_draft|schedule_message|create_canvas|update_canvas|add_list_record|update_list_record)",
         "hooks": [
           {
