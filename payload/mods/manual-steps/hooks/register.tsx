@@ -8,6 +8,7 @@ import { PROSE_MARK, TURN_TIMEOUT_MS, turnAt } from './turn.ts'
 import { saysNoneNow, waitingPhrase } from './waiting.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
+import { turnNow } from './mod-kit/turnnow.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
@@ -328,23 +329,17 @@ const giveDoneBack = async ($: EngineInterface, n: number) => {
 // and a Done pressed then came back while the turn it waited behind still ran. Which arming is the
 // latest describes this module's own timer, which a reload cancels, so it stays here.
 const runningTurnRef = { plugin: 'manual-steps', key: 'runningTurn' } as const
-// This module also holds the latest turn event it saw itself, which decides over $.state while it
-// holds one: a write that fails (logged, and never failing the turn event it rides on) then strands
-// nothing in this module. An end not recorded would otherwise leave the ended turn in $.state, read
-// as running, so a Done dropped behind it never came back (push review of PR for #1703). Only a fresh
-// module after a reload reads $.state alone; a stale turn there holds a dropped Done until the next
-// turn's end, which records the turn and arms the fallback again.
-let turnSeen: { id: string | null } | undefined
-const setRunningTurn = async ($: EngineInterface, turnId: string | null) => {
-  turnSeen = { id: turnId }
-  try {
-    await $.state.set(runningTurnRef, turnId)
-  } catch (err) {
-    $.ui.log(`manual-steps: could not record that the main turn ${turnId === null ? 'ended' : 'started'}: ${message(err)}`, { to: 'debug' })
-  }
-}
-const runningTurnOf = async ($: EngineInterface): Promise<string | null> =>
-  turnSeen !== undefined ? turnSeen.id : ((await $.state.get(runningTurnRef)).value ?? null)
+// Read through mod-kit's one reader of the running turn (hooks/mod-kit/turnnow.ts, #2461): this
+// module's latest turn event decides over $.state while it holds one, so an end whose write failed
+// strands nothing here (push review of PR for #1703); only a fresh module reads $.state alone.
+const turn = turnNow(MOD)
+const turnStore = ($: EngineInterface) => ({
+  get: async () => (await $.state.get(runningTurnRef)).value,
+  set: async (id: string | null) => void (await $.state.set(runningTurnRef, id)),
+  log: (line: string) => $.ui.log(line, { to: 'debug' }),
+})
+const setRunningTurn = ($: EngineInterface, turnId: string | null) => (turnId === null ? turn.ended(turnStore($)) : turn.started(turnStore($), turnId))
+const runningTurnOf = ($: EngineInterface): Promise<string | null> => turn.running(turnStore($))
 let armed = 0
 let fallback: { cancel: () => void } | undefined
 const armFallback = ($: EngineInterface) => {
@@ -605,7 +600,7 @@ export const register: Register = on => {
     interactive = e.isInteractive === true
     // This module's own bookkeeping starts afresh, as a reload's fresh module has it (#1703): the
     // running turn is then read from $.state.
-    turnSeen = undefined
+    turn.forget()
     // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
     if (!e.isInteractive) return next(e)
     await $.tool.register({

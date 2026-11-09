@@ -176,11 +176,43 @@ export const sent = (card: StepsCard, i: number, isSent: boolean, forgetPress = 
   steps: card.steps.map((s, k) => {
     if (k !== i) return s
     if (isSent) return { ...s, isSent, isPressed: true }
-    if (!forgetPress) return { ...s, isSent }
-    const { isPressed: _pressed, ...rest } = s
+    // No longer sent, so no longer held for a running turn either (#2437).
+    const { heldAt: _held, toldAt: _told, ...open } = s
+    if (!forgetPress) return { ...open, isSent }
+    const { isPressed: _pressed, ...rest } = open
     return { ...rest, isSent }
   }),
 })
+
+/** The steps (0 based) sent while a main turn ran and still unrecorded: held for that turn (#2437). */
+export const heldSteps = (card: StepsCard | null): number[] =>
+  (card?.steps ?? []).flatMap((s, k) => (s.isSent && !s.finished && s.heldAt !== undefined ? [k] : []))
+
+/** The held steps whose note has not yet ridden on a tool result. */
+export const untoldSteps = (card: StepsCard | null): number[] => heldSteps(card).filter(k => card?.steps[k]?.toldAt === undefined)
+
+/** The card with each of `steps` (0 based) marked as held for the running turn, or told it, at `at`. */
+export const held = (card: StepsCard, steps: number[], field: 'heldAt' | 'toldAt', at: number): StepsCard => ({
+  ...card,
+  steps: card.steps.map((s, k) => (steps.includes(k) ? { ...s, [field]: at } : s)),
+})
+
+/** The card with each of `steps` (0 based) no longer held, so its Done goes as a prompt (#2437). */
+export const unheld = (card: StepsCard, steps: number[]): StepsCard => ({
+  ...card,
+  steps: card.steps.map((s, k) => {
+    if (!steps.includes(k)) return s
+    const { heldAt: _held, toldAt: _told, ...rest } = s
+    return rest
+  }),
+})
+
+/**
+ * What a running turn is told, on its next tool result, of a Done Dan pressed on step `i` (0 based):
+ * check it right away, as a "step N done" asks, since he waits at the card for the next step.
+ */
+export const heldNote = (card: StepsCard, i: number): string =>
+  `Dan pressed Done on step ${i + 1} of the manual steps card ("${card.steps[i]?.title ?? ''}") while you were working. Check that it took where you can and call steps_done for step ${i + 1} now, then carry on with what you were doing. A "${donePrompt(i)}" message follows when this turn ends only if the step is still not recorded.`
 
 /**
  * The card after Claude's verdict on step `n` (1 based), finished at `at` (epoch milliseconds), or
@@ -330,6 +362,13 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * lines end and the next step's title starts reads at a glance now every step is open at once; none
  * under the heading, none after the last step.
  */
+// A sent step's words (#2437): pressed while a turn ran, it says whether Claude has read it yet, so
+// a Done waiting for the turn's next step never reads as ignored.
+const sentWords = (s: StepsCard['steps'][number]): string => {
+  if (s.heldAt === undefined) return 'sent'
+  return s.toldAt === undefined ? 'sent, Claude reads it at its next step' : 'sent, Claude has it'
+}
+
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardLine[] => {
   // While any unfinished step is Dan's to do, the heading says it waits on him (#863), on the card's
   // own line rather than a row of its own beside the card, so the band and the pane state it once.

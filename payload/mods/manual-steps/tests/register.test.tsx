@@ -1922,3 +1922,94 @@ test('the tools say every step is open with its own Done, ask what a step needs 
   expect(STEPS_DESCRIPTION).toMatch(/needs/)
   expect(VERDICT_DESCRIPTION).toMatch(/ask Dan whether every earlier step is done/i)
 })
+
+// #2437: a mod's $.prompt.submit waits until the session is idle, and a running turn never takes it
+// in (measured on Claude Code 2.1.319: a plugin's queued prompt ran only after the turn ended, while
+// a tool.call hook's context reached the turn's very next request). Under a long /goal turn a Done
+// waited an hour. So a Done pressed mid turn rides on the turn's next tool result instead, and the
+// "step N done" prompt is sent at the turn's end only when the turn never recorded the step.
+type ToolCalls = { tool: { call: (e: object) => Promise<{ context?: readonly string[]; deny?: string }> } }
+// The engine's Bash beneath the mod, registered with the world, before the test first calls $.
+const busyWorld = (on: On) => {
+  const w = world(on)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }) as never)
+  return w
+}
+let bashCalls = 0
+const toolRuns = ($: Engine, agentId?: string) =>
+  ($ as unknown as ToolCalls).tool.call({ tool: 'Bash', tool_use_id: `b${++bashCalls}`, command: 'ls', ...(agentId ? { agentId } : {}) })
+const told = (r: { context?: readonly string[] }) => (r.context ?? []).filter(c => c.includes('pressed Done'))
+
+test('a Done pressed mid turn reaches that turn at its next tool call, never queued behind it (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  expect(w.prompts).toEqual([])
+  const first = await toolRuns($)
+  expect(told(first)).toHaveLength(1)
+  expect(told(first)[0]).toContain('step 1')
+  expect(told(first)[0]).toContain('steps_done')
+  // Said once: the next tool result carries nothing more.
+  expect(told(await toolRuns($))).toEqual([])
+})
+
+test('a Done the running turn records is not sent again when that turn ends (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Second' })])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await toolRuns($)
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/Step 1 recorded/)
+  await turnEnd($, 't1')
+  expect(w.prompts).toEqual([])
+  expect(w.toasts).toEqual([])
+})
+
+test('a Done the running turn never records is sent as "step N done" once it ends (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await toolRuns($)
+  await turnEnd($, 't1')
+  expect(w.prompts).toEqual(['step 1 done'])
+})
+
+test('a Done pressed after the turn made its last tool call is sent at its end (#2437)', withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  await turnEnd($, 't1')
+  expect(w.prompts).toEqual(['step 1 done'])
+})
+
+test("a subagent's tool call does not carry the Done, and a subagent's end does not send it (#2437)", withKit, async ($, on) => {
+  const w = busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  expect(told(await toolRuns($, 'agent-1'))).toEqual([])
+  await turnEnd($, 't1', 'answer', 'agent-1')
+  expect(w.prompts).toEqual([])
+  expect(told(await toolRuns($))).toHaveLength(1)
+})
+
+test('the card says a Done pressed mid turn waits for Claude, then that Claude has it (#2437)', withKit, async ($, on) => {
+  busyWorld(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  const waiting = (await stepLines($)).join('\n')
+  expect(waiting).toContain("sent, Claude reads it at its next step")
+  await toolRuns($)
+  const has = (await stepLines($)).join('\n')
+  expect(has).toContain('sent, Claude has it')
+})
