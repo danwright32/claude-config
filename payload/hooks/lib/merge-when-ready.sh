@@ -731,7 +731,7 @@ choose_method(){
   # Refused for the rate limit: paused, and asked again at the next look.
   [ "$rrc" -eq 5 ] && return 5
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and $(signin_or_unread "which merge methods $slug allows" "$rrc"). Nothing was merged; pass --squash, --merge or --rebase."
-  [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch} (or --merge, or --rebase)."
+  [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch}${want_first:+ --first} (or --merge, or --rebase)."
   read -r -a am <<<"$allowed"
   for m in ${am[@]+"${am[@]}"}; do names+=("$(method_name "$m")"); done
   case "${#am[@]}" in
@@ -739,7 +739,7 @@ choose_method(){
        say "Merging by $(method_name "${am[0]}"), the only merge method $slug allows, since none was passed." ;;
     0) stop 64 "Stopped: no merge method was passed, and GitHub says $slug allows none. Nothing was merged." ;;
     *) for m in "${am[@]:1}"; do others="$others, or --$m"; done
-       stop 64 "Stopped: no merge method was passed, and $slug allows $(and_list "${names[@]}") merges, so which one is a person's choice. Nothing was merged; run it again naming one: $SELF $pr --repo $slug --${am[0]}${want_delete:+ --delete-branch} (${others#, })." ;;
+       stop 64 "Stopped: no merge method was passed, and $slug allows $(and_list "${names[@]}") merges, so which one is a person's choice. Nothing was merged; run it again naming one: $SELF $pr --repo $slug --${am[0]}${want_delete:+ --delete-branch}${want_first:+ --first} (${others#, })." ;;
   esac
 }
 read_back(){   # sets after

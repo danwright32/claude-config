@@ -2585,6 +2585,11 @@ printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widg
 out="$(BIN_DIR="$BIN" MWR_MAX_POLLS=3 run 7 --squash --first)"; rc=$?
 check "#2474 a run at the front that is passed over is told its place there is not kept" "Its place at the front (--first) is not kept" "$out"
 check "#2474 and waits behind both, at the back" "which #9 holds (2 ahead of it in line)" "$out"
+# A stop that hands back the command to run again keeps --first in it, or copying it sends the run
+# to the back of the line with nothing said.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --first)"; rc=$?
+check "#2474 the command to run instead still carries --first" "merge-when-ready.sh 7 --repo acme/widget --squash --first" "$out"
 # --first takes no value: anything attached to it is refused before any call, like any other word.
 fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --squash --first=yes)"; rc=$?
