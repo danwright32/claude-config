@@ -8,7 +8,7 @@ reader behind temp-worktree-gate.sh (claude-config#2528).
 Exit 10: nothing to refuse. Exit 0: printed the refusal (the gate puts its own name in front).
 Exit 3: printed why the command cannot be read, for a command that names a worktree; the gate
 refuses it, since a path nobody can know may be a temp one (L42, L490). Any other exit is a crash,
-and the gate reads it the same as 3.
+and the gate then judges by the call's own words, refusing one that names a worktree add or move.
 
 WHERE A TEMP FOLDER IS. /tmp and /var/folders, each with and without the /private macOS puts in
 front, which is where a restart empties: on 2026-11-09 one emptied /private/tmp and took an agent's
