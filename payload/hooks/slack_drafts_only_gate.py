@@ -2196,13 +2196,15 @@ class Judge:
                 return None
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
             # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
-            # sourced helper that posts passed. A literal path is read as it always was, ~ included. A
-            # path that cannot be worked out, a relative one where the directory is not certain among
-            # them, is refused rather than read as nothing.
+            # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
+            # that still cannot be worked out is not read, as before. Refusing it is the half of #2465
+            # kept off: on 2026-11-09 it still newly refused 80 of this repository's scripts, whose
+            # causes are the follow up issue's to explain before it is turned on (Dan, 2026-11-09).
             v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
             if bad:
-                return (f"{name} {self.sh_source_target(text)} sources a file whose path the gate cannot work "
-                        "out, so it cannot read whether that file posts")
+                raw = self.sh_source_target(text)
+                # A literal path whose directory is not certain is read where the command runs, as on main.
+                return self.script(words[1], d, depth, True) if raw and not re.search(r"[$`]", raw) else None
             return self.script(v, d, depth, True) if v is not None else None
         if "/" in words[0]:
             if hit:

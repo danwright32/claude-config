@@ -865,9 +865,8 @@ allowed "a command sourcing a file under HOME that does not post"
 cp "$T/sv/posts/lib/x.sh" "$T/svhome/env.sh"
 HOME="$T/svhome" run_bash ". \"\$HOME/env.sh\""
 refused "a command sourcing a file under HOME that posts"
-# A sourced path the gate cannot work out is refused rather than read as nothing (claude-config#2465),
-# which it can do only once the resolver reads the forms this repository's scripts use: a `local` set
-# in a function, ${X%/*}, ${X:-default}, and a name set twice where the last set always runs.
+# The resolver reads the forms this repository's scripts use to build a sourced path (claude-config#2465):
+# a `local` set in a function, ${X%/*}, ${X:-default}, and a name set twice where the last set always runs.
 SV_ROOT='ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
 for tree in posts quiet; do
   # The HOOK_DIR idiom: a case on BASH_SOURCE, then cd ... && pwd, sets DIR twice.
@@ -896,7 +895,10 @@ run_bash "cd $T/sv/quiet && bash hookdir.sh"
 allowed "the HOOK_DIR idiom run from the script's own folder, sourcing a file that does not post"
 run_bash "cd $T/sv/quiet && bash twice.sh"
 allowed "the set twice idiom run from the script's own folder, sourcing a file that does not post"
-# The failure paths: every one is in the quiet tree, so a refusal can only be the path not being worked out.
+# A path the gate cannot work out is not read, and NOT refused: that refusal is the half of #2465 kept off
+# until the 80 scripts it would newly refuse are explained (Dan, 2026-11-09). Every shape is in the tree
+# whose lib/x.sh posts, so a pass is the path left unread, exactly as on main; turning the refusal on
+# turns each of these red.
 printf '%s\n' '#!/bin/bash' '. "$NOT_SET_2465/lib/x.sh"' > "$T/sv/quiet/unknown.sh"
 printf '%s\n' '#!/bin/bash' 'source "$(some_tool --where)/x.sh"' > "$T/sv/quiet/subst.sh"
 printf '%s\n' '#!/bin/bash' "$SV_ROOT" '. "${LIB_2465:-$ROOT/lib}/x.sh"' > "$T/sv/quiet/envdefault.sh"
@@ -910,16 +912,13 @@ printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'load() {' '  if [ -d /tmp ]; then local 
 printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'moved() { ROOT=/elsewhere; }' 'go() {' '  . "$ROOT/lib/x.sh"' '}' 'moved' 'go' \
   > "$T/sv/quiet/rebound.sh"
 printf '%s\n' '#!/bin/bash' 'go() { local p="lib/x.sh"; . "$p"; }' 'go' > "$T/sv/quiet/relative.sh"
-for shape in unknown subst envdefault onlyif nevercalled cdfails cdsubst aftercall localif rebound; do
-  run_bash "cd $T/sv/quiet && bash $T/sv/quiet/$shape.sh"
-  refused "a script sourcing a file whose path the gate cannot work out: $shape.sh"
-  says "that refusal says the sourced path could not be worked out" "cannot work out"
+for shape in unknown subst envdefault onlyif nevercalled cdfails cdsubst aftercall localif rebound relative; do
+  cp "$T/sv/quiet/$shape.sh" "$T/sv/posts/$shape.sh"
+  run_bash "cd $T/sv/posts && bash $T/sv/posts/$shape.sh"
+  allowed "the refusal is off: a script sourcing a file whose path the gate cannot work out is let through unread: $shape.sh"
 done
-run_bash "cd $T/sv/quiet && bash relative.sh"
-refused "a function sourcing a relative path, whose directory when it is called is not certain"
-says "that refusal says the sourced path could not be worked out" "cannot work out"
 run_bash ". \"\$NOT_SET_2465/lib/x.sh\""
-refused "a command sourcing a file whose path the gate cannot work out"
+allowed "the refusal is off: a command sourcing through a variable it did not set is let through unread"
 # The variables a script set are still followed past a helper it sources (claude-config#2465), so long
 # as the helper binds no name through a variable. whole-number.sh and disk-clean-units.sh returned
 # their result with printf -v "$2", which binds a name only running can tell, so every variable was
@@ -941,10 +940,11 @@ allowed "a script's variables are followed past a sourced helper that prints its
 run_bash "bash $T/sv/posts/past-prints.sh"
 refused "and the file sourced after it is read: one that posts is refused"
 says "that refusal names the file sourced after the helper" "lib/x.sh"
+# The controls: a helper binding a name through a variable loses the script's variables after it, so
+# the file sourced next, which posts, is left unread (and, with the refusal off, let through).
 for kind in outparam evals; do
-  run_bash "bash $T/sv/quiet/past-$kind.sh"
-  refused "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
-  says "that refusal says the next sourced path could not be worked out" "cannot work out"
+  run_bash "bash $T/sv/posts/past-$kind.sh"
+  allowed "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
 done
 # The real helpers: a script sourcing each, then a file through a variable path, is followed.
 for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh hang-wait.sh full-run-slot.sh \
