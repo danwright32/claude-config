@@ -925,7 +925,7 @@ allowed "the refusal is off: a command sourcing through a variable it did not se
 # lost after them and the next sourced path refused; they print now, and the caller captures.
 mkdir -p "$T/sv/posts/help" "$T/sv/quiet/help"
 for tree in posts quiet; do
-  printf '%s\n' 'num() { case "${1-}" in ""|*[!0-9]*) return 1 ;; esac; printf "%s" "${1#"${1%%[!0]*}"}"; }' \
+  printf '%s\n' 'num() { case "${1-}" in ""|*[!0-9]*) return 1 ;; esac; printf "%s" "$1"; }' \
     'arr() { local -a q=("" "@x"); local pr=( -name .none ); printf "%s" "${#q[@]}${pr[0]}"; }' \
     'home() { local h; h="$(eval "printf %s ~root")"; printf "%s" "$h"; }' > "$T/sv/$tree/help/prints.sh"
   printf '%s\n' 'num() { printf -v "$2" "%s" "$1"; }' > "$T/sv/$tree/help/outparam.sh"
