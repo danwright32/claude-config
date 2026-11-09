@@ -7,7 +7,10 @@
 # closing keyword next to an issue reference ("this does not close #897"), because GitHub
 # closes the issue anyway. Since claude-config#1550 also a conditional, "which" or partial one
 # ("would also have closed #2584"), and a close of an issue the same text calls "Part of" or says
-# stays open, all read by lib/closing-keyword.py. check-closing-merge.sh asks the same detector
+# stays open, all read by lib/closing-keyword.py. Since claude-config#2464 also a closing word before
+# an open pull request anywhere, or before an open issue in the middle of a sentence ("the p0 fix
+# #2451" closed pull request #2451 unmerged), each number looked up with gh, and a lookup that fails
+# refuses. check-closing-merge.sh asks the same detector
 # about the body GitHub holds when the pull request merges, which catches a body this hook never
 # saw (--body-file, the web, a later edit).
 #
@@ -21,7 +24,8 @@
 # clearer you are about not finishing the issue, the likelier you are to trip this. It is
 # silent, and only detectable after the merge.
 #
-# Safe phrasings the hook points you at: "part of #897", or "#897 stays open".
+# Safe phrasings the hook points you at: "part of #897", or "#897 stays open", "Supersedes #N" for a
+# pull request, and a line of its own starting "Closes #N" for an issue the change does finish.
 #
 # Override: SKIP_CLOSING_CHECK=1 gh pr create ...   (a doc that has to quote the broken
 # phrasing itself, e.g. this hook's own tests). Explain why to the user first, never skip

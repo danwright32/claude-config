@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Refuse a pull request merge whose body closes an issue it says stays open (claude-config#1550).
+# Refuse a pull request merge whose body closes an issue it says stays open (claude-config#1550),
+# puts a closing word before an open pull request or mid sentence before an issue, or names a number
+# that could not be looked up (claude-config#2464).
 #
 # GitHub honours a closing keyword before an issue reference wherever it sits in a pull request
 # body, in a sentence saying the opposite included (L1018): "This does not close #4358" closed

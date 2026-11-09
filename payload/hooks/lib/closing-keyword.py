@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Find a closing keyword GitHub will honour for an issue the text says it is NOT closing (L1018).
+"""Find a closing keyword GitHub will honour for an issue the text says it is NOT closing (L1018),
+and, since claude-config#2464, one before an open pull request, one in the middle of a sentence
+before an open issue, and one whose number could not be looked up.
 
-    closing-keyword.py text          any text on stdin (a command, a PR body, a commit message)
+    closing-keyword.py text [<owner/name>]
+                                     any text on stdin (a command, a PR body, a commit message),
+                                     <owner/name> being the repository a bare #N belongs to
     closing-keyword.py pr <owner/name>
                                      a pull request as `gh pr view --json
                                      number,url,body,closingIssuesReferences` prints it, on stdin,
@@ -75,8 +79,6 @@ the same JSON, for the tests; CLOSING_LOOKUP_BUDGET_SECONDS (10) bounds every lo
 Two hooks ask this, so the rule is the same where text is written and where a pull request merges:
 check-closing-keyword.sh (a pull request or commit being written) and check-closing-merge.sh (the
 body GitHub holds, at merge, claude-config#1550).
-
-    closing-keyword.py text [<owner/name>]   the repository a bare #N belongs to, when known
 """
 import json
 import os
@@ -91,8 +93,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import repo_slug  # noqa: E402
 
 KEYWORD = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
-# An issue reference in any form GitHub itself honours: the full URL, owner/repo#12, or #12.
-REF = (r"(?:https?://[^\s/]+/(?P<{p}uo>[\w.-]+)/(?P<{p}un>[\w.-]+)/issues/(?P<{p}n3>\d+)"
+# An issue reference in any form GitHub itself honours: the full URL, owner/repo#12, or #12. The URL
+# of a pull request too (/pull/N), which GitHub closes the same way (claude-config#2464).
+REF = (r"(?:https?://[^\s/]+/(?P<{p}uo>[\w.-]+)/(?P<{p}un>[\w.-]+)/(?:issues|pull)/(?P<{p}n3>\d+)"
        r"|(?P<{p}owner>[\w.-]+)/(?P<{p}name>[\w.-]+)#(?P<{p}n1>\d+)"
        r"|#(?P<{p}n2>\d+))")
 
@@ -321,6 +324,11 @@ def pair_findings(text, slug, listed, already, lookup, text_mode):
     seen = set()
     prev = None
     for m in CLOSING.finditer(text):
+        # A keyword inside a longer word ("prefix #12", "unfixed #4") is no keyword to GitHub. The
+        # sentence rules above keep their unbounded reading; this rule, which refuses on placement
+        # alone, needs the word to start where GitHub's does.
+        if m.start() > 0 and (text[m.start() - 1].isalnum() or text[m.start() - 1] == "_"):
+            continue
         key = ref_key(m, slug)
         if prev and text.rfind("\n", 0, m.start()) >= prev[0]:
             prev = None

@@ -162,6 +162,7 @@ want_finding "and the refusal shows the phrase to reword" \
   "including the p0 fix #2451"
 want_finding "a pull request on a Closes line of its own is still a pull request" "Closes #2451" "pull request"
 want_finding "a pull request named by its full reference" "Fixes acme/widget#2451." "pull request"
+want_finding "a pull request named by its URL" "Closes https://github.com/acme/widget/pull/2451" "pull request"
 want_finding "a closing word in the middle of a sentence before an open issue" \
   "This is the follow up fix #12 asked for." "not at the start of a line or sentence"
 want_finding "a lookup that fails refuses, with the reason" "Closes #404." "HTTP 404"
@@ -185,6 +186,7 @@ want_clean "a closing word right after the opening quote of a message" 'commit -
 want_clean "a closing word in passing before a CLOSED pull request closes nothing" "the earlier fix #60 landed"
 want_clean "a closing word in passing before a closed issue closes nothing" "the earlier fix #61 landed"
 want_clean "no pair, nothing looked up" "See #2451 for the p0."
+want_clean "a keyword inside a longer word is no keyword" "The prefix #12 and the suffix #13 stay."
 
 # A number already refused for its sentence is not also looked up: nothing the lookup says can clear it.
 : > "$LOOKUP_LOG"
