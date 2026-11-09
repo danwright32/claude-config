@@ -223,7 +223,25 @@ def floor_words(state, is_main):
     return "the %s %s started from" % ("{:,}".format(state["floor_ctx"]), it)
 
 
-def line_notice(state, line, is_main):
+def note_place(payload):
+    """Where the main session's handoff note goes, said for the notice, and any failure for Dan.
+
+    The session's notes folder (claude-config#2490, lib/session_notes.py, the one place that decides
+    it), never the scratchpad, which a restart of the Mac empties. Made here too, for a session
+    started before the folder existed.
+    """
+    import session_notes
+    r = session_notes.ensure(payload)
+    if r["dir"] is None:
+        why = "this session's notes folder could not be worked out (%s)" % r["error"]
+        return "handoff.md", why
+    if r["error"] and not os.path.isdir(r["dir"]):
+        why = "this session's notes folder %s could not be created (%s)" % (r["dir"], r["error"])
+        return r["note"], why
+    return r["note"], ""
+
+
+def line_notice(state, line, is_main, payload=None):
     who = "this session's" if is_main else "this agent's"
     work = work_of(state["last_ctx"], state)
     head = ("Context line (claude-config#1960, claude-config#2283): %s last request carried %s tokens of context, "
@@ -232,25 +250,32 @@ def line_notice(state, line, is_main):
             % (who, "{:,}".format(state["last_ctx"]), "{:,}".format(work), floor_words(state, is_main),
                "{:,}".format(line)))
     if is_main:
+        note, broken = note_place(payload or {})
         ctx = head + (
             "Before going on, write down what you have decided: put each decision that belongs to "
-            "an issue on that issue as a comment, and the rest in handoff.md in your scratchpad "
-            "folder, covering %s. Then call mcp__status-bar__queue_compact with the absolute path of "
+            "an issue on that issue as a comment, and the rest in handoff.md in this session's notes "
+            "folder, at %s, where a restart of this Mac cannot clear it (claude-config#2490), "
+            "covering %s. Then call mcp__status-bar__queue_compact with the absolute path of "
             "handoff.md, which queues a compact that runs when this turn ends (claude-config#2025; "
             "a /goal run is one turn until its goal is met or stopped, so there it waits until then), "
             "and tell Dan in one line that the session is at the context line and where the note is, "
             "so he can cancel the compact, type /compact himself if the tool was not there or refused, "
             "or start a fresh session from the note. "
-            "Agents you dispatched keep running either way." % WRITE_DOWN)
+            "Agents you dispatched keep running either way." % (note, WRITE_DOWN))
         system = ("This session is past the context line: its last request carried %s tokens, "
                   "%s of them above %s (the line is %s above it). It has been asked to write down "
                   "what it has decided, then compact or start a fresh session (claude-config#1960, "
                   "#2283)."
                   % ("{:,}".format(state["last_ctx"]), "{:,}".format(work),
                      floor_words(state, is_main), "{:,}".format(line)))
+        if broken:
+            told = (" But %s, so the compact tool will refuse it; tell Dan, so he can /compact "
+                    "himself once the note is written somewhere." % broken)
+            ctx += told
+            system += " Its notes folder: %s." % broken
         return ctx, system
     ctx = head + (
-        "Before going on, write down what you have decided in handoff.md in your scratchpad folder, "
+        "Before going on, write down what you have decided in handoff.md in the working folder your brief names, "
         "covering %s. Then, unless only the push and the report are left, hand back now, saying you "
         "stopped at the context line and naming the handoff file, so the main session can give the "
         "rest to a fresh agent." % WRITE_DOWN)
@@ -371,7 +396,7 @@ def run(payload_bytes):
         os.close(lock_fd)
         return
     try:
-        decide(state_dir, key, path, is_main)
+        decide(state_dir, key, path, is_main, d)
     finally:
         os.close(lock_fd)
 
@@ -383,7 +408,7 @@ def save(state_path, state):
     os.replace(tmp, state_path)
 
 
-def decide(state_dir, key, path, is_main):
+def decide(state_dir, key, path, is_main, payload=None):
     state_path = os.path.join(state_dir, key + ".json")
     try:
         with open(state_path, encoding="utf-8", errors="replace") as fh:
@@ -432,7 +457,7 @@ def decide(state_dir, key, path, is_main):
         state["band_told"] = 0
     elif band > state["band_told"] and (not is_main or state["orchestrator"]):
         state["band_told"] = band
-        say.append(line_notice(state, line, is_main))
+        say.append(line_notice(state, line, is_main, payload))
     step = state["compactions"] // every
     if is_main and step > state["compactions_told"]:
         state["compactions_told"] = step

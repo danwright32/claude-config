@@ -2499,7 +2499,8 @@ script file or interpreter is answered before anything loads; it acts on a Slack
 
 </td><td>
 
-2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push
+2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root or the session's
+notes folder root (#2490), not a push
 
 </td></tr>
 <tr><td>
@@ -4919,11 +4920,25 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's first request, or of the first request after its latest compaction. A builder (any
   subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
   last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
-  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  `handoff.md` in the working folder its brief names and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
-  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
+  in `handoff.md` in its notes folder (below), named in full in the notice, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session.
+- **The notes folder** (claude-config#2490). The scratchpad Claude Code gives a session is under
+  `/private/tmp`, which macOS empties on every restart; on 2026-11-09 a restart of the work
+  MacBook took a session's `handoff.md`, a guide and a background agent's working tree with it.
+  So each session has a notes folder, `~/.claude/state/session-notes/<project>/<session>/`, where
+  `<project>` is the folder name Claude Code keys the session's transcript by. It is on disk,
+  outlives a restart, and is never synced: claude-sync carries only the payload's folders, never
+  `state/`, so a note naming work repositories cannot reach this public repository.
+  `~/.claude/projects` was the other candidate, also unsynced, but Claude Code owns its layout and
+  deletes its contents after `cleanupPeriodDays`. `hooks/lib/session_notes.py` decides the folder
+  for every caller; `hooks/session-notes-folder.sh` (SessionStart) makes it and tells the session,
+  pointing at a `handoff.md` already there and copying one still in the scratchpad in once, never
+  over a note already in the folder. Agents dispatched by the session get their working folders
+  under it, and `scratchpad-subagent-gate.sh` refuses a subagent's write into its root as it does
+  the scratchpad's. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;

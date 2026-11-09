@@ -652,7 +652,10 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
 // #2025: a session past the context line (#1960) writes its handoff note, then queues the same
 // Compact the row queues, since a model cannot type /compact itself; in an unattended /goal run
 // nothing else would compact until Dan came back. Main session only, and only once the note is there.
-const NOTE = '/private/tmp/claude-501/-repo/s1/scratchpad/handoff.md'
+// #2490: in the session's notes folder, which a restart of the Mac cannot clear, never the scratchpad.
+const NOTE = '/Users/x/.claude/state/session-notes/-repo/s1/handoff.md'
+// Where the note was kept before #2490, which a session mid stretch may still pass once.
+const LEGACY = '/private/tmp/claude-501/-repo/s1/scratchpad/handoff.md'
 type Called = { deny?: string; text?: string; result?: unknown; isError?: boolean }
 const queueCompact = ($: unknown, input: Record<string, unknown> = {}) =>
   ($ as { tool: { call: (i: never) => Promise<Called> } }).tool.call({ tool: 'mcp__status-bar__queue_compact', note: NOTE, ...input } as never)
@@ -663,7 +666,81 @@ test('the compact tool is offered to the model, naming where the handoff note mu
   await start($, clock)
   const tool = tools.find(t => t.name === 'queue_compact')
   expect(tool?.description).toContain('handoff.md')
-  expect(tool?.description).toContain('scratchpad')
+  // #2490: the notes folder, said with why: the scratchpad is emptied by a restart.
+  expect(tool?.description).toContain('.claude/state/session-notes/')
+  expect(tool?.description).toContain('restart')
+})
+
+// #2490: on 2026-11-09 a restart of the work MacBook emptied /private/tmp and a session's handoff
+// note with it. A session that wrote its note in the scratchpad before the switch has it carried into
+// its notes folder once, never lost, and is then carried on from the copy a restart cannot clear.
+test('a note still in the scratchpad is copied into the notes folder once, and the session carries on from the copy (#2490)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, prompts } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[LEGACY] = 'Next: push the branch.'
+  mtimes[LEGACY] = clock.now()
+  const r = await queueCompact($, { note: LEGACY })
+  expect(refusal(r)).toBeUndefined()
+  expect(files[NOTE]).toBe('Next: push the branch.')
+  expect(files[LEGACY]).toBe('Next: push the branch.')
+  expect(String(r.result)).toContain(`${NOTE} holds what you decided`)
+  expect(String(r.result)).toContain(`copied from ${LEGACY}`)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  await compactEnds($)
+  await clock.advance(10 * SEC)
+  expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE}`)
+})
+
+test('a scratchpad note is never copied over a note already in the notes folder (#2490)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[LEGACY] = 'Old decisions.'
+  mtimes[LEGACY] = clock.now()
+  files[NOTE] = 'Newer decisions.'
+  mtimes[NOTE] = clock.now()
+  const why = refusal(await queueCompact($, { note: LEGACY }))
+  expect(why).toContain(NOTE)
+  expect(why).toContain(LEGACY)
+  expect(files[NOTE]).toBe('Newer decisions.')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test('a notes folder that cannot be made refuses the copy with its reason, and nothing is queued (#2490)', withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes, w } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(SEC)
+  files[LEGACY] = 'Next: push the branch.'
+  mtimes[LEGACY] = clock.now()
+  w.mkdirFails = 'mkdir: /Users/x/.claude/state: Permission denied'
+  const why = refusal(await queueCompact($, { note: LEGACY }))
+  expect(why).toContain('Permission denied')
+  expect(files[NOTE]).toBeUndefined()
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+})
+
+test("a note in another session's notes folder is refused, naming this session's (#2490)", withKit, async ($, on) => {
+  const { clock, compacts, files, mtimes } = world(on)
+  await start($, clock)
+  await step($, clock)
+  const other = '/Users/x/.claude/state/session-notes/-repo/s2/handoff.md'
+  files[other] = 'Someone else.'
+  mtimes[other] = clock.now()
+  const why = refusal(await queueCompact($, { note: other }))
+  expect(why).toContain('/s1/')
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
 })
 
 test('with no handoff note the compact tool refuses, and nothing is queued or run (#2025)', withKit, async ($, on) => {
@@ -1106,7 +1183,7 @@ test("a compaction's end sends nothing for the button's Compact, an automatic on
   await ui.unmount()
 })
 
-test('a note from before the last compaction, over an hour old, empty, or outside the scratchpad is refused (#2025)', withKit, async ($, on) => {
+test('a note from before the last compaction, over an hour old, empty, or outside the notes folder is refused (#2025, #2490)', withKit, async ($, on) => {
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
   files[NOTE] = 'Decisions from the last stretch.'
@@ -1125,7 +1202,7 @@ test('a note from before the last compaction, over an hour old, empty, or outsid
   expect(refusal(await queueCompact($))).toContain('is empty')
   files['/repo/handoff.md'] = 'Decisions.'
   mtimes['/repo/handoff.md'] = T0 + 2 * HOUR
-  expect(refusal(await queueCompact($, { note: '/repo/handoff.md' }))).toContain('scratchpad')
+  expect(refusal(await queueCompact($, { note: '/repo/handoff.md' }))).toContain('notes folder')
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(ran)
@@ -1172,15 +1249,16 @@ test('a note passed as handoff is the one a reload in the middle of the compacti
   expect(prompts[0]?.text).toContain(`Read your handoff note at ${NOTE} and carry on`)
 })
 
-test('the scratchpad path is taken with or without /private in front (#2071)', withKit, async ($, on) => {
+test('a scratchpad note is carried with or without /private in front (#2071, #2490)', withKit, async ($, on) => {
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
   await step($, clock)
   await clock.advance(SEC)
-  const bare = NOTE.replace(/^\/private/, '')
+  const bare = LEGACY.replace(/^\/private/, '')
   files[bare] = 'Next: push the branch.'
   mtimes[bare] = clock.now()
   expect(refusal(await queueCompact($, { note: bare }))).toBeUndefined()
+  expect(files[NOTE]).toBe('Next: push the branch.')
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(1)
@@ -1208,14 +1286,14 @@ test('a call with no note names the parameter and what it was given; a wrong pat
   expect(compacts).toHaveLength(0)
 })
 
-test('the parameter description names the note path without doubling the scratchpad folder (#2071)', withKit, async ($, on) => {
+test('the parameter description names the note path in the notes folder (#2071, #2490)', withKit, async ($, on) => {
   const { clock, tools } = world(on)
   await start($, clock)
   const tool = tools.find(t => t.name === 'queue_compact')
   expect(tool).toBeDefined()
   const note = (tool?.inputSchema as { properties: { note: { description: string } } }).properties.note
-  expect(note.description).toContain('/scratchpad/handoff.md')
-  expect(note.description).not.toContain('scratchpad folder>/scratchpad')
+  expect(note.description).toContain('.claude/state/session-notes/<project>/<session>/handoff.md')
+  expect(note.description).not.toContain('scratchpad')
 })
 
 // #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
