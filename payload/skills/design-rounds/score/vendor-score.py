@@ -55,6 +55,9 @@ FILES = {
     # copied runnable (claude-config#1537).
     "headless-dom.sh": os.path.join("..", "headless-dom.sh"),
     "shared-playwright.json": "shared-playwright.json",
+    # The one lookup of the separate build every hidden Chrome runs, never Dan's own Chrome, read by
+    # capture-web.mjs and headless-dom.sh alike (claude-config#2191).
+    "headless_chrome.py": "headless_chrome.py",
     "vendor-score.py": "vendor-score.py",
 }
 INSTALLED = os.path.join("~", ".claude", "skills", "design-rounds", "score")

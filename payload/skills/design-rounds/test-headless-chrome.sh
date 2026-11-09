@@ -73,7 +73,7 @@ EOF
 cat > "$F/score/direct.mjs" <<EOF
 const browser = await pw.chromium.launch({ channel: "chrome", args: LAUNCH_ARGS });
 const other = await pw.chromium.launch({
-  executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  executablePath: "/opt/some-chrome/chrome",
 });
 const opts = { executablePath: process.env.CHROME };
 const bundled = await pw.chromium.launch({ headless: true, args: ["--disable-gpu"] });
@@ -172,7 +172,9 @@ check "and says which" "no-such-chrome" "$(cat "$TMP/missing.err")"
 # Other sessions' Chromes add copies to the real folder at any moment, and can only ever ADD them, so
 # a run that shows nothing new proves this run left none, while a run that leaves its copy shows one
 # on every attempt: three attempts tell the two apart (as test-make-switcher.sh's real Chrome check).
-REAL_CHROME="${HEADLESS_CHROME_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# The Chrome is the separate build every hidden Chrome runs, from the one lookup (claude-config#2191),
+# never the Google Chrome Dan uses, whose hidden copies took his click on Chrome in the Dock.
+REAL_CHROME="$(python3 "$DIR/score/headless_chrome.py" 2> "$TMP/lookup.err")" || REAL_CHROME=""
 real_tmp="${TMPDIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}"
 clones="$(cd "${real_tmp%/}/.." 2>/dev/null && pwd -P)/X/com.google.Chrome.code_sign_clone"
 if [ ! -d "$clones" ]; then
@@ -186,8 +188,8 @@ end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kil
 # Waits, bounded, for a file to hold something (L290).
 await_file(){ hang_wait "[ -s '$1' ]"; }
 
-if [ ! -x "$REAL_CHROME" ]; then
-  echo "SUITE-PART-UNMEASURED no Chrome at $REAL_CHROME, so whether a killed real Chrome leaves its copy behind was not measured"
+if [ -z "$REAL_CHROME" ]; then
+  echo "SUITE-PART-UNMEASURED no hidden Chrome here ($(head -c 300 "$TMP/lookup.err")), so whether a killed real Chrome leaves its copy behind was not measured"
 elif [ ! -d "$clones" ]; then
   echo "SUITE-PART-UNMEASURED no clone folder at $clones, so whether a killed real Chrome leaves its copy behind was not measured"
 else

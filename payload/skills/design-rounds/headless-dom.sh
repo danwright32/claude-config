@@ -61,6 +61,21 @@
 # is complete.
 set -u
 REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chrome binary}"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# NEVER DAN'S CHROME (claude-config#2191). A hidden copy of the Google Chrome Dan uses checks in with
+# macOS as com.google.Chrome, so while a suite started them back to back his click on Chrome in the
+# Dock reached a windowless test copy. Every hidden Chrome is started through this file, so it refuses
+# that Chrome here, in both modes, before running anything, by the one test headless_chrome.py makes
+# (beside this file in a vendored copy, in score/ in claude-config's). Without it to ask, nothing runs.
+VET=""
+for v in "$SELF_DIR/headless_chrome.py" "$SELF_DIR/score/headless_chrome.py"; do
+  [ -f "$v" ] && { VET="$v"; break; }
+done
+[ -n "$VET" ] || { echo "headless-dom.sh: headless_chrome.py is not beside $SELF_DIR or in its score folder, so whether $REAL is the Chrome Dan uses cannot be told, and it is not run" >&2; exit 126; }
+if [ -e "$REAL" ]; then
+  python3 "$VET" vet "$REAL" >&2 || { echo "headless-dom.sh: refused to run $REAL" >&2; exit 126; }
+fi
 
 # Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
 # too: a second such switch replaces the first, so two would silently drop one caller's list.

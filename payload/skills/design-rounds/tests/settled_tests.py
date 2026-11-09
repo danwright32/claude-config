@@ -135,23 +135,27 @@ def spec(**changes):
     return s
 
 
-# The Chrome make-settled.py measures a terminal design's windows in (claude-config#1422), found here
-# by the test's own lookup rather than make-settled's, so a fault in that lookup cannot agree with
-# itself: the Mac's Chrome, or one on PATH, as a Linux runner has it.
-MAC_CHROME = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-TEST_CHROME = MAC_CHROME if os.access(MAC_CHROME, os.X_OK) else next(
-    (p for p in (shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")) if p),
-    None)
+# The Chrome every block here opens: the separate build every hidden Chrome runs, from the one lookup
+# (score/headless_chrome.py, claude-config#2191), never the Google Chrome Dan uses, whose hidden
+# copies took his click on Chrome in the Dock. That lookup is held against stand in installs on its
+# own in test-hidden-chrome.sh, so sharing it here does not leave it checking itself.
+import headless_chrome  # noqa: E402
+try:
+    TEST_CHROME = headless_chrome.find()
+    NO_CHROME_WHY = ""
+except headless_chrome.NoHiddenChrome as _err:
+    TEST_CHROME = None
+    NO_CHROME_WHY = str(_err)[:300]
 # ONE lookup for every block that opens a browser (claude-config#1452). The last block once kept a
 # second, at the Mac path only, so on CI's Linux runner, where Chrome is google-chrome on PATH, its
 # frames were never drawn and the suite said so as unmeasured on every run. Read from this file's own
 # source, so a block that finds Chrome its own way again fails here rather than quietly sitting out.
 with open(os.path.abspath(__file__), encoding="utf-8") as _fh:
     _own = _fh.read()
-_lookups = len(re.findall(r'os\.environ\.get\(\s*"SETTLED_TEST_CHROME"', _own))
+_lookups = len(re.findall(r'headless_chrome\.find\(', _own))
 _others = sorted(set(re.findall(r'HEADLESS_DOM_CHROME=(\w+)', _own)) - {"TEST_CHROME"})
 check("every block that opens a browser finds it through the one TEST_CHROME lookup",
-      _lookups == 1 and not _others, "SETTLED_TEST_CHROME read %d times; HEADLESS_DOM_CHROME also set from %s" % (_lookups, _others))
+      _lookups == 1 and not _others, "headless_chrome.find called %d times; HEADLESS_DOM_CHROME also set from %s" % (_lookups, _others))
 
 
 def make(name, s, chrome=True):
@@ -413,7 +417,7 @@ tsrc = ""
 if not TEST_CHROME:
     # Its windows are measured in Chrome before it is written (claude-config#1422), so with none here
     # the design is refused, and what it would have written is not checked.
-    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so no terminal design was written and read" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no hidden Chrome (%s), so no terminal design was written and read" % NO_CHROME_WHY)
     check("with no Chrome here, a terminal design is refused, naming Chrome, writing nothing",
           rc == 2 and "Chrome" in out and not os.path.exists(term), out)
 else:
@@ -499,7 +503,7 @@ for n, (label, body, needle) in enumerate([
           rc == 2 and needle in out and "Traceback" not in out and not os.path.exists(path)
           and not [x for x in os.listdir(T) if x.startswith("tmp") and x.endswith(".html")], out)
 if not TEST_CHROME:
-    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so no terminal frame's window was measured" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no hidden Chrome (%s), so no terminal frame's window was measured" % NO_CHROME_WHY)
 else:
     rc, out, path = make("width-off", on_t1(frames=[wide("t1", 640, 820)]))
     check("a terminal frame declared 640 wide whose window draws at 820 is refused, naming the frame, both "
@@ -764,7 +768,7 @@ check("the settled file gives designFrameTrouble, the one reading of a frame's r
 # PATH, which is how CI's Linux runner has it.
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
 if not TEST_CHROME:
-    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so the settled file's frames were not drawn in a browser" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no hidden Chrome (%s), so the settled file's frames were not drawn in a browser" % NO_CHROME_WHY)
 else:
     probe = src.replace("</body></html>", """<script>
 var out = [];
@@ -1113,7 +1117,7 @@ try {
 }
 """)
 if not TEST_CHROME:
-    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so a settled frame following its page's height was not measured" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no hidden Chrome (%s), so a settled frame following its page's height was not measured" % NO_CHROME_WHY)
 elif not shutil.which("node"):
     print("SUITE-PART-UNMEASURED node is not on PATH, so a settled frame following its page's height was not measured")
 elif rc == 0:
