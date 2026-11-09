@@ -635,7 +635,8 @@ read_pr(){   # sets view_env
   return "$rc"
 }
 # The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
-# runs_pending. Asked as the account that could see the pull request.
+# runs_pending, and runs_failed (the head's runs that finished as a failure), which
+# rerun_failed_start reads (claude-config#2537). Asked as the account that could see the pull request.
 read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
