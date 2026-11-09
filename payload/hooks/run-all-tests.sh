@@ -914,8 +914,27 @@ EOF
 # A part run refuses, running nothing, when the deal does not cover exactly what it discovers: a
 # suite in no line would run in no job and read as a pass (L96, L98), and a line naming a suite this
 # tree does not hold means the deal came from another commit.
-_part_rel(){ # _part_rel <suite path> -> its path inside the repo, or the path itself outside one
-  case "$1" in "$root"/*) printf '%s' "${1#"$root"/}" ;; *) printf '%s' "$1" ;; esac
+#
+# Both loops below run once per suite in the tree (284 on 2026-11-09), so neither starts a process
+# per suite: on a Mac at a load average near 20 that day, a command substitution and an awk per
+# suite made one deal take 64 seconds with a quarter of a second of processor time.
+_part_rel(){ # _part_rel <suite path> -> sets _rel to its path inside the repo, or the path itself
+  case "$1" in "$root"/*) _rel="${1#"$root"/}" ;; *) _rel="$1" ;; esac
+}
+# What suite_seconds reads, without the processes it starts: the same record, keyed as suite_key
+# keys it (only a suite inside the repo has one, `%` then `/` encoded), its first field, and nothing
+# unless that is a whole number. The dealing check in tests/test-ci-workflow.sh reads a record
+# written under that key, so the two cannot drift apart unseen.
+_part_seconds(){ # _part_seconds <suite path> -> sets _sec to its measured seconds, or empty
+  local _k _v _rest
+  _sec=""
+  [ -n "$TIMINGS" ] && [ -n "$root" ] || return 0
+  case "$1" in "$root"/*) _k="${1#"$root"/}" ;; *) return 0 ;; esac
+  _k="${_k//%/%25}"; _k="${_k//\//%2F}"
+  [ -f "$TIMINGS/$_k" ] || return 0
+  IFS=' ' read -r _v _rest < "$TIMINGS/$_k" 2>/dev/null || [ -n "$_v" ] || return 0
+  case "$_v" in ''|*[!0-9]*) return 0 ;; esac
+  _sec="$_v"
 }
 if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
   if ! whole_above_zero "$HOOK_TESTS_DEAL" HOOK_TESTS_DEAL; then
@@ -927,7 +946,8 @@ if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
     exit 1
   fi
   for s in "${suites[@]}"; do
-    printf '%s\t%s\n' "$(_part_rel "$s")" "$(suite_seconds "$s")"
+    _part_rel "$s"; _part_seconds "$s"
+    printf '%s\t%s\n' "$_rel" "$_sec"
   done | awk -F'\t' -v n="$HOOK_TESTS_DEAL" '
     { path[NR] = $1; sec[NR] = $2; if ($2 != "") { m[++k] = $2 + 0 } }
     END {
@@ -969,7 +989,7 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
     exit 1
   fi
   _discovered=""
-  for s in "${suites[@]}"; do _discovered="$_discovered$(_part_rel "$s")
+  for s in "${suites[@]}"; do _part_rel "$s"; _discovered="$_discovered$_rel
 "; done
   # Every refusal is worked out before any is said, so one run names everything wrong with the deal.
   _deal_problems="$(printf '%s' "$_discovered" | awk -F'\t' -v parts="$_parts" '
@@ -986,11 +1006,12 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
     printf '%s\n' "$_deal_problems" | sed 's/^/  /' >&2
     exit 1
   fi
-  _mine="$(awk -F'\t' -v p="$_part" '$1 == p { print $2 }' "$_deal")"
+  # The positions, in discovery order, of the suites dealt to this part: one awk, not one per suite.
+  _mine_at="$(printf '%s' "$_discovered" | awk -F'\t' -v p="$_part" '
+    FNR == NR { if ($1 == p) mine[$2] = 1; next }
+    ($0 in mine) { print FNR - 1 }' "$_deal" -)"
   _kept=()
-  for s in "${suites[@]}"; do
-    if printf '%s\n' "$_mine" | grep -qxF -- "$(_part_rel "$s")"; then _kept+=("$s"); fi
-  done
+  for _i in $_mine_at; do _kept+=("${suites[$_i]}"); done
   if [ "${#_kept[@]}" -eq 0 ]; then
     echo "run-all-tests: part $_part of $_parts holds no suite in $_deal. Refusing to report an empty part as a pass." >&2
     exit 1

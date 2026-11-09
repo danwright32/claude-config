@@ -305,27 +305,11 @@ r="$(processor_printed "$REAL")"
 # the suites into parts, one job per part, from what each suite last measured (L315), and the job
 # named `suite` waits for all of them and holds the one verdict. Dealt from a list of suites, a
 # suite left out of every part would run nowhere and read as a pass (L96, L98), so the runner both
-# deals and refuses a deal that does not cover what it discovers, and both are driven here.
+# deals and refuses a deal that does not cover what it discovers, and both are driven here. The
+# real tree's deal is held in tests/test-ci-parts-real-tree.sh, a suite of its own because reading
+# what the repository tracks makes a suite one the push gate runs, and this one starts the runner on
+# a fixture, which is a minute on a busy Mac (as #1997 did for the runner's own suite).
 RUNNER="$DIR/../payload/hooks/run-all-tests.sh"
-REPO_ROOT="$(cd "$DIR/.." && pwd)"
-
-# The real tree, dealt into four: every tracked suite is in exactly one part, and every part has
-# work. The count it is held to is git's, not the runner's, so the two readings are independent.
-real_deal="$(HOOK_TESTS_ROOT="$REPO_ROOT" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL=4 bash "$RUNNER" 2>/dev/null)"; rc=$?
-tracked="$(git -C "$REPO_ROOT" ls-files | grep -E '(^|/)test-[^/]*\.sh$' | grep -v '^payload/hooks/run-all-tests\.sh$' | sort)"
-dealt="$(printf '%s\n' "$real_deal" | awk -F'\t' 'NF >= 2 { print $2 }' | sort)"
-dupes="$(printf '%s\n' "$dealt" | uniq -d | head -3 | tr '\n' ' ')"
-missing="$(comm -23 <(printf '%s\n' "$tracked") <(printf '%s\n' "$dealt" | sort -u) | head -3 | tr '\n' ' ')"
-[ "$rc" -eq 0 ] && [ -n "$tracked" ] && [ -z "$missing" ] \
-  && check "#2463 every tracked suite ($(printf '%s\n' "$tracked" | grep -c .)) is dealt to some part of the real tree" ok \
-  || check "#2463 every tracked suite is dealt to some part of the real tree" "rc=$rc, in no part: ${missing:-none}"
-[ -z "$dupes" ] && [ -n "$dealt" ] \
-  && check "#2463 and none is dealt twice" ok \
-  || check "#2463 and none is dealt twice" "twice: ${dupes:-nothing dealt}"
-parts_used="$(printf '%s\n' "$real_deal" | awk -F'\t' 'NF >= 2 { print $1 }' | sort -u | tr '\n' ' ')"
-[ "$parts_used" = "1 2 3 4 " ] \
-  && check "#2463 and each of the four parts has work, and no fifth exists" ok \
-  || check "#2463 and each of the four parts has work, and no fifth exists" "parts: '$parts_used'"
 
 # A throwaway tree, so a deal and a part run can be driven to refuse without the real suites.
 FX="$TMPROOT/deal-tree"
