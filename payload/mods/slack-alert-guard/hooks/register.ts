@@ -16,8 +16,13 @@ import {
   ciMessages,
   ciWorkflow,
   codeOf,
+  type Decl,
+  type Foreign,
+  type ModelReading,
   editHalves,
   editedText,
+  foreignNames,
+  foreignUse,
   handsOn,
   heldText,
   importSpecs,
@@ -28,6 +33,10 @@ import {
   languageOf,
   mayHandOn,
   mentionsStore,
+  modelCandidates,
+  modelLiteral,
+  modelOnlyDecls,
+  modelReading,
   namePatterns,
   plainYamlValues,
   question,
@@ -41,6 +50,7 @@ import {
   templateLines,
   testFile,
   textTemplate,
+  tokenRanges,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -81,7 +91,9 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-type Lit = { text: string; literal: string[] }
+// start: where the string's text starts in its file, or -1 where it has no one place (a YAML value,
+// a CI step's message).
+type Lit = { text: string; literal: string[]; start: number }
 // Every string a file's text holds, read as its language reads them, past any handed to a query
 // builder call (#2364), with the placeholders JavaScript writes as text (#2361).
 const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, text: string): Promise<Lit[]> => {
@@ -90,13 +102,90 @@ const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeo
     // mod-kit's spans are already the text between the quotes, prefix letters and quotes left out.
     const spans = await $.modkit.pythonText({ code: text })
     const query = new Set(stringsOf(text, true).filter(s => s.query).map(s => s.start))
-    return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [] }))
+    return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [], start: s.from }))
   }
   // A CI workflow posts only what a Slack step carries, never its names, needs or commands (#2371).
-  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [] }))
+  if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [], start: -1 }))
   const strings = stringsOf(text, lang !== 'c', lang === 'c' && isJs(path)).filter(s => !s.query)
-  const yaml = lang === 'yaml' ? plainYamlValues(text).map(t => ({ text: t, literal: [] })) : []
-  return [...strings.map(s => ({ text: s.text, literal: s.literal })), ...yaml]
+  const yaml = lang === 'yaml' ? plainYamlValues(text).map(t => ({ text: t, literal: [], start: -1 })) : []
+  return [...strings.map(s => ({ text: s.text, literal: s.literal, start: s.start })), ...yaml]
+}
+
+/**
+ * The strings of each side of an edit that Slack can be sent, those only a model reads left out
+ * (#2475): a JavaScript, TypeScript or python file's changed strings are judged by the declarations
+ * holding them (rules.ts, modelOnlyDecls), and a declaration another file can import counts as read
+ * only by a model only once every other file naming it has been read within the deadline. Anything
+ * that cannot be read in time, or at all, leaves the string counted, so it is held as before.
+ */
+type Side = { text: string; lits: Lit[]; changed: string[] }
+const postable = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, sides: Side[], deadline: number): Promise<Lit[][]> => {
+  const python = lang === 'python'
+  if (!python && !(lang === 'c' && isJs(path))) return sides.map(s => s.lits)
+  const readings: ModelReading[] = []
+  for (const s of sides) {
+    let ranges = tokenRanges(s.text, false)
+    if (python) {
+      const spans = s.text ? await $.modkit.pythonText({ code: s.text }) : []
+      ranges = { strings: spans.filter(x => x.kind !== 'comment'), comments: spans.filter(x => x.kind === 'comment') }
+    }
+    readings.push(modelReading(s.text, python, ranges))
+  }
+  const candidates = sides.map((s, i) => {
+    const changed = new Set(s.changed)
+    return modelCandidates(readings[i] as ModelReading, s.lits.filter(l => l.start >= 0 && changed.has(l.text)).map(l => l.start))
+  })
+  const names = [...new Set(candidates.flatMap((c, i) => foreignNames(readings[i] as ModelReading, c)))]
+  const foreign = await foreignUses($, path, names, deadline)
+  return sides.map((s, i) => {
+    const r = readings[i] as ModelReading
+    const only = modelOnlyDecls(r, candidates[i] as Decl[], foreign)
+    return s.lits.filter(l => l.start < 0 || !modelLiteral(r, only, l.start))
+  })
+}
+
+/**
+ * How the other files of `path`'s repository use each of `names` (#2475): one git grep for the files
+ * naming any of them as a whole word, then a read of each, tests and docs left out since they send
+ * nothing. A name missing from the answer counts as wording: a repository that cannot be named, a
+ * search that fails, is cut short or runs late, more files than MOST_READ, or a file that cannot be read.
+ */
+const foreignUses = async ($: EngineInterface, path: string, names: string[], deadline: number): Promise<Foreign> => {
+  const none: Foreign = new Map()
+  if (!names.length) return none
+  try {
+    // The repository, placed as findSender places it: from the nearest folder that exists, by git's
+    // own spelling of its top and the prefix below it.
+    let dir = path.slice(0, path.lastIndexOf('/')) || '/'
+    while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+    const left = async () => Math.floor(deadline - (await $.clock.now()))
+    let ms = await left()
+    if (ms <= 0) return none
+    const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
+    const [top = '', prefix = ''] = where.exitCode === 0 && !where.isStdoutTruncated ? where.stdout.split('\n') : []
+    if (!top) return none
+    const repo = { top, rel: `${prefix}${path.slice(dir === '/' ? 1 : dir.length + 1)}` }
+    ms = await left()
+    if (ms <= 0) return none
+    const hits = await $.process.run(['git', '-C', repo.top, 'grep', '-l', '-z', '-I', '-w', '-F', '--untracked', '--no-color', ...names.flatMap(n => ['-e', n]), '--', '.'], { timeoutMs: ms })
+    if ((hits.exitCode !== 0 && hits.exitCode !== 1) || hits.isStdoutTruncated) return none
+    const rels = hits.stdout.split('\u0000').filter(r => r && r !== repo.rel && !testFile(r) && !isProseFile(r))
+    if (rels.length > MOST_READ) return none
+    const found: Foreign = new Map(names.map(n => [n, { ok: true, model: false }]))
+    for (const rel of rels) {
+      if ((await $.clock.now()) >= deadline) return none
+      const text = String(await $.fs.read(`${repo.top}/${rel}`))
+      for (const [n, v] of found) {
+        if (!v.ok) continue
+        const u = foreignUse(rel, text, n)
+        found.set(n, { ok: u.ok, model: v.model || u.model })
+      }
+    }
+    return found
+  } catch (err) {
+    $.ui.log(`slack-alert-guard: the uses of ${names.join(', ')} could not be read, so they count as wording: ${message(err)}`, { to: 'debug' })
+    return none
+  }
 }
 
 // The keys of a change Dan has not yet approved; a store that cannot be read throws.
@@ -388,31 +477,41 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
   const marked = code && (slackMarked(current) || slackMarked(after))
   try {
     const lang = languageOf(path, current || after)
-    const read = async (t: string): Promise<Lit[]> => (text ? templateLines(t).map(l => ({ text: l, literal: [] })) : await literals($, path, lang, t))
+    const read = async (t: string): Promise<Lit[]> => (text ? templateLines(t).map(l => ({ text: l, literal: [], start: -1 })) : await literals($, path, lang, t))
     const afterLits = await read(after)
+    const beforeLits = await read(before)
     const wording = (lits: Lit[]) => wordingOf(lits.map(l => l.text))
-    const { added, removed } = wordingChange(wording(await read(before)), wording(afterLits))
-    if (!added.length && !removed.length) return PASS
-    let hold: Hold
-    if (added.length) {
-      const fresh = [...new Set(added)]
-      const open = await unapproved($, fresh.map(wordingKey))
-      if (!open.length) return PASS
-      const shown = fresh.filter(s => open.includes(wordingKey(s)))
-      // The placeholders the code writes as text, which the message shown to Dan may carry (#2361).
-      const literal = [...new Set(afterLits.filter(l => shown.includes(l.text)).flatMap(l => l.literal))]
-      hold = { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
-    } else {
+    // The hold for a change, or none when it changes no wording Dan has not approved.
+    const holdOf = async ({ added, removed }: { added: string[]; removed: string[] }): Promise<Hold | undefined> => {
+      if (added.length) {
+        const fresh = [...new Set(added)]
+        const open = await unapproved($, fresh.map(wordingKey))
+        if (!open.length) return undefined
+        const shown = fresh.filter(s => open.includes(wordingKey(s)))
+        // The placeholders the code writes as text, which the message shown to Dan may carry (#2361).
+        const literal = [...new Set(afterLits.filter(l => shown.includes(l.text)).flatMap(l => l.literal))]
+        return { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
+      }
+      if (!removed.length) return undefined
       const keys = await unapproved($, [removalKey(path, removed)])
-      if (!keys.length) return PASS
-      hold = { file: path, added: [], removed, keys }
+      return keys.length ? { file: path, added: [], removed, keys } : undefined
     }
+    const change = wordingChange(wording(beforeLits), wording(afterLits))
+    if (!(await holdOf(change))) return PASS
     // Wording Dan has not approved: held when its file is in a git repository and is no test, and
     // either posts to Slack itself or another file in its repository sends it there.
-    const found = await findSender($, path, (await $.clock.now()) + SCAN_MS, marked)
+    const deadline = (await $.clock.now()) + SCAN_MS
+    const found = await findSender($, path, deadline, marked)
     if ('unchecked' in found) return found
-    if ('posts' in found || 'maybe' in found) return { hold }
-    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : PASS
+    if (!('posts' in found || 'maybe' in found || 'sender' in found)) return PASS
+    // Of that wording, only what Slack can be sent: text only a model reads is left out (#2475), so a
+    // model's instructions beside an alert are never held, nor shown to Dan as one.
+    const [beforeKept, afterKept] = text
+      ? [beforeLits, afterLits]
+      : await postable($, path, lang, [{ text: before, lits: beforeLits, changed: change.removed }, { text: after, lits: afterLits, changed: change.added }], deadline)
+    const hold = await holdOf(wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[])))
+    if (!hold) return PASS
+    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : { hold }
   } catch (err) {
     return { unchecked: message(err) }
   }
