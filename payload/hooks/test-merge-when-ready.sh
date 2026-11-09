@@ -1306,7 +1306,8 @@ check_eq "#2537 and it stops as before" "1" "$rc"
 
 # GitHub slow to show the re-run (still attempt 1 a look later): not re-run a second time, and the
 # grace for a head with no checks starts again from the re-run, so it waits rather than stopping.
-# The run sits queued for 210 seconds first, so the re-run comes after the head's own grace is spent.
+# The run sits queued for 210 seconds first, so the re-run comes after the head's own grace is spent
+# (fixture settings, not measured).
 fresh "$OLD" 0 '[]'
 fs_runs 4206 queued '' 1 > "$ST/runs"; printf '0' > "$ST/jobs-4206"
 printf '%s' "$NO_CHECKS" > "$ST/red-gate-deny"
