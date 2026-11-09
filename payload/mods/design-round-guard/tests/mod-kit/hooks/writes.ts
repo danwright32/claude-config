@@ -35,6 +35,10 @@ const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 // The redirects among them that send standard output, with `>& file` and `1>& file` (#1976).
 const STDOUT_REDIRECT = /^(1?>>?|1?>\||&>>?|1?>&)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
+// The pattern characters alone, for a word whose every $ and backtick the shell leaves as written
+// (#2402, Command.unexpanded: in single quotes, after a backslash, or a $ before nothing it
+// expands), which names the file it spells, as a word holding neither does.
+const PATTERN = /[*?[\]{}]/
 // A path part shaped like a web framework's route parameter (#1010): Next.js's [id], [...slug] and
 // [[...slug]], SvelteKit's [id=matcher], and a pages router file such as [id].tsx. It names that
 // folder or file: quoted the shell takes it as written, and unquoted bash leaves a pattern matching
@@ -42,7 +46,7 @@ const UNNAMEABLE = /[$`*?[\]{}]/
 // differs only where a folder named by one of its letters holds the same file, which a route tree
 // does not. A range, a negation or a bracket beside other letters is a pattern, and stays unnamed.
 const ROUTE_PART = /^\[(?:\[\.\.\.[A-Za-z0-9_=]+\]|(?:\.\.\.)?[A-Za-z0-9_=]+)\](?:\.[A-Za-z0-9.+_]+)?$/
-const patternIn = (p: string) => UNNAMEABLE.test(p.split('/').map(part => (ROUTE_PART.test(part) ? part.replace(/[[\]]/g, '') : part)).join('/'))
+const patternIn = (p: string, text?: boolean) => (text ? PATTERN : UNNAMEABLE).test(p.split('/').map(part => (ROUTE_PART.test(part) ? part.replace(/[[\]]/g, '') : part)).join('/'))
 const HOME_VAR = /^\$(?:HOME|\{HOME\})(?=\/|$)/
 
 // A process substitution given as an operand (`tee >(cmd)`) is a pipe the shell names under /dev/fd,
@@ -63,7 +67,8 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // for each, as that many words, a word holding a space read whole and as each piece (eachOf). A loop
 // over anything else (a pattern, an expansion, a ~ or a #), or a variable also set some other way, is
 // left as written. A word whose every $
-// is in single quotes or after a backslash (Command.unexpanded) is never read as a value.
+// the shell leaves as written, in single quotes, after a backslash or before nothing it expands
+// (Command.unexpanded), is never read as a value, and names the file it spells (#2402).
 const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
 const APPENDS = /^([A-Za-z_][A-Za-z0-9_]*)\+=/
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -92,17 +97,18 @@ const MAX_EACH = 1024
 /**
  * A word as an absolute path, or undefined when it cannot be named: built from a variable other
  * than HOME or a pattern (a route parameter part is no pattern, ROUTE_PART), a ~user, or relative to
- * a folder that is not known.
+ * a folder that is not known. `text` says every $ and backtick in the word is one the shell leaves as
+ * written (Command.unexpanded, #2402): the word then names the file it spells, $HOME included.
  */
-export const absolutePath = (word: string, dir: string | undefined, home: string): string | undefined => {
+export const absolutePath = (word: string, dir: string | undefined, home: string, text?: boolean): string | undefined => {
   if (!word) return undefined
   let p = word
-  const hv = HOME_VAR.exec(p)
+  const hv = text ? null : HOME_VAR.exec(p)
   if (hv) {
     if (!home) return undefined
     p = home + p.slice(hv[0].length)
   }
-  if (patternIn(p)) return undefined
+  if (patternIn(p, text)) return undefined
   if (p === '~' || p.startsWith('~/')) {
     if (!home) return undefined
     p = home + p.slice(1)
@@ -126,12 +132,15 @@ export const absolutePath = (word: string, dir: string | undefined, home: string
  * Undefined where it cannot be named, and where the name may reach below that folder: a variable or
  * a command's output in the name (its value may hold a slash), a ~ (another user's home), or a
  * whole `**` (every folder below, with globstar). A slash inside a brace or bracket leaves a pattern
- * in the folder part, which names no one folder.
+ * in the folder part, which names no one folder. A word holding a $ the shell leaves as written
+ * names no folder either (#2402): Command.literal reads every $ as an expansion (#1951, #2320), so
+ * such a pattern could never be marked quoted, and a quoted regex ("^foo.*bar$") would be read as
+ * one the shell matches against files.
  */
 export const patternFolder = (word: string, dir: string | undefined, home: string): string | undefined => {
   const cut = word.lastIndexOf('/')
   const name = word.slice(cut + 1)
-  if (!/[*?[\]{}]/.test(name) || /[$`]/.test(name) || name === '**' || (cut < 0 && name.startsWith('~'))) return undefined
+  if (!PATTERN.test(name) || /[$`]/.test(name) || name === '**' || (cut < 0 && name.startsWith('~'))) return undefined
   return cut < 0 ? dir : absolutePath(word.slice(0, cut) || '/', dir, home)
 }
 
@@ -596,7 +605,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean, from: string | undefined) => {
     // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
     // here; a pattern git matches itself, across folders, names no one folder (#1123).
-    const path = word.startsWith(':') || patternIn(word) ? undefined : absolutePath(word, at, home)
+    const path = word.startsWith(':') || patternIn(word, textOnly(word)) ? undefined : pathOf(word, at)
     // One file put back from two places is given once for each, so a reader judging what each puts
     // back sees both (#1158).
     if (!word || byGit.some(x => sameGitChange(x, { word, does, from, ...(path ? { path } : {}) }))) return
@@ -625,6 +634,13 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   // variable: the side that makes a reader ask rather than pass, the path the same either way. A
   // redirect's target, the commonest write, is read by its own place instead (#752).
   const asWritten = new Map<string, string>()
+  // The words of the command being read whose every $ and backtick the shell leaves as written
+  // (#1953, #2320: Command.unexpanded), by their text, and every other word: one spelled both ways is
+  // read as expanded. Such a word holds no value, so it names the file it spells (#2402).
+  const textWords = new Set<string>()
+  const liveWords = new Set<string>()
+  const textOnly = (w: string) => textWords.has(w) && !liveWords.has(w)
+  const pathOf = (w: string, at: string | undefined = dir) => absolutePath(w, at, home, textOnly(w))
   // For a command a find -exec runs, the folders find starts from: a change at one of them is one
   // its {} stood for, which reaches everything under it (#760); a path it names itself does not.
   let foundRoots: readonly string[] = []
@@ -658,11 +674,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const set = path ? undefined : aloneIn(entry.word)
     if (set !== undefined) alone.set(entry, set)
   }
-  const named = (w: string, edits?: true, shown?: string) => add(w, absolutePath(w, dir, home), edits ? { edits } : undefined, shown)
+  const named = (w: string, edits?: true, shown?: string) => add(w, pathOf(w), edits ? { edits } : undefined, shown)
   // A redirect target standard output goes into (#1976), named as `files` names it; a device or a
   // process substitution is no file, and one named twice is given once.
   const toStdout = (w: string, shown: string | undefined) => {
-    const path = absolutePath(w, dir, home)
+    const path = pathOf(w)
     if (!w || isPipe(w) || isDevice(path ?? w)) return
     const word = shown ?? asWritten.get(w) ?? w
     if (stdout.some(x => (path ? x.path === path : !x.path && x.word === word))) return
@@ -671,7 +687,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
   }
   const changed = (word: string, does: ModKitChange['does'], tree?: boolean) => {
     tree = tree || foundRoots.includes(word)
-    const path = absolutePath(word, dir, home)
+    const path = pathOf(word)
     if (!word || isPipe(word) || isDevice(path ?? word)) return
     const written = asWritten.get(word) ?? word
     // A path changed the same way twice is kept once, a tree on either keeping the tree.
@@ -683,7 +699,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const folder = path ? undefined : patternFolder(word, dir, home)
     changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}) })
   }
-  const abs = (p: string) => absolutePath(p, dir, home)
+  const abs = (p: string) => pathOf(p)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)
   const expand = (w: string) => w.replace(VARIABLE, (m, braced?: string, bare?: string) => vars.get((braced ?? bare) as string) ?? m)
   // A word as the shell hands it on (#1834): each variable read as its value, the value of one whose
@@ -805,11 +821,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // every other word, by its text: one spelled both ways in the command is read as matched.
     const quotedWords = new Set<string>()
     const otherWords = new Set<string>()
-    // The words whose every $ is in single quotes or after a backslash (#1953), by their text, and
-    // every other word: one spelled both ways is read as expanded.
-    const textWords = new Set<string>()
-    const liveWords = new Set<string>()
-    const textOnly = (w: string) => textWords.has(w) && !liveWords.has(w)
+    // Which words the shell leaves every $ of as written (textOnly), for this command alone.
+    textWords.clear()
+    liveWords.clear()
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
       const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
@@ -894,7 +908,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     let writer = OPERAND_WRITERS.has(name)
     if (name === 'cd' || name === 'pushd') {
       const target = rest.find(a => !a.startsWith('-') || a === '-')
-      dir = target === undefined ? home || undefined : target === '-' ? undefined : absolutePath(target, dir, home)
+      dir = target === undefined ? home || undefined : target === '-' ? undefined : pathOf(target)
       continue
     }
     // popd goes back to the folder pushd kept, which this does not keep (#2000).
@@ -1009,11 +1023,11 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       if (g && (g.sub === 'apply' || g.sub === 'am')) {
         // Checked or summarised, a patch writes nothing.
         if (!g.args.some(a => ['--check', '--stat', '--numstat', '--summary'].includes(a))) {
-          const at = g.dir === undefined ? dir : absolutePath(g.dir, dir, home)
+          const at = g.dir === undefined ? dir : pathOf(g.dir)
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
-          unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
+          unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => pathOf(p, at)).filter((p): p is string => !!p) })
         }
-      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree, from)
+      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : pathOf(g.dir), does, tree, from)
     }
     // A script file it runs (#1586): an interpreter's script operand (never one on standard input, nor
     // awk's or sed's program file, whose files are read above), or a script run by its own name. Every
