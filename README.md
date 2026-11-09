@@ -3299,6 +3299,16 @@ saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and
 `scripts/` on 2026-11-06, run as `node <file>`: refused went from 3 to 22, 7 of them test files
 importing a helper that posts (their `npm test` globs are not read, so `npm test` still passes).
 
+Import text written inside an ordinary string literal is data and is not followed (#2484, narrowing
+signed off by Dan on 2026-11-09): an esbuild stdin entry or a fixture string naming `./missing.js`
+no longer refuses a script for a module nothing loads. A string is still followed wherever the code
+the walk reaches can run a string as code (`JS_SINK`: eval, `Function` and `.constructor`, vm, a
+Worker, Miniflare's script or modules source, a child process, a `data:` or `blob:` URL, a page's
+evaluate, Deno, Bun, the global object by a computed name, or a computed `require` or `import()`).
+The gate cannot trace which string reaches the sink (a variable, a function, another module), so once
+any file reached names one, the walk starts again following every string, as before. Measured over
+1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
@@ -6305,7 +6315,13 @@ ten while its answer has not moved (the doubling is the one polling policy's,
 session's shared budget, so none is made during a rate limit pause, a turn end then saying why it
 has no reading rather than finishing on an old one, #1482), a merged PR is read once, and a PR's
 closing issues are read only once it has merged and not again once closed; each gh read is one
-GraphQL point. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
+GraphQL point. The one old reading a turn end keeps is of a PR last read as left open or left closed
+on Dan's answer (#2433, after a session with 19 folded PRs left closed ran out of the minute's looks
+before the last of them at every stop for over half an hour): those are read after every other PR,
+so the looks go first to what can still finish, are still read whenever a look is spare, so a reopen
+or push from outside is seen, and keep their reading only while the look is held and only when it
+was read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is
+never kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
 another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
 checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
 turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
