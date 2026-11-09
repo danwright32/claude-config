@@ -224,7 +224,7 @@ r="$(image_named "$REAL")"
   || check "#597 the real workflow names its runner image" "$r"
 # The container that reproduces CI on a Mac derives its image from this same line and refuses one it
 # has no mapping for. Asked directly, so a move to a new image cannot leave it refusing unnoticed.
-runner="$(code_of "$REAL" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p' | sort -u | head -1)"
+runner="$(code_of "$REAL" | sed -n 's/^[[:space:]]*runs-on:[[:space:]]*//p' | sort -u | awk 'NR == 1')"
 grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-on-linux.sh" \
   && check "#597 run-on-linux.sh has an image for '$runner'" ok \
   || check "#597 run-on-linux.sh has an image for '$runner'" "no case arm names it"

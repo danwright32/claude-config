@@ -32,17 +32,20 @@ if ! git -C "$ROOT" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
 fi
 
 # How many parts the workflow deals into, read from the deal job's own setting, never restated.
-parts="$(sed 's/[[:space:]]#.*$//' "$WF" | awk '/^[[:space:]]*HOOK_TESTS_DEAL:[[:space:]]*[0-9]+[[:space:]]*$/ { print $2; exit }')"
-case "$parts" in
-  ''|*[!0-9]*|0) check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL" "read '$parts'"; parts=4 ;;
-  *) check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL ($parts)" ok ;;
-esac
+parts="$(sed 's/[[:space:]]#.*$//' "$WF" | awk '/^[[:space:]]*HOOK_TESTS_DEAL:[[:space:]]*[0-9]+[[:space:]]*$/ && !n { print $2; n = 1 }')"
+# shellcheck source=../payload/hooks/lib/whole-number.sh
+. "$ROOT/payload/hooks/lib/whole-number.sh"
+if whole_above_zero "$parts" parts; then
+  check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL ($parts)" ok
+else
+  check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL" "read '$parts'"; parts=4
+fi
 
 real_deal="$(HOOK_TESTS_ROOT="$ROOT" HOOK_TESTS_TIMINGS= HOOK_TESTS_DEAL="$parts" bash "$RUNNER" 2>/dev/null)"; rc=$?
-tracked="$(git -C "$ROOT" ls-files | grep -E '(^|/)test-[^/]*\.sh$' | grep -v '^payload/hooks/run-all-tests\.sh$' | sort)"
+tracked="$(git -C "$ROOT" ls-files | grep -E '(^|/)test-[^/]*\.sh$' | grep -v '^payload/hooks/run-all-tests\.sh$' | sort)" # tracked-only: the runner deals what git tracks, so the deal must cover exactly that
 dealt="$(printf '%s\n' "$real_deal" | awk -F'\t' 'NF >= 2 { print $2 }' | sort)"
-dupes="$(printf '%s\n' "$dealt" | uniq -d | head -3 | tr '\n' ' ')"
-missing="$(comm -23 <(printf '%s\n' "$tracked") <(printf '%s\n' "$dealt" | sort -u) | head -3 | tr '\n' ' ')"
+dupes="$(printf '%s\n' "$dealt" | uniq -d | awk 'NR <= 3' | tr '\n' ' ')"
+missing="$(comm -23 <(printf '%s\n' "$tracked") <(printf '%s\n' "$dealt" | sort -u) | awk 'NR <= 3' | tr '\n' ' ')"
 [ "$rc" -eq 0 ] && [ -n "$tracked" ] && [ -z "$missing" ] \
   && check "#2463 every tracked suite ($(printf '%s\n' "$tracked" | grep -c .)) is dealt to some part of the real tree" ok \
   || check "#2463 every tracked suite is dealt to some part of the real tree" "rc=$rc, in no part: ${missing:-none}"

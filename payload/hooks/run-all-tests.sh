@@ -992,24 +992,26 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
   for s in "${suites[@]}"; do _part_rel "$s"; _discovered="$_discovered$_rel
 "; done
   # Every refusal is worked out before any is said, so one run names everything wrong with the deal.
-  _deal_problems="$(printf '%s' "$_discovered" | awk -F'\t' -v parts="$_parts" '
-    FNR == NR { if ($0 != "") here[$0] = 1; next }
+  # The discovered suites reach awk through its environment, so it reads one file and never has to
+  # tell two apart.
+  _deal_problems="$(_PART_HERE="$_discovered" awk -F'\t' -v parts="$_parts" '
+    BEGIN { n = split(ENVIRON["_PART_HERE"], h, "\n"); for (i = 1; i <= n; i++) if (h[i] != "") here[h[i]] = 1 }
     $0 == "" { next }
     NF < 2 || $1 !~ /^[0-9]+$/ { print "line " FNR " of the deal is not <part><tab><suite>: " $0; next }
     $1 < 1 || $1 > parts { print $2 " is dealt to part " $1 ", which no job of " parts " runs"; next }
     ($2 in seen) { print $2 " is dealt twice"; next }
     { seen[$2] = 1; if (!($2 in here)) print $2 " is in the deal but not in this tree, so the deal is from another commit" }
     END { for (s in here) if (!(s in seen)) print s " is in this tree but dealt to no part, so no job would run it" }
-  ' - "$_deal")"
+  ' "$_deal")"
   if [ -n "$_deal_problems" ]; then
     echo "run-all-tests: refusing to run part $_part of $_parts, because the deal in $_deal does not cover exactly the suites this tree holds:" >&2
     printf '%s\n' "$_deal_problems" | sed 's/^/  /' >&2
     exit 1
   fi
   # The positions, in discovery order, of the suites dealt to this part: one awk, not one per suite.
-  _mine_at="$(printf '%s' "$_discovered" | awk -F'\t' -v p="$_part" '
-    FNR == NR { if ($1 == p) mine[$2] = 1; next }
-    ($0 in mine) { print FNR - 1 }' "$_deal" -)"
+  _mine_at="$(_PART_HERE="$_discovered" awk -F'\t' -v p="$_part" '
+    $1 == p { mine[$2] = 1 }
+    END { n = split(ENVIRON["_PART_HERE"], h, "\n"); for (i = 1; i <= n; i++) if (h[i] in mine) print i - 1 }' "$_deal")"
   _kept=()
   for _i in $_mine_at; do _kept+=("${suites[$_i]}"); done
   if [ "${#_kept[@]}" -eq 0 ]; then
