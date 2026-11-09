@@ -189,7 +189,10 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       const name = namePatterns(level)
       const shape = new RegExp(name.shape, 'i')
       const out = new Set<string>()
-      for (const line of (await grep(`name ${path} or hand it on`, ['-F', ...name.words.flatMap(w => ['-e', w]), '--', '.'])).split('\n')) {
+      // -w: every shape has the name between characters that cannot be part of one, so a line holding
+      // it only inside a longer word (db in feedback) is never printed, which keeps a common short
+      // name's listing small.
+      for (const line of (await grep(`name ${path} or hand it on`, ['-F', '-w', ...name.words.flatMap(w => ['-e', w]), '--', '.'])).split('\n')) {
         const cut = line.indexOf('\u0000')
         if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
       }

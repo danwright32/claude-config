@@ -85,6 +85,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
   const gits: { argv: string[]; timeoutMs?: number }[] = []
+  // How many lines each git grep listing lines (no -l) printed.
+  const printed: number[] = []
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: { answer?: string; afk?: boolean } = {}
@@ -114,7 +116,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         // -F: every pattern a fixed string, and a line matching any of them is listed.
         const fixed = argv.includes('-F')
         const given = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [a] : []))
-        const patterns = given.map(a => new RegExp(fixed ? a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : a, 'i'))
+        // -w: a match must not sit inside a longer word, as git grep -w reads one.
+        const whole = argv.includes('-w')
+        const patterns = given.map(a => {
+          const p = fixed ? a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : a
+          return new RegExp(whole ? `(^|[^A-Za-z0-9_])(${p})([^A-Za-z0-9_]|$)` : p, 'i')
+        })
         // The pathspecs after --, as git reads them: '.' is every file, '*.ts' any file ending .ts, and
         // ':(glob,icase)**/name.*' a path matched as a glob from the top, case ignored.
         const specs = argv.slice(argv.indexOf('--') + 1)
@@ -128,6 +135,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         if (!argv.includes('-l')) {
           // Each line holding a fixed string, after its path and a NUL, as git grep -z prints it.
           const lines = searched.flatMap(p => (files[p] ?? '').split('\n').filter(l => (fixed ? patterns.some(re => re.test(l)) : patterns.every(re => re.test(l)))).map(l => `${p.slice(dir.length + 1)}\u0000${l}\n`))
+          printed.push(lines.length)
           if (!lines.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
           return { value: { exitCode: 0, stdout: lines.join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
         }
@@ -194,7 +202,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, reads: () => reads }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, reads: () => reads }
 }
 type W = ReturnType<typeof world>
 
@@ -834,7 +842,8 @@ test('a template no file sends passes, after a search that ran; so does a file o
   const DIGEST = '/w/app/lib/templates/digest.ts'
   const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
-  // One grep for files sending it, one for files handing it on (#2286).
+  // One grep for the files holding a Slack word, once for the search, and one for the files naming
+  // the template, senders and files handing it on alike (#2286, #2462).
   expect(grepped(w)).toBe(2)
   // Every git call is bounded by the scan's deadline.
   expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
@@ -965,8 +974,8 @@ test('a re-export cycle ends: with a sender beside it the edit is held, with non
   delete w.files[NOTIFY]
   const before = grepped(w)
   expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // Each level of the search is one grep for senders and one for files handing it on, and the
-  // loop back to alpha.ts adds no level.
+  // One grep for the Slack words for the whole search, then each level is one grep for the files
+  // naming it (and at most one for send helpers), and the loop back to alpha.ts adds no level.
   expect(grepped(w) - before).toBeGreaterThan(2)
   expect(grepped(w) - before).toBeLessThanOrEqual(2 * (REEXPORT_HOPS + 1))
   expect(w.ran.length).toBe(1)
@@ -1069,6 +1078,16 @@ test('a module imported by more files than the guard reads is held for Dan, neve
   expect(why).not.toContain('could not check')
   expect(why).toContain('Request failed for ${msg}')
   expect(w.ran).toEqual([])
+})
+
+test('a short common name met only inside longer words lists no lines to test', withKit, async ($, on) => {
+  const DB = '/w/app/src/lib/db.ts'
+  const others: Record<string, string> = {}
+  for (let f = 0; f < 50; f++) others[`/w/app/src/feedback/form${f}.ts`] = `export const feedbackDb${f} = 'feedback ${f}'\n`
+  const w = world($, on, { files: { [DB]: 'export const label = `Database is down`\n', ...others } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DB, old_string: 'Database is down', new_string: 'Database is unreachable' }))).toBe('')
+  // The fifty files holding db only inside feedbackDb print nothing for the guard to test.
+  expect(w.printed).toEqual([0])
 })
 
 test('a search over a widely imported module that runs late, or whose listing is cut short, still holds the edit', withKit, async ($, on) => {

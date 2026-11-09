@@ -556,11 +556,13 @@ test('a file hands a template on when it can export what it imports: a JS or TS 
   expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
 })
 
-// A line the search lists for `rels`: one git grep lists for holding a name (`words`, fixed strings,
-// case ignored) that also holds, tested by the guard, the name in a shape refersTo can accept.
+// A line the search lists for `rels`: one git grep lists for holding a name as a whole word (`words`,
+// fixed strings, -w, case ignored) that also holds, tested by the guard, the name in a shape refersTo
+// can accept. Every line expected below to be listed is so with -w, so -w leaves out none of them.
 const lists = (rels: string[], line: string) => {
   const p = namePatterns(rels)
-  return p.words.some(w => line.toLowerCase().includes(w.toLowerCase())) && new RegExp(p.shape, 'i').test(line)
+  const word = (w: string) => new RegExp(`(^|[^A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_]|$)`, 'i')
+  return p.words.some(w => word(w).test(line)) && new RegExp(p.shape, 'i').test(line)
 }
 
 test('the search for the files naming a template finds the line that names it, in a pattern macOS git grep reads', () => {
