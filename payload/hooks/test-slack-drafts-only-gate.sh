@@ -860,6 +860,61 @@ allowed "a command sourcing a file under HOME that does not post"
 cp "$T/sv/posts/lib/x.sh" "$T/svhome/env.sh"
 HOME="$T/svhome" run_bash ". \"\$HOME/env.sh\""
 refused "a command sourcing a file under HOME that posts"
+# A sourced path the gate cannot work out is refused rather than read as nothing (claude-config#2465),
+# which it can do only once the resolver reads the forms this repository's scripts use: a `local` set
+# in a function, ${X%/*}, ${X:-default}, and a name set twice where the last set always runs.
+SV_ROOT='ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+for tree in posts quiet; do
+  # The HOOK_DIR idiom: a case on BASH_SOURCE, then cd ... && pwd, sets DIR twice.
+  printf '%s\n' '#!/bin/bash' 'case "${BASH_SOURCE[0]}" in */*) DIR="${BASH_SOURCE[0]%/*}" ;; *) DIR=. ;; esac' \
+    'DIR="$(cd "${DIR:-/}" && pwd)"' '. "$DIR/lib/x.sh"' > "$T/sv/$tree/hookdir.sh"
+  # lib/suite-deadline.sh's idiom: a test that only sometimes resets the name, then a last set that always runs.
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"; [ "$D" != "${BASH_SOURCE[0]}" ] || D=.' \
+    'D="$(cd "$D" && pwd)"' '. "$D/lib/x.sh"' > "$T/sv/$tree/twice.sh"
+  # A local set inside a function, before the use, from a global set at the top.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'load() {' '  local a="" p="$ROOT/lib/x.sh"' \
+    '  if [ -f "$p" ] && . "$p" 2>/dev/null; then echo ok; fi' '}' 'load' > "$T/sv/$tree/local.sh"
+  # A global read inside a function body, and ${X:-default} on a name the script set empty.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'SUB=""' 'go() {' '  . "$ROOT/${SUB:-lib}/x.sh"' '}' 'go' > "$T/sv/$tree/default.sh"
+done
+for shape in hookdir twice local default; do
+  run_bash "bash $T/sv/posts/$shape.sh"
+  refused "a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
+  says "that refusal names the sourced file" "lib/x.sh"
+  run_bash "bash $T/sv/quiet/$shape.sh"
+  allowed "the same script sourcing a file that does not post: $shape.sh"
+done
+# BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
+run_bash "cd $T/sv/posts && bash hookdir.sh"
+refused "the HOOK_DIR idiom run from the script's own folder, sourcing a file that posts"
+run_bash "cd $T/sv/quiet && bash hookdir.sh"
+allowed "the HOOK_DIR idiom run from the script's own folder, sourcing a file that does not post"
+run_bash "cd $T/sv/quiet && bash twice.sh"
+allowed "the set twice idiom run from the script's own folder, sourcing a file that does not post"
+# The failure paths: every one is in the quiet tree, so a refusal can only be the path not being worked out.
+printf '%s\n' '#!/bin/bash' '. "$NOT_SET_2465/lib/x.sh"' > "$T/sv/quiet/unknown.sh"
+printf '%s\n' '#!/bin/bash' 'source "$(some_tool --where)/x.sh"' > "$T/sv/quiet/subst.sh"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" '. "${LIB_2465:-$ROOT/lib}/x.sh"' > "$T/sv/quiet/envdefault.sh"
+printf '%s\n' '#!/bin/bash' "if [ -d /tmp ]; then $SV_ROOT; fi" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/onlyif.sh"
+printf '%s\n' '#!/bin/bash' "setup() { $SV_ROOT; }" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/nevercalled.sh"
+printf '%s\n' '#!/bin/bash' 'cd /nonexistent-2465' 'ROOT="$(pwd)"' '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/cdfails.sh"
+printf '%s\n' '#!/bin/bash' 'ROOT="$(cd /nonexistent-2465 && pwd)"' '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/cdsubst.sh"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'load() {' '  local p="$ROOT/lib/x.sh"' '  helper' '  . "$p"' '}' > "$T/sv/quiet/aftercall.sh"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'load() {' '  if [ -d /tmp ]; then local p="$ROOT/lib/x.sh"; fi' '  . "$p"' '}' \
+  > "$T/sv/quiet/localif.sh"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'moved() { ROOT=/elsewhere; }' 'go() {' '  . "$ROOT/lib/x.sh"' '}' 'moved' 'go' \
+  > "$T/sv/quiet/rebound.sh"
+printf '%s\n' '#!/bin/bash' 'go() { local p="lib/x.sh"; . "$p"; }' 'go' > "$T/sv/quiet/relative.sh"
+for shape in unknown subst envdefault onlyif nevercalled cdfails cdsubst aftercall localif rebound; do
+  run_bash "cd $T/sv/quiet && bash $T/sv/quiet/$shape.sh"
+  refused "a script sourcing a file whose path the gate cannot work out: $shape.sh"
+  says "that refusal says the sourced path could not be worked out" "cannot work out"
+done
+run_bash "cd $T/sv/quiet && bash relative.sh"
+refused "a function sourcing a relative path, whose directory when it is called is not certain"
+says "that refusal says the sourced path could not be worked out" "cannot work out"
+run_bash ". \"\$NOT_SET_2465/lib/x.sh\""
+refused "a command sourcing a file whose path the gate cannot work out"
 printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
 run_bash "python3 $T/ds/runner.py $T/ds/job.txt"
