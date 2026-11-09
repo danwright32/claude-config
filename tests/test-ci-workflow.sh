@@ -237,34 +237,50 @@ grep -qE "^[[:space:]]*(.*\\|)?$runner(\\|.*)?\\)[[:space:]]+IMAGE=" "$DIR/run-o
 # Counted from the runner's own start instead, the minutes the steps before it took would be
 # missing, which is the direction that lets the job be cancelled first. So the very first step
 # records the start, before checkout or anything else that takes time.
-start_recorded_first(){ # start_recorded_first <workflow>
-  local first
-  first="$(code_of "$1" | awk '/^[[:space:]]*steps:[[:space:]]*$/ && !s { s = 1; next } s && /^[[:space:]]*- / { n++ } s && n == 1 { print }')"
-  if [ -z "$first" ]; then echo "no first step was found"; return; fi
-  if [[ "$first" =~ HOOK_TESTS_JOB_STARTED=\$\(date\ \+%s\).*GITHUB_ENV ]]; then
-    echo ok
-  else
-    echo "the first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV"
-  fi
-}
-printf 'jobs:\n  suite:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 40\n    steps:\n      - uses: actions/checkout@abc\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n' > "$TMPROOT/start-late.yml"
-r="$(start_recorded_first "$TMPROOT/start-late.yml")"
-[ "$r" != ok ] \
-  && check "#1901 a workflow that records the job start after another step is refused" ok \
-  || check "#1901 a workflow that records the job start after another step is refused" "it passed"
-r="$(start_recorded_first "$REAL")"
-[ "$r" = ok ] \
-  && check "#1901 the real workflow records the job start in its first step" ok \
-  || check "#1901 the real workflow records the job start in its first step" "$r"
+#
+# EVERY JOB THAT RUNS THE RUNNER is held to both, since #2463 split the suites across jobs: the
+# runner reads the limit of whichever job it is in (GITHUB_JOB), so a check on one named job would
+# go on passing while the job actually running the suites went unchecked (L220).
 . "$DIR/../payload/hooks/lib/workflow-job-timeout.sh"
-m="$(workflow_job_timeout_minutes "$REAL" suite)"
 # shellcheck source=../payload/hooks/lib/whole-number.sh
 . "$DIR/../payload/hooks/lib/whole-number.sh"
-if whole_above_zero "$m" m; then
-  check "#1901 the runner can read the suite job's timeout-minutes from the real workflow ($m)" ok
-else
-  check "#1901 the runner can read the suite job's timeout-minutes from the real workflow" "read '$m'"
-fi
+wf_job_block(){ # wf_job_block <workflow> <job> -> that job's lines, comments stripped
+  code_of "$1" | awk -v j="$2" '$0 ~ "^  "j":[[:space:]]*$" { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }'
+}
+start_recorded_first(){ # start_recorded_first <workflow> -> ok, or what is wrong with each runner job
+  local job block first out="" n=0
+  while IFS="$(printf '\t')" read -r _ job _; do
+    [ -n "$job" ] || continue
+    block="$(wf_job_block "$1" "$job")"
+    case "$block" in *run-all-tests.sh*) ;; *) continue ;; esac
+    n=$((n + 1))
+    first="$(printf '%s\n' "$block" | awk '/^[[:space:]]*steps:[[:space:]]*$/ && !s { s = 1; next } s && /^[[:space:]]*- / { k++ } s && k == 1 { print }')"
+    if ! [[ "$first" =~ HOOK_TESTS_JOB_STARTED=\$\(date\ \+%s\).*GITHUB_ENV ]]; then
+      out="$out job $job: its first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV;"
+    fi
+    whole_above_zero "$(workflow_job_timeout_minutes "$1" "$job")" _m \
+      || out="$out job $job: no timeout-minutes the runner can read;"
+  done <<JOBS
+$(workflow_job_timeouts "$1")
+JOBS
+  if [ "$n" -eq 0 ]; then echo "no job runs run-all-tests.sh, so nothing was checked"; return; fi
+  [ -z "$out" ] && echo ok || echo "${out# }"
+}
+# The second job is the one that runs the suites, so a check reading only the first is caught.
+printf 'jobs:\n  deal:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 5\n    steps:\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n  parts:\n    runs-on: ubuntu-26.04\n    timeout-minutes: 40\n    steps:\n      - uses: actions/checkout@abc\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n      - run: bash payload/hooks/run-all-tests.sh\n' > "$TMPROOT/start-late.yml"
+r="$(start_recorded_first "$TMPROOT/start-late.yml")"
+[ "$r" != ok ] \
+  && check "#1901 a job running the suites that records its start after another step is refused, even when an earlier job is fine" ok \
+  || check "#1901 a job running the suites that records its start after another step is refused, even when an earlier job is fine" "it passed"
+printf 'jobs:\n  parts:\n    runs-on: ubuntu-26.04\n    timeout-minutes: ${{ inputs.m }}\n    steps:\n      - run: echo "HOOK_TESTS_JOB_STARTED=$(date +%%s)" >> "$GITHUB_ENV"\n      - run: bash payload/hooks/run-all-tests.sh\n' > "$TMPROOT/no-limit.yml"
+r="$(start_recorded_first "$TMPROOT/no-limit.yml")"
+[ "$r" != ok ] \
+  && check "#1901 a job running the suites with no limit the runner can read is refused" ok \
+  || check "#1901 a job running the suites with no limit the runner can read is refused" "it passed"
+r="$(start_recorded_first "$REAL")"
+[ "$r" = ok ] \
+  && check "#1901 every job of the real workflow that runs the suites records its start first and has a readable limit" ok \
+  || check "#1901 every job of the real workflow that runs the suites records its start first and has a readable limit" "$r"
 
 # ---------------------------------------------------------------------------
 # #2403: the environment step names the processor, not only how many cores there are.
@@ -371,9 +387,7 @@ part_run "$FX/absent.tsv" 1 2
 # runner, and the job named `suite`, the check every merge reads (block-red-merge.sh and
 # merge-when-ready.sh read the whole rollup, so a new job name changes nothing they decide, L305),
 # waits for every part and runs even when one failed, so a red part is a red `suite`.
-wf_code="$(code_of "$REAL")"
-job_block(){ printf '%s\n' "$wf_code" | awk -v j="$1" '$0 ~ "^  "j":[[:space:]]*$" { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }'; }
-fanin="$(job_block suite)"; parts_job="$(job_block parts)"; deal_job="$(job_block deal)"
+fanin="$(wf_job_block "$REAL" suite)"; parts_job="$(wf_job_block "$REAL" parts)"; deal_job="$(wf_job_block "$REAL" deal)"
 [ -n "$fanin" ] && [ -n "$parts_job" ] && [ -n "$deal_job" ] \
   && check "#2463 the workflow has the deal, parts and suite jobs" ok \
   || check "#2463 the workflow has the deal, parts and suite jobs" "missing one of them"
