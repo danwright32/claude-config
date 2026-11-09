@@ -319,7 +319,10 @@ export const register: Register = (on, options) => {
       blocked: async input => {
         // A guard's refusal stands without its card, so a call with no id is drawn as Claude Code's error row.
         if (!input.toolUseId) return
-        await built.state.set({ plugin: 'mod-kit', key: 'cards', id: input.toolUseId }, blockedCard(input))
+        // Never thrown to the guard, which refuses right after this: a guard's hook that throws is
+        // skipped and the call it meant to stop runs. A card not kept leaves Claude Code's error
+        // row, which carries the guard's refusal in the same words (#2512 lessons review).
+        await built.state.set({ plugin: 'mod-kit', key: 'cards', id: input.toolUseId }, blockedCard(input)).catch(() => undefined)
       },
       card: async input => {
         const why = cardRefusal(input)

@@ -441,6 +441,22 @@ test('a card the session cannot keep is refused, so the mod says so and its text
   expect(String(r.deny)).toMatch(/^refused: /)
 })
 
+// A guard records its blocked card just before it refuses, so a card the session cannot keep must
+// never throw there: a guard's hook that throws is skipped, and the call it meant to stop would run.
+test("a blocked card the session cannot keep leaves the guard's refusal standing, drawn as Claude Code's row (#2512)", { plugins: [guard] }, async ($, on) => {
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('state.set', async ($, e, next) => (CARD_STATE(e) ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine row</Text>
+  })
+  const r = (await $.tool.call({ tool: 'Bash', command: 'echo $GITHUB_TOKEN', tool_use_id: 'nb1' } as never)) as { deny?: string; text?: string }
+  expect(r.deny).toMatch(/^Blocked: this would print GITHUB_TOKEN/)
+  const ui = await $.ui.mount({ ...row('nb1'), surface: 'terminal' } as never)
+  expect(await ui.find({ text: 'engine row' })).toBeDefined()
+  await ui.unmount()
+})
+
 test('a card with no tool use id, no title or malformed lines is refused by name, and the row is left to Claude Code', { plugins: [carder] }, async ($, on) => {
   on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   on('ui.render', ($, e) => {
