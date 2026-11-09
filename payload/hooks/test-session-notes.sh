@@ -109,7 +109,7 @@ if [ "$(id -u)" != 0 ]; then
   check "4 Dan is told too" "could not be created" "$(field "$out" system)"
   chmod u+w "$WORK/ro"
 else
-  echo "UNMEASURED: running as root, so a folder that cannot be made cannot be set up"
+  echo "SUITE-PART-UNMEASURED a notes folder that cannot be made: running as root, which ignores folder permissions"
 fi
 
 # ---- 5. A payload it cannot use says so, and never names a folder it did not make ----

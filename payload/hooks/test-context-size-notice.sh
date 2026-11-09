@@ -176,7 +176,7 @@ if [ "$(id -u)" != 0 ]; then
   check "2 a notes folder that cannot be made is said to the session (#2490)" "could not be created" "$(field "$out" additionalContext)"
   check "2 and to Dan (#2490)" "could not be created" "$(field "$out" system)"
 else
-  echo "UNMEASURED: running as root, so a folder that cannot be made cannot be set up (#2490)"
+  echo "SUITE-PART-UNMEASURED a notes folder that cannot be made (#2490): running as root, which ignores folder permissions"
 fi
 G="$WORK/proj/g1.jsonl"; : > "$G"
 goal_set "$G"
