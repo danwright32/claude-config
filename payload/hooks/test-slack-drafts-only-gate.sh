@@ -1013,7 +1013,8 @@ allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
 # seconds under a profiler at a load average of 222 on 2026-11-09).
 . "$DIR/lib/settings-file.sh"
 SETTINGS="$(hook_settings_file "$DIR/..")"
-room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
+[ -n "$SETTINGS" ] || room="neither settings.hooks.json nor settings.json is in $DIR/.., so there is no timeout to compare"
+[ -z "$SETTINGS" ] || room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
 import json, re, sys
 timeout = None
 for g in json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", []):
