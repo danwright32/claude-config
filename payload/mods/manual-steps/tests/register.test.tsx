@@ -2025,6 +2025,37 @@ test('the card says a Done pressed mid turn waits for Claude, then that Claude h
   expect(has).toContain('sent, Claude has it')
 })
 
+test('a running turn that cannot be read sends the Done as its prompt at once, and says why (#2437)', withKit, async ($, on) => {
+  const w = world(on)
+  on('state.get', async ($s, e, next) => ((e as { key?: string }).key === 'runningTurn' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  await press($, 'done-1')
+  expect(w.prompts).toEqual(['step 1 done'])
+  expect((await stepLines($)).join('\n')).toContain('Turn on the WAF rule  sent')
+  expect(w.logs.some(l => l.startsWith('manual-steps: could not read whether a turn is running, so the Done goes as a prompt'))).toBe(true)
+})
+
+test('a held Done that cannot be sent at the turn end is said, and its Done comes back (#2437)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }) as never)
+  const s = { failing: false }
+  on('state.set', async ($s, e, next) => (s.failing && (e as { key?: string }).key === 'card' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'Build the thing', 't1')
+  await press($, 'done-1')
+  s.failing = true
+  await turnEnd($, 't1')
+  await clock.settle()
+  expect(w.prompts).toEqual([])
+  expect(w.logs.some(l => l.startsWith('manual-steps: could not send a Done held for the turn that ended'))).toBe(true)
+  s.failing = false
+  await clock.advance(DROPPED_AFTER_MS)
+  expect(w.toasts).toEqual([RELEASED])
+})
+
 test('a held Done answered not done, pressed again while idle, goes once and is held for nothing (#2437)', withKit, async ($, on) => {
   const w = busyWorld(on)
   await start($)
