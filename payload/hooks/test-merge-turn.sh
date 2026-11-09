@@ -242,6 +242,21 @@ out="$(MWR_TURN_DIR="$WORKDIR/line-is-a-file" bash "$INLINE" acme/widget 41 2>&1
 check_eq "#2403 a turn folder that is a file is a failure to ask" "2" "$rc"
 check "#2403 naming where it looked" "$WORKDIR/line-is-a-file" "$out"
 [[ "$out" != *gone* ]] && ok || bad "#2403 and it never says gone (said: $out)"
+# #2466: a ticket that is there but cannot be read could be the asked pull request's, alive, so it
+# is no answer either, never skipped on the way to "gone".
+reset
+other_joins acme/widget 41 1000 "$LIVE" "$LIVE_START" >/dev/null
+locked="$(ls "$MWR_TURN_DIR/acme/widget" | grep -E '^[0-9]+$' | head -1)"
+chmod 000 "$MWR_TURN_DIR/acme/widget/$locked"
+if [ -r "$MWR_TURN_DIR/acme/widget/$locked" ]; then
+  echo "  UNMEASURED: #2466 an unreadable ticket (this user can read a mode 000 file)"
+else
+  out="$(bash "$INLINE" acme/widget 41 2>&1)"; rc=$?
+  check_eq "#2466 a ticket that cannot be read is a failure to ask" "2" "$rc"
+  check "#2466 naming the ticket" "ticket $locked" "$out"
+  [[ "$out" != *gone* ]] && ok || bad "#2466 and it never says gone (said: $out)"
+fi
+chmod 600 "$MWR_TURN_DIR/acme/widget/$locked"
 
 echo
 echo "passed: $pass, failed: $fail"

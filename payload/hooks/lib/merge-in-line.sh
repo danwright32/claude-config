@@ -5,7 +5,9 @@
 # it names a run that is alive, by the line's own rule (merge-turn.sh's turn_alive: dead only when the
 # system says the pid is not running, or runs with another start time), and "gone" otherwise. Exits 0
 # with either answer, and 2 when it could not ask (an argument missing or malformed, or a line that is
-# there but cannot be read), saying why, so a caller can tell an answer from a failure to ask (L98).
+# there but cannot be read, or a ticket in it that cannot be), saying why, so a caller can tell an
+# answer from a failure to ask (L98). is-it-live takes anything but the two answers as not knowing,
+# never as "gone" (#2466).
 #
 # WHY. is-it-live asks GitHub about a merge the helper makes in the background for WAIT_MS, 24 hours
 # (a setting, not measured), and since claude-config#2351 a helper behind a long line that keeps moving has no fixed longest, so
@@ -36,6 +38,9 @@ else
 fi
 for n in $(turn_tickets); do
   f="$TURN_REPO_DIR/$n"
+  # A ticket that cannot be read may be this pull request's, alive, so it is no answer (#2466): skipped,
+  # it would turn into "gone" for a run still in line. One removed since the listing has left the line.
+  [ ! -e "$f" ] || [ -r "$f" ] || unread "ticket $n cannot be read"
   [ "$(turn_field "$f" pr)" = "$2" ] || continue
   if turn_alive "$(turn_field "$f" pid)" "$(turn_field "$f" start)"; then
     echo running
