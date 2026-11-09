@@ -6305,7 +6305,12 @@ counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the br
 as it is (why)?" with Leave it as it is or Clean it up, and records only the first, by repository
 and branch: winding down then stops waiting for that branch to be deleted here or a worktree on it
 to go, and for the uncommitted files his question named, while a change to any other file asks again
-and the branch on GitHub is still deleted. Uncommitted work is named by its files, and a branch to
+and the branch on GitHub is still deleted. On the session's own branch with no PR, his answer
+settles the question of its PR too (#2533). So does the branch being gone both here and from
+GitHub, which leaves nothing to put in a PR, and a branch the session pushed into another by
+refspec (`git push origin HEAD:fix-pr` from `fix-local`, recorded as `pushedInto` in its state) is
+finished by that other branch's PR when it has none of its own, while `fix-local` still existing
+here holds as any merged PR's branch does. Uncommitted work is named by its files, and a branch to
 commit it starts only on Dan's answer to `open_cleanup_branch` (#1051), which names the files git
 status lists and records only his Open it: that branch may then start once, by `git switch -c` or
 `git checkout -b`, while nothing beyond those files is uncommitted, and any other branch is still
