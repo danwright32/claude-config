@@ -171,6 +171,15 @@ got="$(python3 "$LOOKUP" vet "$DAN" 2>&1)"; rc=$?
 check_eq "vet refuses Dan's Chrome" "2" "$rc"
 got="$(python3 "$LOOKUP" vet "$CFT" 2>&1)"; rc=$?
 check_eq "and passes another build" "0" "$rc"
+# A pin file holding a byte that is not UTF-8 is refused as unreadable, by name, never read past
+# with the byte swapped for another and never a traceback: errors="strict" is the decision there.
+mkdir -p "$TMP/badpin"
+cp "$LOOKUP" "$TMP/badpin/headless_chrome.py"
+printf '{"root": "pw\377"}\n' > "$TMP/badpin/shared-playwright.json"
+got="$(HOME="$H" env -u DESIGN_ROUNDS_CHROME python3 "$TMP/badpin/headless_chrome.py" 2>&1)"; rc=$?
+check_eq "a pin file holding a byte that is not UTF-8 is refused with exit 2" "2" "$rc"
+check "as one that could not be read" "could not be read" "$got"
+check_not "and nothing raises on the way" "Traceback" "$got"
 
 # --- 4. headless-dom.sh refuses Dan's Chrome in both modes, without running it ---
 rm -f "$TMP/Google Chrome.app.ran"
