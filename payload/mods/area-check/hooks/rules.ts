@@ -221,8 +221,9 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  * a script file is judged as the one file its characters name (#2255): see quotedName. A word handed
  * to a script that mod-kit marks `unexpanded` holds no value, so it is never read as built while the
  * command runs: every $ in it is in single quotes or after a backslash (#1953), or one the shell leaves
- * as written, as in a double quoted regex "^foo.*bar$" (#2320). mod-kit names no path for a word
- * holding a $, so such a word, named by no path, is not judged.
+ * as written, as in a double quoted regex "^foo.*bar$" (#2320). mod-kit names the file such a word
+ * spells (#2402: "src/big.ts$"), which is judged as any path is; one also holding a pattern
+ * character it names by no path, and that is not judged.
  */
 export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   const out: ShellTarget[] = []

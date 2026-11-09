@@ -529,8 +529,17 @@ export const outstanding = (r: Reading): string[] => {
  */
 export function settledByDan(r: Reading): boolean {
   const pr = r.pr
-  const d = r.choice
-  if (!pr || isUnreadable(pr) || !d) return false
+  if (!pr || isUnreadable(pr)) return false
+  return leftByChoice(pr, r.choice)
+}
+
+/**
+ * The one rule for whether a PR, in the state and at the head it was read at, is left as it is on
+ * Dan's choice `d`. settledByDan asks it of a reading, and the finish check of the reading it kept from
+ * an earlier check (#2433), so the two never disagree (L261).
+ */
+export const leftByChoice = (pr: { state: string; head?: string }, d: LeftAsIs | undefined): boolean => {
+  if (!d) return false
   if (isLeftClosed(d)) return pr.state === 'CLOSED'
   return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }

@@ -531,7 +531,7 @@ export type ModKitWrites = {
    * backslash, or is a $ the shell leaves as written (before a closing double quote, or before nothing
    * a name, brace, bracket or quote can start), wherever the command spells it (#1953: a regex 'x$',
    * prose 'costs $5'; #2320: a regex "bar$"): the shell hands it on as written, so it holds no
-   * variable's value.
+   * variable's value, and its `path` is the file it spells (#2402: "src/big.ts$").
    */
   runs?: { what: string; script: string; path?: string; tool?: true; args: { word: string; path?: string; folder?: string; quoted?: true; unexpanded?: true }[] }[]
   /**

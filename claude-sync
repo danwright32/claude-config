@@ -16,6 +16,7 @@
 #   claude-sync recheck           # run the hook suite and record what it said, so a fixed failure stops being reported
 #   claude-sync forget-clone DIR  # drop one checkout from the register, when it has gone for good
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
+#   claude-sync hold --extend 30 "why" # renew your own hold of that label (a second plain one is refused, #2468)
 #   claude-sync release           # lift your own hold now rather than waiting for it to run out
 #   claude-sync release "why"     # lift only the hold you took with that label (#2452)
 #   claude-sync release --other S # lift the hold session S took (status names each hold's session)
@@ -1676,6 +1677,10 @@ ENTRIES
   if [ -n "$fresh" ] && ! notify_posted "$3"; then
     cur="$told"
   fi
+  # Nothing to record under this key and nothing recorded there to clear: the rewrite below would
+  # put back the same file, two programs on every run for nothing (claude-config#2472). Only when
+  # the record exists, so a missing one is still created as before.
+  [ "$cur" = / ] && [ -z "$prev" ] && [ -f "$f" ] && return 0
   # Written beside the record and renamed over it, so a run that dies mid write leaves the old record
   # whole. Named for this tool and this run, not scratch: it never leaves the sync clone, where the
   # gitignore covers it, and the sync lock means only one run writes here at a time.
@@ -6318,6 +6323,16 @@ apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   move_shared_files_to_local # before anything reads or mirrors them (claude-config#1526)
+  # What the shared repo changed that this Mac has not applied, worked out ONCE for the steps below
+  # (claude-config#2472). merge_rule_files, preserve_local_conflicts and locally_ahead_paths each
+  # asked unapplied_paths, about nine programs every time, and nothing between them moves HEAD, the
+  # applied marker or the shared branch, so all three got the same answer. Local, so it is visible
+  # only to what this function calls and is gone when it returns: a later step that does move HEAD
+  # asks afresh. Worked out before the flag is set, or it would read its own empty answer, and not
+  # at all without git, where the answer is always nothing.
+  local APPLY_UNAPPLIED="" APPLY_UNAPPLIED_KNOWN=""
+  if have_git; then APPLY_UNAPPLIED="$(unapplied_paths)"; fi
+  APPLY_UNAPPLIED_KNOWN=1
   merge_rule_files           # entry level merge first: what merges is no conflict
   preserve_local_conflicts   # then whatever genuinely clashed, before it is overwritten
   # Hold back local edits the repo has not seen (see locally_ahead_paths): the
@@ -6869,6 +6884,12 @@ ALLBAKS
 # more rather than mirroring over the other Mac's work (L42).
 unapplied_paths(){
   local last head changed branch upstream bases theirs _b
+  # Inside one apply the answer is worked out once and read by every step that asks
+  # (claude-config#2472): see apply_payload_to_local, the only place this is set.
+  if [ -n "${APPLY_UNAPPLIED_KNOWN:-}" ]; then
+    [ -z "$APPLY_UNAPPLIED" ] || printf '%s\n' "$APPLY_UNAPPLIED"
+    return 0
+  fi
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -8384,13 +8405,18 @@ receive_command(){
 #   concludable  in progress, no work left in the todo, nothing unmerged: finishing it is safe
 #   conflict     in progress with paths still unmerged: only a person can settle that
 sync_rebase_dir(){   # prints the directory of an in progress rebase, or nothing
-  local d
-  for d in rebase-merge rebase-apply; do
-    d="$(git -C "$SYNC_REPO" rev-parse --git-path "$d" 2>/dev/null || true)"
+  # Both places asked in ONE git call, which prints one path per line in the order asked
+  # (claude-config#2472): every mutating run asks this at least twice, and a git start is the
+  # costliest thing a run does.
+  local d paths
+  paths="$(git -C "$SYNC_REPO" rev-parse --git-path rebase-merge --git-path rebase-apply 2>/dev/null || true)"
+  while IFS= read -r d; do
     [ -n "$d" ] || continue
     case "$d" in /*) ;; *) d="$SYNC_REPO/$d" ;; esac
     [ -d "$d" ] && { printf '%s' "$d"; return 0; }
-  done
+  done <<REBASE_PATHS
+$paths
+REBASE_PATHS
   return 1
 }
 
@@ -11102,6 +11128,9 @@ FAILED
 # line, so the record's shape is unchanged (L1010); what changed is that `hold` replaces only the
 # caller's line with the SAME label, `release "<label>"` lifts only that line, and a plain release
 # that would have to choose between several lines refuses, naming each, rather than lifting all.
+# Since #2468 even the same label is not replaced by a plain `hold`: it is refused, because a sibling
+# that picked the same label is indistinguishable from the builder renewing its own, and renewing
+# is `hold --extend` (do_hold).
 #
 # The record is PARSED in hooks/lib/hold-record.sh, which the hooks that refuse a payload write
 # without the writing session's own hold read through as well (claude-config#1886), so the tool
@@ -11311,9 +11340,19 @@ hold_live_left(){
 # Each hold is its own line (claude-config#1863), named by its session and its label (#2452), so a
 # hold touches only the caller's own line of that label: another session's hold, or the same
 # session's under another label (a sibling subagent's), is kept as it is, whatever its length, and
-# all are in force. The caller's own hold is never SHORTENED either; asking for less than it
-# already has keeps the longer one and says so.
-do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
+# all are in force.
+#
+# A second hold under a label the same session already holds is REFUSED, and the record is left as
+# it was (claude-config#2468). Sibling builders share their session's id, so a second builder that
+# picked a label a sibling holds would otherwise replace the sibling's line, shortening or ending a
+# hold it was still working under, with nothing said to either. Renewing is a separate, explicit
+# act: `hold --extend [minutes] [why]` renews the caller's own line of that label, and refuses when
+# there is none to renew, since then the hold it meant to keep has already run out or been lifted.
+# A renewal never SHORTENS the hold; asking for less than it already has keeps the longer one and
+# says so.
+do_hold(){   # [--extend]  $1 = minutes (optional)  $2.. = why (optional)
+  local extend=0
+  if [ "${1:-}" = --extend ]; then extend=1; shift; fi
   local mins="${1:-}" dflt="$SYNC_HOLD_MINUTES" why now until tmp at owner rows after rc=0 own_left st ends taken host o w
   [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
   # Taking a hold rewrites every session's line in the record, which needs the reader (#1886).
@@ -11345,12 +11384,21 @@ do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   done <<HOLDROWS
 $rows
 HOLDROWS
+  if [ "$own_left" -gt 0 ] && [ "$extend" = 0 ]; then
+    hold_unlock
+    die "no hold was taken: $(hold_owner_words "$owner") already holds the watcher as $(hold_label_words "$why") for another $(duration_in_words "$own_left" exact), and a second hold under the same label is refused rather than replacing it, because a sibling agent of this session may be working under that one. To renew your own hold: claude-sync hold --extend $mins $(hold_label_words "$why"). For separate work, hold it under its own label."
+  fi
+  if [ "$own_left" -le 0 ] && [ "$extend" = 1 ]; then
+    hold_unlock
+    die "no hold was taken: --extend renews a hold you already have, and $(hold_owner_words "$owner") holds none as $(hold_label_words "$why"), so the one you meant may have run out or been released. To take a new one: claude-sync hold $mins $(hold_label_words "$why")"
+  fi
   if [ "$own_left" -gt 0 ] && [ $(( now + own_left )) -ge "$until" ]; then
     hold_unlock
     echo "Your watcher hold was already in force for another $(duration_in_words "$own_left" exact) ($why), at least the $(duration_in_words $(( mins * 60 )) exact) asked for, so it was kept rather than shortened. It resumes on its own when that runs out, or now with: $(hold_lift_hint "$owner" "$why" "$rows")"
     return 0
   fi
-  # Every other live hold, as it was, and this one in place of the caller's old line of this label.
+  # Every other live hold, as it was, and this one in place of the caller's old line of this label
+  # (there is one only on --extend; without it, a line of this label was refused above).
   tmp="$SYNC_HOLD_FILE.writing.$$"
   # The label reaches awk through the environment, never -v, which reads a backslash as an escape
   # and so would never match a label holding one.
@@ -14754,7 +14802,7 @@ case "$cmd" in
   # Neither takes the sync lock: they write one small marker outside every clone and touch nothing
   # a mutating run touches, and a hold that had to queue behind the very send it exists to hold off
   # would be useless exactly when it is reached for (#262).
-  hold) do_hold "${2:-}" "${@:3}" ;;
+  hold) if [ "${2:-}" = --extend ]; then do_hold --extend "${3:-}" "${@:4}"; else do_hold "${2:-}" "${@:3}"; fi ;;
   release) do_release "${@:2}" ;;
   status) do_status ;;           # read-only, deliberately never blocked
   verify) do_verify ;;           # read-only too: it answers a question, it changes nothing

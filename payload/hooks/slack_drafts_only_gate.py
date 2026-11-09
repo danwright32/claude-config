@@ -24,7 +24,10 @@ Two routes are judged:
     is an example, not one (claude-config#2397). A file a script is handed as data (shaped like data,
     after the script) is not read for an endpoint unless the script can send a request or run what it
     is handed (claude-config#2362), whether the script runs through its interpreter or by its own
-    path with the interpreter its #! names (claude-config#2400). A script counts as able to send a
+    path with the interpreter its #! names (claude-config#2400), or is code given inline (python3 -c,
+    node -e), which is judged as a script is (claude-config#2439). Which word holds inline code, and so
+    which word is the script, is read from each program family's own options (OPTIONS), never one
+    table for all of them (claude-config#2439). A script counts as able to send a
     request, run code or write a file unless it is seen to be unable to: a Python script imports only
     modules known to be unable to (PY_INERT) and uses no builtin that runs code; a JavaScript one
     imports only node builtins known to be unable to (JS_INERT) and names no global that sends or runs
@@ -69,14 +72,31 @@ SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
 INTERPRETER = re.compile(r"^(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno|bun|tsx|ts-node|osascript)$")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
 LAUNCHERS = {"npx", "bunx", "pnpx"}
-# Options that hold code to run, per interpreter family (python -c, node -e or -p, perl -e or -E,
-# ruby -e, osascript -e, deno eval), and a short cluster ending in one (perl -ne, python -Bc). Inline
-# code is in the command's own text, which is judged first, so this decides that there is no script
-# file to read, and the word after it is the code whose imports are followed (claude-config#2318).
-INLINE = {"-c", "-e", "-E", "-p", "--eval", "--print", "eval"}
-INLINE_CLUSTER = re.compile(r"^-[A-Za-z]{1,4}[ceE]$")
 # Options whose value is the next word, so it is never taken for the script.
 VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader", "-C", "--config", "-o"}
+# Each program family's options (claude-config#2439), by the family of its name (family()): the words
+# that hold code to run, the letters that end a short cluster holding it (perl -ne, python -Bc, bash
+# -lc), and the options whose value is the next word. Inline code is in the command's own text, which
+# is judged first, so finding it decides that the program runs no script file, and the word after it
+# is the code whose imports are followed (claude-config#2318).
+#
+# One table for every program misread each one by another's options: -E holds code for perl, so
+# python3 -E, ruby -E (an encoding) and bash -e (errexit) ran a script the gate never read, as did php
+# -c (an ini file); and -I takes a value for ruby, so python3 -I swallowed -c and the file the code
+# reads was taken for the script and refused. A code option a family lacks is the dangerous mistake
+# (its script goes unread), so each family lists only its own. A valued option it lacks is not: the
+# value is then taken for the script, and every word naming a file is read anyway (every_file), so
+# every family but Python, whose options are fixed and few, keeps the shared VALUED.
+OPTIONS = {
+    "shell": ({"-c"}, "c", VALUED),
+    "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
+    "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED),
+    "deno": ({"eval"}, "", VALUED),
+    "ruby": ({"-e"}, "e", VALUED),
+    "perl": ({"-e", "-E"}, "eE", VALUED),
+    "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
+    "osascript": ({"-e"}, "", VALUED),
+}
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
@@ -115,9 +135,17 @@ JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", 
 
 
 def js_code(text):
-    """A JavaScript or TypeScript file's text with each // and /* */ comment blanked to spaces, its
-    newlines kept, so an import shown in a comment is not read as one (claude-config#2397, the rule
-    the alert guard got in #2368: a script is read by the code it runs, never a comment).
+    """js_scan's code alone: the text with its comments blanked."""
+    return js_scan(text)[0]
+
+
+def js_scan(text):
+    """(code, quoted): a JavaScript or TypeScript file's text with each // and /* */ comment blanked
+    to spaces, its newlines kept, so an import shown in a comment is not read as one
+    (claude-config#2397, the rule the alert guard got in #2368: a script is read by the code it runs,
+    never a comment); and, for each index of the text, whether it lies inside a string literal or a
+    template literal's text (its quotes included, the code inside each ${...} not), so an import
+    written inside a string can be told from one written as code (claude-config#2484).
 
     Strings, template literals (with the code inside each ${...}) and regex literals are stepped
     over, so a // or /* inside one (a URL, a pattern) opens nothing. Every misreading is bounded on
@@ -126,6 +154,7 @@ def js_code(text):
     hide every import after it."""
     out = list(text)
     n = len(text)
+    quoted = bytearray(n)
     i = 0
     if text.startswith("#!"):
         i = text.find("\n") if "\n" in text else n
@@ -140,18 +169,23 @@ def js_code(text):
 
     def template(k):
         """Step through a template literal's text from k; the index after its closing backtick, or the
-        index of a ${ (its code is read as code), or n."""
+        index of a ${ (its code is read as code), or n. Each index stepped over is marked quoted."""
+        start = k
         while k < n:
             c = text[k]
             if c == "\\":
                 k += 2
             elif c == "`":
-                return k + 1, False
+                k += 1
+                break
             elif c == "$" and text.startswith("${", k):
+                quoted[start:k + 2] = b"\x01" * (k + 2 - start)
                 return k + 2, True
             else:
                 k += 1
-        return n, False
+        k = min(k, n)
+        quoted[start:k] = b"\x01" * (k - start)
+        return k, False
 
     while i < n:
         c = text[i]
@@ -175,10 +209,13 @@ def js_code(text):
             k = i + 1
             while k < n and text[k] not in (c, "\n"):
                 k += 2 if text[k] == "\\" else 1
+            end = min(k + 1, n)
+            quoted[i:end] = b"\x01" * (end - i)
             i = k + 1
             last = c
             continue
         if c == "`":
+            quoted[i] = 1
             i, entered = template(i + 1)
             if entered:
                 braces.append(depth)
@@ -229,7 +266,7 @@ def js_code(text):
             continue
         last = c
         i += 1
-    return "".join(out)
+    return "".join(out), quoted
 # A Python script's imports are followed the same way: a script is Python by its .py, its #!, or a
 # python interpreter running a file with no extension.
 PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
@@ -300,6 +337,28 @@ JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|
                      r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
                      r"mainModule)\b")
 JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
+# What can run a string as code, so that import text inside a string is an import after all
+# (claude-config#2484, signed off by Dan on 2026-11-09: import text in an ordinary string literal is not
+# followed, a string handed to something that runs it as code still is). eval, Function and the routes
+# to it (.constructor), vm and Module's compiler (and the module builtin, whose hooks rewrite source),
+# a Worker (eval: true), Miniflare's script or modules source, a child process (node -e, a shell),
+# a data: or blob: URL handed to import() or a Worker, a page evaluating code (puppeteer, playwright,
+# jsdom's runScripts), Deno and Bun, the global object reached by a computed name (which reaches eval
+# unnamed), plus a require or import() of a computed name (JS_DYNAMIC), which loads a data: URL as
+# readily as a file. A string reaches a sink through a variable, a function or another module the gate
+# cannot trace, so when any file the walk reaches names one, every string in the walk is followed
+# (Judge.modules). Read from the text, comments included, which can only follow more. setTimeout and
+# setInterval are not here: node, deno and bun each refuse a string callback (measured 2026-11-09).
+JS_SINK = re.compile(r"\b(eval|Function|Worker|SharedWorker|importScripts|ShadowRealm|vm|SourceTextModule|"
+                     r"SyntheticModule|runInContext|runInNewContext|runInThisContext|compileFunction|_compile|"
+                     r"Module|Miniflare|miniflare|child_process|execSync|execFile|execFileSync|spawn|spawnSync|"
+                     r"execa|execaSync|execaNode|execaCommand|zx|shelljs|tinyexec|pty|Deno|Bun|createObjectURL|"
+                     r"runScripts|Reflect)\b|['\"`](node:)?module['\"`]|"
+                     r"\.\s*(constructor|binding|_linkedBinding|dlopen|mainModule|evaluate|evaluateHandle|"
+                     r"evaluateOnNewDocument|addScriptTag|addInitScript|setContent)\b|"
+                     r"\b(globalThis|global|self|window)\s*(\?\.\s*)?\[|\b(data|blob):(?:[A-Za-z]+/|['\"`,;])|"
+                     r"\$\s*`")
+SINK = object()  # what Judge.walk gives on reaching a file that names a JS_SINK
 # The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
 # word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
 # real scripts were refused only by one of these words).
@@ -608,7 +667,32 @@ class Judge:
     def modules(self, start, origin, root, body, kind):
         """Each local module a script's imports reach, as (None, how it is reached, its file, its text),
         each once; or, where an import cannot be followed, (the reason, None, None, None) and no more.
-        The one walk both imports() and acts() read, so the two cannot disagree about what is reached."""
+        The one walk both imports() and acts() read, so the two cannot disagree about what is reached.
+
+        A JavaScript walk first leaves out import text written inside a string literal, which nothing
+        loads (claude-config#2484). Where any file it reaches can run a string as code (JS_SINK,
+        JS_DYNAMIC), it starts again following every string, as every walk did before, and gives only
+        the modules the first walk had not, so each is still given once."""
+        if kind != "js":
+            yield from self.walk(start, origin, root, body, kind, True)
+            return
+        given = set()
+        for item in self.walk(start, origin, root, body, kind, False):
+            if item is SINK:
+                break
+            if item[2]:
+                given.add(item[2])
+            yield item
+        else:
+            return
+        for item in self.walk(start, origin, root, body, kind, True):
+            if item[2] in given:
+                continue
+            yield item
+
+    def walk(self, start, origin, root, body, kind, strings):
+        """modules() with import text inside JavaScript strings followed or not (strings); not
+        following them, it gives SINK, and stops, on reaching a file that can run a string as code."""
         seen = {origin} if origin else set()
         queue = [(origin, root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
@@ -616,7 +700,10 @@ class Judge:
             cur, cur_dir, text, chain = queue.pop(0)
             if kind == "py":
                 self.py_inserts(text, cur, inserts)
-            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts):
+            elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
+                yield SINK
+                return
+            for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings):
                 via = f"{chain}, which imports {spec}"
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
@@ -650,12 +737,16 @@ class Judge:
         self.unfollowed = why
         return why
 
-    def import_targets(self, text, kind, cur_dir, root, inserts=((), ())):
+    def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
-        empty list."""
+        empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
+        or a template's text is left out (claude-config#2484)."""
         if kind == "js":
-            for m in IMPORT_SPEC.finditer(js_code(text)):
+            code, quoted = js_scan(text)
+            for m in IMPORT_SPEC.finditer(code):
+                if not strings and quoted[m.start()]:
+                    continue
                 spec = m.group(2)
                 if "${" in spec:
                     continue
@@ -2174,10 +2265,22 @@ class Judge:
                 # What sys.argv and os.environ hold, for a sys.path change built from them (#2449).
                 self.py_cmd["argv"], self.py_cmd["env"] = self.py_args(text, name, d)
             if inline:
+                before, code, after = inline
+                label = f"the code given to {name}"
+                # A file named before the code is one the program loads first (node -r ./x.js,
+                # ruby -r), so it is read as code (claude-config#2439).
+                for w in before:
+                    if not (w.startswith("-") or w.startswith("+")):
+                        reason = self.script(w, d, depth, False, lang)
+                        if reason:
+                            return reason
                 # The code imports from the directory it runs in (claude-config#2318).
-                code = next((words[k + 1] for k in range(1, len(words) - 1)
-                             if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), text)
-                return self.imports(f"the code given to {name}", None, here, code, lang) if lang else None
+                reason = self.imports(label, None, here, code, lang) if lang else None
+                if reason:
+                    return reason
+                # The files after it are the code's arguments, judged as a script's are: a data file
+                # is read when the code can act on it, and any other file is read as code (#2439).
+                return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
             if "-m" not in words[1:]:
                 reason = self.every_file(words, d, depth, False, lang)
                 if reason:
@@ -2228,7 +2331,7 @@ class Judge:
             return self.every_file([words[0]] + words, d, depth, shell, lang)
         return None
 
-    def every_file(self, words, d, depth, shell_hint, lang=None):
+    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None):
         """The reason any word after the program that names a file posts, or None.
 
         Which word is the script depends on each program's own option table (python3 -I takes no
@@ -2243,8 +2346,15 @@ class Judge:
         against EVERY one of them, wherever each stands (in `node --require ./a.js post.mjs msg.json`
         the script is post.mjs, not the first file; lessons review, 2026-11-07), and is still read when
         any of them can act on it as more than data (acts): sending a request, whose address the file
-        can hold, or running code, which the file can be."""
+        can hold, or running code, which the file can be.
+
+        inline, (its label, its text, the directory it runs in), is code the program was given by an
+        option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
+        first file read as code is, so a data file it is handed is read when it can act on it."""
         code, data = [], []
+        if inline:
+            label, text, here = inline
+            code.append((label, lambda: self.acts_inline(text, here, lang)))
         for w in words[1:]:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
                 continue
@@ -2257,7 +2367,7 @@ class Judge:
             reason = self.script(w, d, depth, shell_hint, lang)
             if reason:
                 return reason
-            code.append((w, path))
+            code.append((f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
         for w, path in data:
             self.tick(path)
             try:
@@ -2267,10 +2377,10 @@ class Judge:
                 continue  # unreadable to us is unreadable to the script that would read it
             if not hit:
                 continue
-            for script_word, script_path in code:
-                acts = self.acts(script_path, d, shell_hint, lang)
+            for script_label, script_acts in code:
+                acts = script_acts()
                 if acts:
-                    return f"the script {script_word} {acts}, and is handed {w}, which names {hit.group(0)}"
+                    return f"{script_label} {acts}, and is handed {w}, which names {hit.group(0)}"
             # Data every script beside it only reads; none sends or runs what it is handed.
         return None
 
@@ -2324,7 +2434,19 @@ class Judge:
         kind = self.language(real, first, lang)
         if not kind:
             return "is a kind of script the gate does not read for what it does with its arguments"
-        root = os.path.dirname(real)
+        return self.acts_body(body, real, os.path.dirname(real), kind)
+
+    def acts_inline(self, text, here, lang):
+        """acts() for code given inline (python3 -c), run from here (claude-config#2439). Code in a
+        language whose imports the gate does not follow (perl -e, ruby -e) is taken to act, as a script
+        file of that kind is."""
+        if lang not in ("py", "js"):
+            return "is code in a language the gate does not read for what it does with its arguments"
+        return self.acts_body(text, None, here, lang)
+
+    def acts_body(self, body, real, root, kind):
+        """How a Python or JavaScript script's text (real its file, None for inline code; root where it
+        runs from) can act on what it is handed, its local imports included, or None."""
         why = self.py_acts(body, real, root) if kind == "py" else self.js_acts(body)
         if why:
             return why
@@ -2379,7 +2501,7 @@ class Judge:
                 tree = ast.parse(text)
         except (SyntaxError, ValueError):
             return "could not be parsed to see what it imports"
-        cur_dir = os.path.dirname(cur)
+        cur_dir = os.path.dirname(cur) if cur else root  # inline code has no file, and runs from root
         # Only this file's own sys.path changes: fewer folders in front can only leave an import to be
         # placed in the standard library, where it must then be inert, never the other way.
         inserts = ([], [])
@@ -2533,8 +2655,9 @@ class Judge:
             if name in SHELLS or INTERPRETER.match(name):
                 operand, inline, stdin = self.operands(words)
                 if inline:
-                    code = next((words[k + 1] for k in range(1, len(words) - 1)
-                                 if words[k] in INLINE or INLINE_CLUSTER.match(words[k])), "")
+                    if any(handed.search(w) for w in inline[0]):
+                        return f"loads a file it is handed before the code given to {name}"
+                    code = inline[1]
                     if handed.search(code):
                         return f"runs code it is handed ({name})"
                     continue  # code written into the script, read with it for what it names
@@ -2697,12 +2820,30 @@ class Judge:
             bodies.append("\n".join(body))
         return "\n".join(bodies), True
 
+    @staticmethod
+    def family(name):
+        """The OPTIONS family of a shell or interpreter, by its name; None for any other program,
+        which then has no option holding code, so every file it is handed is read."""
+        if name in SHELLS:
+            return "shell"
+        if PY_RUNTIME.match(name):
+            return "py"
+        if name in ("deno", "ruby", "perl", "php", "osascript"):
+            return name
+        return "js" if JS_RUNTIME.match(name) else None
+
     def operands(self, words):
-        """(the script operand or None, whether code is given inline, whether it reads its input).
+        """(the script operand or None, the inline code or None, whether it reads its input).
+
+        The inline code, where the program is given code by one of its own options (OPTIONS), is
+        (the words before that option, the code, the words after the code): the words before can
+        name files the program loads first (node -r), and those after are the code's arguments.
 
         A redirection is the shell's, never the program's operand (`bash <<'EOF'` reads its input,
         it runs no file named <<EOF), except that a file fed on stdin with < is the script it reads.
         """
+        inline_words, letters, valued = OPTIONS.get(self.family(os.path.basename(words[0])), (set(), "", VALUED))
+        cluster = re.compile(rf"^-[A-Za-z]{{1,4}}[{letters}]$") if letters else None
         kept, from_file, k = words[:1], None, 1
         while k < len(words):
             m = self.sw.REDIRECT_WORD.match(words[k])  # the shared reader's, target glued or next
@@ -2716,22 +2857,22 @@ class Judge:
             k += 1 if m.group(1) else 2
         words = kept
         if from_file and len(words) == 1:
-            return from_file, False, False
+            return from_file, None, False
         k = 1
-        inline = False
+        inline = None
         while k < len(words):
             w = words[k]
             if w == "--":
                 k += 1
                 break
             if w == "-":
-                return "-", False, True
-            if w in INLINE or INLINE_CLUSTER.match(w):
-                inline = True
+                return "-", None, True
+            if w in inline_words or (cluster and cluster.match(w)):
+                inline = (words[1:k], words[k + 1] if k + 1 < len(words) else "", words[k + 2:])
                 break
             if w == "-m":
-                return None, False, False  # a module: nothing on disk named here to read
-            if w in VALUED:
+                return None, None, False  # a module: nothing on disk named here to read
+            if w in valued:
                 k += 2
                 continue
             if w.startswith("-") or w.startswith("+"):
@@ -2739,10 +2880,10 @@ class Judge:
                 continue
             break
         if inline:
-            return None, True, False
+            return None, inline, False
         if k < len(words):
-            return words[k], False, False
-        return None, False, True
+            return words[k], None, False
+        return None, None, True
 
 
 def main():

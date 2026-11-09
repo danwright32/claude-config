@@ -3,7 +3,12 @@
 # merge-when-ready.sh: update a pull request that is behind its base, wait for the new head's checks
 # and lessons review, and merge exactly that head the moment both are green (claude-config#851).
 #
-#   bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--log=<file>]
+#   bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--first] [--log=<file>]
+#
+# --first puts the pull request at the front of the repository's merge line, for one the others in
+# line need merged first, such as a fix to the CI they are failing on (claude-config#2474, see
+# first_judge). It goes ahead of every run still waiting, never ahead of the one holding the turn,
+# and each run it passes says so. It changes only the order: every gate still judges its merge.
 #
 # For a log of the run, pass --log=<file>, never a pipe into tee (claude-config#2304): a background
 # command's exit is its pipeline's last command, so `... 2>&1 | tee <log>` reports tee's exit 0
@@ -270,11 +275,11 @@ log_result(){   # $1 = the exit
 
 usage(){
   [ -n "${1:-}" ] && { printf 'merge-when-ready: %s\n' "$1" >&2; to_log "merge-when-ready: $1"; }
-  echo "usage: $SELF <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--log=<file>]" >&2
+  echo "usage: $SELF <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch] [--first] [--log=<file>]" >&2
   exit 64
 }
 
-pr=""; repo=""; flags=()
+pr=""; repo=""; flags=(); want_first=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo|-R)
@@ -288,6 +293,9 @@ while [ $# -gt 0 ]; do
       log="${1#--log=}"; [ -n "$log" ] || usage "--log needs a file."
       shift ;;
     --squash|-s|--merge|-m|--rebase|-r|--delete-branch|-d) flags+=("$1"); shift ;;
+    # The front of the line (claude-config#2474): only the order this Mac's helpers merge in, so it
+    # is never passed to gh or to a gate, and every gate still judges the merge (see first_judge).
+    --first) want_first=1; shift ;;
     [0-9]*)
       case "$1" in *[!0-9]*) usage "$1 is not a pull request number." ;; esac
       [ -z "$pr" ] || usage "more than one pull request number was given."
@@ -723,7 +731,7 @@ choose_method(){
   # Refused for the rate limit: paused, and asked again at the next look.
   [ "$rrc" -eq 5 ] && return 5
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and $(signin_or_unread "which merge methods $slug allows" "$rrc"). Nothing was merged; pass --squash, --merge or --rebase."
-  [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch} (or --merge, or --rebase)."
+  [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch}${want_first:+ --first} (or --merge, or --rebase)."
   read -r -a am <<<"$allowed"
   for m in ${am[@]+"${am[@]}"}; do names+=("$(method_name "$m")"); done
   case "${#am[@]}" in
@@ -731,7 +739,7 @@ choose_method(){
        say "Merging by $(method_name "${am[0]}"), the only merge method $slug allows, since none was passed." ;;
     0) stop 64 "Stopped: no merge method was passed, and GitHub says $slug allows none. Nothing was merged." ;;
     *) for m in "${am[@]:1}"; do others="$others, or --$m"; done
-       stop 64 "Stopped: no merge method was passed, and $slug allows $(and_list "${names[@]}") merges, so which one is a person's choice. Nothing was merged; run it again naming one: $SELF $pr --repo $slug --${am[0]}${want_delete:+ --delete-branch} (${others#, })." ;;
+       stop 64 "Stopped: no merge method was passed, and $slug allows $(and_list "${names[@]}") merges, so which one is a person's choice. Nothing was merged; run it again naming one: $SELF $pr --repo $slug --${am[0]}${want_delete:+ --delete-branch}${want_first:+ --first} (${others#, })." ;;
   esac
 }
 read_back(){   # sets after
@@ -971,8 +979,9 @@ updated_from=""; updated_at=0; catching_up=""
 # forward: on 2026-11-06 it ended 11 of them 1 to 3 places from the front, the p0 #2319 among them,
 # and each ran again at the back behind about 20 others, so the pull requests that had waited longest
 # merged last. The reason given for it, a line moving for ever without reaching this run, cannot happen
-# within one wait: numbers only grow (lib/merge-turn.sh), so nobody joins ahead of a ticket, and the
-# line can move only as many times as there were tickets ahead when it joined. The waits themselves are
+# within one wait: numbers only grow (lib/merge-turn.sh), so only a run started with --first joins
+# ahead of a ticket (claude-config#2474), and the line can move only as many times as there were
+# tickets ahead when it joined plus those a person sent to the front since. The waits themselves are
 # bounded too, since a run is passed over only after holding the turn MWR_TURN_HOLD_SECONDS, which
 # the deadline counts. So the ceiling is gone, and the line standing still for MWR_LINE_SECONDS is
 # what ends a wait. The count of looks follows the same rule (L704): the looks taken in line up to
@@ -1269,13 +1278,53 @@ turn_weigh(){   # $1 = now
   fi
   turn_weighed="; the longest of $slug's recent check runs took $(dur "$checks_took")"
 }
+# THE FRONT OF THE LINE (claude-config#2474). On 2026-11-08 #2471 made the sync suite cheaper, which
+# the five pull requests ahead of it needed in order to pass CI; each of them would have held the
+# line for about 50 minutes of mostly failing CI, so it was moved forward by hand by stopping all
+# five helpers and starting them again after it merged. --first joins the line at the front instead:
+# ahead of every run still waiting, never ahead of the run holding the turn (it may be merging), and
+# after any run that went to the front before it (lib/merge-turn.sh). Every run it passes is told so.
+# It changes only the order: the update, the checks, the review and every gate judge its merge as
+# any other. It is refused, said, and the run joins at the back when the pull request's own checks
+# are failing (it is not the fix the others need, and at the front it would only hold them up), and
+# not honoured, said, when its checks cannot be read. Asked once, at the first join: a run passed
+# over joins again at the back, so a pull request stuck at the front cannot take the turn again and
+# again. Sets first_way: "first" to join at the front, empty to join at the back.
+first_way=""; first_said=""; first_asked=""
+first_judge(){
+  local failing
+  first_way=""
+  [ -n "$want_first" ] && [ -z "$first_asked" ] || return 0
+  first_asked=1
+  if [ "$(printf '%s' "$view" | jq -r '.statusCheckRollup | type' 2>/dev/null)" != array ] \
+    || ! failing="$(printf '%s' "$view" | jq -r '[.statusCheckRollup[] | select(((.conclusion // .state // "") | ascii_upcase) | IN("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE")) | (.name // .context // "?")] | unique | join(", ")' 2>/dev/null)"; then
+    say "--first was not honoured for #$pr: GitHub's answer did not list its checks, so whether they are failing cannot be read. It joins the line to merge in $slug at the back, like any other."
+    return 0
+  fi
+  if [ -n "$failing" ]; then
+    say "--first was refused for #$pr: its own checks are failing ($failing), so it is not the fix the others need, and at the front it would only hold them up. It joins the line to merge in $slug at the back, like any other."
+    return 0
+  fi
+  first_way=first
+}
+# Said once, at the first look after joining at the front: how many it went ahead of.
+first_note(){
+  [ -n "$first_way" ] && [ -z "$first_said" ] || return 0
+  first_said=1
+  if [ "${TURN_OVERTOOK:-0}" -gt 0 ]; then
+    say "Joined the line to merge in $slug at the front (--first), ahead of $TURN_OVERTOOK pull request$([ "$TURN_OVERTOOK" -eq 1 ] || printf s) waiting, each of whose helpers says so. It never goes ahead of the run holding the turn, and every gate still judges its merge."
+  else
+    say "--first changed nothing: nobody was waiting in line to merge in $slug, so it takes its place as any run would."
+  fi
+}
 turn_check(){
   local t clock
   [ "$turn_state" = off ] && return 0
   t="$(now)"
   if [ -z "$TURN_TICKET" ]; then
     turn_open "$slug"
-    if ! turn_join "$pr" "$t"; then
+    first_judge
+    if ! turn_join "$pr" "$t" ${first_way:+"$first_way"}; then
       turn_state=off
       say "Could not take a turn to merge in $slug ($TURN_ERR), so this goes on without one, as it did before claude-config#1515: another helper on this Mac may merge under it."
       return 0
@@ -1284,6 +1333,7 @@ turn_check(){
   fi
   turn_look "$t" "$TURN_HOLD"
   turn_say_passed
+  first_note
   if [ -n "$TURN_GONE" ]; then
     if [ -n "$dl_from" ]; then
       turn_lost "$t"
@@ -1291,8 +1341,8 @@ turn_check(){
     else
       clock=""
     fi
-    say "#$pr's place in the line to merge in $slug is gone: a run waiting for the turn takes it over once one pull request has held it for $(mins "$TURN_HOLD"). Joining the line again.$clock"
-    TURN_TICKET=""; turn_state=""; line_polls_from="$polls"
+    say "#$pr's place in the line to merge in $slug is gone: a run waiting for the turn takes it over once one pull request has held it for $(mins "$TURN_HOLD"). Joining the line again.$clock${first_way:+ Its place at the front (--first) is not kept: it joins again at the back, so a pull request stuck at the front cannot take the turn again and again.}"
+    TURN_TICKET=""; turn_state=""; line_polls_from="$polls"; first_way=""
     if ! turn_join "$pr" "$t"; then
       # Going on with no turn after holding one: its deadline counts again from here (#1975).
       [ -z "$taken_at" ] || dl_from="$t"
@@ -1627,9 +1677,9 @@ while :; do
        [ -n "${AR_STEP_BACK_LEAD:-}" ] || . "$MWR_LIB/ai-review-common.sh" 2>/dev/null
        case $'\n'"$rev_out" in
          *$'\n'"${AR_STEP_BACK_LEAD:-Step back:}"*)
-           stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above), and asks to step back and reconsider the approach: read this round's findings with the earlier rounds' as one group before changing anything, rather than fixing one finding at a time. Then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . Nothing was merged." ;;
+           stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above), and asks to step back and reconsider the approach: read this round's findings with the earlier rounds' as one group before changing anything, rather than fixing one finding at a time. Then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}}${want_first:+ --first} . Nothing was merged." ;;
        esac
-       stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above). If it has findings, read them, fix what is real or say why not, then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . Nothing was merged." ;;
+       stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above). If it has findings, read them, fix what is real or say why not, then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}}${want_first:+ --first} . Nothing was merged." ;;
   esac
 
   if [ -n "$waiting" ]; then
