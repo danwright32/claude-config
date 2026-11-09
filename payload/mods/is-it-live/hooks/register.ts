@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
-import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
+import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { draftHold, markLanded, registerDrafts } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
@@ -11,7 +11,9 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
 // a fact the system can read is checked, never taken from the model), keeps the card per repository
 // so /live can list it in any later session, toasts it, and, once a card says live, pins a message
-// for whoever asked in the band until Dan presses Mark sent (#1335). Spec agreed with Dan 2026-10-03, looks settled 2026-10-04.
+// for whoever asked in the band until Dan presses Mark sent (#1335), and tells the session to save
+// that message as a Slack draft too, never a send (#2435, card.ts says how). Spec agreed with Dan
+// 2026-10-03, looks settled 2026-10-04.
 //
 // The card's result row is mod-kit's boxed card ($.modkit.card, #663), the blocked card's shape:
 // only mod-kit draws a result row (tools/check-mod-shared-parts.sh, L613). The same lines go to the
@@ -362,6 +364,7 @@ const DESCRIPTION = [
   'changed: what changed, in 2 to 3 plain sentences. see: the direct link and the exact clicks to see it.',
   'requester and message ONLY when someone other than Dan asked: an issue another person reported (via "issue" with its number), a pasted Slack thread ("slack"), or a person Dan named ("named"). The message is in Dan\'s voice, with no dashes.',
   'The message tells them the change is live, so Dan is shown it only once a card for that PR says "live", or "none" (with no deploy step, merging is going live): it is required on those calls, and one passed on an earlier call ("deploying", "failed", "unreachable") is held until then.',
+  'Once a card says "live" or "none", the message is also saved as a Slack draft for Dan to send himself, never sent: a draft reply in the thread for via "slack" (pass slack.channel_id and slack.thread_ts from the thread link), else a draft DM to the person (pass slack.user_id when you know it). Run /no-ai-tells on the message before passing it, since the draft is the card\'s text word for word; the card\'s answer says exactly which slack_send_message_draft call to make.',
   SEEN,
 ].join(' ')
 
@@ -376,6 +379,11 @@ const SCHEMA = {
     see: { type: 'object', properties: { link: { type: 'string' }, clicks: { type: 'array', items: { type: 'string' } } }, required: ['link', 'clicks'] },
     requester: { type: 'object', properties: { name: { type: 'string' }, via: { type: 'string', enum: ['issue', 'slack', 'named'] }, issue: { type: 'integer' } }, required: ['name', 'via'] },
     message: { type: 'string' },
+    slack: {
+      type: 'object',
+      description: "Where the message's Slack draft goes: channel_id and thread_ts of the thread a Slack requester asked in, or user_id for a DM to anyone else.",
+      properties: { channel_id: { type: 'string' }, thread_ts: { type: 'string' }, user_id: { type: 'string' } },
+    },
   },
   required: ['repo', 'pr', 'deploy', 'changed', 'see'],
 }
@@ -454,6 +462,7 @@ export const register: Register = on => {
     const notes: string[] = []
     let requester = input.requester
     let message = input.message
+    let slack = input.slack
     if (requester?.via === 'issue') {
       // Asked as each account (#2000), as the pull request is.
       const issue = await readGitHub($, ['issue', 'view', String(requester.issue), '--repo', input.repo, '--json', 'author'])
@@ -471,6 +480,7 @@ export const register: Register = on => {
         notes.push(`The message for ${requester.name} was dropped: issue #${requester.issue} was filed from your own account, so Dan or you asked for it.`)
         requester = undefined
         message = undefined
+        slack = undefined
       }
     }
 
@@ -494,6 +504,12 @@ export const register: Register = on => {
     if (requester && message) {
       kept.requester = requester
       kept.message = message
+      // Where its draft goes: this call's, else what an earlier card for the PR gave for the same
+      // requester, so a live call need not repeat the thread a deploying call named (#2435). An
+      // earlier card for someone else keeps its target: Kris's DM is never where Ana's draft goes.
+      const same = before?.requester?.name === requester.name && before?.requester?.via === requester.via
+      const to = slack ?? (same ? before?.slack : undefined)
+      if (to) kept.slack = to
       // A message already marked sent stays sent only while it is the same message.
       if (before?.sentAt !== undefined && before.message === message) kept.sentAt = before.sentAt
     } else if (before?.requester && before.message) {
@@ -503,8 +519,19 @@ export const register: Register = on => {
       // else; Claude is told it still waits, beside the note that this card's was dropped.
       kept.requester = before.requester
       kept.message = before.message
+      if (before.slack) kept.slack = before.slack
       if (before.sentAt !== undefined) kept.sentAt = before.sentAt
       else if (input.requester) notes.push(`The earlier message for ${before.requester.name} still waits until Dan marks it sent.`)
+    }
+    // #2435: a message the change is out for is also saved as a Slack draft, which the session does
+    // (the mod never calls Slack). Asked again on each such card, saying when an earlier card asked
+    // for one to the same place: this card with this message, or another, whose draft this replaces.
+    if (pinnable(kept) && kept.requester && kept.message) {
+      const key = draftKeyOf(kept.requester, kept.slack)
+      const prior = key === undefined ? undefined : had.find(c => c.draftAsked === key)
+      const earlier = prior ? { earlier: { pr: prior.pr, same: prior.pr === input.pr && prior.message === kept.message } } : {}
+      notes.push(draftLineOf({ requester: kept.requester, message: kept.message, ...(kept.slack ? { slack: kept.slack } : {}), ...earlier }))
+      if (key !== undefined) kept.draftAsked = key
     }
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
@@ -519,7 +546,7 @@ export const register: Register = on => {
     if (waiting)
       notes.push(`The message for ${waiting.name} is held, not shown to Dan, until a card for #${input.pr} says live: once you confirm it is live, call this again with deploy "live"${kept.message ? '' : ' and the message'}.`)
 
-    const { requester: _r, message: _m, ...rest } = input
+    const { requester: _r, message: _m, slack: _s, ...rest } = input
     const shown = { ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
     try {
       await $.modkit.card({ toolUseId: String(toolUseId ?? ''), ...cardOf(shown) })
