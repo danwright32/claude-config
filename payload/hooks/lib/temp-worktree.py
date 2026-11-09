@@ -24,7 +24,8 @@ from wherever the command runs. Any other worktree command (list, remove, prune,
 
 WHAT CANNOT BE READ, and is refused: a path holding any other variable or a substitution, a relative
 path after `cd -`, a command line only the crude cut can read, and a wrapper whose string cannot be
-read, each only when the command names a worktree at all.
+read, each only when the command names a worktree add or move (a variable or substitution in the
+path of one is always in a command that names it).
 
 A REPOSITORY ALREADY IN A TEMP FOLDER loses nothing more by its worktree being there, so a worktree
 of one passes. The repository is the folder git names for `rev-parse --git-common-dir` from where the
@@ -52,6 +53,8 @@ PWD_VARIABLE = re.compile(r"^\$(\{PWD\}|PWD(?![A-Za-z0-9_]))")
 # reads as it.
 ADD_SHORT_VALUED = set("bB")
 ADD_LONG_VALUED = ("--reason",)
+# What an unreadable command must name to be refused: a worktree add or move, the two that place one.
+PLACES = re.compile(r"worktree\s+(add|move)(?![A-Za-z0-9_-])")
 WHY_LITERAL = ("write the worktree's path literally, so where it goes can be read before it runs")
 
 
@@ -210,17 +213,17 @@ def bash(s, cwd):
         records, crude = sw._records(s, cwd, 0)
     except Exception as e:
         raise Unread("the shell reader could not read it (%s)" % e)
-    if crude:
+    if crude and PLACES.search(s):
         raise Unread("only a crude cut can read it (a quote that never closes, or the like)")
     for d, text, wrap, rest, _assigns, _field, _depth in records:
         why = wrap.partition("\x1d")[2]
-        if why and "worktree" in text:
+        if why and PLACES.search(text):
             raise Unread("it hands a string to a shell that cannot be read: %s" % why)
         words = sw.command_words(rest)
         reading = sw.git_read(words)
         if reading is None:
             head = words[0] if words else ""
-            if head[:1] in ("$", "`") and "worktree" in text:
+            if head[:1] in ("$", "`") and PLACES.search(text):
                 raise Unread("its command is a variable or a substitution, known only as it runs")
             continue
         sub, front, after = reading

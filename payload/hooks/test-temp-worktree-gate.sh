@@ -146,6 +146,8 @@ unread_refused "a substitution for the path" 'git worktree add "$(mktemp -d)"'
 unread_refused "a quote that never closes" 'git worktree add "/tmp/wt-2528'
 unread_refused "a relative path after cd -" 'cd - && git worktree add wt-2528'
 unread_refused "an eval naming worktree" 'eval "$CMD worktree add /tmp/x"'
+allowed "an unclosed quote in a worktree list" 'git worktree list "x'
+allowed "an eval naming only a worktree list" 'eval "$CMD worktree list"'
 
 # ---------------------------------------------------------------------------------------------
 echo "a worktree anywhere else, and every other worktree command, goes through"
