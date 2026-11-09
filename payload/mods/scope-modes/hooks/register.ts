@@ -4785,7 +4785,7 @@ const SCOPE_NOTE: Record<ScopeModesScope, string> = {
   'WINDING DOWN':
     `Winding down is on: ${MODE_DEF['WINDING DOWN'].will}. Do not ${MODE_DEF['WINDING DOWN'].willNot}: winding down refuses to ${MODE_DEF['WINDING DOWN'].refuses}. ${FINALIZE_ALL} ${ASK_THEN_MERGE} Fix only what blocks a merge or deploy; file anything else. After each merge, check the deploy and make the is it live card (mcp__is-it-live__card): winding down finishes only once that card says Live or no deploy step recorded.`,
 }
-const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (${PAGE_TOOL}). Do not ${MODE_DEF.away.willNot}.`
+const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (${PAGE_TOOL}). Do not ${MODE_DEF.away.willNot}. ${MODE_DEF.away.stillFine}`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
 const sleepPromptNote = (r: SleepRecord, self: string, now: number) =>
   `Sleep mode is on until ${endSaid(r.until, now)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`

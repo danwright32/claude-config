@@ -62,7 +62,10 @@ describe('the note every prompt carries while asleep', () => {
     expect(ASLEEP_DELIVERY).not.toMatch(/deliver results as a private claude\.ai page/)
   })
   test('it keeps what away holds on the Mac', () => {
-    expect(ASLEEP_DELIVERY).toMatch(/Do not show a dialog, run a script whose text cannot be read, type or click into anything but a test build/)
+    expect(ASLEEP_DELIVERY).toMatch(/Do not show an AppleScript or JavaScript for Automation dialog on the Mac, run a script whose text cannot be read, type or click into anything but a test build/)
+  })
+  test('it does not say pickers are fine, since sleep mode notes questions for the morning (#2473)', () => {
+    expect(ASLEEP_DELIVERY).not.toMatch(/pickers are fine/i)
   })
 })
 

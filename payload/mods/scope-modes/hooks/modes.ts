@@ -22,6 +22,8 @@ export type ModeDef = {
   will: string
   /** What Claude does not do now, which the mode refuses or holds. */
   willNot: string
+  /** A sentence to the session naming what stays allowed that `willNot` could be read as covering. */
+  stillFine?: string
   /** What the mode's own guard refuses outright, where that is narrower than `willNot`. */
   refuses?: string
   /** How the mode ends, when it says more than a switch back. */
@@ -49,7 +51,10 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
     name: 'Away',
     will: `deliver results as ${PRIVATE_PAGE}, readable on the phone`,
     // What away holds (#1269, Dan 2026-10-16 ET), said as what Claude must not do.
-    willNot: 'show a dialog, run a script whose text cannot be read, type or click into anything but a test build, or open a page for Dan to read on the Mac: those wait in the held card until home (bringing apps forward, opening files and test automation run)',
+    // The dialog is the Mac's own, the one away.ts holds, never a picker (#2473).
+    willNot: 'show an AppleScript or JavaScript for Automation dialog on the Mac, run a script whose text cannot be read, type or click into anything but a test build, or open a page for Dan to read on the Mac: those wait in the held card until home (bringing apps forward, opening files and test automation run)',
+    // Dan, 2026-11-08 ET: "You can absolutely show dialogues while I'm away. Pickers are fine." (#2473)
+    stillFine: 'AskUserQuestion pickers are fine while away: Dan answers them from his phone.',
   },
   home: {
     name: 'Home',
