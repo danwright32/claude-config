@@ -6,7 +6,6 @@ import {
   CHANGE,
   GUARD,
   HEADER,
-  LINK_PATHS,
   REEXPORT_HOPS,
   SCAN_MS,
   SENDER_PREFILTER,
@@ -25,6 +24,7 @@ import {
   isOwnRecord,
   isProseFile,
   languageOf,
+  mayHandOn,
   mentionsStore,
   namePatterns,
   plainYamlValues,
@@ -144,7 +144,8 @@ const end = (found: Found): never => {
  */
 const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false): Promise<Found> => {
   const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
-  const left = async () => deadline - (await $.clock.now())
+  // Whole milliseconds, as process.run takes a timeout; under one left is none.
+  const left = async () => Math.floor(deadline - (await $.clock.now()))
   try {
     // The nearest folder that exists, since a Write can create a file in a folder not yet made.
     let dir = path.slice(0, path.lastIndexOf('/')) || '/'
@@ -165,15 +166,37 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     // needs no search for what sends it.
     if (testFile(templateRel)) return NONE
     if (marked) return POSTS
-    // The files git grep lists for `what`, the template itself left out; none is an empty list.
-    const grep = async (what: string, args: string[]): Promise<string[]> => {
+    // What git grep prints for `what`, case ignored; none is an empty string.
+    const grep = async (what: string, args: string[]): Promise<string> => {
       const ms = await left()
       if (ms <= 0) end(late)
-      const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', ...args], { timeoutMs: ms })
-      if (hits.exitCode === 1) return []
+      const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...args], { timeoutMs: ms })
+      if (hits.exitCode === 1) return ''
       if (hits.exitCode !== 0 || hits.isStdoutTruncated)
         end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
-      return candidates(hits.stdout.split('\u0000').filter(r => r && r !== templateRel))
+      return hits.stdout
+    }
+    // Every file holding the word slack or postMessage, listed once for the whole search: a sender is
+    // one of these that names a level, as a file holding both was before (#2371).
+    const slackWords = new Set((await grep(`mention Slack beside ${path}`, ['-l', '-E', '-e', SENDER_PREFILTER, '--', '.'])).split('\u0000').filter(Boolean))
+    /**
+     * The files naming any of `level` in a form a reference takes (namePatterns), the template itself
+     * left out, in the order git lists them. git lists each line holding one of the names, as fixed
+     * strings; the shape is tested here on those lines alone, as `-e word --and -e shape` tested it
+     * in git, which took seconds for a widely imported module's importers (#2462).
+     */
+    const naming = async (level: string[]): Promise<string[]> => {
+      const name = namePatterns(level)
+      const shape = new RegExp(name.shape, 'i')
+      const out = new Set<string>()
+      // -w: every shape has the name between characters that cannot be part of one, so a line holding
+      // it only inside a longer word (db in feedback) is never printed, which keeps a common short
+      // name's listing small.
+      for (const line of (await grep(`name ${path} or hand it on`, ['-F', '-w', ...name.words.flatMap(w => ['-e', w]), '--', '.'])).split('\n')) {
+        const cut = line.indexOf('\u0000')
+        if (cut > 0 && shape.test(line.slice(cut + 1))) out.add(line.slice(0, cut))
+      }
+      return candidates([...out].filter(r => r !== templateRel))
     }
     // Every file read in this search, so a file listed at two levels is read once and counted once.
     const texts = new Map<string, string>()
@@ -242,8 +265,8 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     let level = [templateRel]
     for (let hop = 0; ; hop++) {
       // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
-      const name = namePatterns(level)
-      const rels = await grep(`send ${path}`, ['--all-match', '-E', '-e', SENDER_PREFILTER, '-e', name.word, '--and', '-e', name.shape, '--', '.'])
+      const named = await naming(level)
+      const rels = named.filter(r => slackWords.has(r))
       budget(rels)
       for (const rel of rels) {
         // Only what a file runs can send: a comment naming the template beside a Slack webhook's name
@@ -252,7 +275,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         const text = await textOf(rel, sends)
         if (slackMarked(codeOf(rel, text)) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
       }
-      const links = (await grep(`hand ${path} on`, ['-E', '-e', name.word, '--and', '-e', name.shape, '--', ...LINK_PATHS])).filter(r => !seen.has(r))
+      const links = named.filter(r => mayHandOn(r) && !seen.has(r))
       budget(links)
       const next: string[] = []
       const users: { rel: string; text: string }[] = []

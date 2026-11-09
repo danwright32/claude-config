@@ -556,11 +556,13 @@ test('a file hands a template on when it can export what it imports: a JS or TS 
   expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
 })
 
-// A line git grep lists for `rels`: one holding a name (`word`) and, on that same line, the name in a
-// shape refersTo can accept (`shape`), as `-e word --and -e shape` asks.
+// A line the search lists for `rels`: one git grep lists for holding a name as a whole word (`words`,
+// fixed strings, -w, case ignored) that also holds, tested by the guard, the name in a shape refersTo
+// can accept. Every line expected below to be listed is so with -w, so -w leaves out none of them.
 const lists = (rels: string[], line: string) => {
   const p = namePatterns(rels)
-  return new RegExp(p.word, 'i').test(line) && new RegExp(p.shape, 'i').test(line)
+  const word = (w: string) => new RegExp(`(^|[^A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_]|$)`, 'i')
+  return p.words.some(w => word(w).test(line)) && new RegExp(p.shape, 'i').test(line)
 }
 
 test('the search for the files naming a template finds the line that names it, in a pattern macOS git grep reads', () => {
@@ -573,8 +575,10 @@ test('the search for the files naming a template finds the line that names it, i
   expect(lists(two, "export * from './alpha'")).toBe(true)
   // macOS git grep -E reads \b as matching nothing (measured), so no pattern may use it.
   expect(JSON.stringify(namePatterns(['lib/a.ts', 'b.txt', 'lib/x/index.ts'])).includes('\\\\b')).toBe(false)
-  expect(namePatterns(['lib/templates/deploy.ts']).word).toBe('deploy')
-  expect(namePatterns(['lib/templates/index.ts', 'lib/alpha.ts']).word).toBe('(templates|alpha)')
+  expect(namePatterns(['lib/templates/deploy.ts']).words).toEqual(['deploy'])
+  expect(namePatterns(['lib/templates/index.ts', 'lib/alpha.ts']).words).toEqual(['templates', 'alpha'])
+  // A name is handed to git as written, never escaped as a regular expression would be.
+  expect(namePatterns(['lib/a.b.ts']).words).toEqual(['a.b'])
   expect(REEXPORT_HOPS).toBe(3)
 })
 
