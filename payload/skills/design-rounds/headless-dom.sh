@@ -74,8 +74,13 @@ for v in "$SELF_DIR/headless_chrome.py" "$SELF_DIR/score/headless_chrome.py"; do
   [ -f "$v" ] && { VET="$v"; break; }
 done
 [ -n "$VET" ] || { echo "headless-dom.sh: headless_chrome.py is not beside $SELF_DIR or in its score folder, so whether $REAL is the Chrome Dan uses cannot be told, and it is not run" >&2; exit 126; }
-if [ -e "$REAL" ]; then
-  python3 "$VET" vet "$REAL" >&2 || { echo "headless-dom.sh: refused to run $REAL" >&2; exit 126; }
+# A bare name (google-chrome) is run through PATH, so it is told by what PATH resolves it to.
+case "$REAL" in
+  */*) TOLD="$REAL" ;;
+  *) TOLD="$(command -v "$REAL" 2>/dev/null || true)" ;;
+esac
+if [ -n "$TOLD" ] && [ -e "$TOLD" ]; then
+  python3 "$VET" vet "$TOLD" >&2 || { echo "headless-dom.sh: refused to run $REAL" >&2; exit 126; }
 fi
 
 # Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled

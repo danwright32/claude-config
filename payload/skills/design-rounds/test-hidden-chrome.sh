@@ -182,6 +182,13 @@ HEADLESS_DOM_EXEC=1 HEADLESS_DOM_CHROME="$DAN" bash "$HEADLESS_DOM" "$HL" about:
 check_eq "and refuses to become Dan's Chrome in Playwright's place" "nonzero" "$([ "$rc" -ne 0 ] && echo nonzero || echo "exit $rc")"
 check "saying why" "the Chrome Dan uses" "$(cat "$TMP/exec.err")"
 check_eq "and Dan's Chrome never ran" "no" "$([ -e "$TMP/Google Chrome.app.ran" ] && echo yes || echo no)"
+# Named bare, as a link on PATH to Dan's Chrome, which PATH would resolve and run.
+mkdir -p "$TMP/bin"
+ln -s "$DAN" "$TMP/bin/google-chrome"
+out="$(PATH="$TMP/bin:$PATH" HEADLESS_DOM_CHROME=google-chrome HEADLESS_DOM_DEADLINE=10 bash "$HEADLESS_DOM" "$HL" --dump-dom about:blank 2> "$TMP/bare.err")"; rc=$?
+check_eq "and refuses Dan's Chrome named bare and found on PATH" "nonzero" "$([ "$rc" -ne 0 ] && echo nonzero || echo "exit $rc")"
+check "saying why" "the Chrome Dan uses" "$(cat "$TMP/bare.err")"
+check_eq "and it never ran" "no" "$([ -e "$TMP/Google Chrome.app.ran" ] && echo yes || echo no)"
 out="$(HEADLESS_DOM_CHROME="$CFT" HEADLESS_DOM_DEADLINE=10 bash "$HEADLESS_DOM" "$HL" --dump-dom about:blank 2>/dev/null)"; rc=$?
 check_eq "while another build is run as before (L1)" "0 <html><body>drawn</body></html>" "$rc $out"
 

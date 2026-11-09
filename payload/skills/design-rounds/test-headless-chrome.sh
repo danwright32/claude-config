@@ -12,8 +12,12 @@
 #   2. that guard run over this whole repository, so the next hand written launch fails here (L613);
 #   3. HEADLESS_DOM_EXEC, on a stand in Chrome: it becomes Chrome under the same pid, with every
 #      disabled feature folded into the one switch Chrome reads;
-#   4. a real Chrome started that way and killed mid run, and 5. a real Chrome Playwright started
-#      through capture-web.mjs's launchChrome and abandoned by a killed node, each leaving no copy.
+#   4. the real hidden Chrome started that way and killed mid run, and 5. the real hidden Chrome
+#      Playwright started through capture-web.mjs's launchChrome and abandoned by a killed node, each
+#      coming up and putting nothing in Google Chrome's clone folder. Since claude-config#2191 that
+#      Chrome is a separate build that makes no copy, so these no longer test the removal of a copy
+#      (the stand in Chromes in test-make-switcher.sh do); they catch a hidden Chrome that is Google
+#      Chrome again.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/suite-deadline.sh" || {
