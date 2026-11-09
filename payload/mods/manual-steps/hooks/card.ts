@@ -175,12 +175,45 @@ export const sent = (card: StepsCard, i: number, isSent: boolean, forgetPress = 
   ...card,
   steps: card.steps.map((s, k) => {
     if (k !== i) return s
-    if (isSent) return { ...s, isSent, isPressed: true }
-    if (!forgetPress) return { ...s, isSent }
-    const { isPressed: _pressed, ...rest } = s
+    // Held for no turn, either way: a press holds it afresh when a turn runs, and a step answered
+    // "not done" keeps none from the press before (#2437).
+    const { heldAt: _held, toldAt: _told, ...open } = s
+    if (isSent) return { ...open, isSent, isPressed: true }
+    if (!forgetPress) return { ...open, isSent }
+    const { isPressed: _pressed, ...rest } = open
     return { ...rest, isSent }
   }),
 })
+
+/** The steps (0 based) sent while a main turn ran and still unrecorded: held for that turn (#2437). */
+export const heldSteps = (card: StepsCard | null): number[] =>
+  (card?.steps ?? []).flatMap((s, k) => (s.isSent && !s.finished && s.heldAt !== undefined ? [k] : []))
+
+/** The held steps whose note has not yet ridden on a tool result. */
+export const untoldSteps = (card: StepsCard | null): number[] => heldSteps(card).filter(k => card?.steps[k]?.toldAt === undefined)
+
+/** The card with each of `steps` (0 based) marked as held for the running turn, or told it, at `at`. */
+export const held = (card: StepsCard, steps: number[], field: 'heldAt' | 'toldAt', at: number): StepsCard => ({
+  ...card,
+  steps: card.steps.map((s, k) => (steps.includes(k) ? { ...s, [field]: at } : s)),
+})
+
+/** The card with each of `steps` (0 based) no longer held, so its Done goes as a prompt (#2437). */
+export const unheld = (card: StepsCard, steps: number[]): StepsCard => ({
+  ...card,
+  steps: card.steps.map((s, k) => {
+    if (!steps.includes(k)) return s
+    const { heldAt: _held, toldAt: _told, ...rest } = s
+    return rest
+  }),
+})
+
+/**
+ * What a running turn is told, on its next tool result, of a Done Dan pressed on step `i` (0 based):
+ * check it right away, as a "step N done" asks, since he waits at the card for the next step.
+ */
+export const heldNote = (card: StepsCard, i: number): string =>
+  `Dan pressed Done on step ${i + 1} of the manual steps card ("${card.steps[i]?.title ?? ''}") while you were working. Check that it took where you can and call steps_done for step ${i + 1} now, then carry on with what you were doing. A "${donePrompt(i)}" message follows when this turn ends only if the step is still not recorded.`
 
 /**
  * The card after Claude's verdict on step `n` (1 based), finished at `at` (epoch milliseconds), or
@@ -314,6 +347,13 @@ export const donePrompt = (i: number): string => `step ${i + 1} done`
 // one and a pressed one alike (#939).
 const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: donePrompt(i) }]
 
+// A sent step's words (#2437): pressed while a turn ran, it says whether Claude has read it yet, so
+// a Done waiting for the turn's next step never reads as ignored.
+const sentWords = (s: StepsCard['steps'][number]): string => {
+  if (s.heldAt === undefined) return 'sent'
+  return s.toldAt === undefined ? 'sent, Claude reads it at its next step' : 'sent, Claude has it'
+}
+
 /**
  * The card's lines: the amber heading, "waiting on you" after it while any step is Dan's to do,
  * then each step on its own line. Every unfinished step is open (#1239), bold in the terminal's own
@@ -345,7 +385,7 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       return
     }
     // #1239: every unfinished step is open, so Dan can work ahead while Claude has yet to read a Done.
-    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
+    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: `  ${sentWords(s)}`, dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
