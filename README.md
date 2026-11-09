@@ -4986,6 +4986,27 @@ tells you once and offers a picker to remove them (#1582). It removes nothing on
   measurements).
 - Tests: `hooks/test-local-allow-sweep.sh`, and the process counts in `hooks/test-per-prompt-hook-cost.sh`.
 
+## The running agent cap is announced at session start
+
+How many subagents a session may have running at once depends on the Mac (#2546). `hooks/agent-cap.sh`,
+a SessionStart hook, says it in one line, `[Agent cap] At most N subagents running at once on this
+Mac (<hostname>).`, and the global `CLAUDE.md` says the cap is that announced number, with its own
+fallback for a session where no line arrived.
+
+- **The number's one home is the table in `hooks/agent-cap.sh`**: a short hostname and its cap per
+  line, and a default for any Mac the table does not name. To change a Mac's cap, edit that table
+  and nothing else. `agent-cap.sh --number` prints this Mac's number alone and `--table` the table.
+- **A hostname that cannot be read** gets the default, and the line says the name could not be
+  read rather than naming a Mac it guessed.
+- **Everything else points at the line.** The orchestrate, bug bash, architecture pass and
+  production readiness skills say "the session's agent cap" and name the `[Agent cap]` line. The
+  production audit workflow cannot run a shell, so the skill passes the number as `args.agentCap`;
+  without a usable one the workflow falls back to the hook's default and logs that it did.
+- **The plan council and plan lite panels** are exempt, as the global `CLAUDE.md` says.
+- Tests: `hooks/test-agent-cap.sh`, which also scans the payload's documents and fails on one that
+  writes a cap out by hand (seen failing on planted copies first), and
+  `skills/production-ready/test-production-audit.sh` for the workflow's ceiling.
+
 ## The context line and the long session nudge
 
 Every request rereads the whole conversation, so the cost of a session is set by how much each

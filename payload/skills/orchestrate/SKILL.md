@@ -26,7 +26,7 @@ Matching items to agents:
 - Two items that edit the same files, component, workflow, job or table never run at the same time. If they are one fix, give both to ONE agent in one brief. Otherwise the later one waits until the earlier one's pull request has merged.
 - Two symptoms that may share a cause (two complaints about one service) go to one agent, or run side by side with each brief naming the other item.
 - Different areas of one repo may run together, each agent in its own worktree.
-- Wave 1 is the most urgent four: live harm to customers first. Quick checks fill slots as they free.
+- Wave 1 is the most urgent items, as many as the session's agent cap (the `[Agent cap]` line at session start): live harm to customers first. Quick checks fill slots as they free.
 - Anything irreversible (dropping or deleting data, sending to people, re-running a job with side effects, spending money, changing production settings) is `investigate` only. The agent drafts the action; Dan decides it later with a picker that states the specific consequence.
 
 Show the board, then one picker: start as planned, or change something. Nothing is dispatched before he says yes.
@@ -56,7 +56,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 
 ## 4. While agents run
 
-- At most four agents running, a reviewer agent you start included. When one returns, start the next queued item in the same response.
+- No more agents running than the session's agent cap, a reviewer agent you start included. When one returns, start the next queued item in the same response.
 - Reprint the board whenever anything changes, with each item's state: `queued`, `running since 2:14 PM ET`, `reported`, `in review`, `merged`, `live`, `needs Dan`, `failed: <why>`. Running, stuck and failed must never look alike.
 - An agent silent well past what its item should take: check it with `ListAgents`, then ask it with `SendMessage` for a one paragraph status (found so far, waiting on what, how long). Never read its output file; it is the whole transcript. If it is stuck, stop it with `TaskStop` and restart the item with a brief carrying what it found and what hung it, or mark it failed and say why.
 - Dan adds items mid run: add them to the board and run the matching rules again. When a running agent already owns that area, send the new item to it with `SendMessage` instead of starting another agent: it fixes both on its branch only if they are one fault, and otherwise finishes its own item, reports on the new one, and builds it once its own pull request has merged.

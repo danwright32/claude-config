@@ -158,7 +158,10 @@ from the user's list plus the operability gaps research surfaced.
 19. **Documentation & Architecture**: ADRs; architecture diagrams; API contracts &
     versioning; README/runbooks/onboarding docs.
 
-Auditors and refuters run at most four at once, Dan's standing rule for every session
+Auditors and refuters run no more at once than the session's agent cap, Dan's standing rule for
+every session, passed in as `args.agentCap` from the `[Agent cap]` line `hooks/agent-cap.sh` says at
+session start (claude-config#2546). The engine cannot run a shell or read a file, so a run started
+with none falls back to the hook's default for a Mac it does not name, and logs that it did
 (the engine's own cap, about min(16, cores minus 2), let up to 16 run before
 claude-config#1753); the rest queue and still complete. Heavy by design (decision 4).
 
@@ -192,7 +195,8 @@ claude-config#1753); the rest queue and still complete. Heavy by design (decisio
   `plan-council/healthcheck.sh`. Runnable in CI / locally.
 - **`test-production-audit.sh`** runs the real workflow through `production-audit.harness.cjs`
   with every agent stood in: the legal domains kept, a dead auditor reported as unaudited, the
-  law tags carried, at most four agents at once. What the agents themselves find is still only
+  law tags carried, never more agents at once than the cap passed in (or the hook's default with
+  none, or with one that is not a whole number). What the agents themselves find is still only
   judged on a real run.
 - Issue-filing reuses the already-tested `create-milestone.sh` for milestones; the
   per-finding `gh issue create` path is thin and validated on the first real run with a

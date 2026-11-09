@@ -2,8 +2,8 @@
 # Tests for the builder model rule (claude-config#1961).
 #
 # Dan decided on 2026-11-01 that whether a builder agent runs on Sonnet or Opus is set by a written
-# rule by kind of task, that the orchestrator may suggest an override for one brief saying why, and
-# that the running agent cap stays at four. The rule has ONE home, the "Which model a builder runs
+# rule by kind of task, and that the orchestrator may suggest an override for one brief saying why.
+# The running agent cap is held by test-agent-cap.sh since #2546. The rule has ONE home, the "Which model a builder runs
 # on" section of the orchestrate skill, beside the dispatch board whose Model column it fills (L83).
 # Everything else that dispatches builders points at that section by name rather than restating the
 # kinds, because two copies of a list drift (L370).
@@ -11,7 +11,7 @@
 # What this holds the files to:
 #   1. the home exists, exactly once, and names each kind the issue measured and the Opus default;
 #   2. the board carries a Model column and the wave is sent with each row's model;
-#   3. the cap in the global CLAUDE.md still says four;
+#   3. the global CLAUDE.md points builders at the home;
 #   4. any other payload document that sets a model on an Agent call names the home, so a second
 #      copy of the rule cannot arrive unnoticed. This is a scan by spelling (L564): it finds a copy
 #      written with the Agent tool's own parameter, which is how a dispatch rule is written.
@@ -82,10 +82,10 @@ check "the dispatch board has a Model column" \
 check "each Agent call in a wave carries its row's model" \
   "$(grep -q -F 'carrying the `model` its board row shows' "$HOME_FILE" 2>/dev/null && echo ok || echo "the wave line does not pass the model")"
 
-# ---- 3. the cap stays at four ----
+# ---- 3. the global CLAUDE.md points at the rule ----
+# The running agent cap is no longer held here: it is a number per Mac, and test-agent-cap.sh holds
+# it beside its one home, hooks/agent-cap.sh (claude-config#2546).
 if [ -n "$CLAUDE_MD" ]; then
-  check "the cap in the global CLAUDE.md still says four" \
-    "$(grep -q -F '**At most four agents running at once.**' "$CLAUDE_MD" 2>/dev/null && echo ok || echo "the cap line is gone or changed in $CLAUDE_MD")"
   pointer_lines="$(grep -F "$RULE_NAME" "$CLAUDE_MD" 2>/dev/null)"
   case "$pointer_lines" in
     *skills/orchestrate/SKILL.md*) pointer_found=ok ;;
@@ -93,7 +93,7 @@ if [ -n "$CLAUDE_MD" ]; then
   esac
   check "the global CLAUDE.md points builders at the rule's section" "$pointer_found"
 else
-  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the cap in its CLAUDE.md was not read"
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the pointer in its CLAUDE.md was not read"
 fi
 
 # ---- 4. any other document setting an Agent model names the home ----

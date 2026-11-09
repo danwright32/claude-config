@@ -1,6 +1,6 @@
 export const meta = {
   name: 'production-audit',
-  description: 'Audit a project for production readiness: profile, run 19 domain auditors four at a time, adversarially verify serious findings, synthesize an advisory report.',
+  description: 'Audit a project for production readiness: profile, run 19 domain auditors within the session agent cap, adversarially verify serious findings, synthesize an advisory report.',
   phases: [
     { title: 'Profile', detail: 'detect project type + applicable domains' },
     { title: 'Audit', detail: 'one specialist auditor per applicable domain' },
@@ -35,11 +35,27 @@ const focusLine = focus
   ? `\nThe person who started this audit asked for extra attention on: ${focus}. This adds to your checklist; it never replaces any item.`
   : ''
 
-// At most four agents run at once, Dan's standing rule for every session (2026-10-16). The engine's
-// own cap is min(16, cores - 2), so before this the 19 auditors and their refuters ran up to 16 at
-// once and a 2026-10-24 run had to be batched in fours by hand. Every agent the audit and verify
-// phases start goes through this gate; a slot is freed however its agent ends, a throw included.
-const MAX_AGENTS_AT_ONCE = 4
+// No more agents run at once than the session's agent cap, Dan's standing rule for every session
+// (2026-10-16). Before this the 19 auditors and their refuters were bounded only by the engine's own
+// cap, min(16, cores - 2), and a 2026-10-24 run had to be batched by hand. Every agent the audit
+// and verify phases start goes through this gate; a slot is freed however its agent ends, a throw
+// included.
+//
+// The cap is this Mac's (claude-config#2546): hooks/agent-cap.sh is its one home and says it at
+// session start, and the skill passes that number as args.agentCap. This script cannot run a shell
+// or read a file, so it cannot ask the hook, and a run started without a usable number falls back to
+// AGENT_CAP_FALLBACK, the hook's default for a Mac it does not name, and says so in the log rather
+// than guessing quietly. test-production-audit.sh runs this with no agentCap and holds the ceiling it
+// reaches to the hook's default, so the two cannot drift apart unnoticed.
+const AGENT_CAP_FALLBACK = 4
+const _capArg = typeof _a.agentCap === 'string' && /^[0-9]+$/.test(_a.agentCap.trim())
+  ? Number(_a.agentCap.trim())
+  : _a.agentCap
+const _capUsable = Number.isInteger(_capArg) && _capArg >= 1
+const MAX_AGENTS_AT_ONCE = _capUsable ? _capArg : AGENT_CAP_FALLBACK
+if (!_capUsable) {
+  log(`agentCap ${_a.agentCap === undefined ? 'was not passed' : `was ${JSON.stringify(_a.agentCap)}, not a whole number of at least 1`}, so the default of ${AGENT_CAP_FALLBACK} agents at once applies; pass the number on the session's [Agent cap] line`)
+}
 let _running = 0
 const _waiting = []
 const limitedAgent = async (prompt, opts) => {
