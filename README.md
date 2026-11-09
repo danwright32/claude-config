@@ -6308,7 +6308,12 @@ counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the br
 as it is (why)?" with Leave it as it is or Clean it up, and records only the first, by repository
 and branch: winding down then stops waiting for that branch to be deleted here or a worktree on it
 to go, and for the uncommitted files his question named, while a change to any other file asks again
-and the branch on GitHub is still deleted. Uncommitted work is named by its files, and a branch to
+and the branch on GitHub is still deleted. On the session's own branch with no PR, his answer
+settles the question of its PR too (#2533). So does the branch being gone both here and from
+GitHub, which leaves nothing to put in a PR, and a branch the session pushed into another by
+refspec (`git push origin HEAD:fix-pr` from `fix-local`, recorded as `pushedInto` in its state) is
+finished by that other branch's PR when it has none of its own, while `fix-local` still existing
+here holds as any merged PR's branch does. Uncommitted work is named by its files, and a branch to
 commit it starts only on Dan's answer to `open_cleanup_branch` (#1051), which names the files git
 status lists and records only his Open it: that branch may then start once, by `git switch -c` or
 `git checkout -b`, while nothing beyond those files is uncommitted, and any other branch is still
@@ -7048,7 +7053,11 @@ word slack or postMessage and the template's name in a form a reference takes (a
 file name with its extension, after its folder and a dot, or on a python import line, never a word
 the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
 each, all within 3 seconds per call, following files that
-re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
+`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
+so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
+component that itself sends, or imports a send helper, is still its sender, and a file with any
+other importer is followed as before. A search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
 holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
@@ -7057,7 +7066,7 @@ name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519
 
 </td></tr>
 </tbody>

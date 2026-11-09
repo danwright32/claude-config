@@ -1677,6 +1677,10 @@ ENTRIES
   if [ -n "$fresh" ] && ! notify_posted "$3"; then
     cur="$told"
   fi
+  # Nothing to record under this key and nothing recorded there to clear: the rewrite below would
+  # put back the same file, two programs on every run for nothing (claude-config#2472). Only when
+  # the record exists, so a missing one is still created as before.
+  [ "$cur" = / ] && [ -z "$prev" ] && [ -f "$f" ] && return 0
   # Written beside the record and renamed over it, so a run that dies mid write leaves the old record
   # whole. Named for this tool and this run, not scratch: it never leaves the sync clone, where the
   # gitignore covers it, and the sync lock means only one run writes here at a time.
@@ -6317,6 +6321,16 @@ apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   move_shared_files_to_local # before anything reads or mirrors them (claude-config#1526)
+  # What the shared repo changed that this Mac has not applied, worked out ONCE for the steps below
+  # (claude-config#2472). merge_rule_files, preserve_local_conflicts and locally_ahead_paths each
+  # asked unapplied_paths, about nine programs every time, and nothing between them moves HEAD, the
+  # applied marker or the shared branch, so all three got the same answer. Local, so it is visible
+  # only to what this function calls and is gone when it returns: a later step that does move HEAD
+  # asks afresh. Worked out before the flag is set, or it would read its own empty answer, and not
+  # at all without git, where the answer is always nothing.
+  local APPLY_UNAPPLIED="" APPLY_UNAPPLIED_KNOWN=""
+  if have_git; then APPLY_UNAPPLIED="$(unapplied_paths)"; fi
+  APPLY_UNAPPLIED_KNOWN=1
   merge_rule_files           # entry level merge first: what merges is no conflict
   preserve_local_conflicts   # then whatever genuinely clashed, before it is overwritten
   # Hold back local edits the repo has not seen (see locally_ahead_paths): the
@@ -6868,6 +6882,12 @@ ALLBAKS
 # more rather than mirroring over the other Mac's work (L42).
 unapplied_paths(){
   local last head changed branch upstream bases theirs _b
+  # Inside one apply the answer is worked out once and read by every step that asks
+  # (claude-config#2472): see apply_payload_to_local, the only place this is set.
+  if [ -n "${APPLY_UNAPPLIED_KNOWN:-}" ]; then
+    [ -z "$APPLY_UNAPPLIED" ] || printf '%s\n' "$APPLY_UNAPPLIED"
+    return 0
+  fi
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -8383,13 +8403,18 @@ receive_command(){
 #   concludable  in progress, no work left in the todo, nothing unmerged: finishing it is safe
 #   conflict     in progress with paths still unmerged: only a person can settle that
 sync_rebase_dir(){   # prints the directory of an in progress rebase, or nothing
-  local d
-  for d in rebase-merge rebase-apply; do
-    d="$(git -C "$SYNC_REPO" rev-parse --git-path "$d" 2>/dev/null || true)"
+  # Both places asked in ONE git call, which prints one path per line in the order asked
+  # (claude-config#2472): every mutating run asks this at least twice, and a git start is the
+  # costliest thing a run does.
+  local d paths
+  paths="$(git -C "$SYNC_REPO" rev-parse --git-path rebase-merge --git-path rebase-apply 2>/dev/null || true)"
+  while IFS= read -r d; do
     [ -n "$d" ] || continue
     case "$d" in /*) ;; *) d="$SYNC_REPO/$d" ;; esac
     [ -d "$d" ] && { printf '%s' "$d"; return 0; }
-  done
+  done <<REBASE_PATHS
+$paths
+REBASE_PATHS
   return 1
 }
 
