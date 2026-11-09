@@ -3359,6 +3359,23 @@ around the gate, was not reproduced by these and is replaced by them. Following 
 median of 10 at load average about 21): `npm run digest` in repo-digest 0.069 s against 0.063 s
 before; a plain push still takes the quick exit, whose code this did not change. Suite: `test-slack-drafts-only-gate.sh`.
 
+The gate stops itself after 11 seconds (`BUDGET_SECONDS`), inside the 15 its registration declares,
+and refuses saying it ran out of time and which file it was about to read or whose commands it was
+judging (#2432). Before, a call it could
+not finish was killed at the timeout, and Claude Code's `[command hook 42]: timed out; blocking
+because onFailure is "block"` said nothing of why, so it read the same as a send. That was every try
+of the TO FILE THESE clear line on the work MacBook on 2026-11-07, while the gate of that day read
+the session transcript handed to `issue-spool.sh` as a shell script: the first 2 MB, about 12,800
+commands, 5.0 to 5.6 seconds on this Mac at load averages of 14 to 90. #2415 had already stopped
+reading such data files as code; the same line now takes 0.27 seconds against a 248 MB transcript
+(load average 14, 2026-11-09). A file the gate cannot tell from a script (a large file with no
+extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
+and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
+distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
+real one.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
@@ -5639,10 +5656,21 @@ than Dan asked (an issue another person filed, read with `gh issue view` and che
 account `gh auth status` lists as logged in, all of them Dan's; a pasted Slack thread; a person Dan
 named), the message for them, in Dan's voice and with no dash, is pinned in the band (slot
 `message`, violet heading) with Copy and Mark sent, which work in any session whatever repository
-the card is for. A message waits until Mark sent: a later card for the same PR that names nobody
-keeps it, and one Dan marked sent stays sent. Cards are kept per repository in the mod's store,
-under the repository as GitHub's own link for the PR names it and in one case, so a card Claude
-typed in another case or under an old name is found; `/live` lists them and every unsent message.
+the card is for. The same card's answer tells the session to save that message as a Slack draft
+too (#2435, Dan, 2026-11-07: "anytime you have a message for someone you should save it in a draft
+in slack as well"): a draft reply in the thread for a Slack requester (the card's optional
+`slack.channel_id` and `slack.thread_ts`), a draft DM for a person named or an issue reporter
+(`slack.user_id`, else found with `slack_search_users`, else Dan is told no draft was saved), with
+`slack_send_message_draft` and the card's text word for word after `/no-ai-tells`, never a send.
+It asks only on a card the message is shown on (live or none, not yet marked sent), and when an
+earlier card asked for a draft to the same thread or person it says this draft replaces that one:
+Slack keeps one attached draft per channel and has no tool to change it, so on
+`attached_draft_exists` Dan deletes the earlier draft in Slack and the session saves again. A
+missing thread is never swapped for a DM. A message waits until Mark sent: a later card for the
+same PR that names nobody keeps it, and one Dan marked sent stays sent. Cards are kept per
+repository in the mod's store, under the repository as GitHub's own link for the PR names it and in
+one case, so a card Claude typed in another case or under an old name is found;
+`/live` lists them and every unsent message.
 Other mods read the newest card's state for a PR through `$.isItLive.verdict({ repo, pr })` (null
 when no card has been made in this session; the repo in any case), which is how winding down knows
 the deploy is live. The card's result row is mod-kit's boxed card, its state word leading the title
@@ -5721,7 +5749,7 @@ The mod never calls a Slack tool.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2436
+#617, #663, #707, #771, #1244, #1271, #2435, #2436
 
 </td></tr>
 <tr><td>
