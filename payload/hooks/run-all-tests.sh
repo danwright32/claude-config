@@ -931,7 +931,8 @@ if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
   done | awk -F'\t' -v n="$HOOK_TESTS_DEAL" '
     { path[NR] = $1; sec[NR] = $2; if ($2 != "") { m[++k] = $2 + 0 } }
     END {
-      # The median of what was measured, the stand in for a suite with no record (1s with none).
+      # The median of what was measured, the stand in for a suite with no record (one second when
+      # nothing is measured, which this code sets rather than measures).
       if (k == 0) { med = 1 } else {
         for (i = 1; i <= k; i++) for (j = i + 1; j <= k; j++) if (m[j] < m[i]) { t = m[i]; m[i] = m[j]; m[j] = t }
         med = (k % 2) ? m[(k + 1) / 2] : int((m[k / 2] + m[k / 2 + 1]) / 2)
