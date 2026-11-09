@@ -3409,6 +3409,24 @@ the name of a built in one, can still write. Suite: `test-read-only-query-allow.
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
 
+## A trusted path that has gone is said
+
+Entries in `autoMode.environment` can name a trusted checkout by absolute path, and on the work
+MacBook one pointed at a folder gone for two weeks after a project move, so the classifier trusted
+a checkout that no longer existed and did not recognise the real one (#2491).
+`hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
+absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
+backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
+names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
+is one line and exit 2; no `python3` is exit 3.
+
+It runs on every prompt from `hooks/project-list-nudge.sh`, beside `hooks/check-project-list.sh`,
+and goes through that hook's one notice per distinct answer per session record, so it is said once
+and again only when the answer changes. That record holds a hash of the answer, never its text,
+because on the work MacBook the paths name work repositories. Tests point it elsewhere with
+`TRUSTED_PATHS_SETTINGS_FILE`. Suites: `test-check-trusted-paths.sh`, `test-project-list-nudge.sh`.
+
 ## Tests
 
 ```bash
