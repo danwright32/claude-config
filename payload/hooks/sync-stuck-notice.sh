@@ -18,7 +18,8 @@
 # nothing here to change.
 #
 # CHEAP, because it runs on every prompt in every project. No network and no CI query: `stuck` reads
-# the two small records the sync already keeps (.behind-skips and .ci-red-since) and takes no lock,
+# the small records the sync already keeps (.behind-skips, .ci-red-since, .watch-stale and, since
+# #2530, .send-refused) and takes no lock,
 # so it never waits on a watcher that is busy (L110). Measured 2026-09-17 on this Mac over 20 prompts
 # each: 70ms per prompt with one clone to ask (75ms while a stuck stretch is on record), and 16ms on
 # a Mac with no automatic sync installed, which never starts claude-sync at all. Most of the 70 is
@@ -282,7 +283,7 @@ while IFS= read -r clone; do
   done <<< "$recs"
 
   # Every stretch this session was told about that the clone no longer reports has ENDED. Only the
-  # two stuck directions and a stuck watcher have an end worth saying; an unreadable record that
+  # two stuck directions, a stuck watcher and a refused send have an end worth saying; an unreadable record that
   # became readable is followed by whatever it now says, which is its own notice if anything is wrong.
   while IFS= read -r t; do
     case "$t" in "$clone$T"*) ;; *) continue ;; esac
