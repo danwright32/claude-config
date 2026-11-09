@@ -140,7 +140,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
           return { value: { exitCode: 0, stdout: lines.join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
         }
         // git grep reads line by line, so each pattern must match within one line of the file.
-        const hits = searched.filter(p => patterns.every(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
+        // Fixed strings (-F) list a file holding any one of them, as git does (#2475).
+        const hits = searched.filter(p => (fixed ? patterns.some.bind(patterns) : patterns.every.bind(patterns))(re => (files[p] ?? '').split('\n').some(l => re.test(l))))
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return { value: { exitCode: 0, stdout: hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: truncated, isStderrTruncated: false } } as never
       }
@@ -822,6 +823,117 @@ test('new wording in a template that another file sends to Slack is held, naming
   expect(w.ran).toEqual([])
   await ask($, w, why, APPROVE)
   expect(refusalOf(await call($, RETEMPLATE))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2475: a file that posts to Slack imports a module that holds an editor model's own
+// instructions beside the title it posts. The instructions are text only the model reads, so adding a
+// sentence to them was held as Slack wording, and the picker had to show the whole prompt.
+const EDITOR = '/w/app/src/lib/ai/editor.ts'
+const EDITOR_TEXT = [
+  "import Anthropic from '@anthropic-ai/sdk'",
+  'const client = new Anthropic()',
+  'export const EDITOR_PROMPT = `You are the editor for the nightly digest.',
+  '',
+  'Keep every sentence short and plain.`',
+  'const STYLE = `Never use a dash as punctuation.`',
+  'const SYSTEM = [EDITOR_PROMPT, STYLE].join("\\n")',
+  'export const digestTitle = (n: number) => `Nightly digest: ${n} stories ready`',
+  'export const editDigest = async (draft: string) => {',
+  "  const res = await client.messages.create({ model: 'claude-x', max_tokens: 900, system: SYSTEM, messages: [{ role: 'user', content: draft }] })",
+  '  return String(res.content)',
+  '}',
+  '',
+].join('\n')
+const DIGEST_JOB = '/w/app/src/jobs/digest.ts'
+const DIGEST_JOB_TEXT = [
+  "import { WebClient } from '@slack/web-api'",
+  "import { editDigest, digestTitle } from '../lib/ai/editor'",
+  'const slack = new WebClient(process.env.SLACK_BOT_TOKEN)',
+  "export const run = async (draft: string) => slack.chat.postMessage({ channel: 'C1', text: `${digestTitle(3)}\\n${await editDigest(draft)}` })",
+  '',
+].join('\n')
+const editorWorld = { files: { [EDITOR]: EDITOR_TEXT, [DIGEST_JOB]: DIGEST_JOB_TEXT } }
+const PROMPT_EDIT = { tool: 'Edit', file_path: EDITOR, old_string: 'Keep every sentence short and plain.', new_string: 'Keep every sentence short and plain. Lead with the biggest story.' }
+
+test("an edit to a model's own instructions, in a module a Slack sender imports, passes: only the model reads them (#2475)", withKit, async ($, on) => {
+  const w = world($, on, editorWorld)
+  expect(refusalOf(await call($, PROMPT_EDIT))).toBe('')
+  // A part the prompt is built from is read only by the model too.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: EDITOR, old_string: 'Never use a dash as punctuation.', new_string: 'Never use a dash or a semicolon as punctuation.' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  expect(w.asked).toEqual([])
+})
+
+test('the title the same module hands the Slack sender is still held, and so is a prompt edit made in the same call as one (#2475)', withKit, async ($, on) => {
+  const w = world($, on, editorWorld)
+  const title = { tool: 'Edit', file_path: EDITOR, old_string: 'Nightly digest: ${n} stories ready', new_string: 'Nightly digest: ${n} stories are ready' }
+  const why = refusalOf(await call($, title))
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(why).toContain('Nightly digest: ${n} stories are ready')
+  // A call changing the prompt and the title shows Dan the title alone, never the prompt.
+  const both = refusalOf(await call($, { tool: 'MultiEdit', file_path: EDITOR, edits: [{ old_string: PROMPT_EDIT.old_string, new_string: PROMPT_EDIT.new_string }, { old_string: title.old_string, new_string: title.new_string }] }))
+  expect(both).toContain('Nightly digest: ${n} stories are ready')
+  expect(both).not.toContain('Lead with the biggest story')
+  expect(w.ran).toEqual([])
+})
+
+test('a prompt constant some file also posts, or uses any way but as a model input, is still held as Slack wording (#2475)', withKit, async ($, on) => {
+  // The sender posts the instructions themselves.
+  const POSTS_PROMPT = "import { WebClient } from '@slack/web-api'\nimport { EDITOR_PROMPT } from '../lib/ai/editor'\nconst slack = new WebClient(process.env.SLACK_BOT_TOKEN)\nexport const run = () => slack.chat.postMessage({ channel: 'C1', text: EDITOR_PROMPT })\n"
+  const w = world($, on, { files: { ...editorWorld.files, [DIGEST_JOB]: POSTS_PROMPT } })
+  const why = refusalOf(await call($, PROMPT_EDIT))
+  expect(why).toContain('Lead with the biggest story')
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(w.ran).toEqual([])
+})
+
+test('a prompt constant another file hands to something other than a model is still held: the guard cannot see where that goes (#2475)', withKit, async ($, on) => {
+  const OTHER = '/w/app/src/lib/ai/log.ts'
+  const w = world($, on, { files: { ...editorWorld.files, [OTHER]: "import { EDITOR_PROMPT } from './editor'\nexport const note = () => record(EDITOR_PROMPT)\n" } })
+  expect(refusalOf(await call($, PROMPT_EDIT))).toContain('Lead with the biggest story')
+  // So is one renamed on its way out, which a search by its name could not follow.
+  const ALIAS = "export { EDITOR_PROMPT as PROMPT }\n"
+  w.files[EDITOR] = EDITOR_TEXT + ALIAS
+  delete w.files[OTHER]
+  expect(refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))).toContain('Name each story once')
+  expect(w.ran).toEqual([])
+})
+
+// The prompt reaches a model runner elsewhere through a barrel, which a search by its name still finds.
+const BARREL_AI = { '/w/app/src/lib/ai/index.ts': "export * from './editor'\n" }
+const REVIEW = '/w/app/src/lib/review/run.ts'
+const REVIEW_TEXT = "import { EDITOR_PROMPT } from '../ai'\nexport const review = (d: string) => client.messages.create({ system: EDITOR_PROMPT, messages: [{ role: 'user', content: d }] })\n"
+
+test('a prompt another file imports through a barrel and hands only to a model passes; one whose other uses cannot be read is held (#2475)', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...editorWorld.files, ...BARREL_AI, [REVIEW]: REVIEW_TEXT } })
+  expect(refusalOf(await call($, PROMPT_EDIT))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The guard cannot tell what the runner does with it, so the prompt counts as wording: held, never let through.
+  w.ctl.unreadable = REVIEW
+  const why = refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))
+  expect(why).toContain('Name each story once')
+  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
+  expect(w.ran.length).toBe(1)
+})
+
+test('in a file that posts to Slack itself, its model prompt passes and its alert wording is still held (#2475)', withKit, async ($, on) => {
+  const JOB = '/w/app/src/jobs/summary.ts'
+  const JOB_TEXT = [
+    "import { WebClient } from '@slack/web-api'",
+    "import Anthropic from '@anthropic-ai/sdk'",
+    'const slack = new WebClient(process.env.SLACK_BOT_TOKEN)',
+    'const SUMMARY_PROMPT = `Summarise the day in three plain sentences.`',
+    'export const run = async (log: string) => {',
+    "  const res = await new Anthropic().messages.create({ model: 'claude-x', max_tokens: 400, system: SUMMARY_PROMPT, messages: [{ role: 'user', content: log }] })",
+    "  await slack.chat.postMessage({ channel: 'C1', text: `Daily summary is ready: ${String(res.content)}` })",
+    '}',
+    '',
+  ].join('\n')
+  const w = world($, on, { files: { [JOB]: JOB_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'three plain sentences.', new_string: 'three plain sentences, the worst news first.' }))).toBe('')
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'Daily summary is ready', new_string: 'Daily summary is ready to read' }))
+  expect(why).toContain('Daily summary is ready to read')
   expect(w.ran.length).toBe(1)
 })
 

@@ -6910,6 +6910,12 @@ names, needs lists, input descriptions or other run commands; a
 string, the strings inside it wording of their own, and the message Dan is shown is checked only for
 the words between its filled in values, never the code that fills them (#2371); and a file in no
 git repository, as a scratchpad script is, is let through even when it posts to Slack itself.
+Text only a model reads is not message text either (#2475): in a JavaScript, TypeScript or python
+file, a string handed to a `system`, `instructions` or `prompt` key or keyword, or to a message's
+`content` beside its `role`, and a top level constant or function whose every use, in its own file and
+in every other file of the repository naming it, is such a value, an import of it under its own name,
+or a part of another such constant. One other use (posted, logged, handed to a function, exported
+under another name), or another file that cannot be read within the search's time, and it counts.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
