@@ -248,8 +248,8 @@ wf_job_block(){ # wf_job_block <workflow> <job> -> that job's lines, comments st
   code_of "$1" | awk -v j="$2" '$0 ~ "^  "j":[[:space:]]*$" { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }'
 }
 start_recorded_first(){ # start_recorded_first <workflow> -> ok, or what is wrong with each runner job
-  local job block first out="" n=0
-  while IFS="$(printf '\t')" read -r _ job _; do
+  local job block first out="" n=0 _file _limit _m
+  while IFS="$(printf '\t')" read -r _file job _limit; do
     [ -n "$job" ] || continue
     block="$(wf_job_block "$1" "$job")"
     case "$block" in *run-all-tests.sh*) ;; *) continue ;; esac
@@ -330,8 +330,11 @@ RUNNER="$DIR/../payload/hooks/run-all-tests.sh"
 # A throwaway tree, so a deal and a part run can be driven to refuse without the real suites.
 FX="$TMPROOT/deal-tree"
 mkdir -p "$FX/t" "$FX/store"
+# Each fails when it can see the part it was run in: those settings are the runner's alone, and a
+# suite inheriting them would hand them to every runner it starts on a fixture of its own, which
+# then refuses (the first CI run of the parts, test-fixture-runner-home.sh, 2026-11-09).
 for s in a b c d; do
-  printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$FX/t/test-$s.sh"
+  printf '#!/usr/bin/env bash\nif [ -n "${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}${HOOK_TESTS_DEALT:-}" ]; then echo "SUITE-RESULT passed=0 failed=1"; else echo "SUITE-RESULT passed=1 failed=0"; fi\n' > "$FX/t/test-$s.sh"
 done
 git -C "$FX" init -q && git -C "$FX" add t
 # Measured cost, not count: a=100 b=60 c=50 d=10 into two parts puts a with d (110) and b with c
@@ -353,10 +356,10 @@ printf '%s\n' "$deal2" > "$FX/deal.tsv"
 part_run "$FX/deal.tsv" 2 2
 { [ "$part_rc" -eq 0 ] && grep -q 'test-b.sh' <<< "$part_out" && grep -q 'test-c.sh' <<< "$part_out" \
     && ! grep -qE 'ok +test-(a|d)\.sh' <<< "$part_out"; } \
-  && check "#2463 a part runs exactly the suites dealt to it" ok \
-  || check "#2463 a part runs exactly the suites dealt to it" "rc=$part_rc: $(tail -3 <<< "$part_out" | tr '\n' ' ')"
+  && check "#2463 a part runs exactly the suites dealt to it, and none of them sees which part it is in" ok \
+  || check "#2463 a part runs exactly the suites dealt to it, and none of them sees which part it is in" "rc=$part_rc: $(tail -3 <<< "$part_out" | tr '\n' ' ')"
 
-# THE GUARD THE BRIEF ASKS FOR: a suite in no part. Added to the tree after the deal was made, it
+# THE GUARD THAT MATTERS MOST: a suite in no part. Added to the tree after the deal was made, it
 # is in no line of it, and every part refuses rather than running without it.
 printf '#!/usr/bin/env bash\necho "SUITE-RESULT passed=1 failed=0"\n' > "$FX/t/test-e.sh"
 git -C "$FX" add t/test-e.sh
