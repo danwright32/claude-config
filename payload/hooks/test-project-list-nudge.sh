@@ -58,12 +58,19 @@ mklist() { # mklist <name> <body>  -> prints the path
 }
 # The hook payload a real UserPromptSubmit carries. Only the session id matters here.
 payload() { printf '{"session_id": "%s", "prompt": "hello"}' "${1:-sess-a}"; }
+# The nudge also asks check-trusted-paths.sh about this Mac's auto mode trusted paths
+# (claude-config#2491). Every run here points that check at a settings file of the suite's own, so
+# a stale path in the real settings.json of whichever Mac runs the suite cannot make a quiet case
+# speak. A file that is not there is the check's silent case.
+TRUSTED_SETTINGS="$TMPROOT/no-settings.json"
 run() { # run <list file> <host> [session]
   payload "${3:-sess-a}" | PROJECT_LIST_FILE="$1" PROJECT_LIST_HOST="$2" \
+    TRUSTED_PATHS_SETTINGS_FILE="$TRUSTED_SETTINGS" \
     PROJECT_LIST_STATE_DIR="$STATE" bash "$NUDGE" 2>/dev/null
 }
 run_err() { # same, but stderr instead
   payload "${3:-sess-a}" | PROJECT_LIST_FILE="$1" PROJECT_LIST_HOST="$2" \
+    TRUSTED_PATHS_SETTINGS_FILE="$TRUSTED_SETTINGS" \
     PROJECT_LIST_STATE_DIR="$STATE" bash "$NUDGE" 2>&1 >/dev/null
 }
 
@@ -171,17 +178,58 @@ out_noblock="$(run "$NOBLOCK" Mac-A sess-e)"
 # why it could not deduplicate.
 # ---------------------------------------------------------------------------
 out_nosess="$(printf '{}' | PROJECT_LIST_FILE="$ONE_GONE" PROJECT_LIST_HOST=Mac-A \
+  TRUSTED_PATHS_SETTINGS_FILE="$TRUSTED_SETTINGS" \
   PROJECT_LIST_STATE_DIR="$STATE" bash "$NUDGE" 2>/dev/null)"
 case "$out_nosess" in
   *AppMoved*) check "a payload with no session id still reports the missing project" ok ;;
   *) check "a payload with no session id still reports the missing project" "it said: $out_nosess" ;;
 esac
 err_nosess="$(printf '{}' | PROJECT_LIST_FILE="$ONE_GONE" PROJECT_LIST_HOST=Mac-A \
+  TRUSTED_PATHS_SETTINGS_FILE="$TRUSTED_SETTINGS" \
   PROJECT_LIST_STATE_DIR="$STATE" bash "$NUDGE" 2>&1 >/dev/null)"
 case "$err_nosess" in
   *[![:space:]]*) check "and says on stderr that it could not deduplicate" ok ;;
   *) check "and says on stderr that it could not deduplicate" "stderr was empty" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# A stale auto mode trusted path is said through the same once per divergence record
+# (claude-config#2491), not a second mechanism. Invented paths only.
+# ---------------------------------------------------------------------------
+TRUSTED_GONE="$TMPROOT/trusted-gone.json"
+printf '{\n  "autoMode": {\n    "environment": [\n      "**Trusted repo**: %s/here/AppOne",\n      "**Old repo**: %s/here/TrustedMoved"\n    ]\n  }\n}\n' \
+  "$TMPROOT" "$TMPROOT" > "$TRUSTED_GONE"
+run_trusted() { # run_trusted <list file> <session>
+  payload "$2" | PROJECT_LIST_FILE="$1" PROJECT_LIST_HOST=Mac-A \
+    TRUSTED_PATHS_SETTINGS_FILE="$TRUSTED_GONE" \
+    PROJECT_LIST_STATE_DIR="$STATE" bash "$NUDGE" 2>/dev/null
+}
+out_tr="$(run_trusted "$ALL_THERE" sess-trusted)"; code_tr=$?
+case "$out_tr" in
+  *TrustedMoved*) check "a missing trusted path is said even when every listed project is present" ok ;;
+  *) check "a missing trusted path is said even when every listed project is present" "it said: $out_tr" ;;
+esac
+[ "$code_tr" -eq 0 ] \
+  && check "and it does not block the prompt" ok \
+  || check "and it does not block the prompt" "exit=$code_tr"
+out_tr2="$(run_trusted "$ALL_THERE" sess-trusted)"
+[ -z "$out_tr2" ] \
+  && check "a second prompt with the same stale trusted path is quiet" ok \
+  || check "a second prompt with the same stale trusted path is quiet" "it repeated: $out_tr2"
+# Both findings at once are one answer, and a project going missing on top of the stale trusted
+# path is a change, so it is said, carrying both.
+out_tr3="$(run_trusted "$ONE_GONE" sess-trusted)"
+case "$out_tr3" in
+  *TrustedMoved*AppMoved*|*AppMoved*TrustedMoved*) check "a project going missing as well is said, with both findings" ok ;;
+  *) check "a project going missing as well is said, with both findings" "it said: $out_tr3" ;;
+esac
+# The record of what was said holds no path from it: on the work MacBook those paths name work
+# repositories, and the record only has to tell one answer from another.
+if grep -r -l -F 'TrustedMoved' "$STATE" > /dev/null 2>&1; then
+  check "the once per divergence record does not hold the paths it was told about" "a file in $STATE holds TrustedMoved"
+else
+  check "the once per divergence record does not hold the paths it was told about" ok
+fi
 
 # ---------------------------------------------------------------------------
 # Wired, not merely written. The defect this closes is a check nothing invokes, so the hook being
