@@ -47,9 +47,6 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
-  scriptProgram,
-  scriptWrite,
-  unreadPart,
   type ShellTarget,
 } from '../hooks/rules.ts'
 
@@ -430,24 +427,22 @@ test('a shell write is judged by every file it names: a redirect, an in place ed
   // `git checkout -- src/big.ts`: git marks every pathspec as reaching a whole folder, as it may.
   expect(shellTargets({ ...NONE, byGit: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', does: 'write', tree: true, from: '' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', tree: true }])
   // `python3 gen.py src/big.ts`
-  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', runs: [{ what: 'a python3 script', path: '/w/app/gen.py' }] }])
+  expect(shellTargets({ ...NONE, runs: [{ what: 'a python3 script', script: 'gen.py', path: '/w/app/gen.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts', handed: true }])
   // `python3 -c "open('src/lib/slack.ts','w').write('x')"`
   expect(shellTargets({ ...NONE, unnamed: [{ what: 'an inline python3 script', words: ['python3', '-c', '...'], inputs: [], targets: ['/w/app/src/lib/slack.ts'], folder: '/w/app' }] })).toEqual([{ word: '/w/app/src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 })
 
-// #2426 lessons review: one path reached more than once keeps every script it was handed to, and a
-// route into it that is no script ends the exemption, so the folder is judged as any write would be.
+// #2527: a path a script is handed is marked `handed`, judged as that one path; handed to two scripts
+// it is still one path handed, and quoted characters a script is handed are handed too (#2255).
 const SCAN_RUN = { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }
 const REWRITE_RUN = { what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }
 
-test('a path handed to two scripts keeps both, in either order, and the same script twice once (#2426 lessons review)', () => {
-  const scan = { what: 'a bash script file', path: '/w/app/scan.sh' }
-  const rewrite = { what: 'a python3 script file', path: '/w/app/rewrite.py' }
-  // `bash scan.sh src/ && python3 rewrite.py src/`, and the other order.
-  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, REWRITE_RUN] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [scan, rewrite] }])
-  expect(shellTargets({ ...NONE, runs: [REWRITE_RUN, SCAN_RUN] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [rewrite, scan] }])
-  // `bash scan.sh src/ && bash scan.sh ./src`
-  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, { ...SCAN_RUN, args: [{ word: './src', path: '/w/app/src' }] }] })).toEqual([{ word: 'src/', path: '/w/app/src', runs: [scan] }])
+test('a path handed to scripts, once or twice, is one path handed, and quoted characters are handed too (#2527)', () => {
+  // `bash scan.sh src/ && python3 rewrite.py src/`, and `bash scan.sh src/ && bash scan.sh ./src`.
+  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, REWRITE_RUN] })).toEqual([{ word: 'src/', path: '/w/app/src', handed: true }])
+  expect(shellTargets({ ...NONE, runs: [SCAN_RUN, { ...SCAN_RUN, args: [{ word: './src', path: '/w/app/src' }] }] })).toEqual([{ word: 'src/', path: '/w/app/src', handed: true }])
+  // `for t in "*push*"; do bash scan.sh "$t"; done`, as mod-kit gives it since #2527.
+  expect(shellTargets({ ...NONE, runs: [{ ...SCAN_RUN, args: [{ word: '*push*', folder: '/w/app', quoted: true }] }] })).toEqual([{ word: '*push*', path: '/w/app/*push*', handed: true }])
 })
 
 test('a path written twice keeps the reach of the write reaching its whole folder, whichever comes first (#2426 lessons review)', () => {
@@ -519,11 +514,11 @@ const QUOTED = { word: 'src/*.ts', folder: '/w/app/src', quoted: true as const }
 const probe = (args: object[], tool?: true) => ({ ...NONE, runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', ...(tool ? { tool } : {}), args }] }) as Parameters<typeof shellTargets>[0]
 
 test('a quoted pattern handed to a script file is judged as the one file its characters name (#2255)', () => {
-  expect(shellTargets(probe([QUOTED]))).toEqual([{ word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+  expect(shellTargets(probe([QUOTED]))).toEqual([{ word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
   // Prose holding a wildcard and a question mark, matched in the folder the command runs in.
-  expect(shellTargets(probe([{ word: 'every *.ts file, why?', folder: '/w/app', quoted: true }]))).toEqual([{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?' }])
+  expect(shellTargets(probe([{ word: 'every *.ts file, why?', folder: '/w/app', quoted: true }]))).toEqual([{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?', handed: true }])
   // Anything else the command writes is judged beside it: `python3 probe.py 'src/*.ts' > src/big.ts`.
-  expect(shellTargets({ ...probe([QUOTED]), files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+  expect(shellTargets({ ...probe([QUOTED]), files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts', handed: true }])
 })
 
 test('a pattern the shell or a tool may expand, a group, and one reaching across folders stay unread (#2255)', () => {
@@ -616,37 +611,7 @@ test('a command whose file cannot be read is held saying so, and can only procee
   expect(decideProblem({ decision: 'proceed', reason: 'This command only regenerates the build log, which no issue names.' }, UNREAD)).toBeUndefined()
 })
 
-// #2407: a folder handed to a script is judged only when the script's own text can write there.
-test('a script is fed to the interpreter its run names, or its #! line names, without that line, under a delimiter its text does not hold', () => {
-  expect(scriptProgram({ what: 'a bash script file', path: '/w/app/s.sh' }, '#!/bin/sh\ngrep x "$1"\n')).toEqual({ command: "bash <<'AREA_CHECK_SCRIPT'\ngrep x \"$1\"\n\nAREA_CHECK_SCRIPT", name: 'bash', delimiter: 'AREA_CHECK_SCRIPT' })
-  expect(scriptProgram({ what: 'a script file run directly', path: '/w/app/s.py' }, '#!/usr/bin/env -S python3 -u\nprint(1)\n')).toMatchObject({ name: 'python3' })
-  expect(scriptProgram({ what: 'a script file run directly', path: '/w/app/s.sh' }, '#!/bin/zsh\nls\n')).toMatchObject({ name: 'zsh' })
-  expect(scriptProgram({ what: 'a bash script file', path: '/w/app/s.sh' }, 'echo AREA_CHECK_SCRIPT\n')).toMatchObject({ delimiter: 'AREA_CHECK_SCRIPT_1' })
-  // A run with nothing naming its interpreter, a module or tool, and a name that is no plain word, are unread.
-  expect(scriptProgram({ what: 'a script file run directly', path: '/w/app/s.sh' }, 'ls\n')).toHaveProperty('unread')
-  expect(scriptProgram({ what: 'a python3 module run with -m', tool: true }, '')).toHaveProperty('unread')
-  expect(scriptProgram({ what: 'a script file run directly', path: '/w/app/s' }, '#!\nls\n')).toHaveProperty('unread')
-})
-
-test('a program mod-kit did not read, a script run in turn, or one sourced, leaves what the script writes unread', () => {
-  expect(unreadPart([{ words: ['grep', 'x', '$1'] }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['python3', '<<D'], program: { text: 'print(1)', stdin: true } }], 'D')).toBeNull()
-  expect(unreadPart([{ words: ['frob', '<<D'] }], 'D')).toContain('frob is no interpreter')
-  expect(unreadPart([{ words: ['python3', 'fix.py'], script: { files: ['fix.py'] } }], 'D')).toContain('fix.py')
-  expect(unreadPart([{ words: ['./tools/fix'] }], 'D')).toContain('./tools/fix')
-  expect(unreadPart([{ words: ['source', 'lib.sh'] }], 'D')).toContain('lib.sh')
-})
-
-test('a script writes there when its text writes any file the area check could judge or runs another script; none is null', () => {
-  expect(scriptWrite(NONE)).toBeNull()
-  // A built name that can only be no source file is none; a file it names, whatever it is, is a write.
-  expect(scriptWrite({ ...NONE, files: [{ word: '$tmp/scan.log' }] })).toBeNull()
-  expect(scriptWrite({ ...NONE, files: [{ word: '/tmp/scan.log', path: '/tmp/scan.log' }] })).toContain('/tmp/scan.log')
-  expect(scriptWrite({ ...NONE, files: [{ word: '$1/*.ts', edits: true }] })).toContain('$1/*.ts')
-  expect(scriptWrite({ ...NONE, files: [{ word: '/tmp/out.ts', path: '/tmp/out.ts' }] })).toContain('/tmp/out.ts')
-  expect(scriptWrite({ ...NONE, runs: [{ what: 'a python3 script file', script: 'fix.py', args: [{ word: '$1' }] }] })).toContain('fix.py')
-})
-
+// #2407, kept by #2527: a path the command writes itself is judged as that write, folder and all.
 test('a path a command writes itself is that write, though a script is handed it too, in either order (#2407)', () => {
   const run = { what: 'a bash script file', script: 's.sh', path: '/w/app/s.sh', args: [{ word: 'src', path: '/w/app/src' }] }
   expect(shellTargets({ ...NONE, files: [{ word: 'src', path: '/w/app/src' }], runs: [run] })).toEqual([{ word: 'src', path: '/w/app/src' }])

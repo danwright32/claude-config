@@ -66,7 +66,9 @@ const isPipe = (word: string) => /^[<>]\(/.test(word)
 // A for loop over plain words (#1953) gives its variable each of them: a word naming it is read once
 // for each, as that many words, a word holding a space read whole and as each piece (eachOf). A loop
 // over anything else (a pattern, an expansion, a ~ or a #), or a variable also set some other way, is
-// left as written. A word whose every $
+// left as written, unless the shell hands that word on as written, every pattern character in it
+// quoted (#2527: `for t in "*push*" gate`); such a value reaching a script where the shell matches
+// it against no file is marked quoted, as the word spelled out there is (#1951). A word whose every $
 // the shell leaves as written, in single quotes, after a backslash or before nothing it expands
 // (Command.unexpanded), is never read as a value, and names the file it spells (#2402).
 const SETS = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/
@@ -89,8 +91,12 @@ const ALONE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$/
 type Vars = Map<string, string | null>
 // A loop word the reader follows: nothing the shell expands or matches against files. One holding a
 // space (an issue's title, quoted) is followed too, read whole and as each piece a shell splitting
-// the variable's value would make (eachOf).
+// the variable's value would make (eachOf). A word the shell hands on as written (Command.literal,
+// every pattern character quoted and nothing expanded) is followed too (#2527): see handsOnAsText.
 const PLAIN_WORD = /^[^*?[\]{}()~^#$`\\]+$/
+// What may make the text around a loop's value a pattern or an expansion (#2527): a pattern
+// character, read as widely as Command.literal reads one, a $ or a backtick.
+const NOT_TEXT = /[*?[\]{}()~^#$`\\]/
 // The most words a loop, or several loops in one word, may give a word before it is left as written.
 const MAX_EACH = 1024
 
@@ -825,10 +831,25 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     // Which words the shell leaves every $ of as written (textOnly), for this command alone.
     textWords.clear()
     liveWords.clear()
+    // #2527: whether a word hands each loop value in it on as its characters, so a value holding a
+    // pattern character (a quoted loop word, the only kind PLAIN_WORD lets through) is matched
+    // against no file: every variable in it a for loop's, none outside quotes where the shell splits
+    // and matches a value (`unquoted`, Command.splits: bash and sh, never zsh, #1834), and nothing
+    // else in the word a pattern or an expansion.
+    const handsOnAsText = (w: string, unquoted: readonly number[] | undefined): boolean => {
+      if (unquoted?.length) return false
+      let named = false
+      for (const m of w.matchAll(VARIABLE)) {
+        if (!each.has((m[1] ?? m[2]) as string)) return false
+        named = true
+      }
+      return named && !NOT_TEXT.test(w.replace(VARIABLE, ''))
+    }
     written.forEach((w, n) => {
       const prior = written[n - 1] ?? ''
       const target = WRITE_REDIRECT.test(prior) || /^\d*>&$/.test(prior)
       const asText = c.unexpanded?.[n] === true
+      const loopText = !asText && handsOnAsText(w, c.splits?.[n])
       for (const read of asText ? [w] : target ? [expand(w)] : fields(w, c.splits?.[n]))
         for (const [k, part] of (asText ? [read] : eachOf(read)).entries()) {
           // A redirect's target a loop gives several words is a write of each: its operator again.
@@ -839,7 +860,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
           raw.push(part)
           from.push(n)
           if (part !== w) asWritten.set(part, w)
-          ;(c.literal?.[n] === true && part === w ? quotedWords : otherWords).add(part)
+          ;((c.literal?.[n] === true && part === w) || (loopText && part !== w) ? quotedWords : otherWords).add(part)
           ;(asText ? textWords : liveWords).add(part)
         }
     })
@@ -893,7 +914,7 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       const words = rest.slice(2)
       // `for v in a b c` over plain words, the variable set no other way (#1953): each word, joined
       // to those of another such loop over it. Anything else leaves it unknown.
-      if (v !== undefined && name === 'for' && NAME.test(v) && rest[1] === 'in' && words.length && words.every(x => PLAIN_WORD.test(x)) && !vars.has(v)) {
+      if (v !== undefined && name === 'for' && NAME.test(v) && rest[1] === 'in' && words.length && words.every(x => PLAIN_WORD.test(x) || quotedOnly(x)) && !vars.has(v)) {
         const all = [...new Set([...(each.get(v) ?? []), ...words])]
         if (all.length <= MAX_EACH) each.set(v, all)
         else unknown(v)
@@ -1037,13 +1058,14 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
     // Each word a run is handed, as a path where its words name one. A pattern whose every pattern
     // character is quoted is marked `quoted` (#1951): the shell matched it against no file, so the
-    // run is handed its characters as written.
+    // run is handed its characters as written. A loop's value handed on so (#2527) is given by those
+    // characters, as the word spelled out is, since a guard names the one file it reads by them.
     const handedOf = (words: readonly string[]) =>
       words.map(w => {
         const p = abs(w)
         const folder = p ? undefined : patternFolder(w, dir, home)
         return {
-          word: asWritten.get(w) ?? w,
+          word: folder && quotedOnly(w) ? w : (asWritten.get(w) ?? w),
           ...(p ? { path: p } : {}),
           ...(folder ? { folder } : {}),
           ...(folder && quotedOnly(w) ? { quoted: true as const } : {}),

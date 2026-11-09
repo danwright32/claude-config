@@ -6861,6 +6861,11 @@ its words do not name) is held saying it cannot be read, and may only proceed; i
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+A folder a script is handed (`bash tools/check-mods.sh payload/mods`) is read, never a write of every
+file under it, as the design round guard reads one; a folder a copy lands in, and a write marked as
+reaching a whole folder (`find ... -exec sed -i`, git putting a folder back), still are (#2527). A loop over quoted search terms
+(`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
+the one file they name.
 One narrowing (#2254): a findings note to the installed helper,
 `bash ~/.claude/hooks/lib/issue-spool.sh note ...` or that path run directly, writes only to
 `~/.claude-issue-spool`, so its arguments are not read as files; a copy of the helper anywhere
