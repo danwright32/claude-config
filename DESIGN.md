@@ -1648,6 +1648,22 @@ second redirection, a redirection with a descriptor anywhere in the command (`3<
 shell runs from a string). The guard still reads a lone `-` when gh runs; `--notes-file=-` and
 `-F-` it does not read, so they are refused there too.
 
+A body on standard input (#2443) is judged by the same rule, through the same function
+(`_stdin_bodies`, shared with release notes): `--body-file -`, `--body-file=-`, `-F-` and a `-`
+after a clustered `-F`, on every gh command whose body the gate reads (pr and issue create, edit and
+comment, and pr review). The guard reads the bytes for a lone `-` only, and refuses
+`--body-file=-` and `-F-` unread, clean bytes included, as it does for release notes.
+
+A file written from more than one redirection of standard input (#2469). `cat <<'EOF' < named.md >
+notes.md` writes named.md, since the shell feeds a stage only its last redirection of standard input,
+but `_shown` judges the write from the heredoc. `_shown` is left as it is: the issue field gate
+stands down on a write that is not shown, so making the write hidden there would loosen that gate
+(Dan's choice, 2026-11-08). Instead `scan.mixed_input_writes` names every file written by a stage
+with more than one such redirection (a heredoc, `<`, `<<<`, `<&` or `<>` on any descriptor, or a
+redirection aimed at descriptor 0), and the work names gate refuses a notes, body or gist file among
+them in a public repository, saying why. Counting a read on another descriptor (`3<`) is the reading
+that refuses more.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on
