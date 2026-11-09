@@ -234,6 +234,16 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       if (ctl.sealed?.includes(stdin)) return ok('sealed\n')
       return { value: { exitCode: 1, stdout: 'not sealed: it has changed since make-settled.py sealed it\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
+    // Every file under a folder a write reaches whole (#2395): `git -C <tree> ls-files -z --cached
+    // --others --exclude-standard -- :(top,literal)<folder>`, which names each file the test put under
+    // it, tracked or not, and every file in the checkout for an empty folder (its top).
+    if (cmd === 'git' && args[0] === '-C' && args[2] === 'ls-files' && args.length === 9 && args[4] === '--cached') {
+      gitRuns.push(e.argv.join(' '))
+      if (ctl.lsFilesFails) throw new Error('spawn git ENOENT')
+      const rel = String(args[8]).replace(/^:\(top,literal\)/, '')
+      const under = rel ? `${args[1]}/${rel}/` : `${args[1]}/`
+      return ok(Object.keys(files).filter(f => f.startsWith(under)).map(f => `${f.slice(String(args[1]).length + 1)}\0`).join(''))
+    }
     // Whether git tracks a file (#1933): `git -C <tree> ls-files -z -- :(literal,icase)<path>`, which
     // names it when it is tracked and prints nothing when it is not.
     if (cmd === 'git' && args[0] === '-C' && args[2] === 'ls-files' && args.length === 6) {
@@ -859,6 +869,60 @@ test('git putting back a file that changes no look, or a test, runs; a pathspec 
   const why = refusalOf(await call($, { tool: 'Bash', command: "git checkout main -- '*.css'" }))
   expect(why).toContain('*.css')
   expect(w.ran.length).toBe(2)
+})
+
+// #2395: a write reaching a whole folder (a find -exec on it, a macOS cp -R of a folder ending in a
+// slash, rm -r, a git checkout of a folder) reaches every file under it, as the area check reads it
+// (underTree). Judged as the one folder path, which is no look changing name, every one ran unasked.
+test('#2395: a write reaching a whole folder is judged by every file under it, and by every file a copy lands there', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      '/w/slate/app/page.tsx': 'export default function Page() { return <main /> }\n',
+      '/w/slate/app/api/route.ts': 'export const GET = () => 1\n',
+      '/w/slate/lib/date.ts': 'export const d = 1\n',
+      '/w/slate/kit/Card.tsx': 'export const Card = () => <div />\n',
+      '/w/slate/docs/notes/a.md': 'notes\n',
+      '/w/slate/docs/notes/b.json': '{}\n',
+      '/w/slate/other/page.tsx': 'export default function Other() { return <main /> }\n',
+    },
+  })
+  for (const [command, shown] of [
+    ['cd /w/slate && cp -R lib/ app/', 'app/page.tsx'],
+    ["cd /w/slate && find app -name '*.tsx' -exec sed -i '' 's/a/b/' {} +", 'app/page.tsx'],
+    ['cd /w/slate && rm -rf app', 'app/page.tsx'],
+    ['cd /w/slate && git checkout main -- app', 'app/page.tsx'],
+    // A copy lands its source's files under the destination, which need not hold them yet.
+    ['cd /w/slate && cp -R kit/ lib/', 'lib/Card.tsx'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('issue #978 in slate'), why.includes(shown)]).toEqual([command, true, true])
+  }
+  expect(w.ran).toEqual([])
+  // A folder holding no look changing file runs, and a screen file outside it is never swept in.
+  for (const command of [
+    "cd /w/slate && find docs/notes -type f -exec sed -i '' 's/a/b/' {} +",
+    'cd /w/slate && cp -R lib/ docs/notes/',
+    'cd /w/slate && rm -rf docs/notes',
+  ])
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(3)
+})
+
+test('#2395: a whole folder whose files git cannot list is held, saying so; one in no checkout is in no project', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/docs/notes/a.md': 'notes\n', '/tmp/kit/Card.tsx': 'x\n' } })
+  w.ctl.lsFilesFails = true
+  const why = refusalOf(await call($, { tool: 'Bash', command: "cd /w/slate && find docs/notes -type f -exec sed -i '' 's/a/b/' {} +" }))
+  expect(why).toContain('docs/notes')
+  expect(why).toContain('cannot be listed')
+  expect(w.ran).toEqual([])
+  w.ctl.lsFilesFails = false
+  // A copy from a folder in no checkout cannot say what it lands, so it is held too.
+  const from = refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate && cp -R /tmp/kit/ docs/notes/' }))
+  expect(from).toContain('/tmp/kit')
+  expect(w.ran).toEqual([])
+  // A folder in no checkout, written from one in no checkout, is in no project.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R /tmp/kit/ /tmp/out/' }))).toBe('')
+  expect(w.ran.length).toBe(1)
 })
 
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {

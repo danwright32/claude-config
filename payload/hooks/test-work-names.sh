@@ -64,6 +64,9 @@ done
 _tmp="${TMPDIR:-/tmp}"
 WORK="$(mktemp -d "${_tmp%/}/work-names.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+# The start of this run, so the bytecode check at the end (#2444) counts only files this run could
+# have written, never a copy an older run left behind.
+touch "$WORK/.started"
 
 # An invented organisation, handed to the scanner by hash exactly as the real two are built in.
 FAKE_ORG="Acme-HQ"
@@ -399,9 +402,9 @@ check "#2231 nor with the marker set to anything but 1: $text_out" lacks "$text_
 # lengthen it, so no value named in the environment can hold the scan past the calling hook.
 budget_of(){   # $1 = the value, or "unset" -> the budget the scan would use, or "refused"
   if [ "$1" = unset ]; then
-    env -u WORK_NAMES_REPOS_BUDGET_SECONDS -u HOOK_TESTS_RUNNING python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+    env -u WORK_NAMES_REPOS_BUDGET_SECONDS -u HOOK_TESTS_RUNNING python3 -B -c "$BUDGET_PY" "$SCAN" 2>&1
   else
-    env -u HOOK_TESTS_RUNNING WORK_NAMES_REPOS_BUDGET_SECONDS="$1" python3 -c "$BUDGET_PY" "$SCAN" 2>&1
+    env -u HOOK_TESTS_RUNNING WORK_NAMES_REPOS_BUDGET_SECONDS="$1" python3 -B -c "$BUDGET_PY" "$SCAN" 2>&1
   fi
 }
 BUDGET_PY='import importlib.util, sys
@@ -427,6 +430,16 @@ case "$cover_out" in
   *"no dev update registry"*) echo "note: this machine has no dev update registry, so whether the built in names cover its owners was not measured here." ;;
   *) check "every owner in this Mac's registry is one the built in names cover (exit $cover_rc): $cover_out" [ "$cover_rc" -eq 0 ] ;;
 esac
+
+# #2444: loading lib/work-names.py by path, as the budget checks above do, must never leave bytecode
+# in lib/ (the class that broke #2422's CI, #2080).
+wn_pyc="$(find "$HERE/lib/__pycache__" -name 'work-names*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 nothing this suite runs leaves work-names bytecode in lib/ (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
+# And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py). Another
+# suite running beside this one that writes lib bytecode fails it too: that suite's defect, named by
+# the file listed.
+lib_pyc="$(find "$HERE/lib/__pycache__" -name '*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 no module in lib/ gained bytecode during this run (found: ${lib_pyc:-none})" [ -z "$lib_pyc" ]
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

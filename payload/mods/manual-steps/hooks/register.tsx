@@ -322,7 +322,10 @@ const giveDoneBack = async ($: EngineInterface, n: number) => {
 // #734: a "step N done" prompt queued behind a running turn and then dropped (Esc drops the queue),
 // or one a prompt hook refused, starts no turn, so the turn.complete guard below never arms and
 // the step would stay sent for the session. So once no main turn has run for DROPPED_AFTER_MS with
-// the step still sent and its turn never started, Done comes back. Armed at the press and again at
+// the step still sent and its turn never started, Done comes back. Since #2482 a Done pressed during
+// a running turn that could be read is held for that turn, not queued, so the queued case here is a
+// running turn that could not be read; a held Done an Esc stopped is left sent and comes back here
+// too. Armed at the press and again at
 // each main turn's end; only the latest arming may act, so the one armed at the press cannot fire
 // seconds after the turn it waited behind ended, while the settings hooks still run.
 // The main turn running now is in $.state (#1703): a reload in the middle of a turn read it as none,
@@ -678,7 +681,8 @@ export const register: Register = on => {
   })
 
   // The turn "step N done" started, noted so its end can be judged. A turn already running when
-  // Done was pressed is not it: the prompt waits behind that turn.
+  // Done was pressed is not it: that Done is held for the running turn (#2482), and goes as a prompt
+  // only at that turn's end, or at once when the running turn could not be read.
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     // Only the main loop raises turn.start; a subagent's run raises none.
