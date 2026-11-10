@@ -248,7 +248,7 @@ def heredoc_opener(s, i, marker_start=False):
     return "".join(word), m.group(1) == "-", quoted, j
 
 
-def heredoc_openers(line):
+def heredoc_openers(line, marker_start=True):
     """Each heredoc a line opens, read on its own without following its quotes, as (start, marker,
     strip_tabs, quoted, end), start at its << and the rest as heredoc_opener gives them.
 
@@ -258,6 +258,10 @@ def heredoc_openers(line):
     written (marker_start): `$((1<<2))` and `grep -c '1<<2'` open nothing, and neither does the
     << of a here string. The cost is a heredoc whose marker starts with a digit, which bash accepts
     and no file here uses.
+
+    With marker_start False every << with a word after it is taken, a here string still apart, for
+    a reader that must not miss a heredoc and can afford to count one that is not there: a gate
+    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script.
     """
     out, i = [], 0
     while True:
@@ -267,7 +271,7 @@ def heredoc_openers(line):
         if line.startswith("<<<", i):
             i += 3
             continue
-        op = heredoc_opener(line, i, marker_start=True)
+        op = heredoc_opener(line, i, marker_start=marker_start)
         if op is None:
             i += 2
             continue

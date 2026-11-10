@@ -33,6 +33,13 @@
 #     and tried again after FRESH_WORKTREE_RETRY_MINUTES (15 by default). One exception: when even
 #     the unrefreshed local ref already shows the worktree behind, the gate refuses, because a stale
 #     ref only ever understates how far behind it is and the named command needs no network.
+#   * A fetch that was never RUN is refused, every time, naming the file (claude-config#2634). That
+#     is lib/bounded-run.sh missing, or the lib/whole-number.sh it reads its bound with: the hooks
+#     are missing a part, which is not a network fault, does not clear after the retry window, and
+#     is put right by `claude-sync pull`. It took the failed fetch path until then, so with the
+#     library gone a worktree behind the real main was let through with a notice said once, and
+#     test-gates-fail-closed.sh, which left a library loaded with a stand in function out, never
+#     ran the gate without it.
 #
 # DECISIONS TAKEN WITHOUT DAN (recorded in the pull request too):
 #   * Refuse until updated, not warn once: a warning already read and passed is how the 2026-09-14
@@ -46,8 +53,10 @@
 #     passed in silence.
 #   * A payload it cannot read is let through, saying so, rather than refused: this gate only
 #     tightens, and refusing an edit whose payload the session cannot change would stop work with
-#     no remedy (the same call as scratchpad-subagent-gate.sh). A missing python3 or library does the
-#     same, through the notice.
+#     no remedy (the same call as scratchpad-subagent-gate.sh). A missing python3 does the same,
+#     through the notice, and a missing lib/hook-notice.sh changes only how that notice is built.
+#     A missing lib/bounded-run.sh is the one library that is refused: see the fetch never run,
+#     above.
 #
 # Settings, for the suite: FRESH_WORKTREE_STATE_DIR (where the per session record is kept, default
 # TMPDIR), FRESH_WORKTREE_FETCH_SECONDS, FRESH_WORKTREE_RETRY_MINUTES.
@@ -70,6 +79,8 @@ case "$payload" in *file_path*|*notebook_path*) ;; *) exit 0 ;; esac
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
 # A lone surrogate escape cleaned, where the library is; without it the payload is read as it came.
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+# The stand in answers 125, the library's own code for having run nothing, and the gate refuses on
+# it where it needs the fetch, so a call that never reaches the fetch is not refused for the file.
 . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null || bounded_run() {  # the library is missing: run nothing unbounded
   BOUNDED_RC=125; BOUNDED_OUT="lib/bounded-run.sh is missing beside this hook, so the fetch was not run"; }
 
@@ -167,7 +178,8 @@ own="$(count "$base..HEAD")"
 case "$own" in ''|0) ;; *) record ok; exit 0 ;; esac
 
 # Zero written any way, or anything not a whole number, is the default (lib/whole-number.sh, which
-# lib/bounded-run.sh loads; with neither, the default too).
+# lib/bounded-run.sh loads). With either library missing the bound is the default as well, but no
+# fetch is run with it: bounded_run answers 125 and the edit is refused below (claude-config#2634).
 secs="$(whole_above_zero "${FRESH_WORKTREE_FETCH_SECONDS:-10}" 2>/dev/null)" || secs=10
 bounded_run "$secs" env GIT_TERMINAL_PROMPT=0 git -C "$top" fetch --quiet origin "$branch"
 if [ "$BOUNDED_RC" -ne 0 ]; then
@@ -176,6 +188,17 @@ if [ "$BOUNDED_RC" -ne 0 ]; then
   own="$(count "$base..HEAD")"
   if [ -n "$behind" ] && [ "$behind" != 0 ] && [ "$own" = 0 ]; then
     refuse "$behind" "The fetch of origin $branch failed ($why), so it could not check how far main has moved since; this copy of $base already shows it behind."
+  fi
+  # 125 is bounded_run saying it ran NOTHING: lib/bounded-run.sh is missing (the stand in above), or
+  # the lib/whole-number.sh it reads its bound with is. That is not a fetch that failed. Nothing on
+  # the network is wrong, it will not come right after the retry window, and the remedy is one
+  # command the session can run, so the edit is refused, every time, until the hooks are whole
+  # (claude-config#2634). It used to take the failed fetch path below, which let through, with a
+  # notice said once, an edit this gate refuses with the library in place.
+  if [ "$BOUNDED_RC" -eq 125 ]; then
+    case "$why" in *[![:space:]]*) ;; *) why="nothing was run" ;; esac
+    printf '%s\n' "REFUSED: fresh-worktree-base-gate.sh could not run its fetch of origin $branch at all ($why), so whether the worktree $top, which has no commits of its own yet, is behind $base was not checked (claude-config#2634). A part of the hooks is missing, which is not a network fault and will not clear by waiting. Reinstall the hooks with claude-sync pull, then make the edit again. Reading files is not affected." >&2
+    exit 2
   fi
   record "unchecked $now"
   hook_allow_notice "$NAME: fresh-worktree-base-gate.sh could not fetch origin $branch for the worktree $top ($why), so whether it is behind $base was not checked and this edit went ahead. It tries again after $retry minutes."
