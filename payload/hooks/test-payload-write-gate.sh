@@ -51,6 +51,19 @@ mkdir -p "$FIX/dev/payload/hooks" "$FIX/src/payload/hooks" "$FIX/elsewhere"
 : > "$FIX/dev/payload/LESSONS.md"
 mkdir -p "$FIX/dev/tests"
 : > "$FIX/dev/tests/a.sh"
+# The development checkout is a real git checkout, because that is what the daemon can reach: the
+# same folder with no repository is a plain copy, which is let through (claude-config#2705). The
+# daemon's clone is one too, so a case about it is let through for being the watcher's own clone
+# and never for being a plain copy.
+git init -q "$FIX/dev" 2>/dev/null
+git init -q "$FIX/src" 2>/dev/null
+[ -d "$FIX/dev/.git" ] && [ -d "$FIX/src/.git" ] || {
+  echo "test-payload-write-gate: git init left no repository in the fixture checkouts, so no case could ask about a checkout." >&2
+  printf 'SUITE-NOT-RUN %s\n' "the fixture checkouts could not be made git checkouts"
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  exit 2
+}
 
 HOLD="$FIX/hold"
 PIDF="$FIX/watch.pid"
@@ -383,6 +396,7 @@ refused "#2080 a cd in a heredoc body does not hide a relative write after it"
 mkdir -p "$FIX/sp ace/dev/payload"
 : > "$FIX/sp ace/dev/claude-sync"
 : > "$FIX/sp ace/dev/payload/LESSONS.md"
+git init -q "$FIX/sp ace/dev" 2>/dev/null   # a checkout, as the one above is (claude-config#2705)
 runbash "cat <<'EOF' > /dev/null
 cd $FIX/elsewhere
 EOF
@@ -676,6 +690,78 @@ edit "$G/wt/payload/a.md" "$G/wt"
 refused "a linked worktree on no branch at all is still refused"
 GG "$G/wt" checkout -q feat 2>/dev/null
 
+echo "payload write gate: a plain copy of the tree, with no repository around it, is not refused (claude-config#2705)"
+
+# What the daemon overwrites in a development checkout it reaches through the repository: it
+# mirrors ~/.claude over payload/ in ITS clone and pushes. A copy of the tree kept in a session
+# notes folder has claude-sync and payload/ at its root and no repository at all, so nothing the
+# daemon does can arrive there, and on 2026-11-10 an Edit to one was refused all the same. It is
+# let through only when git, asked, says there is no repository AND no .git is found by looking.
+# Its own checkout, a copy inside another work tree, and any place git cannot answer for are all
+# still refused (L42).
+N="$FIX/home/.claude/state/session-notes/project/session/2678"
+mkdir -p "$N/copy/payload/hooks"
+: > "$N/copy/claude-sync"
+printf 'x\n' > "$N/copy/payload/hooks/a.sh"
+rm -f "$HOLD"
+edit "$N/copy/payload/hooks/a.sh" "$N/copy"
+allowed "an Edit under payload in a plain copy with no repository is let through"
+edit "$N/copy/payload/hooks/a.sh" "$FIX/dev"
+allowed "and so is one named from a session sitting in a real checkout"
+runbash "printf y > payload/hooks/a.sh" "$N/copy"
+allowed "a shell write under payload in that copy is let through"
+prepost PreToolUse "python3 $FIX/w.py" "$N/copy" c1
+printf 'changed\n' > "$N/copy/payload/hooks/a.sh"
+prepost PostToolUse "python3 $FIX/w.py" "$N/copy" c1
+allowed "and the check after a command says nothing about that copy's payload"
+# The control, and the case that must never open: the same tree with a repository in it (L159).
+cp -R "$N/copy" "$N/gitcopy"
+git init -q "$N/gitcopy" 2>/dev/null
+edit "$N/gitcopy/payload/hooks/a.sh" "$N/gitcopy"
+refused "the same copy is refused once it is a git checkout of its own"
+says "and the refusal names that copy as the checkout at risk" "$N/gitcopy"
+git clone -q "$G/primary" "$N/cloned" 2>/dev/null
+[ -f "$N/cloned/payload/a.md" ] && check "the cloned fixture was built" ok || check "the cloned fixture was built" "no clone at $N/cloned"
+edit "$N/cloned/payload/a.md" "$N/cloned"
+refused "a clone of the repository kept in a notes folder is still refused"
+# A copy INSIDE a checkout's work tree can be added and pushed from that checkout.
+mkdir -p "$G/primary/scratch/copy/payload"
+: > "$G/primary/scratch/copy/claude-sync"
+: > "$G/primary/scratch/copy/payload/a.md"
+edit "$G/primary/scratch/copy/payload/a.md" "$G/primary/scratch/copy"
+refused "a plain copy inside a checkout's work tree is still refused"
+# git stops looking at a ceiling it is given, and then says there is no repository when one is
+# there. The premise is asserted, and the .git found by looking is what still refuses.
+case "$(cd "$G/primary/scratch/copy" && GIT_CEILING_DIRECTORIES="$G/primary/scratch" LC_ALL=C git rev-parse --is-inside-work-tree 2>&1)" in
+  "fatal: not a git repository"*) check "under a ceiling git says a copy inside a work tree has no repository" ok ;;
+  *) check "under a ceiling git says a copy inside a work tree has no repository" "git answered otherwise" ;;
+esac
+OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$G/primary/scratch/copy" "$G/primary/scratch/copy/payload/a.md" \
+  | env GIT_CEILING_DIRECTORIES="$G/primary/scratch" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "and that copy is still refused, by the .git above it"
+rm -rf "$G/primary/scratch"
+# A .git that names a repository which is not there: git says no repository, the file says otherwise.
+cp -R "$N/copy" "$N/broken"
+printf 'gitdir: %s\n' "$FIX/no/such/repository" > "$N/broken/.git"
+edit "$N/broken/payload/hooks/a.sh" "$N/broken"
+refused "a copy whose .git points at a repository that is gone is still refused"
+# With no git that runs, nothing has said there is no repository, so the plain copy is refused.
+NOGIT="$FIX/nogit"; mkdir -p "$NOGIT"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$NOGIT/git"
+chmod +x "$NOGIT/git"
+OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$N/copy" "$N/copy/payload/hooks/a.sh" \
+  | env PATH="$NOGIT:$PATH" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "a plain copy is still refused when git cannot run"
+# And a git that fails for a reason of its own, in git's own exit code, has not said so either.
+printf '#!/usr/bin/env bash\necho "fatal: detected dubious ownership in repository" >&2\nexit 128\n' > "$NOGIT/git"
+OUT="$(printf '{"tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s"}}' "$N/copy" "$N/copy/payload/hooks/a.sh" \
+  | env PATH="$NOGIT:$PATH" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" bash "$HOOK" 2>&1)"; RC=$?
+refused "and when git fails without saying there is no repository"
+# The control for the two above: the same call with the real git is let through, so those refusals
+# are git's silence rather than a fixture that refuses everything (L159).
+edit "$N/copy/payload/hooks/a.sh" "$N/copy"
+allowed "and the plain copy is let through again once git answers"
+
 echo "payload write gate: a rebase is judged by the branch being rebased (claude-config#904)"
 
 # A rebase detaches HEAD, so read by HEAD alone an agent's own worktree mid rebase looked like one
@@ -795,6 +881,11 @@ rm -f "$HOLD"
 # And the clone the watcher itself runs from is not at risk, so it is not refused either.
 edit_nopy "$FIX/src/payload/LESSONS.md" "$FIX/src"
 allowed "the clone the watcher runs from is not refused over the missing reader"
+
+# A plain copy is not let through here (claude-config#2705): which file the call writes cannot be
+# read, so it may be one in a real checkout, named from a session sitting in the copy.
+edit_nopy "$N/copy/payload/hooks/a.sh" "$N/copy"
+refused "with no python3 a write from a plain copy is still refused"
 
 # The control: the same write with python3 present and no watcher to revert it is allowed, so the
 # refusal above is the reader's absence rather than a fixture that refuses everything (L159).
