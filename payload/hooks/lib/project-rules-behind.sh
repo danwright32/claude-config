@@ -181,12 +181,17 @@ else:
     # The changed tracked files, staged or not, with both sides of a rename (--no-renames), since git
     # refuses a fast forward that changes either name. Read into a variable, which waits for git
     # (a loop fed by a process substitution leaves a child bash 3.2 never reaps, #1984), so not -z,
-    # whose NULs a variable cannot hold. A name git still quotes (a quote, tab, newline or backslash
-    # in it) cannot be handed back to git literally, so it makes the answer unread, never untouched.
-    local entry status unread=0 dirty=() touched=() touched_out
+    # whose NULs a variable cannot hold. Git quotes a name holding a space, a quote, a tab, a newline
+    # or a backslash (measured 2026-11-10), and escapes all but the space. A quoted name with no
+    # escape is read back whole; one with an escape cannot be handed back to git literally, so it
+    # makes the answer unread, never untouched.
+    local entry name status unread=0 dirty=() touched=() touched_out
     if status="$(git -C "$primary" -c core.quotePath=false status --porcelain --no-renames --untracked-files=no 2>/dev/null)"; then
       while IFS= read -r entry; do
         case "$entry" in
+          ??' "'*'"')
+            name="${entry:4}"; name="${name%\"}"
+            case "$name" in *\\*) unread=1 ;; *) dirty+=("$name") ;; esac ;;
           ??' "'*) unread=1 ;;
           ??' '?*) dirty+=("${entry:3}") ;;
         esac

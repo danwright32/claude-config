@@ -270,7 +270,23 @@ case "$m" in *"pull --ff-only"*|*"no changes to tracked files"*) check "a tree t
 case "$m" in *"could not be read"*) check "and the notice says what could not be read" ok ;;
   *) check "and the notice says what could not be read" "said: $m" ;; esac
 
-# A changed file whose name git has to quote cannot be handed back to git literally, so it is not
+# A name with a space is quoted by git too (measured), with no escape inside, so it is read back
+# whole: untouched upstream it is offered, touched it is withheld and named.
+world dirty-space
+printf 'x\n' > "$W/seed/my notes.txt"
+upstream CLAUDE.md "short"
+git -C "$W/primary" merge -q --ff-only origin/main >/dev/null 2>&1
+upstream CLAUDE.md "shorter"
+printf 'local\n' >> "$W/primary/my notes.txt"
+m="$(msg "$(start s-dirty-space "$W/primary")")"
+case "$m" in *"changes to my notes.txt, which origin's new commits do not touch"*"pull --ff-only"*) check "a changed file with a space in its name, untouched upstream, is offered the fast forward" ok ;;
+  *) check "a changed file with a space in its name, untouched upstream, is offered the fast forward" "said: $m" ;; esac
+upstream "my notes.txt" "upstream"
+m="$(msg "$(start s-dirty-space-2 "$W/primary")")"
+case "$m" in *"changes to my notes.txt, which origin's new commits also change"*) check "and touched upstream it is withheld and named" ok ;;
+  *) check "and touched upstream it is withheld and named" "said: $m" ;; esac
+
+# A changed file whose name git has to escape cannot be handed back to git literally, so it is not
 # judged untouched on the strength of a name that matched nothing.
 world dirty-quoted
 printf 'x\n' > "$W/seed/say \"hi\".txt"
