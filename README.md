@@ -2326,7 +2326,7 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
 
 ### What a push actually waits on
 
-Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2796,6 +2796,17 @@ file at its base commit, run beside `block-red-merge.sh`, which reads the same p
 2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on
 a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading
 anything
+
+</td></tr>
+<tr><td>
+
+`db-write-ask.sh` (#2536)
+
+</td><td>
+
+2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
+average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
+before python3 starts
 
 </td></tr>
 </tbody>
@@ -3555,10 +3566,43 @@ the statement and the project named) for:
   one is; `test-db-write-ask.sh` runs one set of statements through both hooks and fails unless
   exactly one of them decides each.
 - every `apply_migration`, whatever its text.
+- since #2536, a write through any other database tool, or through a database client in a shell
+  command, which #2521 left unasked. `hooks/lib/db-write-calls.py` says which calls those are and
+  which statements they carry, and each statement goes to the same `lib/sql-read-only.py`:
+  - an MCP tool whose name holds the word sql (`execute_sql` on any server, `run_sql`), whose input
+    has a field named for SQL (`sql`, `sql_query`; the Supabase connector's `query_logs` has one), or
+    whose server or name holds a database's name while its input has a `query` or `statement` field;
+    any tool that applies a migration; and the Supabase connector's `run_notebook`, always, since its
+    statements are saved in the notebook and not in the call.
+  - `psql`, `mysql`, `mariadb` and `sqlite3` in a Bash command, read from the commands
+    `lib/shell-words.py` finds, so one inside `bash -c`, a substitution, an `if`, or behind `sudo`,
+    `env`, an assignment, `docker exec`, `ssh` or `npx` is read, and a mention (a grep pattern, an
+    echo, a commit message, a heredoc body, `command -v psql`) is not. Every statement in the
+    command's words is judged (`-c`, `-e`, sqlite3's words after the database file).
+  - the Supabase CLI: `db query` by its statement, `db push` unless `--dry-run`, `db reset`, and
+    `migration up`, `down`, `repair` and `squash`. These are the routes `/db-apply` uses.
+  - `pgcli`, `pg_restore`, `dropdb`, `mongosh` and the other clients whose statements it does not
+    read: whenever one runs.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
-  one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). It
-  is registered with `onFailure: "block"`, so a crash or a timeout refuses the call rather than letting
-  a write through unasked.
+  one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
+  a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
+  file is never read, since the same command can write it first), an option it does not know, a shell
+  variable or a psql variable in a statement, and `lib/db-write-calls.py` or `lib/shell-words.py`
+  failing to load. It is registered with `onFailure: "block"`, so a crash or a timeout refuses the call
+  rather than letting a write through unasked.
+
+It is registered for Bash and every MCP tool, since a database tool on a connector not yet seen can
+only be told by its name or its input once the hook runs. It leaves before python3 starts unless the
+call holds one of a short list of words every rule above needs (0.01 seconds on an ordinary call, 0.06
+when the classifier runs, one reading each at a load average of 18, 2026-11-10).
+
+How often it will ask, measured with the shipped classifier over the personal MacBook's transcripts
+for the 30 days to 2026-11-10: 55 of 107,434 Bash calls, most of them on four days, and none of 5,325
+MCP calls beyond the two tools #2521 already covered. No call ran psql or mysql by name in that time
+(three ran psql through `docker exec`). 62 of the 67 findings were `sqlite3` against a local app
+store, most of them reads the rule cannot prove are reads (a dot command, two statements, a function
+it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
+does not take as proof.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3568,8 +3612,14 @@ rule lets those writes skip auto mode entirely, and the work MacBook's file held
 on that Mac. The message comes on each call of one of those tools and on every database question,
 never on a read it passes.
 
-What it does not cover: a database tool on any other connector, which is not asked about until it is
-named in the hook and its registration. Suite: `test-db-write-ask.sh`.
+What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
+held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
+prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
+connector whose SQL tool has neither sql in its name nor a field named for a statement (the claude.ai
+Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
+`exec`, whose `execute-sql` runs HogQL, which only reads; and the Supabase connector's branch tools
+(`merge_branch`, `reset_branch`, `rebase_branch`), which change a database without a statement. The
+tool names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
