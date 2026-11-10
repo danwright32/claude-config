@@ -14,6 +14,7 @@ import {
   goalUnreadQuestion,
   NO_GOAL,
   groupQuestions,
+  heldGuardsSaid,
   orderQuestions,
   priorityRank,
   questionsIn,
@@ -262,5 +263,25 @@ describe('the issues a goal names', () => {
     expect(goalIssues('Finish the Saved views milestone', 'o/r')).toEqual([])
     expect(goalIssues('Close #7', null)).toEqual([])
     expect(goalIssues('Close o/r#7', null)).toEqual([{ repo: 'o/r', issue: 7 }])
+  })
+})
+
+// #2585: the held design round guard questions /sleep names but never asks, read against each
+// issue's state where they are read, so a closed issue's question is left out and one whose issue
+// could not be read is still named, saying so (L215).
+describe('heldGuardsSaid: the guard questions /sleep names, without the closed issues', () => {
+  const q = (issue: number, text = 'Is this design settled?') => ({ repo: 'o/r', issue, text })
+  test('one open and one closed: only the open one is named', () => {
+    expect(heldGuardsSaid([q(30), q(31)], (_, n) => (n === 31 ? { state: 'closed' } : { state: 'open' }))).toBe('Not asked, since only the design round guard\'s own question can settle it: o/r#30 "Is this design settled?".')
+  })
+  test('one whose state could not be read is named, saying why', () => {
+    expect(heldGuardsSaid([q(30), q(32)], (_, n) => (n === 32 ? { state: 'unchecked', why: 'HTTP 502' } : { state: 'open' }))).toBe('Not asked, since only the design round guard\'s own question can settle them: o/r#30 "Is this design settled?" and o/r#32 "Is this design settled?" (whether its issue is still open could not be checked: HTTP 502).')
+  })
+  test('all closed, or none held: nothing is said', () => {
+    expect(heldGuardsSaid([q(31)], () => ({ state: 'closed' }))).toBeNull()
+    expect(heldGuardsSaid([], () => ({ state: 'open' }))).toBeNull()
+  })
+  test('the same question noted on two nights is named once', () => {
+    expect(heldGuardsSaid([q(30), q(30)], () => ({ state: 'open' }))).toBe('Not asked, since only the design round guard\'s own question can settle it: o/r#30 "Is this design settled?".')
   })
 })

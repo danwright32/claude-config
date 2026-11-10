@@ -6691,7 +6691,9 @@ question was left on is written to `state/sleep/unanswered/<generation>` before 
 night's queue leaves it out (a list that cannot be written stops sleep starting), and the question
 is noted again for the morning report. A question in the design round guard's words is never asked
 or checked off, an answer on record included, since only the guard's own picker settles it, and
-`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`). Waking (#837, Dan's
+`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`), leaving out one
+whose issue is closed and marking it in `state/sleep/closed-holds/` so its issue is not read again,
+and naming one whose issue could not be read as not checked (#2585). Waking (#837, Dan's
 decisions of 2026-10-07): only `/wake` or "I'm up" ends sleep, in every session; a message from
 Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain line, whether he
 is up (`isDaytimeEt` in `hooks/sleep.ts`,
@@ -6722,7 +6724,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261
+#1765, #1812, #2064, #2261, #2585
 
 </td></tr>
 <tr><td>
