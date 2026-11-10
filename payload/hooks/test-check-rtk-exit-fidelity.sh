@@ -56,6 +56,9 @@ fi
 lie_var="LIE_${sub}"
 if [ -n "${!lie_var:-}" ]; then exit "${!lie_var}"; fi
 shift
+# The real `rtk gh` asks gh for a --json field list, which is the call the probe's gh stub hands
+# on to the real gh (claude-config#2562). Opt in, so every other case keeps the plain call.
+if [ "$sub" = gh ] && [ -n "${RTK_STUB_GH_JSON:-}" ]; then set -- "$@" --json currentBranch; fi
 command "$sub" "$@" >/dev/null 2>&1
 exit $?
 STUB
@@ -282,6 +285,83 @@ case "$out" in
   *contained*) check "and it does not report anything as contained, which would read as protection" "out=$out" ;;
   *) check "and it does not report anything as contained, which would read as protection" ok ;;
 esac
+
+# ---------------------------------------------------------------------------
+# The probe's gh stub never runs back into itself (claude-config#2562).
+#
+# The stub hands a --json call to "the real gh", found with `command -v gh` before the stub's folder
+# is put first on PATH. Since #2183 the first gh on a session's PATH is the work names guard, which
+# runs the first gh on PATH past its own folder. Handed the probe's PATH, that is the stub again:
+# guard runs stub, stub runs guard, two processes a round, until the per user process limit is hit
+# and every fork on the Mac fails. On 2026-11-09 a full run reached 4,037 copies of the stub.
+#
+# Both fixtures below carry their OWN fuse, so this suite can never fork bomb the Mac whatever the
+# script does: a gh fixture entered more than LOOP_FIXTURE_MAX deep in one chain records the depth
+# and stops. A fuse that fired means the script recursed, and is the failure being tested for.
+# ---------------------------------------------------------------------------
+LOOP="$TMPROOT/loop"
+mkdir -p "$LOOP/guard" "$LOOP/real" "$LOOP/evil" "$LOOP/tmp"
+export LOOP_FIXTURE_FUSE="$LOOP/fuse" LOOP_FIXTURE_REACHED="$LOOP/reached" LOOP_FIXTURE_MAX=8
+export LOOP_FIXTURE_TMP="$LOOP/tmp"
+unset LOOP_FIXTURE_DEPTH
+# Shaped like hooks/bin/gh: runs the first gh on PATH past its own folder, with its own folder put
+# back first on PATH for whatever that gh starts.
+cat > "$LOOP/guard/gh" <<'GUARD'
+#!/usr/bin/env bash
+depth=$(( ${LOOP_FIXTURE_DEPTH:-0} + 1 )); export LOOP_FIXTURE_DEPTH="$depth"
+if [ "$depth" -gt "$LOOP_FIXTURE_MAX" ]; then echo "$depth" > "$LOOP_FIXTURE_FUSE"; exit 99; fi
+here="$(cd "${0%/*}" && pwd -P)"
+IFS=: read -r -a dirs <<<"${PATH:-}"
+for d in "${dirs[@]}"; do
+  [ -n "$d" ] || continue
+  [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$here" ] && continue
+  if [ -x "$d/gh" ] && [ ! -d "$d/gh" ]; then PATH="$here:$PATH" exec "$d/gh" "$@"; fi
+done
+exit 127
+GUARD
+# Stands for the real gh past the guard: offline, records that the STUB's field list reached it
+# (the stub calls it from its own not-a-repo folder, which no other gh call here runs in), and fails
+# the way gh does outside a repository.
+cat > "$LOOP/real/gh" <<'REAL'
+#!/bin/sh
+case "$PWD $*" in *"/ghstub/not-a-repo "*" --json "*) : > "$LOOP_FIXTURE_REACHED" ;; esac
+echo "no git remotes found" >&2
+exit 1
+REAL
+# A gh that resolves straight back into the probe's own stub whatever PATH says, so the stub's own
+# refusal is what has to end the loop.
+cat > "$LOOP/evil/gh" <<'EVIL'
+#!/usr/bin/env bash
+depth=$(( ${LOOP_FIXTURE_DEPTH:-0} + 1 )); export LOOP_FIXTURE_DEPTH="$depth"
+if [ "$depth" -gt "$LOOP_FIXTURE_MAX" ]; then echo "$depth" > "$LOOP_FIXTURE_FUSE"; exit 99; fi
+for s in "$LOOP_FIXTURE_TMP"/claude-sync-work.fidelity-probe.*/ghstub/bin/gh; do
+  [ -x "$s" ] && exec "$s" "$@"
+done
+exit 127
+EVIL
+chmod +x "$LOOP/guard/gh" "$LOOP/real/gh" "$LOOP/evil/gh"
+
+# The shape that hit the Mac: a guard first on PATH, the real gh behind it.
+rm -f "$LOOP/fuse" "$LOOP/reached"
+PATH="$LOOP/guard:$LOOP/real:$PATH" REFUSE="" RTK_STUB_GH_JSON=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
+[ ! -e "$LOOP/fuse" ] && check "with a guard shaped gh first on PATH, the gh stub does not run back into itself" ok \
+  || check "with a guard shaped gh first on PATH, the gh stub does not run back into itself" "the guard was entered $(cat "$LOOP/fuse") deep in one chain, so guard and stub were calling each other"
+[ -e "$LOOP/reached" ] && check "and its field list still reaches the real gh past the guard" ok \
+  || check "and its field list still reaches the real gh past the guard" "the real gh never saw a --json call: out=$out"
+[ "$rc" -eq 0 ] && check "and the run measures and agrees" ok \
+  || check "and the run measures and agrees" "rc=$rc out=$out"
+
+# A gh that leads straight back into the stub: the stub refuses to run inside itself, and the run
+# says it could not measure (exit 2) and why, rather than reporting a verdict.
+rm -f "$LOOP/fuse" "$LOOP/reached"
+TMPDIR="$LOOP/tmp" PATH="$LOOP/evil:$PATH" REFUSE="" RTK_STUB_GH_JSON=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
+[ ! -e "$LOOP/fuse" ] && check "a gh that resolves back into the stub is stopped by the stub, not by the fixture's fuse" ok \
+  || check "a gh that resolves back into the stub is stopped by the stub, not by the fixture's fuse" "the fixture was entered $(cat "$LOOP/fuse") deep, so nothing in the script stopped the loop"
+[ "$rc" -eq 2 ] && check "and the run exits 2, could not measure" ok \
+  || check "and the run exits 2, could not measure" "rc=$rc out=$out"
+grep -q 'ran inside itself' <<< "$out" \
+  && check "and says the stub ran inside itself" ok \
+  || check "and says the stub ran inside itself" "out=$out"
 
 # ---------------------------------------------------------------------------
 # And the real thing. Everything above drives the script through stubs, which proves its logic and

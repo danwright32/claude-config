@@ -22,7 +22,8 @@
 # Exit codes, because the whole subject of this script is a tool whose exit code lied (L184):
 #   0  every comparison agreed, or its mismatch is contained by the hook
 #   1  a destination the hook ALLOWS disagreed with the real tool, named in the output
-#   2  it could not measure: no rtk, no hook, no probe could run, or its own control failed
+#   2  it could not measure: no rtk, no hook, no probe could run, its own control failed, or the gh
+#      probe's stub was started inside its own call to the real gh (claude-config#2562)
 # There is deliberately no exit 0 for a run that compared nothing, because that is the state that
 # reads exactly like a clean bill of health (L98).
 #
@@ -131,13 +132,32 @@ export NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_CACHE
 # not one, in a directory that is not a repository: gh refuses an unknown field before it needs
 # either, and fails on the missing repository, still offline, for a list it accepts (L2).
 # A probe directory holding a bin/ has it first on PATH for every run in that directory.
+#
+# The real gh is called with the PATH this script started with, read from a file, never the PATH
+# the stub was handed (claude-config#2562). The gh found below can be a wrapper that runs the first gh
+# on PATH past its own folder, as the work names guard (hooks/bin/gh) does on every session's PATH
+# since #2183. Handed the probe's PATH, whose first gh is this stub, it ran the stub again, the stub
+# ran it again, two processes a round, until the per user process limit was hit and every fork on
+# the Mac failed: 4,037 copies of the stub on 2026-11-09. And a gh that leads back into the stub
+# whatever PATH says is still possible, so the stub also refuses to run inside its own call to the
+# real gh: it marks the call in its environment, and a stub that finds the mark stops at once and
+# leaves a file this script reads below, so the run says it could not measure rather than forking.
 mkdir -p "$WORK/ghstub/bin" "$WORK/ghstub/not-a-repo"
 real_gh="$(command -v gh 2>/dev/null || true)"
+printf '%s\n' "$PATH" > "$WORK/ghstub/path"
+GHSTUB_LOOP="$WORK/ghstub/ran-inside-itself"
 cat > "$WORK/ghstub/bin/gh" <<GHSTUB
 #!/bin/sh
+if [ -n "\${CHECK_RTK_FIDELITY_IN_GHSTUB:-}" ]; then
+  echo "gh stub: started again from inside its own call to the real gh ($real_gh), which is a loop; refusing to recurse." >&2
+  : > "$GHSTUB_LOOP"
+  exit 125
+fi
 case " \$* " in
   *" --json "*)
-    err="\$(cd "$WORK/ghstub/not-a-repo" && env -u GH_REPO GH_TOKEN=not-a-token "$real_gh" "\$@" 2>&1 >/dev/null)"
+    IFS= read -r start_path < "$WORK/ghstub/path"
+    err="\$(cd "$WORK/ghstub/not-a-repo" && env -u GH_REPO GH_TOKEN=not-a-token CHECK_RTK_FIDELITY_IN_GHSTUB=1 PATH="\$start_path" "$real_gh" "\$@" 2>&1 >/dev/null)"
+    [ ! -e "$GHSTUB_LOOP" ] || { printf '%s\n' "\$err" >&2; exit 125; }
     case "\$err" in *"Unknown JSON field"*) printf '%s\n' "\$err" >&2; exit 1 ;; esac
     echo '{"currentBranch":null,"createdBy":[],"needsReview":[]}'; exit 0 ;;
 esac
@@ -319,6 +339,13 @@ done
 echo "tools examined:$tools_seen"
 echo "compared $compared substitution(s) against the real tool, skipped $skipped, broken fixtures $broken, contained by the hook ${#contained[@]}."
 for c in "${contained[@]:-}"; do [ -n "$c" ] && echo "  contained: $c"; done
+
+# Read before any verdict: a gh probe whose stub refused a loop compared nothing real, and its exit
+# code would otherwise be reported as rtk's lie (L11).
+if [ -e "$GHSTUB_LOOP" ]; then
+  echo "check-rtk-exit-fidelity: the probe's gh stub ran inside itself: the gh it hands field lists to ($real_gh) led back into the stub, so it refused rather than starting two more processes a round until the Mac ran out (claude-config#2562). The gh probes measured nothing. Find how that gh reaches the stub, and run this again." >&2
+  exit 2
+fi
 
 if [ "$compared" -eq 0 ]; then
   echo "check-rtk-exit-fidelity: nothing was actually compared, so this run says nothing about whether a substitute lies. Treating that as a failure to measure rather than a clean run." >&2
