@@ -188,9 +188,8 @@ type World = {
   tokens: Record<string, string>
   /** #2403: what lib/merge-in-line.sh answers, asked of a background merge past its window. */
   inLine?: Gh
-  /** #2436: what Slack answers a draft, the answer Dan picks in a question, and the job watcher's running task ids ('unreadable' refuses). */
+  /** #2436: what Slack answers a draft, and the job watcher's running task ids ('unreadable' refuses). */
   slackDraft: { text: string; isError?: true }
-  answer?: string
   jobs: string[] | 'unreadable'
 }
 /** How a command was run: the folder it ran in and the account token handed to it, if any. */
@@ -217,7 +216,6 @@ const world = (on: On, init: Partial<World> = {}) => {
     jobs: [],
     ...init,
   }
-  const asks: { question: string; options: { label: string }[] }[] = []
   const slackCalls: string[] = []
   const toasts: string[] = []
   const copies: string[] = []
@@ -287,19 +285,13 @@ const world = (on: On, init: Partial<World> = {}) => {
     return (b.isError ? { isError: true, result: b.text, text: b.text } : { result, text: b.text }) as never
   })
   on('classic.Stop', () => ({}) as never)
-  // #2436: Dan's prompt, Slack's own tools, and Claude Code's question dialog, beneath the mod.
+  // #2436: Dan's prompt and Slack's own tools, beneath the mod.
   on('prompt.submit', ($, e) => ({ text: e.text, context: [] }) as never)
   on('tool.call', { tool: ['mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__plugin_slack_slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_read_thread'] }, ($, e) => {
     slackCalls.push(String(e.tool))
     if (String(e.tool).endsWith('slack_read_thread')) return { result: 'messages', text: 'messages' } as never
     const d = w.slackDraft
     return (d.isError ? { isError: true, result: d.text, text: d.text } : { result: d.text, text: d.text }) as never
-  })
-  on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
-    const q = ((e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions ?? [])[0]
-    if (q) asks.push(q)
-    if (w.answer === 'afk') return { result: { questions: [q], answers: {}, afkTimeoutMs: 60_000 } } as never
-    return { result: { questions: [q], answers: q && w.answer ? { [q.question]: w.answer } : {} } } as never
   })
   on('ui.log', () => ({ value: undefined }) as never)
   on('tool.register', () => ({ value: undefined }) as never)
@@ -316,7 +308,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, toasts, copies, runs, asked, clock, asks, slackCalls }
+  return { w, toasts, copies, runs, asked, clock, slackCalls }
 }
 
 const CARD = {
@@ -552,6 +544,11 @@ test('a live card with a message for a Slack requester tells the session to save
   expect(said(r)).toContain('slack_send_message_draft with channel_id "C0123ABCD" and thread_ts "1730900000.123456"')
   expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
   expect(said(r)).toContain('/no-ai-tells')
+  // #2630, Dan, 2026-11-10: "Anytime you give me a message for someone, you should also just save it
+  // as a slack draft in the relevant thread." Saved in the step the card shows it, with no question.
+  expect(said(r)).toContain('now, in the same step as this card, without asking Dan first')
+  expect(said(r)).toContain('Never ask him with AskUserQuestion whether to save it')
+  expect(said(r)).toContain('tell Dan it is a draft waiting in that thread and that nothing was sent')
   expect(w.slackCalls).toEqual([])
   expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
 })
@@ -584,6 +581,7 @@ test('a live card for a Slack requester with no thread known says to find it or 
   expect(r.deny).toBeUndefined()
   expect(said(r)).toContain('No Slack thread was given')
   expect(said(r)).toContain('save nothing and tell Dan')
+  expect(said(r)).toContain('without asking Dan first')
   expect(said(r)).toContain('Never call slack_send_message or slack_schedule_message.')
 })
 
@@ -593,6 +591,8 @@ test('a person Dan named gets a draft DM by user id, and a message Dan marked se
   const r = await card($, { ...CARD, ...ask })
   expect(said(r)).toContain('slack_send_message_draft with channel_id "U0123ABCD"')
   expect(said(r)).toContain('a DM to Kris')
+  expect(said(r)).toContain('without asking Dan first')
+  expect(said(r)).toContain('tell Dan it is a draft waiting in a DM to Kris and that nothing was sent')
   await press($, 'is-it-live:sent-acme-hq-scheduler-412')
   expect(said(await card($, { ...CARD, ...ask }))).not.toContain('slack_send_message_draft')
 })
@@ -1594,12 +1594,15 @@ test('a mod-kit that cannot say which folder a command runs in leaves a merge as
 // Dan, 2026-11-07: "slack thread start = draft response saved. every time", and, answering the
 // issue's open question the same day, one draft after the session's last merge from that thread. The
 // turn end is held while a merge has landed since the thread's last draft and no merge of the session
-// is still in flight. The mod never calls a Slack tool: it tells the session what to do.
+// is still in flight. The mod never calls a Slack tool: it tells the session what to do. #2630, Dan,
+// 2026-11-10: "Anytime you give me a message for someone, you should also just save it as a slack
+// draft in the relevant thread", so the reply is saved in the step it is shown, with no picker.
 
 const CH = 'C07ABCDEF'
 const TS = '1730912345.123456'
 const THREAD = `https://acme.slack.com/archives/${CH}/p1730912345123456`
-const SOURCE = `is-it-live-draft:${CH}:${TS}`
+// What only the hold for this thread says: the call that saves its draft.
+const SOURCE = `slack_send_message_draft with channel_id "${CH}" and thread_ts "${TS}"`
 const DRAFT = 'mcp__claude_ai_Slack__slack_send_message_draft'
 const READ = 'mcp__claude_ai_Slack__slack_read_thread'
 // The job watcher, standing in: its list of this session's running jobs, asked of the world.
@@ -1623,14 +1626,6 @@ const says = async ($: unknown, text: string, kind = 'composer') =>
 const slack = async ($: unknown, tool: string, input: Record<string, unknown>, more: Record<string, unknown> = {}) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool, tool_use_id: 's1', ...input, ...more } as never)) as Out
 const draft = ($: unknown, input: Record<string, unknown> = {}, more: Record<string, unknown> = {}) => slack($, DRAFT, { channel_id: CH, thread_ts: TS, message: 'This is live now.', ...input }, more)
-const askDan = async ($: unknown, source: string, more: Record<string, unknown> = {}) =>
-  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({
-    tool: 'AskUserQuestion',
-    tool_use_id: 'q1',
-    questions: [{ question: 'Save this reply to the thread? "This is live now."', header: 'Slack', options: [{ label: 'Post', description: '' }], multiSelect: false }],
-    metadata: { source },
-    ...more,
-  } as never)) as Out
 const mergeAndCard = async ($: unknown, pr = 412) => {
   await bash($, `gh pr merge ${pr} --squash`)
   expect((await card($, { ...CARD, pr, deploy: 'none' })).deny).toBeUndefined()
@@ -1654,12 +1649,16 @@ test('a merge in a session started from a pasted Slack thread holds the turn end
   const held = String((await turnEnd($)).block)
   expect(held).toContain(THREAD)
   expect(held).toContain('/no-ai-tells')
-  expect(held).toContain(`"source": "${SOURCE}"`)
-  expect(held).toContain(`slack_send_message_draft with channel_id "${CH}" and thread_ts "${TS}"`)
+  expect(held).toContain(SOURCE)
   expect(held).toContain('Never call slack_send_message or slack_schedule_message')
   expect(held).toContain('attached_draft_exists')
-  // The steps in order: write the reply, run /no-ai-tells, show Dan the text in the picker, then save it.
-  const steps = ['write a short reply', '/no-ai-tells', 'showing the reply in the question', 'slack_send_message_draft'].map(s => held.indexOf(s))
+  // #2630: no picker. The reply is shown to Dan and saved in the same step, then he is told where it is.
+  expect(held).toContain('without asking Dan first')
+  expect(held).toContain('Never ask him with AskUserQuestion whether to save it')
+  expect(held).not.toContain('metadata')
+  expect(held).not.toContain('Skip this time')
+  // The steps in order: write the reply, run /no-ai-tells, show Dan the text, save it, then say where it is.
+  const steps = ['write a short reply', '/no-ai-tells', 'show it to Dan', 'slack_send_message_draft', 'nothing was sent'].map(s => held.indexOf(s))
   expect(steps.every(n => n >= 0)).toBe(true)
   expect([...steps].sort((a, b) => a - b)).toEqual(steps)
   // The mod itself calls no Slack tool.
@@ -1766,31 +1765,41 @@ test('with no job list to read, a merge still waiting in the background counts a
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
-test('Dan skipping the draft in the picker lets the turn end, and the next merge asks again (#2436)', withKit, async ($, on) => {
+test('a draft the session saves after the hold lets the turn end, and the next merge asks again, with no question to Dan in between (#2630)', withKit, async ($, on) => {
   const w = world(on, { prView: merged(412, 413) })
   await start($)
   await says($, THREAD)
   await mergeAndCard($, 412)
-  // A subagent never asks, and a question naming no recorded thread is refused.
-  expect((await askDan($, SOURCE, { agentId: 'a1' })).deny).toContain('main session')
-  expect((await askDan($, `is-it-live-draft:${CH}:1700000000.000300`)).deny).toContain('No Slack thread')
-  // Dan away: nothing is recorded.
-  w.w.answer = 'afk'
-  expect(said(await askDan($, SOURCE))).toContain('did not answer')
   expect((await turnEnd($)).block).toContain(SOURCE)
-  // Save as a draft: the session is told to save the exact text, and the turn stays held until it does.
-  w.w.answer = 'Save as a draft'
-  const save = said(await askDan($, SOURCE))
-  expect(save).toContain(`slack_send_message_draft with channel_id "${CH}" and thread_ts "${TS}"`)
-  expect((await turnEnd($)).block).toContain(SOURCE)
-  // The options are the mod's, whatever the session offered: never Post or Send.
-  expect(w.asks[w.asks.length - 1]?.options.map(o => o.label)).toEqual(['Save as a draft', 'Skip this time'])
-  expect(w.asks[w.asks.length - 1]?.question).toContain('This is live now.')
-  w.w.answer = 'Skip this time'
-  expect(said(await askDan($, SOURCE))).toContain('next merge')
+  expect((await draft($)).isError).toBeUndefined()
   expect((await turnEnd($)).block).toBeUndefined()
   await mergeAndCard($, 413)
   expect((await turnEnd($)).block).toContain(SOURCE)
+  expect(w.slackCalls).toEqual([DRAFT])
+})
+
+// #2630: on 2026-11-10 the card showed the message for the person who asked in a thread, and the
+// draft was saved only after the turn end's picker. A thread a card asked a draft of its message for
+// is now held for that message, word for word, and never for a second reply or a question.
+test('a thread owed the message a card showed is held for that message, saved with no question, and settled by it (#2630)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413) })
+  await start($)
+  await says($, `Kris asked in ${THREAD}, build what she asked for`)
+  await bash($, 'gh pr merge 412 --squash')
+  await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: { channel_id: CH, thread_ts: TS } })
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain('The message for Kris on the is it live card for acme-hq/scheduler#412')
+  expect(held).toContain('"The venue filter is live now."')
+  expect(held).toContain(SOURCE)
+  expect(held).toContain('without asking Dan first')
+  expect(held).not.toContain('write a short reply')
+  await draft($, { message: 'The venue filter is live now.' })
+  expect((await turnEnd($)).block).toBeUndefined()
+  // The next merge with no card message for the thread asks for a reply of its own, not the old message.
+  await mergeAndCard($, 413)
+  const next = String((await turnEnd($)).block)
+  expect(next).toContain('write a short reply')
+  expect(next).not.toContain('The venue filter is live now.')
 })
 
 test('the draft hold is refused once per chain of turn ends, so a draft that cannot be saved never traps the turn (#2436)', withKit, async ($, on) => {
@@ -1890,18 +1899,20 @@ test('a card naming the pasted thread as where its draft goes makes its merge on
   await says($, `look into this alert ${THREAD}`)
   await bash($, 'gh pr merge 412 --squash')
   await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue sync is fixed.', slack: { channel_id: CH, thread_ts: TS } })
-  expect((await turnEnd($)).block).toContain(SOURCE)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  // #2630: held for the card's own message, never a second reply.
+  expect(held).toContain('"The venue sync is fixed."')
 })
 
-test('Skip this time for a pasted thread is remembered: an unrelated merge asks nothing, the next merge for it asks again (#2578)', withKit, async ($, on) => {
-  const w = world(on, withText([412, 413, 414], { 412: { body: `For ${THREAD}` }, 414: { body: `Also for ${THREAD}` } }))
+test('a draft saved for a pasted thread is remembered: an unrelated merge asks nothing, the next merge for it asks again (#2578, #2630)', withKit, async ($, on) => {
+  world(on, withText([412, 413, 414], { 412: { body: `For ${THREAD}` }, 414: { body: `Also for ${THREAD}` } }))
   await start($)
   await underWay($)
   await says($, `look into this alert ${THREAD}`)
   await mergeAndCard($, 412)
   expect((await turnEnd($)).block).toContain(SOURCE)
-  w.w.answer = 'Skip this time'
-  expect(said(await askDan($, SOURCE))).toContain('Skip this time')
+  await draft($)
   expect((await turnEnd($)).block).toBeUndefined()
   await mergeAndCard($, 413)
   expect((await turnEnd($)).block).toBeUndefined()

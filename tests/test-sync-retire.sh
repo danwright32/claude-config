@@ -111,6 +111,12 @@ loaded(){ LC_ALL=C sort "$LOADED" | paste -sd ' ' -; }
 
 # ==== 1. the controls: install-autosync loads both agents, and a push from this Mac does reach the shared repo ====
 plant mac-a
+# A Mac that is not retired reads as it always has (claude-config#2633): no retired notice, and
+# the agents it lacks are offered through install-autosync, which here runs.
+out="$(run status)"
+check "control: status on a Mac not retired says nothing of retiring" lacks "$out" "RETIRED"
+check "control: status on a Mac not retired skips no check" lacks "$out" "Not checked while this Mac is retired"
+check "control: status on a Mac not retired still offers install-autosync" has "$out" "Install both with: claude-sync install-autosync"
 out="$(run install-autosync)"
 check "control: install-autosync wrote both agents" test -f "$AGENTS/com.claudesync.timer.plist" -a -f "$AGENTS/com.claudesync.watch.plist"
 check "control: install-autosync loaded both agents" same "$(loaded)" "com.claudesync.timer com.claudesync.watch"
@@ -182,6 +188,36 @@ check "retire twice: says there was nothing to remove" has "$out" "no launch age
 check "retire twice: the first record is kept" same "$(cksum < "$RECORD")" "$RECORD_SUM"
 check "retire twice: still confirms from launchd" has "$out" "launchctl list shows neither"
 
+# ==== 5b. status on a retired Mac says so first, when, and the way back (claude-config#2633) ====
+# Before this, status reported the agents as merely not installed and offered install-autosync,
+# which refuses. Every remedy it names on a retired Mac must be one that would run.
+retired_when="$(date -r "$(awk 'NR == 1 { print $2 }' "$RECORD")" '+%Y-%m-%d %H:%M %Z')"
+out="$(run status)"; rc=$?
+first_line="$(awk 'NF { print; exit }' <<< "$out")"
+check "status on a retired Mac: exits 0" same "$rc" 0
+check "status on a retired Mac: the first thing it says is that this Mac is retired" has "$first_line" "this Mac is RETIRED from the sync"
+check "status on a retired Mac: says when, from the record" has "$out" "retired from the sync on $retired_when"
+check "status on a retired Mac: names the record" has "$out" "as recorded in $RECORD"
+check "status on a retired Mac: says it neither sends nor receives" has "$out" "neither sends to nor receives from the shared repo"
+check "status on a retired Mac: names the way back" has "$out" "To bring it back: rm $RECORD, then claude-sync install-autosync"
+check "status on a retired Mac: automatic sync says it is off because the Mac is retired" has "$out" "automatic sync: off, because this Mac is retired"
+check "status on a retired Mac: no longer offers install-autosync as an install" lacks "$out" "Install both with: claude-sync install-autosync"
+# install-autosync is offered once, in the way back (the notice also names it among what refuses),
+# and no other refusing command is offered at all.
+check "status on a retired Mac: install-autosync is offered only in the way back" same "$(grep -c 'claude-sync install-autosync' <<< "$out")" 1
+check "status on a retired Mac: offers no send, receive or watch" lacks "$(grep -E "claude-sync (push|pull|send|sync|watch|install-schedule)|'claude-sync (push|pull|send|sync)" <<< "$out" | tr -d '\n')" "claude-sync"
+check "status on a retired Mac: says which checks it did not make" has "$out" "Not checked while this Mac is retired"
+[ "$fail" -eq 0 ] || printf '  status on the retired Mac said:\n%s\n' "$out"
+
+# A record holding no time is still a retired Mac; status says so without inventing a date.
+cp "$RECORD" "$WORK/record-kept"
+printf 'retired\n' > "$RECORD"
+out="$(run status)"
+check "status, record with no time: still says this Mac is retired" has "$out" "this Mac is RETIRED from the sync"
+check "status, record with no time: claims no date" lacks "$out" "retired from the sync on"
+check "status, record with no time: names the way back" has "$out" "To bring it back: rm $RECORD, then claude-sync install-autosync"
+cp "$WORK/record-kept" "$RECORD"
+
 # ==== 6. an agent launchd will not let go of is reported, never claimed gone ====
 plant mac-stuck
 run install-autosync >/dev/null
@@ -192,6 +228,14 @@ check "stuck agent: says it is still loaded" has "$out" "NOT confirmed"
 check "stuck agent: names the label" has "$out" "com.claudesync.watch"
 check "stuck agent: makes no claim that neither is loaded" lacks "$out" "launchctl list shows neither"
 check "stuck agent: the record is still written, so its runs refuse" test -f "$RECORD"
+# Status on a retired Mac with an agent's plist back on disk (a hand restore, a migration): it is
+# named, and the remedy is retire again, which runs on a retired Mac, never install-autosync.
+printf '<plist/>\n' > "$AGENTS/com.claudesync.watch.plist"
+out="$(run status)"
+check "status, retired with an agent left: says this Mac is retired" has "$out" "this Mac is RETIRED from the sync"
+check "status, retired with an agent left: names the agent still installed" has "$out" "com.claudesync.watch is still installed"
+check "status, retired with an agent left: offers retire again, which runs on a retired Mac" has "$out" "Remove it with: claude-sync retire --yes"
+check "status, retired with an agent left: install-autosync is offered only in the way back" same "$(grep -c 'claude-sync install-autosync' <<< "$out")" 1
 
 # ==== 7. launchd cannot be read: said, and not passed ====
 plant mac-unreadable

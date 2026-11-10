@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type Relation, draftHold, markLanded, pastedThreads, registerDrafts, relateCard } from './drafts.ts'
+import { type Relation, draftHold, markLanded, noteCard, pastedThreads, registerDrafts, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
@@ -401,7 +401,7 @@ const DESCRIPTION = [
   'changed: what changed, in 2 to 3 plain sentences. see: the direct link and the exact clicks to see it.',
   'requester and message ONLY when someone other than Dan asked: an issue another person reported (via "issue" with its number), a pasted Slack thread ("slack"), or a person Dan named ("named"). The message is in Dan\'s voice, with no dashes.',
   'The message tells them the change is live, so Dan is shown it only once a card for that PR says "live", or "none" (with no deploy step, merging is going live): it is required on those calls, and one passed on an earlier call ("deploying", "failed", "unreachable") is held until then.',
-  'Once a card says "live" or "none", the message is also saved as a Slack draft for Dan to send himself, never sent: a draft reply in the thread for via "slack" (pass slack.channel_id and slack.thread_ts from the thread link), else a draft DM to the person (pass slack.user_id when you know it). Run /no-ai-tells on the message before passing it, since the draft is the card\'s text word for word; the card\'s answer says exactly which slack_send_message_draft call to make.',
+  'Once a card says "live" or "none", the message is also saved as a Slack draft for Dan to send himself, never sent: a draft reply in the thread for via "slack" (pass slack.channel_id and slack.thread_ts from the thread link), else a draft DM to the person (pass slack.user_id when you know it). Run /no-ai-tells on the message before passing it, since the draft is the card\'s text word for word; the card\'s answer says exactly which slack_send_message_draft call to make, which you make in that same step, without asking Dan first.',
   SEEN,
 ].join(' ')
 
@@ -563,19 +563,29 @@ export const register: Register = on => {
     // #2435: a message the change is out for is also saved as a Slack draft, which the session does
     // (the mod never calls Slack). Asked again on each such card, saying when an earlier card asked
     // for one to the same place: this card with this message, or another, whose draft this replaces.
+    // #2630: saved in the step the card shows it, with no question (card.ts says how).
+    let noted: { pr: string; name: string; message: string } | undefined
     if (pinnable(kept) && kept.requester && kept.message) {
       const key = draftKeyOf(kept.requester, kept.slack)
       const prior = key === undefined ? undefined : had.find(c => c.draftAsked === key)
-      const earlier = prior ? { earlier: { pr: prior.pr, same: prior.pr === input.pr && prior.message === kept.message } } : {}
+      const same = prior !== undefined && prior.pr === input.pr && prior.message === kept.message
+      const earlier = prior ? { earlier: { pr: prior.pr, same } } : {}
       notes.push(draftLineOf({ requester: kept.requester, message: kept.message, ...(kept.slack ? { slack: kept.slack } : {}), ...earlier }))
       if (key !== undefined) kept.draftAsked = key
+      // A thread the session recorded is then owed this message, not a reply of its own; asked again
+      // for the same message, it is owed it only if the first ask is still unsaved, which it keeps.
+      if (key?.startsWith('thread:') && !same) noted = { pr: `${repo}#${input.pr}`, name: kept.requester.name, message: kept.message }
     }
     // A card asking for no draft (deploying, failed, sent) still replaces the PR's earlier card, so
     // it keeps the record that a draft was asked for there: it is still in Slack (#2515).
     if (kept.draftAsked === undefined && before?.draftAsked !== undefined) kept.draftAsked = before.draftAsked
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
     // #2578: a card whose draft goes to a thread pasted mid session records its PR as one for it.
-    if (kept.slack?.channel_id && kept.slack.thread_ts) await relateCard($, { channel: kept.slack.channel_id, ts: kept.slack.thread_ts }, `${repo}#${input.pr}`)
+    if (kept.slack?.channel_id && kept.slack.thread_ts) {
+      const t = { channel: kept.slack.channel_id, ts: kept.slack.thread_ts }
+      await relateCard($, t, `${repo}#${input.pr}`)
+      if (noted) await noteCard($, t, noted)
+    }
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
     await $.state.set(verdictsRef, { ...verdicts, [verdictKey(repo, input.pr)]: { state, at: now } })
     // Taken out of the band when the card carries no message for it, or holds it until live (#1335).
