@@ -753,12 +753,12 @@ says "that refusal names the placed helper" "av_helper.py"
 # The suite itself, as a session runs it. The fixtures above are shaped like it; this is it, so the
 # next change to the walk that refuses it fails here rather than in a session (L48). The installed
 # copy of these hooks has no tests/ folder beside it, and says so rather than passing (L411).
-REPO="$(cd "$DIR/../.." && pwd)"
-if [ -f "$REPO/tests/test-mods.sh" ] && [ -f "$REPO/tools/lib/ts_source.py" ]; then
-  run_bash "cd $REPO && bash tests/test-mods.sh"
+MODS_REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tests/test-mods.sh" ] && [ -f "$MODS_REPO/tools/lib/ts_source.py" ]; then
+  run_bash "cd $MODS_REPO && bash tests/test-mods.sh"
   allowed "the repository's own mods suite, bash tests/test-mods.sh, is not refused (claude-config#2654)"
 else
-  echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: there is no tests/test-mods.sh two folders above $DIR (the installed copy of the hooks), so the repository's mods suite was not judged here"
+  echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: $DIR is not in a claude-config checkout holding tests/test-mods.sh (the installed copy of the hooks is not), so the repository's mods suite was not judged here"
 fi
 
 # Code given inline or fed on standard input imports from the directory it runs in.
@@ -1088,13 +1088,13 @@ crude_doc cd-var 'f="$1"' 'bash <<EOF' 'echo $f' 'EOF'
 crude_doc cd-py 'python3 <<EOF' 'echo = 1' 'cat = open("$1").read()' 'EOF'
 crude_doc cd-dash 'bash -s <<-EOF' 'echo "$1"' 'EOF'
 crude_doc cd-assign 'python3 <<EOF' 'p="$1"' 'exec(open(p).read())' 'EOF'
-crude_doc cd-part 'bash <<E"O"F' 'echo "$1"' 'EOF'
-for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign; do
+crude_doc cd-digit 'bash <<1' 'echo "$1"' '1'
+for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign cd-digit; do
   run_bash "cd $T/ip && bash $s.sh msg.json"
   refused "a heredoc that expands what the script is handed into code, as written: $s.sh"
   says "that refusal says $s.sh runs code it is handed" "a heredoc that expands it"
 done
-for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign cd-part; do
+for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign cd-digit; do
   run_bash "cd $T/ip && bash $s-crude.sh msg.json"
   refused "the same heredoc in a script the reader can only cut crudely: $s-crude.sh"
   says "that refusal says $s-crude.sh could not be followed" "could not be read as commands to see what a heredoc expands its arguments into"
@@ -1106,15 +1106,18 @@ refused "a heredoc that expands what the script is handed, piped into a script t
 run_bash "cd $T/ip && bash cd-pipe-crude.sh msg.json"
 refused "the same heredoc and pipe in a script the reader can only cut crudely"
 # The controls, each a script only the crude cut reads, handed the same file: one that opens no
-# heredoc, one whose heredoc is quoted so the shell expands nothing into it, one whose heredoc is
-# expanded but which never uses its arguments, and a here string, which is a word and no heredoc.
-# So the refusal above is the heredoc that may expand the arguments, not every crudely cut script.
+# heredoc, three whose heredoc marker is quoted (whole, by a backslash, or in part: any of them and
+# the shell expands nothing into it, as lib/shell-words.py's heredoc_opener measured), one whose
+# heredoc is expanded but which never uses its arguments, and a here string, which is a word and no
+# heredoc. So the refusal above is the heredoc that may expand the arguments, not every crudely cut
+# script.
+printf '%s\n' '#!/bin/bash' 'cat <<E"O"F' 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-part.sh"
 printf '%s\n' '#!/bin/bash' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-reads.sh"
 printf '%s\n' '#!/bin/bash' "cat <<'EOF'" 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-quoted.sh"
 printf '%s\n' '#!/bin/bash' 'cat <<\EOF' 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-escaped.sh"
 printf '%s\n' '#!/bin/bash' 'cat <<EOF' 'made in $HOME' 'EOF' 'grep -c chat msg.json' "echo 'never closed" > "$T/ip/cc-no-args.sh"
 printf '%s\n' '#!/bin/bash' 'grep -c chat <<< "$1"' "echo 'never closed" > "$T/ip/cc-here-string.sh"
-for s in cc-reads cc-quoted cc-escaped cc-no-args cc-here-string; do
+for s in cc-reads cc-quoted cc-escaped cc-part cc-no-args cc-here-string; do
   run_bash "cd $T/ip && bash $s.sh msg.json"
   allowed "a crudely cut script with no heredoc that can expand its arguments is still read as before: $s.sh"
 done
