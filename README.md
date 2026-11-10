@@ -5530,7 +5530,13 @@ read of one waits for ever and the call it judges never runs. What a file a call
 read the same way, through `currentText` in that file (#1814), which says such a file is unreadable,
 with why, never empty or absent, as it does a file whose look throws (Claude Code 2.1.312 throws
 EBADF for a link to `/dev/stdin`). The write reader never names a device as an input, and the scan
-fails a mod looping over `.inputs` by hand. That the real engine's `$.fs` reports a fifo and
+fails a mod looping over `.inputs` by hand. A quoted string that is not shell (a TypeScript string,
+a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through `quotedEnd`,
+`yamlScalar` and `yamlFlowList` in `hooks/quoted.ts`, kept by each mod that reads one at
+`hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
+own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
+words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
+pattern, or walking a string to the quote it opened with. That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
 `tests/test-fs-kind-engine.sh` against a probe mod run headless, once per Claude Code version, the
