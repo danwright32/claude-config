@@ -357,8 +357,10 @@ fi
 # lowest leaking one by almost half, so a small shift in either cluster moves nothing across it. The
 # work MacBook has no reading at all, and a Mac with less memory swaps more on an ordinary day, which
 # is why every reading is now recorded (below) and why the share is a setting,
-# FREE_SPACE_SWAP_SHARE_PCT. Its false positive costs little by construction: it is said only on a
-# warning that is already firing, never as a warning of its own.
+# FREE_SPACE_SWAP_SHARE_PCT. On a warning that is already firing its false positive costs little.
+# Since #2559 it is also half of a warning of its own on a disk with room, exit 5, where a false
+# positive is a notice nobody needed: so that one asks for swap past 90% of its own total as well,
+# and the nudge says it once per session (see swap_full).
 #
 # THE READINGS ARE RECORDED so the 2% can be recalibrated rather than re-argued: the highest reading
 # of each day (UTC), with the disk's size, one line per day in <state dir>/<volume>.swap-days, the
