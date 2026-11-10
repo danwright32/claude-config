@@ -6859,13 +6859,14 @@ followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
 its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
-file. Removals, `touch`, `mkdir`, mode changes and a folder handed to a script are not judged, and a
+file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
-A folder a script is handed (`bash tools/check-mods.sh payload/mods`) is read, never a write of every
-file under it, as the design round guard reads one; a folder a copy lands in, and a write marked as
-reaching a whole folder (`find ... -exec sed -i`, git putting a folder back), still are (#2527). A loop over quoted search terms
+A folder a script is handed is judged as a write of every file under it (#2321), unless the script's
+own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which copies into
+a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527, and #2565 is to hold
+such a script only for the files its writes can reach. A loop over quoted search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
-the one file they name.
+the one file they name (#2527).
 One narrowing (#2254): a findings note to the installed helper,
 `bash ~/.claude/hooks/lib/issue-spool.sh note ...` or that path run directly, writes only to
 `~/.claude-issue-spool`, so its arguments are not read as files; a copy of the helper anywhere

@@ -36,8 +36,11 @@ const WRITES: Record<string, unknown> = {
   "find docs -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'docs', path: '/w/app/docs', edits: true, tree: true }], changes: [], unnamed: [] },
   // #2373: a write reaching a whole folder holding more files that could be held than are judged one by one.
   "find gen -exec sed -i '' 's/a/b/' {} +": { files: [{ word: 'gen', path: '/w/app/gen', edits: true, tree: true }], changes: [], unnamed: [] },
-  // #2321, read since #2527: a folder handed to a script, named by its path alone.
+  // #2321: a folder handed to a script, or a copy's folder destination, named by its path alone.
   'python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'python3 rewrite.py docs': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'docs', path: '/w/app/docs' }] }] },
+  'python3 rewrite.py gen': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'gen', path: '/w/app/gen' }] }] },
+  'python3 rewrite.py src/locked': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/locked', path: '/w/app/src/locked' }] }] },
   // A cp source ending in slash dot copies what lib holds into src, a whole tree (#2396).
   'cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [] },
   // ditto merges what a source folder holds into its destination whatever the slash, a tree (#2396).
@@ -52,24 +55,23 @@ const WRITES: Record<string, unknown> = {
   // #2402: a word whose every dollar sign the shell leaves as text names the file it spells.
   'python3 probe.py "src/big$.ts"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big$.ts', path: '/w/app/src/big$.ts', unexpanded: true }] }] },
   'python3 probe.py "src/big.ts$"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'probe.py', path: '/w/app/probe.py', args: [{ word: 'src/big.ts$', path: '/w/app/src/big.ts$', unexpanded: true }] }] },
-  // #2321: a copy into a folder, named by its path alone, so the disk says it is a folder.
-  'cp new.ts src': { files: [{ word: 'src', path: '/w/app/src', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
-  'cp new.ts docs': { files: [{ word: 'docs', path: '/w/app/docs', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
-  'cp new.ts gen': { files: [{ word: 'gen', path: '/w/app/gen', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
-  'cp new.ts src/locked': { files: [{ word: 'src/locked', path: '/w/app/src/locked', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
-  'cp new.ts srclink': { files: [{ word: 'srclink', path: '/w/app/srclink', sources: ['/w/app/new.ts'], mayBeFolder: true }], changes: [], unnamed: [] },
-  // #2527: a folder a script is handed, read as the one path it names, and real writes beside one.
-  'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  'bash /w/app/check.sh /w/app/src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '/w/app/check.sh', path: '/w/app/check.sh', args: [{ word: '/w/app/src', path: '/w/app/src' }] }] },
-  './check.sh src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './check.sh', path: '/w/app/check.sh', args: [{ word: 'src', path: '/w/app/src' }] }] },
+  // #2407: a folder handed to a script whose own text is read for what it writes there.
+  'bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  './scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash wrap.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'wrap.sh', path: '/w/app/wrap.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash locked.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'locked.sh', path: '/w/app/locked.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'python3 rewrite.py srclink': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'srclink', path: '/w/app/srclink' }] }] },
-  'python3 rewrite.py src/big.ts': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] }] },
-  'bash check.sh src/ > src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }], stdout: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] },
-  'bash check.sh src/ && cp lib/new.ts src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', sources: ['/w/app/lib/new.ts'], mayBeFolder: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  "bash check.sh src/ && sed -i '' 's/a/b/' src/big.ts": { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  'bash check.sh src/ | tee src/big.ts': { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  'bash check.sh src/ && cp -R lib/. src/': { files: [{ word: 'src/.', path: '/w/app/src/.', sources: ['/w/app/lib'] }, { word: 'src', path: '/w/app/src', sources: ['/w/app/lib'], tree: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
-  // #2527: a loop handing a script quoted search terms, plain words, and words it cannot read.
+  './odd.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a script file run directly', script: './odd.sh', path: '/w/app/odd.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  // #2426 lessons review: one folder handed to two scripts, the one that writes first or second.
+  'bash scan.sh src/ && python3 rewrite.py src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'python3 rewrite.py src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a python3 script file', script: 'rewrite.py', path: '/w/app/rewrite.py', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash scan.sh src/ && bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash rewrite.sh src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  'bash scan.sh src/ && bash scan.sh ./src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: './src', path: '/w/app/src' }] }] },
+  // #2527: a check like tools/check-mods.sh handed a folder, held by Dan's decision, and a loop handing
+  // a script quoted search terms, plain words, and words it cannot read.
+  'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   "for t in \"*push*\" 'gate'; do bash check.sh --like \"$t\"; done": { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '*push*', folder: '/w/app', quoted: true }, { word: '$t', path: '/w/app/gate' }] }] },
   'for t in "a" "b"; do bash check.sh --like "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t', path: '/w/app/a' }, { word: '$t', path: '/w/app/b' }] }] },
   'for t in $(cat list); do bash check.sh "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t' }] }] },
@@ -671,11 +673,15 @@ test('a write chained with a findings note is still judged, and a copy of the he
   const w = world($, on)
   expect(refusal(await bash($ as never, w, `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`))).toContain('which writes src/lib/slack.ts')
   expect(refusal(await bash($ as never, w, `${NOTE} && echo hi > "$OUT/big.ts"`, {}, 'b2'))).toContain('$OUT/big.ts')
-  // Each is handed `.`, the checkout itself, which since #2527 is read as the one path it names, never
-  // as every file under it; a copy's note and the append are still held for the words they cannot read.
-  expect(refusal(await bash($ as never, w, COPY_NOTE, {}, 'b3'))).toContain('reads $PWD and every *.ts file, so why?')
-  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('$RECORD')
-  expect(w.judged().map(j => j.path)).not.toContain('src/big.ts')
+  // Each is handed `.`, the checkout itself, so since #2321 it is held first for the held files under it;
+  // once that file is decided, the append is still held for its unreadable word.
+  expect(refusal(await bash($ as never, w, COPY_NOTE, {}, 'b3'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('which writes src/big.ts.')
+  await decide($ as never, { call: 'b4', decision: 'proceed', reason: REASON })
+  const why = refusal(await bash($ as never, w, APPEND, {}, 'b5'))
+  expect(why).toContain('which writes src/lib/slack.ts.')
+  await decide($ as never, { call: 'b5', decision: 'proceed', reason: REASON })
+  expect(refusal(await bash($ as never, w, APPEND, {}, 'b6'))).toContain('$RECORD')
 })
 
 // #2142 lessons review: a write reaching a whole folder (find -exec over it, git putting a folder
@@ -712,9 +718,9 @@ test('a write reaching a folder whose files cannot be listed is held as unread, 
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src', decision: 'held' })
 })
 
-// #2321: a folder a copy lands in reaches every file under it, as a write marked `tree` does: mod-kit
-// names it by its path alone, so the disk says it is a folder. (A folder a script is handed is read, #2527.)
-const COPY_SRC = 'cp new.ts src'
+// #2321: a folder handed to a script, or a folder a copy lands in, reaches every file under it, as a
+// write marked `tree` does: mod-kit names it by its path alone, so the disk says it is a folder.
+const SCRIPT_SRC = 'python3 rewrite.py src/'
 // gen/f1.ts .. gen/fN.ts on the default branch, with an open structural issue naming gen/f1.ts, so
 // every file in gen is one the area check could hold.
 const GEN_ISSUE: Issue = { number: 50, title: 'Untangle the generator', body: 'gen/f1.ts does everything', labels: [{ name: 'tech-debt' }, { name: 'priority-p2' }] }
@@ -727,22 +733,22 @@ const genWorld = ($: unknown, on: Parameters<typeof world>[1], n: number) => {
   return w
 }
 
-test('a copy into a folder holding a held file is held, naming the file, and goes ahead once each is decided (#2321)', KIT, async ($, on) => {
+test('a script handed a folder holding a held file is held, naming the file, and goes ahead once each is decided (#2321)', KIT, async ($, on) => {
   const w = world($, on)
-  expect(refusal(await bash($ as never, w, COPY_SRC))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, SCRIPT_SRC))).toContain('The area check held this Bash command, which writes src/big.ts.')
   await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
-  const why = refusal(await bash($ as never, w, COPY_SRC, {}, 'b2'))
+  const why = refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b2'))
   expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
   expect(why).toContain('#41 (p2, tech-debt)')
   await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
-  expect((await bash($ as never, w, COPY_SRC, {}, 'b3')).result).toBe('done')
+  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b3')).result).toBe('done')
   expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
 })
 
-test('a copy into a folder holding no held file, or a folder not on the disk, runs judging no file (#2321)', KIT, async ($, on) => {
+test('a script handed a folder holding no held file, or a folder not on the disk, runs judging no file (#2321)', KIT, async ($, on) => {
   const w = world($, on)
-  expect((await bash($ as never, w, 'cp new.ts docs')).result).toBe('done')
-  expect((await bash($ as never, w, 'cp new.ts gen', {}, 'b2')).result).toBe('done')
+  expect((await bash($ as never, w, 'python3 rewrite.py docs')).result).toBe('done')
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
 })
@@ -759,21 +765,21 @@ test('a ditto into a folder holding a held file is held, naming the file, though
   expect(refusal(await bash($ as never, w, 'ditto gen/ src/'))).toMatch(/which writes src\/(big|lib\/slack)\.ts\./)
 })
 
-test('a copy into a folder whose files cannot be listed is held as unread, saying why (#2321)', KIT, async ($, on) => {
+test('a script handed a folder whose files cannot be listed is held as unread, saying why (#2321)', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.slowLogOnce = true
-  const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: COPY_SRC } as never)
+  const p = $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: SCRIPT_SRC } as never)
   await w.clock.advance(DEADLINE_MS + 1000)
   const why = refusal((await p) as R)
-  expect(why).toContain('src reaches every file under it')
+  expect(why).toContain('src/ reaches every file under it')
   expect(why).toContain('cannot be listed')
-  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src', decision: 'held' })
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/', decision: 'held' })
 })
 
-test('a copy onto a path whose kind cannot be read is held as unread, since it may be a folder (#2321)', KIT, async ($, on) => {
+test('a script handed a path whose kind cannot be read is held as unread, since it may be a folder (#2321)', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.statFails.push(`${APP}/src/locked`)
-  const why = refusal(await bash($ as never, w, 'cp new.ts src/locked'))
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
   expect(why).toContain('src/locked may be a folder')
   expect(why).toContain('permission denied')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'src/locked', decision: 'held' })
@@ -781,73 +787,116 @@ test('a copy onto a path whose kind cannot be read is held as unread, since it m
 
 // #2407 lessons review: a link to a folder holds the files of the folder it leads to, and a path whose
 // existence cannot be asked about may be a folder, so each is held as the folder or as unread.
-test('a copy into a link to a folder holding a held file is held, naming the file under the folder it leads to', KIT, async ($, on) => {
+test('a script handed a link to a folder holding a held file is held, naming the file under the folder it leads to', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.links[`${APP}/srclink`] = `${APP}/src`
-  expect(refusal(await bash($ as never, w, 'cp new.ts srclink'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, 'python3 rewrite.py srclink'))).toContain('which writes src/big.ts.')
 })
 
-test('a copy onto a path whose existence cannot be asked about is held as unread, since it may be a folder', KIT, async ($, on) => {
+test('a script handed a path whose existence cannot be asked about is held as unread, since it may be a folder', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.existsFails.push(`${APP}/src/locked`)
-  const why = refusal(await bash($ as never, w, 'cp new.ts src/locked'))
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py src/locked'))
   expect(why).toContain('src/locked may be a folder')
   expect(why).toContain('permission denied')
 })
 
 test('a folder holding 25 files that could be held has each judged one by one, naming the file (#2321)', KIT, async ($, on) => {
   const w = genWorld($, on, 25)
-  expect(refusal(await bash($ as never, w, 'cp new.ts gen'))).toContain('which writes gen/f1.ts.')
+  expect(refusal(await bash($ as never, w, 'python3 rewrite.py gen'))).toContain('which writes gen/f1.ts.')
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
 })
 
 test('a folder holding 26 files that could be held is held whole as unread, judging none one by one, and runs once decided (#2321)', KIT, async ($, on) => {
   const w = genWorld($, on, 26)
-  const why = refusal(await bash($ as never, w, 'cp new.ts gen'))
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py gen'))
   expect(why).toContain('gen reaches every file under it, and 26 files under it could be held, more than the 25 the area check judges one by one')
   expect(why).toContain('gen/f1.ts')
   expect(w.judged().length).toBe(0)
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: 'gen', decision: 'held' })
   await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
-  expect((await bash($ as never, w, 'cp new.ts gen', {}, 'b2')).result).toBe('done')
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
 })
 
-// #2527: on 2026-11-09 `bash tools/check-mods.sh <payload/mods>`, a read only check, was held twice as
-// writing every file under payload/mods, wedging a builder each time: since #2321 a folder a script is
-// handed was judged as a write of every file under it, and #2407 let it go only where the script's own
-// text wrote nothing at all, which check-mods.sh's does (a copy into a folder it makes with mktemp, an
-// inline perl program). A folder a script is handed is read, as the design round guard has always
-// read one (#1586): it is judged as the one path it names, never for the files under it. A file a
-// script is handed is still judged as a write of that file, and a write that reaches a folder (a
-// redirect, a copy, an in place edit, tee) is judged exactly as before.
-const CHECK = 'scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
+// #2407: a folder handed to a script is held only when the script can write there. Its file is read,
+// and mod-kit's one reader of what a command writes reads it as the program its interpreter runs;
+// a script that cannot be read, or that writes anything at all, is held as #2321 holds it.
+const SCAN = 'for f in "$1"/*.ts; do\n  grep -n TODO "$f" 2>/dev/null\ndone\nwc -l "$1"/*.ts | sort -n\ncommand -v git >/dev/null 2>&1\n'
 
-test('a script handed a folder holding held files runs judging no file under it, whatever its own text writes (#2527)', KIT, async ($, on) => {
+test('a read only scan handed a folder holding held files runs judging no file, run by bash or directly (#2407)', KIT, async ($, on) => {
   const w = world($, on)
-  w.files[`${APP}/check.sh`] = `#!/bin/bash\n${CHECK}`
-  w.ctl.links[`${APP}/srclink`] = `${APP}/src`
-  const commands = ['bash check.sh src/', `bash ${APP}/check.sh ${APP}/src`, './check.sh src', 'python3 rewrite.py src/', 'python3 rewrite.py srclink']
-  const ran: string[] = []
-  for (const [i, command] of commands.entries()) ran.push(`${command}: ${(await bash($ as never, w, command, {}, `b${i + 1}`)).result === 'done' ? 'ran' : 'held'}`)
-  expect(ran).toEqual(commands.map(c => `${c}: ran`))
+  w.files[`${APP}/scan.sh`] = `#!/usr/bin/env bash\n${SCAN}`
+  expect((await bash($ as never, w, 'bash scan.sh src/')).result).toBe('done')
+  expect((await bash($ as never, w, './scan.sh src/', {}, 'b2')).result).toBe('done')
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+  // Each pass is on record, so a reading that lets everything through shows in the log (L551).
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([
+    { word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' },
+    { word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' },
+  ])
 })
 
-test('a held file a script is handed, and a redirect, copy, in place edit or tee onto one, are still held beside a read only check (#2527)', KIT, async ($, on) => {
+test("a read only scan is still held when mod-kit's reader fails while reading the script, never passed (#2407)", KIT, async ($, on) => {
   const w = world($, on)
-  w.files[`${APP}/check.sh`] = CHECK
-  const commands = [
-    'python3 rewrite.py src/big.ts',
-    'bash check.sh src/ > src/big.ts',
-    'bash check.sh src/ && cp lib/new.ts src/big.ts',
-    "bash check.sh src/ && sed -i '' 's/a/b/' src/big.ts",
-    'bash check.sh src/ | tee src/big.ts',
-    'bash check.sh src/ && cp -R lib/. src/',
-  ]
+  w.files[`${APP}/scan.sh`] = SCAN
+  w.ctl.pipelineThrows = true
+  expect(refusal(await bash($ as never, w, 'bash scan.sh src/'))).toContain('which writes src/big.ts.')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+test('a script that writes into the folder it is handed, or runs another script, is still held, naming the file (#2407)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/rewrite.sh`] = `#!/bin/bash\n${SCAN}sed -i '' 's/a/b/' "$1"/*.ts\n`
+  w.files[`${APP}/wrap.sh`] = `${SCAN}python3 tools/fix.py "$1"\n`
+  expect(refusal(await bash($ as never, w, 'bash rewrite.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, 'bash wrap.sh src/', {}, 'b2'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+})
+
+test('a folder handed to a read only scan and to a script that may write there is held, whichever runs first (#2426 lessons review)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = SCAN
+  w.files[`${APP}/rewrite.sh`] = `${SCAN}sed -i '' 's/a/b/' "$1"/*.ts\n`
+  // rewrite.py is not there, so what it writes cannot be read; rewrite.sh writes into the folder.
+  const commands = ['bash scan.sh src/ && python3 rewrite.py src/', 'python3 rewrite.py src/ && bash scan.sh src/', 'bash scan.sh src/ && bash rewrite.sh src/', 'bash rewrite.sh src/ && bash scan.sh src/']
   const held: string[] = []
-  for (const [i, command] of commands.entries()) held.push(`${command}: ${refusal(await bash($ as never, w, command, {}, `b${i + 1}`)).includes('which writes src/big.ts.') ? 'held' : 'ran'}`)
+  for (const [i, command] of commands.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `${command}: ran` : `${command}: ${refusal(r).includes('which writes src/big.ts.') ? 'held' : refusal(r)}`)
+  }
   expect(held).toEqual(commands.map(c => `${c}: held`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+test('a folder handed twice to the same read only scan runs judging no file, its one script passed on record (#2426 lessons review)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/scan.sh`] = SCAN
+  expect((await bash($ as never, w, 'bash scan.sh src/ && bash scan.sh ./src')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', script: `${APP}/scan.sh`, decision: 'passed' }])
+})
+
+test('a script handed a folder that cannot be read, is not there, or runs under an interpreter mod-kit does not read is still held (#2407)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/locked.sh`] = SCAN
+  w.ctl.unreadableFiles.push(`${APP}/locked.sh`)
+  w.files[`${APP}/odd.sh`] = `#!/usr/bin/env frob\n${SCAN}`
+  expect(refusal(await bash($ as never, w, 'bash locked.sh src/'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, './odd.sh src/', {}, 'b2'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b3'))).toContain('which writes src/big.ts.')
+})
+
+// #2527, Dan's decision (2026-11-09): `bash tools/check-mods.sh <payload/mods>` copies into a folder it
+// makes with mktemp and runs an inline perl program, so its own text writes, and a folder it is handed
+// stays held for the held files under it, as #2321 holds any script's. Where a script's writes really
+// land is a follow up; until then the hold fails closed.
+const CHECK = 'scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
+
+test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/check.sh`] = `#!/bin/bash\n${CHECK}`
+  expect(refusal(await bash($ as never, w, 'bash check.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
 })
 
 // #2527: `for t in "*push*" gate; do bash probe.sh --like "$t"; done`, a read only probe over search
@@ -863,7 +912,6 @@ test('a loop handing a script quoted search terms runs; one whose words cannot b
   expect(why).toContain('$t')
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$t', decision: 'held' })
 })
-
 
 // #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is
 // bounded the same way, so a folder like payload/hooks cannot outrun the hook's 10 second budget.
