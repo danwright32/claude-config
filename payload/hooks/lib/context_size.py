@@ -233,6 +233,9 @@ def note_place(payload):
     # Bounded here: a failure must cost only the note's place, never the notice itself, which would
     # otherwise abort before its band is recorded and be retried, unsaid, on every call.
     try:
+        # context-size-notice.sh runs this file as plain python3, so the sibling import would leave
+        # its bytecode in lib/__pycache__ (#2600).
+        sys.dont_write_bytecode = True
         import session_notes
         r = session_notes.ensure(payload)
     except Exception as err:

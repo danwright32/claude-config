@@ -625,6 +625,7 @@ del ENV["DESIGN_SCORE_GATE_PY"]
 # gate still refuses rather than guessing the pull request's own repository.
 import importlib.util  # noqa: E402
 
+sys.dont_write_bytecode = True   # no cache beside the hooks or their lib (#2600)
 _spec = importlib.util.spec_from_file_location("design_score_gate_under_test", os.path.join(HOOKS, "design-score-gate.py"))
 gate_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gate_mod)
