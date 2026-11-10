@@ -221,7 +221,9 @@ UNREAD_CLIENTS = {
     "cockroach", "mongosh", "mongo", "redis-cli", "pg_restore", "dropdb", "createdb", "dropuser",
     "createuser", "mysqladmin", "mysqlimport", "mariadb-admin",
 }
-HELP_WORDS = {"--help", "-h", "-help", "-?", "--version", "-V", "-version"}
+# A client whose statements are not read runs nothing only when asked for help or its version, and
+# only by the long forms: their -h is a host and -V varies between them.
+UNREAD_HELP_WORDS = {"--help", "--version"}
 CLIENTS = set(STATEMENT_CLIENTS) | UNREAD_CLIENTS | {"supabase"}
 # A client's name where a command's word would be: not part of a longer name, a path's last part.
 CLIENT_WORD = re.compile(r"(?<![A-Za-z0-9_.-])(?:" + "|".join(
@@ -456,7 +458,10 @@ def _run(words, judge, sw, depth):
     if prog == "supabase":
         return _supabase(words, judge)
     if prog in UNREAD_CLIENTS:
-        if HELP_WORDS & set(words[1:]):
+        # Only a call that is nothing but a help or version request runs nothing. In these clients -h
+        # is the host and -V can be anything, so a short flag never counts, and a help word beside a
+        # real run (pg_restore --version -d shop) does not excuse the run.
+        if len(words) > 1 and set(words[1:]) <= UNREAD_HELP_WORDS:
             return []
         return [(prog + " is a database client whose statements this hook does not read, so the call "
                  "could not be classified as read only", None)]

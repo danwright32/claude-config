@@ -388,6 +388,12 @@ expect_bash "pgcli" ask 'pgcli "$DATABASE_URL"'
 expect_bash "pg_restore" ask 'pg_restore -d shop dump.tar'
 expect_bash "dropdb" ask 'dropdb shop'
 expect_bash "pgcli --help runs nothing" none 'pgcli --help'
+# A help or version word counts only when it is the whole command: in these clients -h is the HOST,
+# so a word that reads as help elsewhere in a real run must not let it pass (lessons review, 5cb8288).
+expect_bash "dropdb -h names the host, so it is asked about" ask 'dropdb -h prod.example.com shop'
+expect_bash "pgcli -h names the host, so it is asked about" ask 'pgcli -h prod.example.com shop'
+expect_bash "a version word beside a real restore is asked about" ask 'pg_restore --version -d shop dump.tar'
+expect_bash "dropdb --version alone runs nothing" none 'dropdb --version'
 
 # Other database tools, by the names measured on this Mac and by invented ones.
 expect "the project level Supabase server's execute_sql, a write" ask "$(tool_payload mcp__supabase__execute_sql '{"query": "update runs set note = 1"}')"
