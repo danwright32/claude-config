@@ -666,7 +666,7 @@ mkdir -p "$_sc_runs" 2>/dev/null
 # top), so a run older than this is one nobody is coming back for. A setting, not a measurement.
 _sc_run_stale="${SCANNERS_RUN_STALE_SECONDS:-21600}"
 # Zero however written is the default, never "stale at once" (lib/whole-number.sh, claude-config#1948).
-whole_above_zero "$_sc_run_stale" _sc_run_stale || _sc_run_stale=21600
+_sc_run_stale="$(whole_above_zero "$_sc_run_stale")" || _sc_run_stale=21600
 # A poll delay that can be injected (L524), for the wait on the suite lock further down. It names a
 # command this gate runs, so it is honoured only under the hooks' test marker, HOOK_TESTS_RUNNING=1,
 # which run-all-tests.sh exports to every suite and no real push carries (claude-config#2399, the
@@ -872,7 +872,7 @@ _sc_relaunch(){   # $1 = run index   $2 = the runs in flight at once
 # leaves can hold this hook's output open after it exits (L235).
 _sc_budget_default=150
 _sc_budget="${SCANNERS_BUDGET_SECONDS:-$_sc_budget_default}"
-if ! whole_above_zero "$_sc_budget" _sc_budget; then
+if _wn_got="$(whole_above_zero "$_sc_budget")"; then _sc_budget="$_wn_got"; else
   # Unreadable is the default, never zero (which would refuse every push) and never no budget
   # (which is the defect), and it is said rather than swallowed (L50, L90).
   echo "scanners-before-push: SCANNERS_BUDGET_SECONDS is '$_sc_budget', not a whole number of seconds, so the default of $_sc_budget_default is used." >&2
@@ -893,7 +893,7 @@ _sc_budget_ends_when=""
 _sc_budget_not_before=0
 if [ -n "${SCANNERS_BUDGET_ENDS_WHEN:-}" ] && [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
   _sc_budget_ends_when="$SCANNERS_BUDGET_ENDS_WHEN"
-  whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}" _sc_budget_not_before || _sc_budget_not_before=0
+  _sc_budget_not_before="$(whole_above_zero "${SCANNERS_BUDGET_ENDS_NOT_BEFORE:-0}")" || _sc_budget_not_before=0
 fi
 _sc_budget_spent(){   # -> 0 once the budget has run out
   local now
@@ -1010,7 +1010,7 @@ _sc_wait_bounded 2>/dev/null
 _sc_lock_wait="${SCANNERS_LOCK_WAIT_SECONDS:-90}"
 case "$_sc_lock_wait" in ''|*[!0-9]*) _sc_lock_wait=90 ;; esac
 _sc_lock_poll="${SCANNERS_LOCK_POLL_SECONDS:-5}"
-whole_above_zero "$_sc_lock_poll" _sc_lock_poll || _sc_lock_poll=5
+_sc_lock_poll="$(whole_above_zero "$_sc_lock_poll")" || _sc_lock_poll=5
 _sc_locked_list(){   # prints the indexes of runs that refused on the lock
   local i=1
   while [ "$i" -le "$_sc_n" ]; do
