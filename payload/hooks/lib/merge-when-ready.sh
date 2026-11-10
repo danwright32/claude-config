@@ -1686,9 +1686,12 @@ while :; do
   branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
-    # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629).
+    # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629);
+    # a fork's branch is never deleted here (finish_branch), so it needs no such account.
     MERGED) if [ -n "$want_delete" ]; then
-              resolve_merger 4 "Pull request #$pr in $slug is already merged (head ${head:0:7}), and its branch was left in place." || continue
+              if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" != "true" ]; then
+                resolve_merger 4 "Pull request #$pr in $slug is already merged (head ${head:0:7}), and its branch was left in place." || continue
+              fi
               finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
             fi
             merged_now=1

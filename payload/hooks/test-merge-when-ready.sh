@@ -3558,6 +3558,12 @@ check_eq "#2629 already merged, a branch no account can delete is left (stop 4)"
 check "#2629 saying it is merged and the branch was left" "is already merged (head ${OLD:0:7}), and its branch was left in place." "$out"
 check_not "#2629 never that nothing was merged" "Nothing was merged" "$out"
 check_eq "#2629 and the branch was not deleted" "0" "$(count gh-calls 'DELETE')"
+# A fork's branch is never deleted here, so a merged fork pull request needs no account that can merge.
+fresh "$OLD" 0 "$GREEN"; : > "$ST/merged"; printf true > "$ST/cross"; printf 'reader\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"
+out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
+check_eq "#2629 a merged fork pull request still finishes with a read only account" "0" "$rc"
+check "#2629 saying its branch is in a fork" "is in a fork" "$out"
+check_eq "#2629 with no permission read" "0" "$(count perm-asked .)"
 
 # A permission read that fails is said as that, never as no permission, and another account that
 # can merge still does.
