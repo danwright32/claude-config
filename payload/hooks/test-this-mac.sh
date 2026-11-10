@@ -92,6 +92,22 @@ case "$out" in *"lib/this-mac.sh is missing"*"default applies"*) check "agent-ca
 printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/x`\n' > "$TMPROOT/nolib/CLAUDE.md"
 out="$(PROJECT_LIST_FILE="$TMPROOT/nolib/CLAUDE.md" judge bash "$TMPROOT/nolib/check-project-list.sh" 2>&1)"; rc=$?
 case "$rc $out" in "2 "*"this-mac.sh is missing"*) check "check-project-list.sh without lib/this-mac.sh refuses, naming it" ok ;; *) check "check-project-list.sh without lib/this-mac.sh refuses, naming it" "exit $rc: $out" ;; esac
+# write-project-list-local.sh decides which block to write by the name, so without the helper it refuses.
+mkdir -p "$TMPROOT/nolib2/lib"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/nolib2/lib" write-project-list-local.sh >/dev/null 2>&1
+rm -f "$TMPROOT/nolib2/lib/this-mac.sh"
+out="$(PROJECT_LIST_LOCAL_FILE="$TMPROOT/nolib2/out.txt" PROJECT_LIST_REPO="$TMPROOT/nolib2" judge bash "$TMPROOT/nolib2/lib/write-project-list-local.sh" 2>&1)"; rc=$?
+case "$rc $out" in "2 "*"this-mac.sh is missing"*) check "write-project-list-local.sh without lib/this-mac.sh refuses, naming it" ok ;; *) check "write-project-list-local.sh without lib/this-mac.sh refuses, naming it" "exit $rc: $out" ;; esac
+[ ! -e "$TMPROOT/nolib2/out.txt" ] && check "and writes no list" ok || check "and writes no list" "it wrote $TMPROOT/nolib2/out.txt"
+# ai-review-on-push.sh decides whether to review by the name, so without the helper it says the
+# review did not run rather than skipping or reviewing in silence.
+mkdir -p "$TMPROOT/nolib3/lib" "$TMPROOT/nolib3/home"
+cp "$DIR/ai-review-on-push.sh" "$TMPROOT/nolib3/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/nolib3/lib" ai-review-common.sh ai-review-run.py hook-notice.sh merge-target.sh push-scope.sh >/dev/null 2>&1
+rm -f "$TMPROOT/nolib3/lib/this-mac.sh"
+pay='{"hook_event_name": "PostToolUse", "session_id": "s", "cwd": "'"$TMPROOT"'", "tool_name": "Bash", "tool_input": {"command": "git push origin feature"}, "tool_response": {"stdout": "", "stderr": ""}}'
+out="$(cd "$TMPROOT" && printf '%s\n' "$pay" | judge env -u CLAUDE_DETACHED_RUN HOME="$TMPROOT/nolib3/home" bash "$TMPROOT/nolib3/ai-review-on-push.sh" 2>&1)"; rc=$?
+case "$rc $out" in "0 "*"DID NOT RUN"*"could not load lib/this-mac.sh"*) check "ai-review-on-push.sh without lib/this-mac.sh says the review did not run, naming it" ok ;; *) check "ai-review-on-push.sh without lib/this-mac.sh says the review did not run, naming it" "exit $rc: $out" ;; esac
 
 echo "lib/hand-rolled-hostname.py: the next hook reading hostname by hand fails"
 T="$TMPROOT/tree"
