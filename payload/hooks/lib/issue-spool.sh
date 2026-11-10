@@ -162,7 +162,8 @@ MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcr
 # NO DIGEST, NO KEY, AND NOTHING READ OR WRITTEN (claude-config#2639). When shasum is not on PATH, or
 # runs and gives no digest, this used to print an EMPTY key, and every caller built its path from it:
 # a file named just `.jsonl` under the spool root, shared by every project, with nothing saying why.
-# Now it prints nothing, says which of those two happened on stderr, and returns
+# Now it prints nothing, says on stderr which of three causes it was (not on PATH, an exit status, or
+# output that is not a digest), and returns
 # ISSUE_SPOOL_NO_KEY_RC, which every key, path and reader below passes on unchanged, so a caller can
 # tell a refusal from an empty spool (exit 1). The checks cost no process on the ordinary path:
 # `command -v` is asked only once the digest has already failed.

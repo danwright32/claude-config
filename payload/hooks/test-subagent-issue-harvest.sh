@@ -3251,7 +3251,7 @@ contains "shasum" "$ns_log" && contains "not on PATH" "$ns_log" \
 # used to kill the hook before it spoke, so a missing shasum silenced the review altogether.
 rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
 ns_rc=0; ns_review="$(printf '%s' "$review_payload" | ns bash "$REVIEW" 2>/dev/null)" || ns_rc=$?
-[ "$ns_rc" -eq 0 ] && grep -q '"decision"' <<< "$ns_review" \
+[ "$ns_rc" -eq 0 ] && contains '"decision"' "$ns_review" \
   && check "#2639 the review still speaks with no shasum" ok \
   || check "#2639 the review still speaks with no shasum" "exit $ns_rc out=${ns_review:0:200}"
 ns_carried="$(carried "$ns_review")"
@@ -3261,8 +3261,9 @@ contains "shasum" "$ns_carried" && contains "not on PATH" "$ns_carried" \
 # And only then: an ordinary review with shasum in place says nothing of the kind.
 rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
 ok_review="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
-contains "no spool key" "$(carried "$ok_review")" \
-  && check "#2639 a review with shasum in place does not raise it" "carried=$(carried "$ok_review" | head -c 300)" \
+ok_carried="$(carried "$ok_review")"
+contains "no spool key" "$ok_carried" \
+  && check "#2639 a review with shasum in place does not raise it" "carried=${ok_carried:0:300}" \
   || check "#2639 a review with shasum in place does not raise it" ok
 
 echo "passed: $pass  failed: $fail"
