@@ -729,7 +729,15 @@ LOOP_INPUT
 AR_PR_LEDGER="$AR_STATE_DIR/pr-reviews.tsv"
 AR_PR_OPENED="$AR_STATE_DIR/pr-opened.tsv"
 
-ar_host() { local h; h="${AI_REVIEW_HOST:-$(hostname 2>/dev/null)}"; printf '%s' "${h%.local}"; }
+# Which Mac this is, the one reading every hook makes (lib/this-mac.sh, claude-config#2561), or
+# AI_REVIEW_HOST's for the suites. Empty when no name can be read or the helper is missing; a caller
+# that decides something by it checks `declare -F this_mac_name` first (ai-review-on-push.sh).
+. "$AR_COMMON_DIR/this-mac.sh" 2>/dev/null
+ar_host() {
+  local h=""
+  declare -F this_mac_name >/dev/null && h="$(this_mac_name ${AI_REVIEW_HOST:+"$AI_REVIEW_HOST"})"
+  printf '%s' "$h"
+}
 
 ar_pr_ledger() {   # $1 = a finished pr review file, $2 = the repository's directory
   [ -f "$1" ] || return 1

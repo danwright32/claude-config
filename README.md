@@ -5085,7 +5085,9 @@ fallback for a session where no line arrived.
   line, and a default for any Mac the table does not name. To change a Mac's cap, edit that table
   and nothing else. `agent-cap.sh --number` prints this Mac's number alone and `--table` the table.
 - **A hostname that cannot be read** gets the default, and the line says the name could not be
-  read rather than naming a Mac it guessed.
+  read rather than naming a Mac it guessed. The name is read by `hooks/lib/this-mac.sh`, everything
+  before the first dot, the one reading every hook makes; `test-this-mac.sh` fails on a hook under
+  `payload/hooks/` that reads `hostname` itself (#2561).
 - **Everything else points at the line.** The orchestrate, bug bash, architecture pass and
   production readiness skills say "the session's agent cap" and name the `[Agent cap]` line. The
   production audit workflow cannot run a shell, so the skill passes the number as `args.agentCap`;

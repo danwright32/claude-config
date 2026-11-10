@@ -1248,8 +1248,7 @@ documents and held by two suites. Three shapes were weighed:
   fallback for a session where it did not arrive, the one number a static file must state, held to
   the hook's default by `test-agent-cap.sh`.
 
-Which Mac this is comes from `hostname`, the short name, as `check-project-list.sh` and
-`ai-review-on-push.sh` already read it; a name that cannot be read is said as that, with the default,
+Which Mac this is comes from `lib/this-mac.sh`, the short name every hook reads (#2561); a name that cannot be read is said as that, with the default,
 never a guess (L11). The production audit workflow runs in an engine with no shell or file access,
 so it takes the number as `args.agentCap` and falls back, logged, to a literal default that its
 suite holds to the hook's by running it with none. The scan in `test-agent-cap.sh` finds a number

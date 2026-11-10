@@ -1651,7 +1651,9 @@ mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
   case "$now" in
     ''|*[!0-9]*) MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (the time could not be read), so the count of refused sign ins across runs (claude-config#1626) is missing it"; return 0 ;;
   esac
-  host="${HOSTNAME:-$(hostname 2>/dev/null)}"; host="${host%%.*}"; host="${host//[!A-Za-z0-9-]/_}"
+  # Which Mac, the one reading every hook makes (lib/this-mac.sh, claude-config#2561).
+  declare -F this_mac_name >/dev/null || . "$_MT_LIB/this-mac.sh" 2>/dev/null
+  host="$(this_mac_name 2>/dev/null)"; host="${host//[!A-Za-z0-9-]/_}"
   # The session as the polling policy keys it, one reading of it (L370).
   declare -F ghp_session_key >/dev/null || . "$_MT_LIB/gh-poll.sh" 2>/dev/null
   session="$(ghp_session_key 2>/dev/null)"; session="${session:-unknown}"

@@ -82,10 +82,13 @@ if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
   exit 2
 fi
 
-# The short name, because `hostname` answers with a trailing .local here while the sync's own
-# commit subjects use the short form, and the list is written to match what a person would type.
-HOST="${PROJECT_LIST_HOST:-$(hostname 2>/dev/null)}"
-HOST="${HOST%%.*}"
+# The short name, as every hook reads it (lib/this-mac.sh, claude-config#2561), which is how the
+# list names the Macs.
+if ! . "$DIR/lib/this-mac.sh" 2>/dev/null; then
+  echo "check-project-list: $DIR/lib/this-mac.sh is missing, so which Mac this is could not be read. Refusing rather than guessing which block of the list applies." >&2
+  exit 2
+fi
+HOST="$(this_mac_name ${PROJECT_LIST_HOST:+"$PROJECT_LIST_HOST"})"
 if [ -z "$HOST" ]; then
   echo "check-project-list: this machine has no readable hostname, so which block of the list applies could not be decided." >&2
   exit 2

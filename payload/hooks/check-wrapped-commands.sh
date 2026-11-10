@@ -182,7 +182,7 @@ record_refusal() {   # $1 = wrapper  $2 = reason category  $3 = refused|overridd
   case "$now" in
     ''|*[!0-9]*) RECORD_NOTE="This refusal could not be recorded in $LEDGER (the time could not be read), so the count of how often this gate fires (claude-config#1492) is missing it."; return 0 ;;
   esac
-  host="${HOSTNAME:-$(hostname 2>/dev/null)}"; host="${host%%.*}"; host="${host//[!A-Za-z0-9-]/_}"
+  host="$(this_mac_name 2>/dev/null)"; host="${host//[!A-Za-z0-9-]/_}"
   err="$( { mkdir -p "$LEDGER_DIR" && printf '%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$wrapper" "$reason" "$3" >> "$LEDGER"; } 2>&1 )" || {
     err="${err%%$'\n'*}"
     RECORD_NOTE="This refusal could not be recorded in $LEDGER (${err:-the write failed}), so the count of how often this gate fires (claude-config#1492) is missing it."
@@ -289,6 +289,9 @@ first_unexcused() {   # $1 = command
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
+# Which Mac a refusal is recorded from, the one reading every hook makes (claude-config#2561).
+# Missing, the refusal is recorded as from an unknown host, and refused all the same.
+. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948), for the
 # ledger's size, read before any refusal can be recorded. Missing, the ledger is kept at its default
 # size for this refusal, and the command is refused like any other this gate cannot judge with all
