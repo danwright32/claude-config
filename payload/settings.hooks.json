@@ -512,6 +512,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/agent-cap.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/feature-discovery-nudge.sh",
             "timeout": 5
           },

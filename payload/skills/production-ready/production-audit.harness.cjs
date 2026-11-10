@@ -102,6 +102,11 @@ const scenarios = {
     profile: p => profileFor(p),
     'audit:compliance-audit': () => null,
   },
+  // The session's agent cap passed in (claude-config#2546): a whole number, one that is not, and zero.
+  // Each answers as the default run does; only the args below differ.
+  'cap-seven': {},
+  'cap-bad': {},
+  'cap-zero': {},
 }
 const scenario = scenarios[scenarioName]
 if (!scenario) {
@@ -159,6 +164,9 @@ const args = {
   projectDir: '/p', repo: 'o/r', date: '2026-10-26',
   ...(scenarioName === 'focus' ? { focus: 'consumer email sent from the CRM' } : {}),
   ...(scenarioName === 'not-inspected' ? { outsideSystems: ['Quillfeather Dialer'] } : {}),
+  ...(scenarioName === 'cap-seven' ? { agentCap: 7 } : {}),
+  ...(scenarioName === 'cap-bad' ? { agentCap: 'lots' } : {}),
+  ...(scenarioName === 'cap-zero' ? { agentCap: 0 } : {}),
 }
 
 const run = compile(fs.readFileSync(scriptPath, 'utf8'), ['args', 'agent', 'parallel', 'pipeline', 'phase', 'log'])

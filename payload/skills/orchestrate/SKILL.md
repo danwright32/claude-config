@@ -26,19 +26,20 @@ Matching items to agents:
 - Two items that edit the same files, component, workflow, job or table never run at the same time. If they are one fix, give both to ONE agent in one brief. Otherwise the later one waits until the earlier one's pull request has merged.
 - Two symptoms that may share a cause (two complaints about one service) go to one agent, or run side by side with each brief naming the other item.
 - Different areas of one repo may run together, each agent in its own worktree.
-- Wave 1 is the most urgent four: live harm to customers first. Quick checks fill slots as they free.
+- Wave 1 is the most urgent items, as many as the session's agent cap (the `[Agent cap]` line at session start): live harm to customers first. Quick checks fill slots as they free.
 - Anything irreversible (dropping or deleting data, sending to people, re-running a job with side effects, spending money, changing production settings) is `investigate` only. The agent drafts the action; Dan decides it later with a picker that states the specific consequence.
 
 Show the board, then one picker: start as planned, or change something. Nothing is dispatched before he says yes.
 
 ### Which model a builder runs on
 
-A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961). This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
+A builder agent's model is set by the kind of task (Dan, 2026-11-01, claude-config#1961), in three tiers since Fable became his default model (Dan, 2026-11-09, claude-config#2547), keeping ordinary builders off Fable to limit usage. This section is the rule's one home: the global CLAUDE.md, and anything else that dispatches builders, points here instead of restating it.
 
 - Sonnet, with `model: "sonnet"` on the Agent call, for three kinds: a rename or move that changes no behaviour, filling in tests for code that already exists, and a fix for a review comment.
-- Opus, with `model: "opus"`, for everything else. Design, security and compliance work always runs on Opus, even when it is also one of the three kinds above.
-- A fork ignores `model`, so a Sonnet builder is never a fork.
-- To run one brief on the other model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.
+- Fable, with `model: "fable"`, for design, security and compliance work, even when it is also one of the three kinds above.
+- Opus, with `model: "opus"`, for everything else.
+- A fork ignores `model` and runs on the session's own model, so a builder whose tier is not the session's model is never a fork.
+- To run one brief on another model, suggest it to Dan with the reason: on the board, as that row's Model with the reason beside it, or before dispatching when there is no board.
 
 ## 3. Briefs
 
@@ -56,7 +57,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 
 ## 4. While agents run
 
-- At most four agents running, a reviewer agent you start included. When one returns, start the next queued item in the same response.
+- No more agents running than the session's agent cap, a reviewer agent you start included. When one returns, start the next queued item in the same response.
 - Reprint the board whenever anything changes, with each item's state: `queued`, `running since 2:14 PM ET`, `reported`, `in review`, `merged`, `live`, `needs Dan`, `failed: <why>`. Running, stuck and failed must never look alike.
 - An agent silent well past what its item should take: check it with `ListAgents`, then ask it with `SendMessage` for a one paragraph status (found so far, waiting on what, how long). Never read its output file; it is the whole transcript. If it is stuck, stop it with `TaskStop` and restart the item with a brief carrying what it found and what hung it, or mark it failed and say why.
 - Dan adds items mid run: add them to the board and run the matching rules again. When a running agent already owns that area, send the new item to it with `SendMessage` instead of starting another agent: it fixes both on its branch only if they are one fault, and otherwise finishes its own item, reports on the new one, and builds it once its own pull request has merged.

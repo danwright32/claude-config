@@ -18,7 +18,8 @@ odds, not a confirmed bug: write the test.
 ## 1. Plan and approval (Dan)
 
 Agree the areas of the app (from its navigation) and the personas below, then state the agent count
-(explorers at most 4 at a time, plus one verifier per area) and that every agent run is paid. Get a
+(explorers no more at a time than the session's agent cap, the `[Agent cap]` line at session
+start, plus one verifier per area) and that every agent run is paid. Get a
 go ahead with **AskUserQuestion** before dispatching anything.
 
 Personas, one per explorer charter: a first time visitor; someone checking numbers and copy;
@@ -75,7 +76,7 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
    plainly, `node ~/.claude/skills/bug-bash/read-only-proxy.js --state "<run dir>/proxy"`) but not
    the rule.
 
-## 3. Explore (at most 4 agents at a time)
+## 3. Explore (within the session's agent cap)
 
 Each explorer gets one area, one persona, a charter of five to ten one sentence goals, and its own
 output directory `<scratchpad>/bug-bash/<run>/explorer-<n>/`. Tell each explorer:

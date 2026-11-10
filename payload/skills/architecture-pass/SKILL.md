@@ -80,8 +80,9 @@ change count is growth, and no proposal may cite that count as breakage.
 ## 4. Look for the four shapes directly
 
 The same four shapes appeared in both manual passes, so look for them rather than ranking files and
-asking why. Dispatch one agent per shape, which is four agents, at most four running at once; tell
-Dan the count before dispatching.
+asking why. Dispatch one agent per shape, which is four agents, never more running at once than the
+session's agent cap (the `[Agent cap]` line at session start); tell Dan the count before
+dispatching.
 
 | Shape | What it looks like |
 |---|---|

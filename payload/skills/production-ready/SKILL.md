@@ -18,7 +18,7 @@ In conversation with the user, establish:
 - Any **known focus or exclusions** (e.g. "skip accessibility, it's an internal API"). A focus becomes the workflow's `focus` argument: it adds weight to every auditor and never removes a checklist item.
 - **Which systems outside this repo email, text or call the product's consumers**: CRM templates, marketing or automation tools, a dialer. Ask this every time. The code cannot show them, and on 2026-10-24 an audit graded a consumer site as sending no email (so CAN-SPAM was never checked) because the repo itself sent none, while three outside systems emailed consumers daily. Pass the names as `outsideSystems`; an empty answer is a real answer.
 
-Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan: "I'll run 19 domain auditors, four at a time, verify the serious findings, and produce an advisory report", and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
+Take a quick read of the repo (CLAUDE.md, manifest) so you can confirm the project type you expect. Then present the plan: "I'll run 19 domain auditors, as many at a time as this session's agent cap allows, verify the serious findings, and produce an advisory report", and get a go-ahead with **AskUserQuestion**. This is heavy and spawns many agents, so confirm before launching.
 
 ## 2. Run the audit (Workflow engine)
 First copy the workflow script into this session's scratchpad, because the Workflow tool refuses a script under `~/.claude`: it accepts only a path it returned itself or a file inside the working directory, a directory added to the session, or the scratchpad. Run, with the scratchpad directory your system prompt names:
@@ -34,7 +34,8 @@ It prints one line, the absolute path of an exact copy of the script, and refuse
         repo: "<owner/name>",
         date: "<today's date YYYY-MM-DD>",
         focus: "<optional: what to weigh more heavily, from step 1>",
-        outsideSystems: ["<each outside system that emails, texts or calls consumers, from step 1>"]
+        outsideSystems: ["<each outside system that emails, texts or calls consumers, from step 1>"],
+        agentCap: <the number on the [Agent cap] line at session start>
       }
     }
 
@@ -44,7 +45,7 @@ Pass that printed path exactly as it is: the Workflow tool takes `scriptPath` as
 
 Pass `date` from your own context: the workflow engine cannot read the clock. It returns `{ profile, applicable, naDomains, report }`, where `report = { executiveSummary, whatsSolid, topRisks, severityCounts, backlog, notInspected, unauditedDomains, lawTagsLost }`. Each backlog item may carry `law`, the law its gap exposes the business to (CAN-SPAM, TCPA, ADA, ...).
 
-The workflow runs at most four agents at once (Dan's standing rule), so do not batch the auditors by hand. It also keeps the compliance and personal data domains whenever the product is public, holds personal data or messages consumers, whatever the profiler said.
+The workflow runs no more agents at once than `agentCap`, the session's agent cap (Dan's standing rule), so do not batch the auditors by hand. Pass it as a whole number. Left out, or not a whole number, it falls back to the default for a Mac the hook does not name and logs that it did, since the engine cannot read the number itself. It also keeps the compliance and personal data domains whenever the product is public, holds personal data or messages consumers, whatever the profiler said.
 
 ## 3. Save the report
 Render a markdown report from the return value (executive summary, what's solid, top risks, severity counts, the N/A domains with reasons, then the full backlog grouped by domain with status/severity/evidence/remediation/effort, and a **Lawsuit risk: <law>** line on every item with a `law`). Then three sections that are never left out, each saying "none" when empty: **Not inspected** (`notInspected`: each system or setting nobody could look at, with why; an outside sender listed here was not checked for CAN-SPAM or TCPA at all), **Not audited** (`unauditedDomains`: a domain whose auditor died, so it was not checked, which is not the same as clean), and **Law tags lost** (`lawTagsLost`: laws a finding named that no backlog item carries, so add them back by hand from the domain's findings). Save it to `docs/production-readiness/<date>-report.md` in the **target** repo. Do NOT commit it: tell the user it's there for review.
@@ -101,7 +102,7 @@ Milestone grouping now happens up front in step 5, not as an afterthought, so no
     bash ~/.claude/skills/milestone/create-milestone.sh "<owner/name>" <plan.json>             # create
 
 ## Notes
-- **Cost is intended.** 19 domain auditors + a profiler + per-finding refute agents + a synthesizer is a lot of subagents per run. That depth is the point; it is why this is user-invoked only. They run four at a time, so a run takes longer than when they all ran at once.
+- **Cost is intended.** 19 domain auditors + a profiler + per-finding refute agents + a synthesizer is a lot of subagents per run. That depth is the point; it is why this is user-invoked only. They run within the session's agent cap, so a run takes longer than when they all ran at once.
 - **Tests run the script.** `test-production-audit.sh` runs the workflow with every agent stood in (`production-audit.harness.cjs`) and checks what each auditor is asked and what the report carries. Change a checklist or the report shape there first.
 - **Grounding is mandatory.** Every auditor is told to read real code and cite `path:line`; the verify pass exists to overturn false "missing" findings.
 - **First run = the prototype.** Expect to tune severity calibration and domain checklists after the first real audit.

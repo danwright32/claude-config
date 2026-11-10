@@ -23887,6 +23887,20 @@ out_me8="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP='opus=claude-opus-
 check "#828 with no shared effort to apply, claude is not asked" "[ ! -s '$ME_LOG' ]"
 check "#828 and nothing is said" "! grep -q 'shared effort' <<< \"\$out_me8\""
 
+# The REAL shared file covers the model Dan made his default on 2026-11-09 (#2547), as well as the
+# one it replaced, so status says nothing on a Mac running either. Read from this checkout's payload,
+# never a fixture, since the fixture would only prove what this suite wrote.
+ME_R3="$WORK/me828-repo3"; mkdir -p "$ME_R3/payload"
+cp "$(dirname "$SCRIPT")/payload/settings.shared.json" "$ME_R3/payload/settings.shared.json"
+for me_m in claude-fable-5-2 claude-opus-5-5; do
+  : > "$ME_LOG"
+  out_me9="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP="opus=$me_m" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R3" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+  check "#2547 the shared settings file shares an effort for $me_m, so status asks and says nothing" \
+    "[ -s '$ME_LOG' ] && ! grep -q 'no shared effort' <<< \"\$out_me9\""
+done
+check "#2547 and the effort it shares for Fable is high, as Dan approved" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-fable-5-2\"].effortLevel' '$ME_R3/payload/settings.shared.json')\" = high ]"
+
 section "== status says when the pinned TypeScript compiler is not installed (#833) =="
 # The strict mod type check needs the compiler pinned in tools/typescript, installed by hand once
 # per checkout, and without it the hook suite's type check says UNMEASURED on every run, which reads

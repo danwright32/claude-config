@@ -1110,7 +1110,10 @@ the write and `payload_path_applied`: applying the file changes nothing. The fil
 for `max` (session only, never saved), any other per model key, the top level `effortLevel`, and a
 model named by an alias, since the full name is read first and an alias there would change nothing.
 The repo stays the only source: a `/effort` pick on one Mac is put back by its next pull. When a new
-model becomes the default, its entry has to be added here, or it runs at its own default.
+model becomes the default, its entry has to be added here, or it runs at its own default. That
+happened on 2026-11-09, when Fable 5.2 became Dan's default: `claude-fable-5-2` was added at `high`
+beside the Opus entry, which stays for the builders and sessions still on Opus (#2547), and the sync
+suite reads the real file to confirm status says nothing for either.
 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
@@ -1226,6 +1229,33 @@ allow list is unchanged; the result must parse to the original document minus ex
 and is written to a temporary file beside the original and renamed over it, so a failed write leaves
 the original as it was, then read back. Two sessions starting in one project at the same moment can
 both say it; that is the cost of not taking a lock at session start.
+
+## The running agent cap is a number per Mac, said at session start (#2546)
+
+Dan set the cap at four on 2026-10-16 and asked on 2026-11-09 for seven on the work MacBook, which
+that day became an 18 core machine, with the personal MacBook left at four. The global `CLAUDE.md`
+is one file both Macs load, so it cannot carry a number per Mac, and four was written out in eight
+documents and held by two suites. Three shapes were weighed:
+
+- **A sentence per Mac in `CLAUDE.md`.** Both Macs would read both numbers on every request and
+  have to work out which applies to them, which is the reasoning a rule file should spare them.
+- **A file each skill reads when it dispatches.** Every dispatcher would need a lookup step, and the
+  global rule, which governs any session dispatching agents with no skill involved, would still have
+  no number.
+- **A SessionStart line (chosen).** `hooks/agent-cap.sh` holds the table and prints the session's
+  own number once, after `/clear` and after each compaction too, which is exactly when an earlier copy
+  is gone. One short line on every request is the whole cost. `CLAUDE.md` names the line and keeps a
+  fallback for a session where it did not arrive, the one number a static file must state, held to
+  the hook's default by `test-agent-cap.sh`.
+
+Which Mac this is comes from `hostname`, the short name, as `check-project-list.sh` and
+`ai-review-on-push.sh` already read it; a name that cannot be read is said as that, with the default,
+never a guess (L11). The production audit workflow runs in an engine with no shell or file access,
+so it takes the number as `args.agentCap` and falls back, logged, to a literal default that its
+suite holds to the hook's by running it with none. The scan in `test-agent-cap.sh` finds a number
+written where a cap on agents is said, in any payload document; text in double quotes is not read,
+because a dated quotation is the record of a decision, not a restatement of the rule, and the lessons
+and dated audits are not read, because they record history (L613, L564).
 
 ## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
