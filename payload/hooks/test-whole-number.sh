@@ -235,9 +235,10 @@ trap 'rm -rf "$TMPROOT"' EXIT
 E="''"; N='*[!0-9]*'; ND='*[!0-9.]*'; Z='0'; C='%%[!''0]*'
 W='whole''_above_zero'; D='decimal''_above_zero'; H='dcu''_human'
 mkdir -p "$TMPROOT/payload/hooks" "$TMPROOT/.github/workflows"
-# Thirteen that are, each on a line of its own so a finding names which, and one in a workflow. The
-# last four were the right way to call the helper before claude-config#2465, when it set the variable
-# it was named instead of printing, and the capture under local hides a refusal.
+# Twenty that are, each on a line of its own so a finding names which, and one in a workflow. Lines
+# 14 to 16 were the right way to call the helper before claude-config#2465, when it set the variable
+# it was named instead of printing, line 17 is a capture under local, which hides a refusal, and the
+# last seven are for #2577, described where they are written.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s|%s) x=5 ;; esac\n' "$E" "$N" "$Z"
@@ -272,7 +273,7 @@ OLD
 } > "$TMPROOT/payload/hooks/probe.sh"
 cp "$TMPROOT/payload/hooks/probe.sh" "$TMPROOT/claude-sync"
 printf 'jobs:\n  a:\n    steps:\n      - run: case "$n" in %s|%s|%s) n=1 ;; esac\n' "$E" "$N" "$Z" > "$TMPROOT/.github/workflows/w.yml"
-# And fifteen that are not.
+# And the shapes that are not one.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s) x=5 ;; esac\n' "$E" "$N"
