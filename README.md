@@ -1798,7 +1798,18 @@ and lessons review and is judged by every gate as any update's is. Any other con
 branch, stops as before, naming the conflicted files. Each row was one line of up to 29 KB until
 the table became an HTML table of wrapped cells (claude-config#2108), which lets edits to different
 lines of one description merge cleanly, but two pull requests adding an issue number to one mod
-still meet in its Issue cell, so the resolver stays. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+still meet in its Issue cell, so the resolver stays. One CI start that never began is re-run
+rather than stopped on (claude-config#2537): on 2026-11-09 pull requests #2495, #2496 and #2534
+stopped on `block-red-merge.sh`'s "PR has NO checks at all" because each head's tests run had
+finished as a failure with zero jobs ("This run likely failed because of a workflow file issue")
+while main's workflow was fine, and a plain `gh run rerun` started each properly. Once no run for
+the head is unfinished, the helper reads the jobs of each run for that exact head that finished as a
+failure, and one with no jobs on its first attempt is re-run once for that head, said in its output
+and log, and waited on like any other run. A run whose jobs ran and failed is never re-run, a run
+already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
+left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
+gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
+has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -2254,9 +2265,24 @@ A fourth gate reads the same library for a different thing an agent does to its 
   the flags, `--fixup`, `--no-force`, and the main session are untouched. A payload it cannot read
   is refused when it names an amend or a force, as `no-verify-gate.sh` does with a skip.
 
+One more gate holds a rule the briefs give every agent, for everyone:
+
+- `temp-worktree-gate.sh` (PreToolUse, Bash and EnterWorktree) refuses a git worktree placed under a
+  temp folder a restart empties: `/tmp`, `/private/tmp`, `/var/folders` (with or without
+  `/private`), or a path starting with `$TMPDIR`, `$TMP` or `$TEMP`, by `git worktree add`, `git
+  worktree move` or EnterWorktree's `path`, and names the repository's `.claude/worktrees/<name>`
+  instead (claude-config#2528). On 2026-11-09 a restart emptied `/private/tmp` and took an agent's
+  worktree holding an uncommitted fix; #2490 said the rule in prose, and this makes it hold. The
+  reading is `lib/temp-worktree.py` over the shared shell reader, so it sees through rtk, env, a cd,
+  `git -C` and a `bash -c` string, takes a relative path from where the command runs, and resolves
+  symbolic links; list, remove and prune pass, `/var/tmp` (which a restart keeps) passes, and so does
+  a worktree of a repository that is itself in a temp folder. It judges the main session too. A path
+  in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
+  is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
+
 ### What a push actually waits on
 
-Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2499,6 +2525,18 @@ the main session's `git push -u origin feat/x`, five readings on 2026-10-28 (loa
 since a payload with no agent id leaves before anything loads; 0.105 to 0.126 seconds on a
 subagent's same push, which starts the shared reader to find no force; 0.105 to 0.148 seconds on a
 subagent's `git push --force`, refused
+
+</td></tr>
+<tr><td>
+
+`temp-worktree-gate.sh` (#2528)
+
+</td><td>
+
+2026-11-09: 0.034 to 0.038 seconds on `git push -u origin feat/x` from the main checkout, which
+names no worktree and leaves before anything loads; 0.040 to 0.043 seconds on the same push from a
+folder under `.claude/worktrees/`, whose name makes it read the command; 0.098 to 0.102 seconds on
+`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59
 
 </td></tr>
 <tr><td>
@@ -3423,7 +3461,7 @@ reading such data files as code; the same line now takes 0.27 seconds against a 
 extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
 and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
 distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
-the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
@@ -3456,6 +3494,38 @@ What it cannot see, since it reads only the statement's text: the database's own
 over a view that calls a function that writes, an operator or cast the database defined, a function on
 a table's row type called as a column (`t.some_function`), or a function the database defined under
 the name of a built in one, can still write. Suite: `test-read-only-query-allow.sh`.
+
+The rules for "read only" live in one file, `hooks/lib/sql-read-only.py`, which this hook and the
+write question below both load (#2521).
+
+## Database writes ask Dan first
+
+On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
+production database through the claude.ai Supabase `execute_sql`, on both Macs, and auto mode, every
+hook and every prompt let it through (the classifier judged it harmless itself). Dan decided that day
+that he is asked first. `hooks/db-write-ask.sh` answers "ask" (the call goes in front of Dan, with
+the statement and the project named) for:
+
+- any `execute_sql` that `read-only-query-allow.sh` would not approve. Both load
+  `lib/sql-read-only.py`, so a statement the read hook approves is never asked about and every other
+  one is; `test-db-write-ask.sh` runs one set of statements through both hooks and fails unless
+  exactly one of them decides each.
+- every `apply_migration`, whatever its text.
+- anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
+  one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). It
+  is registered with `onFailure: "block"`, so a crash or a timeout refuses the call rather than letting
+  a write through unasked.
+
+It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
+pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
+`updateSobjectRecord`, `deleteSobjectRecord`, or the whole `mcp__claude_ai_SFDC_USE` server). Such a
+rule lets those writes skip auto mode entirely, and the work MacBook's file held all three on
+2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
+on that Mac. The message comes on each call of one of those tools and on every database question,
+never on a read it passes.
+
+What it does not cover: a database tool on any other connector, which is not asked about until it is
+named in the hook and its registration. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.

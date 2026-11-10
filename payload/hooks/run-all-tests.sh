@@ -279,7 +279,7 @@ case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
 _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
 [ "$_default_budget" -gt 0 ] || _default_budget=1
 BUDGET="${HOOK_TESTS_BUDGET-$_default_budget}"
-if ! whole_above_zero "$BUDGET" BUDGET; then
+if _wn_got="$(whole_above_zero "$BUDGET")"; then BUDGET="$_wn_got"; else
   echo "run-all-tests: HOOK_TESTS_BUDGET='$BUDGET' is not a positive whole number of processes this run may have in flight. Refusing rather than guessing, because it decides how much of the machine the tests take." >&2
   exit 1
 fi
@@ -296,7 +296,7 @@ _jobs_default=$(( BUDGET / 2 ))
 [ "$_jobs_default" -ge 2 ] || _jobs_default=2
 [ "$_jobs_default" -le "$BUDGET" ] || _jobs_default="$BUDGET"
 JOBS="${HOOK_TESTS_JOBS-$_jobs_default}"
-if ! whole_above_zero "$JOBS" JOBS; then
+if _wn_got="$(whole_above_zero "$JOBS")"; then JOBS="$_wn_got"; else
   echo "run-all-tests: HOOK_TESTS_JOBS='$JOBS' is not a positive whole number of suites to run at once. Refusing rather than guessing, because this decides how many processes start. Use 1 to run them one at a time." >&2
   exit 1
 fi
@@ -937,7 +937,7 @@ _part_seconds(){ # _part_seconds <suite path> -> sets _sec to its measured secon
   _sec="$_v"
 }
 if [ -n "${HOOK_TESTS_DEAL:-}" ]; then
-  if ! whole_above_zero "$HOOK_TESTS_DEAL" HOOK_TESTS_DEAL; then
+  if _wn_got="$(whole_above_zero "$HOOK_TESTS_DEAL")"; then HOOK_TESTS_DEAL="$_wn_got"; else
     echo "run-all-tests: HOOK_TESTS_DEAL='$HOOK_TESTS_DEAL' is not a positive whole number of parts. Refusing rather than guessing how many jobs the suites go to." >&2
     exit 1
   fi
@@ -984,7 +984,9 @@ if [ -n "${HOOK_TESTS_DEALT:-}${HOOK_TESTS_PART:-}${HOOK_TESTS_PARTS:-}" ]; then
   # otherwise inherit the part and refuse a deal that names none of its fixture's suites (seen on
   # the first CI run of the parts, test-fixture-runner-home.sh, 2026-11-09).
   unset HOOK_TESTS_PART HOOK_TESTS_PARTS HOOK_TESTS_DEALT
-  if ! whole_above_zero "$_part" _part || ! whole_above_zero "$_parts" _parts || [ "$_part" -gt "$_parts" ]; then
+  if _wn_got="$(whole_above_zero "$_part")" && _wn_got2="$(whole_above_zero "$_parts")" && [ "$_wn_got" -le "$_wn_got2" ]; then
+    _part="$_wn_got"; _parts="$_wn_got2"
+  else
     echo "run-all-tests: a part run needs HOOK_TESTS_PART and HOOK_TESTS_PARTS as whole numbers, the part no more than the parts (got part '$_part' of '$_parts'). Refusing rather than guessing which suites are this job's." >&2
     exit 1
   fi
@@ -1189,7 +1191,7 @@ if [ "$ran" -gt 0 ]; then
       _dl_why="$SELF_DIR/lib/workflow-job-timeout.sh is missing"
     else
       _dl_min="$(workflow_job_timeout_minutes "$_dl_file" "$_dl_job")"
-      whole_above_zero "$_dl_min" _dl_min || { _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read"; }
+      _dl_min="$(whole_above_zero "$_dl_min")" || { _dl_min=""; _dl_why="job '$_dl_job' in $_dl_rel carries no timeout-minutes this runner can read"; }
     fi
     if [ -n "$_dl_min" ]; then
       _dl_now="$(run_now)"

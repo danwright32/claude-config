@@ -136,11 +136,11 @@ PC_GATE=tests
 # whole_above_zero is not found, which reads as a value that failed, so the default deadline stands.
 # shellcheck source=lib/whole-number.sh
 . "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null || true
-whole_above_zero "${REQUIRE_TESTS_DEADLINE_SECONDS:-}" TESTS_DEADLINE 2>/dev/null || :
+TESTS_DEADLINE="$(whole_above_zero "${REQUIRE_TESTS_DEADLINE_SECONDS:-}" 2>/dev/null)" || :
 [ "$TESTS_DEADLINE" -le 110 ] 2>/dev/null || TESTS_DEADLINE=110
 # The cap on further readings, lowered for the suite; a value above 40 or one that fails leaves 40.
 parts_setting=""
-whole_above_zero "${REQUIRE_TESTS_MAX_PARTS:-}" parts_setting 2>/dev/null || parts_setting=""
+parts_setting="$(whole_above_zero "${REQUIRE_TESTS_MAX_PARTS:-}" 2>/dev/null)" || parts_setting=""
 [ -n "$parts_setting" ] && [ "$parts_setting" -lt "$TEST_PARTS_MAX" ] 2>/dev/null && TEST_PARTS_MAX=$parts_setting
 
 # ---------------------------------------------------------------------------

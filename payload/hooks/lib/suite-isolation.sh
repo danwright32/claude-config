@@ -14,7 +14,8 @@
 # near its top and which fills in any seam nothing has set yet. A suite that names its own still
 # wins, as it always did under the runner.
 #
-# Adding a record that has a seam is one line in suite_isolation_seams below. A record with no seam
+# Adding a record that has a seam is one line in suite_isolation_seams below and one in
+# suite_isolate's case, which refuses a listed seam it has no line for. A record with no seam
 # at all is not covered by anything here, and tools/suite-home-writes.sh is how one is found: it
 # runs a suite on its own under a throwaway HOME and names every file the suite left under that
 # HOME's .claude.
@@ -77,10 +78,24 @@ suite_isolate(){
   # Read into a variable first, never through a process substitution: bash 3.2 can drop what the
   # caller prints next when a child its shell never waits for exits (#1984, #2040).
   seams="$(suite_isolation_seams)"
+  # Each seam is set by its own name, written out, never printf -v "$var": a name bound through a
+  # variable cannot be read without running this file, so the Slack drafts gate lost track of every
+  # variable in every suite once it sourced this (claude-config#2465). Where each one points stays
+  # in the list above; a seam listed there with no line here is refused, never skipped.
+  local at
   while read -r var rel; do
     [ "$mode" = unset ] && [ -n "${!var:-}" ] && continue
-    printf -v "$var" '%s' "${dir%/}/$rel"
-    export "${var?}"
+    at="${dir%/}/$rel"
+    case "$var" in
+      CLAUDE_ISSUE_SPOOL_DIR) export CLAUDE_ISSUE_SPOOL_DIR="$at" ;;
+      PUSH_GATE_LEDGER_DIR) export PUSH_GATE_LEDGER_DIR="$at" ;;
+      WRAPPED_REFUSAL_LEDGER_DIR) export WRAPPED_REFUSAL_LEDGER_DIR="$at" ;;
+      MT_SIGNIN_LEDGER_DIR) export MT_SIGNIN_LEDGER_DIR="$at" ;;
+      MWR_PHASE_DIR) export MWR_PHASE_DIR="$at" ;;
+      SYNC_LOG_FILE) export SYNC_LOG_FILE="$at" ;;
+      CLAUDE_SLEEP_RECORD) export CLAUDE_SLEEP_RECORD="$at" ;;
+      *) echo "suite-isolation: the seam $var is listed but suite_isolate has no line setting it." >&2; return 2 ;;
+    esac
   done <<< "$seams"
   if [ "$mode" = every ] || [ -z "${SYNC_CLAUDE_BIN:-}" ]; then
     suite_isolation_no_claude

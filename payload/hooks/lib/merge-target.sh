@@ -1717,7 +1717,7 @@ mt__signin_trim(){  # $1 = ledger  $2 = now
 # holder died, whose worst case is the race the lock exists for.
 mt__signin_lock(){  # $1 = ledger
   local lock="$1.lock" k=0 tries="${MT_SIGNIN_LOCK_TRIES:-}"
-  whole_above_zero "$tries" tries || tries=100
+  tries="$(whole_above_zero "$tries")" || tries=100
   while [ "$k" -lt "$tries" ]; do
     mkdir "$lock" 2>/dev/null && return 0
     if [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
@@ -1735,8 +1735,8 @@ mt__signin_lock(){  # $1 = ledger
 mt_signin_trend(){  # [$1 = now]
   local now="${1:-}" at="${MT_SIGNIN_ALERT_AT:-}" win="${MT_SIGNIN_WINDOW_SECONDS:-}" ledger
   case "$now" in ''|*[!0-9]*) now="$(mt__signin_now)" ;; esac
-  whole_above_zero "$at" at || at=5
-  whole_above_zero "$win" win || win=86400
+  at="$(whole_above_zero "$at")" || at=5
+  win="$(whole_above_zero "$win")" || win=86400
   ledger="$(mt__signin_ledger)"
   [ -f "$ledger" ] || return 0
   awk -F'\t' -v since="$((now - win))" -v hours="$(( (win + 1799) / 3600 ))" -v at="$at" -v path="$ledger" '
@@ -1853,15 +1853,15 @@ mt_view_class() {  # $1 = the envelope mt_pr_view printed
 # no check, so nothing here knows any repository's check names.
 #
 # Sets MT_RUNS_PENDING to the unfinished runs' names, joined with ", " (empty when every run has
-# finished, or when there are none at all, which is what a repository without Actions answers), and
-# MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
+# finished, or when there are none at all, which is what a repository without Actions answers),
+# MT_RUNS_FAILED to the runs that finished as a failure (see below), and MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
 # the read failed transiently, MT_SIGNIN_RC when GitHub refused the sign in (mt_gh_read_class), and 1
 # for anything else, including an answer that is not that list:
 # not knowing whether CI is still to come is not the same as knowing it is not (L42). Asked as
 # $3, the account that could see the pull request, when one is named.
 mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empty
   local slug="$1" sha="$2" account="${3:-}" token="" errf out rc
-  MT_RUNS_PENDING=""; MT_RUNS_ERR=""
+  MT_RUNS_PENDING=""; MT_RUNS_FAILED=""; MT_RUNS_ERR=""
   if [ -z "$slug" ] || [ -z "$sha" ]; then MT_RUNS_ERR="no repository or commit to ask about"; return 1; fi
   errf=$(mktemp "${TMPDIR:-/tmp}/mt-runs.XXXXXX" 2>/dev/null) || errf=/dev/null
   if [ -n "$account" ]; then
@@ -1884,6 +1884,10 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
     return 1
   fi
   MT_RUNS_PENDING=$(printf '%s' "$out" | jq -rs '[.[].workflow_runs[] | select((.status // "") != "completed") | "\(.name // "a workflow") (\(.status // "status unknown"))"] | unique | join(", ")' 2>/dev/null)
+  # The runs that finished as a failure, one per line as id, attempt and name, tab separated
+  # (claude-config#2537): merge-when-ready.sh reads them for a start that never began. Nothing here
+  # judges them, so block-red-merge.sh, which reads only MT_RUNS_PENDING, is unchanged by it.
+  MT_RUNS_FAILED=$(printf '%s' "$out" | jq -rs '.[].workflow_runs[] | select((.status // "") == "completed" and (.conclusion // "") == "failure" and (.id | type) == "number") | "\(.id)\t\(.run_attempt // 1)\t\(.name // "a workflow")"' 2>/dev/null)
   return 0
 }
 

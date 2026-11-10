@@ -255,6 +255,17 @@
         ]
       },
       {
+        "matcher": "Bash|EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/temp-worktree-gate.sh",
+            "timeout": 15,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "Monitor",
         "hooks": [
           {
@@ -305,6 +316,17 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/read-only-query-allow.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__claude_ai_Supabase__(execute_sql|apply_migration)|mcp__claude_ai_SFDC_USE__(createSobjectRecord|updateSobjectRecord|deleteSobjectRecord)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/db-write-ask.sh",
+            "timeout": 10,
+            "onFailure": "block"
           }
         ]
       },
