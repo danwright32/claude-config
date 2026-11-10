@@ -3330,7 +3330,9 @@ CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
 CR2="$WORK/cr2"; git clone -q "$CBARE" "$CR2"; CC2="$WORK/cc2"; mkdir -p "$CC2/hooks"
 echo '{"hooks":{}}' > "$CC2/settings.json"
 # both sides change the same tracked file differently, without pulling
-echo TWO_a > "$CC1/hooks/h.sh"; CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
+# The first Mac's side lands through fixture_land rather than a sync of its own (claude-config#2614):
+# it never runs claude-sync again, and the run under test is the second Mac's.
+echo TWO_a > "$CC1/hooks/h.sh"; fixture_land "$CR1" hooks/h.sh "$CC1/hooks/h.sh"
 echo TWO_b > "$CC2/hooks/h.sh"
 SYNC_NOTIFIER="$NOTIFIER" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$CC2" SYNC_REPO="$CR2" bash "$SCRIPT" sync >/dev/null 2>&1
 check "conflict fired a notification"  "[ -s '$REC' ]"
@@ -13114,7 +13116,8 @@ echo '{"skills":[]}' > "$PSK2/skills/synced/bucket-2/manifest.json"
 : > "$PSK2/skills/synced/.bucket-2"
 mkskill "$PSK2/skills/synced/bucket-2/pdf/SKILL.md" 'the other Mac platform skill'
 echo 'other-v2' > "$PSAH/hooks/other.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSAH" SYNC_REPO="$PSA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac A's last publish lands through fixture_land, not a sync of its own (claude-config#2614).
+fixture_land "$PSA" hooks/other.sh "$PSAH/hooks/other.sh"
 out_psk_pull="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" pull 2>&1 || true)"
 dbg "pull: $out_psk_pull"
 check "the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$PSK2/hooks/other.sh'"
@@ -13382,7 +13385,8 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull >/dev/
 mkdir -p "$UPBH/skills/halfbuilt"; echo 'draft notes' > "$UPBH/skills/halfbuilt/notes.md"
 echo 'MY-LOCAL-FIX' > "$UPBH/skills/shared/run.py"
 echo 'other-v2' > "$UPAH/hooks/other.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPAH" SYNC_REPO="$UPA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac A's last publish lands through fixture_land, not a sync of its own (claude-config#2614).
+fixture_land "$UPA" hooks/other.sh "$UPAH/hooks/other.sh"
 out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull 2>&1 || true)"
 dbg "pull with an unloadable local skill: $out_up"
 check "#388 the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$UPBH/hooks/other.sh'"
@@ -14169,7 +14173,9 @@ check "#81 and that pull says so"  "line_has \"\$out_dvok\" 'Pulled shared confi
 # files on each side, so there is no content clash anywhere: the ONLY reason git refuses is that
 # --ff-only cannot fast-forward, which is exactly the case that used to report success.
 mkskill "$DVHA/skills/dvlater/SKILL.md" 'DIVERGE-LATER'
-CLAUDE_HOME="$DVHA" SYNC_REPO="$DVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# Through fixture_land, not a sync of the other Mac's own (claude-config#2614): it never runs
+# claude-sync again, and every run under test is this Mac's.
+fixture_land "$DVRA" skills/dvlater/SKILL.md "$DVHA/skills/dvlater/SKILL.md"
 mkdir -p "$DVRB/payload/agents"
 printf 'an agent this Mac wrote and never sent\n' > "$DVRB/payload/agents/dvlocal.md"
 git -C "$DVRB" add -A -- payload
@@ -15503,7 +15509,9 @@ CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev
 # everything this one has and the conflict resolves itself.
 printf 'alpha\nbravo\nonly-here-for-now\n' > "$RVHB/hooks/rv-file.sh"
 printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\n' > "$RVHA/hooks/rv-file.sh"
-CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# The other Mac's two later publishes land through fixture_land, not syncs of its own
+# (claude-config#2614): between them this Mac only pulls, so nothing reaches the branch but them.
+fixture_land "$RVRA" hooks/rv-file.sh "$RVHA/hooks/rv-file.sh"
 out_rv="$(CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull resolving a contained conflict: $out_rv"
 check "#183 the arriving version really was taken" "grep -q 'and-theirs' '$RVHB/hooks/rv-file.sh'"
@@ -15527,7 +15535,7 @@ _rv_new="$RVRB/.resolved/rv-new-copy"
 printf 'old\n' > "$_rv_old"; printf 'new\n' > "$_rv_new"
 touch -t "$(date -v-30d +%Y%m%d%H%M)" "$_rv_old" 2>/dev/null || touch -d '30 days ago' "$_rv_old"
 printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\nlater\n' > "$RVHA/hooks/rv-file.sh"
-CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RVRA" hooks/rv-file.sh "$RVHA/hooks/rv-file.sh"
 CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#183 a copy past its age is swept"      "[ ! -f '$_rv_old' ]"
 check "#183 and a recent one is left alone"    "[ -f '$_rv_new' ]"
@@ -20666,13 +20674,15 @@ check "#473 the union after the rename is still every lesson exactly once" \
 # entry by the pull, so the rebase now merges them too, and this check is about a file nothing settles.
 DRHC="$WORK/derived-homeC"; DRRC="$WORK/derived-repoC"
 mkdir -p "$DRHA/hooks"; printf '#!/bin/sh\necho base\n' > "$DRHA/hooks/dr-hook.sh"
-drsync "$DRHA" "$DRA" >/dev/null 2>&1
+# A's two hook publishes land through fixture_land, not syncs of A's own (claude-config#2614): A never
+# runs claude-sync again, and the run under test is C's.
+fixture_land "$DRA" hooks/dr-hook.sh "$DRHA/hooks/dr-hook.sh"
 git clone -q "$DRB" "$DRRC" 2>/dev/null
 mkdir -p "$DRHC"; echo '{"hooks":{}}' > "$DRHC/settings.json"
 env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHC" SYNC_REPO="$DRRC" SYNC_NO_NOTIFY=1 \
   bash "$SCRIPT" pull >/dev/null 2>&1
 printf '#!/bin/sh\necho A side says this\n' > "$DRHA/hooks/dr-hook.sh"
-drsync "$DRHA" "$DRA" >/dev/null 2>&1
+fixture_land "$DRA" hooks/dr-hook.sh "$DRHA/hooks/dr-hook.sh"
 printf '#!/bin/sh\necho C side says something else entirely\n' > "$DRHC/hooks/dr-hook.sh"
 out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
 dbg "#282 a real content conflict said: $out_drc"
@@ -20841,7 +20851,8 @@ EMRE="$WORK/entrymerge-repoE"; git clone -q "$EMB" "$EMRE" 2>/dev/null
 EMHE="$WORK/entrymerge-homeE"; mkdir -p "$EMHE"; echo '{"hooks":{}}' > "$EMHE/settings.json"
 emrun "$EMHE" "$EMRE" pull >/dev/null
 printf -- '- rule from Mac A\n@EMNEW.md\n' >> "$EMHA/CLAUDE.md"; printf '# new\n- written on Mac A\n' > "$EMHA/EMNEW.md"
-emrun "$EMHA" "$EMRA" sync >/dev/null
+# A's last publish, so it lands through fixture_land rather than a sync of A's own (claude-config#2614).
+fixture_land "$EMRA" CLAUDE.md "$EMHA/CLAUDE.md" EMNEW.md "$EMHA/EMNEW.md"
 cp "$EMHA/CLAUDE.md" "$EMHE/CLAUDE.md"; printf '# new\n- written on Mac E\n' > "$EMHE/EMNEW.md"
 git -C "$EMRE" remote set-url origin "$WORK/entrymerge-unreachable.git"
 emrun "$EMHE" "$EMRE" sync >/dev/null
