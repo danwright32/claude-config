@@ -2,28 +2,11 @@ import type { EngineInterface, On } from 'claude-code'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
-import {
-  DRAFT_OPTIONS,
-  DRAFT_SOURCE,
-  SAVE,
-  SKIP,
-  draftHoldOf,
-  draftLetGoOf,
-  draftOwedFrom,
-  draftSaved,
-  isSlackTool,
-  owedThreads,
-  saveLine,
-  skipLine,
-  sourceOf,
-  threadKey,
-  threadOfSource,
-  threadsIn,
-} from './threads.ts'
+import { draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, owedThreads, threadKey, threadsIn } from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
 // this file keeps, per session in $.state: the threads, the step a merge last landed at, and each
-// thread's step of its last draft or skip. register.ts calls markLanded when a merge lands and
+// thread's step of its last draft. register.ts calls markLanded when a merge lands and
 // draftHold at its turn end, after the card's check has asked GitHub about the background merges.
 
 const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
@@ -103,9 +86,18 @@ export async function relateCard($: EngineInterface, t: { channel: string; ts: s
   await relate($, [{ key, pr }], await nextStep($))
 }
 
+/** #2630: a card asked a draft of its message for a recorded thread, so the hold for that thread
+ * names that message, the one Dan was shown, rather than asking for a second reply. A later card's
+ * message for the thread replaces it, as its draft would. */
+export async function noteCard($: EngineInterface, t: { channel: string; ts: string }, card: { pr: string; name: string; message: string }): Promise<void> {
+  const key = threadKey(t)
+  await changeThreads($, ts => ts.map(x => (threadKey(x) === key ? { ...x, card } : x)))
+}
+
+// A draft saved settles the thread, and the card message it was owed is no longer owed.
 async function settle($: EngineInterface, t: { channel: string; ts: string }): Promise<void> {
   const step = await nextStep($)
-  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
+  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, card: _saved, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
 }
 
 async function recorded($: EngineInterface, t: { channel: string; ts: string }): Promise<IsItLiveThread | undefined> {
@@ -159,9 +151,6 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
   return draftHoldOf(due)
 }
 
-type AskInput = { questions?: { question?: unknown }[]; metadata?: { source?: unknown } }
-type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
-
 export function registerDrafts(on: On): void {
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
   // what he types, never a notification or another plugin's prompt), when in his first prompt and
@@ -214,38 +203,5 @@ export function registerDrafts(on: On): void {
       $.ui.log(`is-it-live: could not record a Slack thread call: ${msg(err)}`, { to: 'debug' })
     }
     return done
-  })
-
-  // Dan's answer about a draft reply, in Claude Code's own dialog: the session writes the question
-  // (the reply, shown to him), this mod words the answers, and reads his choice from the dialog's
-  // own result, the one place it comes from him.
-  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-    const ask = e as unknown as AskInput
-    const source = ask.metadata?.source
-    if (typeof source !== 'string' || !source.startsWith(`${DRAFT_SOURCE}:`)) return next(e)
-    if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about a Slack draft reply. Stop and report to the main session that the reply waits on him.' }
-    const named = threadOfSource(source)
-    const t = named ? await recorded($, named) : undefined
-    if (!t) return { deny: `No Slack thread this session started from is named by ${source}. Pass the source the turn end's hold named.` }
-    const question = typeof ask.questions?.[0]?.question === 'string' && ask.questions[0].question.trim() ? ask.questions[0].question : `Save a draft reply to ${t.link ?? 'the thread'}?`
-    const r = await next({ ...e, questions: [{ question, header: 'Slack draft', options: DRAFT_OPTIONS, multiSelect: false }] } as typeof e)
-    if (r.deny !== undefined || r.isError) return r
-    const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
-    const out = (r.result ?? {}) as AskResult
-    if (out.afkTimeoutMs !== undefined) return say('Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and the draft reply is still owed. Ask him again when he is back.')
-    const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
-    const chosen = out.answers?.[shown] ?? out.answers?.[question]
-    if (chosen === SAVE) return say(saveLine(t))
-    if (chosen === SKIP) {
-      await settle($, t)
-      return say(skipLine(t))
-    }
-    if (typeof chosen !== 'string' || !chosen.trim()) return say('Dan gave no answer, so nothing is recorded and the draft reply is still owed. Ask him again.')
-    const parts = { still: 'the draft reply is still owed', again: `ask him again with metadata {"source": "${sourceOf(t)}"}` }
-    try {
-      return say(await $.modkit.typedAnswer({ guard: 'Is it live', typed: chosen, ...parts }))
-    } catch (err) {
-      return say(`Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${msg(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
-    }
   })
 }
