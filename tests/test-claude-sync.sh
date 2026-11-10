@@ -21629,7 +21629,10 @@ cat > "$NR_SHIM/rsync" <<NR_RSYNC_BREAK
 "$NR_REAL_RSYNC" "\$@"; rc=\$?
 dry=""; for a in "\$@"; do case "\$a" in --dry-run|-[!-]*n*) dry=1 ;; esac; done
 last="\${@: -1}"
-if [ -z "\$dry" ] && [ "\$last" = "\$NR_WATCH_HOME/hooks/" ]; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
+# The hooks mirror is one rsync into the home naming hooks among the mirrored trees (#2614), or, run
+# on its own, one into the home's hooks folder.
+hooks=""; for a in "\$@"; do case "\$a" in */hooks) hooks=1 ;; esac; done
+if [ -z "\$dry" ] && { [ "\$last" = "\$NR_WATCH_HOME/hooks/" ] || { [ "\$last" = "\$NR_WATCH_HOME/" ] && [ -n "\$hooks" ]; }; }; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
 exit \$rc
 NR_RSYNC_BREAK
 chmod +x "$NR_SHIM/rsync"
@@ -24643,11 +24646,32 @@ check "#1535 a file installed with this Mac's home path in it is matched to the 
 # When it is not, what status said, the installed bytes and the history it was matched against are
 # the diagnosis, so they are printed (L177). This check failed once under load on 2026-11-02
 # (claude-config#2091) while the two above it passed, and the kept output held only the FAIL line.
+# It has not been reproduced since: on 2026-11-10, 0 misses in 416 pulls into a fresh home each
+# followed by a status read, at load 23 to 115 on 12 cores, some of it inside a load window. So
+# the print also answers the two questions the next look needs. Is the INSTALLED file a version the
+# repo held? Its hashes, raw and with the placeholder put back, are looked up in the history, and
+# its size says whether an install left it empty. Does the miss persist? A second status read, at
+# once, says whether the first one failed only that once.
 if ! line_has "$out_ml1" 'mods behind the shared repo' 'path-mod'; then
   printf '%s\n' "$out_ml1" | sed 's/^/    status said: /'
+  printf '    CLAUDE_HOME status was given: %s\n' "$MLH"
   sed 's/^/    installed paths.ts: /' "$MLH/mods/path-mod/hooks/paths.ts" 2>&1
-  git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1 \
-    | sed 's/^/    repo history: /'
+  _ml_raw="$(git hash-object "$MLH/mods/path-mod/hooks/paths.ts" 2>&1)"
+  _ml_tok="$(HT_FROM="$MLH" HT_TO='__CLAUDE_HOME__' perl -pe 's/\Q$ENV{HT_FROM}\E/$ENV{HT_TO}/g' < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | git hash-object --stdin 2>&1)"
+  printf '    installed paths.ts: %s bytes, blob %s, blob with the placeholder put back %s\n' \
+    "$(wc -c < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | tr -d ' ')" "$_ml_raw" "$_ml_tok"
+  _ml_hist="$(git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1)"
+  printf '%s\n' "$_ml_hist" | sed 's/^/    repo history: /'
+  if grep -qF -e " $_ml_raw " -e " $_ml_tok " <<< "$_ml_hist"; then
+    echo "    the installed file is a version the repo held, so the pull installed it correctly and status failed to match it"
+  else
+    echo "    the installed file is no version the repo held, so the pull installed something wrong"
+  fi
+  if line_has "$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)" 'mods behind the shared repo' 'path-mod'; then
+    echo "    a second status read at once named path-mod, so the first read failed only that once"
+  else
+    echo "    a second status read at once missed path-mod too, so the miss persists"
+  fi
 fi
 check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
   "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
@@ -24694,6 +24718,136 @@ out_ml5="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
 dbg "#1535 status with a removal not received: $out_ml5"
 check "#1535 a mod the shared repo removed and this Mac still runs is named" \
   "line_has \"\$out_ml5\" 'mods behind the shared repo' 'side-mod'"
+
+section "== status names a mod file it could not compare, rather than counting it as unsent (claude-config#2673) =="
+# The comparison above hashed each installed mod file, and the files holding this Mac's home path
+# again with the placeholder put back, with every error discarded and no exit read. A hash that
+# failed left an empty or wrong value, so the file matched no version the repo held, read as this
+# Mac's own unsent work, and dropped out of the lag line with nothing said. One failed placeholder
+# swap reproduces the #1535 failure of 2026-11-02 exactly (Refs #2091): kit-mod and side-mod named,
+# path-mod silently missing. So a file status could not compare is now named, with the step that
+# failed, and counted neither as behind nor as level (L11, L184). The failures are made by a perl
+# and a git standing in front of the real ones on PATH, so the script under test is unchanged.
+MCB="$WORK/modcmp-bare.git"; git init -q --bare -b main "$MCB"
+MCS="$WORK/modcmp-sender"; git clone -q "$MCB" "$MCS" 2>/dev/null
+mccommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MCS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MCS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MCS/payload/mods/kit-mod/hooks" "$MCS/payload/mods/side-mod/.claude-plugin" "$MCS/payload/mods/path-mod/hooks" \
+  "$MCS/payload/mods/gone-mod" "$MCS/payload/mods/plain-mod"
+printf 'export const v = 1\n' > "$MCS/payload/mods/kit-mod/hooks/branch.ts"
+printf '{ "name": "side-mod" }\n' > "$MCS/payload/mods/side-mod/.claude-plugin/plugin.json"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MCS/payload/mods/path-mod/hooks/paths.ts"
+printf 'gone 1\n' > "$MCS/payload/mods/gone-mod/index.ts"
+printf 'plain 1\n' > "$MCS/payload/mods/plain-mod/index.ts"
+printf '# rules\n' > "$MCS/payload/CLAUDE.md"
+git -C "$MCS" add -A; mccommit 864000 "mods v1"
+MCR="$WORK/modcmp-repo"; git clone -q "$MCB" "$MCR" 2>/dev/null
+MCH="$WORK/modcmp-home"; mkdir -p "$MCH"; echo '{"hooks":{}}' > "$MCH/settings.json"
+MCAG="$WORK/modcmp-agents"; mkdir -p "$MCAG"
+mcenv(){ echo "CLAUDE_HOME=$MCH SYNC_REPO=$MCR SYNC_LAUNCHAGENTS=$MCAG SYNC_HOLD_FILE=$WORK/modcmp-hold SYNC_WATCH_PID_FILE=$WORK/modcmp-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(mcenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2673 the fixture: path-mod is installed with this Mac's home path in it" \
+  "grep -qF '$MCH/hooks' '$MCH/mods/path-mod/hooks/paths.ts'"
+# The shared repo moves on two days ago: four files change, one mod is removed and one added. This
+# Mac receives none of it, so all six are behind.
+printf 'export const v = 2\n' > "$MCS/payload/mods/kit-mod/hooks/branch.ts"
+printf '{ "name": "side-mod", "description": "two" }\n' > "$MCS/payload/mods/side-mod/.claude-plugin/plugin.json"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MCS/payload/mods/path-mod/hooks/paths.ts"
+printf 'plain 2\n' > "$MCS/payload/mods/plain-mod/index.ts"
+mkdir -p "$MCS/payload/mods/new-mod"; printf 'new 1\n' > "$MCS/payload/mods/new-mod/index.ts"
+git -C "$MCS" rm -q -r payload/mods/gone-mod
+git -C "$MCS" add -A; mccommit 172800 "mods v2"
+# THE NORMAL PATH, unchanged: every lagging file is compared and named, and nothing is called
+# uncomparable.
+rc_mc0=0; out_mc0="$(env $(mcenv) bash "$SCRIPT" status 2>&1)" || rc_mc0=$?
+dbg "#2673 status with nothing failing: $out_mc0"
+check "#2673 with nothing failing, all six lagging files are compared and their mods named" \
+  "line_has \"\$out_mc0\" 'mods behind the shared repo: 6 file' 'gone-mod' 'kit-mod' 'new-mod' 'path-mod' 'plain-mod' 'side-mod'"
+check "#2673 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_mc0\""
+# THE #2091 REPRODUCTION: the placeholder swap fails once, for the one tokenized file.
+MCSHIM="$WORK/modcmp-shim"; mkdir -p "$MCSHIM/perl-bin" "$MCSHIM/git-bin"
+cat > "$MCSHIM/perl-bin/perl" <<EOS
+#!/bin/sh
+# Fails the first swap TO the placeholder it is asked for (claude-sync's tok), then is the real perl.
+if [ "\${HT_TO:-}" = "__CLAUDE_HOME__" ] && [ ! -e "$MCSHIM/perl-failed" ]; then : > "$MCSHIM/perl-failed"; exit 2; fi
+exec "$(command -v perl)" "\$@"
+EOS
+chmod +x "$MCSHIM/perl-bin/perl"
+rc_mc1=0; out_mc1="$(env $(mcenv) PATH="$MCSHIM/perl-bin:$PATH" bash "$SCRIPT" status 2>&1)" || rc_mc1=$?
+dbg "#2673 status with the placeholder swap failing once: $out_mc1"
+check "#2673 the fixture: the stand in perl did fail a placeholder swap" \
+  "[ -e '$MCSHIM/perl-failed' ]"
+check "#2673 a file whose placeholder swap failed is named, with the step and its exit status" \
+  "line_has \"\$out_mc1\" 'could not compare path-mod/hooks/paths.ts' 'placeholder' 'exit 2'"
+check "#2673 under a heading saying how many files and that they are counted neither way" \
+  "line_has \"\$out_mc1\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind'"
+check "#2673 and it is not counted as behind, since it was never compared" \
+  "! line_has \"\$out_mc1\" 'mods behind the shared repo' 'path-mod'"
+check "#2673 while every file it could compare is still named as behind" \
+  "line_has \"\$out_mc1\" 'mods behind the shared repo: 5 file' 'kit-mod' 'side-mod' 'plain-mod'"
+check "#2673 and status exits as it does when nothing failed" \
+  "[ $rc_mc1 -eq $rc_mc0 ]"
+# EVERY OTHER STEP: the batch hash, one file's own hash, a hash that prints nothing, and each of the
+# three history reads. plain-mod is left alone, so it shows the rest are still compared.
+cat > "$MCSHIM/git-bin/git" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"hash-object --stdin-paths"*) exit 128 ;;
+  *"hash-object -- "*"/mods/kit-mod/hooks/branch.ts") exit 128 ;;
+  *"hash-object -- "*"/mods/path-mod/hooks/paths.ts") exit 128 ;;
+  *"hash-object --stdin") cat >/dev/null; exit 0 ;;
+  *" log "*"--raw"*"payload/mods/side-mod/"*) exit 128 ;;
+  *" log "*"--diff-filter=A"*"payload/mods/new-mod/"*) exit 128 ;;
+  *" log "*"--diff-filter=D"*"payload/mods/gone-mod/"*) exit 128 ;;
+esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$MCSHIM/git-bin/git"
+rc_mc2=0; out_mc2="$(env $(mcenv) PATH="$MCSHIM/git-bin:$PATH" bash "$SCRIPT" status 2>&1)" || rc_mc2=$?
+dbg "#2673 status with git failing at every step: $out_mc2"
+check "#2673 a file git could not hash is named, with git's exit status" \
+  "line_has \"\$out_mc2\" 'could not compare kit-mod/hooks/branch.ts' 'hashing it failed' 'exit 128'"
+check "#2673 a hash that printed nothing is named as that" \
+  "line_has \"\$out_mc2\" 'could not compare path-mod/hooks/paths.ts' 'printed no hash'"
+check "#2673 a changed file whose history could not be read is named" \
+  "line_has \"\$out_mc2\" 'could not compare side-mod/.claude-plugin/plugin.json' 'reading its history' 'exit 128'"
+check "#2673 a file this Mac lacks, when the repo's add could not be read, is named" \
+  "line_has \"\$out_mc2\" 'could not compare new-mod/index.ts' 'added it' 'exit 128'"
+check "#2673 a file the repo removed, when the removal could not be read, is named" \
+  "line_has \"\$out_mc2\" 'could not compare gone-mod/index.ts' 'removed it' 'exit 128'"
+# path-mod fails two steps (its own hash and the hash with the placeholder put back), so it has two
+# lines and is still one file.
+check "#2673 a file failing two steps has a line for each" \
+  "line_has \"\$out_mc2\" 'could not compare path-mod/hooks/paths.ts' 'hashing it failed' 'exit 128'"
+check "#2673 the heading counts all five files, not their lines" \
+  "line_has \"\$out_mc2\" 'mods not compared with the shared repo: status could not compare 5 file' 'neither as behind'"
+check "#2673 and the one file every step could read is still compared one by one and named as behind" \
+  "line_has \"\$out_mc2\" 'mods behind the shared repo: 1 file' 'plain-mod'"
+check "#2673 and none of the five is counted as behind" \
+  "! line_has \"\$out_mc2\" 'mods behind the shared repo' 'kit-mod|path-mod|side-mod|new-mod|gone-mod'"
+check "#2673 and status exits as it does when nothing failed, even then" \
+  "[ $rc_mc2 -eq $rc_mc0 ]"
+# THE REMOVED VERSION: the removal was read, but the version it removed could not be, so whether
+# this Mac still runs that version is unknown (found by the push's lessons review).
+mkdir -p "$MCSHIM/rp-bin"
+cat > "$MCSHIM/rp-bin/git" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"rev-parse -q --verify "*"^:payload/mods/gone-mod/"*) exit 128 ;;
+esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$MCSHIM/rp-bin/git"
+out_mc3="$(env $(mcenv) PATH="$MCSHIM/rp-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2673 status with the removed version unreadable: $out_mc3"
+check "#2673 a removed file whose removed version could not be read is named" \
+  "line_has \"\$out_mc3\" 'could not compare gone-mod/index.ts' 'version origin/main removed' 'exit 128'"
+check "#2673 and the rest are still named as behind" \
+  "line_has \"\$out_mc3\" 'mods behind the shared repo: 5 file' 'kit-mod' 'path-mod'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266

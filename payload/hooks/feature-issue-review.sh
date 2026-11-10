@@ -93,7 +93,26 @@ trap 'rm -f ${render_stamp:+"$render_stamp"}' EXIT
 #
 # ${TMPDIR%/} rather than $TMPDIR, because macOS sets it with a trailing slash and this path is SHOWN
 # to Dan in the reason rather than only used.
-hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
+#
+# NO KEY IS SAID, NEVER DIED ON (claude-config#2639). This hook runs under errexit and pipefail, so
+# when shasum was missing the pipe below exited 127 and killed it before it spoke: a spool nobody
+# could read or write and a quiet turn looked the same. So the library is asked for the spool key
+# first, and a refusal is kept, in the library's own words, to go out with the next review that
+# speaks. The hook's own files are then named `no-digest`, shared by every project, which only
+# costs the per project cooldown while the fault lasts. The library is the one place that knows why
+# there is no key, so its words are used rather than this hook guessing at them.
+spool_refused=""
+if [ -f "$SPOOL_LIB" ] && ! spool_refused="$(bash "$SPOOL_LIB" key "$proj" "$transcript" 2>&1 >/dev/null)"; then
+  spool_refused="SUBAGENT FINDINGS COULD NOT BE READ: no spool key could be made for this project, so the subagent findings spool was not read, and no finding a subagent reports can be written to it until this is fixed. ${spool_refused:-The spool library gave no reason.}"
+else
+  spool_refused=""
+fi
+if [ -n "$spool_refused" ]; then
+  hash="no-digest"
+else
+  hash="$(printf '%s' "$proj" | shasum 2>/dev/null | cut -c1-12)" || hash=""
+  [ -n "$hash" ] || hash="no-digest"
+fi
 # Every file the review leaves behind for a later step (the findings, each session's stamp, the seen
 # ledger beside it) starts with this, and the sweep below removes only files that do (#1019).
 findings_prefix="claude-issue-findings-"
@@ -349,6 +368,9 @@ if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
 # which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
+# A spool no key could be made for rides the same way, with whichever review speaks next, and does not
+# make one speak: it is the same fault at every turn until the digest is back (claude-config#2639).
+if [ -n "$spool_refused" ]; then reason_args+=(--extra "$spool_refused"); fi
 # The area check's weekly line, or why it could not be built, and anything it could not record (#1511).
 if [ -n "$area_line" ]; then reason_args+=(--extra "$area_line"); fi
 if [ -n "$area_failed" ]; then reason_args+=(--extra "$area_failed"); fi

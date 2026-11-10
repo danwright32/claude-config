@@ -211,6 +211,54 @@ took=$((SECONDS - start))
 [ "$RC" -eq 0 ] && check "hang does not block" ok || check "a fetch cut off at its bound should not block the edit" "exit $RC: $ERR"
 case "$OUT" in *"could not"*) check "hang says it could not check" ok ;; *) check "a hanging fetch should be reported as could not check" "$OUT" ;; esac
 
+# --- a fetch that was never run --------------------------------------------------------------------
+# With lib/bounded-run.sh gone the gate's stand in runs nothing, and with the lib/whole-number.sh it
+# reads its bound with gone the library itself runs nothing. Neither is a fetch that failed: the
+# hooks are missing a part, nothing on the network is wrong, and reinstalling is one command. Until
+# claude-config#2634 both took the failed fetch path, so a worktree the gate refuses with the
+# library in place was let through with a notice.
+gate_without() { # gate_without <library>: a copy of the gate and its libraries, with that one gone
+  mkdir -p "$WORK/without-$1"
+  cp "$GATE" "$WORK/without-$1/" && cp -R "$DIR/lib" "$WORK/without-$1/lib" && rm -f "$WORK/without-$1/lib/$1"
+}
+gate_without bounded-run.sh
+gate_without whole-number.sh
+REAL_GATE="$GATE"
+AGENT_WT="$WORK/repo/.claude/worktrees/agent"
+
+echo "with lib/bounded-run.sh missing, a fresh worktree's first edit is refused, naming the file"
+# Current on the local ref, so the fetch is the only thing that can decide, as in the hang above.
+GATE="$WORK/without-bounded-run.sh/fresh-worktree-base-gate.sh"
+run_gate Edit "$AGENT_WT/c1.txt" s8
+[ "$RC" -eq 2 ] && check "missing bounded-run refused" ok || check "with lib/bounded-run.sh missing the fetch is never run, so the first edit in a fresh worktree should exit 2" "exit $RC: $OUT $ERR"
+case "$ERR" in *"lib/bounded-run.sh"*"claude-sync pull"*) check "names the file and the fix" ok ;;
+  *) check "the refusal should name lib/bounded-run.sh and claude-sync pull" "$ERR" ;; esac
+[ -z "$OUT" ] && check "refusal prints nothing on stdout" ok || check "a refusal should print nothing on stdout" "$OUT"
+run_gate Edit "$AGENT_WT/c1.txt" s8
+[ "$RC" -eq 2 ] && check "refused again, not passed after once" ok || check "the edit after a refusal for a missing library should be refused again, not passed as already said" "exit $RC: $OUT $ERR"
+run_gate Edit "$OWN/mine.txt" s8
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && check "own commits still pass without the library" ok || check "a worktree with its own commits never reaches the fetch and should pass with lib/bounded-run.sh missing" "exit $RC: $OUT $ERR"
+run_gate Edit "$WORK/repo/c1.txt" s8
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && check "primary checkout still passes without the library" ok || check "a primary checkout should pass with lib/bounded-run.sh missing" "exit $RC: $OUT $ERR"
+run_gate Read "$AGENT_WT/c1.txt" s8
+[ "$RC" -eq 0 ] && check "reading still passes without the library" ok || check "a Read should pass with lib/bounded-run.sh missing" "exit $RC: $ERR"
+run_gate Edit "$WORK/repo2/.claude/worktrees/behind/c1.txt" s8
+[ "$RC" -eq 2 ] && check "behind on the local copy still refused without the library" ok || check "behind on the local ref should be refused with lib/bounded-run.sh missing" "exit $RC: $ERR"
+case "$ERR" in *"merge --ff-only origin/main"*) check "names the command that needs no library" ok ;;
+  *) check "behind on the local ref with the library missing should still name the fast forward" "$ERR" ;; esac
+
+echo "with the lib/whole-number.sh that lib/bounded-run.sh loads missing, the same edit is refused"
+GATE="$WORK/without-whole-number.sh/fresh-worktree-base-gate.sh"
+run_gate Edit "$AGENT_WT/c1.txt" s9
+[ "$RC" -eq 2 ] && check "missing whole-number refused" ok || check "with lib/whole-number.sh missing the fetch is never run, so the first edit in a fresh worktree should exit 2" "exit $RC: $OUT $ERR"
+case "$ERR" in *"whole-number.sh"*"claude-sync pull"*) check "names whole-number.sh and the fix" ok ;;
+  *) check "the refusal should name whole-number.sh and claude-sync pull" "$ERR" ;; esac
+
+echo "with every library in place the same edit, in a new session, passes in silence"
+GATE="$REAL_GATE"
+run_gate Edit "$AGENT_WT/c1.txt" s10
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && check "the same edit passes with the library" ok || check "the edit refused for a missing library should pass in silence once every library is in place" "exit $RC: $OUT $ERR"
+
 echo "a payload that cannot be read is let through, saying so"
 OUT="$(printf '%s' '{"tool_name": "Edit", "tool_input": {"file_path": "/x/y.txt"' | bash "$GATE" 2>/dev/null)"; RC=$?
 [ "$RC" -eq 0 ] && check "cut payload passes" ok || check "a cut payload should not block" "exit $RC"

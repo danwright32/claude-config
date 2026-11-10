@@ -33,9 +33,14 @@
 #
 # IT NEVER CHANGES THE CHECKOUT. Another session may be standing on it, so the hook runs no fetch,
 # pull, merge, checkout or reset. "Offer the fast forward" means the notice names the one command,
-# and only when it can only fast forward: no commits of its own on the branch, and no changes to
-# tracked files. Untracked and ignored files (a cache, node_modules) do not withhold it, since a
-# fast forward that would overwrite one is refused by git itself.
+# and only when it can only fast forward: no commits of its own on the branch, and no changed
+# tracked file that origin's new commits also change. That is git's own rule, measured on
+# 2026-11-10 (claude-config#2625): pull --ff-only over a changed file the incoming commits leave
+# alone succeeds and keeps the change, and over one they change it refuses and leaves HEAD and the
+# file as they were, staged, deleted and renamed files alike. So a tracked cache file a tool
+# rewrites on every run no longer withholds the offer for ever; the notice names the changed files
+# either way. Untracked and ignored files (a cache, node_modules) never withhold it, since a fast
+# forward that would overwrite one is refused by git itself.
 #
 #   project_rules_behind <cwd>
 #       sets PRB_TEXT (for the person) and PRB_CONTEXT (for the session) when the checkout is behind
@@ -173,11 +178,45 @@ else:
   if [ "$ahead" -gt 0 ]; then
     offer="$branch also has $ahead $s_ahead origin/$branch does not have, so it cannot simply be fast forwarded; bring it up to date by hand."
   else
-    local dirty
-    dirty="$(git -C "$primary" status --porcelain --untracked-files=no 2>/dev/null | awk 'END { print NR }')"
-    case "$dirty" in ''|*[!0-9]*) dirty=1 ;; esac
-    if [ "$dirty" -gt 0 ]; then
-      offer="The checkout has changes to tracked files, so no fast forward is offered; bring it up to date by hand once they are dealt with."
+    # The changed tracked files, staged or not, with both sides of a rename (--no-renames), since git
+    # refuses a fast forward that changes either name. Read into a variable, which waits for git
+    # (a loop fed by a process substitution leaves a child bash 3.2 never reaps, #1984), so not -z,
+    # whose NULs a variable cannot hold. Git quotes a name holding a space, a quote, a tab, a newline
+    # or a backslash (measured 2026-11-10), and escapes all but the space. A quoted name with no
+    # escape is read back whole; one with an escape cannot be handed back to git literally, so it
+    # makes the answer unread, never untouched.
+    local entry name status unread=0 dirty=() touched=() touched_out
+    if status="$(git -C "$primary" -c core.quotePath=false status --porcelain --no-renames --untracked-files=no 2>/dev/null)"; then
+      while IFS= read -r entry; do
+        case "$entry" in
+          ??' "'*'"')
+            name="${entry:4}"; name="${name%\"}"
+            case "$name" in *\\*) unread=1 ;; *) dirty+=("$name") ;; esac ;;
+          ??' "'*) unread=1 ;;
+          ??' '?*) dirty+=("${entry:3}") ;;
+        esac
+      done <<STATUS_LINES
+$status
+STATUS_LINES
+    else
+      unread=1
+    fi
+    if [ "$unread" = 0 ] && [ "${#dirty[@]}" -gt 0 ]; then
+      # Which of them the incoming commits change. Git refuses the fast forward exactly then, and
+      # otherwise applies it and keeps the changes (measured, claude-config#2625).
+      if touched_out="$(git -C "$primary" -c core.quotePath=false --literal-pathspecs diff --name-only --no-renames HEAD "$origin_ref" -- "${dirty[@]}" 2>/dev/null)"; then
+        while IFS= read -r entry; do [ -n "$entry" ] && touched+=("$entry"); done <<< "$touched_out"
+      else
+        unread=1
+      fi
+    fi
+    if [ "$unread" = 1 ]; then
+      # Unread, so treated as the unsafe case: no offer, and nothing claimed that was not read (L11).
+      offer="Whether the checkout's changes to tracked files are touched by origin's new commits could not be read, so no fast forward is offered; bring it up to date by hand."
+    elif [ "${#touched[@]}" -gt 0 ]; then
+      offer="The checkout has changes to $(_prb_name_files "${touched[@]}"), which origin's new commits also change, so no fast forward is offered; bring it up to date by hand once those changes are dealt with."
+    elif [ "${#dirty[@]}" -gt 0 ]; then
+      offer="The checkout has changes to $(_prb_name_files "${dirty[@]}"), which origin's new commits do not touch, so this brings it up to date for the next session and leaves those changes as they are: git -C '$primary' pull --ff-only"
     else
       offer="The checkout has no changes to tracked files, so this brings it up to date for the next session: git -C '$primary' pull --ff-only"
     fi
@@ -190,6 +229,19 @@ else:
   # itself. The age is left out, since it reads differently every few minutes with nothing changed.
   PRB_KEY="$primary|$branch|$head_sha|$origin_sha|$(printf '%s\n' "$changed" | tr '\n' '|')"
   return 0
+}
+
+# A list of file names for a sentence: all of them up to three, past that the first three and a
+# count of the rest, so a checkout with hundreds of changes cannot bury the notice.
+_prb_name_files() {
+  local rest=$(($# - 3)) s=s
+  [ "$rest" -eq 1 ] && s=""
+  case $# in
+    1) printf '%s' "$1" ;;
+    2) printf '%s and %s' "$1" "$2" ;;
+    3) printf '%s, %s and %s' "$1" "$2" "$3" ;;
+    *) printf '%s, %s, %s and %s more file%s' "$1" "$2" "$3" "$rest" "$s" ;;
+  esac
 }
 
 # The rule files a session loads from <primary>, as paths relative to it: the three Claude Code
