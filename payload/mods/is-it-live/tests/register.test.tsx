@@ -610,6 +610,16 @@ test('a second live card for the same thread says its draft replaces the first; 
   expect(said(second)).toContain('attached_draft_exists')
 })
 
+test('a later card for the PR that asks for no draft keeps the record of the earlier one, so another PR to the thread still says it replaces it (#2515)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, slack: ASKED_IN }
+  expect(said(await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' }))).toContain('slack_send_message_draft')
+  const failed = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.', deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(said(failed)).not.toContain('slack_send_message_draft')
+  const other = await card($, { ...CARD, ...ask, pr: 413, message: 'Both venue fixes are live now.' })
+  expect(said(other)).toContain('An earlier card (#412) already asked for a draft in that thread')
+})
+
 test('a card refuses Slack fields with nobody named, and a malformed thread, before GitHub is asked (#2435)', withKit, async ($, on) => {
   const w = world(on)
   expect((await card($, { ...CARD, slack: ASKED_IN })).deny).toContain('slack is only for the person a message is for')
@@ -1680,11 +1690,14 @@ test('a draft to another thread, one Slack refused, or one with no thread leaves
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
-test('a draft saved before a merge does not count for it, a later merge asks again, and a thread pasted after a merge is owed one (#2436)', withKit, async ($, on) => {
+// #2578 reversed this test's last clause, "a thread pasted after a merge is owed one": a thread
+// pasted once the session is under way is owed a reply only after a merge for it (tests below).
+test('a draft saved before a merge does not count for it, and a later merge asks again (#2436)', withKit, async ($, on) => {
   world(on, { prView: merged(412, 413) })
   await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await draft($)
   await mergeAndCard($, 412)
-  await says($, `and reply on ${THREAD} when done`)
   expect((await turnEnd($)).block).toContain(SOURCE)
   await draft($)
   expect((await turnEnd($)).block).toBeUndefined()
@@ -1797,4 +1810,121 @@ test('a session with nobody at the prompt is never held for a draft (#2436)', wi
   await says($, THREAD)
   await bash($, 'gh pr merge 412 --squash')
   expect((await turnEnd($)).block).toBeUndefined()
+})
+
+// ---- #2578: a thread pasted once the session is under way is owed a reply only after a merge for it ----
+// On 2026-11-09 Dan pasted one alert link hours into an orchestrated session; the hold then asked for
+// a reply in the alert's thread after three unrelated merges, and he skipped each. A merge is for a
+// pasted thread when its pull request, or an issue it closes, links the thread, or a card for it
+// names the thread as where its Slack draft goes.
+
+// GitHub, answering the text of each pull request and the issues it closes as gh does
+// (closingIssuesReferences as measured on claude-config#2587, 2026-11-10), over `merged`.
+const ISSUE_URL = (n: number) => `https://github.com/${REPO}/issues/${n}`
+const withText = (prs: number[], text: Record<number, { body?: string; closes?: number[] }>, issues: Record<number, string> = {}): Partial<World> => ({
+  prView: argv => {
+    if (!argv.includes('title,body,comments,closingIssuesReferences')) return merged(...prs)(argv)
+    const t = text[Number(argv[3])] ?? {}
+    const closes = (t.closes ?? []).map(n => ({ id: `I_${n}`, number: n, repository: { id: 'R_1', name: 'scheduler', owner: { id: 'O_1', login: 'acme-hq' } }, url: ISSUE_URL(n) }))
+    return { exitCode: 0, stdout: JSON.stringify({ title: 'Filter bookings by venue', body: t.body ?? '', comments: [], closingIssuesReferences: closes }) }
+  },
+  issueView: argv => {
+    if (!argv.includes('title,body,comments')) return undefined
+    const n = Number(argv[3])
+    return n in issues ? { exitCode: 0, stdout: JSON.stringify({ title: 'Booking sync alert', body: issues[n], comments: [] }) } : { exitCode: 1, stdout: '', stderr: 'no issue found' }
+  },
+})
+const underWay = async ($: unknown) => says($, 'Work the venue milestone, one issue at a time.')
+
+test('a merge unrelated to a Slack thread pasted once the session is under way asks for no reply in it (#2578)', withKit, async ($, on) => {
+  world(on, withText([412], {}))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a thread pasted after a merge is not where the session started, and that merge asks for no reply in it (#2578)', withKit, async ($, on) => {
+  world(on, withText([412, 413], { 413: { body: `Answers ${THREAD}` } }))
+  await start($)
+  await mergeAndCard($, 412)
+  await says($, `and reply on ${THREAD} when done`)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 413)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).not.toContain('started from')
+})
+
+test('a merge closing the issue that links a pasted thread asks for a reply once, naming that merge alone (#2578)', withKit, async ($, on) => {
+  world(on, withText([412, 413], { 413: { body: 'Closes #77', closes: [77] } }, { 77: `Filed from the alert at ${THREAD}` }))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await mergeAndCard($, 412)
+  await mergeAndCard($, 413)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).toContain(`${REPO}#413`)
+  expect(held).not.toContain(`${REPO}#412`)
+  expect(held).not.toContain('started from')
+  expect((await turnEnd($, true)).block).toBeUndefined()
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a pull request whose own text links the pasted thread is a merge for it (#2578)', withKit, async ($, on) => {
+  world(on, withText([412], { 412: { body: `Fixes the alert in ${THREAD}` } }))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('a card naming the pasted thread as where its draft goes makes its merge one for the thread (#2578)', withKit, async ($, on) => {
+  world(on, withText([412], {}))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await bash($, 'gh pr merge 412 --squash')
+  await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue sync is fixed.', slack: { channel_id: CH, thread_ts: TS } })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('Skip this time for a pasted thread is remembered: an unrelated merge asks nothing, the next merge for it asks again (#2578)', withKit, async ($, on) => {
+  const w = world(on, withText([412, 413, 414], { 412: { body: `For ${THREAD}` }, 414: { body: `Also for ${THREAD}` } }))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  w.w.answer = 'Skip this time'
+  expect(said(await askDan($, SOURCE))).toContain('Skip this time')
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 414)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(`${REPO}#414`)
+  expect(held).not.toContain(`${REPO}#412`)
+})
+
+test('a pull request GitHub cannot be asked about for a pasted thread is said, and asks for no reply (#2578)', withKit, async ($, on) => {
+  const w = world(on, { prView: argv => (argv.includes('title,body,comments,closingIssuesReferences') ? { exitCode: 1, stdout: '', stderr: 'HTTP 502' } : merged(412)(argv)) })
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(w.toasts.join(' ')).toContain('HTTP 502')
+})
+
+test('a session that started from a thread still asks after every merge, and the hold says it started there (#2578)', withKit, async ($, on) => {
+  world(on, withText([412], {}))
+  await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await mergeAndCard($, 412)
+  expect(String((await turnEnd($)).block)).toContain(`This session started from ${THREAD}`)
 })
