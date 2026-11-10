@@ -94,7 +94,8 @@ The remedy is a restart: restarting the leaking service (quitting its app, or re
 service), or restarting the Mac, which gave all 95 GB back that day. Never deleting files: swap is
 given back only when the memory is, and nothing deleted elsewhere on the disk touches it. The low
 space warning names these holders itself when swap is more than 2% of the disk and the warning is
-already firing.
+already firing, and, with the disk to spare, when swap is also more than 90% of its own total (exit
+5, #2559).
 
 ### 4. Where the weight is
 
