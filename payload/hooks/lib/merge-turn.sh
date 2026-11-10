@@ -67,13 +67,85 @@ TURN_PID="${TURN_PID:-$$}"
 TURN_PID_START="${TURN_PID_START:-}"
 TURN_TICKET=""; TURN_REPO_DIR=""; TURN_ERR=""
 
-turn_proc_start(){ ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//'; }
+# Every reader here runs in the shell's own builtins, never a sed, cat or grep per field (claude-config
+# #2694): a look reads every ticket in the line, and at a program per field a line of 15 started about
+# 150 programs a look, at every look of every helper waiting in it.
+# turn__trim <text>: the text without its leading and trailing spaces, as sed 's/^ *//;s/ *$//' gave.
+turn__trim(){ local s="$1"; s="${s#"${s%%[! ]*}"}"; s="${s%"${s##*[! ]}"}"; printf '%s' "$s"; }
+turn_proc_start(){
+  local s
+  s="$(ps -o lstart= -p "$1" 2>/dev/null)"
+  case "$s" in
+    *$'\n'*) printf '%s\n' "$s" | sed -e 's/^ *//' -e 's/ *$//' ;;
+    *) turn__trim "$s" ;;
+  esac
+}
 turn_dur(){
   if [ "$1" -ge 60 ]; then
     if [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $1 / 60 ))"; else printf '%dm %02ds' "$(( $1 / 60 ))" "$(( $1 % 60 ))"; fi
   else printf '%ds' "$1"; fi
 }
-turn_field(){ sed -n "/^$2 /{s/^$2 //p;q;}" "$1" 2>/dev/null; }
+# The rest of the first line that starts "<key> ", or nothing (a file that cannot be read included).
+turn_field(){
+  local l
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in "$2 "*) printf '%s' "${l#"$2 "}"; return 0 ;; esac
+  done 2>/dev/null < "$1"
+  return 0
+}
+# turn__slurp <file>: sets TURN__TEXT to the file as $(cat) gives it (trailing newlines dropped), or
+# empty when it cannot be read.
+turn__slurp(){
+  local l t=""
+  TURN__TEXT=""
+  while IFS= read -r l || [ -n "$l" ]; do t="$t$l"$'\n'; done 2>/dev/null < "$1"
+  while [ "${t%$'\n'}" != "$t" ]; do t="${t%$'\n'}"; done
+  TURN__TEXT="$t"
+}
+# turn__first_line <file>: 0 when a line of it is "first", or starts "first ".
+turn__first_line(){
+  local l
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in first|"first "*) return 0 ;; esac
+  done 2>/dev/null < "$1"
+  return 1
+}
+
+# The start times of a look's runs, read with ONE ps for all of them (claude-config#2694) rather than
+# one each. turn__batch <pid>...: sets TURN__STARTS ("<pid> <start>" lines) and TURN__BATCHED (the
+# pids asked). A ps that fails (it refuses the whole list over one pid it calls too large, and says
+# nothing for it) leaves nothing batched, so every pid is read alone as before. A pid the list
+# answered without is not running, which its own read would have found too. turn__unbatch ends it.
+TURN__STARTS=""; TURN__BATCHED=""
+turn__batch(){
+  local list="" p out l pid
+  TURN__STARTS=""; TURN__BATCHED=""
+  for p in "$@"; do
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    case " $TURN__BATCHED " in *" $p "*) continue ;; esac
+    TURN__BATCHED="$TURN__BATCHED $p"; list="$list${list:+,}$p"
+  done
+  [ -n "$list" ] || return 0
+  if ! out="$(ps -o pid=,lstart= -p "$list" 2>/dev/null)"; then TURN__BATCHED=""; return 0; fi
+  while IFS= read -r l; do
+    l="$(turn__trim "$l")"; pid="${l%% *}"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    TURN__STARTS="$TURN__STARTS$pid $(turn__trim "${l#"$pid"}")"$'\n'
+  done <<<"$out"
+}
+turn__unbatch(){ TURN__STARTS=""; TURN__BATCHED=""; }
+# turn__start <pid>: prints its start time, from the batch when it was asked there.
+turn__start(){
+  local l
+  case " $TURN__BATCHED " in
+    *" $1 "*)
+      while IFS= read -r l; do
+        [ "${l%% *}" = "$1" ] && { printf '%s' "${l#* }"; return 0; }
+      done <<<"$TURN__STARTS"
+      return 0 ;;
+  esac
+  turn_proc_start "$1"
+}
 
 # Dead only on evidence: the system says no such process, or the pid runs with another start time.
 turn_alive(){   # $1 = pid, $2 = the start time recorded for it
@@ -82,7 +154,7 @@ turn_alive(){   # $1 = pid, $2 = the start time recorded for it
   if ! out="$(kill -0 "$1" 2>&1)"; then
     case "$out" in *"o such process"*) return 1 ;; esac
   fi
-  st="$(turn_proc_start "$1")"
+  st="$(turn__start "$1")"
   [ -z "$st" ] || [ -z "$2" ] || [ "$st" = "$2" ] || return 1
   return 0
 }
@@ -94,12 +166,30 @@ turn_open(){   # $1 = owner/name
 }
 
 turn_tickets(){   # the ticket numbers in the repository's folder, lowest first
-  local f b
+  # Sorted in the shell, as sort -n would (equal numbers by their text), and by sort -n itself for a
+  # name too long for the shell's arithmetic (claude-config#2694).
+  local f b out="" long="" rest t placed
   for f in "$TURN_REPO_DIR"/*; do
     b="${f##*/}"
     case "$b" in ''|*[!0-9]*) continue ;; esac
-    printf '%s\n' "$b"
-  done | sort -n
+    [ "${#b}" -le 15 ] || long=1
+    out="$out$b"$'\n'
+  done
+  [ -n "$out" ] || return 0
+  if [ -n "$long" ]; then printf '%s' "$out" | sort -n; return 0; fi
+  rest=""
+  for b in $out; do
+    placed=""; t=""
+    for f in $rest; do
+      if [ -z "$placed" ] && { [ $((10#$b)) -lt $((10#$f)) ] || { [ $((10#$b)) -eq $((10#$f)) ] && [[ "$b" < "$f" ]]; }; }; then
+        t="$t $b"; placed=1
+      fi
+      t="$t $f"
+    done
+    [ -n "$placed" ] || t="$t $b"
+    rest="$t"
+  done
+  for b in $rest; do printf '%s\n' "$b"; done
 }
 
 turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front, or nothing
@@ -146,13 +236,13 @@ turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front,
 # turn_since. A mark naming another pid is a leftover of an earlier ticket and is replaced.
 turn_mark(){   # $1 = ticket, $2 = its pid, $3 = now
   local m="$TURN_REPO_DIR/$1.head" tmp line
-  line="$(cat "$m" 2>/dev/null)"
+  turn__slurp "$m"; line="$TURN__TEXT"
   if [ -n "$line" ] && [ "${line#* }" != "$2" ]; then rm -f "$m"; line=""; fi
   if [ -z "$line" ]; then
     tmp="$TURN_REPO_DIR/.mark.$TURN_PID.$RANDOM"
     printf '%s %s\n' "$3" "$2" > "$tmp" 2>/dev/null && ln "$tmp" "$m" 2>/dev/null
     rm -f "$tmp"
-    line="$(cat "$m" 2>/dev/null)"
+    turn__slurp "$m"; line="$TURN__TEXT"
   fi
   turn_since="${line%% *}"
   case "$turn_since" in ''|*[!0-9]*) turn_since="$3" ;; esac
@@ -173,7 +263,7 @@ turn_order(){
   for n in $(turn_tickets); do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
-    pid="$(turn_field "$f" pid)"; mark="$(cat "$f.head" 2>/dev/null)"
+    pid="$(turn_field "$f" pid)"; turn__slurp "$f.head"; mark="$TURN__TEXT"
     if [ -n "$mark" ] && [ -n "$pid" ] && [ "${mark#* }" = "$pid" ]; then held="$held $n"; continue; fi
     if [ "$(turn_field "$f" first)" = 1 ]; then
       before=""; after=""
@@ -197,9 +287,15 @@ turn_tell(){   # $1 = what about (a key), $2 = the line
 }
 
 turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
-  local now="$1" bound="$2" n f pid start pr fv seen_own="" head=""
+  local now="$1" bound="$2" n f pid start pr fv seen_own="" head="" order pids
   TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_HEAD_TICKET=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""; TURN_OVERTOOK=0
-  for n in $(turn_order); do
+  order="$(turn_order)"
+  # Every other run's start time in one ps, read before the loop (claude-config#2694).
+  pids=""
+  for n in $order; do [ "$n" = "$TURN_TICKET" ] || pids="$pids $(turn_field "$TURN_REPO_DIR/$n" pid)"; done
+  # shellcheck disable=SC2086
+  turn__batch $pids
+  for n in $order; do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
     pid="$(turn_field "$f" pid)"; start="$(turn_field "$f" start)"; pr="$(turn_field "$f" pr)"; fv="$(turn_field "$f" first)"
@@ -210,7 +306,7 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
     fi
     # A front of line mark that cannot be read is not honoured, and the runs it would have passed
     # are told so: never silently taken as a place at the front, nor silently dropped.
-    if [ "$fv" != 1 ] && grep -qE '^first( |$)' "$f" 2>/dev/null && [ -n "$TURN_TICKET" ] && [ "$n" -gt "$TURN_TICKET" ]; then
+    if [ "$fv" != 1 ] && turn__first_line "$f" && [ -n "$TURN_TICKET" ] && [ "$n" -gt "$TURN_TICKET" ]; then
       turn_tell "ignored:$n" "#${pr:-?}'s place at the front of the line was ignored: its ticket says 'first ${fv}', which is not a front of line mark, so it waits behind this one in the order it joined."
     fi
     if [ -z "$head" ]; then
@@ -235,6 +331,7 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
       TURN_OVERTOOK=$((TURN_OVERTOOK + 1))
     fi
   done
+  turn__unbatch
   TURN_SAID="${TURN_SAID%$'\n'}"
   if [ -n "$TURN_TICKET" ] && [ -z "$seen_own" ]; then TURN_GONE=1; return 0; fi
   [ -n "$TURN_TICKET" ] && [ "$head" = "$TURN_TICKET" ] && TURN_MINE=1

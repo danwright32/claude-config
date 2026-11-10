@@ -1577,12 +1577,13 @@ while :; do
   fi
   # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
   ghp_answered
-  account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
-  view="$(printf '%s' "$view_env" | jq -c '.view')"
-  state="$(printf '%s' "$view" | jq -r '.state // ""')"
-  head="$(printf '%s' "$view" | jq -r '.headRefOid // ""')"
-  base="$(printf '%s' "$view" | jq -r '.baseRefName // ""')"
-  branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
+  # One jq for the answer's six fields, one per line, not six (claude-config#2694). `.view | tojson`
+  # prints what `jq -c .view` did, byte for byte; none of the fields can hold a line break (a login, a
+  # state, a commit and two branch names), and an answer jq cannot read leaves every one empty, as
+  # six failed reads did, saying why on standard error once.
+  { IFS= read -r account; IFS= read -r view; IFS= read -r state; IFS= read -r head; IFS= read -r base; IFS= read -r branch; } <<EOF_VIEW
+$(printf '%s' "$view_env" | jq -r '(.account // ""), (.view | tojson), (.view | .state // ""), (.view | .headRefOid // ""), (.view | .baseRefName // ""), (.view | .headRefName // "")')
+EOF_VIEW
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
     MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
