@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # db-write-ask.sh
-# Claude Code PreToolUse(mcp__claude_ai_Supabase__(execute_sql|apply_migration)|mcp__claude_ai_SFDC_USE__(createSobjectRecord|updateSobjectRecord|deleteSobjectRecord))
-# hook: ask Dan before any database SQL call that is not read only (claude-config#2521).
+# Claude Code PreToolUse(Bash|mcp__.*)
+# hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql, on both Macs, and
@@ -16,12 +16,24 @@
 #     hook approves is never asked about, and every other one is. test-db-write-ask.sh runs one set
 #     of statements through both hooks and checks exactly one of them decides each (L721).
 #   - apply_migration, always: a migration changes the database whatever its text.
+#   - Since #2536, a write through any other database tool or through a database client in a
+#     shell, which #2521 left unasked. lib/db-write-calls.py says which calls those are and which
+#     statements they carry (an MCP tool whose name or input marks it as running SQL or applying a
+#     migration; psql, mysql, mariadb, sqlite3 and the Supabase CLI's db and migration subcommands
+#     in a Bash command, however wrapped), and each statement goes to the same one predicate. Its
+#     header holds the rules and the tool names and counts they were calibrated on.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
 #     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
-#     and python3 missing from PATH (asked the same way, naming python3).
+#     and python3 missing from PATH (asked the same way, naming python3). For a shell client it
+#     also covers statements in a file or on its input, an option it does not know, a shell
+#     variable in a statement, and lib/db-write-calls.py or lib/shell-words.py failing to load.
 #     The registration carries onFailure block, so a crash or a timeout refuses the call rather than
 #     letting a write through unasked.
+#
+# THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
+# unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
+# about holds (test-db-write-ask.sh checks that), or names a Salesforce write tool.
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let
@@ -39,6 +51,18 @@ payload="$(cat 2>/dev/null || true)"
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
+
+# The screen: a payload holding none of these words, in any case, names no database call.
+DB_SCREEN_WORDS="sql quer statement migration notebook supabase mariadb pgcli mycli litecli duckdb clickhouse cockroach mongo redis-cli pg_restore dropdb createdb dropuser createuser"
+db_call=0
+sf_call=0
+shopt -s nocasematch
+for w in $DB_SCREEN_WORDS; do
+  case "$payload" in *"$w"*) db_call=1; break ;; esac
+done
+case "$payload" in *sobjectrecord*) sf_call=1 ;; esac
+shopt -u nocasematch
+[ "$db_call$sf_call" != 00 ] || exit 0
 
 # Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
 # (#1906). Without the library it still asks, keeping only characters that need no escaping.
@@ -65,15 +89,12 @@ fi
 # call is asked about, a select included, naming what is missing (#486). A Salesforce write gets no
 # decision from this hook either way.
 if ps_reader_missing python3; then
-  case "$payload" in
-    *mcp__claude_ai_Supabase__execute_sql*|*mcp__claude_ai_Supabase__apply_migration*)
-      hook_ask_json "db-write-ask.sh asks before this database call because python3 is not on PATH, and it is what classifies a statement as read only, so nothing could be. Install python3 (claude-config#2521)" ;;
-  esac
+  [ "$db_call" = 1 ] && hook_ask_json "db-write-ask.sh asks before this database call because python3 is not on PATH, and it is what classifies a statement as read only, so nothing could be. Install python3 (claude-config#2521)"
   exit 0
 fi
 
 out="$(printf '%s' "$payload" | python3 -I -B -c '
-import importlib.util, json, os, socket, sys
+import importlib.util, json, os, re, socket, sys
 sys.stdout.reconfigure(errors="replace")
 
 DB_SQL = "mcp__claude_ai_Supabase__execute_sql"
@@ -82,8 +103,21 @@ SF_SERVER = "mcp__claude_ai_SFDC_USE"
 SF_WRITES = [SF_SERVER + "__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")]
 WATCHED = [DB_SQL, DB_MIGRATION] + SF_WRITES
 STATEMENT_SHOWN = 600
+# How many database commands of one Bash call a question spells out; the rest are counted.
+FINDINGS_SHOWN = 5
 
 raw = sys.stdin.buffer.read().decode("utf-8", "replace")
+
+def part(name, file):
+    """(a library beside the hook, None), or (None, a clause naming the one that did not load).
+    Loaded by its path, never by name, so no module in the working directory can stand in for it."""
+    try:
+        spec = importlib.util.spec_from_file_location(name, sys.argv[1] + "/lib/" + file)
+        lib = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lib)
+        return lib, None
+    except Exception as e:
+        return None, "lib/" + file + " could not be loaded beside the hook (" + type(e).__name__ + ")"
 
 def mac_name():
     host = socket.gethostname().split(".")[0]
@@ -129,8 +163,11 @@ def emit(decision_reason=None, message=None):
         sys.stdout.write("note\x1f" + plain(message))
     sys.exit()
 
-def ask(why):
-    emit("db-write-ask.sh asks before this database call: " + why + " (claude-config#2521)", sf_notice())
+def ask(why, issue="2521"):
+    emit("db-write-ask.sh asks before this database call: " + why + " (claude-config#" + issue + ")", sf_notice())
+
+# Which other calls reach a database, and which statements they carry (claude-config#2536).
+calls, calls_why = part("db_write_calls_shared", "db-write-calls.py")
 
 try:
     d = json.loads(raw)
@@ -140,6 +177,12 @@ tool = d.get("tool_name") if isinstance(d, dict) else None
 if not isinstance(tool, str):
     # A payload it cannot read is judged by its raw text: one naming a database tool is asked about.
     named = [t for t in WATCHED if t in raw]
+    m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\\\]*)\"", raw)
+    said = m.group(1) if m else ""
+    if not named and said.startswith("mcp__") and (calls is None or calls.named_for_statements(said)):
+        named = [said]
+    if not named and said == "Bash" and (calls is None or calls.CLIENT_WORD.search(raw)):
+        named = ["Bash and a database client"]
     if named:
         ask("the hook payload could not be read as a tool call, and its text names " + ", ".join(named)
             + ", so the call could not be classified as read only")
@@ -147,37 +190,81 @@ if not isinstance(tool, str):
 
 if tool in SF_WRITES:
     emit(None, sf_notice())
-if tool not in (DB_SQL, DB_MIGRATION):
+if tool not in (DB_SQL, DB_MIGRATION) and tool != "Bash" and not tool.startswith("mcp__"):
     sys.exit()
 
 ti = d.get("tool_input")
 project = ti.get("project_id") if isinstance(ti, dict) else None
 query = ti.get("query") if isinstance(ti, dict) else None
 where = "project " + (project if isinstance(project, str) and project else "(none named)")
-if isinstance(query, str):
-    shown = query.strip()
+
+def said(q):
+    """The statement as the question shows it, cut at STATEMENT_SHOWN characters."""
+    if not isinstance(q, str):
+        return "Statement: (no text query in the call)"
+    shown = q.strip()
     if len(shown) > STATEMENT_SHOWN:
-        shown = shown[:STATEMENT_SHOWN] + " ... (" + str(len(query)) + " characters in all)"
-    stmt = "Statement: " + (shown or "(empty)")
-else:
-    stmt = "Statement: (no text query in the call)"
+        shown = shown[:STATEMENT_SHOWN] + " ... (" + str(len(q)) + " characters in all)"
+    return "Statement: " + (shown or "(empty)")
+
+stmt = said(query)
 
 if tool == DB_MIGRATION:
     ask("apply_migration always changes the database, on " + where + ". " + stmt)
 
-lib = sys.argv[1] + "/lib/sql-read-only.py"
-try:
-    spec = importlib.util.spec_from_file_location("sql_read_only_shared", lib)
-    ro = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ro)
-except Exception as e:
-    ask("lib/sql-read-only.py could not be loaded beside the hook (" + type(e).__name__
-        + "), so no statement can be classified as read only, on " + where + ". " + stmt)
+# The one predicate for read only, which read-only-query-allow.sh approves by.
+ro, ro_why = part("sql_read_only_shared", "sql-read-only.py")
+if tool == DB_SQL:
+    if ro is None:
+        ask(ro_why + ", so no statement can be classified as read only, on " + where + ". " + stmt)
+    ok, why = ro.read_only_approval(tool, ti)
+    if ok:
+        sys.exit()
+    ask("execute_sql is not provably read only (" + why + "), on " + where + ". " + stmt)
 
-ok, why = ro.read_only_approval(tool, ti)
-if ok:
+# Any other database tool, and a database client in a Bash command (claude-config#2536). Which
+# calls those are is lib/db-write-calls.py; whether a statement is read only stays the predicate.
+if calls is None:
+    ask(calls_why + ", so whether this call reaches a database could not be told", "2536")
+
+def judge(q):
+    if ro is None:
+        return ro_why + ", so no statement can be classified as read only"
+    return ro.judge(q)
+
+if tool == "Bash":
+    command = ti.get("command") if isinstance(ti, dict) else None
+    if not isinstance(command, str):
+        if calls.CLIENT_WORD.search(raw):
+            ask("the Bash call holds no text command and its payload names a database client, so the "
+                "call could not be classified as read only", "2536")
+        sys.exit()
+    if not calls.CLIENT_WORD.search(command):
+        sys.exit()
+    sw, sw_why = part("shell_words_shared", "shell-words.py")
+    if sw is None:
+        ask(sw_why + ", so the command, which names a database client, could not be read", "2536")
+    try:
+        found = calls.bash_findings(command, judge, sw)
+    except Exception as e:
+        ask("the command names a database client and could not be read (" + type(e).__name__
+            + "), so the call could not be classified as read only", "2536")
+    if not found:
+        sys.exit()
+    shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
+    more = len(found) - len(shown)
+    ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""), "2536")
+
+try:
+    found = calls.mcp_finding(tool, ti, judge)
+except Exception as e:
+    found = (tool + " could not be read (" + type(e).__name__ + "), so the call could not be classified "
+             "as read only", None)
+if found is None:
     sys.exit()
-ask("execute_sql is not provably read only (" + why + "), on " + where + ". " + stmt)
+why, s = found
+ask(why + (", on " + where if isinstance(project, str) and project else "")
+    + ("" if s is None else ". " + said(s)), "2536")
 ' "$HOOK_DIR" 2>/dev/null)"
 rc=$?
 
@@ -194,10 +281,7 @@ if [ "$rc" -eq 0 ]; then
       exit 0 ;;
   esac
 fi
-# python3 itself failed, or printed something that is not a verdict: fail closed for a database
-# tool, by the raw text, since nothing parsed it.
-case "$payload" in
-  *mcp__claude_ai_Supabase__execute_sql*|*mcp__claude_ai_Supabase__apply_migration*)
-    hook_ask_json "db-write-ask.sh asks before this database call because its classifier (python3) failed, so the statement could not be classified as read only (claude-config#2521)" ;;
-esac
+# python3 itself failed, or printed something that is not a verdict: fail closed for anything the
+# screen let through as a database call, by the raw text, since nothing parsed it.
+[ "$db_call" = 1 ] && hook_ask_json "db-write-ask.sh asks before this database call because its classifier (python3) failed, so the statement could not be classified as read only (claude-config#2521)"
 exit 0

@@ -556,6 +556,8 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   # It never refuses: it ASKS Dan about a database call it cannot classify, by Dan's decision on
   # 2026-11-09 (#2521), so a call it cannot parse is asked about, naming the payload.
   judged db-write-ask.sh mcp__claude_ai_Supabase__execute_sql '{"query": "update runs set note = '"'"'@@'"'"' where false", "project_id": "probe"}' '{}' "ask db-write-ask.sh header"
+  # And about a database client in a shell command it cannot parse (#2536).
+  judged db-write-ask.sh              Bash "$(bash_call "psql -c 'delete from runs where false'")" '{}' "ask db-write-ask.sh header"
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).
 while IFS= read -r g; do

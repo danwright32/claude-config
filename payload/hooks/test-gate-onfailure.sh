@@ -296,7 +296,7 @@ playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwr
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
-db-write-ask.sh mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord"
+db-write-ask.sh Bash,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
 if [ -s "$WORK/received.tsv" ]; then
   received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
   while IFS= read -r script; do
