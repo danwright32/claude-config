@@ -1122,8 +1122,7 @@ the model tiers in the orchestrate skill cover only that skill's builders. Claud
 default from `CLAUDE_CODE_SUBAGENT_MODEL` in the `env` block of `settings.json`. Measured on 2.1.322
 with a headless Fable run starting one agent that names no model: the agent ran on
 `claude-fable-5-2` with nothing set and on `claude-opus-5-5` with the variable set, and a call
-naming `sonnet` still ran on Sonnet, so it is a default and never an override (L82, L188). Workflow
-agents are documented as taking the same default and were not measured. The `env` block is otherwise
+naming `sonnet` still ran on Sonnet, so it is a default and never an override (L82, L188). The `env` block is otherwise
 each Mac's own (it holds `CLAUDE_CODE_PLUGIN_DIRS`, and may hold a credential), so the file may
 carry that one variable under `env` and the pull writes that one leaf. Any other variable refuses
 the whole file, named but with its value left out of the message, since a refusal reaches the log
@@ -1133,6 +1132,23 @@ value in place, as with a model the file stops naming.
 
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
+
+Workflow agents, which the planning panel starts, were measured on 2026-11-10 (#2649): one test
+workflow, run once from a headless Fable session with hooks off, started one agent in each shape
+`payload/skills/plan-council/panel.workflow.js` uses. The model is read from each transcript's
+assistant turns, never from what an agent says about itself:
+
+| Agent shape | Model named | Model on its transcript |
+|---|---|---|
+| the parent session (`--model claude-fable-5-2`) | | `claude-fable-5-2` (5 of 5 turns) |
+| ad hoc, no agent type | none | `claude-opus-5-5` (2 of 2) |
+| `plan-architect` | none | `claude-opus-5-5` (1 of 1) |
+| `plan-redteam` | `sonnet` | `claude-sonnet-5-5` (1 of 1) |
+
+So a workflow agent naming no model takes the default subagent model, Opus, and does not copy its
+Fable parent, and one naming a model gets it: the panel follows the default as intended. The run
+had to come from a Fable session, since from an Opus one following the default and copying the
+parent both read as Opus.
 
 ## rtk's excluded commands are written into rtk's own config (#1427)
 
