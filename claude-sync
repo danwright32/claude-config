@@ -13123,7 +13123,9 @@ report_mods_behind_main(){
   # A file that could not be compared is said whatever the window, since it is no lag of any age:
   # whether it is behind is unknown, and saying nothing would read as it being level (L98, L11).
   [ -n "$unread" ] || return 0
-  n="$(printf '%s\n' "$unread" | awk 'END { print NR }')"
+  # Files, not lines: a file can fail more than one step (its own hash and the placeholder one), and
+  # each failure keeps its own line below.
+  n="$(printf '%s\n' "$unread" | awk -F '\t' '!seen[$2]++ { k++ } END { print k + 0 }')"
   echo "mods not compared with the shared repo: status could not compare $n file(s) in $CLAUDE_HOME/mods with origin/$(sync_branch), so it cannot say whether they are behind it, and counts them neither as behind nor as this Mac's own work:"
   while IFS=$'\t' read -r kind rel why; do
     [ -n "$rel" ] && echo "  could not compare $rel: $why"

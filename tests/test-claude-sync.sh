@@ -24774,6 +24774,7 @@ cat > "$MCSHIM/git-bin/git" <<EOS
 case "\$*" in
   *"hash-object --stdin-paths"*) exit 128 ;;
   *"hash-object -- "*"/mods/kit-mod/hooks/branch.ts") exit 128 ;;
+  *"hash-object -- "*"/mods/path-mod/hooks/paths.ts") exit 128 ;;
   *"hash-object --stdin") cat >/dev/null; exit 0 ;;
   *" log "*"--raw"*"payload/mods/side-mod/"*) exit 128 ;;
   *" log "*"--diff-filter=A"*"payload/mods/new-mod/"*) exit 128 ;;
@@ -24794,7 +24795,11 @@ check "#2673 a file this Mac lacks, when the repo's add could not be read, is na
   "line_has \"\$out_mc2\" 'could not compare new-mod/index.ts' 'added it' 'exit 128'"
 check "#2673 a file the repo removed, when the removal could not be read, is named" \
   "line_has \"\$out_mc2\" 'could not compare gone-mod/index.ts' 'removed it' 'exit 128'"
-check "#2673 the heading counts all five" \
+# path-mod fails two steps (its own hash and the hash with the placeholder put back), so it has two
+# lines and is still one file.
+check "#2673 a file failing two steps has a line for each" \
+  "line_has \"\$out_mc2\" 'could not compare path-mod/hooks/paths.ts' 'hashing it failed' 'exit 128'"
+check "#2673 the heading counts all five files, not their lines" \
   "line_has \"\$out_mc2\" 'mods not compared with the shared repo: status could not compare 5 file' 'neither as behind'"
 check "#2673 and the one file every step could read is still compared one by one and named as behind" \
   "line_has \"\$out_mc2\" 'mods behind the shared repo: 1 file' 'plain-mod'"
