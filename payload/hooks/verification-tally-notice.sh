@@ -57,12 +57,12 @@ due="$(python3 "$SCRIPTS/verification.py" tally due 2>/dev/null)" || exit 0
 [ -n "$due" ] || exit 0
 
 # The folder the code below imports verification from, only for its TALLY_ASK_EVERY, is spelt from
-# BASH_SOURCE where it is handed over, never taken from $SCRIPTS: that one starts from VR_SCRIPTS,
+# HOOK_DIR, this hook's own folder, never taken from $SCRIPTS: that one starts from VR_SCRIPTS,
 # which the environment may set, so the Slack drafts gate cannot tell which verification.py would be
 # imported and refuses this hook, and since claude-config#2678 the suite that runs it, as an import
-# it cannot place (measured through the gate's wrapper, 2026-11-10). By dirname, never %/*, which
-# leaves a bare name whole: run as `bash verification-tally-notice.sh` from this folder, the folder
-# was not found and the notice ended with nothing said. This line is reached only when a notice is due.
+# it cannot place (measured through the gate's wrapper, 2026-11-10). Never cut from BASH_SOURCE
+# with %/* here: that leaves a bare name whole, so run as `bash verification-tally-notice.sh` from
+# this folder the folder was not found and the notice ended with nothing said.
 reason="$(printf '%s' "$due" | python3 -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -92,7 +92,7 @@ print("The verification merge check has watched enough merges to ask about block
       " .claude/verification/areas.json through a pull request in that repository) and \"Keep warn\" (asked again"
       " after %d more pull requests). Put the numbers above in the question. Make no change for Keep warn."
       % v.TALLY_ASK_EVERY)
-' "$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/verification-guides/scripts" && pwd)" 2>/dev/null)" || exit 0
+' "$HOOK_DIR/../skills/verification-guides/scripts" 2>/dev/null)" || exit 0
 [ -n "$reason" ] || exit 0
 
 out="$(python3 -c 'import json, sys; print(json.dumps({"decision": "block", "reason": sys.argv[1]}))' "$reason" 2>/dev/null)" || exit 0
