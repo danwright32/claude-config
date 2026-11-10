@@ -16,7 +16,8 @@ const reached = (r: Reading, seeds?: Map<string, { callee: string; line: number 
   const strings = r.python ? pythonText(r.text).filter(s => s.kind !== 'comment').map(s => ({ text: r.text.slice(s.from, s.to), start: s.from })) : stringsOf(r.text, false, true)
   return Object.fromEntries(strings.map(s => [s.text, sentAt(t, s.start)?.callee ?? '']))
 }
-// Written apart so this file's own source holds no Slack marker.
+// Two markers the fixtures share, built once. Other fixtures write markers whole, which is safe here:
+// a test file is never read as a sender or held.
 const WEBHOOK = ['process.env.SLACK', 'WEBHOOK_URL'].join('_')
 const CHAT = ['chat', 'postMessage'].join('.')
 
