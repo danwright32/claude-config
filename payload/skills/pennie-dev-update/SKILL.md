@@ -109,8 +109,15 @@ An entry looks like this (an invented repository):
     "deployRecord": "build_history",
     "deployRecordFrom": "2026-07-29",
     "changelogFrom": "2026-08-31" }
-] }
+],
+  "slackChannel": "C0000000000" }
 ```
+
+`slackChannel` is the id of the Slack channel the updates are posted in (in Slack, the channel's
+details, at the bottom), where the post's Slack draft is saved (section 10). It is optional: with
+none recorded the draft step says so and skips. It is a work name too, so it lives here and never
+in this skill. The one reader gives it back with `node ~/.claude/hooks/lib/dev-update-registry.js
+channel`, which refuses a channel name such as `#updates` and asks for the id.
 
 **Every repo in the registry is treated identically, apart from its first appearance.** There is no
 per-repo behaviour of any kind. A product's first appearance (its repo has no `lastEnd` in state)
@@ -631,7 +638,9 @@ product line on a one product post, product sections out of the registry's order
 deleted "backend only" line. It reads the products from this Mac's registry (`--config`
 points it at another), and refuses to run if that cannot be read. Fix every finding before Dan sees the draft. A hyphenated
 word is only a warning: keep it if it is the literal name of something on screen, such as the
-Top-out column. Then open it:
+Top-out column. Other people read this post, so run `/no-ai-tells` over it next, apply what it
+finds to the file, and run `lint-post.js` again until it is clean: what Dan reviews, and what any
+Slack draft holds, is the reviewed text. Then open it:
 
 ```bash
 /Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window <file>
@@ -640,6 +649,9 @@ Top-out column. Then open it:
 `bbedit` is not on PATH and `open` triggers the Island browser. Use the helper above, with
 `--front-window`: without it the helper opens the file in the background, reports success, and
 Dan sees nothing. Say in the same reply that focus is about to move.
+
+The file in the editor stays the whole post whatever happens next. Saving it as a Slack draft is
+an optional step after the editor opens, set out in section 10.
 
 Not archived. The window mechanism already prevents repeating content, so there is nothing to
 compare against.
@@ -738,10 +750,33 @@ files in the session scratchpad.
    in; give Dan both, word for word.
 3. Classify (section 5) the `ok` repos' PRs. Read bodies where ambiguous.
 4. Draft in the format (section 6), applying the accuracy pass (section 7).
-5. Write it, run `lint-post.js` until it is clean, and open it in BBEdit (section 8).
-6. Run the issue check (section 9), every gh command through `gather.js gh` so it runs as the
+5. Write it, run `lint-post.js` until it is clean, run `/no-ai-tells` and lint again, and open it
+   in BBEdit (section 8).
+6. Offer the Slack draft, as one picker: "Save as a Slack draft" or "Leave it in the editor". Skip
+   the picker when Dan already asked for it in Slack. On a yes:
+
+   ```bash
+   node ~/.claude/hooks/lib/dev-update-registry.js channel
+   ```
+
+   It prints `{state, file, why, channel}` from this Mac's registry. When `channel` is empty there
+   is no channel, say so and skip the draft: give Dan its `why` word for word. Never search Slack
+   for the earlier posts to find one, and never guess.
+
+   With a channel, read the file as it stands now (Dan may have edited it in BBEdit) and save it
+   unchanged, the whole post as one draft, with `slack_send_message_draft` to that channel and no
+   thread. Reword nothing after Dan chose. It is one draft rather than the opener alone because a
+   channel holds one draft, and a reply cannot be drafted to a post that does not exist yet. Use
+   that tool and no other: never a send or schedule tool, and if Dan says to post it, it is still
+   a draft.
+
+   Then tell Dan it is a draft waiting in that channel in Slack's Drafts and nothing was sent, and
+   where to split it: the opener and the product line go out as the post (the opener alone on a
+   one product post), and everything below them belongs in the thread, as a reply to it. The full
+   text is still in the editor.
+7. Run the issue check (section 9), every gh command through `gather.js gh` so it runs as the
    repo's account, and print what it changed.
-7. Commit the state, once per repo that was `ok` or `first_appearance`, naming the PRs the post
+8. Commit the state, once per repo that was `ok` or `first_appearance`, naming the PRs the post
    listed and the headings it used:
 
    ```bash
@@ -749,6 +784,6 @@ files in the session scratchpad.
    ```
 
    Leave out `--listed` for a first appearance and for a repo the post listed nothing from.
-8. Tell Dan: the window covered, how many changes, how many held back and why, how many could
+9. Tell Dan: the window covered, how many changes, how many held back and why, how many could
    not be confirmed live and why (never folded into the held count), and what the issue check
    changed.
