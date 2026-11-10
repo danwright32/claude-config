@@ -23856,6 +23856,54 @@ out_sx8e="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT
 check "shared effort: once the effort matches, status no longer lists it, whatever else the entry holds" \
   "! line_has \"\$out_sx8e\" 'settings.shared.json' 'has not applied'"
 
+# THE DEFAULT SUBAGENT MODEL IS SHARED (#2645). An agent that names no model inherits the session's
+# model, so the day the session model changed (2026-11-09) every such agent changed with it. Measured
+# 2026-11-10 on Claude Code 2.1.322 with a headless run that starts one agent and names no model: the
+# agent ran on the session's model, and on opus once settings.json carried
+# env.CLAUDE_CODE_SUBAGENT_MODEL, while a call naming sonnet still ran on sonnet. The env block is
+# otherwise each Mac's own and can hold a credential, so the sync writes that ONE variable and
+# refuses a shared file carrying any other, naming the variable and never printing its value.
+SX19R="$WORK/sx19-repo"; sx_repo "$SX19R" '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "opus"}}' ''
+SX19H="$WORK/sx19-home"; mkdir -p "$SX19H"
+jq -c '. + {env: {CLAUDE_CODE_PLUGIN_DIRS: "/this/mac/mods", CLAUDE_CODE_SUBAGENT_MODEL: "haiku"}}' <<< "$SX_ORIG" > "$SX19H/settings.json"
+out_sx19="$(sx_pull "$SX19H" "$SX19R")"
+dbg "shared subagent model, first pull: $out_sx19"
+check "#2645 a pull sets the default subagent model from the shared settings file" \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL' '$SX19H/settings.json')\" = opus ]"
+check "#2645 and keeps the rest of this Mac's env block" \
+  "[ \"\$(jq -r '.env.CLAUDE_CODE_PLUGIN_DIRS' '$SX19H/settings.json')\" = /this/mac/mods ]"
+check "#2645 and leaves every setting outside env exactly as it was" \
+  "[ \"\$(jq -cS 'del(.env)' '$SX19H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "#2645 and the pull names the variable it wrote" "line_has \"\$out_sx19\" 'settings.json' 'CLAUDE_CODE_SUBAGENT_MODEL'"
+touch -t 202001010000 "$SX19H/settings.json"; _sx19sum="$(cksum < "$SX19H/settings.json")"
+out_sx19b="$(sx_pull "$SX19H" "$SX19R")"
+check "#2645 a second pull leaves settings.json byte for byte" "[ \"\$(cksum < '$SX19H/settings.json')\" = \"\$_sx19sum\" ]"
+check "#2645 and claims to have written nothing there" "! line_has \"\$out_sx19b\" 'settings.json' 'CLAUDE_CODE_SUBAGENT_MODEL'"
+# A Mac with no env block gets one holding only that variable, and a full model name is accepted.
+SX20R="$WORK/sx20-repo"; sx_repo "$SX20R" '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5-5"}}' ''
+SX20H="$WORK/sx20-home"; mkdir -p "$SX20H"; printf '%s\n' "$SX_ORIG" > "$SX20H/settings.json"
+sx_pull "$SX20H" "$SX20R" >/dev/null
+check "#2645 a Mac with no env block gets one holding only that variable, here a full model name" \
+  "[ \"\$(jq -c '.env' '$SX20H/settings.json')\" = '{\"CLAUDE_CODE_SUBAGENT_MODEL\":\"claude-opus-5-5\"}' ]"
+# WHAT env MAY NOT CARRY. Any other variable is refused by NAME, and its value stays out of the
+# message: the refusal reaches a log and a notification, and the value may be a credential.
+out_sx21="$(sx_refused envkey '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "opus", "SOME_SERVICE_TOKEN": "do-not-print-me"}}')"
+dbg "shared subagent model, another variable under env: $out_sx21"
+check "#2645 any other variable under env is refused, naming it" "line_has \"\$out_sx21\" 'settings.shared.json' 'SOME_SERVICE_TOKEN'"
+check "#2645 and its value is never printed" "! grep -q 'do-not-print-me' <<< \"\$out_sx21\""
+check "#2645 and nothing from that file is written" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx21\""
+out_sx22="$(sx_refused envval '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "the best one"}}')"
+dbg "shared subagent model, a value that is not a model: $out_sx22"
+check "#2645 a value that is neither an alias nor a full model name is refused, naming it" \
+  "line_has \"\$out_sx22\" 'settings.shared.json' 'CLAUDE_CODE_SUBAGENT_MODEL' 'the best one'"
+check "#2645 and nothing is written for it" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx22\""
+out_sx23="$(sx_refused envshape '{"env": "opus"}')"
+dbg "shared subagent model, env of the wrong shape: $out_sx23"
+check "#2645 an env that is not an object of variables is refused" "line_has \"\$out_sx23\" 'settings.shared.json' 'env is not an object'"
+check "#2645 and nothing is written for that either" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx23\""
+check "#2645 the shared file in this repository names a default subagent model" \
+  "[ -n \"\$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL // empty' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" ]"
+
 # THE SHIPPED FILE is one the sync accepts: every value it carries lands. Asserts no particular
 # value, so changing the shared setting later needs no test change (L252).
 SX18R="$WORK/sx18-repo"; sx_repo "$SX18R" "$(cat "$(dirname "$SCRIPT")/payload/settings.shared.json")" ''
