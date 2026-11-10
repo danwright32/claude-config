@@ -269,8 +269,12 @@ const end = (found: Found): never => {
  * A file in no repository, as a scratchpad script is, has nothing that sends it, so none, even when
  * it carries a Slack marker (#2287, #2361); so is a test (#2290). A file that does carry one (`marked`)
  * and is in a repository is posts, with no search.
+ *
+ * `self` (#2637) is the file's own text as an edit leaves it, given when the question is what the
+ * edit brings to a send from the files it imports: the file is then counted among its own senders
+ * when it posts by itself or through a send helper it imports, before the files that send it.
  */
-const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false, settle?: Settle): Promise<Found> => {
+const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false, settle?: Settle, self?: string): Promise<Found> => {
   const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
   // The senders found so far, and what the search returns when it stops with them in hand.
   const found: Sender[] = []
@@ -441,6 +445,23 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       for (let r: string | undefined = rel; r !== undefined && r !== templateRel; r = parent.get(r)) out.push(r)
       return out
     }
+    // Senders found: the search stops, unless the caller's trace of them settles nothing and asks
+    // it to go on (#2570).
+    const stops = async (more: Sender[]): Promise<boolean> => {
+      if (!more.length) return false
+      found.push(...more)
+      return !settle || (await settle(more, top, texts, templateRel))
+    }
+    // The file itself as the edit leaves it, when what is judged is what it brings to a send from
+    // the files it imports (#2637): it posts by itself, or through a send helper it imports, as a
+    // file using a template does. It is read as that text from here on, never from the disk.
+    if (self !== undefined) {
+      texts.set(templateRel, self)
+      const own: Sender[] = slackMarked(codeOf(templateRel, self))
+        ? [{ rel: templateRel, chain: [] }]
+        : (await helperUser([{ rel: templateRel, text: self }])).map(p => ({ rel: templateRel, chain: [], helper: p.helper }))
+      if (await stops(own)) return { senders: found, top, texts, complete: true }
+    }
     for (let hop = 0; ; hop++) {
       // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
       const named = await naming(level)
@@ -454,13 +475,6 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         const text = await textOf(rel, sends)
         const via = slackMarked(codeOf(rel, text)) ? level.find(t => refersTo(rel, text, t)) : undefined
         if (via !== undefined) atLevel.push({ rel, chain: chainOf(via) })
-      }
-      // Senders found: the search stops, unless the caller's trace of them settles nothing and asks
-      // it to go on (#2570).
-      const stops = async (more: Sender[]): Promise<boolean> => {
-        if (!more.length) return false
-        found.push(...more)
-        return !settle || (await settle(more, top, texts, templateRel))
       }
       if (await stops(atLevel)) return { senders: found, top, texts, complete: true }
       const links = named.filter(r => mayHandOn(r) && !seen.has(r))

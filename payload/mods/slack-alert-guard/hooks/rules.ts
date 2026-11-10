@@ -317,6 +317,20 @@ export const handsOn = (rel: string, text: string): boolean => {
   return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
 }
 
+// The paths of a JavaScript or TypeScript file's local imports, as written: a relative or aliased
+// path, never a bare package.
+const localSpecs = (text: string): string[] =>
+  [...withoutComments(text, false).matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)]
+    .map(m => m[1] as string)
+    .filter(spec => spec.startsWith('.') || spec.includes('/'))
+
+/**
+ * Every module a file imports, as the file names it (#2637): each local JavaScript or TypeScript
+ * import path whole, and each python module. Two files of one name in different folders are two
+ * modules here, where importTerms gives one word for both.
+ */
+export const moduleSpecs = (text: string): string[] => [...new Set([...localSpecs(text), ...importedModules(withoutComments(text, true))])]
+
 /**
  * The words a search for the modules a file imports looks for (#2361): the last name of each local
  * JavaScript or TypeScript import (a relative or aliased path, never a bare package), its folder's for
@@ -324,10 +338,7 @@ export const handsOn = (rel: string, text: string): boolean => {
  */
 export const importTerms = (text: string): string[] => {
   const out = new Set<string>()
-  const code = withoutComments(text, false)
-  for (const m of code.matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)) {
-    const spec = m[1] as string
-    if (!spec.startsWith('.') && !spec.includes('/')) continue
+  for (const spec of localSpecs(text)) {
     const segs = spec.split('/').filter(s => s && s !== '.' && s !== '..')
     const stem = stemOf(segs[segs.length - 1] ?? '')
     const term = PACKAGE.has(stem) ? (segs[segs.length - 2] ?? '') : stem

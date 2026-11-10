@@ -114,6 +114,16 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         // As git prints it: the top folder, then the folder below it ending in a slash, empty at the top.
         return ok(`${REPO}\n${dir === REPO ? '' : `${dir.slice(REPO.length + 1)}/`}\n`)
       }
+      // git ls-files, listing the files a pathspec names (#2637): tracked or not, each ending in a NUL.
+      if (argv[3] === 'ls-files') {
+        if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
+        const named = argv.slice(argv.indexOf('--') + 1).filter(s => s.startsWith(':(glob,icase)')).map(s => s.slice(':(glob,icase)'.length))
+        const asGlob = (g: string) =>
+          new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
+        const res = named.map(asGlob)
+        const listed = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && res.some(re => re.test(p.slice(dir.length + 1))))
+        return { value: { exitCode: 0, stdout: listed.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: ctl.gitTruncated, isStderrTruncated: false } } as never
+      }
       if (argv[3] === 'grep') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
         // -F: every pattern a fixed string, and a line matching any of them is listed.
@@ -1588,4 +1598,127 @@ test('a search that runs late after finding a sender that sends none of the chan
   expect(held).toContain('No booking has that id yet')
   expect(held).toContain(`which ${LATE} sends to Slack`)
   expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2637: on 2026-11-10 a builder wrote a new copy module (two pages and two all clears
+// for a "feed has gone quiet" alarm) that a monitor route imports and posts to Slack. Nothing sent the
+// module when it was written, so the Write passed; the edits that made the route import and send it
+// added no text of their own, so they passed too, and the wording reached a branch unapproved.
+const QUIET = '/w/app/src/lib/monitor/quiet-feed-copy.ts'
+const QUIET_TEXT = [
+  'export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`',
+  'export const quietAgain = (feed: string) => `The ${feed} feed is still quiet, so somebody needs to look at it now`',
+  'export const quietClear = (feed: string) => `The ${feed} feed is sending again`',
+  "export const allClear = 'Every feed is sending again'",
+  "export const CHECKED = 'Checked every feed for a quiet one'",
+  '',
+].join('\n')
+const MONITOR = '/w/app/src/app/api/monitor/route.ts'
+const MONITOR_TEXT = [
+  "import { lateBooking } from '@/lib/notify/outage-copy'",
+  "import { postAlert } from '@/lib/notify/post'",
+  'export const GET = async () => {',
+  "  await postAlert(lateBooking('1'))",
+  '  return Response.json({ ok: true })',
+  '}',
+  '',
+].join('\n')
+const QUIET_IMPORT = "import { quietPage, quietClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n"
+const listedFiles = (w: W) => w.gits.filter(g => g.argv[3] === 'ls-files').length
+
+test('a new copy module passes while nothing sends it; the edit that makes a route send it is held for the wording it brings in, then goes through once Dan approves (#2637)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))).toBe('')
+  // The import alone sends nothing of the module yet, so it passes: what is held is the send.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: QUIET_IMPORT + MONITOR_TEXT }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(lateBooking('1'))\n  await postAlert(quietPage('orders', 45))\n  console.log(CHECKED)\n" }
+  const held = refusalOf(await call($, send))
+  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
+  expect(held).toContain(QUIET)
+  expect(held).toContain(MONITOR)
+  // Only what the send carries: never the line it logs, the all clear it imports and does not send,
+  // or the wording the route already sent before this edit.
+  expect(held).not.toContain('Checked every feed')
+  expect(held).not.toContain('sending again')
+  expect(held).not.toContain('is late')
+  expect(w.ran.length).toBe(2)
+  expect(w.cards.length).toBe(1)
+  await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
+  expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  expect(refusalOf(await call($, send))).toBe('')
+  expect(w.ran.length).toBe(3)
+})
+
+test('one change that writes a new sender over a new copy module is held for every message it sends, whether it posts by itself or through a send helper (#2637)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [POST]: POST_TEXT, [QUIET]: QUIET_TEXT } })
+  const route = `${QUIET_IMPORT}import { quietAgain, allClear } from '@/lib/monitor/quiet-feed-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async (quiet: boolean) => {\n  console.log(CHECKED)\n  return postAlert(quiet ? quietPage('orders', 45) : allClear)\n}\n`
+  const held = refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: route }))
+  expect(held).toContain('feed has gone quiet')
+  expect(held).toContain('Every feed is sending again')
+  expect(held).toContain(QUIET)
+  expect(held).not.toContain('Checked every feed')
+  expect(held).not.toContain('still quiet')
+  // A file that posts by itself, with no helper between.
+  const PAGE = '/w/app/src/lib/monitor/page.ts'
+  const page = "import { quietAgain } from './quiet-feed-copy'\nexport const page = (feed: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: quietAgain(feed) }) })\n"
+  const direct = refusalOf(await call($, { tool: 'Write', file_path: PAGE, content: page }))
+  expect(direct).toContain('feed is still quiet, so somebody needs to look at it now')
+  expect(direct).toContain(QUIET)
+  expect(direct).not.toContain('gone quiet')
+  expect(w.ran).toEqual([])
+})
+
+test('wording a sender newly reaches through a barrel it already imports, or in a module it already imports, is held; the barrel gaining the module is not, while nothing sends it (#2637)', withKit, async ($, on) => {
+  const BARREL_COPY = '/w/app/src/lib/monitor/index.ts'
+  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
+  const NIGHTLY_TEXT = "import { quietClear } from '../lib/monitor'\nexport const nightly = (text: string) => sendSlackAlert(text)\n"
+  const w = world($, on, { files: { [QUIET]: QUIET_TEXT, [BARREL_COPY]: 'export const VERSION = 1\n', [NIGHTLY]: NIGHTLY_TEXT, [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Write', file_path: BARREL_COPY, content: "export const VERSION = 1\nexport * from './quiet-feed-copy'\n" }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const through = refusalOf(await call($, { tool: 'Edit', file_path: NIGHTLY, old_string: 'sendSlackAlert(text)', new_string: "sendSlackAlert(text || quietClear('orders'))" }))
+  expect(through).toContain('The ${feed} feed is sending again')
+  expect(through).toContain(QUIET)
+  expect(through).not.toContain('gone quiet')
+  // No import changes at all: a name the sender already imported for a 404 answer is now sent.
+  const already = refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'sendSlackAlert(lateBooking(id))', new_string: 'sendSlackAlert(id ? lateBooking(id) : NOT_FOUND)' }))
+  expect(already).toContain('No booking has that id')
+  expect(already).toContain(BOOKING_COPY)
+  expect(already).not.toContain('is late')
+  expect(w.ran.length).toBe(1)
+})
+
+test('an edit that brings no new wording to a send passes: more use of what a sender already sent, a name used some other way, and any import in a file nothing sends (#2637)', withKit, async ($, on) => {
+  const HELP = '/w/app/src/lib/help.ts'
+  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT, [QUIET]: QUIET_TEXT, [HELP]: 'export const help = () => 1\n' } })
+  // The route already sent lateBooking, wording older than the guard: sending it once more is no new alert.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'export const miss', new_string: 'export const again = (id: string) => sendSlackAlert(lateBooking(id))\nexport const miss' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'export const miss', new_string: 'export const gone = () => new Response(NOT_FOUND, { status: 410 })\nexport const miss' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // A file on no path to Slack: the search for what sends it runs, and no imported module is listed or read.
+  const before = w.gits.length
+  expect(refusalOf(await call($, { tool: 'Write', file_path: HELP, content: "import { allClear } from './monitor/quiet-feed-copy'\nexport const help = () => allClear\n" }))).toBe('')
+  expect(w.gits.length).toBeGreaterThan(before)
+  expect(listedFiles(w)).toBe(0)
+  expect(w.ran.length).toBe(3)
+})
+
+test('wording an edit may bring to a send is held, never let through, when the search runs late or the imported module cannot be read (#2637)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(quietPage('orders', 45))\n" }
+  w.ctl.unreadable = QUIET
+  const unread = refusalOf(await call($, send))
+  expect(unread).toContain('could not check')
+  expect(unread).toContain(QUIET)
+  w.ctl.unreadable = ''
+  w.ctl.gitSlow = SCAN_MS + 1
+  expect(refusalOf(await call($, send))).toContain(`not searched within ${SCAN_MS / 1000} seconds`)
+  w.ctl.gitSlow = 0
+  w.ctl.gitFails = 'fatal: unable to read tree'
+  expect(refusalOf(await call($, send))).toContain('could not check')
+  expect(w.ran).toEqual([])
+  // With the search able to finish, the same edit is held for the wording, so the three above were
+  // the guard failing closed, never a guard with nothing to hold.
+  w.ctl.gitFails = ''
+  expect(refusalOf(await call($, send))).toContain('feed has gone quiet')
 })
