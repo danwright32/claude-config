@@ -168,6 +168,8 @@ allowed "a command that is not git" 'ls -la /tmp'
 allowed "the override, for one command" 'ALLOW_TEMP_WORKTREE=1 git worktree add /tmp/wt-2528'
 # A repository that is itself in a temp folder loses nothing more by its worktree being there.
 STUB_COMMON="/private/tmp/fixture/.git" allowed "a repository itself under a temp folder" 'git worktree add /tmp/wt-2528'
+# git's answer holding a byte that is not UTF-8 is still read, so that repository is still found.
+STUB_COMMON=$'/private/tmp/fix\xffture/.git' allowed "a repository under a temp folder whose path is not UTF-8" 'git worktree add /tmp/wt-2528'
 allowed "a repository git cannot find, run in a temp folder" 'git worktree add ../wt-2528' /private/tmp/fixture/repo
 
 # ---------------------------------------------------------------------------------------------
