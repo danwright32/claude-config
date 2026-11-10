@@ -365,7 +365,7 @@ fi
 # newest 120 days kept. The readings file beside it keeps six hours, too short to show an ordinary
 # day. That is a sysctl and an awk on every prompt; `top`, which takes most of a second (0.6 s
 # measured on 2026-10-26 at a load average of 159), runs only when swap is over the share AND the
-# verdict is low or falling, and is bounded by FREE_SPACE_TOP_SECONDS (default 2, 0 turns it off),
+# verdict is low or falling, or swap is nearly full (#2559), and is bounded by FREE_SPACE_TOP_SECONDS (default 2, 0 turns it off),
 # its whole process group killed when the bound runs out, so the prompt hook stays inside its 10
 # second timeout with the nudge's 6 second Xcode step beside it.
 #
@@ -442,7 +442,7 @@ if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
     && mv -f "$_tmp" "$SWAP_DAYS" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
 fi
 
-# How full swap is of its own total, in words, for the verdict 5 line and the sentence beside the
+# How full swap is of its own total, in words, for the swap verdict's first line and the sentence beside the
 # holders, so the two say it one way (L118).
 swap_full_words(){
   printf '%s used of %s (%s%%), by sysctl vm.swapusage' "$(fs_words "$swap_bytes")" "$(fs_words "$swap_total")" $(( swap_bytes * 100 / swap_total ))

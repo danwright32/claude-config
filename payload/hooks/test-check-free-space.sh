@@ -399,7 +399,7 @@ check "and that reading really is a number of GB, which is what proves df was pa
 # from reading as a trend, so the skill asks it. But the quiet default prints NOTHING on a healthy
 # disk, which is right for a warning on every prompt and useless to somebody triaging: so --report
 # always says how much is left, and either the rate or exactly why there is none (L11, L540).
-# The exit codes are the same four in both modes, because callers judge by those (L184).
+# The exit codes are the same in both modes, because callers judge by those (L184).
 # (rprobe, the --report form of probe, is defined beside probe at the top.)
 
 # The quiet default stays quiet: the nudge relies on exit 0 saying nothing (claude-config#363).

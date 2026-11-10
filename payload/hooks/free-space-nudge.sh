@@ -46,7 +46,7 @@ DIR="$(cd "${DIR:-/}" && pwd)"
 CHECK="$DIR/check-free-space.sh"
 [ -f "$CHECK" ] || exit 0
 
-# The answer, and its exit code, which is what separates the four outcomes. Judged by the CODE and
+# The answer, and its exit code, which is what separates the outcomes. Judged by the CODE and
 # never by a line of the output (L184).
 answer="$(bash "$CHECK" 2>&1)"; verdict=$?
 
