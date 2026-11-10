@@ -2726,7 +2726,7 @@ class Judge:
         handed = re.compile(given)
         try:
             records = self.sw.every_command(body, d)
-        except Exception:
+        except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573, #2593)
             return "could not be read as commands to see what it does with its arguments"
         for _, text, _, _, _ in records:
             rest, _ = self.sw.command_rest(text)
