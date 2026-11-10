@@ -6820,7 +6820,9 @@ that drops on it and a TaskStop of an ended job is an error result (#1387); a ch
 answer keeps the job. The turn end is never refused. Leftovers are judged at session start only once
 the Claude Code process that started them has gone (read from the job's process group, never from
 the registry), by one session at a time (a claim folder in `~/.claude/state/job-watcher/claims`), by
-Haiku, then Sonnet, stopped only when measured stuck, and summed up in one dim line. Each job
+Haiku, then Sonnet, stopped only when measured stuck, and summed up in one dim line. A judge that
+gives no verdict (refused, unanswered, or an answer that is no verdict) is said in the debug log by
+model and why, so a retired first judge is not silent (#2550). Each job
 records the background agent that started it, and its reminders and notices go to that agent while
 it runs, to this conversation once it has ended; a poll loop gone quiet is waiting, never stuck; an
 untraced entry whose output file is gone is dropped (#784). What Claude Code says of each job comes

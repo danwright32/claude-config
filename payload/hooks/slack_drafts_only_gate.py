@@ -47,6 +47,7 @@ The threat is a session that means well choosing the quickest way to post.
 """
 import ast
 import fnmatch
+import functools
 import glob
 import importlib.machinery
 import importlib.util
@@ -416,6 +417,21 @@ SH_COMPOUND = re.compile(r"^(?:(?:if|then|elif|else|fi|do|done|while|until|for|s
 SH_FUNC_DEF = re.compile(r"^[A-Za-z_][\w:.-]*\s*\(\s*\)")
 SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
               r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# export and readonly with no = keep a name's value, so sh_binds does not count them as binding it.
+SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
+
+
+# The three patterns Judge.sh_binds reads a name by, compiled once per name for the life of the run:
+# NAME=, NAME+= and NAME[i]=; NAME inside (( )); and the builtins that bind a name. re keeps only 512
+# compiled patterns, and one script can have thousands of names (claude-config#2569).
+@functools.lru_cache(maxsize=None)
+def sh_bind_patterns(name):
+    n = re.escape(name)
+    return (re.compile(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?="),
+            re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b"),
+            re.compile(SH_BINDERS.format(n)))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -1429,13 +1445,18 @@ class Judge:
         """Whether text can bind name, beyond `allowed` NAME= forms that set it for one command alone:
         NAME=, NAME+=, NAME[i]=, ${NAME:=}, read, for, local, unset... NAME, or NAME inside (( )).
         export and readonly with no = keep the value, so they do not count."""
-        n = re.escape(name)
-        if len(re.findall(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", text)) > allowed:
+        # Every form below spells the name out, so text without it binds nothing. That, and patterns
+        # compiled once per name (sh_bind_patterns), are what keep a script with thousands of names
+        # inside the gate's time: asked per name per compound command, this ran 344,464 times
+        # judging the merge helper and compiled a pattern 1,002,444 times (claude-config#2569).
+        if name not in text:
+            return False
+        assigns, arithmetic, binders = sh_bind_patterns(name)
+        if len(assigns.findall(text)) > allowed:
             return True
-        if re.search(r"\(\([^()]*(?<![\w$])" + n + r"\b", text):
+        if arithmetic.search(text):
             return True
-        return any(not re.match(r"(?:export|readonly)\b", m.group(0))
-                   for m in re.finditer(SH_BINDERS.format(n), text))
+        return any(not SH_VALUE_KEPT.match(m.group(0)) for m in binders.finditer(text))
 
     def sh_indirect(self, text):
         """Whether a command can bind a name it does not spell out, so no name is certain past it: eval,

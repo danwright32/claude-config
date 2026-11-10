@@ -1302,6 +1302,46 @@ PY
   check "the gate is registered under PreToolUse for Bash and every Slack tool, to block" "$wiring"
 fi
 
+# ---- #2569: the patterns sh_binds builds are compiled once per name ----
+# The merge helper's own script has a few thousand names, and sh_binds built three patterns per name
+# on every call. re keeps only 512 compiled patterns, so a profile of the gate judging
+# `bash lib/merge-when-ready.sh` showed 1,002,444 compilations and 41 s of processor time, past the
+# 15 s the gate is given, and no session could start the helper (2026-11-09). Held by the count of
+# compilations, never by the clock (L290).
+cat > "$T/binds.py" <<'PY'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+binds = gate.Judge.sh_binds
+# What it answers is unchanged: (name, text, NAME= forms allowed, bound or not).
+cases = [("x", "x=1", 0, True), ("x", "echo $x", 0, False), ("x", "read x", 0, True),
+         ("x", "export x", 0, False), ("x", "export x=2", 0, True), ("x", "(( x++ ))", 0, True),
+         ("x", "x=1 cmd", 1, False), ("x", "xy=1", 0, False), ("x", "local y x", 0, True),
+         ("x", ': "${x:=d}"', 0, True), ("x", "y=1", 0, False), ("x", "x[2]=a", 0, True),
+         ("x", "x+=a", 0, True), ("a.b", "aXb=1", 0, False)]
+wrong = [c for c in cases if binds(c[0], c[1], c[2]) != c[3]]
+if wrong:
+    print("wrong answers: %r" % wrong); sys.exit()
+comp = getattr(re, "_compiler", None) or __import__("sre_compile")
+real, count = comp.compile, [0]
+def counting(*a, **k):
+    count[0] += 1
+    return real(*a, **k)
+names = ["name_%d" % i for i in range(700)]   # more than the 512 patterns re keeps
+text = "\n".join("%s=1" % n for n in names)
+if not all(binds(n, text) for n in names):
+    print("a name set in the text was not read as bound"); sys.exit()
+comp.compile = counting
+try:
+    again = all(binds(n, text) for n in names)
+finally:
+    comp.compile = real
+print("ok" if again and count[0] == 0 else "a second pass over 700 names compiled %d patterns" % count[0])
+PY
+binds="$(python3 "$T/binds.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+check "sh_binds compiles each name's patterns once, however many names a script has (#2569)" "$binds"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

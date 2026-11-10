@@ -175,14 +175,15 @@ type Job = {
 /** One agent of the session as $.agent.list() names it (#759). */
 type Agent = { id: string; description: string; type: string; status: string }
 // The rest of the world: failExtra makes every registry write fail; sessions is what the registry
-// lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call).
+// lists; verdict answers each model call ('none' for no answer, 'throws' to reject the call,
+// 'unauthenticated' for the no login answer, whose status is null, measured 2026-11-09, #2550).
 type World = {
   failExtra?: boolean
   /** 'throws once': the first ask fails (the registry mid reload, #753) and every later one answers. */
   sessions?: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } | 'throws' | { throwsOnce: { open?: unknown[]; closed?: unknown[]; unreadable?: string[] } }
   /** The session's agents, as $.agent.list() answers; the test may change them as it goes. */
   agents?: Agent[] | 'throws'
-  verdict?: (model: string, prompt: string) => string | 'none' | 'throws'
+  verdict?: (model: string, prompt: string) => string | 'none' | 'throws' | 'unauthenticated'
   /** The test's mocked clock, for commands that answer late and for dating the claims made. */
   clock?: { sleep: (ms: number) => Promise<void>; now?: () => number }
   /** Told of each registry write of the jobs, with the value written. */
@@ -415,6 +416,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     const v = o.verdict?.(req.model, req.prompt) ?? 'none'
     if (v === 'none') return { value: { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: {} } } as never
     if (v === 'throws') throw new Error('the model is blocked')
+    if (v === 'unauthenticated') return { value: { isAnswered: false, reason: 'api-error', status: null, error: 'authentication_failed', usage: {} } } as never
     return { value: { isAnswered: true, text: v, usage: {} } } as never
   })
   on('tool.register', ($, e) => {
@@ -1246,7 +1248,8 @@ test('a keep whose registry write fails still keeps the job, and Claude is told 
 // judged by Haiku, then Sonnet when Haiku gives no usable verdict, with no question to Dan; neither
 // able, the job is left running. Stopped by the traced process group, never by command text
 // (L1011). Dan sees one dim line afterwards.
-const HAIKU = 'claude-haiku-4-5-20251001'
+// #2550: the current Haiku, never a dated id that is retired out from under the watcher.
+const HAIKU = 'claude-haiku-5-5'
 const SONNET = 'claude-sonnet-5-5'
 const CURL = 'until curl -sf http://localhost:3000/health; do sleep 3; done'
 const REFUSED = Array.from({ length: 30 }, () => 'curl: (7) Failed to connect to localhost port 3000: Connection refused').join('\n') + '\n'
@@ -1364,6 +1367,75 @@ test('when neither model can judge, the job is left running and the line says so
   expect(w.kills).toEqual([])
   // The command names it, cut to keep the line to one line.
   expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
+})
+
+// #2550: a judge that gives no verdict was swallowed, so a retired first judge left every verdict
+// to the second with nothing saying so (L551). Each one is now said in the debug log, by model and
+// why, beside the watcher's other outcomes there, and Dan's line is unchanged.
+// A refused call's reason is the engine's own words (the test engine words a throwing hook as having
+// no implementation), so a refusal line is held to its shape and its model, not to those words.
+const refusedJudge = (model: string, end: string) =>
+  new RegExp(`^job-watcher: the leftover judge ${model.replace(/\./g, '\\.')} gave no verdict \\(the engine refused the call: \\S.*\\), ${end}$`)
+const judgeLines = (debug: string[]) => debug.filter(l => l.includes('leftover judge'))
+test('a first judge the engine refuses is said in the debug log, and the second decides (#2550)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'throws' : STOP('curl loop')),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
+  expect(w.kills).toEqual([['-TERM', '-501']])
+  expect(w.logs).toEqual(['Stopped 1 leftover job from a closed session (curl loop).'])
+  const lines = judgeLines(w.debug)
+  expect(lines).toHaveLength(1)
+  expect(lines[0] ?? '').toMatch(refusedJudge(HAIKU, 'so the next was asked'))
+})
+
+test('a first judge that answers nothing or nothing usable is said in the debug log (#2550)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, [{ tail: REFUSED, size: 9000 }, { tail: REFUSED, size: 9000 }], {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL), leftover(2, `${CURL} # second`)])] },
+    verdict: (model, prompt) => (model === SONNET ? KEEP_IT('curl loop') : prompt.includes('# second') ? 'I think you should probably stop it.' : 'none'),
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET, HAIKU, SONNET])
+  expect(judgeLines(w.debug)).toEqual([
+    `job-watcher: the leftover judge ${HAIKU} gave no verdict (no answer: api-error 529 overloaded), so the next was asked`,
+    `job-watcher: the leftover judge ${HAIKU} gave no verdict (its answer was not a usable verdict), so the next was asked`,
+  ])
+})
+
+test('a judge whose call never reached the API is said without a status (#2550)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: model => (model === HAIKU ? 'unauthenticated' : KEEP_IT('curl loop')),
+  })
+  await start($)
+  await judged(clock)
+  expect(judgeLines(w.debug)).toEqual([
+    `job-watcher: the leftover judge ${HAIKU} gave no verdict (no answer: api-error authentication_failed), so the next was asked`,
+  ])
+})
+
+test('when both judges are refused, each is said in the debug log and the job is left running (#2550)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 60 * MIN })
+  const w = world(on, { tail: REFUSED, size: 9000 }, {
+    sessions: { closed: [closedRec('old', [leftover(1, CURL)])] },
+    verdict: () => 'throws',
+  })
+  await start($)
+  await judged(clock)
+  expect(w.asked.map(a => a.model)).toEqual([HAIKU, SONNET])
+  expect(w.kills).toEqual([])
+  expect(w.logs).toEqual(['1 leftover job not judged, left running (until curl -sf http://localhost:3000/...).'])
+  const lines = judgeLines(w.debug)
+  expect(lines).toHaveLength(2)
+  expect(lines[0] ?? '').toMatch(refusedJudge(HAIKU, 'so the next was asked'))
+  expect(lines[1] ?? '').toMatch(refusedJudge(SONNET, 'and no judge is left'))
 })
 
 test('a stop that fails is said, and the job is not counted as stopped', withDeps, async ($, on) => {
