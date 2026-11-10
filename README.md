@@ -1803,7 +1803,14 @@ included) as above, and never updates the same head twice; four minutes after th
 nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
 repository's settings, merges by the one method they allow, and when they allow more (claude-config
 and a work repository allow all three) stops at once naming them rather than at the merge after the wait.
-It does not guess squash from history, which GitHub does not record a method for. While it waits it
+It does not guess squash from history, which GitHub does not record a method for. It merges as an
+account that can merge, not the first that could read the pull request: at its first look it asks
+GitHub the permission (`viewerPermission`) of the account that read it, and when that is below
+WRITE asks each other account gh is signed in to, with a token scoped to each call and never
+`gh auth switch`. Every write in the run is made as the first with WRITE, MAINTAIN or ADMIN, and it
+says which and why; when none can, it stops before any update or wait, naming each account and its
+permission. On 2026-11-10 a read only active account waited 7m 30s and was then refused at the merge
+(claude-config#2629). While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
 one can be told apart (claude-config#1476). Its looks follow the one polling policy,
 `hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
@@ -5401,6 +5408,15 @@ but not running, and the clone itself being behind (with when it last received) 
 repo but not applied here (what a pull that stops before its apply leaves). The causes are read from
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
+
+A file status could not compare is said on its own, whatever the window, under `mods not compared
+with the shared repo`, one line per file naming the step that failed and its exit status: hashing
+it, putting the home path placeholder back, hashing it with the placeholder put back, or reading
+when the shared repo added it, changed it or removed it (#2673). Such a file is counted neither as
+behind nor as this Mac's own work, and status exits as it would otherwise. Before this, every one
+of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
+and read as unsent work here, dropping out of the lag line with nothing said; one failed
+placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
 
 <table>
 <thead>
