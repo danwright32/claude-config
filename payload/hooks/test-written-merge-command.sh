@@ -108,6 +108,7 @@ case "$out" in *"ok doc.md:1"*) check "a command naming a method, from a checkou
 case "$out" in *"bad doc.md:2: names no merge method"*) check "a command naming no method fails" ok ;; *) check "a command naming no method fails" "$out" ;; esac
 case "$out" in *"bad doc.md:3: does not say it runs from a checkout"*) check "a command whose item never says checkout fails, though the next item does" ok ;; *) check "a command whose item never says checkout fails, though the next item does" "$out" ;; esac
 case "$out" in *"bad doc.md:4: passes --admin, which the usage line"*) check "a flag the usage line does not offer fails" ok ;; *) check "a flag the usage line does not offer fails" "$out" ;; esac
+case "$out" in *"ok doc.md:7"*) check "a command wrapped across a paragraph's lines, with --log=, is read as one and passes" ok ;; *) check "a command wrapped across a paragraph's lines, with --log=, is read as one and passes" "$out" ;; esac
 printf 'Nothing here.\n' > "$T/empty.md"
 out="$(printf 'empty.md\n' | judge "$T" "$HELPER")"
 [ "$out" = "none" ] && check "a document with no command is reported as none, not as passing" ok || check "a document with no command is reported as none, not as passing" "$out"
