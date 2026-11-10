@@ -33,8 +33,22 @@ export const SOURCE = 'slack-alert-guard'
 export const HEADER = 'Slack alert'
 export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
-/** How long the search for a file that sends a template may take, every git call and read in it. */
-export const SCAN_MS = 3000
+/**
+ * How long the search for a file that sends a template may take, every git call and read in it.
+ * Claude Code kills a hook that runs past HookBudget.ms, 10 s (tools/typescript/claude-code-types/
+ * claude-code/index.d.ts), so 7 s leaves 3 s to build and return the refusal. The 3 s this replaced
+ * ran out on a work repository's 185 reads even at load 6.4 (#2510).
+ */
+export const SCAN_MS = 7000
+/**
+ * The most files the search reads for one template before it holds the call for Dan, naming no
+ * sender since it could not tell which file sends it (#2364). Sized from the largest real searches
+ * (#2510): NurseDex, the largest repository on the personal MacBook the search walks (1,061
+ * JavaScript, TypeScript and python files), reads 213 files for its widely imported utils.ts, in
+ * 1.65 to 1.70 s at load 27, about 8 ms a file; a work repository's two copy files read 185. 500
+ * leaves more than twice the largest, and at 8 ms a file still ends well inside SCAN_MS.
+ */
+export const MOST_READ = 500
 /** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
 export const REEXPORT_HOPS = 3
 /**
@@ -126,13 +140,15 @@ export const MARKER_PREFILTER = [
 
 /**
  * Whether a path, relative to its repository's root, is a test: a .test. or .spec. file, a _test or
- * _spec one, a python test_ module, a test- shell suite, or anything in a test or mock folder. A test
- * never posts to Slack, so its titles and fixtures are never message text (#2290).
+ * _spec one, a python test_ module, a test- shell suite or node test script (test-*.ts and its
+ * JavaScript and TSX forms, #2509, as a work repository runs its tests), or anything in a test or
+ * mock folder. A test never posts to Slack, so its titles and fixtures are never message text
+ * (#2290), and it is never a sender.
  */
 export const testFile = (rel: string): boolean => {
   const segs = rel.split('/')
   const name = segs[segs.length - 1] ?? ''
-  if (/\.(test|spec)\.[^/]+$/.test(name) || /_(test|spec)\.[^/.]+$/.test(name) || /^test_[^/]*\.py$/.test(name) || /^test-[^/]*\.(sh|bash|zsh)$/.test(name)) return true
+  if (/\.(test|spec)\.[^/]+$/.test(name) || /_(test|spec)\.[^/.]+$/.test(name) || /^test_[^/]*\.py$/.test(name) || /^test-[^/]*\.(sh|bash|zsh|[cm]?[jt]sx?)$/.test(name)) return true
   return segs.slice(0, -1).some(s => TEST_DIRS.has(s))
 }
 const TEST_DIRS = new Set(['__tests__', '__mocks__', '__fixtures__', 'test', 'tests', 'spec', 'specs', 'e2e'])
@@ -597,12 +613,9 @@ const SCRIPT_LIST_KEY = /^(script|before_script|after_script|after-script)$/
 // The script lists that run in a shell of their own, apart from the job's other lists (#2416).
 const AFTER_KEY = /^after[-_]script$/
 
-/** A YAML scalar as the shell receives it: a quoted one with its quoting undone, a plain one as written. */
-const yamlScalar = (s: string): string => {
-  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'")
-  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c === 't' ? '\t' : c))
-  return s
-}
+// A YAML scalar as the shell receives it, and a flow list's items, read by mod-kit's one reader of
+// quoted strings that are not shell (#2467).
+import { yamlFlowList, yamlScalar } from './mod-kit/quoted.ts'
 
 /**
  * The commands of a YAML list opening on the line after a key at `indent` (a GitLab `script:` list),
@@ -643,42 +656,10 @@ const listCommands = (lines: string[], from: number, indent: number): string[] =
 
 /**
  * The commands of a YAML flow list (`script: ["a", "b"]`) opening in `raw` on line `from`, read on
- * over the lines after it until the list closes: each item with its quoting undone (#2416). A quote
- * opens only at an item's start, as YAML reads one, so `echo don't` is a plain item. This reads
- * YAML's commas, brackets and quoting, not a shell command's, so mod-kit's command reader
- * ($.modkit.commands) is no use here: it glues a flow list's brackets and commas onto its words.
+ * over the lines after it until the list closes: each item with its quoting undone (#2416), read by
+ * mod-kit's yamlFlowList (#2467).
  */
-export const flowCommands = (lines: string[], from: number, raw: string): string[] => {
-  const text = [raw, ...lines.slice(from + 1)].join('\n')
-  const items: string[] = []
-  let cur = ''
-  let depth = 0
-  const read = () => [...items, cur].map(s => yamlScalar(s.trim())).filter(Boolean)
-  FLOW_TOKEN.lastIndex = 0
-  for (let m = FLOW_TOKEN.exec(text); m; m = FLOW_TOKEN.exec(text)) {
-    let t = m[0]
-    // A scalar's quote counts only at an item's start, and a comment's hash only after a space.
-    if ((/^["']/.test(t) && cur.trim()) || (t.startsWith('#') && !/\s/.test(text[m.index - 1] ?? ' '))) {
-      t = t.slice(0, 1)
-      FLOW_TOKEN.lastIndex = m.index + 1
-    } else if (t.startsWith('#')) continue
-    if (t === '[' || t === '{') {
-      if (++depth > 1) cur += t
-    } else if (t === ']' || t === '}') {
-      if (--depth === 0) return read()
-      cur += t
-    } else if (t === ',' && depth === 1) {
-      items.push(cur)
-      cur = ''
-    } else cur += t.replace(/\n/g, ' ')
-  }
-  return read()
-}
-
-// The pieces of a YAML flow list, in the file's token idiom (HASH_TOKENS): a quoted scalar read whole
-// with its escapes (\" in double quotes, '' in single), a comment, a bracket, brace or comma, a line
-// break, or a run of anything else.
-const FLOW_TOKEN = /"(?:\\[\s\S]|[^"\\])*"?|'(?:''|[^'])*'?|#[^\n]*|[[\]{},]|\n|[^[\]{},"'#\n]+/y
+export const flowCommands = (lines: string[], from: number, raw: string): string[] => yamlFlowList([raw, ...lines.slice(from + 1)].join('\n'))
 
 /**
  * The line that opens the mapping a key at line `i` and column `column` sits in: the key's own line

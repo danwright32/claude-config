@@ -2839,7 +2839,7 @@ class Judge:
         handed = re.compile(given)
         try:
             records = self.sw.every_command(body, d)
-        except Exception:
+        except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573, #2593)
             return "could not be read as commands to see what it does with its arguments"
         flow = self.sh_flow(body, d, records)
         piped = set()  # the commands a pipe feeds what the script was handed (their index in records)

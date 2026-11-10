@@ -16,6 +16,7 @@ payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-written-lib-list.sh
 payload/hooks/test-hand-rolled-wait.sh
 payload/hooks/test-heredoc-in-substitution.sh
+payload/hooks/test-lib-bytecode-importers.sh
 payload/hooks/test-lib-self-locate.sh
 payload/hooks/test-pipefail-shortcircuit.sh
 payload/hooks/test-push-changes.sh
@@ -25,6 +26,7 @@ payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
+payload/hooks/test-this-mac.sh
 payload/hooks/test-two-file-awk.sh
 payload/hooks/test-unwaited-children.sh
 payload/hooks/test-whole-number.sh

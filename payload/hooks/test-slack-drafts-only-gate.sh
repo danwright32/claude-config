@@ -1608,6 +1608,47 @@ allowed "a script the reader cannot read as commands, naming no endpoint, still 
 run_crash "" "bash $T/crash/posts/odd.sh"
 refused "a script the reader cannot read as commands, naming an endpoint, is still refused"
 says "and that refusal says it could not be read as commands" "could not be read as commands"
+# A shell script handed a data file is read once more, for what it does with its arguments
+# (shell_acts), and that reading kept the broad handler (claude-config#2593): a fault in the gate's
+# own walk there was reported as a script that could not be read as commands, which claims a post
+# and names the wrong cause. The reader is made to fail only where shell_acts asks it (ACTS_RAISES
+# names what it raises), over a script that never touches the file it is handed, which names an
+# endpoint.
+cat > "$T/crash/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("gate", os.environ["CRASH_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real_load = gate.load_reader
+def load():
+    sw = real_load()
+    real = sw.every_command
+    def every_command(s, *a, **k):
+        kind = os.environ.get("ACTS_RAISES", "")
+        if kind and sys._getframe(1).f_code.co_name == "shell_acts":
+            raise {"fault": AttributeError("a fault"), "unreadable": sw.Unreadable(),
+                   "late": gate.OutOfTime("judging what a script does with its arguments")}[kind]
+        return real(s, *a, **k)
+    sw.every_command = every_command
+    return sw
+gate.load_reader = load
+gate.main()
+PY
+printf '%s\n' '#!/bin/bash' 'echo hi' > "$T/crash/quiet/ignores.sh"
+run_crash "" "bash $T/crash/quiet/ignores.sh $T/ds/msg.json"
+allowed "with no fault, a script that ignores the data file it is handed passes"
+ACTS_RAISES=fault run_crash "" "bash $T/crash/quiet/ignores.sh $T/ds/msg.json"
+refused "a crash while reading what a shell script does with its arguments is refused"
+says "and says the gate could not judge the call" "could not judge this call"
+lacks "and does not claim the command posts" "posts to Slack:"
+lacks "and does not say the script could not be read" "could not be read as commands"
+ACTS_RAISES=unreadable run_crash "" "bash $T/crash/quiet/ignores.sh $T/ds/msg.json"
+refused "a script the reader cannot read for what it does with its arguments is still refused"
+says "and that refusal says it could not be read as commands" "could not be read as commands to see what it does"
+ACTS_RAISES=late run_crash "" "bash $T/crash/quiet/ignores.sh $T/ds/msg.json"
+refused "the budget running out while reading what a script does with its arguments is refused"
+says "and says the gate ran out of time" "ran out of time judging this call"
+lacks "and does not say the script could not be read" "could not be read as commands"
 # The same rule where the gate asks the reader for a text's commands (the line being judged, the
 # walk of its variables, the names a sourced file binds): the reader saying it cannot read the text
 # gives what it gave (nothing known, every name bound, no command's place), and any other error

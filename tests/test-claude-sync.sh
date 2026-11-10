@@ -2934,6 +2934,8 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The retired record (claude-config#2545): present, every locked command here would refuse.
+export SYNC_RETIRED_FILE="$WORK/retired-guard"
 # The sync log a held back hooks block is appended to (claude-config#592), whose default is the
 # log the scheduled and watch jobs write to in the home folder.
 export SYNC_LOG_FILE="$WORK/sync-log-guard"
@@ -3328,7 +3330,9 @@ CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
 CR2="$WORK/cr2"; git clone -q "$CBARE" "$CR2"; CC2="$WORK/cc2"; mkdir -p "$CC2/hooks"
 echo '{"hooks":{}}' > "$CC2/settings.json"
 # both sides change the same tracked file differently, without pulling
-echo TWO_a > "$CC1/hooks/h.sh"; CLAUDE_HOME="$CC1" SYNC_REPO="$CR1" bash "$SCRIPT" sync >/dev/null 2>&1
+# The first Mac's side lands through fixture_land rather than a sync of its own (claude-config#2614):
+# it never runs claude-sync again, and the run under test is the second Mac's.
+echo TWO_a > "$CC1/hooks/h.sh"; fixture_land "$CR1" hooks/h.sh "$CC1/hooks/h.sh"
 echo TWO_b > "$CC2/hooks/h.sh"
 SYNC_NOTIFIER="$NOTIFIER" SYNC_NO_NOTIFY=0 CLAUDE_HOME="$CC2" SYNC_REPO="$CR2" bash "$SCRIPT" sync >/dev/null 2>&1
 check "conflict fired a notification"  "[ -s '$REC' ]"
@@ -7925,6 +7929,9 @@ _snap_setup(){   # $1 = prefix  $2 = snapshot body  $3 = what the shared tip get
 }
 
 # ---- the redundant snapshot: both sides appended at the same spot, and the tip is the superset ----
+# The local day before the drop below runs, so the #365 check can bracket the day the drop records
+# without reading the clock again at check time (#2091).
+SN1_DAY_BEFORE="$(date +%Y%m%d)"
 _snap_setup sn1 \
   "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
 L449'" \
@@ -8155,8 +8162,15 @@ out_dr="$(CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOT
 dbg "#365 status over a clone holding a parked drop: $out_dr"
 check "#365 status names the commits a drop parked in this clone" \
   "line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'parked'"
+# The day status must print is the one the drop wrote into the ref's name, which is what status
+# reads. Comparing with `date` at check time failed whenever local midnight fell between the drop
+# and this check (2026-11-05, and 3 of 3 runs with midnight moved 30s into the section, #2091), so
+# the day comes from the ref, and is bracketed by the day before the drop and the day now (L713).
+_dr_ref="$(git -C "$SN1R" for-each-ref --count=1 --format='%(refname)' refs/claude-sync/dropped 2>/dev/null)"
+_dr_ymd="${_dr_ref##*/}"; _dr_ymd="${_dr_ymd%%-*}"
+_dr_day="${_dr_ymd:0:4}-${_dr_ymd:4:2}-${_dr_ymd:6:2}"
 check "#365 and says when, so an old one can be told from a recent one" \
-  "line_has \"\$out_dr\" 'refs/claude-sync/dropped' \"\$(date +%Y-%m-%d)\""
+  "[[ \"\$_dr_ymd\" =~ ^[0-9]{8}\$ ]] && [ \"\$_dr_ymd\" -ge '$SN1_DAY_BEFORE' ] && [ \"\$_dr_ymd\" -le \"\$(date +%Y%m%d)\" ] && line_has \"\$out_dr\" 'refs/claude-sync/dropped' \"dropped \$_dr_day \""
 check "#365 and says how to read one back" \
   "grep -q 'git -C' <<< \"\$out_dr\" && line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'log'"
 
@@ -8170,7 +8184,10 @@ check "#365 a clone holding no parked commits says so rather than going quiet" \
 # happened. Nothing here waits for time to pass (L290).
 DRKEEP=30
 git -C "$SN1R" update-ref "refs/claude-sync/dropped/19990101-120000-1" "$SN1_HEAD_BEFORE" 2>/dev/null
-git -C "$SN1R" update-ref "refs/claude-sync/dropped/$(date +%Y%m%d)-120000-2" "$SN1_HEAD_BEFORE" 2>/dev/null
+# Its day is read ONCE and named again below, never by a second `date`, which names a ref nothing
+# wrote when local midnight falls between the two (#2091).
+DR_RECENT="refs/claude-sync/dropped/$(date +%Y%m%d)-120000-2"
+git -C "$SN1R" update-ref "$DR_RECENT" "$SN1_HEAD_BEFORE" 2>/dev/null
 # A name nothing can read is a reason to KEEP: this is the only copy of somebody's work and a
 # guess in the deleting direction cannot be taken back (L5).
 git -C "$SN1R" update-ref "refs/claude-sync/dropped/not-a-date-at-all" "$SN1_HEAD_BEFORE" 2>/dev/null
@@ -8183,7 +8200,7 @@ check "#365 a parked ref past the window is removed" \
 check "#365 and the removal is said, not done in silence" \
   "line_has \"\$out_drs\" 'removed' 'parked' '19990101-120000-1'"
 check "#365 a recent one is kept" \
-  "git -C '$SN1R' rev-parse --verify -q \"refs/claude-sync/dropped/\$(date +%Y%m%d)-120000-2\" >/dev/null 2>&1"
+  "git -C '$SN1R' rev-parse --verify -q '$DR_RECENT' >/dev/null 2>&1"
 check "#365 and one whose stamp cannot be read is kept rather than guessed at" \
   "git -C '$SN1R' rev-parse --verify -q refs/claude-sync/dropped/not-a-date-at-all >/dev/null 2>&1"
 # A run that removed nothing must not read like one that removed ten (L98).
@@ -13099,7 +13116,8 @@ echo '{"skills":[]}' > "$PSK2/skills/synced/bucket-2/manifest.json"
 : > "$PSK2/skills/synced/.bucket-2"
 mkskill "$PSK2/skills/synced/bucket-2/pdf/SKILL.md" 'the other Mac platform skill'
 echo 'other-v2' > "$PSAH/hooks/other.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSAH" SYNC_REPO="$PSA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac A's last publish lands through fixture_land, not a sync of its own (claude-config#2614).
+fixture_land "$PSA" hooks/other.sh "$PSAH/hooks/other.sh"
 out_psk_pull="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$PSK2" SYNC_REPO="$PSB" bash "$SCRIPT" pull 2>&1 || true)"
 dbg "pull: $out_psk_pull"
 check "the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$PSK2/hooks/other.sh'"
@@ -13367,7 +13385,8 @@ SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull >/dev/
 mkdir -p "$UPBH/skills/halfbuilt"; echo 'draft notes' > "$UPBH/skills/halfbuilt/notes.md"
 echo 'MY-LOCAL-FIX' > "$UPBH/skills/shared/run.py"
 echo 'other-v2' > "$UPAH/hooks/other.sh"
-SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPAH" SYNC_REPO="$UPA" bash "$SCRIPT" sync >/dev/null 2>&1
+# Mac A's last publish lands through fixture_land, not a sync of its own (claude-config#2614).
+fixture_land "$UPA" hooks/other.sh "$UPAH/hooks/other.sh"
 out_up="$(SYNC_NO_NOTIFY=1 CLAUDE_HOME="$UPBH" SYNC_REPO="$UPB" bash "$SCRIPT" pull 2>&1 || true)"
 dbg "pull with an unloadable local skill: $out_up"
 check "#388 the unrelated change reaches Mac B (the pull really applied)" "grep -q other-v2 '$UPBH/hooks/other.sh'"
@@ -14154,7 +14173,9 @@ check "#81 and that pull says so"  "line_has \"\$out_dvok\" 'Pulled shared confi
 # files on each side, so there is no content clash anywhere: the ONLY reason git refuses is that
 # --ff-only cannot fast-forward, which is exactly the case that used to report success.
 mkskill "$DVHA/skills/dvlater/SKILL.md" 'DIVERGE-LATER'
-CLAUDE_HOME="$DVHA" SYNC_REPO="$DVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# Through fixture_land, not a sync of the other Mac's own (claude-config#2614): it never runs
+# claude-sync again, and every run under test is this Mac's.
+fixture_land "$DVRA" skills/dvlater/SKILL.md "$DVHA/skills/dvlater/SKILL.md"
 mkdir -p "$DVRB/payload/agents"
 printf 'an agent this Mac wrote and never sent\n' > "$DVRB/payload/agents/dvlocal.md"
 git -C "$DVRB" add -A -- payload
@@ -15488,7 +15509,9 @@ CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev
 # everything this one has and the conflict resolves itself.
 printf 'alpha\nbravo\nonly-here-for-now\n' > "$RVHB/hooks/rv-file.sh"
 printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\n' > "$RVHA/hooks/rv-file.sh"
-CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+# The other Mac's two later publishes land through fixture_land, not syncs of its own
+# (claude-config#2614): between them this Mac only pulls, so nothing reaches the branch but them.
+fixture_land "$RVRA" hooks/rv-file.sh "$RVHA/hooks/rv-file.sh"
 out_rv="$(CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull 2>&1)"
 dbg "pull resolving a contained conflict: $out_rv"
 check "#183 the arriving version really was taken" "grep -q 'and-theirs' '$RVHB/hooks/rv-file.sh'"
@@ -15512,7 +15535,7 @@ _rv_new="$RVRB/.resolved/rv-new-copy"
 printf 'old\n' > "$_rv_old"; printf 'new\n' > "$_rv_new"
 touch -t "$(date -v-30d +%Y%m%d%H%M)" "$_rv_old" 2>/dev/null || touch -d '30 days ago' "$_rv_old"
 printf 'alpha\nbravo\nonly-here-for-now\nand-theirs\nlater\n' > "$RVHA/hooks/rv-file.sh"
-CLAUDE_HOME="$RVHA" SYNC_REPO="$RVRA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/dev/null 2>&1
+fixture_land "$RVRA" hooks/rv-file.sh "$RVHA/hooks/rv-file.sh"
 CLAUDE_HOME="$RVHB" SYNC_REPO="$RVRB" SYNC_NO_NOTIFY=1 bash "$SCRIPT" pull >/dev/null 2>&1
 check "#183 a copy past its age is swept"      "[ ! -f '$_rv_old' ]"
 check "#183 and a recent one is left alone"    "[ -f '$_rv_new' ]"
@@ -20651,13 +20674,15 @@ check "#473 the union after the rename is still every lesson exactly once" \
 # entry by the pull, so the rebase now merges them too, and this check is about a file nothing settles.
 DRHC="$WORK/derived-homeC"; DRRC="$WORK/derived-repoC"
 mkdir -p "$DRHA/hooks"; printf '#!/bin/sh\necho base\n' > "$DRHA/hooks/dr-hook.sh"
-drsync "$DRHA" "$DRA" >/dev/null 2>&1
+# A's two hook publishes land through fixture_land, not syncs of A's own (claude-config#2614): A never
+# runs claude-sync again, and the run under test is C's.
+fixture_land "$DRA" hooks/dr-hook.sh "$DRHA/hooks/dr-hook.sh"
 git clone -q "$DRB" "$DRRC" 2>/dev/null
 mkdir -p "$DRHC"; echo '{"hooks":{}}' > "$DRHC/settings.json"
 env SYNC_DERIVED_MERGE_RULE=0 CLAUDE_HOME="$DRHC" SYNC_REPO="$DRRC" SYNC_NO_NOTIFY=1 \
   bash "$SCRIPT" pull >/dev/null 2>&1
 printf '#!/bin/sh\necho A side says this\n' > "$DRHA/hooks/dr-hook.sh"
-drsync "$DRHA" "$DRA" >/dev/null 2>&1
+fixture_land "$DRA" hooks/dr-hook.sh "$DRHA/hooks/dr-hook.sh"
 printf '#!/bin/sh\necho C side says something else entirely\n' > "$DRHC/hooks/dr-hook.sh"
 out_drc="$(drsync "$DRHC" "$DRRC")"; drc_rc=$?
 dbg "#282 a real content conflict said: $out_drc"
@@ -20826,7 +20851,8 @@ EMRE="$WORK/entrymerge-repoE"; git clone -q "$EMB" "$EMRE" 2>/dev/null
 EMHE="$WORK/entrymerge-homeE"; mkdir -p "$EMHE"; echo '{"hooks":{}}' > "$EMHE/settings.json"
 emrun "$EMHE" "$EMRE" pull >/dev/null
 printf -- '- rule from Mac A\n@EMNEW.md\n' >> "$EMHA/CLAUDE.md"; printf '# new\n- written on Mac A\n' > "$EMHA/EMNEW.md"
-emrun "$EMHA" "$EMRA" sync >/dev/null
+# A's last publish, so it lands through fixture_land rather than a sync of A's own (claude-config#2614).
+fixture_land "$EMRA" CLAUDE.md "$EMHA/CLAUDE.md" EMNEW.md "$EMHA/EMNEW.md"
 cp "$EMHA/CLAUDE.md" "$EMHE/CLAUDE.md"; printf '# new\n- written on Mac E\n' > "$EMHE/EMNEW.md"
 git -C "$EMRE" remote set-url origin "$WORK/entrymerge-unreachable.git"
 emrun "$EMHE" "$EMRE" sync >/dev/null

@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, MARKER_PREFILTER, PATHSPEC_BYTES, REEXPORT_HOPS, SCAN_MS, SENDER_PREFILTER, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, MARKER_PREFILTER, MOST_READ, PATHSPEC_BYTES, REEXPORT_HOPS, SCAN_MS, SENDER_PREFILTER, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -483,6 +483,25 @@ const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.
 const ROUTE = '/w/app/src/app/api/cron/route.ts'
 const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
 
+test('a node test script importing a copy builder and its Slack send helper is not a sender, so the copy passes; a route that does the same is (#2509)', withKit, async ($, on) => {
+  const NODE_TEST = '/w/app/scripts/test-outage-copy.ts'
+  const w = world($, on, {
+    files: {
+      [COPY]: COPY_TEXT,
+      [POST]: POST_TEXT,
+      [NODE_TEST]: "import { lateBooking } from '../src/lib/notify/outage-copy'\nimport { postAlert } from '../src/lib/notify/post'\nassert.equal(lateBooking('1'), 'Booking 1 is late')\nvoid postAlert\n",
+    },
+  })
+  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same imports in a route make it the sender, so the guard is still deciding.
+  w.files[ROUTE] = ROUTE_TEXT
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(`which ${ROUTE} sends to Slack`)
+  expect(why).not.toContain(NODE_TEST)
+})
+
 test('a copy builder whose text a route posts through a Slack send helper is held, naming the route as its sender', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
   const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
@@ -527,7 +546,7 @@ test('more files could send a template than the guard reads: the edit is held wi
   const many: Record<string, string> = {}
   // Each names the template as an import does, and names a Slack webhook only in a comment, which git
   // cannot tell from code, so each must be read (#2371).
-  for (let i = 0; i < 201; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// deploy news went to hooks.slack.com\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
+  for (let i = 0; i <= MOST_READ; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// deploy news went to hooks.slack.com\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
   const w = world($, on, { files: { ...sent.files, ...many } })
   const why = refusalOf(await call($, RETEMPLATE))
   expect(why).not.toContain('could not check')
@@ -583,8 +602,8 @@ test('a write to a file with a common short name (et.ts, memory.ts) is judged by
       [CLOCK]: "import { nowEt } from '@/lib/et'\nimport { remember } from '@/lib/memory'\nimport { db } from '@/lib/db'\nexport default function Clock() { return nowEt() }\n",
     },
   })
-  // Reading and checking 120 files takes the whole 3 seconds.
-  w.ctl.readMs = 25
+  // Reading and checking 120 files takes the whole search budget.
+  w.ctl.readMs = Math.ceil(SCAN_MS / 120)
   for (const file of [ET, MEMORY]) {
     const before = w.reads()
     expect(refusalOf(await call($, relabel(file)))).toBe('')
@@ -1271,8 +1290,42 @@ test('a module imported by many files is searched within the limit, and the file
   for (const r of regexes) expect([SENDER_PREFILTER, MARKER_PREFILTER]).toContain(r)
 })
 
-test('a module imported by more files than the guard reads is held for Dan, never let through, and never as could not check', withKit, async ($, on) => {
+// Sized from real searches (#2510): on this Mac the largest repository the search walks (NurseDex,
+// 1,061 JavaScript, TypeScript and python files) needed 213 reads for its widely imported utils.ts,
+// taking 1.65 to 1.70 s at load 27 (about 8 ms a file, git included); a work repository's two copy
+// files needed 185 reads in 1.8 to 2.1 s at load 33, and ran past the 3 s budget then in force even
+// at load 6.4. widelyImported(n) reads n importers, 10 barrels and 60 routes.
+test('a module whose search reads as many files as the largest real one gets a verdict naming its sender, at the cost measured per file (#2510)', withKit, async ($, on) => {
   const w = world($, on, { files: widelyImported(150) })
+  w.ctl.regexMsPerKb = 0.09
+  w.ctl.readMs = 8
+  const why = refusalOf(await call($, REHTTP))
+  expect(w.reads()).toBeGreaterThan(213)
+  expect(why).not.toContain('could not check')
+  expect(why).toContain(`which ${POSTER} sends to Slack`)
+})
+
+test("the work repository's 185 reads, at the per file cost that ran past the old budget on a quiet Mac, still get a verdict (#2510)", withKit, async ($, on) => {
+  const w = world($, on, { files: widelyImported(115) })
+  w.ctl.regexMsPerKb = 0.09
+  // 20 ms a file: 185 files come to 3.7 s, past the 3 s budget the work repository ran out of.
+  w.ctl.readMs = 20
+  const why = refusalOf(await call($, REHTTP))
+  expect(w.reads()).toBeGreaterThanOrEqual(185)
+  expect(why).not.toContain('could not check')
+  expect(why).toContain(`which ${POSTER} sends to Slack`)
+})
+
+test('the search leaves the hook time to refuse: its budget sits well inside the 10 s Claude Code gives a hook (#2510)', () => {
+  // HookBudget.ms in the pinned Claude Code types: a hook running past it is killed.
+  const HOOK_MS = 10_000
+  expect(SCAN_MS).toBeGreaterThan(3000)
+  expect(SCAN_MS).toBeLessThanOrEqual(HOOK_MS - 2500)
+})
+
+test('a module imported by more files than the guard reads is held for Dan, never let through, and never as could not check', withKit, async ($, on) => {
+  // 70 more reads than importers (10 barrels and 60 routes), so this reads MOST_READ + 10.
+  const w = world($, on, { files: widelyImported(MOST_READ - 60) })
   w.ctl.regexMsPerKb = 0.09
   const why = refusalOf(await call($, REHTTP))
   expect(why).not.toContain('could not check')
@@ -1528,7 +1581,9 @@ test('a search that runs late after finding a sender that sends none of the chan
   expect(w.ran.length).toBe(1)
   // Each read taking most of the deadline, the search stops at the barrel's importers with only the
   // nearest sender in hand, so the change is held as before rather than let through unsearched.
-  w.ctl.readMs = 1600
+  // Sized from SCAN_MS (8/15 of it, which was 1600 ms at 3 s), so the two reads after the deadline is
+  // set still overrun it whatever the deadline is: a fixed 1600 let the search finish once it was 7 s.
+  w.ctl.readMs = Math.ceil(SCAN_MS * 8 / 15)
   const held = refusalOf(await call($, edit))
   expect(held).toContain('No booking has that id yet')
   expect(held).toContain(`which ${LATE} sends to Slack`)

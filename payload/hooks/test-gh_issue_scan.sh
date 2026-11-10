@@ -433,7 +433,7 @@ FB_OVER_READ=(
 # With no reader every shape above is unreadable, naming the reader, whatever it holds; the empty
 # command alone is nothing to read.
 no_reader() { # no_reader <dir> <shape>... -> one line per shape: MISSING, NONE, or what it read
-  python3 - "$1/gh_issue_scan.py" "${@:2}" <<'PY'
+  python3 -B - "$1/gh_issue_scan.py" "${@:2}" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("scan_no_reader", sys.argv[1])
 m = importlib.util.module_from_spec(spec)

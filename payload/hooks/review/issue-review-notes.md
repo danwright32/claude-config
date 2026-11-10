@@ -33,6 +33,7 @@ could never open a milestone was reversed on 2026-09-02 after Ungrouped held 98 
 needs two or more issues at once, because a one issue milestone is a label with extra steps, and
 inventing one to satisfy the gate produced six essay titled milestones on 2026-07-30.
 `ensure-milestone.sh` enforces the count (`--for-issues`, exit 10 on a count of 1) and the title shape.
+A planned feature's milestone comes from plan-council, plan-lite or /milestone, never from this review.
 
 ## READ THE TITLES
 The candidate score ranks a shortlist and rules on nothing. Word counting claimed a cluster that was
@@ -63,7 +64,16 @@ calling session's records; other sessions' findings are marked seen and stay pen
 
 ## Folding in the reflection
 When both Stop hooks fire on one turn, two banners and two pickers crowded each other, so the
-reflection's points go into this review's second pass and one picker.
+reflection's points go into this review's second pass and one picker. A findings file the pointer
+names holds what subagents noticed, which the session cannot rediscover, hence the sweep reads it.
+
+## The Goal accomplished box, as the last step
+The reflection's last line asks for the Goal accomplished box (session-reflection-notes.md), and it
+was placed after the reflection's EXCEPTION so a folded reflection would still ask. It did not: on
+2026-11-09 both hooks fired, the session wrote that turn from this file, whose second pass folds in
+the reflection's points and said nothing of the box, and no box showed until Dan asked
+(claude-config#2523). So this review carries the same request as its own last step, after the clear.
+That is still only a prompt (L27); a check in the goal box mod itself is #2523's second half.
 
 ## The Open questions section
 Every issue body ends with a "## Open questions" section (claude-config#1279, Dan 2026-10-17): one "- [ ]"
