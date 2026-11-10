@@ -913,6 +913,81 @@ test('a loop handing a script quoted search terms runs; one whose words cannot b
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$t', decision: 'held' })
 })
 
+// #2619: writes a script makes through text mod-kit's reader gives no write for. Each of these, read
+// through the real reader on 2026-11-10, came back as a script writing nothing, so the folder it was
+// handed went unjudged and the command ran. Each is a write that cannot be followed, so the folder
+// stays held for the files under it (fail closed).
+const sed = `sed -i '' 's/a/b/' "$1"/*.ts`
+const UNREAD_WRITES: [string, string][] = [
+  ['runs text it builds through eval', 'eval "$FIX"\n'],
+  ['runs text it builds through eval named as a builtin', 'builtin eval "$FIX"\n'],
+  ['runs text it builds through bash -c', 'bash -c "$FIX"\n'],
+  ['pipes text it builds into bash', 'echo "$FIX" | bash\n'],
+  ['runs a program named by a value', '"$TOOL" --write "$1"\n'],
+  ['runs a program named by a value inside an if', 'if "$TOOL" --write "$1"; then echo ok; fi\n'],
+  ['runs a program named by what a command prints', '$(command -v fixer) "$1"\n'],
+  ['runs the arguments it is handed as a command', '"$@"\n'],
+  ['runs a program named by a value in two subshells', '( ( "$TOOL" --write "$1" ); ( echo done ) )\n'],
+  ['writes from a trap', 'trap \'echo x > "$1/big.ts"\' EXIT\n'],
+  ['edits from a trap', `trap '${sed.replace(/'/g, '"')}' EXIT\n`],
+  ['edits from a trap set after --', `trap -- '${sed.replace(/'/g, '"')}' EXIT INT\n`],
+  ['runs text it builds from a trap', 'trap \'eval "$FIX"\' EXIT\n'],
+  ['sets a writing trap from a trap', 'trap \'trap "echo x > $1/big.ts" EXIT\' INT\n'],
+  ['writes through an alias', `alias fix="sed -i '' 's/a/b/'"\nfix "$1"/*.ts\n`],
+  ['writes in a function defined on one line', `w(){ ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line, spaced', `w() { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line with the function word', `function w { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line with the function word and parentheses', `function w() { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line whose body is a subshell', `w()( ${sed} )\nw "$1"\n`],
+  ['writes in a function defined on one line inside an if', `if true; then w(){ ${sed}; }; fi\nw "$1"\n`],
+]
+
+test('a script whose write goes through eval, bash -c, a program named by a value, a trap, an alias or a one line function is held for the files under the folder (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text]] of UNREAD_WRITES.entries()) {
+    w.files[`${APP}/check.sh`] = text
+    const r = await bash($ as never, w, 'bash check.sh src/', {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: a script that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: a script that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(UNREAD_WRITES.map(([what]) => `held: a script that ${what}`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// The controls (#2619): none of these writes a file, so each still runs with nothing judged. A value
+// in an argument, an assignment or arithmetic names no command; a trap that only removes, stops or
+// runs a function the script defines writes nothing; a one line function that only reads is read.
+const STILL_READ_ONLY: [string, string][] = [
+  ['writes nothing at all', 'set -euo pipefail\necho "checking $1"\nexit 0\n'],
+  ['only reads, with a value in an argument', 'grep -n "$PATTERN" "$1"/*.ts\n'],
+  ['only reads in a function defined on one line', 'count() { grep -c TODO "$1"; }\nfunction total { wc -l "$1"; }\ncount "$1"/a.ts\ntotal "$1"/a.ts\n'],
+  ['sets a trap that removes its temp file, stops, or runs its own function', 'tmp=x\ncleanup() {\n  rm -rf "$tmp"\n}\ntrap cleanup EXIT\ntrap \'rm -f "$tmp"; exit 130\' INT\ntrap - TERM\ntrap \'\' HUP\ntrap -p\ngrep -rn TODO "$1"\n'],
+  ['sets array elements and appends by value', 'declare -A seen\nfor f in "$1"/*.ts; do\n  seen[$f]=1\n  list+=("$f")\n  total+=" $f"\ndone\necho "${#list[@]}"\n'],
+  ['compares values in arithmetic', 'if (( $# < 1 )); then echo usage; exit 1; fi\n(( ${#list[@]} == 0 || $# < 2 )) && exit 0\n(( n += $step ))\n'],
+  ['lists its aliases', 'alias\ngrep -rn TODO "$1"\n'],
+]
+
+test('a script that writes nothing still runs judging no file, though it holds a value, a quiet trap, arithmetic or a one line function (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  const ran: string[] = []
+  for (const [i, [what, text]] of STILL_READ_ONLY.entries()) {
+    w.files[`${APP}/check.sh`] = text
+    const r = await bash($ as never, w, 'bash check.sh src/', {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `ran: a script that ${what}` : `held: a script that ${what}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(STILL_READ_ONLY.map(([what]) => `ran: a script that ${what}`))
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads').map(x => x.decision)).toEqual(STILL_READ_ONLY.map(() => 'passed'))
+})
+
+// #2619: the one line function form was a gap in mod-kit's reader itself, so a write typed in a
+// command went unjudged too.
+test('a typed command writing a held file inside a function defined on one line is held, naming the file (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, "f(){ sed -i '' 's/a/b/' src/big.ts; }; f"))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, "function f { sed -i '' 's/a/b/' src/big.ts; }; f", {}, 'b2'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+})
+
 // #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is
 // bounded the same way, so a folder like payload/hooks cannot outrun the hook's 10 second budget.
 const FIND_GEN = "find gen -exec sed -i '' 's/a/b/' {} +"
