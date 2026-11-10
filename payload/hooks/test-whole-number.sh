@@ -139,6 +139,42 @@ CAPTURED = re.compile(r"\$\([ \t]*$")
 # refusal after the || never runs. Assign on a line of its own.
 MASKED = re.compile(r"^[ \t]*(?:local|declare|typeset|export|readonly)\b[^;|&#]*\$\([ \t]*(?:whole|decimal)_above_zero\b")
 DIGITS_ARM = re.compile(r"\[!0-9\.?\]\*\)")
+# A capture back into the variable it reads, whose refusal then quotes that variable
+# (claude-config#2577): the assignment runs before the refusal, so a refused value is printed as the
+# blank the capture left. Fixed at four sites in #2539 by capturing into a temporary first. A capture
+# that falls back to a default without quoting the variable is fine, and stays allowed. The refusal
+# is what follows the || on the line, or the then of an if ! around it, and the block it opens, to
+# its closing } or fi.
+SAME = re.compile(r"(?:^|(?<=[\s;&|!({]))([A-Za-z_][A-Za-z0-9_]*)=\"\$\([ \t]*"
+                  r"(?:(?:whole|decimal)_above_zero|dcu_human)\b[^)]*?\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+def refusal_after(lines, n, line, start, end):
+    rest = line[end:]
+    if "||" in rest:
+        body = rest.split("||", 1)[1].lstrip()
+        if not body.startswith("{"):
+            # One command, up to the next separator: what follows it is not the refusal.
+            return re.split(r";|&&|\|\|", body, maxsplit=1)[0]
+        depth, text = 0, ""
+        for chunk in [body] + lines[n:n + 40]:
+            for ch in chunk:
+                text += ch
+                depth += (ch == "{") - (ch == "}")
+                if depth == 0:
+                    return text
+            text += "\n"
+        return text
+    if re.search(r"\bif[ \t]+![ \t]*$", line[:start]):
+        m = re.search(r"\bthen\b", rest)
+        if not m:
+            return ""
+        text = ""
+        for chunk in [rest[m.end():]] + lines[n:n + 40]:
+            stop = re.search(r"\b(?:fi|else|elif)\b", chunk)
+            if stop:
+                return text + chunk[:stop.start()]
+            text += chunk + "\n"
+        return text
+    return ""
 found = []
 for rel in sys.stdin.read().split("\n"):
     if not rel:
@@ -176,6 +212,13 @@ for rel in sys.stdin.read().split("\n"):
             hit = "a capture under local, declare or export, whose status hides a refusal"
         if not hit and any(not CAPTURED.search(line[:m.start(1)]) for m in CALL.finditer(line)):
             hit = "a call whose printed value is not captured"
+        if not hit:
+            for m in SAME.finditer(line):
+                name = m.group(1)
+                if name == m.group(2) and re.search(r"\$\{?" + re.escape(name) + r"\b",
+                                                    refusal_after(lines, n, line, m.start(1), m.end())):
+                    hit = "a refusal quoting the value its own capture blanked (capture into a temporary first)"
+                    break
         if hit:
             found.append(f"{rel}:{n}: {hit}: {line.strip()}")
 print("\n".join(found))
@@ -190,11 +233,12 @@ esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
 E="''"; N='*[!0-9]*'; ND='*[!0-9.]*'; Z='0'; C='%%[!''0]*'
-W='whole''_above_zero'; D='decimal''_above_zero'
+W='whole''_above_zero'; D='decimal''_above_zero'; H='dcu''_human'
 mkdir -p "$TMPROOT/payload/hooks" "$TMPROOT/.github/workflows"
-# Thirteen that are, each on a line of its own so a finding names which, and one in a workflow. The
-# last four were the right way to call the helper before claude-config#2465, when it set the variable
-# it was named instead of printing, and the capture under local hides a refusal.
+# Twenty that are, each on a line of its own so a finding names which, and one in a workflow. Lines
+# 14 to 16 were the right way to call the helper before claude-config#2465, when it set the variable
+# it was named instead of printing, line 17 is a capture under local, which hides a refusal, and the
+# last seven are for #2577, described where they are written.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s|%s) x=5 ;; esac\n' "$E" "$N" "$Z"
@@ -210,10 +254,26 @@ mkdir -p "$TMPROOT/payload/hooks" "$TMPROOT/.github/workflows"
   printf 'if %s "${1:-}" n; then [ "$n" -ge 3 ]; fi\n' "$W"
   printf '%s "$p" p || exit 4\n' "$D"
   printf '  local n="$(%s "$1")" || return 1\n' "$W"
+  # A refusal quoting the value its own capture blanked (claude-config#2577). Lines 18 to 21 are the
+  # four sites #2539 fixed, payload/skills/disk-clean/scan.sh:65 and :66 and tests/test-claude-sync.sh
+  # :1862 and :1952, exactly as they stood in that pull request's commit 347cfa0c; then one whose
+  # block opens on its line and quotes the value on the next (22), one under if ! (25), and the size
+  # wording (26). @W@, @D@ and @H@ stand for the names, so this file holds none of the shape.
+  sed -e "s/@W@/$W/g" -e "s/@D@/$D/g" -e "s/@H@/$H/g" <<'OLD'
+LIMIT="$(@W@ "$LIMIT")" || { echo "disk-clean scan: DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
+WALK_LIMIT="$(@W@ "$WALK_LIMIT")" || { echo "disk-clean scan: DISK_CLEAN_WALK_SECONDS is '$WALK_LIMIT', which is not a whole number of seconds, so it scanned nothing."; exit 2; }
+  _cv_n="$(@W@ "$_cv_n")" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
+  _fv_n="$(@W@ "$_fv_n")" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
+x="$(@W@ "$x")" || {
+  echo "x is '$x', not a whole number"
+}
+if ! y="$(@D@ "${y:-}")"; then echo "y is '${y}'"; exit 2; fi
+s="$(@H@ "$s")" || echo "no size for $s"
+OLD
 } > "$TMPROOT/payload/hooks/probe.sh"
 cp "$TMPROOT/payload/hooks/probe.sh" "$TMPROOT/claude-sync"
 printf 'jobs:\n  a:\n    steps:\n      - run: case "$n" in %s|%s|%s) n=1 ;; esac\n' "$E" "$N" "$Z" > "$TMPROOT/.github/workflows/w.yml"
-# And fifteen that are not.
+# And the shapes that are not one.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'case "$x" in %s|%s) x=5 ;; esac\n' "$E" "$N"
@@ -231,6 +291,18 @@ printf 'jobs:\n  a:\n    steps:\n      - run: case "$n" in %s|%s|%s) n=1 ;; esac
   printf 'case "$rc" in %s|%s|null) : ;; esac\n' "$E" "$Z"
   printf 'case "${CI:-}" in %s|false|%s) ;; *) under_ci ;; esac\n' "$E" "$Z"
   printf 'case "$p" in %s|%s|.) exit 4 ;; esac\n' "$E" "$ND"
+  # The fix #2539 made, captures that fall back to a default, a name that only begins with the one
+  # captured, and a block that quotes it only after it has closed (claude-config#2577).
+  sed -e "s/@W@/$W/g" -e "s/@D@/$D/g" <<'FIXED'
+_whole="$(@W@ "$LIMIT")" && LIMIT="$_whole" || { echo "DISK_CLEAN_CATEGORY_SECONDS is '$LIMIT'"; exit 2; }
+max="$(@W@ "$max")" || max=10
+b="$(@W@ "$b")" || b=$b_default
+n="$(@W@ "$n")" || {
+  n=3
+}
+echo "n is $n"
+if ! p="$(@D@ "$p")"; then p=1; fi; echo "$p"
+FIXED
 } > "$TMPROOT/payload/hooks/clean.sh"
 # The same text in a file that is not shell is not judged.
 cp "$TMPROOT/payload/hooks/probe.sh" "$TMPROOT/payload/hooks/notes.md"
@@ -241,7 +313,13 @@ for l in 2 4 7 8 9 10 11 12 13 14 15 16 17; do
   case "$probe" in *"payload/hooks/probe.sh:$l:"*) check "and finds the shape on line $l of the probe" ok ;;
     *) check "and finds the shape on line $l of the probe" "it said: $probe" ;; esac
 done
-[ "$(printf '%s\n' "$probe" | grep -c '^payload/hooks/probe.sh:')" = 13 ] \
+# #2577: each of the four sites #2539 fixed, in its old shape, and the three other spellings.
+for l in 18 19 20 21 22 25 26; do
+  case "$probe" in *"payload/hooks/probe.sh:$l: a refusal quoting the value its own capture blanked"*)
+      check "#2577 finds a refusal quoting the value its capture blanked, on line $l of the probe" ok ;;
+    *) check "#2577 finds a refusal quoting the value its capture blanked, on line $l of the probe" "it said: $probe" ;; esac
+done
+[ "$(printf '%s\n' "$probe" | grep -c '^payload/hooks/probe.sh:')" = 20 ] \
   && check "and nothing else in the probe" ok \
   || check "and nothing else in the probe" "it said: $probe"
 case "$probe" in *"claude-sync:2:"*) check "and reads claude-sync, which has no .sh" ok ;;
@@ -290,10 +368,10 @@ else
 
   found="$(printf '%s\n' "$FILES" | python3 -c "$SCAN" "$ROOT")"; found_rc=$?
   [ "$found_rc" = 0 ] && [ -z "$found" ] \
-    && check "nothing tests a whole number above zero by hand" ok \
-    || check "nothing tests a whole number above zero by hand" "exit $found_rc; these do, and a value written 00 passes them as a number above zero:
+    && check "nothing tests a whole number above zero by hand, or loses what the helper said" ok \
+    || check "nothing tests a whole number above zero by hand, or loses what the helper said" "exit $found_rc; each line names its shape:
 $found
-  Ask whole_above_zero from hooks/lib/whole-number.sh instead."
+  A hand written test passes a value written 00 as a number above zero: ask whole_above_zero from hooks/lib/whole-number.sh instead. A refusal quoting the value its own capture blanked prints a blank: capture into a temporary first, as #2539 did."
 fi
 
 echo "passed: $pass, failed: $fail"
