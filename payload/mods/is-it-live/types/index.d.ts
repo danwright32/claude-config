@@ -59,7 +59,8 @@ declare module 'claude-code' {
       refused: { keys: string[]; told: string[] }
       /**
        * #2436: the Slack threads this session started from, oldest first: each one Dan pasted a
-       * link to, and the first one the main session read when it had none.
+       * link to, and the first one the main session read when it had none. Since #2578 also those
+       * recorded once the session was under way, marked `mid`.
        */
       threads: IsItLiveThread[]
       /**
@@ -71,6 +72,8 @@ declare module 'claude-code' {
       landed: number
       /** #2436: the draft holds already refused in this chain of turn ends, and those let go and said, as `refused`. */
       draftRefused: { keys: string[]; told: string[] }
+      /** #2578: how many prompts Dan has typed in this session, counted only as far as 2. */
+      prompts: number
     }
   }
 }
@@ -90,6 +93,14 @@ export type IsItLiveThread = {
   from: 'link' | 'read'
   at: number
   settled?: number
+  /**
+   * #2578: recorded once the session was under way (after Dan's first prompt, or after a merge), so
+   * only a merge for it owes it a reply, never every merge of the session.
+   */
+  mid?: true
+  /** #2578: for a thread recorded mid session, the step of the latest merge for it, and those merges since its last draft or skip. */
+  related?: number
+  prs?: string[]
 }
 
 /**
