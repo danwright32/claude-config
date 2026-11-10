@@ -36,7 +36,7 @@ fi
 # to a file rather than through $( ): bash 3.2 misreads a quoted heredoc holding an apostrophe there.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-python3 - "$RESOLVER" "$README" > "$tmp/out" 2>&1 <<'PY'
+python3 -B - "$RESOLVER" "$README" > "$tmp/out" 2>&1 <<'PY'
 import importlib.util, re, sys
 
 resolver_path, readme_path = sys.argv[1], sys.argv[2]

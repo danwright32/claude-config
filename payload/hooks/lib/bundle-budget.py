@@ -67,6 +67,9 @@ import hashlib
 import os
 import sys
 
+# No bytecode cache beside the hooks: check-bundle-budget.sh runs this as plain python3, and a
+# ratchet cache left in lib/__pycache__ failed test-work-names.sh's #2444 check beside it (#2600).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ratchet  # noqa: E402  (the shared record reader, beside this file)
 

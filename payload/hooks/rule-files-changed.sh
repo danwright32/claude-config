@@ -44,16 +44,26 @@
 # the global rule files under the config directory: a project's own CLAUDE.md is
 # not what a config sync changes underneath a session.
 #
-# MODS TOO, BUT ONLY THE SET OF THEM (claude-config#1535). A session names its mods once, at its
+# MODS TOO: THE SET OF THEM (claude-config#1535), AND ONE A PULL REPLACED (#2514, below). A session names its mods once, at its
 # start, from CLAUDE_CODE_PLUGIN_DIRS, so a mod that arrives on disk later is not loaded in it until
 # a new session, and a mod removed from disk is still whatever the session made of it. That is the
 # same shape as a rule file, so it is the same check over a second snapshot: the names of the mod
-# folders that hold a manifest (a folder without one is not named by the sync either). A CHANGE to
-# a mod the session already loaded is deliberately not reported: Claude Code reloads it in the
-# running session and says so itself ("hooks.json changed, reloaded"), and says when a reload
-# failed and the earlier version is still running. Reporting it here would repeat that line on every
-# pull touching a mod and claim a staleness the reload has already cured (L11, L36). The names come
+# folders that hold a manifest (a folder without one is not named by the sync either). The names come
 # from one glob, so this half starts no process at all however many mods there are.
+#
+# AND A MOD A PULL REPLACED UNDER IT (claude-config#2514). This hook once left every change to a
+# loaded mod to Claude Code, on the belief that it always reloads one and says so. It does not:
+# measured on Claude Code 2.1.322 on 2026-11-10 with a probe mod in a headless session and the
+# scripted stand-in model, a `claude -p` session watches no mod folder (CLAUDE_CODE_PLUGIN_DIR_WATCH
+# unset), so neither a rename install nor an in place write reloaded it and nothing was said; with
+# the watch on, both reloaded. Read from its binary, not measured: a reload also waits for a running
+# turn to end, and it holds one that would change the tool list under the prompt cache, pauses one for a mod
+# changing very often, and lets a hook veto one. On 2026-11-09 a session went on running a guard from before the pull that
+# replaced it. So a pull records each mod it replaced (lib/mods-replaced.sh), with a stamp, and the
+# record joins the snapshot: a stamp that moved on a mod the session already had is a replacement,
+# said once, with /reload-plugins. Whether Claude Code also reloaded it cannot be read from here, so
+# the notice says what to do either way. An edit made by hand, with no pull, is not recorded and not
+# reported: whoever made it knows.
 #
 # Env:
 #   CLAUDE_RULES_DIR        the config directory to read (default ~/.claude)
@@ -88,6 +98,11 @@ case "${BASH_SOURCE[0]}" in */*) RFC_DIR="${BASH_SOURCE[0]%/*}" ;; *) RFC_DIR=. 
 # only (claude-config#1939). Without the library the start goes on as before, saying nothing.
 # shellcheck source=lib/project-rules-behind.sh
 . "$RFC_DIR/lib/project-rules-behind.sh" 2>/dev/null && _prb_loaded=1
+
+# The record of which mods a pull replaced (claude-config#2514). Without the library the mods half
+# compares the set of mods only, as it did before.
+# shellcheck source=lib/mods-replaced.sh
+. "$RFC_DIR/lib/mods-replaced.sh" 2>/dev/null && _mr_loaded=1
 
 # Keyed on the session, so two sessions open at once each get their own baseline.
 # With neither field there is no way to tell a first prompt from a later one, and
@@ -173,8 +188,10 @@ since_baseline() {
   [ -n "$previous" ] || { printf '%s\n' "$current" > "$state" 2>/dev/null || true; return 0; }
   [ "$current" = "$previous" ] && return 0
   printf '%s\n' "$current" > "$state" 2>/dev/null || true
+  # comm puts one tab before a line only the second side has. The whole rest of the line is kept, never
+  # one field, since a snapshot line may itself hold tabs (the mods' @replaced lines, #2514).
   comm -3 <(printf '%s\n' "$previous" | sort) <(printf '%s\n' "$current" | sort) 2>/dev/null \
-    | awk -F '\t' '{ if ($1 != "") print "gone\t" $1; else print "new\t" $2 }'
+    | awk '{ if (substr($0, 1, 1) == "\t") print "new\t" substr($0, 2); else print "gone\t" $0 }'
 }
 
 # A compaction and a resume RE-READ the rule files (claude-config#1580, measured on the real engine
@@ -242,6 +259,10 @@ snapshot() {
 
 # The mod folders that hold a manifest, by name, under a header line that never changes, so a Mac
 # with no mods at all still takes a baseline and a first mod arriving later is reported.
+#
+# Then one "@replaced<TAB><mod><TAB><stamp>" line per mod a pull replaced on this Mac, from the
+# record claude-sync writes (lib/mods-replaced.sh, claude-config#2514), so a stamp that moves after
+# the baseline is a mod replaced under this session. Read with builtins, so still no process.
 mod_snapshot() {
   local m n
   [ -d "$RULES_DIR/mods" ] || return 0
@@ -251,6 +272,8 @@ mod_snapshot() {
     n="${m%/.claude-plugin/plugin.json}"
     printf '%s\n' "${n##*/}"
   done
+  [ "${_mr_loaded:-}" = 1 ] && mods_replaced_lines "$RULES_DIR"
+  return 0
 }
 
 # Joined with spaces without stripping them out afterwards: `case` rather than a substitution,
@@ -306,12 +329,24 @@ if [ -f "$RULES_DIR/CLAUDE.md" ]; then
 fi
 
 mods_diff="$(since_baseline "$MODS_STATE" mod_snapshot)"
-added="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "new" && $2 != "#mods" { print $2 }' | words)"
-removed="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "gone" && $2 != "#mods" { print $2 }' | words)"
+[ -n "$mods_diff" ] || exit 0
+added="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "new" && $2 != "#mods" && $2 != "@replaced" { print $2 }' | words)"
+removed="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "gone" && $2 != "#mods" && $2 != "@replaced" { print $2 }' | words)"
+# A stamp that is new since the baseline, on a mod that is not itself new: a mod this session loaded,
+# replaced by a pull since. A mod that arrived in the same pull was never loaded here, so it is named
+# as arrived only. A replaced mod since removed has no line (the reader skips it), so it is said as
+# removed only.
+replaced="$(printf '%s\n' "$mods_diff" | awk -F '\t' '
+  $1 == "new" && $2 == "@replaced" { r[$3] = 1; next }
+  $1 == "new" && $2 != "#mods" { a[$2] = 1 }
+  END { for (n in r) if (!(n in a)) print n }' | sort | words)"
 case "$added" in *[![:space:]]*)
   echo "claude-sync: these mods arrived on disk after this session started, and this session has not loaded them: ${added}. A session names its mods when it starts, so a new session loads them; until then their tools, commands and hooks are not here." ;;
 esac
 case "$removed" in *[![:space:]]*)
   echo "claude-sync: these mods were removed from disk after this session started: ${removed}. A new session runs without them; this one may still be running what it loaded." ;;
+esac
+case "$replaced" in *[![:space:]]*)
+  echo "claude-sync: a pull replaced these mods after this session loaded them: ${replaced}. Unless Claude Code has said it reloaded them, this session is still running the earlier version: Claude Code does not reload a changed mod in a headless session, and in an interactive one it can hold or pause the reload. Run /reload-plugins to load the new version, or start a new session." ;;
 esac
 exit 0

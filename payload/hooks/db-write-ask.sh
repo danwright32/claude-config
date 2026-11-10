@@ -72,7 +72,7 @@ if ps_reader_missing python3; then
   exit 0
 fi
 
-out="$(printf '%s' "$payload" | python3 -I -c '
+out="$(printf '%s' "$payload" | python3 -I -B -c '
 import importlib.util, json, os, socket, sys
 sys.stdout.reconfigure(errors="replace")
 
