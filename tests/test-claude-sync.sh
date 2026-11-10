@@ -25007,11 +25007,35 @@ check "#2688 and it is not counted as behind, since it was never compared" \
   "! line_has \"\$out_ms2\" 'mods behind the shared repo' 'path-mod'"
 check "#2688 while the files it could compare are still named as behind" \
   "line_has \"\$out_ms2\" 'mods behind the shared repo: 2 file' 'lock-mod' 'plain-mod'"
-# A SEARCH THAT FAILED NAMING NO FILE: which files hold the home path is unknown, and said so.
-out_ms3="$(env $(msenv) PATH="$MSSHIM/none-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
-dbg "#2688 status with the search failing outright: $out_ms3"
-check "#2688 a search that failed naming no file is said, with grep's exit status and its words" \
-  "line_has \"\$out_ms3\" 'could not compare' 'home path' 'grep exit 2' 'something went wrong'"
+# A SEARCH THAT FAILED NAMING NO FILE: which files hold the home path is unknown, so a tokenized file
+# compared without the placeholder would read as this Mac's own work, or a plain one be counted
+# while status said it could not compare it. So each file is searched on its own, and a file that
+# search answers for is compared as usual.
+out_ms_none="$(env $(msenv) PATH="$MSSHIM/none-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the whole search failing naming no file: $out_ms_none"
+check "#2688 when the whole search fails naming no file, each file is searched alone and path-mod is still compared" \
+  "line_has \"\$out_ms_none\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and with every file answered for one by one, nothing is called uncomparable" \
+  "! grep -q 'could not compare' <<< \"\$out_ms_none\""
+# AND WHEN EVERY SEARCH FAILS: no file is known not to hold the home path, so each is named and none
+# is counted, neither as behind nor as this Mac's own work.
+mkdir -p "$MSSHIM/all-bin"
+cat > "$MSSHIM/all-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*|*"-IlF -- $MSH "*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/all-bin/grep"
+out_ms_all="$(env $(msenv) PATH="$MSSHIM/all-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with every home path search failing: $out_ms_all"
+check "#2688 when every search fails, each file is named with grep's exit status and its words" \
+  "line_has \"\$out_ms_all\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2' 'something went wrong' && line_has \"\$out_ms_all\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' && line_has \"\$out_ms_all\" 'could not compare plain-mod/index\.ts' 'searching it'"
+check "#2688 under a heading counting all three files" \
+  "line_has \"\$out_ms_all\" 'mods not compared with the shared repo: status could not compare 3 file' 'neither as behind'"
+check "#2688 and none of them is in the lag line" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ms_all\""
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266

@@ -13221,25 +13221,43 @@ mods_lag_records(){
     # other file matched, so the matches it printed are still used and each file it named in an
     # error is recorded as not compared: with no placeholder hash it would read as this Mac's own
     # work (#2688, the class #2673 fixed one step later). An error naming no file under mods leaves
-    # every tokenized file unknown, and is said as that.
-    local loop_input gerr gline gpath named=""
+    # unknown which files hold the home path, and a file compared without knowing would be counted
+    # in the lag line, or read as this Mac's own work, while status said it could not compare it. So
+    # each installed file the search neither printed nor named is then searched on its own: one it
+    # answers for is compared as usual, and one whose own search fails is recorded as not compared,
+    # counted neither as behind nor as this Mac's own work. A process per file, on that failure only.
+    local loop_input gerr gline gpath unattributed="" grc gmsg
     gerr="$(scratch_file 2>/dev/null)" || gerr=""
     rc=0; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>"${gerr:-/dev/null}")" || rc=$?
     if [ "$rc" -ge 2 ]; then
-      if [ -n "$gerr" ]; then
+      if [ -n "$gerr" ] && [ -s "$gerr" ]; then
         while IFS= read -r gline; do
           case "$gline" in
             *"$CLAUDE_HOME/mods/"*": "*)
               gpath="${gline#*"$CLAUDE_HOME/mods/"}"
               unread="${unread}unread	${gpath%: *}	searching it for this Mac's home path failed (grep exit $rc: ${gpath##*: })
 "
-              named=1 ;;
+              ;;
+            *) unattributed=1 ;;
           esac
         done < "$gerr"
+      else
+        unattributed=1
       fi
-      if [ -z "$named" ]; then
-        unread="${unread}unread	every file holding this Mac's home path	the search for them in $CLAUDE_HOME/mods failed (grep exit $rc: $( [ -n "$gerr" ] && head -1 "$gerr" 2>/dev/null))
-"
+      if [ -n "$unattributed" ]; then
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          case $'\n'"$loop_input"$'\n' in *$'\n'"$CLAUDE_HOME/mods/$f"$'\n'*) continue ;; esac
+          case "$unread" in *"unread	$f	"*) continue ;; esac
+          grc=0; gmsg="$(grep -IlF -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods/$f" 2>&1 >/dev/null)" || grc=$?
+          case "$grc" in
+            0) loop_input="${loop_input:+$loop_input
+}$CLAUDE_HOME/mods/$f" ;;
+            1) ;;
+            *) unread="${unread}unread	$f	searching it for this Mac's home path failed (grep exit $grc${gmsg:+: ${gmsg##*: }})
+" ;;
+          esac
+        done <<< "$installed"
       fi
     fi
     [ -n "$gerr" ] && rm -f "$gerr"
