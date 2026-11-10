@@ -282,6 +282,20 @@ const leftAsWritten = (cmd: string, i: number, inDouble: boolean): boolean => {
   if (next === undefined || /[\s/.,%]/.test(next)) return true
   return inDouble ? next === '"' : /[;|&]/.test(next)
 }
+// The words that name a function where a command would begin (#2619): `name()`, or `function name`,
+// after nothing but the reserved words that lead a command. They were read as the command, and a
+// body starting on the same line as its words (`w(){ sed -i ...; }`, `w() { ...`, `w()( ... )`,
+// `function w { ...`), so what the body ran was no command and a write in it was no write. They are
+// a command of their own, and the body is read as the commands it holds, as one starting on the next
+// line always was. `given` is how many of the words naming it are already read: with 1 the name's
+// own word is still being read (`name(` seen), so `function` may stand before it; with 2 both are.
+const FUNCTION_NAME = /^[A-Za-z_][A-Za-z0-9_:.-]*$/
+const namesFunction = (words: readonly string[], given: 1 | 2): boolean => {
+  const k = words.length
+  const word = words[k - 1] === 'function'
+  if (given === 2) return k >= 2 && words[k - 2] === 'function' && words.slice(0, k - 2).every(w => LEADS.has(w))
+  return words.slice(0, word ? k - 1 : k).every(w => LEADS.has(w))
+}
 const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, unexpanded?: Set<number>, subbed?: Map<number, InWord[]>): Split[] => {
   const cmds: Split[] = []
   let words: string[] = []
@@ -487,6 +501,12 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       quotedChar(cmd[i + 1] as string)
       dollar(cmd[i + 1] as string, false)
       word += cmd[++i]
+    } else if (c === '(' && inWord && cmd[i + 1] === ')' && FUNCTION_NAME.test(word) && namesFunction(words, 1)) {
+      // `name()` where a command would begin names a function (#2619): a command of its own, so the
+      // body after it, `{ ...; }` or `( ... )` on the same line included, is read as its commands.
+      word += '()'
+      i++
+      endCmd()
     } else if (c === '(' && inWord) {
       wordParens++
       bareChar(c)
@@ -532,7 +552,8 @@ const split =(cmd: string, bare?: Map<number, number[]>, literal?: Set<number>, 
       if (!caseIn() && endCmd()) listed()
     } else if (c === ' ' || c === '\t') {
       endWord()
-      caseIn()
+      // `function name` is a command of its own too, so the `{` after it opens the body (#2619).
+      if (!caseIn() && namesFunction(words, 2)) endCmd()
     } else if (c === '<' && inWord && wordParens === 0 && !/^\d*<*$/.test(word)) {
       // An input redirect begins a word of its own however it is spaced (#730), as an output one
       // does (#654): cat<<EOF, python3 -<<EOF and cmd<file name the command, and the heredoc its
