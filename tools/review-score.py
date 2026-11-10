@@ -175,6 +175,7 @@ def load_case(root, cid):
 def _runner_module(hooks_lib):
     """The runner itself, so a finding line is recognised by the same pattern the gate counts."""
     path = os.path.join(hooks_lib, "ai-review-run.py")
+    sys.dont_write_bytecode = True   # no cache left in the hooks lib (#2600)
     spec = importlib.util.spec_from_file_location("ai_review_run", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

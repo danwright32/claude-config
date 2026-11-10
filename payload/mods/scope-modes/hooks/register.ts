@@ -59,6 +59,8 @@ import {
   goalQuestion,
   goalUnreadQuestion,
   groupQuestions,
+  heldGuardsSaid,
+  type HeldIssueState,
   sameText as oneSpaced,
   orderQuestions,
   priorityRank,
@@ -162,6 +164,9 @@ import {
 const MOD = 'scope-modes'
 const MIN = 60_000
 const RUN_MS = 20_000
+// Each read of a bedtime question's issue state, while Dan waits at /sleep (#2585): one that runs
+// out is said as not checked, never as open or closed.
+const STATE_MS = 8_000
 // The report at the end of a night reads GitHub for each repo worked (each gh call bounded at 15 s and all of them at 60 s
 // in the script), so it gets longer than an ordinary run.
 const REPORT_FINAL_MS = 90_000
@@ -431,8 +436,8 @@ const ghSaid = (r: { stderr: string; exitCode: number }) => r.stderr.trim().spli
 // which failures are worth asking the next account about; a write passes only GitHub's own not
 // found, so a write that may have landed is never sent again as another account (assume it runs twice).
 // The one helper, mod-kit's hooks/ghaccounts.ts, copied here (#1279 lessons review).
-const ghAnyAccount = ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true, stdin?: string): Promise<{ stdout: string } | { failures: GhRun[] }> =>
-  askAnyAccount((argv, env, input) => run($, argv, RUN_MS, env, input), args, tryNext, stdin)
+const ghAnyAccount = ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true, stdin?: string, timeoutMs = RUN_MS): Promise<{ stdout: string } | { failures: GhRun[] }> =>
+  askAnyAccount((argv, env, input) => run($, argv, timeoutMs, env, input), args, tryNext, stdin)
 
 // Whether GitHub knows a repository under any account gh is logged in to.
 const resolves = async ($: EngineInterface, repo: string): Promise<string | null> => {
@@ -825,6 +830,9 @@ type IssueRound = {
 // Where an issue's answered question is recorded: one file per repository, issue and words, so a
 // question is never asked again once its answer is on the issue.
 const answeredPath = (dir: string, repo: string, issue: number, text: string) => `${dir}/answered/${answerKey(repo, issue, text)}.json`
+// Where a held design round guard question whose issue was found closed is marked (#2585), so its
+// issue is not read again; the notes it came from are left whole, and removing the mark restores it.
+const closedHoldPath = (dir: string, repo: string, issue: number, text: string) => `${dir}/closed-holds/${answerKey(repo, issue, text)}.json`
 
 const andList = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
@@ -938,10 +946,11 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
   const open: IssueQuestion[] = []
   // A design round guard question is settled only by the guard's own picker (#2261): asked here, its
   // answer records nothing the guard reads, so it is never asked or checked off, answered or not.
-  const guards: string[] = []
+  // One marked as on a closed issue on an earlier night is passed over unread (#2585).
+  const guards: IssueQuestion[] = []
   for (const q of found) {
     if (guardQuestion(q.text)) {
-      guards.push(`${q.repo}#${q.issue} "${q.text}"`)
+      if (!(await $.fs.exists(closedHoldPath(dir, q.repo, q.issue, q.text)))) guards.push(q)
       continue
     }
     const path = answeredPath(dir, q.repo, q.issue, q.text)
@@ -964,18 +973,20 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     const off = await checkOff($, q.repo, q.issue, q.text, answer)
     if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
   }
-  const unasked = [...new Set(guards)]
-  if (unasked.length) problems.push(`Not asked, since only the design round guard's own question can settle ${unasked.length === 1 ? 'it' : 'them'}: ${andList(unasked)}.`)
-  // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
-  // asked about, ranked last, since dropping its question would hide it (L215).
+  // Each issue read once, the held guard questions' too (#2585): a closed one is no longer in any
+  // queue. One that cannot be read is still asked about, ranked last, since dropping its question
+  // would hide it (L215), and a held one is named saying it could not be checked.
+  const keyOf = (q: { repo: string; issue: number }) => `${q.repo.toLowerCase()}#${q.issue}`
   const rank = new Map<string, number>()
   const closed = new Set<string>()
-  for (const k of new Set(open.map(q => `${q.repo.toLowerCase()}#${q.issue}`))) {
-    const q = open.find(x => `${x.repo.toLowerCase()}#${x.issue}` === k) as IssueQuestion
+  const unchecked = new Map<string, string>()
+  for (const k of new Set([...open, ...guards].map(keyOf))) {
+    const q = [...open, ...guards].find(x => keyOf(x) === k) as IssueQuestion
     const seen = viewed.get(k)
-    const r = seen !== undefined ? { stdout: seen } : await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'])
+    const r = seen !== undefined ? { stdout: seen } : await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'], undefined, undefined, STATE_MS)
     if (!('stdout' in r)) {
       rank.set(k, 5)
+      unchecked.set(k, ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun)))
       continue
     }
     try {
@@ -984,8 +995,21 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
       rank.set(k, priorityRank(j.labels))
     } catch {
       rank.set(k, 5)
+      unchecked.set(k, "GitHub's answer was not JSON")
     }
   }
+  // A held question on a closed issue is marked, so it is not read again; a mark that cannot be
+  // written is said, since its issue is then read again next time.
+  for (const q of guards.filter(x => closed.has(keyOf(x)))) {
+    const kept = await writeWhole($, closedHoldPath(dir, q.repo, q.issue, q.text), `${JSON.stringify({ repo: q.repo, issue: q.issue, text: q.text, state: 'CLOSED', at: await $.clock.now() })}\n`)
+    if (kept) problems.push(`${q.repo}#${q.issue} is closed, so "${q.text}" is left out, but the record that it is could not be kept (${kept}), so its issue is read again next time.`)
+  }
+  const held = heldGuardsSaid(guards, (repo, issue): HeldIssueState => {
+    const k = keyOf({ repo, issue })
+    const why = unchecked.get(k)
+    return why !== undefined ? { state: 'unchecked', why } : closed.has(k) ? { state: 'closed' } : { state: 'open' }
+  })
+  if (held) problems.push(held)
   const questions = groupQuestions(open.filter(q => !closed.has(`${q.repo.toLowerCase()}#${q.issue}`)))
   return { questions, rank, problems }
 }

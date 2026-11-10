@@ -67,9 +67,34 @@ function readRegistry(file) {
   return { state: 'ok', file: where, registry: registry };
 }
 
+// The Slack channel the dev update's draft is saved to (claude-config#2564), recorded in the
+// registry as `slackChannel`, a channel id. It lives here, not in the skill, because the channel is
+// a work name and this repository is public. A missing or malformed one gives no channel and says
+// why, so the skill skips the draft rather than searching Slack for one or guessing (L11). Only an
+// id is accepted: a draft tool given a name like #updates can land somewhere else, or nowhere.
+const CHANNEL_ID = /^[CG][A-Z0-9]{8,}$/;
+function readChannel(file) {
+  const got = readRegistry(file);
+  if (got.state !== 'ok') return { state: got.state, file: got.file, why: got.why, channel: '' };
+  const value = got.registry.slackChannel;
+  if (value === undefined || value === null || value === '') {
+    return { state: 'ok', file: got.file, channel: '',
+      why: 'The dev update registry at ' + got.file + ' records no slackChannel, so there is no channel '
+        + 'to save the Slack draft to. Add "slackChannel": "<channel id>" to it, the id of the channel '
+        + 'the updates are posted in (in Slack, the channel\'s details, at the bottom).' };
+  }
+  if (typeof value !== 'string' || !CHANNEL_ID.test(value)) {
+    return { state: 'ok', file: got.file, channel: '',
+      why: 'The slackChannel in the dev update registry at ' + got.file + ' is ' + JSON.stringify(value)
+        + ', which is not a Slack channel id (C or G followed by capital letters and digits).' };
+  }
+  return { state: 'ok', file: got.file, why: '', channel: value };
+}
+
 module.exports = {
   registryPath: registryPath,
   readRegistry: readRegistry,
+  readChannel: readChannel,
   missingWhy: missingWhy,
   FILE_NAME: FILE_NAME,
   SKILL_DIR: SKILL_DIR,
@@ -80,10 +105,15 @@ module.exports = {
 //   state [file]  prints {state, file, why} as JSON for that file (default: the one above)
 //   repos [file]  the same, plus `repos`, every entry's owner/name, for the scan that keeps work
 //                 names out of the public repository (hooks/lib/work-names.py, claude-config#1568)
+//   channel [file] the same, plus `channel`, the Slack channel id the skill saves its draft to, or
+//                 "" with `why` saying what is missing (claude-config#2564)
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === 'path') {
     process.stdout.write(registryPath() + '\n');
+  } else if (cmd === 'channel') {
+    const got = readChannel(process.argv[3] || registryPath());
+    process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '', channel: got.channel }) + '\n');
   } else if (cmd === 'state' || cmd === 'repos') {
     const got = readRegistry(process.argv[3] || registryPath());
     const out = { state: got.state, file: got.file, why: got.why || '' };
@@ -94,7 +124,7 @@ if (require.main === module) {
     }
     process.stdout.write(JSON.stringify(out) + '\n');
   } else {
-    process.stderr.write('Usage: dev-update-registry.js path | state [file] | repos [file]\n');
+    process.stderr.write('Usage: dev-update-registry.js path | state [file] | repos [file] | channel [file]\n');
     process.exit(2);
   }
 }

@@ -41,8 +41,11 @@ if ! . "$DIR/project-list.sh" 2>/dev/null; then
   exit 2
 fi
 
-HOST="${PROJECT_LIST_HOST:-$(hostname 2>/dev/null)}"
-HOST="${HOST%%.*}"
+if ! . "$DIR/this-mac.sh" 2>/dev/null; then
+  echo "write-project-list-local: $DIR/this-mac.sh is missing, so which Mac this is could not be read." >&2
+  exit 2
+fi
+HOST="$(this_mac_name ${PROJECT_LIST_HOST:+"$PROJECT_LIST_HOST"})"
 OUT="${PROJECT_LIST_LOCAL_FILE:-${CLAUDE_HOME:-$HOME/.claude}/$PL_LOCAL_NAME}"
 REPO="${PROJECT_LIST_REPO:-$HOME/claude-config-sync}"
 

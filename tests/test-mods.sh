@@ -1546,6 +1546,24 @@ for m in prefix-strip prefix-match; do
     || check "and names $m, pointing it at errorText" "$out"
 done
 case "$out" in *clean-asks-words*|*clean-reads-aborted*) check "a mod asking errorText, or reading an abandoned command, passes" "$out" ;; *) check "a mod asking errorText, or reading an abandoned command, passes" ok ;; esac
+# #2467: the design round guard read a TypeScript string to its closing quote itself, and the Slack
+# alert guard a YAML flow list and its '' escape, while mod-kit's command reader reads shell only. Both
+# now read with quotedEnd, yamlScalar and yamlFlowList from the copy of mod-kit's hooks/quoted.ts, so a
+# mod undoing YAML's '' by hand, matching a single quoted scalar with a pattern, or walking a string to
+# the quote it opened with fails the run, pointed at that copy. A mod asking the copy passes, and so
+# does the design round guard's emptying of '' and "" in a prop value, which reads no string.
+M9Q="$TMPROOT/m9-quoted-reader"
+mkmodsrc "$M9Q" clean-asks-quoted "const items = yamlFlowList(text); const e = quotedEnd(text, i, 'code'); const empty = (v: string) => v.replace(/''|\"\"/g, 'x')"
+mkmodsrc "$M9Q" quoted-escape "if (s.startsWith(\"'\") && s.endsWith(\"'\")) return s.slice(1, -1).replace(/''/g, \"'\")"
+mkmodsrc "$M9Q" quoted-token "const FLOW = /\"(?:\\\\[\\s\\S]|[^\"\\\\])*\"?|'(?:''|[^'])*'?|#[^\\n]*/y"
+mkmodsrc "$M9Q" quoted-walk "for (let j = i + 1; j < n; j++) { if (text[j] === '\\\\') j++; else if (text[j] === q) return j }"
+out="$(bash "$SHARED" "$M9Q" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2467: a mod reading a quoted string or a YAML flow list by hand fails the run" ok || check "#2467: a mod reading a quoted string or a YAML flow list by hand fails the run" "exit=$code out=$out"
+for m in quoted-escape quoted-token quoted-walk; do
+  printf '%s\n' "$out" | grep "$m keeps its own quoted-reader" | grep -q 'hooks/mod-kit/quoted.ts' && check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" ok \
+    || check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" "$out"
+done
+case "$out" in *clean-asks-quoted*) check "#2467: a mod asking the copy of hooks/quoted.ts passes" "$out" ;; *) check "#2467: a mod asking the copy of hooks/quoted.ts passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the

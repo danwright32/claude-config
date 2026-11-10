@@ -1248,8 +1248,7 @@ documents and held by two suites. Three shapes were weighed:
   fallback for a session where it did not arrive, the one number a static file must state, held to
   the hook's default by `test-agent-cap.sh`.
 
-Which Mac this is comes from `hostname`, the short name, as `check-project-list.sh` and
-`ai-review-on-push.sh` already read it; a name that cannot be read is said as that, with the default,
+Which Mac this is comes from `lib/this-mac.sh`, the short name every hook reads (#2561); a name that cannot be read is said as that, with the default,
 never a guess (L11). The production audit workflow runs in an engine with no shell or file access,
 so it takes the number as `args.agentCap` and falls back, logged, to a literal default that its
 suite holds to the hook's by running it with none. The scan in `test-agent-cap.sh` finds a number
@@ -2289,6 +2288,36 @@ approved would have held 72 seats rather than 20: at least 52 lessons that were 
 disputed in September are agreed diff now. That is why the seats became a tracked file (the seats
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
+
+## A fresh worktree's first edit waits for an up to date base (#2517)
+
+`hooks/fresh-worktree-base-gate.sh` refuses a file edit in a worktree that has no commits of its own
+while it is behind the remote's main branch. The choices, and what each rules out:
+
+- **Refuse until updated, not warn once.** A warning read and passed is exactly how the 2026-09-14
+  merge went out without its rebase, and the remedy is one local command, so the refusal costs one
+  round trip. Recorded as a decision taken without Dan, on the pull request.
+- **The gate fetches before judging.** Worktrees share refs, so the local `origin/main` is whatever
+  the last fetch in ANY worktree left, and a check against it says "current" on stale data (L345).
+- **Once per worktree per session, then cached, and only a pass is cached.** One fetch per worktree
+  rather than one per edit; a refused worktree is judged again so the edit after the update goes
+  ahead. The record is a file per session and worktree in `TMPDIR`, the same keying as
+  `project-list-nudge.sh` and `payload-revert-warning.sh` (a hash of the session id).
+- **It stands down for good once the worktree has its own commits.** Main moving after that is a
+  rebase question for the merge step (#766), and that check is read on the local ref, needing no
+  fetch, since a fetch only adds to main.
+- **A failed fetch neither passes in silence nor blocks for good.** It says it could not check, once,
+  and tries again once its retry window has passed (a setting, `FRESH_WORKTREE_RETRY_MINUTES`, not a
+  measurement), because a session that cannot reach GitHub must still be able to
+  work. The one exception refuses: when even the unrefreshed local ref shows the worktree behind, it
+  is behind at least that far, and `git merge --ff-only origin/main` needs no network.
+- **The fetch is bounded at 10 seconds inside a 30 second registration timeout.** The gate is
+  registered with onFailure block (#1899), so a gate Claude Code kills is a refused edit; the bound
+  makes the gate settle itself long before that. Eight fetches with nothing new took 0.18 to 0.33
+  seconds on 2026-11-10 on the personal MacBook at a load average of 16 to 19 over one minute.
+- **Primary checkouts are out of scope, as the issue set.** A worktree is cut from whatever main the
+  shared refs held at that moment; a primary checkout holds Dan's own branch and state, which an
+  edit refusal there would get in the way of.
 
 ## Things known to be wrong and left that way
 
