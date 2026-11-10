@@ -1624,7 +1624,7 @@ const MONITOR_TEXT = [
   '',
 ].join('\n')
 const QUIET_IMPORT = "import { quietPage, quietClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n"
-const listedFiles = (w: W) => w.gits.filter(g => g.argv[3] === 'ls-files').length
+const listedFiles = (w: W, from = 0) => w.gits.slice(from).filter(g => g.argv[3] === 'ls-files').length
 
 test('a new copy module passes while nothing sends it; the edit that makes a route send it is held for the wording it brings in, then goes through once Dan approves (#2637)', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
@@ -1699,7 +1699,7 @@ test('an edit that brings no new wording to a send passes: more use of what a se
   const before = w.gits.length
   expect(refusalOf(await call($, { tool: 'Write', file_path: HELP, content: "import { allClear } from './monitor/quiet-feed-copy'\nexport const help = () => allClear\n" }))).toBe('')
   expect(w.gits.length).toBeGreaterThan(before)
-  expect(listedFiles(w)).toBe(0)
+  expect(listedFiles(w, before)).toBe(0)
   expect(w.ran.length).toBe(3)
 })
 
@@ -1721,4 +1721,53 @@ test('wording an edit may bring to a send is held, never let through, when the s
   // the guard failing closed, never a guard with nothing to hold.
   w.ctl.gitFails = ''
   expect(refusalOf(await call($, send))).toContain('feed has gone quiet')
+})
+
+test('where the names sent cannot be followed, every message of a newly imported module is held: a sender taking the edited module whole is named, and a search that stops short names none (#2637)', withKit, async ($, on) => {
+  const BY_KEY = '/w/app/src/lib/notify/by-key.ts'
+  const BARREL_COPY = '/w/app/src/lib/monitor/index.ts'
+  const many: Record<string, string> = {}
+  // Each names the barrel as an import does, and a Slack webhook only in a comment, which git cannot
+  // tell from code, so each must be read: one more than the guard reads.
+  for (let i = 0; i <= MOST_READ; i++) many[`/w/app/src/lib/jobs/job${i}.ts`] = `// news went to hooks.slack.com\nimport { VERSION } from '../monitor'\nexport const n${i} = VERSION\n`
+  const w = world($, on, {
+    files: { [QUIET]: QUIET_TEXT, [BOOKING_COPY]: BOOKING_COPY_TEXT, [BY_KEY]: "import * as copy from './booking-copy'\nexport const run = (key: string) => sendSlackAlert(copy[key])\n", [BARREL_COPY]: 'export const VERSION = 1\n', ...many },
+  })
+  const whole = refusalOf(await call($, { tool: 'Write', file_path: BOOKING_COPY, content: `export * from '../monitor/quiet-feed-copy'\n${BOOKING_COPY_TEXT}` }))
+  for (const s of ['feed has gone quiet', 'still quiet', 'feed is sending again', 'Every feed is sending again']) expect(whole).toContain(s)
+  expect(whole).toContain(`makes ${BY_KEY} send Slack message text from ${QUIET}`)
+  // What the module already held is no part of this edit.
+  expect(whole).not.toContain('is late')
+  const short = refusalOf(await call($, { tool: 'Write', file_path: BARREL_COPY, content: "export const VERSION = 1\nexport * from './quiet-feed-copy'\n" }))
+  expect(short).not.toContain('could not check')
+  expect(short).toContain('feed has gone quiet')
+  expect(short).toContain(`makes it send Slack message text from ${QUIET}`)
+  expect(idIn(short)).toBeDefined()
+  expect(w.ran).toEqual([])
+})
+
+test('once Dan approves what the nearest sender sends, the rest of the same edit is still held for the sender further along that sends it', withKit, async ($, on) => {
+  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
+  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
+  const w = world($, on, {
+    files: {
+      [BOOKING_COPY]: BOOKING_COPY_TEXT,
+      [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
+      [BARREL_COPY]: "export * from './booking-copy'\n",
+      [NIGHTLY]: "import { NOT_FOUND } from '../lib/notify'\nexport const nightly = () => sendSlackAlert(NOT_FOUND)\n",
+    },
+  })
+  const both = { tool: 'Write', file_path: BOOKING_COPY, content: BOOKING_COPY_TEXT.replace('is late', 'is running late').replace('has that id', 'has that id yet') }
+  const first = refusalOf(await call($, both))
+  expect(first).toContain('Booking ${id} is running late')
+  expect(first).toContain(LATE)
+  await ask($, w, first, APPROVE, { rendered: 'Booking 4182 is running late' })
+  // The nearest sender's wording is approved now; the 404 text only the nightly job sends is not.
+  const second = refusalOf(await call($, both))
+  expect(second).toContain('No booking has that id yet')
+  expect(second).toContain(NIGHTLY)
+  expect(w.ran).toEqual([])
+  await ask($, w, second, APPROVE, { rendered: 'No booking has that id yet' })
+  expect(refusalOf(await call($, both))).toBe('')
+  expect(w.ran.length).toBe(1)
 })

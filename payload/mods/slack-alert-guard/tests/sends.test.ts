@@ -143,9 +143,9 @@ test('a marker in a route handler a framework call wraps does not make the whole
 const ROUTE = [`import { lateBooking, NOT_FOUND } from './booking-copy'`, `import { postAlert } from '@/lib/notify/post'`, `export const run = (id: string) => postAlert(lateBooking(id))`, `export const miss = () => new Response(NOT_FOUND, { status: 404 })`, ``].join('\n')
 
 test('the names a file imports or hands on are read from its import, re-export and require statements, and python import lines (#2637)', () => {
-  const names = importedNames(js(`import dflt, { a, b as c, type T } from './x'\nimport * as ns from './y'\nexport { d as e } from './z'\nconst { f, g } = require('./w')\nconst h = await import('./v')\nexport const local = 1\n`))
-  for (const n of ['dflt', 'a', 'b', 'c', 'T', 'ns', 'd', 'e', 'f', 'g', 'h']) expect(names.has(n)).toBe(true)
-  for (const n of ['local', 'import', 'from', 'as', 'type', 'export', 'require']) expect(names.has(n)).toBe(false)
+  const names = importedNames(js(`import dflt, { a, b as c, type T } from './x'\nimport * as ns from './y'\nexport { d as e } from './z'\nconst { f, g } = require('./w')\nconst h = await import('./v')\nimport React, { useState } from 'react'\nconst fs = require('fs')\nconst late = require(pick())\nexport const local = 1\n`))
+  for (const n of ['dflt', 'a', 'b', 'c', 'T', 'ns', 'd', 'e', 'f', 'g', 'h', 'late']) expect(names.has(n)).toBe(true)
+  for (const n of ['local', 'React', 'useState', 'fs', 'import', 'from', 'as', 'type', 'export', 'require']) expect(names.has(n)).toBe(false)
   const python = importedNames(py('from app.copy import (\n    late_booking,\n    not_found as missing,\n)\nimport app.alerts.sender as sender\nLOCAL = 1\n'))
   for (const n of ['late_booking', 'not_found', 'missing', 'sender']) expect(python.has(n)).toBe(true)
   expect(python.has('LOCAL')).toBe(false)

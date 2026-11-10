@@ -466,6 +466,9 @@ export const sentAt = (t: Traced, start: number): Send | undefined => t.spans.fi
  * The names a file's import and re-export statements bind or hand on (#2637): named, default and
  * whole module imports, a require or awaited import given to names, python's from and import lines.
  * A statement read too widely only adds names, which makes mayBringIn look more often, never less.
+ * The names of a bare package ('react') are left out, in JavaScript and TypeScript: its text is in
+ * no file of the repository the guard follows an import to (rules.ts, importTerms), and counting
+ * them would run the search on every edit that calls a library once more.
  */
 export const importedNames = (r: Reading): Set<string> => {
   const out = new Set<string>()
@@ -474,8 +477,15 @@ export const importedNames = (r: Reading): Set<string> => {
   }
   const forms = r.python
     ? [/^[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(\([^)]*\)|[^\n]*)/gm, /^[ \t]*import[ \t]+([^\n]+)/gm]
-    : [/(?<![\w$.])(?:import|export)\s+(?:type\s+)?([\w$\s,{}*]*?)\s*from\s*["'`]/g, /(?<![\w$.])(?:const|let|var)\s+([\w$]+|\{[^}=]*\})\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g]
-  for (const f of forms) for (const m of r.skel.matchAll(f)) add(m[1] as string)
+    : [/(?<![\w$.])(?:import|export)\s+(?:type\s+)?([\w$\s,{}*]*?)\s*from(?=\s*["'`])/g, /(?<![\w$.])(?:const|let|var)\s+([\w$]+|\{[^}=]*\})\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g]
+  for (const f of forms)
+    for (const m of r.skel.matchAll(f)) {
+      // The module named, read from the code, since the skeleton blanks it. Anything but a quoted
+      // bare package counts: a path, an alias, or a name worked out at run time.
+      const named = r.python ? null : /^\s*(["'`])([^"'`\n]*)\1/.exec(r.code.slice((m.index ?? 0) + m[0].length))
+      if (named && !(named[2] as string).startsWith('.') && !(named[2] as string).includes('/')) continue
+      add(m[1] as string)
+    }
   return out
 }
 
