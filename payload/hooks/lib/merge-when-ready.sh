@@ -134,7 +134,8 @@
 #      the repository's recent check runs took (claude-config#1604). A head whose CI run finished
 #      as a failure with no jobs (GitHub failing to start it) is not a stop the first time: that run
 #      is re-run once and waited on, and only a second such start stops (claude-config#2537, see
-#      rerun_failed_start)
+#      rerun_failed_start), or no signed in gh account that can merge in the repository, or none
+#      confirmed (claude-config#2629, see resolve_merger)
 #   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
 #      a line that keeps moving never ends it, #2351) or the poll count ran out, or
@@ -142,8 +143,9 @@
 #      deadline left than a check run takes (claude-config#1604); running it again resumes, at the
 #      back of the line
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
-#      based on it could not be moved, GitHub could not be read, or the branch holds commits the
-#      merge did not; running it again finishes the branch
+#      based on it could not be moved, GitHub could not be read, the branch holds commits the
+#      merge did not, or no signed in account can delete it (claude-config#2629); running it again
+#      finishes the branch
 #   64 refused its arguments, was run outside a checkout, was given a read key nobody typed in front
 #      of it (claude-config#1673), or was passed no merge method for a repository that allows more
 #      than one (or does not say which)
