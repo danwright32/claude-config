@@ -222,6 +222,15 @@ mirror_rsync_add hooks "$WORK/ln/src/hooks"; mirror_rsync_add agents "$WORK/ln/s
 PATH="$WORK/fail/bin:$PATH" mirror_rsync_go "$WORK/ln/dst" -ac --delete >/dev/null 2>&1; rc=$?
 if [ "$rc" -eq 23 ]; then ok "a failing rsync's exit status reaches the caller"; else bad "a failing rsync's exit status reaches the caller" "got $rc"; fi
 
+# ---- 4b. every shared exclude anchored: nothing left to pass through, which set -u must survive ----
+mirror_rsync_reset
+mirror_rsync_add hooks "$WORK/ln/src/hooks"
+if o="$(set -u; COMMON_EXCLUDES=(--exclude=/only-anchored.txt); mirror_rsync_go "$WORK/ln/dst" -ac --delete 2>&1)"; then
+  ok "a run whose shared excludes are all anchored still runs under set -u"
+else
+  bad "a run whose shared excludes are all anchored still runs under set -u" "$o"
+fi
+
 # ---- 5. wired: a real sync starts one rsync per step for the mirrored trees ----
 export SYNC_CLONE_REGISTRY="$WORK/no-such-directory/clone-registry" SYNC_ZSHRC="$WORK/zshrc-guard" \
   SYNC_SCRATCH_ROOT="$WORK/scratch-root" SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 \

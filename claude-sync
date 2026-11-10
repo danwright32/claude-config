@@ -2012,7 +2012,7 @@ mirror_rsync_go(){   # $1 = destination root  $2.. = rsync flags -> runs the tre
     i=$((i + 1))
   done
   if [ "${#combined[@]}" -gt 0 ]; then
-    rsync "$@" "${shared[@]}" ${ex[@]+"${ex[@]}"} "${combined[@]}" "$dst/" || return $?
+    rsync "$@" ${shared[@]+"${shared[@]}"} ${ex[@]+"${ex[@]}"} "${combined[@]}" "$dst/" || return $?
   fi
   i=0
   while [ "$i" -lt "${#MR_TREES[@]}" ]; do
