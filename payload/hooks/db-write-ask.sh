@@ -18,7 +18,8 @@
 #   - apply_migration, always: a migration changes the database whatever its text.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
-#     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file).
+#     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
+#     and python3 missing from PATH (asked the same way, naming python3).
 #     The registration carries onFailure block, so a crash or a timeout refuses the call rather than
 #     letting a write through unasked.
 #
@@ -39,11 +40,34 @@ payload="$(cat 2>/dev/null || true)"
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 
+# Every word this hook prints is built by lib/hook-notice.sh, valid whatever the statement holds
+# (#1906). Without the library it still asks, keeping only characters that need no escaping.
+# shellcheck source=lib/hook-notice.sh
+. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || {  # the library is missing
+  hook_ask_json() { printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s (lib/hook-notice.sh is missing beside this hook)"}}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
+  hook_notice_json() { printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; }
+}
+
 # Cleaned by the shared reader before python3 parses it (claude-config#1944). Without the library
-# the payload is read as it came.
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
+# the payload is read as it came, and python3 is looked for directly.
+if . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null; then
+  payload="$(ps_clean_payload "$payload")"
+else
+  ps_reader_missing() { ! command -v "$1" >/dev/null 2>&1; }
+fi
 
 [ -n "$payload" ] || exit 0
+
+# The classifier is python3. Without it no statement can be judged read only, so every database
+# call is asked about, a select included, naming what is missing (#486). A Salesforce write gets no
+# decision from this hook either way.
+if ps_reader_missing python3; then
+  case "$payload" in
+    *mcp__claude_ai_Supabase__execute_sql*|*mcp__claude_ai_Supabase__apply_migration*)
+      hook_ask_json "db-write-ask.sh asks before this database call because python3 is not on PATH, and it is what classifies a statement as read only, so nothing could be. Install python3 (claude-config#2521)" ;;
+  esac
+  exit 0
+fi
 
 out="$(printf '%s' "$payload" | python3 -I -c '
 import importlib.util, json, os, socket, sys
@@ -91,14 +115,15 @@ def sf_notice():
             "so no session or sync removes it (claude-config#2521).")
 
 def emit(decision_reason=None, message=None):
-    o = {}
+    """Hand the verdict to the shell, which builds the JSON through lib/hook-notice.sh: "ask", the
+    reason and the notice, or "note" and the notice, split by the unit separator, which is taken
+    out of both texts first (as is NUL, which a shell variable cannot hold)."""
+    def plain(t):
+        return (t or "").replace("\x1f", " ").replace("\x00", "")
     if decision_reason is not None:
-        o["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "ask",
-                                   "permissionDecisionReason": decision_reason}
-    if message:
-        o["systemMessage"] = message
-    if o:
-        print(json.dumps(o))
+        sys.stdout.write("ask\x1f" + plain(decision_reason) + "\x1f" + plain(message))
+    elif message:
+        sys.stdout.write("note\x1f" + plain(message))
     sys.exit()
 
 def ask(why):
@@ -153,14 +178,23 @@ ask("execute_sql is not provably read only (" + why + "), on " + where + ". " + 
 ' "$HOOK_DIR" 2>/dev/null)"
 rc=$?
 
-if [ "$rc" -ne 0 ] || { [ -n "$out" ] && [ "${out:0:1}" != "{" ]; }; then
-  # python3 itself failed: fail closed for a database tool, by the raw text, since nothing parsed it.
-  case "$payload" in
-    *mcp__claude_ai_Supabase__execute_sql*|*mcp__claude_ai_Supabase__apply_migration*)
-      printf '%s\n' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "db-write-ask.sh asks before this database call because its classifier (python3) failed, so the statement could not be classified as read only (claude-config#2521)"}}'
-      ;;
+US=$'\x1f'
+if [ "$rc" -eq 0 ]; then
+  case "$out" in
+    '') exit 0 ;;
+    "ask$US"*)
+      rest="${out#ask$US}"
+      hook_ask_json "${rest%%"$US"*}" "${rest#*"$US"}"
+      exit 0 ;;
+    "note$US"*)
+      hook_notice_json "${out#note$US}"
+      exit 0 ;;
   esac
-  exit 0
 fi
-[ -n "$out" ] && printf '%s\n' "$out"
+# python3 itself failed, or printed something that is not a verdict: fail closed for a database
+# tool, by the raw text, since nothing parsed it.
+case "$payload" in
+  *mcp__claude_ai_Supabase__execute_sql*|*mcp__claude_ai_Supabase__apply_migration*)
+    hook_ask_json "db-write-ask.sh asks before this database call because its classifier (python3) failed, so the statement could not be classified as read only (claude-config#2521)" ;;
+esac
 exit 0

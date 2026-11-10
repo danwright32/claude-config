@@ -233,6 +233,48 @@ printf '%s\n' '{"permissions": ' > "$SF_HOME/.claude/settings.local.json"
 r="$(run "$HOOK" "$SF_HOME" "$SFP")"
 case "$(decision "$r")|$(field "$r" message)" in "none rc=0|"*"could not"*settings.local.json*) check "an unreadable settings.local.json is said" ok ;; *) check "an unreadable settings.local.json is said" "$(decision "$r") $(field "$r" message)" ;; esac
 
+# --- with no python3 the hook still asks, and says python3 is what is missing (#486, #2521) -------
+# The classifier is python3, so on a machine without it no statement can be judged read only: every
+# database call is asked about, a select included, and the question names the missing reader rather
+# than reading as a crash.
+. "$DIR/lib/no-python-path.sh"
+NOPY="$WORK/nopy/bin"
+npp_build_bin "$NOPY"
+if npp_reaches_python3 "$NOPY"; then
+  check "the bare directory reaches no python3" "it found one, so nothing below measures its absence"
+else
+  run_nopy() { local out rc; out="$(cd "$WORK" && printf '%s' "$1" | env -u CLAUDE_HOME HOME="$EMPTY_HOME" PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>/dev/null)"; rc=$?; printf '%s\nrc=%s\n' "$out" "$rc"; }
+  for q in "select 1" "$STMT"; do
+    r="$(run_nopy "$(payload "$SQL_TOOL" "$q")")"
+    case "$(decision "$r")|$(field "$r" reason)" in
+      "ask rc=0|"*"python3 is not on PATH"*) check "with no python3, [$q] is asked about, naming python3" ok ;;
+      *) check "with no python3, [$q] is asked about, naming python3" "$(decision "$r") $(field "$r" reason)" ;;
+    esac
+  done
+  r="$(run_nopy "$(payload "$MIG_TOOL" "create table t (a int)")")"
+  [ "$(decision "$r")" = "ask rc=0" ] && check "with no python3 a migration is asked about" ok || check "with no python3 a migration is asked about" "$(decision "$r")"
+  r="$(run_nopy "$SFP")"
+  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3 a Salesforce write is given no decision" ok || check "with no python3 a Salesforce write is given no decision" "$(decision "$r")"
+fi
+
+# --- with lib/hook-notice.sh missing beside it, the hook still asks, in valid JSON --------------
+NOLIB="$WORK/nolib"
+mkdir -p "$NOLIB"
+cp "$HOOK" "$NOLIB/db-write-ask.sh"
+cp -R "$DIR/lib" "$NOLIB/lib"
+rm -f "$NOLIB/lib/hook-notice.sh"
+r="$(run "$NOLIB/db-write-ask.sh" "$EMPTY_HOME" "$(payload "$SQL_TOOL" "update t set a = 'x' where \"b\" = 1")")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*"lib/hook-notice.sh is missing"*) check "with lib/hook-notice.sh missing, a write is still asked about and says why" ok ;;
+  *) check "with lib/hook-notice.sh missing, a write is still asked about and says why" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+printf '%s\n' '{"permissions": {"allow": ["mcp__claude_ai_SFDC_USE__createSobjectRecord"]}}' > "$SF_HOME/.claude/settings.local.json"
+r="$(run "$NOLIB/db-write-ask.sh" "$SF_HOME" "$SFP")"
+case "$(decision "$r")|$(field "$r" message)" in
+  "none rc=0|"*createSobjectRecord*"lib/hook-notice.sh is missing"*) check "with lib/hook-notice.sh missing, the Salesforce notice is still said" ok ;;
+  *) check "with lib/hook-notice.sh missing, the Salesforce notice is still said" "$(decision "$r") $(field "$r" message)" ;;
+esac
+
 # --- the settings run it for exactly these tools, and refuse the call if it fails ---------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
