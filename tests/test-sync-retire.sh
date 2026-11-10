@@ -35,7 +35,7 @@ WORK="$(cd "$WORK" && pwd -P)"
 
 # ---- the real agents on this Mac, read (never changed) so the end of the suite can compare ----
 REAL_AGENTS="$HOME/Library/LaunchAgents"
-real_agents(){ for f in "$REAL_AGENTS"/com.claudesync.*.plist; do [ -f "$f" ] && printf '%s %s\n' "$f" "$(cksum < "$f")"; done; true; }
+real_agents(){ local f; for f in "$REAL_AGENTS"/com.claudesync.*.plist; do [ -f "$f" ] && printf '%s %s\n' "$f" "$(cksum < "$f")"; done; true; }
 REAL_BEFORE="$(real_agents)"
 
 # ---- the stub launchctl: it logs every call and keeps a table of what is loaded ----

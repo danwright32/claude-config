@@ -2934,6 +2934,8 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The retired record (claude-config#2545): present, every locked command here would refuse.
+export SYNC_RETIRED_FILE="$WORK/retired-guard"
 # The sync log a held back hooks block is appended to (claude-config#592), whose default is the
 # log the scheduled and watch jobs write to in the home folder.
 export SYNC_LOG_FILE="$WORK/sync-log-guard"
