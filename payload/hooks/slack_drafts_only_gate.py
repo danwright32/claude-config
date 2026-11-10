@@ -391,7 +391,8 @@ JS_WRITES_METHOD = re.compile(r"\.\s*(cp|rename|link|mkdir|rm|rmdir|unlink|trunc
 JS_FS = {"fs", "fs/promises"}
 # And a shell script (claude-config#2434): a command handed the script's arguments acts unless it is a
 # function the script defines (its body is read as the script's own commands), a script the gate
-# reads and sees cannot act (acts), code written into the script itself (a heredoc, -c), or one of
+# reads and sees cannot act (acts), code written into the script itself (a heredoc, -c) that is seen
+# unable to act in the same way (sh_code_acts, claude-config#2446), or one of
 # SH_INERT, builtins and programs that cannot send a request or run code with the words they are
 # handed. A list of senders (SENDERS) missed every program off it, gh and nc among them. Unlike a
 # Python or JavaScript script, a shell script's writes are not counted: every shell script that keeps
@@ -417,6 +418,28 @@ AWKS = {"awk", "gawk", "mawk", "nawk"}
 SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
 POSITIONAL = r"\$\{?[1-9@*]"
+# The same inside code given to a shell with -c, where $0 is the first word after the code.
+POSITIONAL_ZERO = r"\$\{?[0-9@*]"
+# Code a shell script writes inline and hands its arguments (python3 -c, a heredoc fed to python3 -,
+# bash -c) is judged for what it does with them, and what a command pipes on from the file it was
+# handed is followed to the command the pipe feeds (claude-config#2446). As for the script itself,
+# writing a file is not counted in that code: issue-spool.sh's own heredocs import os and write, and
+# its clear line is handed a transcript every turn. So inline Python may also import PY_FILES, and os
+# for the names in OS_FILES alone (its file, path and environment calls: none starts a program).
+PY_FILES = frozenset({"errno", "io", "stat", "tempfile"})
+OS_FILES = frozenset({
+    "DirEntry", "F_OK", "O_APPEND", "O_CLOEXEC", "O_CREAT", "O_EXCL", "O_NOFOLLOW", "O_RDONLY", "O_RDWR",
+    "O_TRUNC", "O_WRONLY", "PathLike", "R_OK", "W_OK", "X_OK", "access", "altsep", "chmod", "close",
+    "cpu_count", "curdir", "devnull", "environ", "environb", "error", "extsep", "fdopen", "fsdecode",
+    "fsencode", "fspath", "fstat", "fsync", "get_terminal_size", "getcwd", "getegid", "getenv", "geteuid",
+    "getgid", "getloadavg", "getlogin", "getpid", "getppid", "getuid", "isatty", "linesep", "link",
+    "listdir", "lstat", "makedirs", "mkdir", "name", "open", "pardir", "path", "pathsep", "read",
+    "readlink", "remove", "rename", "replace", "rmdir", "scandir", "sep", "stat", "stat_result",
+    "strerror", "symlink", "truncate", "umask", "uname", "unlink", "urandom", "utime", "walk", "write"})
+# What a pipe can feed that reads it in commands of its own: a loop, a block, an if, or read.
+SH_BLOCK = re.compile(r"\s*(?:while|until|for|if|select|case|time|!|\{)(?=\s|$)|\s*(?:\S+=\S*\s+)*read(?=\s|$)")
+# A pipe in a script's text, `||` apart.
+SH_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 # What a Python import's folder can be handed through: a shell variable in an argument, PYTHONPATH or
 # an exported variable (claude-config#2449). A variable's value is known only where it is certain
 # (sh_walk), mostly over the script's straight run of commands at its top; these mark where that stops: a
@@ -2551,18 +2574,26 @@ class Judge:
             return "is a kind of script the gate does not read for what it does with its arguments"
         return self.acts_body(body, real, os.path.dirname(real), kind)
 
-    def acts_inline(self, text, here, lang):
+    def acts_inline(self, text, here, lang, writes=True, env=None):
         """acts() for code given inline (python3 -c), run from here (claude-config#2439). Code in a
         language whose imports the gate does not follow (perl -e, ruby -e) is taken to act, as a script
-        file of that kind is."""
+        file of that kind is. writes and env are acts_body's, for code a shell script writes."""
         if lang not in ("py", "js"):
             return "is code in a language the gate does not read for what it does with its arguments"
-        return self.acts_body(text, None, here, lang)
+        return self.acts_body(text, None, here, lang, writes, env)
 
-    def acts_body(self, body, real, root, kind):
+    def acts_body(self, body, real, root, kind, writes=True, env=None):
         """How a Python or JavaScript script's text (real its file, None for inline code; root where it
-        runs from) can act on what it is handed, its local imports included, or None."""
-        why = self.py_acts(body, real, root) if kind == "py" else self.js_acts(body)
+        runs from) can act on what it is handed, its local imports included, or None.
+
+        writes is False for code a shell script writes inline (claude-config#2446), where writing a
+        file is not counted, as it is not for the shell script itself. env, there, is the Python the
+        script put in that command's environment ({NAME: its text}, sh_env_code): code the inline
+        code runs with exec(os.environ["NAME"]) is read with it, as one text (py_env_code)."""
+        ran = frozenset()
+        if kind == "py" and env:
+            body, ran = self.py_env_code(body, env)
+        why = self.py_acts(body, real, root, writes, ran) if kind == "py" else self.js_acts(body, writes)
         if why:
             return why
         for why, _, target, found in self.modules("it", real, root, body, kind):
@@ -2574,12 +2605,59 @@ class Judge:
         return None
 
     @staticmethod
-    def js_acts(text):
+    def py_env_exec(node, os_names):
+        """NAME where node is the call exec(os.environ["NAME"]), os under any name it was imported
+        by (os_names), with nothing else handed to exec; else None."""
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "exec"
+                and len(node.args) == 1 and not node.keywords and isinstance(node.args[0], ast.Subscript)):
+            return None
+        sub = node.args[0]
+        held = sub.value
+        if not (isinstance(held, ast.Attribute) and held.attr == "environ" and isinstance(held.value, ast.Name)
+                and held.value.id in os_names):
+            return None
+        key = sub.slice
+        return key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
+
+    @staticmethod
+    def py_os_names(tree):
+        """The names a Python text imports os by (`import os`, `import os as _os`)."""
+        return {a.asname or "os" for node in ast.walk(tree) if isinstance(node, ast.Import)
+                for a in node.names if a.name == "os"}
+
+    def py_env_code(self, text, env):
+        """(text with the code it runs from its environment in front of it, the NAMEs taken).
+
+        Inline Python that runs exec(os.environ["NAME"]) runs, in its own namespace, whatever the
+        shell script put in NAME. Where env holds that text (sh_env_code: a literal the script wrote),
+        it is put in front, so the two are read as the one program they are: a name either imports
+        is held to the same rules in both. It goes round, since the code taken can run more. A NAME
+        env does not hold is left, and py_acts counts that exec as running code."""
+        ran = set()
+        for _ in range(len(env) + 1):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    tree = ast.parse(text)
+            except (SyntaxError, ValueError):
+                break  # py_acts says it could not be parsed
+            os_names = self.py_os_names(tree)
+            found = {self.py_env_exec(node, os_names) for node in ast.walk(tree)}
+            new = sorted(n for n in found - ran if n is not None and env.get(n) is not None)
+            if not new:
+                break
+            text = "\n".join(env[n] for n in new) + "\n" + text
+            ran.update(new)
+        return text, frozenset(ran)
+
+    @staticmethod
+    def js_acts(text, writes=True):
         """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
         a phrase, or None when it is seen unable to. It is unable to only when every module it imports
         that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC,
         JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
-        judges it with this same reading, and one that is not there is refused there."""
+        judges it with this same reading, and one that is not there is refused there. writes is False
+        for code a shell script writes inline, where JS_WRITES is not counted (claude-config#2446)."""
         code = js_code(text)
         uses_fs = False
         for m in IMPORT_SPEC.finditer(code):
@@ -2594,15 +2672,22 @@ class Judge:
         hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code) or JS_ACTS.search(text)
         if hit:
             return f"can send a request or run code ({hit.group(0).strip()})"
-        hit = JS_WRITES.search(code) or JS_WRITES_METHOD.search(code) or \
-            (JS_WRITES_SHORT.search(code) if uses_fs else None)
+        hit = writes and (JS_WRITES.search(code) or JS_WRITES_METHOD.search(code) or
+                          (JS_WRITES_SHORT.search(code) if uses_fs else None))
         if hit:
             return f"can write a file ({hit.group(0).strip(' (.')})"
         return None
 
-    def py_acts(self, text, cur, root):
+    def py_acts(self, text, cur, root, writes=True, ran=frozenset()):
         """acts() for one Python file's text (cur its file, root the script's folder): how it can act
         on what it is handed, as a phrase, or None when it is seen unable to.
+
+        writes is False for code a shell script writes inline (claude-config#2446): writing a file is
+        not counted there, so PY_WRITES and open()'s mode are not read, PY_FILES may be imported, and
+        so may os, held to OS_FILES: each use of the name it is imported by must be os.<one of them>,
+        and any other use (os.system, os passed on or given another name) counts as acting. ran is
+        the NAMEs whose code py_env_code put in front of text, so exec(os.environ[NAME]) for one of
+        them is that code running, which is read here; any other exec counts as it always did.
 
         It is unable to only when every module it imports from outside the script's own files is in
         PY_INERT, and it uses no builtin in PY_RUNS, no attribute in PY_REACH (or any _private or
@@ -2626,6 +2711,7 @@ class Judge:
         unknown = "a module the gate does not know to be unable to send a request or run code"
         bound = set()  # each name an import binds, whose attributes are another module's namespace
         restricted = set()  # (a, b) for `import a.b` where only a.b is inert, so a.<other> acts
+        os_names = set()  # the names os is imported by, where writes are not counted
         for node in nodes:
             if isinstance(node, ast.Import):
                 for a in node.names:
@@ -2633,6 +2719,11 @@ class Judge:
                     bound.add(a.asname or top)
                     if self.resolve_py(0, a.name, (), cur_dir, root, inserts) != []:
                         continue  # local (followed by modules()) or placed nowhere (refused there)
+                    if not writes and a.name == "os":
+                        os_names.add(a.asname or "os")
+                        continue
+                    if not writes and a.name in PY_FILES:
+                        continue
                     if a.name not in PY_INERT and top not in PY_INERT:
                         return f"imports {a.name}, {unknown}"
                     if not a.asname and top not in PY_INERT:
@@ -2648,6 +2739,8 @@ class Judge:
                     continue
                 if module == "sys" and "path" in names:
                     return "changes where Python finds modules (sys.path)"
+                if not writes and (module in PY_FILES or (module == "os" and all(n in OS_FILES for n in names))):
+                    continue
                 if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
                         not all(f"{module}.{n}" in PY_INERT for n in names):
                     return f"imports {module}, {unknown}"
@@ -2661,15 +2754,21 @@ class Judge:
                     (node.value.id, node.attr) in restricted:
                 cleared.add(id(node.value))
         restricted_names = {top for top, _ in restricted}
+        # Each use of os as os.<one of OS_FILES>, and each exec that runs code already in this text.
+        os_ok = {id(n.value) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                 and n.value.id in os_names and n.attr in OS_FILES}
+        ran_here = {id(n.func) for n in nodes if ran and self.py_env_exec(n, os_names) in ran}
         for node in nodes:
             if isinstance(node, ast.Name):
-                if node.id in PY_RUNS:
+                if node.id in PY_RUNS and id(node) not in ran_here:
                     return f"can run code or reach past what the gate reads ({node.id})"
+                if node.id in os_names and id(node) not in os_ok:
+                    return f"uses {node.id} for more than its file, path and environment calls"
                 if node.id in PY_REACH - {"modules"}:
                     return f"can evaluate a string as code ({node.id})"
                 if node.id in restricted_names and id(node) not in cleared:
                     return f"uses {node.id} for more than {', '.join(sorted(f'{t}.{s}' for t, s in restricted))}"
-                if node.id == "open" and id(node) not in called:
+                if writes and node.id == "open" and id(node) not in called:
                     return "can write a file (open, passed on rather than called)"
             elif isinstance(node, ast.Attribute):
                 a = node.attr
@@ -2681,10 +2780,12 @@ class Judge:
                 while isinstance(base, ast.Attribute):
                     base = base.value
                 # sys holds no module but sys.modules (refused above), and sys.platform is a string.
+                # os.stat is os's own call, not the stat module: one of OS_FILES straight off os.
                 if isinstance(base, ast.Name) and base.id in bound and base.id != "sys" and a in stdlib \
-                        and a not in PY_INERT and (base.id, a) not in restricted:
+                        and a not in PY_INERT and (base.id, a) not in restricted \
+                        and not (base.id in os_names and node.value is base and a in OS_FILES):
                     return f"reaches the {a} module through {base.id}"
-            elif isinstance(node, ast.Call):
+            elif isinstance(node, ast.Call) and writes:
                 f = node.func
                 name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
                 if isinstance(f, ast.Attribute) and name in PY_WRITES:
@@ -2700,21 +2801,33 @@ class Judge:
                         return f"can write a file ({name} with a mode that writes, or one the gate cannot read)"
         return None
 
-    def shell_acts(self, body, d):
+    def shell_acts(self, body, d, zero=False, depth=0):
         """acts() for a shell script's body: the first of its commands that sends a request, runs what
         the script was handed, or hands it to a program not seen to be unable to act, as a phrase, or
         None.
 
         Handed means a word after the program's name holds an expansion of the script's arguments or
-        of a variable set from them, a redirection's included (`nc host 443 < "$1"`). What it does not
-        follow, so a pass is not read as more than it measured: what reaches a program through a pipe
-        (`cat "$1" | x`), code written into the script itself (a heredoc fed to python3 -, a -c
-        string), and what the script writes with a redirection."""
+        of a variable set from them, a redirection's included (`nc host 443 < "$1"`), or the command
+        opens a heredoc the shell expands them into. Two more routes are followed (claude-config#2446):
+          - code the script writes and hands its arguments, with -c, a heredoc or a here string, is
+            judged for what it does with them (sh_code_acts): shell code by this same reading (zero is
+            True for a -c string, where $0 is an argument too), Python and JavaScript by acts_inline
+            with writing not counted;
+          - what a command that passes sends down a pipe goes to the command the pipe feeds, which is
+            then judged as fed it (sh_command_acts), on through each program that only filters it.
+        Both need each command's place in the script (sh_flow). What it still does not follow, so a
+        pass is not read as more than it measured: what the script writes with a redirection or by
+        moving a file (SH_INERT says why), a variable set by read from a pipe or a file, a pipe or a
+        heredoc inside a string a wrapper runs (eval, bash -c with no arguments handed), and a file
+        the script sources that sets again a variable holding Python it runs (sh_env_code)."""
+        if depth > MAX_DEPTH:
+            return "nests code deeper than the gate reads"
         defined = set(re.findall(r"(?:^|[\s;&|(){}])(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", body))
         defined |= set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", body))
         names = {"OPTARG"} if "getopts" in body else set()
         while True:
-            given = POSITIONAL + (r"|\$\{?(?:" + "|".join(sorted(names)) + r")\b" if names else "")
+            given = (POSITIONAL_ZERO if zero else POSITIONAL) + \
+                (r"|\$\{?(?:" + "|".join(sorted(names)) + r")\b" if names else "")
             found = {m.group(1) for m in re.finditer(
                 r"(?:^|[\s;&|(])(?:(?:local|readonly|export|declare|typeset)\s+(?:-\w+\s+)*)?([A-Za-z_]\w*)="
                 r"[^\n;]*?(?:" + given + ")", body)}
@@ -2728,81 +2841,228 @@ class Judge:
             records = self.sw.every_command(body, d)
         except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573, #2593)
             return "could not be read as commands to see what it does with its arguments"
-        for _, text, _, _, _ in records:
-            rest, _ = self.sw.command_rest(text)
+        flow = self.sh_flow(body, d, records)
+        piped = set()  # the commands a pipe feeds what the script was handed (their index in records)
+        for idx, (_, text, _, _, _) in enumerate(records):
+            rest, assigns = self.sw.command_rest(text)
             words = self.sw.command_words(rest)
             if words and not words[0].strip():
                 # A line continued with a backslash inside $(...) comes back with the newline as its
                 # first word and its assignments still in front (issue-spool.sh's append), so it is
                 # read again from its first real word.
-                rest, _ = self.sw.command_rest(self.sw.rejoin([w for w in words if w.strip()]))
-                words = self.sw.command_words(rest)
+                rest, more = self.sw.command_rest(self.sw.rejoin([w for w in words if w.strip()]))
+                words, assigns = self.sw.command_words(rest), assigns + "\n" + more
             if not words:
                 continue
             if re.match(r"[A-Za-z_]\w*(\[[^]]*\])?\+?=", words[0]):
                 continue  # an assignment (list+=("$1") too), which runs nothing
-            name = os.path.basename(words[0])
-            if handed.search(words[0]):
-                return f"runs a command named by its arguments ({words[0]})"
-            if name in SENDERS:
-                return f"sends a request ({name})"
-            if name in ("source", ".", "eval"):
-                if any(handed.search(w) for w in words[1:]):
-                    return f"runs the file it is handed ({name})"
+            # The heredocs this command opens, and whether the shell expands what was handed into one.
+            docs = self.sh_heredocs(flow, idx, body)
+            fed = idx in piped
+            takes = fed or any(handed.search(w) for w in words[1:])
+            expands = any(not quoted and handed.search(code) for quoted, code in docs or ())
+            cmd = {"words": words, "docs": docs, "fed": fed, "takes": takes, "expands": expands,
+                   "known": flow is not None,
+                   "block": bool(flow and idx in flow["part"] and SH_BLOCK.match(
+                       body[flow["part"][idx]["start"]:flow["part"][idx]["end"]])),
+                   "env": lambda assigns=assigns: self.sh_env_code(assigns, body, names)}
+            why = self.sh_command_acts(cmd, handed, defined, d, depth)
+            if why:
+                return why
+            if not (takes or expands):
                 continue
-            if not any(handed.search(w) for w in words[1:]):
+            # It passed, holding what was handed: whatever it pipes on goes to the next command.
+            if flow is None:
+                if SH_PIPE.search(body):
+                    return "could not be read as commands to see where it pipes what it is handed"
                 continue
-            if "/" not in words[0] and (name[:-2] if name.endswith("()") else name) in defined:
-                continue  # a definition, `show() { cat "$1"; }`, reads as a command named show()
-            # A program is the tool its name says only by bare name or from a system folder: a local
-            # ./grep or bin/cat is a script of its own, judged below by what it does.
-            system = "/" not in words[0] or os.path.dirname(words[0]) in SYSTEM_BIN
-            if system and name in SH_INERT:
+            into = self.sh_piped_into(flow, idx)
+            if into is not None:
+                piped.add(into)
+        return None
+
+    def sh_flow(self, body, d, records):
+        """Where each command of a shell script's body is in it, for shell_acts: {"part": {its index
+        in records: its part, as the reader's commands() gives it}, "heredocs": [(quoted, the text
+        of the command up to the opener, body)]}. None where the reader could only cut the body
+        crudely, so nothing says what a command pipes into or which heredoc feeds it. Only the
+        script's own commands have a place: one inside a string a wrapper runs (deeper than 0 in
+        records) has none."""
+        heredocs, parts = [], []
+        try:
+            self.sw.commands(body, d, heredocs=heredocs, parts=parts)
+        except self.sw.Unreadable:
+            return None
+        top = [i for i, r in enumerate(records) if r[4] == 0]
+        if len(top) != len(parts):
+            return None
+        return {"part": dict(zip(top, parts)), "heredocs": heredocs}
+
+    @staticmethod
+    def sh_heredocs(flow, idx, body):
+        """[(quoted, text)] for each heredoc the command at idx in records opens, [] for none, and
+        None where its place is not known (sh_flow). A command written twice gets both bodies."""
+        part = flow["part"].get(idx) if flow else None
+        if part is None:
+            return None
+        out = []
+        for start, _ in part["openers"]:
+            before = body[part["start"]:start]
+            out += [(quoted, text) for quoted, b, text in flow["heredocs"] if b == before]
+        return out
+
+    @staticmethod
+    def sh_piped_into(flow, idx):
+        """The index in records of the command the one at idx pipes into, or None: the command that
+        starts soonest after it ends, a subshell's first command for `x | ( ... )`."""
+        part = flow["part"].get(idx)
+        if part is None or part["how"] != "|":
+            return None
+        after = [(q["start"], j) for j, q in flow["part"].items() if q["start"] >= part["end"]]
+        return min(after)[1] if after else None
+
+    def sh_env_code(self, assigns, body, names):
+        """{NAME: text} for each NAME="$VAR" in front of a command where VAR holds Python the script
+        wrote: set once in the script, to a single quoted literal (issue-spool.sh's
+        ISSUE_SPOOL_SEEN_PY), bound no other way (sh_binds), and not set from what the script was
+        handed (names). Inline code that runs exec(os.environ["NAME"]) is then read with that text
+        (py_env_code); a NAME not here is code the gate cannot read."""
+        out = {}
+        for a in assigns.split("\n"):
+            m = re.fullmatch(r"([A-Za-z_]\w*)=\$\{?([A-Za-z_]\w*)\}?", a.strip())
+            if not m or m.group(2) in names:
                 continue
-            git = self.sw.git_read(words) if system and name == "git" else None
-            if git and git[0] in GIT_INERT and not any(
-                    w in GIT_RUNS or w.startswith(GIT_RUNS) for w in git[1] + git[2]):
-                continue
-            if system and name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
-                continue  # find runs a program only through -exec and its kind
-            if system and name in AWKS and not self.awk_runs(words):
-                continue
-            if name in SHELLS or INTERPRETER.match(name):
-                operand, inline, stdin = self.operands(words)
-                if inline:
-                    if any(handed.search(w) for w in inline[0]):
-                        return f"loads a file it is handed before the code given to {name}"
-                    code = inline[1]
-                    if handed.search(code):
-                        return f"runs code it is handed ({name})"
-                    continue  # code written into the script, read with it for what it names
-                if operand and handed.search(operand):
-                    return f"runs the file it is handed ({name})"
-                if stdin and operand in (None, "-"):
-                    continue  # its code is a heredoc in the script, read with it for what it names
-                if not operand or re.search(r"[$`]", operand):
-                    return (f"hands its arguments to {name} running a script or module the gate cannot "
-                            f"read ({operand or ' '.join(words[1:3])})")
-                path = self.resolve(operand, d)
-                if not os.path.isfile(path):
-                    return f"hands its arguments to {name} running a script the gate cannot find ({operand})"
-                kind = "js" if JS_RUNTIME.match(name) else "py" if re.match(r"(python|pypy)", name) else None
-                inner = self.acts(path, d, name in SHELLS, kind)
+            var = m.group(2)
+            literal = re.findall(r"(?m)^[ \t]*" + re.escape(var) + r"='([^']*)'[ \t]*$", body)
+            if len(literal) == 1 and not self.sh_binds(var, body, 1):
+                out[m.group(1)] = literal[0]
+        return out
+
+    def sh_code_acts(self, code, name, d, zero, env, depth):
+        """How code a shell script writes for the program name (with -c, a heredoc or a here string)
+        acts on the arguments it is handed, as a phrase, or None: shell code by shell_acts, Python
+        and JavaScript by acts_inline with writing not counted, any other language as acting."""
+        if name in SHELLS:
+            return self.shell_acts(code, d, zero, depth + 1)
+        kind = "js" if JS_RUNTIME.match(name) else "py" if PY_RUNTIME.match(name) else None
+        return self.acts_inline(code, d, kind, False, env())
+
+    def sh_command_acts(self, cmd, handed, defined, d, depth):
+        """How one command of a shell script acts on what the script was handed, as a phrase, or None.
+
+        cmd is the command as shell_acts read it: its words, the heredocs it opens (docs, None where
+        its place in the script is not known), whether a pipe feeds it what was handed (fed),
+        whether it takes what was handed (takes: fed, or in a word), whether the shell expands what
+        was handed into a heredoc it opens (expands: code, to a shell or an interpreter reading its
+        input, and only text to any other program, as `done <<EOF` over a list of names is), whether
+        the script's commands have places (known), whether it is the head of a loop or block
+        (block), and env, which gives the Python its environment holds (sh_env_code)."""
+        words, docs, fed = cmd["words"], cmd["docs"], cmd["fed"]
+        lead = "pipes what it is handed into" if fed else "hands its arguments to"
+        name = os.path.basename(words[0])
+        if handed.search(words[0]):
+            return f"runs a command named by its arguments ({words[0]})"
+        if name in SENDERS:
+            return f"sends a request ({name})"
+        if name in ("source", ".", "eval"):
+            if any(handed.search(w) for w in words[1:]):
+                return f"runs the file it is handed ({name})"
+            if fed and name != "eval":
+                return f"runs what it is handed, through a pipe ({name})"
+            return None
+        if not cmd["takes"] and not (cmd["expands"] and (name in SHELLS or INTERPRETER.match(name))):
+            return None
+        if fed and cmd["block"]:
+            # `cat "$1" | while read -r line; do eval "$line"; done`: the reads are commands of its own.
+            return f"pipes what it is handed into a loop or block whose reads the gate does not follow ({name})"
+        if "/" not in words[0] and (name[:-2] if name.endswith("()") else name) in defined:
+            if fed:
+                return f"pipes what it is handed into {name}, a function whose reads the gate does not follow"
+            return None  # a definition, `show() { cat "$1"; }`, reads as a command named show()
+        # A program is the tool its name says only by bare name or from a system folder: a local
+        # ./grep or bin/cat is a script of its own, judged below by what it does.
+        system = "/" not in words[0] or os.path.dirname(words[0]) in SYSTEM_BIN
+        if system and name in SH_INERT:
+            return None
+        git = self.sw.git_read(words) if system and name == "git" else None
+        if git and git[0] in GIT_INERT and not any(
+                w in GIT_RUNS or w.startswith(GIT_RUNS) for w in git[1] + git[2]):
+            return None
+        if system and name == "find" and not set(words) & {"-exec", "-execdir", "-ok", "-okdir"}:
+            return None  # find runs a program only through -exec and its kind
+        if system and name in AWKS and not self.awk_runs(words):
+            return None
+        if name in SHELLS or INTERPRETER.match(name):
+            operand, inline, stdin = self.operands(words)
+            if inline:
+                if any(handed.search(w) for w in inline[0]):
+                    return f"loads a file it is handed before the code given to {name}"
+                code = inline[1]
+                if handed.search(code):
+                    return f"runs code it is handed ({name})"
+                if fed and name in SHELLS:
+                    return f"pipes what it is handed into code given to {name}, whose reads the gate does not follow"
+                # Code written into the script: judged for what it does with the arguments after it.
+                inner = self.sh_code_acts(code, name, d, True, cmd["env"], depth)
+                return f"{lead} code given to {name}, which {inner}" if inner else None
+            if operand and handed.search(operand):
+                return f"runs the file it is handed ({name})"
+            if stdin and operand in (None, "-"):
+                return self.sh_stdin_acts(cmd, name, handed, d, depth)
+            if not operand or re.search(r"[$`]", operand):
+                return (f"hands its arguments to {name} running a script or module the gate cannot "
+                        f"read ({operand or ' '.join(words[1:3])})")
+            path = self.resolve(operand, d)
+            if not os.path.isfile(path):
+                return f"hands its arguments to {name} running a script the gate cannot find ({operand})"
+            kind = "js" if JS_RUNTIME.match(name) else "py" if re.match(r"(python|pypy)", name) else None
+            inner = self.acts(path, d, name in SHELLS, kind)
+            if inner:
+                return f"hands its arguments to {os.path.basename(operand)}, which {inner}"
+            if fed:
+                return (f"pipes what it is handed into {os.path.basename(operand)}, whose reading of its "
+                        f"input the gate does not follow")
+            return None
+        if name in ("done", "}", ")", "fi", "esac"):
+            return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
+                    f"({name} {' '.join(words[1:3])})")
+        if not system and not re.search(r"[$`]", words[0]):
+            path = self.resolve(words[0], d)
+            if os.path.isfile(path):
+                inner = self.acts(path, d, False, None)
                 if inner:
-                    return f"hands its arguments to {os.path.basename(operand)}, which {inner}"
-                continue
-            if name in ("done", "}", ")", "fi", "esac"):
-                return (f"feeds what it is handed to a loop or block whose reads the gate does not follow "
-                        f"({name} {' '.join(words[1:3])})")
-            if not system and not re.search(r"[$`]", words[0]):
-                path = self.resolve(words[0], d)
-                if os.path.isfile(path):
-                    inner = self.acts(path, d, False, None)
-                    if inner:
-                        return f"hands its arguments to {words[0]}, which {inner}"
-                    continue
-            return (f"hands its arguments to a program the gate does not know to be unable to send a "
-                    f"request or run code ({name})")
+                    return f"hands its arguments to {words[0]}, which {inner}"
+                if fed:
+                    return f"pipes what it is handed into {words[0]}, whose reading of its input the gate does not follow"
+                return None
+        return (f"hands its arguments to a program the gate does not know to be unable to send a "
+                f"request or run code ({name})")
+
+    def sh_stdin_acts(self, cmd, name, handed, d, depth):
+        """sh_command_acts for a shell or interpreter that runs the code on its input, as a phrase,
+        or None: a here string or a heredoc the script wrote is judged as code handed the command's
+        arguments (sh_code_acts); what a pipe feeds it, or a here string or heredoc the shell
+        expands what was handed into, is code the script was handed; and with none of them the code
+        comes from wherever the script's own input does, which nothing here can read."""
+        words, docs = cmd["words"], cmd["docs"]
+        strings = [words[k + 1] if w == "<<<" and k + 1 < len(words) else w[3:]
+                   for k, w in enumerate(words) if w.startswith("<<<")]
+        if any(handed.search(s) for s in strings):
+            return f"runs code it is handed ({name}, a here string)"
+        if docs is None:
+            if not cmd["known"]:
+                return f"could not be read as commands to see what code it feeds {name}"
+            return None  # inside a string a wrapper runs: its heredoc is not followed, as before
+        if any(not quoted and handed.search(code) for quoted, code in docs):
+            return f"runs code it is handed ({name}, a heredoc that expands it)"
+        if not docs and not strings:
+            if cmd["fed"]:
+                return f"runs what it is handed, through a pipe ({name})"
+            return f"hands its arguments to {name} running code from its input, which the gate cannot read"
+        for code in [code for _, code in docs] + strings:
+            inner = self.sh_code_acts(code, name, d, False, cmd["env"], depth)
+            if inner:
+                return f"hands its arguments to code it feeds {name}, which {inner}"
         return None
 
     @staticmethod

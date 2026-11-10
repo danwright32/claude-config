@@ -1379,7 +1379,11 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       moved="$start"
       why=""
       while :; do
-        sleep "$poll"
+        # The sleep writes nowhere (claude-config#2614). This shell is killed by the cleanup of the
+        # run while it sits here, and the sleep outlives it: holding the run output, it kept every
+        # reader of that output waiting out the rest of the poll after the run had already ended.
+        # No apostrophe anywhere in this script: it is one single quoted argument to sh.
+        sleep "$poll" >/dev/null 2>&1
         kill -0 "$1" 2>/dev/null || exit 0
         now="$(date +%s)"
         # Progress is the run reaching a NEW section. A stopped run leaves this alone; a slow one
@@ -1448,8 +1452,14 @@ if [ "$SUITE_TIMEOUT" -gt 0 ] || [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
       "$5" "$1" "" 2>/dev/null
       kill -9 "$1" 2>/dev/null
       rm -f "$3"    # the victim was killed outright and cannot clean up after itself
-    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE" "$SUITE_POLL_INTERVAL" >&8 2>&9 8>&- 9>&-
-  ) &
+    ' suite-deadline-watchdog "$_suite_pid" "$SUITE_TIMEOUT" "$SUITE_SECTION_MARK" "$SUITE_STALL_TIMEOUT" "$SUITE_KILL_TREE" "$SUITE_POLL_INTERVAL"
+  # The redirections sit on the SUBSHELL, never on the `exec` (claude-config#2614). Written on the
+  # exec, bash saved descriptors 8 and 9 to 12 and 13 to restore them afterwards, the exec never
+  # returned to restore them, and the copies were not closed on exec: the watchdog and every sleep
+  # it started held this run's output open on them. So each reader of that output went on waiting
+  # for up to a poll after the run had ended. In a forked subshell there is nothing to restore, so
+  # nothing is saved, and the watchdog holds the output on 1 and 2 alone.
+  ) >&8 2>&9 8>&- 9>&- &
     printf '%s\n' "$!" > "$_wd_pidf"
   ) 8>&1 9>&2 >/dev/null 2>&1
   SUITE_WATCHDOG_PID="$(cat "$_wd_pidf" 2>/dev/null)"
@@ -8778,6 +8788,31 @@ check "#31 it ends near its deadline rather than long after (${_elapsed}s agains
 # and it would read as protection while protecting nothing (L1).
 check "#31 and a run one second over that bound is refused" \
   "! [ $(( _hang_max + 1 )) -le '$_hang_max' ]"
+
+# A FINISHED run must not leave anything holding its output open (claude-config#2614). The run
+# kills its watchdog on the way out, but the watchdog was usually sitting in `sleep "$poll"`, and
+# that sleep outlived it holding the run's stdout and stderr. So anything reading the output, a
+# `$(...)`, a `| grep`, the `| tee` every SECTION_ONLY and shard run goes through, waited for the
+# rest of the poll after the run had already exited: up to 2 seconds per run at the default, which
+# put every timing of a one section run on a 2 second step (measured 2026-11-10: the run's bash
+# exited at 6.8s, the watchdog at 6.7s, its sleep and the reader's end of file at 8.3s).
+#
+# The poll is set long here so the defect, if it comes back, cannot hide inside the run's own
+# length: the reader would wait most of a minute rather than a fraction of 2 seconds. The run's
+# exit is stamped by the subshell the moment bash returns, the end of file by the reader, and the
+# gap between them is what a stray holder costs. The bound is half the poll, which a healthy run
+# clears by the whole poll and a held pipe cannot reach.
+_ho_poll=40
+_ho_dir="$(mktemp -d "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
+( SUITE_TIMEOUT=300 SUITE_FIXTURE_SECTIONS=1 SUITE_POLL_INTERVAL=$_ho_poll SUITE_WATCHDOG_TAG="$_wd_tag" \
+    SUITE_DEPTH=$SUITE_CHILD_DEPTH bash "$SCRIPT_SELF"; echo "$?" > "$_ho_dir/rc"; date +%s > "$_ho_dir/exit" ) 2>&1 \
+  | { cat > "$_ho_dir/out"; date +%s > "$_ho_dir/eof"; }
+_ho_gap=$(( $(cat "$_ho_dir/eof" 2>/dev/null || echo 0) - $(cat "$_ho_dir/exit" 2>/dev/null || echo 0) ))
+check "#2614 the run being timed finished and passed" \
+  "[ \"\$(cat '$_ho_dir/rc' 2>/dev/null)\" = 0 ] && grep -q '^SUITE-RESULT passed=[1-9][0-9]* failed=0' '$_ho_dir/out'"
+check "#2614 a finished run leaves nothing holding its output open (${_ho_gap}s after it exited, against $(( _ho_poll / 2 ))s)" \
+  "[ '$_ho_gap' -ge 0 ] && [ '$_ho_gap' -lt $(( _ho_poll / 2 )) ]"
+rm -rf "$_ho_dir"
 
 # A watchdog that outlives the run it watches is holding a process id that the system is free to
 # hand to something else, and it kills what it finds there. Each one exits within a poll of its
