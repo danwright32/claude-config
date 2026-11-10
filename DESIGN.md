@@ -839,7 +839,7 @@ that is added both fail until this table is updated.
 | 30 seconds | `SYNC_CLAUDE_CHECK_TIMEOUT=30` | One `claude plugin list` or `claude plugin validate` asked about the mods is stopped, and the pull says the mods could not be checked | Measured 2026-10-03 on this Mac, three runs each: `plugin list --json` took 0.37 to 0.40 seconds and `plugin validate` 0.31 to 0.44, so this is about 70x the slowest. The check runs under the sync lock on the watcher's and the timer's path, so the cost of waiting too long is every sync behind a hung claude (a login prompt, a self update), while a slow first launch still fits inside it, proved by #606 | 2026-10-03 |
 | 30 seconds | `SYNC_SCRATCH_DU_TIMEOUT=30` | A `du` sizing abandoned scratch is stopped and the size is reported as not known | Measured 2026-09-18 on this Mac: one `du` over 792 flat scratch items holding 950 MB in 12,124 entries took 0.2 seconds, so this is 150x that, and the 1,139 items and 1.4 GB the pile left would be under a second at the same rate. A `du` still going at 30 seconds is reading a tree something is writing, and the four found that day had run 23 to 51 minutes, proved by #444 | 2026-09-18 |
 | 1 hour | `SYNC_SUITE_MAX_AGE=3600` | `status` and the per prompt notice report a suite process of this repo as left running, and name it for `kill -9`; a run of the runner is judged by its newest suite instead, and named only when none under it is younger (#2106, where full runs passed the hour at load 80 to 176 while still finishing suites) | Equal to `SUITE_TIMEOUT`, the ceiling of the slowest suite there is, which is the longest any suite is allowed to run at all. The slowest real run on record is that suite's 1943 seconds at load 160 to 188 on 2026-08-22, so a healthy run never reaches it. The pile of 2026-09-18 had 354 processes past 40 minutes and one at seven hours, proved by #444 | 2026-09-18 |
-| 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` and the per prompt notice report this repo's suites as a pile when more than this many were started independently | The runner's own ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, which is the cores capped at 8. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |
+| 8 runs | `SYNC_SUITE_MAX_ROOTS=8` | `status` and the per prompt notice report this repo's suites as a pile when more than this many were started independently | Set equal to the runner's old ceiling on what one whole run has in flight, `HOOK_TESTS_BUDGET`, then the cores capped at 8. Since #2548 (2026-11-09) that budget is the cores up to 8, then two thirds of them (12 on 18 cores), so the two numbers no longer match on a bigger Mac. The count is kept at 8 because it counts independent STARTS, not processes, and the budget changes neither how many starts a whole run makes nor how many agents start suites; it was not re-measured on the 18 core Mac. A whole run of the runner is ONE independent start, since everything under it is nested. Measured 2026-09-18: three suites started directly at once read as three, so this leaves room for a few agents each running a suite or two, proved by #444 | 2026-09-18 |
 | 10 minutes | `SYNC_SUITE_PILE_REARM=600` | The per prompt notice that this repo's suites have piled up treats a pile as a new stretch, and says it again in a session, only after this long without one | A chosen number, not a measurement: long enough that suites starting and finishing around the breadth limit read as one stretch, short enough that a pile killed and rebuilt the same afternoon is said again. The notice runs on every prompt in every project, so its cost was measured with it, 2026-09-19 on this Mac at 944 processes and load 5: 58ms median, 60ms p90 and 162ms max over 200 prompts with no pile, of which `ps` alone is 37ms median; with a 559 process pile added to that table as a fixture, 32ms median and 43ms max over 100 (no `ps`). Both are far inside the hook's 5 second timeout, proved by #466 | 2026-09-19 |
 | 1 root | not a setting | One healthy watcher | Judged by roots alone since #604. A healthy watcher is a launcher with one child at rest (pid 13658 with 13702, observed 2026-08-17, #33), and every send it makes adds nested command substitutions carrying the same command line, so one watcher mid send read 3 or 4 deep on 2026-10-03. Depth therefore says nothing; a second watcher, including the reparented loop of a killed one, is always a second root, proved by #604 | 2026-10-05 |
 
@@ -2289,6 +2289,36 @@ approved would have held 72 seats rather than 20: at least 52 lessons that were 
 disputed in September are agreed diff now. That is why the seats became a tracked file (the seats
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
+
+## A fresh worktree's first edit waits for an up to date base (#2517)
+
+`hooks/fresh-worktree-base-gate.sh` refuses a file edit in a worktree that has no commits of its own
+while it is behind the remote's main branch. The choices, and what each rules out:
+
+- **Refuse until updated, not warn once.** A warning read and passed is exactly how the 2026-09-14
+  merge went out without its rebase, and the remedy is one local command, so the refusal costs one
+  round trip. Recorded as a decision taken without Dan, on the pull request.
+- **The gate fetches before judging.** Worktrees share refs, so the local `origin/main` is whatever
+  the last fetch in ANY worktree left, and a check against it says "current" on stale data (L345).
+- **Once per worktree per session, then cached, and only a pass is cached.** One fetch per worktree
+  rather than one per edit; a refused worktree is judged again so the edit after the update goes
+  ahead. The record is a file per session and worktree in `TMPDIR`, the same keying as
+  `project-list-nudge.sh` and `payload-revert-warning.sh` (a hash of the session id).
+- **It stands down for good once the worktree has its own commits.** Main moving after that is a
+  rebase question for the merge step (#766), and that check is read on the local ref, needing no
+  fetch, since a fetch only adds to main.
+- **A failed fetch neither passes in silence nor blocks for good.** It says it could not check, once,
+  and tries again once its retry window has passed (a setting, `FRESH_WORKTREE_RETRY_MINUTES`, not a
+  measurement), because a session that cannot reach GitHub must still be able to
+  work. The one exception refuses: when even the unrefreshed local ref shows the worktree behind, it
+  is behind at least that far, and `git merge --ff-only origin/main` needs no network.
+- **The fetch is bounded at 10 seconds inside a 30 second registration timeout.** The gate is
+  registered with onFailure block (#1899), so a gate Claude Code kills is a refused edit; the bound
+  makes the gate settle itself long before that. Eight fetches with nothing new took 0.18 to 0.33
+  seconds on 2026-11-10 on the personal MacBook at a load average of 16 to 19 over one minute.
+- **Primary checkouts are out of scope, as the issue set.** A worktree is cut from whatever main the
+  shared refs held at that moment; a primary checkout holds Dan's own branch and state, which an
+  edit refusal there would get in the way of.
 
 ## Things known to be wrong and left that way
 

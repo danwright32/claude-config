@@ -1246,6 +1246,89 @@ OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj
 ERR="$(cat "$errf")"; rm -f "$errf"
 allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
 
+# The budget was looked at only between commands and before each file, so work inside one file's
+# walk was never timed (claude-config#2571): on 2026-11-09 the walk of one script took 41 s of
+# processor time (#2569), the budget passed unseen, Claude Code killed the hook at 15 seconds, and
+# the session saw "[command hook 44]: timed out" with no gate named. On the real clock the budget
+# now interrupts the walk wherever it is, and a reader that cannot be interrupted (held inside one
+# long call into C) is ended a little later by a watchdog, so either way the gate's own refusal is
+# what prints. Proved by which of the two stopped the walk and where, never by how long anything
+# took (L290): the real reader runs behind the real wrapper with a budget of half a second and a
+# hard stop at 2, and the walk of the script's variables is made slow before it starts, by 4
+# seconds of Python or by one call into C that nothing can interrupt and that runs several times
+# longer than the hard stop (a sum over two thousand million numbers: measured on 2026-11-10, the
+# interruption reached a backtracking regular expression at once, and reached this sum only when
+# it had finished). Slow work that was let run to its end leaves a mark, and work the gate stopped
+# part way leaves none: before this the gate refused such a walk too, but only at the next file
+# it came to after the slow work had finished, however long that took. The third slow case is an interruption that something swallowed (an exception raised from
+# a timer can land in code that discards it), after which the walk went on to an answer: once the
+# budget has interrupted a walk, no answer it gives afterwards is an allow.
+mkdir -p "$T/slow/hooks" "$T/slow/lib"
+cp "$HOOK" "$T/slow/hooks/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/slow/hooks/lib"
+cat > "$T/slow/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys, time
+spec = importlib.util.spec_from_file_location("gate", os.environ["SLOW_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+gate.BUDGET_SECONDS = 0.5
+if hasattr(gate, "HARD_STOP_SECONDS"):
+    gate.HARD_STOP_SECONDS = 2.0
+how = os.environ["SLOW_HOW"]
+def spin(seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        pass
+real_walk = gate.Judge.sh_walk
+def slow_walk(self, s, *a, **k):
+    if "SLOW-2571" in s:
+        if how == "python":
+            spin(4)
+        elif how == "c":
+            sum(range(2 * 10**9))
+        open(os.environ["SLOW_MARK"], "a").write("finished\n")
+    return real_walk(self, s, *a, **k)
+gate.Judge.sh_walk = slow_walk
+real_line = gate.Judge.line
+def slow_line(self, s, cwd, depth, whole):
+    out = real_line(self, s, cwd, depth, whole)
+    if how == "swallowed" and depth == 0:
+        try:
+            spin(4)  # the walk has its answer, and the budget passes before it hands it back
+        except BaseException:
+            pass
+    return out
+gate.Judge.line = slow_line
+gate.main()
+PY
+printf '%s\n' 'echo "hi"' > "$T/slow/lib/x.sh"
+printf '%s\n' '#!/bin/bash' '# SLOW-2571' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '. "$ROOT/lib/x.sh"' > "$T/slow/run.sh"
+run_slow() { # run_slow <no|python|swallowed|c>: judge `bash run.sh` on the real clock, slowed that way
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  rm -f "$T/slow/mark"
+  OUT="$(payload Bash "$(bash_input "bash $T/slow/run.sh")" | env -u SLACK_GATE_TICK_BUDGET SLOW_REAL_READER="$DIR/slack_drafts_only_gate.py" SLOW_HOW="$1" SLOW_MARK="$T/slow/mark" bash "$T/slow/hooks/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+unfinished() { if [ -e "$T/slow/mark" ]; then check "$1" "the slow work ran to its end before the gate answered"; else check "$1" ok; fi; }
+# The control: with nothing slow the copy allows the script and the walk of run.sh is reached, so
+# the mark means what it says and the short budget alone refuses nothing.
+run_slow no
+allowed "with nothing slow, a script sourcing a quiet helper passes under the short budget"
+if [ -e "$T/slow/mark" ]; then check "and the walk of the script was reached" ok; else check "and the walk of the script was reached" "no mark was left, so the walk of run.sh was never reached"; fi
+run_slow python
+refused "a walk of one file that runs past the budget is refused"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and names the file whose walk it was in" "judging the commands in $T/slow/run.sh ("
+unfinished "and the walk was stopped inside the file, not after it"
+run_slow swallowed
+refused "a walk whose interruption was swallowed, and which went on to an answer, is refused all the same"
+says "and that refusal says the gate ran out of time too" "ran out of time"
+run_slow c
+refused "a reader held inside one long call into C is refused too"
+says "and says the gate could not judge the call" "could not judge this call"
+says "and that the reader was stopped for taking too long" "Timeout"
+unfinished "and it was stopped inside the call, not after it"
+
 # The budget sits inside the timeout the settings give the gate, with room for python3 to start and
 # for the one file it may be reading when the budget passes (MAX_FILE read as commands took 2.8
 # seconds under a profiler at a load average of 222 on 2026-11-09).
@@ -1266,6 +1349,165 @@ print("ok" if int(m.group(1)) <= timeout - 4 else "BUDGET_SECONDS %s leaves unde
 PY
 )"
 check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
+# And the hard stop, which ends a reader the budget could not interrupt, still leaves the wrapper 2
+# seconds of that timeout to print its refusal (claude-config#2571): a hard stop at or past the
+# timeout is Claude Code's kill again, with no gate named. The 2 is the floor this check sets, not
+# measured; on 2026-11-10, with the Mac's load average over 50, a hook whose reader was ended by
+# a hard stop set at 1 s had answered 1.19 s after it was started, so everything outside the
+# reader's own time (the wrapper, python3 starting, the refusal) took 0.19 s.
+[ -n "$SETTINGS" ] || stop_room="$room"
+[ -z "$SETTINGS" ] || stop_room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
+import json, re, sys
+timeout = None
+for g in json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", []):
+    for h in g.get("hooks", []):
+        if h.get("command", "").endswith("hooks/slack-drafts-only-gate.sh"):
+            timeout = h.get("timeout")
+src = open(sys.argv[2]).read()
+budget = re.search(r"^BUDGET_SECONDS = (\d+)$", src, re.M)
+extra = re.search(r"^HARD_STOP_SECONDS = BUDGET_SECONDS \+ (\d+)$", src, re.M)
+if timeout is None or not budget or not extra:
+    print("no registered timeout, BUDGET_SECONDS line or HARD_STOP_SECONDS line to compare"); sys.exit()
+stop = int(budget.group(1)) + int(extra.group(1))
+print("ok" if stop <= timeout - 2 else "HARD_STOP_SECONDS %s leaves under 2 of the %s second timeout" % (stop, timeout))
+PY
+)"
+check "and its hard stop leaves at least 2 seconds of that timeout" "$stop_room"
+
+echo "slack drafts only: a crash inside the walk of a script is no verdict (claude-config#2573)"
+
+# On 2026-11-09, while #2569 was being fixed, sh_binds briefly raised AttributeError, and with that
+# fault in place the gate allowed `bash lib/merge-when-ready.sh` in 0.24 s: the handler around a
+# script read as commands took the crash for a script that cannot be read, and such a script passes
+# when it names no endpoint itself, whatever it goes on to source. So a fault in the gate's own
+# walk read as a clean script. Here the real reader runs behind the real wrapper with that one
+# fault put back (CRASH_IN names the function, which raises the first time it is asked), over a
+# script that sets a variable in an if and then sources a helper: one that posts, and one that
+# does not, since a walk that crashed has judged neither.
+mkdir -p "$T/crash/hooks" "$T/crash/posts/lib" "$T/crash/quiet/lib"
+cp "$HOOK" "$T/crash/hooks/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/crash/hooks/lib"
+cat > "$T/crash/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("gate", os.environ["CRASH_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+name = os.environ.get("CRASH_IN", "")
+if name:
+    def crashing(*a, **k):
+        raise AttributeError("'NoneType' object has no attribute 'search'")
+    setattr(gate.Judge, name, staticmethod(crashing))
+gate.main()
+PY
+for tree in posts quiet; do
+  cp "$T/sv/$tree/lib/x.sh" "$T/crash/$tree/lib/x.sh"
+  printf '%s\n' '#!/bin/bash' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'MODE=one' \
+    'if [ -n "$1" ]; then' '  MODE=two' 'fi' '. "$ROOT/lib/x.sh"' > "$T/crash/$tree/run.sh"
+  printf '%s\n' '{"scripts": {"go": "MODE=one; if [ -n \"$1\" ]; then MODE=two; fi; . ./lib/x.sh"}}' > "$T/crash/$tree/package.json"
+done
+run_crash() { # run_crash <function to crash, or ""> <command>: run_bash through the faulted reader
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | CRASH_REAL_READER="$DIR/slack_drafts_only_gate.py" CRASH_IN="$1" bash "$T/crash/hooks/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+# The control: with no fault the copy judges as the gate does, so what follows is the fault's doing.
+run_crash "" "bash $T/crash/posts/run.sh"
+refused "with no fault, the script sourcing a helper that posts is refused"
+says "and that refusal names the helper" "lib/x.sh"
+run_crash "" "bash $T/crash/quiet/run.sh"
+allowed "with no fault, the script sourcing a helper that does not post passes"
+run_crash "" "npm --prefix $T/crash/posts run go"
+refused "with no fault, the package script sourcing a helper that posts is refused"
+run_crash "" "npm --prefix $T/crash/quiet run go"
+allowed "with no fault, the package script sourcing a helper that does not post passes"
+# Each way a script's commands are reached: the file a shell is handed, a shell fed them on its
+# input, and a package script. sh_binds is asked inside the walk of the script's variables,
+# sh_source_word when the source command itself is judged.
+for fault in sh_binds sh_source_word; do
+  for tree in posts quiet; do
+    run_crash "$fault" "bash $T/crash/$tree/run.sh"
+    refused "a crash in $fault while walking a script that sources a helper ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+    lacks "and does not claim the command posts" "posts to Slack:"
+    run_crash "$fault" "cd $T/crash/$tree && bash <<'EOF'
+$(cat "$T/crash/$tree/run.sh")
+EOF"
+    refused "the same crash in commands a shell is fed on its input ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+    run_crash "$fault" "npm --prefix $T/crash/$tree run go"
+    refused "the same crash in a package script's commands ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+  done
+done
+# A script the reader cannot read as commands at all is not a crash of the walk: it is judged as it
+# was, by what it names. The reader is made to fail on the script's own text, and on no other.
+cat > "$T/crash/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("gate", os.environ["CRASH_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real_load = gate.load_reader
+def load():
+    sw = real_load()
+    real = sw.every_command
+    def every_command(s, *a, **k):
+        if "UNREADABLE-2573" in s and "\n" in s:
+            raise sw.Unreadable()
+        return real(s, *a, **k)
+    sw.every_command = every_command
+    return sw
+gate.load_reader = load
+gate.main()
+PY
+printf '%s\n' '#!/bin/bash' '# UNREADABLE-2573' 'echo hi' > "$T/crash/quiet/odd.sh"
+printf '%s\n' '#!/bin/bash' '# UNREADABLE-2573' "$(cat "$T/sv/posts/lib/x.sh")" > "$T/crash/posts/odd.sh"
+run_crash "" "bash $T/crash/quiet/odd.sh"
+allowed "a script the reader cannot read as commands, naming no endpoint, still passes"
+run_crash "" "bash $T/crash/posts/odd.sh"
+refused "a script the reader cannot read as commands, naming an endpoint, is still refused"
+says "and that refusal says it could not be read as commands" "could not be read as commands"
+# The same rule where the gate asks the reader for a text's commands (the line being judged, the
+# walk of its variables, the names a sourced file binds): the reader saying it cannot read the text
+# gives what it gave (nothing known, every name bound, no command's place), and any other error
+# from it is a fault that is not swallowed into one of those answers.
+cat > "$T/crash/parse.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+d = sys.argv[2]
+text = open(d + "/run.sh").read()
+def ask(make):
+    # The error is made from this judge's own copy of the reader: each load is a module of its own,
+    # so another copy's Unreadable is not the class this one catches.
+    judge = gate.Judge(gate.load_reader())
+    error = make(judge.sw)
+    def commands(*a, **k):
+        raise error
+    judge.sw.commands = commands
+    got = {}
+    for label, call in (("the walk of its variables", lambda: judge.sh_walk(text, d, "run.sh", True, 0)),
+                        ("the names a sourced file binds", lambda: judge.sh_bound_in(d + "/run.sh", {"MODE"}, d, True, "run.sh", 1, set())),
+                        ("the line being judged", lambda: judge.line("echo hi", d, 0, "echo hi"))):
+        try:
+            got[label] = ("gave", call())
+        except Exception as e:
+            got[label] = ("raised", type(e).__name__)
+    return got
+wrong = []
+for label, (how, what) in ask(lambda sw: AttributeError("a fault")).items():
+    if (how, what) != ("raised", "AttributeError"):
+        wrong.append("a fault in the reader, asked for %s, was taken as an answer: %r" % (label, what))
+unreadable = ask(lambda sw: sw.Unreadable())
+expect = {"the walk of its variables": ("gave", {"regions": {}, "top": 0, "lost": [], "bodies": []}),
+          "the names a sourced file binds": ("gave", {"MODE"}), "the line being judged": ("gave", None)}
+for label in expect:
+    if unreadable[label] != expect[label]:
+        wrong.append("a text the reader cannot read, asked for %s, %s %r" % ((label,) + unreadable[label]))
+print("; ".join(wrong) or "ok")
+PY
+parse="$(python3 "$T/crash/parse.py" "$DIR/slack_drafts_only_gate.py" "$T/crash/quiet" 2>&1)"
+check "a fault in the reader is not taken for a text it cannot read, in each place the gate asks it (#2573)" "$parse"
 
 echo "slack drafts only: it is wired"
 
@@ -1341,6 +1583,107 @@ print("ok" if again and count[0] == 0 else "a second pass over 700 names compile
 PY
 binds="$(python3 "$T/binds.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds compiles each name's patterns once, however many names a script has (#2569)" "$binds"
+
+echo "slack drafts only: the merge helper's own line is judged inside the gate's time (claude-config#2576)"
+
+# On 2026-11-09 no merge through lib/merge-when-ready.sh could start on the work MacBook: the gate
+# follows the helper into everything it sources, and that walk had grown past the gate's time. The
+# cause of that day was #2569, but nothing held the walk of the real helper to a size, so the next
+# file added to what it sources would be found at a merge. Held by the step clock, never the real
+# one (L290). Measured on 2026-11-09: 7,899 steps, 11 files read 32 times, 3.9 seconds of processor
+# time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
+# to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
+# half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
+# the ceiling raised on a new measurement.
+MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
+MWR_STEPS=12000
+run_budget "$MWR_STEPS" "$MWR"
+allowed "the real merge helper, with everything it sources, is judged within $MWR_STEPS steps"
+# The control: the budget is live for this line, and a walk that passes it is refused with the
+# gate's own reason.
+run_budget 2000 "$MWR"
+refused "the merge helper's line under a budget its walk passes is refused"
+says "that refusal says the gate ran out of time" "ran out of time"
+
+# A function of the script that calls others was followed once per path to it, so a chain of
+# functions each calling the next twice cost two to the power of its length: 16,383 walks for 14
+# functions. Each function's own effect is now worked out once and a call takes in everything it
+# reaches. Held by a count of what is read, never the clock, and by the answers being the same.
+cat > "$T/calls.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+chain = "".join("f%d() {\n  f%d\n  f%d\n}\n" % (i, i + 1, i + 1) for i in range(1, 14))
+text = ("KEEP=/keep\nLOSE=/lose\nCYC=/cyc\n" + chain + "f14() {\n  LOSE=changed\n}\n"
+        "a() {\n  b\n}\nb() {\n  a\n  CYC=changed\n}\nf1\na\n: after\n")
+count = [0]
+real = gate.Judge.sh_indirect
+def counting(self, t):
+    count[0] += 1
+    return real(self, t)
+gate.Judge.sh_indirect = counting
+judge = gate.Judge(gate.load_reader())
+known = judge.sh_known(text, "/", None)
+at = text.index(": after")
+got = [judge.sh_at(known, n, at) for n in ("KEEP", "LOSE", "CYC")]
+if got != ["/keep", None, None]:
+    print("after the calls KEEP, LOSE and CYC read %r, not ['/keep', None, None]" % got); sys.exit()
+# A function reached through another that binds a name through a variable ends the walk at the call.
+stop = "KEEP=/keep\ng() {\n  h\n}\nh() {\n  eval \"$1\"\n}\n%s\n: after\n"
+ends = [judge.sh_cwd_at(judge.sh_known(stop % call, "/", None), (stop % call).index(": after")) for call in ("g", ": g")]
+if ends != [False, True]:
+    print("the walk past a call reaching eval, and past none, read %r, not [False, True]" % ends); sys.exit()
+print("ok" if count[0] < 1000 else "following 14 chained functions read %d commands for a name bound through a variable" % count[0])
+PY
+calls="$(python3 "$T/calls.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+check "a function is followed once, however many paths of calls reach it (#2576)" "$calls"
+
+# One script's text was read into commands again by each part of the gate that wanted them (the
+# line being judged, the walk of its variables, the names a sourced file binds), 40 times for the
+# 11 files of the merge helper (counted on 2026-11-09), and a sourced file was asked which names it binds once per script
+# that sources it. Both answers depend on the text alone, so each is worked out once in a run.
+mkdir -p "$T/once"
+printf '%s\n' 'ROOT=/somewhere' '. ./lib.sh' 'echo "$ROOT"' > "$T/once/a.sh"
+printf '%s\n' 'HELPER=1' 'helper() {' '  echo "$HELPER"' '}' > "$T/once/lib.sh"
+cat > "$T/once.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+d = sys.argv[2]
+judge = gate.Judge(gate.load_reader())
+parses, real = {}, judge.sw.commands
+def counting(s, *a, **k):
+    # Only what the gate's own code asks for: the reader's own calls to itself are not the gate's.
+    if sys._getframe(1).f_code.co_filename == gate.__file__:
+        parses[s] = parses.get(s, 0) + 1
+    return real(s, *a, **k)
+judge.sw.commands = counting
+asked, binds = [], gate.Judge.sh_binds
+gate.Judge.sh_binds = staticmethod(lambda name, text, allowed=0: asked.append((name, text)) or binds(name, text, allowed))
+if judge.line("bash a.sh", d, 0, "bash a.sh") is not None:
+    print("a script that sources a helper posting nothing was refused"); sys.exit()
+lib = open(d + "/lib.sh").read()
+names = {"ROOT", "HELPER"}
+first = judge.sh_bound_in(d + "/lib.sh", names, d, True, "./lib.sh", 1, set())
+whole = [a for a in asked if a[1] == lib]
+again = judge.sh_bound_in(d + "/lib.sh", names, d, True, "./lib.sh", 1, set())
+if first != {"HELPER"} or again != first:
+    print("lib.sh was read as binding %r, then %r, not {'HELPER'}" % (first, again)); sys.exit()
+more = len([a for a in asked if a[1] == lib]) - len(whole)
+twice = sorted(n for n in parses.values() if n > 1)
+wrong = []
+if twice:
+    wrong.append("the gate read one text into commands %s times" % twice[-1])
+if len(parses) < 2:
+    wrong.append("the gate read %d texts into commands, and a.sh and lib.sh are two" % len(parses))
+if more:
+    wrong.append("asking lib.sh about the same names again scanned it %d more times" % more)
+print("; ".join(wrong) or "ok")
+PY
+once="$(python3 "$T/once.py" "$DIR/slack_drafts_only_gate.py" "$T/once" 2>&1)"
+check "a text is read into commands once, and a sourced file asked about a name once (#2576)" "$once"
 
 echo
 echo "passed: $pass, failed: $fail"
