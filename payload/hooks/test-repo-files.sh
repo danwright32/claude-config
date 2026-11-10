@@ -128,13 +128,16 @@ out="$(bash "$RF" "$TMPROOT/plain" 2>&1)"; rc=$?
 # ---------------------------------------------------------------------------
 GUARD_PAT='(git +-C +"\$\{?(ROOT|REPO|root|_sc_root)\}?"|cd +"\$\{?(ROOT|REPO|root)\}?" *&& *git) +ls-files'
 guard_scan(){        # guard_scan <dir> [<dir>...] -> offending lines as <file>:<line>: text
-  local d f
+  # A file in the first folder is named as it is there; one in any later folder carries that
+  # folder's own name (tests/test-x.sh), so every finding has the same short shape.
+  local d f base
   for d in "$@"; do
+    base="${d%/*}"; [ "$d" = "$1" ] && base="$d"
     for f in "$d"/test-*.sh; do
       [ -f "$f" ] || continue
       grep -nE "$GUARD_PAT" "$f" 2>/dev/null \
         | grep -vE -- '--error-unmatch|--others|# tracked-only: [A-Za-z]' \
-        | sed "s|^|${f#"$1"/}:|"
+        | sed "s|^|${f#"$base"/}:|"
     done
   done
   return 0
