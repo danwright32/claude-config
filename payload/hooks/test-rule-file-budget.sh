@@ -137,7 +137,9 @@ MIN_RATCHET_HEADROOM=8000
 # here FAILS, so a new section cannot arrive unmeasured.
 recorded_size() {  # $1 = payload relative path
   case "$1" in
-    CLAUDE.md)                                printf '32375' ;;
+    # Re-measured 2026-11-09 (#2546), from 32375: 50 changes to the file since 2026-09-19, each a
+    # rule Dan added, and no line over 60 characters appears twice, so none of it is duplication.
+    CLAUDE.md)                                printf '48716' ;;
     RTK.md)                                   printf '966' ;;
     LESSONS-INDEX-proof-over-green.md)        printf '27713' ;;
     LESSONS-INDEX-ux-completeness.md)         printf '13605' ;;

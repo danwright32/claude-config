@@ -46,6 +46,8 @@ endpoint assembled from pieces, an import path built at run time) is not the thr
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
+import fnmatch
+import functools
 import glob
 import importlib.machinery
 import importlib.util
@@ -407,14 +409,29 @@ SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
 POSITIONAL = r"\$\{?[1-9@*]"
 # What a Python import's folder can be handed through: a shell variable in an argument, PYTHONPATH or
-# an exported variable (claude-config#2449). A variable's value is known only where the script sets
-# it once, unconditionally, at its top (sh_trusted); these mark where that stops being certain: a
+# an exported variable (claude-config#2449). A variable's value is known only where it is certain
+# (sh_walk), mostly over the script's straight run of commands at its top; these mark where that stops: a
 # compound command, a group, a subshell or a function opening, and every other way a name is bound.
 SH_COMPOUND = re.compile(r"^(?:(?:if|then|elif|else|fi|do|done|while|until|for|select|case|esac|function|coproc|time|!)"
                          r"(?=[\s;&|()]|$)|[{}()]|\[\[)")
 SH_FUNC_DEF = re.compile(r"^[A-Za-z_][\w:.-]*\s*\(\s*\)")
 SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
               r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# export and readonly with no = keep a name's value, so sh_binds does not count them as binding it.
+SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
+
+
+# The three patterns Judge.sh_binds reads a name by, compiled once per name for the life of the run:
+# NAME=, NAME+= and NAME[i]=; NAME inside (( )); and the builtins that bind a name. re keeps only 512
+# compiled patterns, and one script can have thousands of names (claude-config#2569).
+@functools.lru_cache(maxsize=None)
+def sh_bind_patterns(name):
+    n = re.escape(name)
+    return (re.compile(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?="),
+            re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b"),
+            re.compile(SH_BINDERS.format(n)))
+
+
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
 # and those that bind names), so it is an assignment like any other.
 SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly",
@@ -423,6 +440,17 @@ SH_SPECIAL = frozenset({":", ".", "source", "break", "continue", "eval", "exec",
 SH_PARAM = re.compile(r"\$(?:\{([^{}]*)\}|([A-Za-z_]\w*|[0-9@*#?$!-]))")
 # Where a redirection starts in a command's text, its target the word after it.
 SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
+# A directory the resolver does not know (claude-config#2465): where a command runs when that is not
+# certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
+# It holds a $, so nothing takes it for a real path.
+SH_UNKNOWN_DIR = "${unknown directory}"
+# The builtins that cannot change a shell variable, the only commands a `local` value is taken across
+# (claude-config#2465): any other command can be a function, and a function can set its caller's
+# local. printf is one only without -v.
+SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf", "return", "exit", "cd", "pwd"})
+# A parameter expansion the resolver works out: the name (BASH_SOURCE[0] too), then nothing, a
+# default (:- or -), or a pattern removed from either end (% %% # ##).
+SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
 
 
 def load_reader():
@@ -508,14 +536,19 @@ class Judge:
         # it is, as its BASH_SOURCE names it, which script() hands to the line() it calls.
         self.shell = self.shell_scope("", "", None)
         self.next_script = None
+        # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
+        # a script run or sourced from inside a function starts wherever that function was called.
+        self.next_cwd_known = True
+        self.known_memo = {}
 
     @staticmethod
-    def shell_scope(text, cwd, script):
+    def shell_scope(text, cwd, script, cwd_known=True):
         """A fresh record of one text's variables: each NAME=value command read so far (pending, its
-        text and directory), the values worked out from them, the names exported, and the names
-        sh_trusted finds safe to take a value for, worked out the first time one is asked for."""
-        return {"text": text, "cwd": cwd, "script": script, "pending": {}, "values": {}, "exported": set(),
-                "trusted": None}
+        text and directory), the names exported, the offset in the text of the command being read
+        (at), whether the directory the text starts in is certain, and what sh_walk finds certain
+        about its variables, worked out the first time one is asked for."""
+        return {"text": text, "cwd": cwd, "script": script, "pending": {}, "exported": set(), "at": None,
+                "cwd_known": cwd_known, "known": None}
 
     @staticmethod
     def py_path(value, d):
@@ -601,6 +634,7 @@ class Judge:
             # Read as commands even with no endpoint in it: it can run another script that posts.
             try:
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
+                self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
                 inner = self.line(body, d, depth + 1, body)
             except Exception:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
@@ -961,13 +995,21 @@ class Judge:
     # `python3 - "$ROOT/tools/lib" <<'PY'`, whose code does sys.path.insert(0, sys.argv[1]) and imports
     # ts_source. The gate refuses an import it cannot place (#2358), so it refused the whole suite
     # until it could work out what "$ROOT/tools/lib" holds. A value is worked out only where it is
-    # certain what the variable holds when python starts (sh_trusted), from the few forms the scripts
+    # certain what the variable holds when python starts (sh_walk), from the few forms the scripts
     # use: literals, quotes, other such variables, BASH_SOURCE, and $(pwd), $(dirname X) and
     # $(cd X && pwd). Anything else is None, and an entry built from None is placed nowhere, so the
     # import is refused as before: this only ever places more imports, each judged like any other.
+    #
+    # The same values work out the path a script sources, and a sourced path that cannot be worked
+    # out is refused (claude-config#2465), so the resolver also reads the forms this repository's
+    # scripts use: a `local` set in a function (lib/suite-deadline.sh's `local ... _sd_reader=...`),
+    # ${X%/*} and ${X:-default}, and a name set more than once where the last set always runs (the
+    # HOOK_DIR idiom: a case on BASH_SOURCE, then cd ... && pwd). A value is known only over the part
+    # of the text where it is certain (sh_walk), so each command is looked up by where it is (at).
 
     def sh_note(self, text, words, assigns, d):
-        """Note a command that only sets one variable (NAME=value, or export NAME=value), for sh_var."""
+        """Note a command that only sets one variable (NAME=value, or export NAME=value): pending, for
+        sh_source_var, and exported, for the environment py_args hands a python command."""
         lines = [a for a in assigns.split("\n") if a.strip()]
         if not words and len(lines) == 1:
             name, exported = lines[0].split("=", 1)[0], False
@@ -978,40 +1020,90 @@ class Judge:
         if not re.fullmatch(r"[A-Za-z_]\w*", name):
             return
         self.shell["pending"][name] = (text, d)
-        self.shell["values"].pop(name, None)
         if exported:
             self.shell["exported"].add(name)
 
-    def sh_var(self, name, seen=()):
-        """The value of a variable the text being read set, or None where it is not certain."""
+    def sh_ctx_known(self):
+        """sh_walk's result for the text being read, worked out the first time it is asked for."""
         ctx = self.shell
-        if name in ctx["values"]:
-            return ctx["values"][name]
-        if name not in ctx["pending"] or name in seen:
+        if ctx["known"] is None:
+            ctx["known"] = self.sh_known(ctx["text"], ctx["cwd"], ctx["script"], ctx["cwd_known"])
+        return ctx["known"]
+
+    def sh_var(self, name):
+        """The value of a variable the text being read set, at the command being read, or None where
+        it is not certain."""
+        if self.shell["at"] is None:
             return None
-        if ctx["trusted"] is None:
-            ctx["trusted"] = self.sh_trusted(ctx["text"], ctx["cwd"], ctx["script"])
-        if name not in ctx["trusted"]:
-            return None
-        text, d = ctx["pending"][name]
-        m = re.match(r"\s*(?:export\s+)?" + name + "=", text)
-        v = None
-        if m:
-            end = self.sh_word_end(text, m.end())
-            v = self.sh_word(text[m.end():end], d, lambda n: self.sh_var(n, seen + (name,)), ctx["script"], True)[0]
-        ctx["values"][name] = v
-        return v
+        return self.sh_at(self.sh_ctx_known(), name, self.shell["at"])
+
+    def sh_cwd(self, d):
+        """d, the directory the command being read runs in, where that is certain; else
+        SH_UNKNOWN_DIR. commands() follows every cd in the text, one in a branch or a function
+        included, so it is certain only where sh_walk found it so (sh_cwd_at), and only where the
+        text's own start was."""
+        ctx = self.shell
+        if not ctx["cwd_known"] or ctx["at"] is None or not self.sh_cwd_at(self.sh_ctx_known(), ctx["at"]):
+            return SH_UNKNOWN_DIR
+        return self.sh_dir(d)
+
+    @staticmethod
+    def sh_cwd_at(known, at):
+        """Whether sh_walk found the directory certain at offset at: before where the walk ended, in no
+        function body (which runs wherever it is called from), and past no cd that may have failed."""
+        return at < known["top"] and not any(a <= at < b for a, b in known["lost"] + known["bodies"])
+
+    @staticmethod
+    def sh_dir(d):
+        """d where it can be a directory a command is certain to run in, else SH_UNKNOWN_DIR: not one
+        named by a variable or a substitution (commands() keeps cd "$X" as written), not `cd -`, and
+        one that is there, since a cd into a folder that is not fails and the shell stays put."""
+        if not d:
+            return d  # the directory the text was started in
+        if "$" in d or "`" in d or d == "-" or not os.path.isdir(d):
+            return SH_UNKNOWN_DIR
+        return d
+
+    @staticmethod
+    def sh_at(known, name, at):
+        """The value sh_walk found certain for name at offset at in its text, or None."""
+        for a, b, v in known["regions"].get(name, ()):
+            if a <= at < b:
+                return v
+        return None
 
     def sh_source_var(self, name):
-        """sh_var for a sourced file's path, which also takes HOME from the session when the text never
-        binds it: the command runs with the session's HOME, and `. "$HOME/.cargo/env"` is common."""
-        v = self.sh_var(name)
-        text = self.shell["text"]
-        if v is None and name == "HOME" and name not in self.shell["pending"] and \
-                not re.search(r"(?<![\w$])HOME(?:\[[^\]\n]*\])?\+?=", text) and \
-                not re.search(SH_BINDERS.format(name), text):
+        """sh_var for a sourced file's path, HOME taken from the session where the text never binds it."""
+        return self.sh_home(name, self.shell["text"], self.sh_var(name))
+
+    def sh_home(self, name, text, v):
+        """v, or for HOME unknown in a text that never binds it, the session's HOME: the command runs
+        with the session's HOME, and `. "$HOME/.cargo/env"` is common."""
+        if v is None and name == "HOME" and not self.sh_binds("HOME", text):
             return os.environ.get("HOME") or None
         return v
+
+    def sh_source_word(self, text, wd, var, script):
+        """The path a source or . command reads, as its BASH_SOURCE will be: (word, False); (None, True)
+        where it cannot be worked out; (None, False) for a command that is not one, or names nothing.
+        wd is the directory it runs in, SH_UNKNOWN_DIR where that is not certain, and a relative path
+        there cannot be worked out. A literal path is the word as written, ~ expanded where it is
+        read; one built from a variable or a substitution is worked out with var (claude-config#2465)."""
+        raw = self.sh_source_target(text)
+        if raw is None:
+            return None, False
+        if re.search(r"[$`]", raw):
+            v, splits = self.sh_word(raw, wd, var, script, False)
+            if v is None or splits:
+                return None, True
+        else:
+            words = self.sw.command_words(self.sw.command_rest(text)[0])
+            if len(words) < 2:
+                return None, False
+            v = words[1]
+        if not os.path.isabs(os.path.expanduser(v)) and wd == SH_UNKNOWN_DIR:
+            return None, True
+        return v, False
 
     def sh_pythonpath(self, value, text, d):
         """A PYTHONPATH value with its variables worked out from the command's own text, where they can
@@ -1025,115 +1117,651 @@ class Judge:
         v = self.sh_word(text[m.end():end], d, self.sh_var, self.shell["script"], True)[0]
         return value if v is None else v
 
-    def sh_trusted(self, s, cwd, script):
-        """The names whose value is certain wherever s uses them after setting them: each set exactly
-        once in s, by a command of its own at the top of s, before the first compound command, group,
-        subshell, function, pipeline or && / || chain (so it has run, and run only once, by the time
-        anything after it does), bound no other way in s (read, for, local, export NAME, ${NAME:=}...),
-        and set by no file s sources. A file s sources whose path cannot be worked out, or which is not
-        there, leaves no name certain. One those files source in turn is read where its path can be
-        worked out; where it cannot, it is not read (as the gate reads no sourced file it cannot find)."""
+    def sh_known(self, s, cwd, script, cwd_known=True, depth=0):
+        """sh_walk(), worked out once for each text, which is asked about from several places. A text
+        that sources itself finds nothing certain on the way back in."""
+        key = (s, cwd, script, cwd_known)
+        if key not in self.known_memo:
+            self.known_memo[key] = {"regions": {}, "top": 0, "lost": [], "bodies": []}
+            self.known_memo[key] = self.sh_walk(s, cwd, script, cwd_known, depth)
+        return self.known_memo[key]
+
+    def sh_walk(self, s, cwd, script, cwd_known, depth):
+        """What is certain about the variables in s: {"regions": {name: [(start, end, value)]}, "top",
+        "lost", "bodies"}, each value certain for every command starting from start to before end.
+        The directory a command runs in is certain before top, outside every span in lost, and
+        outside every function body (bodies), which runs wherever its function is called from.
+
+        The walk follows s in order, to top: the end of s, or the first command whose effect it
+        cannot follow. A command at the top level is followed as it happens:
+          - NAME=value (export NAME=value) sets NAME, worked out from what is known at that point;
+          - `test || NAME=value` and `test && NAME=value` set it where the test ([ or test comparing
+            known values) says it runs, and leave it unknown where nothing says (lib/suite-deadline.sh:
+            `[ "$D" != "${BASH_SOURCE[0]}" ] || D=.`); any other command chained after && or ||
+            leaves what it binds unknown;
+          - a case on a known word whose branches only set names runs the branch its patterns pick
+            (sh_case: the HOOK_DIR idiom);
+          - any other compound command (if, a loop, a case, a { } group) is stepped over: every name
+            bound inside it is unknown from where it starts, and what it sources or calls is followed
+            as below;
+          - a function definition runs nothing, so it is stepped over; a call to a function of s
+            leaves every name its body binds unknown, and ends the walk where the body sources a
+            file, binds a name through a variable, or calls a function of s that does;
+          - a pipeline's commands and a backgrounded one run in shells of their own, as a subshell's
+            do, and set nothing here (unless the script turns on lastpipe);
+          - a sourced file whose path is worked out leaves every name it binds (it, or a file it
+            sources, sh_bound_in) unknown from then on, since it can define a function that sets the
+            name later; one whose path is not, eval, or a name bound through a variable (read "$n",
+            printf -v "$n", declare -n...) ends the walk, and nothing known before lasts past it;
+          - any other command that binds a name (read, for, unset, local...) leaves it unknown;
+          - a cd that may not have run (chained, piped, or in a compound) leaves the directory unknown
+            from then on, except that the commands joined to `cd X` by && run only where it worked,
+            and `cd X || exit` and `cd X || { ...; exit; }` end the script where it did not.
+        Inside a function body only a value that lasts to the end of s holds, as the body runs when
+        the function is called. A value lasts to the end of s where nothing else in s binds the name
+        (a NAME=value in front of a command that is not a special builtin or a function of s sets it
+        for that command alone, so it does not count), nothing the walk did not follow binds a name
+        through a variable, and no file sourced where the walk did not follow it (in a function body,
+        or past top) binds it, those paths worked out from these same values. A `local` set in a
+        function adds a value of its own (sh_locals)."""
         parts = []
         try:
             cmds = self.sw.commands(s, cwd, parts=parts)
         except Exception:
-            return set()
-        subst = [(a, b) for p in parts if len(p["scope"]) == 1 for a, b, _ in p["inner"]]
-        # A guard is no end to the top: `x || exit 1`, `x || { ...; exit 1; }` and
-        # `if x; then ...; exit 1; fi` either do not run their exit, so everything after them runs
-        # unconditionally, or end the script, so nothing after them runs. Its body is simple commands
-        # ending in an exit nothing chains into; anything else in it ends the top.
-        cands, prev, block = {}, ";", None
-        for (d, t), p in zip(cmds, parts):
-            if len(p["scope"]) > 1:
-                if any(a <= p["start"] < b for a, b in subst):
-                    continue  # a command substitution's, read as part of the command holding it
-                break  # a subshell
-            head = t.strip()
-            if block is not None:
-                if SH_FUNC_DEF.match(head) or p["how"] in ("&", "case"):
-                    break
-                if block["cond"]:
-                    if not re.match(r"then(\s|$)", head):
-                        if SH_COMPOUND.match(head):
-                            break
-                        continue  # one of the if's condition commands
-                    block["cond"], head = False, head[4:].strip()
-                    if not head:
+            return {"regions": {}, "top": 0, "lost": [], "bodies": []}
+        items = list(zip(cmds, parts))
+        struct = self.sh_struct(items)
+        rows, blocks = struct if struct else (None, None)
+        allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
+        funcs = self.sh_funcs(s)
+        shopt = bool(re.search(r"\bshopt\b", s))
+        env, since, regions, spans, tainted, handled = {}, {}, {}, {}, set(), set()
+        lost = [] if cwd_known else [(0, len(s))]
+        bodies, fbody = [], {}
+        for blk in blocks or ():
+            if blk["kind"] == "func":
+                o, c = blk["open"], blk["close"]
+                bodies.append((items[o][1]["start"], items[c][1]["end"]))
+                m = re.match(r"\s*(?:function\s+)?([A-Za-z_][\w:.-]*)", items[o][0][1])
+                if m:
+                    fbody.setdefault(m.group(1), []).append((o, c))
+
+        def head_of(k):
+            return rows[k][1] if rows else items[k][0][1].strip()
+
+        def where(d, at):
+            if at >= top or any(a <= at < b for a, b in lost + bodies):
+                return SH_UNKNOWN_DIR
+            return self.sh_dir(d)
+
+        def look(n):
+            return self.sh_home(n, s, env.get(n))
+
+        def setv(n, v, at):
+            if env.get(n) is not None:
+                regions.setdefault(n, []).append((since[n], at, env[n]))
+            env[n], since[n] = (None if n in tainted else v), at
+
+        def calls(name, seen=()):
+            """(the names a call to the function of s named name can bind, whether it can do more than
+            that: source a file, bind a name through a variable, or call a function of s that does)."""
+            if name in seen:
+                return set(), False
+            bound, more = set(), False
+            for o, c in fbody.get(name, ()):
+                bound |= {n for n in allnames if self.sh_binds(n, s[items[o][1]["start"]:items[c][1]["end"]])}
+                for k in range(o, c + 1):
+                    if len(items[k][1]["scope"]) > 1:
                         continue
-                if head == block["end"]:
-                    if not (re.match(r"exit\b", block["last"]) and block["before"] not in ("&&", "||", "|")
-                            and block["how"] in (";", "#", "\\n")):
-                        break
-                    block, prev = None, p["how"]
-                    continue
-                if SH_COMPOUND.match(head):
-                    break  # elif, else, or a compound command inside
-                block.update(before=block["how"], last=head, how=p["how"])
+                    h = head_of(k)
+                    words = self.sw.command_words(self.sw.command_rest(h)[0])
+                    if self.sh_source_target(h) is not None or self.sh_indirect(h):
+                        more = True
+                    elif words and words[0] in fbody:
+                        b, m2 = calls(words[0], seen + (name,))
+                        bound, more = bound | b, more or m2
+            return bound, more
+
+        def effects(d, head, p, run, when=None):
+            """Follow one command: None, or "stop" or "dead" where the walk ends at it ("dead": and
+            nothing known lasts past it). run is True where it certainly runs, None where it may not;
+            when is where what it changes is changed from (the end of the command, or the start of
+            the compound holding it, which can run it more than once)."""
+            w = p["end"] if when is None else when
+            a = self.sh_assignment(head)
+            if a:
+                spans.setdefault(a[0], []).append((p["start"], p["end"]))
+                setv(a[0], self.sh_word(a[1], where(d, p["start"]), look, script, True)[0] if run else None, w)
+                return None
+            rest, _ = self.sw.command_rest(head)
+            words = self.sw.command_words(rest)
+            if self.sh_indirect(head):
+                return "dead"
+            wd = where(d, p["start"])
+            v, bad = self.sh_source_word(head, wd, look, script)
+            if bad:
+                return "dead"
+            if v is not None:
+                path = self.resolve(v, d)
+                if not os.path.isfile(path):
+                    return "dead"
+                for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, v, depth + 1, set()):
+                    tainted.add(n)
+                    setv(n, None, w)
+                return None
+            named = [x for x in words if x in fbody] if words[:1] == ["trap"] else \
+                words[:1] if words and words[0] in fbody else []
+            for f in named:
+                b, more = calls(f)
+                if more:
+                    return "stop"
+                for n in b:
+                    setv(n, None, w)
+            judged = rest if words and words[0] not in SH_SPECIAL and words[0] not in funcs else head
+            for n in [n for n in env if self.sh_binds(n, judged)]:
+                setv(n, None, w)
+            return None
+
+        def compound(i, j):
+            """Step over the compound command from items[i] to items[j]: None, "stop" or "dead"."""
+            start = items[i][1]["start"]
+            inner = [k for k in range(i, j + 1) if len(items[k][1]["scope"]) == 1
+                     and not any(a <= items[k][1]["start"] < b for a, b in bodies)]
+            if any(self.sw.cd_target(head_of(k)) is not None for k in inner if head_of(k)):
+                lost.append((start, len(s)))
+            for n in {n for n in allnames | set(env) if self.sh_binds(n, s[start:items[j][1]["end"]])}:
+                setv(n, None, start)
+            for k in inner:
+                if head_of(k):
+                    handled.add(k)
+                    res = effects(items[k][0][0], head_of(k), items[k][1], None, start)
+                    if res:
+                        return res
+            return None
+
+        top, whole, prev, test, chain, i = len(s), True, ";", None, None, 0
+        while i < len(items):
+            (d, t), p = items[i]
+            if len(p["scope"]) > 1:
+                i += 1
+                continue  # a subshell's or a substitution's: it sets nothing here
+            head = head_of(i)
+            if rows is None and (SH_COMPOUND.match(head) or SH_FUNC_DEF.match(head)):
+                top = p["start"]
+                break  # the keywords did not pair up, so where a compound ends is not known
+            if rows and rows[i][0]:
+                blk = blocks[rows[i][0][0]]
+                j, res = blk["close"], None
+                end = items[j][1]["end"]
+                if chain and prev in ("&&", "||") and not (chain == "and" and prev == "&&"):
+                    # Reached where the cd may have failed: unknown inside, and after it too unless
+                    # it is `cd X || { ...; exit; }`.
+                    guard = chain == "or" and prev == "||" and blk["kind"] == "group" and \
+                        re.match(r"exit\b", head_of(j - 1) or "")
+                    lost.append((p["start"], end if guard else len(s)))
+                    chain = "done" if guard else None
+                if blk["kind"] == "func":
+                    pass  # it runs nothing until it is called
+                elif blk["kind"] == "case" and prev not in ("&&", "||", "|", "&") and \
+                        self.sh_case(s, items, i, look, setv, spans, lambda d2, at=p["start"]: where(d2, at),
+                                     script, shopt, j + 1):
+                    handled.update(range(i, j + 1))
+                else:
+                    res = compound(i, j)
+                if res:
+                    top, whole = p["start"], whole and res == "stop"
+                    break
+                if items[j][1]["how"] not in ("&&", "||"):
+                    if chain == "and":
+                        lost.append((end, len(s)))
+                    chain = None
+                i, prev, test = j + 1, items[j][1]["how"], None
                 continue
-            if prev in ("&&", "||") and p["how"] not in ("|", "&", "&&", "||", "case"):
-                if re.match(r"exit\b", head):
-                    prev = p["how"]
-                    continue
-                if re.match(r"\{(\s|$)", head):
-                    inner = head[1:].strip()
-                    if inner and (SH_COMPOUND.match(inner) or SH_FUNC_DEF.match(inner)):
-                        break
-                    block = {"end": "}", "cond": False, "last": inner, "before": ";", "how": p["how"] if inner else ";"}
-                    continue
-            if re.match(r"if(\s|$)", head) and prev not in ("&&", "||", "|", "&") and p["how"] not in ("&", "case"):
-                block = {"end": "fi", "cond": True, "last": "", "before": ";", "how": ";"}
+            i += 1
+            handled.add(i - 1)
+            how, is_cd = p["how"], self.sw.cd_target(head) is not None
+            if prev in ("|", "&") or how in ("|", "&"):
+                if "lastpipe" in s:
+                    top = p["start"]
+                    break  # the last command of a pipeline may run in this shell
+                if is_cd and how not in ("|", "&"):
+                    lost.append((p["end"], len(s)))  # commands() moves to it, the shell does not
+                prev, test, chain = how, None, None
                 continue
-            if prev in ("&&", "||", "|", "&") or p["how"] in ("|", "&", "case"):
+            if prev in ("&&", "||"):
+                if chain and not (chain == "and" and prev == "&&"):
+                    if chain == "or" and prev == "||" and re.match(r"exit\b", head):
+                        chain = "done"  # `cd X || exit 1`: past it, the cd worked
+                    else:
+                        lost.append((p["start"], len(s)))
+                        chain = None
+                a = self.sh_assignment(head)
+                res = None
+                if a:
+                    runs = None if test is None else test == (prev == "&&")
+                    if runs is False:
+                        spans.setdefault(a[0], []).append((p["start"], p["end"]))  # written, never run
+                    else:
+                        res = effects(d, head, p, runs)
+                else:
+                    if is_cd:
+                        lost.append((p["end"], len(s)))  # a cd that may not run
+                    res = effects(d, head, p, None)
+                test = None
+            else:
+                chain = ("and" if how == "&&" else "or") if is_cd and how in ("&&", "||") else None
+                test = self.sh_test(head, where(d, p["start"]), look, script) if how in ("&&", "||") else None
+                res = effects(d, head, p, True)
+            if res:
+                top, whole = p["end"], whole and res == "stop"
                 break
-            if SH_COMPOUND.match(head) or SH_FUNC_DEF.match(head):
-                break
-            prev = p["how"]
-            m = re.match(r"(?:export\s+)?([A-Za-z_]\w*)=", head)
-            if not m or head[self.sh_word_end(head, m.end()):].strip():
-                continue
-            name = m.group(1)
-            cands[name] = None if name in cands else (head[m.end():self.sh_word_end(head, m.end())], d, p["start"],
-                                                       p["end"])
-        # NAME=value in front of a command (not a special builtin) sets it for that command alone,
-        # so it is no second assignment: `LIBDIR="$DIR/lib" python3 ...` beside `export LIBDIR=...`.
+            if how not in ("&&", "||"):
+                if chain == "and":
+                    lost.append((p["end"], len(s)))  # `cd X && a; b`: b runs whether or not the cd worked
+                chain = None
+            prev = how
+        # NAME=value in front of a command (not a special builtin, nor a function of s, which runs
+        # with it set) sets it for that command alone, so it is no second assignment:
+        # `LIBDIR="$DIR/lib" python3 ...` beside `export LIBDIR=...`.
         temp = {}
-        for (d, t), p in zip(cmds, parts):
+        for (d, t), p in items:
             rest_t, assigns = self.sw.command_rest(t)
             words = self.sw.command_words(rest_t)
-            if words and words[0] not in SH_SPECIAL:
+            if words and words[0] not in SH_SPECIAL and words[0] not in funcs:
                 for a in assigns.split("\n"):
                     n = a.split("=", 1)[0]
                     if a.strip() and re.fullmatch(r"[A-Za-z_]\w*", n):
                         temp[n] = temp.get(n, 0) + 1
-        names = set()
-        for name, c in cands.items():
-            if c is None:
-                continue
-            rest = s[:c[2]] + s[c[3]:]
-            sets = len(re.findall(r"(?<![\w$])" + name + r"(?:\[[^\]\n]*\])?\+?=", rest))
-            if sets <= temp.get(name, 0) and not re.search(SH_BINDERS.format(name), rest):
-                names.add(name)
-        memo = {}
+        final = {n: (since[n], v) for n, v in env.items() if v is not None}
+        # What the walk did not follow: function bodies, and everything past top. A subshell's
+        # commands set nothing here.
+        unfollowed = [k for k in range(len(items)) if k not in handled and len(items[k][1]["scope"]) == 1]
+        cand = set()
+        if whole and not any(self.sh_indirect(head_of(k)) for k in unfollowed):
+            for n in final:
+                rest = s
+                for a, b in sorted(spans.get(n, ()), reverse=True):
+                    rest = rest[:a] + rest[b:]
+                if n not in tainted and not self.sh_binds(n, rest, temp.get(n, 0)):
+                    cand.add(n)
 
-        def var(n, before, seen=()):
-            c = cands.get(n)
-            if n not in names or n in seen or c[2] >= before:
+        def carve(a, b):
+            """[a, b) less every function body: a value the walk saw at one point, not to the end."""
+            out = []
+            for x, y in sorted(bodies):
+                if y <= a or x >= b:
+                    continue
+                if x > a:
+                    out.append((a, x))
+                a = max(a, y)
+            return out + [(a, b)] if a < b else out
+
+        # The files sourced where the walk did not follow, whose paths these values work out, must
+        # bind none of the names that last; dropping one can change those paths, so this goes round
+        # until it settles.
+        while True:
+            known = {"regions": {}, "top": top, "lost": lost, "bodies": bodies}
+            for n, r in regions.items():
+                for a, b, v in r:
+                    known["regions"].setdefault(n, []).extend((x, y, v) for x, y in carve(a, b))
+            for n, (a, v) in final.items():
+                kept = [(a, len(s))] if n in cand else carve(a, top)
+                known["regions"].setdefault(n, []).extend((x, y, v) for x, y in kept)
+            for n, r in self.sh_locals(s, items, struct, known, script).items():
+                known["regions"].setdefault(n, []).extend(r)
+            if not cand:
+                return known
+            bound = set()
+            for k in unfollowed:
+                (d, t), p = items[k]
+                v, bad = self.sh_source_word(head_of(k), SH_UNKNOWN_DIR, lambda n, at=p["start"]: self.sh_home(
+                    n, s, self.sh_at(known, n, at)), script)
+                if v is None and not bad:
+                    continue
+                if bad or not os.path.isfile(self.resolve(v, d)):
+                    bound = set(cand)
+                    break
+                bound |= self.sh_bound_in(self.resolve(v, d), cand, d, False, v, depth + 1, set())
+            if not bound & cand:
+                return known
+            cand -= bound
+
+    def sh_assignment(self, head):
+        """(name, raw value) for a command that only sets one name (NAME=value, export NAME=value)."""
+        m = re.match(r"(?:export\s+)?([A-Za-z_]\w*)=", head)
+        if not m:
+            return None
+        end = self.sh_word_end(head, m.end())
+        return None if head[end:].strip() else (m.group(1), head[m.end():end])
+
+    @staticmethod
+    def sh_funcs(s):
+        """The names of the functions s defines."""
+        return set(re.findall(r"(?m)^\s*(?:function\s+)?([A-Za-z_][\w:.-]*)\s*\(\s*\)", s)) | \
+            set(re.findall(r"\bfunction\s+([A-Za-z_][\w:.-]*)", s))
+
+    @staticmethod
+    def sh_binds(name, text, allowed=0):
+        """Whether text can bind name, beyond `allowed` NAME= forms that set it for one command alone:
+        NAME=, NAME+=, NAME[i]=, ${NAME:=}, read, for, local, unset... NAME, or NAME inside (( )).
+        export and readonly with no = keep the value, so they do not count."""
+        # Every form below spells the name out, so text without it binds nothing. That, and patterns
+        # compiled once per name (sh_bind_patterns), are what keep a script with thousands of names
+        # inside the gate's time: asked per name per compound command, this ran 344,464 times
+        # judging the merge helper and compiled a pattern 1,002,444 times (claude-config#2569).
+        if name not in text:
+            return False
+        assigns, arithmetic, binders = sh_bind_patterns(name)
+        if len(assigns.findall(text)) > allowed:
+            return True
+        if arithmetic.search(text):
+            return True
+        return any(not SH_VALUE_KEPT.match(m.group(0)) for m in binders.finditer(text))
+
+    def sh_indirect(self, text):
+        """Whether a command can bind a name it does not spell out, so no name is certain past it: eval,
+        a nameref (declare -n), a name handed through a variable to read, mapfile, getopts, unset,
+        printf -v, let or declare, or $NAME = in (( )). Its words are read as written (sh_tokens), so
+        a value such as $(( ... )) stays one word, and a name is one only with no $ or ` in it."""
+        if re.search(r"\(\([^()]*\$\{?\w+\}?\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", text):
+            return True
+        toks = self.sh_tokens(self.sw.command_rest(text)[0])
+        words, k = [], 0
+        while k < len(toks):
+            kind, raw = toks[k]
+            if kind == "op":
+                k += 2 if SH_REDIRECT.fullmatch(raw) else 1  # a redirection and its target
+                continue
+            words.append(raw if re.search(r"[$`]", raw) else re.sub(r"""['"]""", "", raw))
+            k += 1
+            if raw.endswith("=") and k < len(toks) and toks[k] == ("op", "("):
+                # NAME=( ... ): the words inside are the array's values, not names (local -a q=("" x)
+                # read "" as a name nobody could spell, claude-config#2465). With no ) it closes on
+                # (sh_tokens can keep it inside a $(( )) word), the words are read as before, each
+                # one judged as a name where the command binds names.
+                close = next((i for i in range(k + 1, len(toks)) if toks[i] == ("op", ")")), None)
+                if close is not None:
+                    k = close + 1
+        if not words:
+            return False
+        w0, args = words[0], words[1:]
+        name = r"[A-Za-z_]\w*(?:\[[^\]$`]*\])?"
+        if w0 == "eval":
+            return True
+        if w0 == "let":
+            return any(re.search(r"[$`]", a) for a in args)
+        if w0 in ("declare", "typeset", "local", "export", "readonly"):
+            for a in args:
+                if a[:1] in ("-", "+"):
+                    if a[0] == "-" and "n" in a[1:]:
+                        return True
+                    continue
+                if not re.fullmatch(name, a.split("=", 1)[0]):
+                    return True
+            return False
+        names = []
+        if w0 in ("read", "mapfile", "readarray"):
+            valued = "dinNptu" if w0 == "read" else "dnOsuCc"
+            k = 0
+            while k < len(args) and args[k].startswith("-") and args[k] != "-":
+                letters, k = args[k][1:], k + 1
+                for ci, ch in enumerate(letters):
+                    if ch in valued or (ch == "a" and w0 == "read"):
+                        value = letters[ci + 1:]
+                        if not value:
+                            value, k = (args[k] if k < len(args) else ""), k + 1
+                        if ch == "a":
+                            names.append(value)
+                        break
+            names += args[k:]
+        elif w0 == "getopts":
+            names = args[1:2]
+        elif w0 == "unset":
+            names = [a for a in args if not a.startswith("-")]
+        elif w0 == "printf":
+            for k, a in enumerate(args):
+                if a == "-v":
+                    names = args[k + 1:k + 2]
+                    break
+                if a.startswith("-v"):
+                    names = [a[2:]]
+                    break
+                if not a.startswith("-"):
+                    break
+        return any(not re.fullmatch(name, a) for a in names)
+
+    def sh_test(self, head, d, var, script):
+        """True or False for a test whose outcome is certain ([ or test comparing known words with =,
+        ==, != , -n, -z, or one word on its own), else None."""
+        toks = self.sh_tokens(head)
+        if not toks or any(k == "op" for k, _ in toks):
+            return None
+        w = [r for _, r in toks]
+        if w[0] == "[":
+            if w[-1] != "]":
                 return None
-            if n not in memo:
-                memo[n] = self.sh_word(c[0], c[1], lambda x: var(x, before, seen + (n,)), script, True)[0]
-            return memo[n]
+            w = w[1:-1]
+        elif w[0] == "test":
+            w = w[1:]
+        else:
+            return None
+        vals = []
+        for r in w:
+            v, splits = self.sh_word(r, d, var, script, False)
+            if v is None or splits:
+                return None
+            vals.append(v)
+        if len(vals) == 3 and vals[1] in ("=", "==", "!="):
+            return (vals[0] == vals[2]) != (vals[1] == "!=")
+        if len(vals) == 2 and vals[0] in ("-n", "-z"):
+            return (vals[1] == "") == (vals[0] == "-z")
+        if len(vals) == 1:
+            return vals[0] != ""
+        return None
 
-        for (d, t), p in zip(cmds, parts):
-            target = self.sh_source_target(t)
-            if target is None:
+    def sh_case(self, s, items, k, var, setv, spans, where, script, shopt, expect):
+        """Follow the case at items[k] for sh_walk: True where it was followed, its esac the command
+        before items[expect]; otherwise False, having changed nothing, for the walk to step over it
+        as any other compound command. Each branch may only set names (NAME=value) and end in ;;. With the word known,
+        the first branch with a pattern matching it runs, its names set in turn; with it unknown, every
+        name any branch sets is unknown after it. A pattern is followed only in a plain form (letters,
+        digits, / . _ - * ?), and holding a letter only where the script never runs shopt, which can
+        change how a pattern matches (nocasematch, extglob)."""
+        (d, t), p = items[k]
+        head = t.strip()
+        m = re.match(r"case\s+", head)
+        if not m:
+            return None
+        wend = self.sh_word_end(head, m.end())
+        if head[wend:].strip() != "in":
+            return None
+        word = self.sh_word(head[m.end():wend], where(d), var, script, True)[0]
+        branches, opened, pos, j = [], False, p["end"], k + 1
+        while j < len(items):
+            (dj, tj), pj = items[j]
+            if len(pj["scope"]) > 1:
+                return None
+            gap = s[pos:pj["start"]]
+            while gap.strip():
+                gap = gap.lstrip()
+                if gap.startswith((";;&", ";&")):
+                    return None  # a branch that runs on into the next
+                if gap.startswith(";;"):
+                    gap, opened = gap[2:], False
+                    continue
+                gm = re.match(r"\(?([^()]*)\)", gap)
+                if not gm:
+                    return None
+                pats = [x.strip() for x in gm.group(1).split("|")]
+                if any(not re.fullmatch(r"[A-Za-z0-9_./*?-]+", x) or (shopt and re.search(r"[A-Za-z]", x))
+                       for x in pats):
+                    return None
+                branches.append((pats, []))
+                gap, opened = gap[gm.end():], True
+            hj = tj.strip()
+            if hj == "esac":
+                if pj["how"] in ("|", "&", "case"):
+                    return None
+                break
+            a = self.sh_assignment(hj)
+            if not a or not opened or pj["how"] not in (";", "#"):
+                return None
+            branches[-1][1].append((a, dj, pj))
+            pos, j = pj["end"], j + 1
+        else:
+            return None
+        if j + 1 != expect:
+            return None
+        chosen = ()
+        if word is not None:
+            chosen = next((b for pats, b in branches if any(fnmatch.fnmatchcase(word, x) for x in pats)), ())
+        for _, b in branches:
+            for (n, raw), dj, pj in b:
+                spans.setdefault(n, []).append((pj["start"], pj["end"]))
+                if word is None:
+                    setv(n, None, pj["end"])
+        for (n, raw), dj, pj in chosen:
+            setv(n, self.sh_word(raw, where(dj), var, script, True)[0], pj["end"])
+        return True
+
+    @staticmethod
+    def sh_struct(items):
+        """The compound commands around each command, for sh_locals: (rows, blocks), a row for each of
+        items, None for a subshell's or a substitution's command, else (the ids of the blocks it is
+        inside, outermost first; its text with the keywords that open or carry on a block taken off),
+        and each block {"kind": "func", "if", "loop", "case" or "group", "open" and "close": the indexes
+        of the commands opening and closing it}. None where the keywords do not pair up, or a function
+        body is not a group."""
+        rows, blocks, stack, brace, idx = [], [], [], False, 0
+
+        def push(kind):
+            blocks.append({"kind": kind, "open": idx, "close": None})
+            stack.append(len(blocks) - 1)
+
+        for idx, ((d, t), p) in enumerate(items):
+            if len(p["scope"]) > 1:
+                rows.append(None)
                 continue
-            v = self.sh_word(target, d, lambda n, at=p["start"]: var(n, at), script, False)
-            path = v[0] and not v[1] and os.path.join(os.path.abspath(d or os.getcwd()), v[0])
-            if not path or not os.path.isfile(path):
-                return set()
-            names -= self.sh_bound_in(path, names, var, 0, set())
-        return names
+            head, pending = t.strip(), brace
+            while head:
+                m = re.match(r"(?:then|else|do|elif|!|time)(?=[\s;&|()]|$)\s*", head)
+                if m:
+                    head = head[m.end():]
+                    continue
+                m = re.match(r"(if|while|until)(?=[\s;&|()]|$)\s*", head)
+                if m:
+                    push("if" if m.group(1) == "if" else "loop")
+                    head = head[m.end():]
+                    continue
+                if re.match(r"(?:for|select|case)(?=\s|$)", head):
+                    push("case" if head.startswith("case") else "loop")
+                    head = ""  # its words are no command
+                    break
+                if re.match(r"\{(?=\s|$)", head):
+                    if brace:
+                        brace = False  # the body of the function opened on the command before
+                    else:
+                        push("group")
+                    head = head[1:].lstrip()
+                    continue
+                m = re.match(r"function\s+[^\s(){}]+(?:\s*\(\s*\))?\s*", head) or \
+                    re.match(r"[A-Za-z_][\w:.-]*\s*\(\s*\)\s*", head)
+                if m:
+                    if brace:
+                        return None
+                    push("func")
+                    head = head[m.end():]
+                    if not head:
+                        brace = True
+                        break
+                    if not re.match(r"\{(?=\s|$)", head):
+                        return None  # f() ( ... ) or another body form: not followed
+                    head = head[1:].lstrip()
+                    continue
+                break
+            if pending and brace:
+                return None
+            m = re.match(r"(fi|done|esac|\})(?=[\s;&|<>)]|$)", head)
+            if m:
+                want = {"fi": ("if",), "done": ("loop",), "esac": ("case",), "}": ("group", "func")}[m.group(1)]
+                if not stack or blocks[stack[-1]]["kind"] not in want:
+                    return None
+                blocks[stack.pop()]["close"] = idx
+                head = ""
+            rows.append((tuple(stack), head))
+        return None if stack or brace else (rows, blocks)
+
+    def sh_locals(self, s, items, struct, known, script):
+        """The values `local NAME=value` gives in the function it is in, as sh_walk regions
+        (claude-config#2465: lib/suite-deadline.sh sources "$_sd_reader", a local). The local must be a
+        command of the function body itself (in no if, loop, case, group or chain, so it runs whenever
+        the function does), NAME=value must appear once in it, and nothing else in s may bind NAME.
+        Its value is worked out from what is known there, the directory unknown, since a function
+        runs wherever it is called. It lasts until the function ends, a loop or a function opens
+        inside it, or a command that is not one of SH_KEEPS, a plain NAME=value, or a local of other
+        names runs, since that can be a function setting it; that command's own words are still read
+        with it, being worked out before it runs."""
+        out = {}
+        if struct is None:
+            return out
+        rows, blocks = struct
+        for idx, ((d, t), p) in enumerate(items):
+            if rows[idx] is None:
+                continue
+            stack, head = rows[idx]
+            if not stack or blocks[stack[-1]]["kind"] != "func" or p["how"] in ("|", "&"):
+                continue
+            before = next((items[j][1]["how"] for j in range(idx - 1, -1, -1) if rows[j] is not None), ";")
+            toks = self.sh_tokens(head)
+            if before in ("&&", "||", "|", "&") or toks[:1] != [("word", "local")] or any(k == "op" for k, _ in toks):
+                continue
+            words = [r for _, r in toks[1:]]
+            while words[:1] == ["-r"]:
+                words = words[1:]
+            if any(w[:1] in ("-", "+") for w in words):
+                continue  # -a, -i, -n and the rest change what the value is
+            here, rest, end = {}, s[:p["start"]] + s[p["end"]:], blocks[stack[-1]]["close"]
+            for w in words:
+                m = re.match(r"([A-Za-z_]\w*)=", w)
+                if not m:
+                    here[w] = None
+                    continue
+                n = m.group(1)
+                v = self.sh_word(w[m.end():], SH_UNKNOWN_DIR, lambda x: here[x] if x in here else self.sh_home(
+                    x, s, self.sh_at(known, x, p["start"])), script, True)[0]
+                here[n] = v
+                if v is None or self.sh_binds(n, rest) or \
+                        sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
+                    continue
+                b = items[end][1]["start"]
+                for j in range(idx + 1, end):
+                    if rows[j] is None:
+                        continue  # a subshell's or a substitution's, which cannot set it
+                    stack_j, head_j = rows[j]
+                    if stack_j[:len(stack)] != stack or \
+                            any(blocks[x]["kind"] in ("loop", "func") for x in stack_j[len(stack):]):
+                        b = items[j][1]["start"]
+                        break
+                    if not self.sh_keeps(head_j):
+                        b = items[j][1]["start"] + 1
+                        break
+                out.setdefault(n, []).append((p["end"], b, v))
+        return out
+
+    def sh_keeps(self, head):
+        """Whether a command certainly sets no shell variable but those it spells out: nothing, a
+        plain NAME=value, a local or declare naming its names outright, or one of SH_KEEPS."""
+        if not head:
+            return True
+        rest, _ = self.sw.command_rest(head)
+        words = self.sw.command_words(rest)
+        if not words:
+            return True
+        if words[0] in ("local", "declare", "typeset", "readonly", "export"):
+            return not self.sh_indirect(head)
+        if words[0] == "printf":
+            return not any(w.startswith("-v") for w in words[1:])
+        return words[0] in SH_KEEPS
 
     def sh_source_target(self, t):
         """The raw word a source or . command names, or None for any other command."""
@@ -1145,11 +1773,34 @@ class Judge:
         start = len(rest) - len(rest[end:].lstrip())
         return rest[start:self.sh_word_end(rest, start)] or None
 
-    def sh_bound_in(self, path, names, var, depth, seen):
-        """The names a sourced file binds, it or a file it sources whose path can be worked out."""
-        real = os.path.realpath(path)
-        if real in seen or depth > MAX_DEPTH:
+    @staticmethod
+    def sh_strip_openers(t):
+        """t with what opens or carries on a compound command taken off its front (a function's
+        `name() {`, `function name {`, if, then, do, while, until, else, !, a brace), so the command
+        it runs is the one judged: `f() { eval "$1=1"; }` on one line read as a call to f() and its
+        eval went unseen (claude-config#2465)."""
+        t = t.strip()
+        while True:
+            m = SH_FUNC_DEF.match(t) or re.match(r"function\s+[A-Za-z_][\w:.-]*(?:\s*\(\s*\))?", t) or \
+                re.match(r"(?:if|then|elif|else|do|while|until|time|!|\{)(?=[\s;&|]|$)", t)
+            if not m or m.end() == 0:
+                return t
+            t = t[m.end():].lstrip()
+
+    def sh_bound_in(self, path, names, cwd, cwd_known, word, depth, seen):
+        """The names among names that a sourced file binds, anywhere in it (a function's body too, as
+        it can be called later), or in a file it sources, whose path is worked out from the file's
+        own variables (sh_known; word is its BASH_SOURCE, cwd the directory it runs in). All of them
+        where it cannot be read, is past MAX_DEPTH, or binds a name through a variable (eval,
+        read "$n"...). A file it sources whose path cannot be worked out is not followed: the gate
+        refuses that file when it reads it (claude-config#2465), so what it binds is never relied on."""
+        if not names:
             return set()
+        real = os.path.realpath(path)
+        if real in seen:
+            return set()
+        if depth > MAX_DEPTH:
+            return set(names)
         seen.add(real)
         self.tick(path)
         try:
@@ -1157,21 +1808,27 @@ class Judge:
                 text = f.read(MAX_FILE).decode("utf-8", "replace")
         except OSError:
             return set(names)
-        bound = {n for n in names if re.search(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", text)
-                 or re.search(SH_BINDERS.format(n), text)}
+        bound = {n for n in names if self.sh_binds(n, text)}
+        parts = []
         try:
-            cmds = self.sw.commands(text, os.path.dirname(real))
+            cmds = self.sw.commands(text, cwd, parts=parts)
         except Exception:
-            return bound
-        for d, t in cmds:
-            target = self.sh_source_target(t)
-            if target is None:
+            return set(names)
+        known = None
+        for (d, t), p in zip(cmds, parts):
+            if len(p["scope"]) > 1:
+                continue  # a subshell's or a substitution's (h="$(eval ...)"): it binds nothing here
+            if self.sh_indirect(self.sh_strip_openers(t)):
+                return set(names)
+            if self.sh_source_target(t) is None:
                 continue
-            v = self.sh_word(target, d, lambda n: var(n, float("inf")), path, False)
-            if v[0] and not v[1]:
-                nested = os.path.join(os.path.abspath(d or os.getcwd()), v[0])
-                if os.path.isfile(nested):
-                    bound |= self.sh_bound_in(nested, names, var, depth + 1, seen)
+            if known is None:
+                known = self.sh_known(text, cwd, word, cwd_known, depth)
+            wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, p["start"]) else SH_UNKNOWN_DIR
+            v, bad = self.sh_source_word(t, wd, lambda n, at=p["start"]: self.sh_home(
+                n, text, self.sh_at(known, n, at)), word)
+            if v is not None and os.path.isfile(self.resolve(v, d)):
+                bound |= self.sh_bound_in(self.resolve(v, d), names, d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen)
         return bound
 
     def py_args(self, text, name, d):
@@ -1356,8 +2013,7 @@ class Judge:
                     p, i = m.group(1) if m.group(1) is not None else m.group(2), m.end()
                     if p in ("@", "*") or "[@]" in p or "[*]" in p or p.startswith(("!", "#")):
                         return None, True  # as many words as there are values
-                    v = script if p in ("BASH_SOURCE", "BASH_SOURCE[0]") else (
-                        var(p) if re.fullmatch(r"[A-Za-z_]\w*", p) else None)
+                    v = self.sh_param(p, d, var, script, dq)
                 if v is None:
                     unknown = True
                     splits = splits or not (dq or assign)
@@ -1373,6 +2029,35 @@ class Judge:
         if dq:
             return None, True
         return (None if unknown else "".join(out)), splits
+
+    def sh_param(self, p, d, var, script, dq):
+        """The value of the parameter expansion ${p} or $p, or None where it is not certain: a name,
+        BASH_SOURCE[0], and (claude-config#2465) ${X:-default} and ${X-default}, and ${X%pat},
+        ${X%%pat}, ${X#pat} and ${X##pat} with a plain pattern (letters, digits, / . _ - * ?), such as
+        ${BASH_SOURCE[0]%/*}. Only a name whose value is known has a known expansion: one the text never
+        set can come from the environment, set or not, so its default is never taken on trust."""
+        m = SH_EXPANSION.fullmatch(p)
+        if not m:
+            return None
+        base = script if m.group(1) in ("BASH_SOURCE", "BASH_SOURCE[0]") else var(m.group(1))
+        if base is None:
+            return None
+        if m.group(2):
+            if base or m.group(2) == "-":
+                return base
+            if dq and "'" in m.group(3):
+                return None  # inside double quotes a single quote is only text, which sh_word would drop
+            return self.sh_word(m.group(3), d, var, script, True)[0]
+        if m.group(4):
+            pat, n, op = m.group(5), len(base), m.group(4)
+            if not re.fullmatch(r"[A-Za-z0-9_./*?-]+", pat):
+                return None
+            # Shortest or longest, from the end (%) or the start (#): the first cut that matches.
+            cuts = range(n, -1, -1) if op in ("%", "##") else range(n + 1)
+            for k in cuts:
+                if fnmatch.fnmatchcase(base[k:] if op[0] == "%" else base[:k], pat):
+                    return base[:k] if op[0] == "%" else base[k:]
+        return base
 
     def sh_subst(self, body, d, var, script):
         """What $(body) prints, for $(pwd), $(dirname X) and $(cd X && pwd); None for anything else,
@@ -1391,9 +2076,11 @@ class Judge:
             if v is None or sp:
                 return None
             vals.append(v)
-        here = os.path.abspath(d or os.getcwd())
+        # Where the directory it runs in is not certain (claude-config#2465), what pwd prints, and
+        # where a relative cd goes, are not either.
+        here = None if self.sh_dir(d) == SH_UNKNOWN_DIR else os.path.abspath(d or os.getcwd())
         if vals in (["pwd"], ["pwd", "-P"]):
-            return here if len(vals) == 1 else os.path.realpath(here)
+            return None if here is None else here if len(vals) == 1 else os.path.realpath(here)
         if len(vals) == 2 and vals[0] == "dirname":
             p = vals[1].rstrip("/")
             if not vals[1]:
@@ -1406,7 +2093,10 @@ class Judge:
             if not target or target.startswith("-") or (os.environ.get("CDPATH") and not os.path.isabs(target)
                                                          and not target.startswith((".", "/"))):
                 return None
-            p = os.path.normpath(os.path.join(here, os.path.expanduser(target) if target.startswith("~") else target))
+            target = os.path.expanduser(target) if target.startswith("~") else target
+            if here is None and not os.path.isabs(target):
+                return None
+            p = os.path.normpath(os.path.join(here or "/", target))
             if not os.path.isdir(p):
                 return None
             return os.path.realpath(p) if vals[4:] else p
@@ -1474,10 +2164,23 @@ class Judge:
     def line(self, s, cwd, depth, whole):
         """The reason a command line posts, or None. Its shell variables are its own: a script read
         here starts with none, and the caller's are back once it is read."""
-        saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script)
-        self.next_script = None
+        saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script, self.next_cwd_known)
+        self.next_script, self.next_cwd_known = None, True
         try:
-            for d, text, wrapper, why, _ in self.sw.every_command(s, cwd):
+            # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
+            # only over part of the text. every_command gives s's own commands in commands() order,
+            # with a wrapper's commands after it at a depth of one or more; those take its place.
+            parts = []
+            try:
+                self.sw.commands(s, cwd, parts=parts)
+                starts = [p["start"] for p in parts]
+            except Exception:
+                starts = []  # read by the crude cut, so no command's place is known
+            k = 0
+            for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
+                if not wdepth:
+                    self.shell["at"] = starts[k] if k < len(starts) else None
+                    k += 1
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason
@@ -1617,15 +2320,16 @@ class Judge:
                 return None
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
             # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
-            # sourced helper that posts passed. A literal path is read as it always was, ~ included.
-            # One that still cannot be worked out is not read, as before: refusing it refused 402 of
-            # this repository's scripts on 2026-11-08 (every hook suite, through the `local` path
-            # lib/suite-deadline.sh sources), so that waits on the resolver reading those forms.
-            raw = self.sh_source_target(text)
-            if raw and re.search(r"[$`]", raw):
-                v, splits = self.sh_word(raw, d, self.sh_source_var, self.shell["script"], False)
-                return self.script(v, d, depth, True) if v is not None and not splits else None
-            return self.script(words[1], d, depth, True)
+            # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
+            # that still cannot be worked out is not read, as before. Refusing it is the half of #2465
+            # kept off: on 2026-11-09 it still newly refused 80 of this repository's scripts, whose
+            # causes are the follow up issue's to explain before it is turned on (Dan, 2026-11-09).
+            v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
+            if bad:
+                raw = self.sh_source_target(text)
+                # A literal path whose directory is not certain is read where the command runs, as on main.
+                return self.script(words[1], d, depth, True) if raw and not re.search(r"[$`]", raw) else None
+            return self.script(v, d, depth, True) if v is not None else None
         if "/" in words[0]:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"

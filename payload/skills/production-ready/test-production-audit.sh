@@ -4,7 +4,10 @@
 # not by grepping its text. The 2026-10-24 audit of a consumer site missed CAN-SPAM entirely: the
 # profiler set sendsEmail false because the repo sends no email, so nothing looked at the consumer
 # email sent from outside systems, and most legal checks that did land came from a hand written
-# focus argument the script did not have. It also ran 19 auditors at once, above the four agent rule.
+# focus argument the script did not have. It also ran 19 auditors at once, above the session's agent
+# cap. The cap is this Mac's (claude-config#2546), passed in as args.agentCap; the engine cannot read
+# it, so with none the script falls back to the default of hooks/agent-cap.sh, read here from the hook
+# itself rather than written out again.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/suite-deadline.sh" || {
@@ -18,6 +21,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WF="${PRODUCTION_AUDIT_WORKFLOW:-$DIR/production-audit.workflow.js}"
 H="$DIR/production-audit.harness.cjs"
 pass=0; fail=0
+# The default cap, from the cap's one home: what the hook gives a Mac its table does not name.
+CAP_DEFAULT="$(AGENT_CAP_HOST=no-such-mac bash "$DIR/../../hooks/agent-cap.sh" --number 2>/dev/null)"
+case "$CAP_DEFAULT" in
+  ''|*[!0-9]*)
+    echo "FAIL: hooks/agent-cap.sh gave no default cap ('$CAP_DEFAULT'), so the ceiling could not be judged"
+    printf 'SUITE-RESULT passed=0 failed=1\n'
+    exit 1 ;;
+esac
 if ! command -v node >/dev/null 2>&1; then
   echo "FAIL: node is missing, so the audit could not be run"
   printf 'SUITE-RESULT passed=0 failed=1\n'
@@ -85,11 +96,23 @@ expect dead-auditor "and the run still finishes the other domains" "len(audits) 
 expect dead-auditor "and the outside CRM is reported as not inspected" "any(n['system'] == 'Larkspur CRM' for n in r['report']['notInspected'])"
 expect default "a run where every auditor answered reports none unaudited" "r['report']['unauditedDomains'] == []"
 
-# At most four agents run at once, and every applicable domain is still audited.
-expect default "never more than four agents at once" "mx <= 4"
-expect default "with more than one at once, so the ceiling is what held it" "mx > 1"
+# No more agents run at once than the cap, and every applicable domain is still audited. With no
+# agentCap passed, the ceiling is exactly the hook's default: reaching it shows the fallback is that
+# number, not a lower one that also stays under it.
+expect default "with no agentCap, never more than the hook's default ($CAP_DEFAULT) at once" "mx <= $CAP_DEFAULT"
+expect default "and the run reaches that default, so the fallback is the hook's own number" "mx == $CAP_DEFAULT"
+expect default "and the fallback is logged" "any('agentCap' in l and 'default' in l for l in logs)"
 expect default "every applicable domain is audited" "len(audits) == len(r['applicable']) == 19"
-expect dead-auditor "a dead agent frees its place, so the ceiling holds and the run finishes" "mx <= 4 and len(audits) == 19"
+expect dead-auditor "a dead agent frees its place, so the ceiling holds and the run finishes" "mx <= $CAP_DEFAULT and len(audits) == 19"
+# A cap passed in is the ceiling: seven, as the work MacBook announces, runs above the default.
+expect cap-seven "an agentCap of 7 is the ceiling" "mx <= 7"
+expect cap-seven "and is reached, so the passed number held it rather than the default" "mx == 7"
+expect cap-seven "and nothing about a fallback is logged" "not any('agentCap' in l for l in logs)"
+expect cap-seven "every applicable domain is still audited" "len(audits) == 19"
+# Something that is not a whole number is never trusted as a cap: the default holds, said in the log.
+expect cap-bad "an agentCap that is not a whole number falls back to the default" "mx == $CAP_DEFAULT"
+expect cap-bad "and says so" "any('agentCap' in l and 'default' in l for l in logs)"
+expect cap-zero "an agentCap of zero falls back to the default rather than running nothing" "mx == $CAP_DEFAULT and len(audits) == 19"
 
 # focus is a documented argument: it adds emphasis to every auditor, and is absent when not given.
 expect focus "a focus reaches every auditor" "all('consumer email sent from the CRM' in prompt(a) for a in audits)"

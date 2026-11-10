@@ -236,7 +236,7 @@ SUITE_SECTION_SAMPLES="${SUITE_SECTION_SAMPLES:-10}"
 # setting and the counts below. Missing, the shell says so and every count is refused.
 # shellcheck source=../payload/hooks/lib/whole-number.sh
 . "$(dirname "$SCRIPT")/payload/hooks/lib/whole-number.sh"
-if ! whole_above_zero "$SUITE_SECTION_SAMPLES" SUITE_SECTION_SAMPLES; then
+if _wn_got="$(whole_above_zero "$SUITE_SECTION_SAMPLES")"; then SUITE_SECTION_SAMPLES="$_wn_got"; else
   echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
   exit 4
 fi
@@ -530,7 +530,7 @@ fi
 # above the selectors, because those re-execute this file: a refusal written beside the seam would
 # sit after that re-execution and could never be reached by the run that needed it (L109).
 if [ -n "${SUITE_FIXTURE_SECTIONS:-}" ]; then
-  if ! whole_above_zero "$SUITE_FIXTURE_SECTIONS" SUITE_FIXTURE_SECTIONS; then
+  if _wn_got="$(whole_above_zero "$SUITE_FIXTURE_SECTIONS")"; then SUITE_FIXTURE_SECTIONS="$_wn_got"; else
     echo "test suite: SUITE_FIXTURE_SECTIONS='$SUITE_FIXTURE_SECTIONS' is not a positive whole number of sections. Refusing rather than running none and reporting a pass over a set nobody chose (L98)." >&2
     exit 2
   fi
@@ -1284,7 +1284,7 @@ esac
 # about what they assert.
 SUITE_POLL_INTERVAL="${SUITE_POLL_INTERVAL:-2}"
 # Zero however written is zero, 00 and 0.000 included (lib/whole-number.sh, claude-config#1948).
-if ! decimal_above_zero "$SUITE_POLL_INTERVAL" SUITE_POLL_INTERVAL; then
+if _wn_got="$(decimal_above_zero "$SUITE_POLL_INTERVAL")"; then SUITE_POLL_INTERVAL="$_wn_got"; else
   echo "test suite: SUITE_POLL_INTERVAL='$SUITE_POLL_INTERVAL' is not a positive number of seconds. Refusing rather than guessing: zero would spin the watchdog against the clock with no sleep at all, and this decides how finely a stall can be noticed." >&2
   exit 4
 fi
@@ -1498,7 +1498,7 @@ case "$SUITE_LOCK_WAIT" in
     exit 4 ;;
 esac
 # Zero however written is zero, 00 and 0.000 included (lib/whole-number.sh, claude-config#1948).
-if ! decimal_above_zero "$SUITE_LOCK_WAIT_POLL" SUITE_LOCK_WAIT_POLL; then
+if _wn_got="$(decimal_above_zero "$SUITE_LOCK_WAIT_POLL")"; then SUITE_LOCK_WAIT_POLL="$_wn_got"; else
   echo "test suite: SUITE_LOCK_WAIT_POLL='$SUITE_LOCK_WAIT_POLL' is not a positive number of seconds. Refusing rather than spinning against the lock with no pause between looks." >&2
   exit 4
 fi
@@ -1857,9 +1857,9 @@ shard_coverage_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards 
 
 shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
   local _cv_n="${1:-}" _cv_line _cv_i _cv_f _cv_l _cv_s _cv_x _cv_k
-  local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" "
+  local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" " _cv_whole
   local _cv_bad="" _cv_dis="" _cv_dup="" _cv_gone="" _cv_miss="" _cv_extra="" _cv_say=""
-  whole_above_zero "$_cv_n" _cv_n || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
+  _cv_whole="$(whole_above_zero "$_cv_n")" && _cv_n="$_cv_whole" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
   while IFS= read -r _cv_line; do
     case "$_cv_line" in 'SUITE-SHARD-COVERAGE '*) ;; *) continue ;; esac
     _cv_i="${_cv_line#*shard=}";    _cv_i="${_cv_i%% *}"
@@ -1949,7 +1949,7 @@ _fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whol
 # two faults where there is one (L11).
 fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
   _fv_n="$1"
-  whole_above_zero "$_fv_n" _fv_n || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
+  _fv_whole="$(whole_above_zero "$_fv_n")" && _fv_n="$_fv_whole" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
   _fv_seen=""; _fv_bad=""; _fv_pp=""; _fv_pf=""; _fv_dis=""
   _fv_tp=0; _fv_tf=0; _fv_rp=0; _fv_rf=0; _fv_short=""
   while IFS= read -r _fv_l; do
@@ -2101,7 +2101,7 @@ fan_totals_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards expe
 _sj_src="default"
 _sj_default=4
 if [ -n "${HOOK_TESTS_SLOTS:-}" ]; then
-  if ! whole_above_zero "$HOOK_TESTS_SLOTS" HOOK_TESTS_SLOTS; then
+  if _wn_got="$(whole_above_zero "$HOOK_TESTS_SLOTS")"; then HOOK_TESTS_SLOTS="$_wn_got"; else
     echo "test suite: HOOK_TESTS_SLOTS='$HOOK_TESTS_SLOTS' is not a positive whole number of processes this suite may take. Refusing rather than guessing: it arrives from run-all-tests.sh, so a value nobody can read means that is wrong, and running four shards anyway would hide it." >&2
     exit 2
   fi
@@ -10934,6 +10934,14 @@ dbg "#146 real filtered run reported: $_ft_line"
 check "#146 a real filtered run says how its checks were divided up" "[ -n \"\$_ft_line\" ]"
 check "#146 and a real line's buckets add up to what that run reported" \
   "printf '%s\n' \"\$_ft_line shard=1\" | fan_totals_verdict 1 >/dev/null"
+# A shard count that is not a number is refused by both verdicts, naming what they were given
+# rather than the blank a refused capture leaves (claude-config#2465).
+_ft_bad="$(printf '' | fan_totals_verdict soon 2>&1)"
+check "#2465 the totals verdict refuses a shard count that is not a number, naming it" \
+  "case \"\$_ft_bad\" in *'against \"soon\" shards'*) true ;; *) false ;; esac"
+_ft_bad="$(printf '' | shard_coverage_verdict soon 2>&1)"
+check "#2465 and so does the coverage verdict" \
+  "case \"\$_ft_bad\" in *'against \"soon\" shards'*) true ;; *) false ;; esac"
 # The prelude really is the bulk of what a one section run does, which is the fact the whole issue
 # rests on. A run whose prelude bucket was zero would satisfy every arithmetic check above (L182).
 _ft_prel="$(printf '%s' "$_ft_line" | sed -n 's/.*prelude_pass=\([0-9]*\).*/\1/p')"
@@ -13208,6 +13216,134 @@ check "#1621 and the refusal still names the file and line" \
 # hand, never at an override the watcher has just said it ignores (L111).
 check "#1621 and the watcher's refusal points the override at a send run by hand" \
   "line_has \"\$out_wn3\" 'names a work organisation' 'one send run by hand' 'claude-sync send'"
+
+section "== a refused send is reported by status and stuck until a send gets through, and a lesson naming a work organisation is caught when written (#2530) =="
+# On one Mac the change watcher's send was refused 71 times by the work names scan, and the only
+# trace was ~/.claude-sync.log: stuck said nothing and status said only "last sent: 2 days ago".
+# The same invented organisation and seam as the section above, so no real name is written here.
+RFSH="$WORK/refused-home"; mkdir -p "$RFSH"; echo '{"hooks":{}}' > "$RFSH/settings.json"
+printf '# rules\nsee acme-hq/widgets#12 for the history\n' > "$RFSH/CLAUDE.md"
+RFSE="$WORK/refused-emptyhome"; mkdir -p "$RFSE"
+RFSR="$WORK/refused-repo"; mkdir -p "$RFSR/payload"
+RFSHASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+_rfs(){ HOME="$RFSE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" SYNC_LOG_FILE="$WORK/refused-sync.log" CLAUDE_HOME="$RFSH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+# The control: nothing refused yet, so stuck has nothing to say.
+out_rfs0="$(_rfs stuck)"
+check "#2530 control: before any refusal, stuck says nothing about a refused send" \
+  "! grep -q 'send-refused' <<< \"\$out_rfs0\""
+_rfs push >/dev/null; _rfs push >/dev/null; _rfs push >/dev/null
+out_rfs1="$(_rfs stuck)"
+dbg "stuck after three refused sends: $out_rfs1"
+check "#2530 stuck reports the refused send as its own kind, with how many times in a row" \
+  "printf '%s\n' \"\$out_rfs1\" | awk -F'\t' '\$1==\"send-refused\" && \$2==3 {f=1} END{exit !f}'"
+check "#2530 and its sentence names the reason, the file and the line, and the count" \
+  "line_has \"\$out_rfs1\" 'send-refused' 'work organisation' 'CLAUDE\.md:2' '3 times'"
+check "#2530 and never the name it found" "out_lacks \"\$out_rfs1\" 'acme-hq'"
+out_rfs2="$(_rfs status)"
+dbg "status after three refused sends: $out_rfs2"
+check "#2530 status says the same, in the same words" \
+  "line_has \"\$out_rfs2\" 'work organisation' 'CLAUDE\.md:2' '3 times'"
+# A send that gets through ends it, on both surfaces.
+printf '# rules\nsee widgets#12 for the history\n' > "$RFSH/CLAUDE.md"
+if out_rfs3="$(_rfs push)"; then rc_rfs3=0; else rc_rfs3=$?; fi
+dbg "push after the name was dropped: $out_rfs3"
+check "#2530 control: the send goes through once the name is gone" "[ '$rc_rfs3' -eq 0 ]"
+out_rfs4="$(_rfs stuck)"; out_rfs5="$(_rfs status)"
+check "#2530 a send that gets through clears it from stuck" "! grep -q 'send-refused' <<< \"\$out_rfs4\""
+check "#2530 and from status" "out_lacks \"\$out_rfs5\" 'refused every send'"
+# A refusal after that starts a new count rather than resuming the old one.
+printf '# rules\nsee acme-hq/widgets#12 again\n' > "$RFSH/CLAUDE.md"
+_rfs push >/dev/null
+out_rfs6="$(_rfs stuck)"
+check "#2530 a refusal after a send got through counts from one again" \
+  "printf '%s\n' \"\$out_rfs6\" | awk -F'\t' '\$1==\"send-refused\" && \$2==1 {f=1} END{exit !f}'"
+# A record that is there and cannot be read is said, never read as nothing refused (L98).
+printf 'not-a-time\tsomething\n' > "$RFSR/.send-refused"
+out_rfs7="$(_rfs stuck)"
+check "#2530 a refused send record that will not parse is said, not dropped" \
+  "line_has \"\$out_rfs7\" 'send-refused-unreadable' '\.send-refused'"
+printf '1\tx\twork-names\t1\t1\n' > "$RFSR/.send-refused"; chmod 000 "$RFSR/.send-refused"
+out_rfs8="$(_rfs stuck)"; chmod 644 "$RFSR/.send-refused"
+check "#2530 a refused send record that cannot be opened is said, not dropped" \
+  "line_has \"\$out_rfs8\" 'send-refused-unreadable' 'could not be read'"
+# A record written before the count existed holds three fields: what it can say, without a count it
+# never measured (L11).
+printf '%s\tCLAUDE.md:2\twork-names\n' "$(date +%s)" > "$RFSR/.send-refused"
+out_rfs9="$(_rfs stuck)"
+check "#2530 a record from before the count says the refusal and claims no count" \
+  "line_has \"\$out_rfs9\" 'send-refused' 'CLAUDE\.md:2' 'not counted'"
+# The secret scan's refusals share the record and the report, each said as itself (L11).
+printf '%s\tagents/leak.md\t\t2\t%s\n' "$(date +%s)" "$(date +%s)" > "$RFSR/.send-refused"
+out_rfs10="$(_rfs stuck)"
+check "#2530 a refusal by the secret scan is reported as that, never as a work name" \
+  "line_has \"\$out_rfs10\" 'secret' 'agents/leak\.md' '2 times' && out_lacks \"\$out_rfs10\" 'work organisation'"
+rm -f "$RFSR/.send-refused"
+
+# The lessons file is checked for the same names when a lesson is WRITTEN, by the same scanner, so
+# the refusal is met by the session that wrote it rather than by the watcher days later.
+LWNH="$WORK/refused-lessons-home"; mkdir -p "$LWNH"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2. another sound rule.** seen in acme-hq/widgets#4\n' > "$LWNH/LESSONS.md"
+_lwn(){ HOME="${LWN_HOME:-$RFSE}" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" CLAUDE_HOME="$LWNH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+if out_lwn1="$(_lwn lesson-faults)"; then rc_lwn1=0; else rc_lwn1=$?; fi
+dbg "lesson-faults over a lesson naming the organisation: rc=$rc_lwn1 $out_lwn1"
+check "#2530 lesson-faults refuses a lesson naming a work organisation, with its own exit code" "[ '$rc_lwn1' -eq 3 ]"
+check "#2530 and names the file and line, never the name" \
+  "line_has \"\$out_lwn1\" 'work organisation' 'LESSONS\.md:6' && out_lacks \"\$out_lwn1\" 'acme-hq'"
+if out_lwn2="$(_lwn next-lesson)"; then rc_lwn2=0; else rc_lwn2=$?; fi
+dbg "next-lesson over a lesson naming the organisation: rc=$rc_lwn2 $out_lwn2"
+check "#2530 next-lesson still mints a number" "[ '$rc_lwn2' -eq 0 ] && grep -q '^L3$' <<< \"\$out_lwn2\""
+check "#2530 and warns that the lessons file already names a work organisation" \
+  "line_has \"\$out_lwn2\" 'work organisation' 'LESSONS\.md:6'"
+# The control in the same fixture: the same lesson without the organisation is clean and silent.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2. another sound rule.** seen in widgets#4\n' > "$LWNH/LESSONS.md"
+if out_lwn3="$(_lwn lesson-faults)"; then rc_lwn3=0; else rc_lwn3=$?; fi
+check "#2530 control: the same lesson without the name passes lesson-faults silently" \
+  "[ '$rc_lwn3' -eq 0 ] && [ -z \"\$(printf '%s' \"\$out_lwn3\" | tr -d '[:space:]')\" ]"
+# A scan that could not run judged nothing, so it is said as that, with its own exit code, never as
+# a lesson naming an organisation (L11). A registry that will not parse is how the scanner refuses.
+LWNBAD="$WORK/refused-lessons-badhome"; mkdir -p "$LWNBAD/.claude/skills/pennie-dev-update"
+printf '{ not json\n' > "$LWNBAD/.claude/skills/pennie-dev-update/repos.local.json"
+if out_lwn4="$(LWN_HOME="$LWNBAD" _lwn lesson-faults)"; then rc_lwn4=0; else rc_lwn4=$?; fi
+dbg "lesson-faults with a scanner that cannot judge: rc=$rc_lwn4 $out_lwn4"
+check "#2530 a work names scan that could not run exits 4, not 3" "[ '$rc_lwn4' -eq 4 ]"
+check "#2530 and says it could not be checked, never that the file names one" \
+  "line_has \"\$out_lwn4\" 'could not be checked' 'send refuses' && out_lacks \"\$out_lwn4\" 'names a work organisation, at'"
+if out_lwn5="$(LWN_HOME="$LWNBAD" _lwn next-lesson)"; then rc_lwn5=0; else rc_lwn5=$?; fi
+check "#2530 and next-lesson still mints a number when the scan cannot run" "[ '$rc_lwn5' -eq 0 ] && grep -q '^L' <<< \"\$out_lwn5\""
+# A copy of the tool with no scanner beside it judged nothing too, so it says so with the same exit
+# code, never a clean 0 that reads as a lesson checked and found free of names (L11, L98).
+LWNCOPY="$WORK/refused-lessons-copy"; mkdir -p "$LWNCOPY"; cp "$SCRIPT" "$LWNCOPY/claude-sync"
+if out_lwn6="$(HOME="$RFSE" CLAUDE_HOME="$LWNH" SYNC_REPO="$LWNCOPY" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$LWNCOPY/claude-sync" lesson-faults 2>&1)"; then rc_lwn6=0; else rc_lwn6=$?; fi
+dbg "lesson-faults from a copy with no scanner: rc=$rc_lwn6 $out_lwn6"
+check "#2530 a copy with no work names scanner beside it exits 4 from lesson-faults, not 0" "[ '$rc_lwn6' -eq 4 ]"
+check "#2530 and says the file could not be checked, naming the missing scanner" \
+  "line_has \"\$out_lwn6\" 'could not be checked' 'scanner'"
+
+# The desktop notification a sync posts when its send is refused and it still receives names the
+# scan that refused. It said "the secret scan" for every refusal, so a work name read as a leaked
+# credential (L11). A sync, since only a sync with git hands the refusal back and still receives.
+RFSB="$WORK/refused-notice-bare.git"; git init -q --bare "$RFSB"
+RFSC="$WORK/refused-notice-clone"; git clone -q "$RFSB" "$RFSC" 2>/dev/null
+RFSN="$WORK/refused-notice-home"; mkdir -p "$RFSN/agents"; echo '{"hooks":{}}' > "$RFSN/settings.json"
+printf 'base\n' > "$RFSN/agents/base.md"
+RFSREC="$WORK/refused-notice.rec"; RFSNOTIFIER="$WORK/refused-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$RFSREC" > "$RFSNOTIFIER"; chmod +x "$RFSNOTIFIER"
+_rfsn(){ env HOME="$RFSE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" SYNC_LOG_FILE="$WORK/refused-sync.log" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_HOSTNAME=rfsmac CLAUDE_HOME="$RFSN" SYNC_REPO="$RFSC" "$@" bash "$SCRIPT" sync 2>&1; }
+_rfsn SYNC_NO_NOTIFY=1 >/dev/null || true
+check "#2530 control: the notice fixture's first sync sends" "git -C '$RFSB' log -1 >/dev/null 2>&1"
+printf 'see acme-hq/widgets#12\n' > "$RFSN/agents/named.md"
+: > "$RFSREC"; _rfsn SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RFSNOTIFIER" >/dev/null || true
+rfs_notice_wn="$(grep 'still receives' "$RFSREC" 2>/dev/null || true)"
+dbg "notice for a work name refusal: $rfs_notice_wn"
+check "#2530 a work name refusal's notice names the work names scan" "grep -q 'work names scan' <<< \"\$rfs_notice_wn\""
+check "#2530 and does not call it a secret" "[ -n \"\$rfs_notice_wn\" ] && ! grep -qi 'secret' <<< \"\$rfs_notice_wn\""
+rm -f "$RFSN/agents/named.md"
+# Made from a hash, so this file holds no AWS shaped key for the whole tree scan to refuse (#1128).
+printf 'export AWS_KEY=AKIA%s\n' "$(printf 'a refused send names its scan' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)" > "$RFSN/agents/leak.md"
+: > "$RFSREC"; _rfsn SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RFSNOTIFIER" >/dev/null || true
+rfs_notice_sec="$(grep 'still receives' "$RFSREC" 2>/dev/null || true)"
+dbg "notice for a secret scan refusal: $rfs_notice_sec"
+check "#2530 a secret scan refusal's notice still names the secret scan" "grep -q 'secret scan' <<< \"\$rfs_notice_sec\""
 
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
@@ -23750,6 +23886,20 @@ ME_R2="$WORK/me828-repo2"; me_repo "$ME_R2" '{"ultracode": false}'
 out_me8="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP='opus=claude-opus-6' CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 check "#828 with no shared effort to apply, claude is not asked" "[ ! -s '$ME_LOG' ]"
 check "#828 and nothing is said" "! grep -q 'shared effort' <<< \"\$out_me8\""
+
+# The REAL shared file covers the model Dan made his default on 2026-11-09 (#2547), as well as the
+# one it replaced, so status says nothing on a Mac running either. Read from this checkout's payload,
+# never a fixture, since the fixture would only prove what this suite wrote.
+ME_R3="$WORK/me828-repo3"; mkdir -p "$ME_R3/payload"
+cp "$(dirname "$SCRIPT")/payload/settings.shared.json" "$ME_R3/payload/settings.shared.json"
+for me_m in claude-fable-5-2 claude-opus-5-5; do
+  : > "$ME_LOG"
+  out_me9="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP="opus=$me_m" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_R3" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+  check "#2547 the shared settings file shares an effort for $me_m, so status asks and says nothing" \
+    "[ -s '$ME_LOG' ] && ! grep -q 'no shared effort' <<< \"\$out_me9\""
+done
+check "#2547 and the effort it shares for Fable is high, as Dan approved" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-fable-5-2\"].effortLevel' '$ME_R3/payload/settings.shared.json')\" = high ]"
 
 section "== status says when the pinned TypeScript compiler is not installed (#833) =="
 # The strict mod type check needs the compiler pinned in tools/typescript, installed by hand once

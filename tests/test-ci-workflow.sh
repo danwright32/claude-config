@@ -258,7 +258,7 @@ start_recorded_first(){ # start_recorded_first <workflow> -> ok, or what is wron
     if ! [[ "$first" =~ HOOK_TESTS_JOB_STARTED=\$\(date\ \+%s\).*GITHUB_ENV ]]; then
       out="$out job $job: its first step does not write HOOK_TESTS_JOB_STARTED=\$(date +%s) to GITHUB_ENV;"
     fi
-    whole_above_zero "$(workflow_job_timeout_minutes "$1" "$job")" _m \
+    _m="$(whole_above_zero "$(workflow_job_timeout_minutes "$1" "$job")")" \
       || out="$out job $job: no timeout-minutes the runner can read;"
   done <<JOBS
 $(workflow_job_timeouts "$1")
@@ -381,6 +381,11 @@ part_run "$FX/high.tsv" 1 2
 { [ "$part_rc" -ne 0 ] && grep -q 'part 3' <<< "$part_out"; } \
   && check "#2463 a deal into a part beyond the jobs that run is refused" ok \
   || check "#2463 a deal into a part beyond the jobs that run is refused" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
+# A part number that is not a whole number is refused, and the refusal names what it was given.
+part_run "$FX/deal.tsv" 1x 2
+{ [ "$part_rc" -ne 0 ] && grep -q "got part '1x' of '2'" <<< "$part_out"; } \
+  && check "#2463 a part number that is not a whole number is refused, naming it" ok \
+  || check "#2463 a part number that is not a whole number is refused, naming it" "rc=$part_rc: $(tail -2 <<< "$part_out" | tr '\n' ' ')"
 part_run "$FX/absent.tsv" 1 2
 [ "$part_rc" -ne 0 ] \
   && check "#2463 a deal file that is not there is refused" ok \

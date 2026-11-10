@@ -456,6 +456,18 @@ else
     || check "#2034 payload/hooks still holds at least ${_share}% of the real tree's suites, so a run of it queues" "$_hooks of $_all; re-measure the threshold in run-all-tests.sh"
 fi
 
+# The settings are read by indirection, never eval (#2465, which the Slack drafts gate cannot follow):
+# a set bad value is still refused by name, an unset one still skipped, a set good one still taken.
+r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_HOLD=soon bash -c \
+  '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
+check "#2465 a slot setting that is not a whole number is still refused, by name" \
+  "$([ "$r" = "1|HOOK_TESTS_SLOT_HOLD='soon' is not a whole number of seconds" ] && echo ok || echo "got: $r")"
+r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL bash -c \
+  '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
+check "#2465 and with none set, nothing is refused" "$([ "$r" = "0|" ] && echo ok || echo "got: $r")"
+check "#2465 lib/full-run-slot.sh holds no eval" \
+  "$(grep -nE '^[^#]*(^|[^[:alnum:]_])eval[[:space:]]' "$DIR/lib/full-run-slot.sh" >/dev/null && echo "it does" || echo ok)"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

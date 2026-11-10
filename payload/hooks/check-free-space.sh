@@ -101,8 +101,8 @@ GIB=$((1024 * 1024 * 1024))
 # load, the warning still speaks, in GiB and saying so, rather than not at all (L71).
 _fs_here="."; case "${BASH_SOURCE[0]}" in */*) _fs_here="${BASH_SOURCE[0]%/*}" ;; esac
 . "$_fs_here/lib/disk-clean-units.sh" 2>/dev/null || true
-fs_words_to(){ # <variable> <bytes>: the size in words, with no process started
-  if declare -F dcu_human_to >/dev/null; then dcu_human_to "$1" $(( $2 / 1024 )); else printf -v "$1" '%s GiB' $(( $2 / GIB )); fi
+fs_words(){ # <bytes>: the size in words, printed for the caller to capture
+  if declare -F dcu_human >/dev/null; then dcu_human $(( $1 / 1024 )); else printf '%s GiB' $(( $1 / GIB )); fi
 }
 
 VOLUME="${FREE_SPACE_PATH:-}"
@@ -166,7 +166,7 @@ fi
 is_number "$free_bytes" || cannot "the reading was '$free_bytes'"
 
 free_gb=$((free_bytes / GIB))
-fs_words_to free_words "$free_bytes"; fs_words_to floor_words $((FLOOR_GB * GIB))
+free_words="$(fs_words "$free_bytes")"; floor_words="$(fs_words $((FLOOR_GB * GIB)))"
 
 # ---------- the readings, which are what makes a rate possible at all ----------
 # Keyed on the volume, so measuring two of them never mixes their histories (L15).
@@ -319,7 +319,7 @@ EOF
     elif [ "$span" -lt $((MIN_SPAN_MIN * 60)) ]; then
       no_rate_clause=" No rate yet: the fall that has lasted $PERSIST_MIN minutes spans only $((span / 60)) minute(s) of readings, and a rate is stated only over at least $MIN_SPAN_MIN minutes."
     else
-      fs_words_to rate_words $(( fall * 3600 / span ))
+      rate_words="$(fs_words $(( fall * 3600 / span )))"
       # Seconds rather than hours, so a fall that empties the disk inside an hour is not rounded down
       # to zero hours and read as no time at all.
       to_zero=$(( held_b * span / fall - (now - held_t) ))
@@ -419,7 +419,7 @@ fi
 
 swap_note(){
   local swap_words=""
-  is_number "${swap_bytes:-}" && fs_words_to swap_words "$swap_bytes"
+  is_number "${swap_bytes:-}" && swap_words="$(fs_words "$swap_bytes")"
   if [ -n "$swap_why" ] && [ -n "$swap_bytes" ]; then
     # Swap WAS read; only the disk's size was not, so its share cannot be judged. Said as exactly
     # that, never as swap being unread (L11).

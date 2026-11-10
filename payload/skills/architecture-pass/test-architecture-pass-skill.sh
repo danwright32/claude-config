@@ -3,8 +3,8 @@
 #
 # measure.py's counting rules are tested in test_measure.py. This suite holds SKILL.md to what the
 # issue settled and what the manual passes of 2026-10-22 taught: it runs only when Dan starts it,
-# it never counts fixes with git log --grep, it looks for the four shapes directly with at most four
-# agents at once, it spot checks every agent claim, it looks across repos, and it files only what
+# it never counts fixes with git log --grep, it looks for the four shapes directly with no more
+# agents at once than the session's agent cap, it spot checks every agent claim, it looks across repos, and it files only what
 # Dan picks, one question per picker, with a milestone, a priority and a category. Every
 # measure.py command in a block is RUN as written against a fixture repository (L442), with a state
 # directory of the suite's own, so this Mac's record of past passes is never touched.
@@ -94,7 +94,8 @@ check "and record-pass wrote the date last-pass reads back" \
 for shape in 'hand wired chain' 'calling sequence' 'two homes' 'multi step write'; do
   check "the skill looks for the shape: $shape" "$(grep -qi "$shape" "$SKILL" && echo ok || echo "not named")"
 done
-check "agents are capped at four at once" "$(grep -qi 'at most four' "$SKILL" && echo ok || echo "no 'at most four'")"
+# The cap is the session's, announced by hooks/agent-cap.sh, never a number written here (#2546).
+check "agents stay within the session's agent cap" "$(grep -q -F '[Agent cap]' "$SKILL" && echo ok || echo "no pointer at the [Agent cap] line")"
 # The needle sits on a line of its own: the spool's own suite flags any line where a documented
 # note call is followed by a shell expansion, and the file name after it would read as one.
 note_call='bash ~/.claude/hooks/lib/issue-spool.sh note . "<the finding>" "architecture-pass"'
