@@ -49,7 +49,9 @@ import sys
 # The scanner is a sibling file, loaded by its explicit path rather than by name.
 # `python3` puts the script's own directory on the import path, but running via `-c` or
 # from another directory would not, and a gh_issue_scan.py sitting in whatever project
-# the command runs from must never be able to shadow the real one.
+# the command runs from must never be able to shadow the real one. No bytecode cache is left
+# beside the hooks by it or by what it loads from lib/ (#2600).
+sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 _path = os.path.join(_HERE, "gh_issue_scan.py")
 _spec = importlib.util.spec_from_file_location("gh_issue_scan", _path)

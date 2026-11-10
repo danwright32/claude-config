@@ -151,6 +151,41 @@ else check "every gh command in the skill runs as the repo's account, through ga
 case "$sequence" in *'gather.js gh'*) check "the sequence runs the issue check through gather.js gh" ok ;;
   *) check "the sequence runs the issue check through gather.js gh" "section 10 never says gather.js gh" ;; esac
 
+# ---- claude-config#2564: the post can be saved as a Slack draft, and only ever a draft (global
+# CLAUDE.md, "Slack: drafts only", 2026-11-05). The tool names are built from parts so this file
+# holds none of them literally: the Slack drafts gate reads the scripts a command runs.
+DRAFT_TOOL="slack_send""_message_draft"
+SENDS='slack_(send|post)''_message([^_]|$)|slack_schedule''_message|slack_reply''_to_thread|chat[._]post''(message|ephemeral)|chat[._]schedule''message|hooks[.]slack[.]com'
+names_send(){ grep -n -i -E -- "$SENDS" "$1" || true; }
+if grep -q -F -- "$DRAFT_TOOL" "$SKILL"; then check "the skill saves the post with the Slack draft tool" ok
+else check "the skill saves the post with the Slack draft tool" "it never names $DRAFT_TOOL"; fi
+sends="$(names_send "$SKILL")"
+if [ -z "$sends" ]; then check "the skill names no Slack send or schedule tool or endpoint" ok
+else check "the skill names no Slack send or schedule tool or endpoint" "$sends"; fi
+# Seen failing: the same scan over text naming a send tool.
+probe="$(mktemp "${TMPDIR:-/tmp}/dev-update-skill.XXXXXX")"
+printf 'Then post it with slack_send''_message to the channel.\n' > "$probe"
+if [ -n "$(names_send "$probe")" ]; then check "the send scan fires on text naming a send tool" ok
+else check "the send scan fires on text naming a send tool" "it passed text naming one"; fi
+printf 'Save it with %s.\n' "$DRAFT_TOOL" > "$probe"
+if [ -z "$(names_send "$probe")" ]; then check "the send scan passes the draft tool itself" ok
+else check "the send scan passes the draft tool itself" "it flagged the draft tool"; fi
+rm -f "$probe"
+# The sequence saves the draft, reads its channel from the registry's one reader, runs /no-ai-tells
+# BEFORE the draft is saved, and tells Dan nothing was sent.
+case "$sequence" in *"$DRAFT_TOOL"*) check "the sequence has the Slack draft step" ok ;;
+  *) check "the sequence has the Slack draft step" "section 10 never names $DRAFT_TOOL" ;; esac
+case "$sequence" in *'dev-update-registry.js channel'*) check "the draft's channel comes from the registry reader" ok ;;
+  *) check "the draft's channel comes from the registry reader" "section 10 never runs dev-update-registry.js channel" ;; esac
+before_draft="${sequence%%"$DRAFT_TOOL"*}"
+case "$before_draft" in *'/no-ai-tells'*) check "/no-ai-tells runs before the draft is saved" ok ;;
+  *) check "/no-ai-tells runs before the draft is saved" "section 10 does not run /no-ai-tells before $DRAFT_TOOL" ;; esac
+seq_flat="$(printf '%s\n' "$sequence" | tr -s '[:space:]' ' ')"
+for said in 'no channel, say so and skip the draft' 'nothing was sent' 'belongs in the thread' 'the whole post as one draft'; do
+  case "$seq_flat" in *"$said"*) check "the draft step says: $said" ok ;;
+    *) check "the draft step says: $said" "section 10 does not say: $said" ;; esac
+done
+
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

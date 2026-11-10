@@ -5212,10 +5212,22 @@ The change reaches **new** sessions only: a running session keeps the plugins it
 `hooks/rule-files-changed.sh`, the same per prompt check that names a rule file changed under a
 running session, says this too, once: which mods arrived on disk after the session started (not
 loaded in it until a new session) and which were removed (#1535). It compares the set of mod folders
-holding a manifest, from one glob, so it starts no process however many mods there are. It says
-nothing about an EDIT to a mod the session already loaded: Claude Code reloads that mod itself and
-prints its own line ("hooks.json changed, reloaded"), or says the earlier version is still running
-when a reload fails, so a second notice would only repeat it, on every pull that touches a mod.
+holding a manifest, from one glob, so it starts no process however many mods there are. It also
+says, once per replacement, when a pull REPLACED a mod the session already loaded, and to run
+/reload-plugins (#2514). Claude Code does not always reload such a mod by itself. Measured on
+2.1.322 on 2026-11-10 with a probe mod in a headless session and the scripted stand-in model: a
+`claude -p` session (and an SDK host) watches no mod folder unless CLAUDE_CODE_PLUGIN_DIR_WATCH is
+set, so neither an install by rename (a new inode, how the sync installs) nor a write in place
+reloaded it, and nothing was said; with the watch on, both reloaded, each with a "reloaded (1 hook:
+...)" line. So a rename install is not what slips past the watcher. Read from the binary and not
+measured: in an interactive session a reload waits for a running turn to end; Claude Code holds one
+that would change the tool list under the prompt cache ("reload held, run /reload-plugins to apply
+it"), pauses one for a mod changing very often, and lets a hook veto one. The apply records each mod one of whose
+files it wrote or removed in `~/.claude/state/mods-replaced.tsv` (`hooks/lib/mods-replaced.sh`, its
+one writer and reader), and the hook adds that record to the mods snapshot, so a stamp that moved on
+a mod the session already had is a replacement. Whether Claude Code also reloaded it cannot be read
+from a hook, so the notice says what to do either way. An edit made by hand, with no pull, is not
+recorded and not reported.
 Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
 so a change between starting a session and its first prompt is reported too (#1544); the first
 prompt takes them only for a session with no start record. A start that finds a record already
@@ -5290,8 +5302,9 @@ Measured on Daniels-MacBook-Pro-2 on 2026-10-22, with 370 installed mod files of
 behind, one reading each and so only an order of size: status took 12.5 seconds with the comparison
 and 10.8 without it. A first version that hashed one file per process took 28.5.
 
-A change to a mod that is already named does reach running sessions: each one reloads the mod's
-code, at once when idle and at the end of its turn when busy. When one delivery changes mod-kit and
+A change to a mod that is already named does reach running interactive sessions (a headless one
+never reloads by default, #2514 above): each one reloads the mod's code, at once when idle and at
+the end of its turn when busy. When one delivery changes mod-kit and
 a mod that starts using something mod-kit only now provides, a session can reload that mod first,
 against the old mod-kit. Claude Code then unloads it, and its tools and commands are gone from that
 session, although its notice says "the previous version stays loaded" (#960, measured 2026-10-08;
@@ -6678,7 +6691,9 @@ question was left on is written to `state/sleep/unanswered/<generation>` before 
 night's queue leaves it out (a list that cannot be written stops sleep starting), and the question
 is noted again for the morning report. A question in the design round guard's words is never asked
 or checked off, an answer on record included, since only the guard's own picker settles it, and
-`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`). Waking (#837, Dan's
+`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`), leaving out one
+whose issue is closed and marking it in `state/sleep/closed-holds/` so its issue is not read again,
+and naming one whose issue could not be read as not checked (#2585). Waking (#837, Dan's
 decisions of 2026-10-07): only `/wake` or "I'm up" ends sleep, in every session; a message from
 Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain line, whether he
 is up (`isDaytimeEt` in `hooks/sleep.ts`,
@@ -6709,7 +6724,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261
+#1765, #1812, #2064, #2261, #2585
 
 </td></tr>
 <tr><td>
