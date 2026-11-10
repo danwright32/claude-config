@@ -156,7 +156,9 @@ def mcp_finding(tool, ti, judge):
 # ---- shell clients ------------------------------------------------------------------------------
 # Each client's options, from its own help (psql 16, mysql 8.0 and mariadb 11, sqlite3 3.43). An
 # option on neither list is asked about, since whether it takes the next word decides which word
-# is the statement. kind: "stmt" holds a statement, "file" names a file of them, None anything else.
+# is the statement. kind: "stmt" holds a statement the client runs INSTEAD of reading its input
+# (psql -c, mysql -e), "before" one it runs and then reads its input all the same (sqlite3 -cmd,
+# mysql --init-command), "file" names a file of them, None anything else.
 PSQL = {
     "flags": set("abeEnqsSAtxHz0wWX1lV?"),
     "valued": {"c": "stmt", "f": "file", "d": None, "h": None, "p": None, "U": None, "v": None,
@@ -185,7 +187,7 @@ MYSQL = {
                    "--help", "--version", "--ssl", "--skip-ssl", "--column-type-info", "--reconnect",
                    "--skip-reconnect", "--show-warnings", "--binary-as-hex", "--no-defaults",
                    "--password", "--column-names", "--line-numbers"},
-    "long_valued": {"--execute": "stmt", "--init-command": "stmt", "--host": None, "--user": None,
+    "long_valued": {"--execute": "stmt", "--init-command": "before", "--host": None, "--user": None,
                     "--port": None, "--database": None, "--socket": None, "--protocol": None,
                     "--default-character-set": None, "--defaults-file": None,
                     "--defaults-extra-file": None, "--defaults-group-suffix": None,
@@ -205,7 +207,7 @@ SQLITE = {
                    "-box", "-table", "-markdown", "-html", "-quote", "-tabs", "-ascii", "-batch",
                    "-bail", "-echo", "-interactive", "-safe", "-stats", "-nofollow", "-version",
                    "-help"},
-    "long_valued": {"-cmd": "stmt", "-init": "file", "-separator": None, "-newline": None,
+    "long_valued": {"-cmd": "before", "-init": "file", "-separator": None, "-newline": None,
                     "-nullvalue": None, "-vfs": None, "-maxsize": None, "-mmap": None},
     "quiet": {"-version", "-help"},
     "attached": set(),
@@ -323,12 +325,14 @@ def _base(word):
 def _shell_client(prog, words, judge):
     """The findings for one run of psql, mysql, mariadb or sqlite3, from its words."""
     spec = STATEMENT_CLIENTS[prog]
-    statements, files, seen, positional = [], [], set(), []
+    statements, before, files, seen, positional = [], [], [], set(), []
     unknown = None
 
     def take(kind, name, value):
         if kind == "stmt":
             statements.append(value)
+        elif kind == "before":
+            before.append(value)
         elif kind == "file":
             files.append(value)
 
@@ -386,10 +390,12 @@ def _shell_client(prog, words, judge):
         return [(prog + " runs the statements in a file (" + ", ".join(files) + "), which this hook "
                  "does not read, so the call could not be classified as read only", None)]
     if not statements:
+        # A statement that runs before the client reads its input does not stand in for that
+        # input: `echo "delete from shows" | sqlite3 -cmd "select 1" app.db` runs the delete.
         if seen & spec["quiet"]:
             return []
         return [(prog + " is not provably read only (" + NO_STATEMENT + ")", None)]
-    return _judged(prog, statements, judge, shell=True, psql=(prog == "psql"))
+    return _judged(prog, before + statements, judge, shell=True, psql=(prog == "psql"))
 
 
 def _supabase(words, judge):

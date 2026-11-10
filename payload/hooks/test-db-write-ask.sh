@@ -363,6 +363,9 @@ expect_bash "sqlite3, two statement words, the second a write" ask 'sqlite3 app.
 expect_bash "sqlite3, a dot command" ask 'sqlite3 app.db ".read change.sql"'
 expect_bash "sqlite3 with no statement reads its input" ask 'sqlite3 app.db'
 expect_bash "sqlite3 -cmd holds a statement too" ask 'sqlite3 -cmd "delete from shows" app.db "select 1"'
+# A statement that only runs BEFORE the client reads its input does not stand in for that input.
+expect_bash "sqlite3 -cmd with a select still reads the write piped into it" ask 'echo "delete from shows" | sqlite3 -cmd "select 1" app.db'
+expect_bash "mysql --init-command with a select still reads the file given as its input" ask 'mysql --init-command="select 1" shop < dump.sql'
 expect_bash "a quoted > is a statement word, never a redirection" ask "sqlite3 app.db '>' 'delete from shows'"
 expect_bash "sqlite3 -version runs nothing" none 'sqlite3 -version'
 
