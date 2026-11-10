@@ -21629,7 +21629,10 @@ cat > "$NR_SHIM/rsync" <<NR_RSYNC_BREAK
 "$NR_REAL_RSYNC" "\$@"; rc=\$?
 dry=""; for a in "\$@"; do case "\$a" in --dry-run|-[!-]*n*) dry=1 ;; esac; done
 last="\${@: -1}"
-if [ -z "\$dry" ] && [ "\$last" = "\$NR_WATCH_HOME/hooks/" ]; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
+# The hooks mirror is one rsync into the home naming hooks among the mirrored trees (#2614), or, run
+# on its own, one into the home's hooks folder.
+hooks=""; for a in "\$@"; do case "\$a" in */hooks) hooks=1 ;; esac; done
+if [ -z "\$dry" ] && { [ "\$last" = "\$NR_WATCH_HOME/hooks/" ] || { [ "\$last" = "\$NR_WATCH_HOME/" ] && [ -n "\$hooks" ]; }; }; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
 exit \$rc
 NR_RSYNC_BREAK
 chmod +x "$NR_SHIM/rsync"
