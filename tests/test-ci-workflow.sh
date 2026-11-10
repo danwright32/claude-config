@@ -478,6 +478,151 @@ grep -qE 'HOOK_TESTS_DEAL:' <<< "$deal_job" \
   && check "#2463 the deal job deals with the runner itself" ok \
   || check "#2463 the deal job deals with the runner itself" "no HOOK_TESTS_DEAL in it"
 
+# ---------------------------------------------------------------------------
+# #2690: a pull request run whose exact tree already passed reuses that run instead of running again.
+# ---------------------------------------------------------------------------
+# Dan's choice, 2026-11-10: keep the merge gate as it is and make the repeat run cheap. The deal job
+# asks tools/ci-reuse-green-tree.sh (tested on its own in tools/test-ci-reuse-green-tree.sh); on a
+# reuse every job still reports under its own name (L305), each says in its log which run and commit
+# it stood on, and the work is skipped step by step. A FULL green run records its tree for the next.
+#
+# One line per step of a job: its name (or what it uses), a tab, its if: condition.
+steps_of(){ # steps_of <workflow> <job>
+  local block; block="$(wf_job_block "$1" "$2")"
+  awk '
+    function out() { if (seen) printf "%s\t%s\n", label, cond }
+    /^      - / { out(); seen = 1; label = ""; cond = ""; line = $0; sub(/^      - /, "        ", line); $0 = line }
+    seen && /^        name:/ { l = $0; sub(/^        name:[[:space:]]*/, "", l); label = l }
+    seen && /^        uses:/ && label == "" { l = $0; sub(/^        uses:[[:space:]]*/, "", l); label = l }
+    seen && /^        if:/ { c = $0; sub(/^        if:[[:space:]]*/, "", c); cond = c }
+    END { out() }' <<< "$block"
+}
+# Every step of the parts and suite jobs is skipped on a reuse, except the three that must run on
+# both: the start recorder, the fan in's verdict, and the notice naming the reused run, which runs
+# ONLY on a reuse. A step added later without the condition would run against a tree never checked
+# out, or redo the work, so it is refused by name.
+REUSED="needs.deal.outputs.reused-run"
+reuse_gated(){ # reuse_gated <workflow> -> ok, or each step that is wrong
+  local job label cond out="" n=0
+  for job in parts suite; do
+    while IFS="$(printf '\t')" read -r label cond; do
+      [ -n "$label$cond" ] || continue
+      n=$((n + 1))
+      case "$label" in
+        "Record when the job started"|"The deal and every part passed")
+          case "$cond" in *"$REUSED"*) out="$out $job/$label is conditional on the reuse, but must run on both;" ;; esac ;;
+        "Reused a green run of this exact tree")
+          case "$cond" in *"$REUSED != ''"*) ;; *) out="$out $job/$label does not run only on a reuse ($cond);" ;; esac ;;
+        *)
+          case "$cond" in *"$REUSED == ''"*) ;; *) out="$out $job/$label runs on a reuse too (if: '${cond}');" ;; esac ;;
+      esac
+    done <<STEPS
+$(steps_of "$1" "$job")
+STEPS
+  done
+  [ "$n" -gt 0 ] || { echo "no steps were read from the parts and suite jobs"; return; }
+  for job in parts suite; do
+    steps_of "$1" "$job" | grep -q "^Reused a green run of this exact tree	" || out="$out $job has no step naming the reused run;"
+  done
+  [ -z "$out" ] && echo ok || echo "${out# }"
+}
+# Right in every way but one part step with no condition, so only that step may be named.
+cat > "$TMPROOT/ungated.yml" <<'YML'
+jobs:
+  parts:
+    steps:
+      - name: Record when the job started
+        run: true
+      - name: Reused a green run of this exact tree
+        if: needs.deal.outputs.reused-run != ''
+        run: true
+      - uses: actions/checkout@abc
+        if: needs.deal.outputs.reused-run == ''
+      - name: Install the pinned TypeScript compiler
+        run: true
+  suite:
+    steps:
+      - name: Record when the job started
+        run: true
+      - name: The deal and every part passed
+        run: true
+      - name: Reused a green run of this exact tree
+        if: needs.deal.outputs.reused-run != ''
+        run: true
+YML
+r="$(reuse_gated "$TMPROOT/ungated.yml")"
+[ "$r" = "parts/Install the pinned TypeScript compiler runs on a reuse too (if: '');" ] \
+  && check "#2690 a part step left running on a reuse is refused, by name, and only it" ok \
+  || check "#2690 a part step left running on a reuse is refused, by name, and only it" "got: $r"
+r="$(reuse_gated "$REAL")"
+[ "$r" = ok ] \
+  && check "#2690 on a reuse every part and suite step is skipped but the start, the verdict and the notice naming the run" ok \
+  || check "#2690 on a reuse every part and suite step is skipped but the start, the verdict and the notice naming the run" "$r"
+
+# The deal job asks the helper, with what it needs to judge, and may read the Actions API for it:
+# the workflow's own token is contents: read only, so actions: read is granted to the deal job alone.
+deal_raw="$(code_of "$REAL" | awk '/^  deal:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }')"
+miss=""
+for want in 'bash tools/ci-reuse-green-tree\.sh' 'REUSE_EVENT:[[:space:]]*\$\{\{ github\.event_name \}\}' 'REUSE_REPO:[[:space:]]*\$\{\{ github\.repository \}\}' \
+  'REUSE_RUN_ID:[[:space:]]*\$\{\{ github\.run_id \}\}' 'GH_TOKEN:[[:space:]]*\$\{\{ github\.token \}\}' 'reused-run:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.reused-run \}\}' \
+  'tree:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.tree \}\}' 'actions:[[:space:]]*read'; do
+  grep -qE -- "$want" <<< "$deal_raw" || miss="$miss [$want]"
+done
+[ -z "$miss" ] \
+  && check "#2690 the deal job asks the reuse helper with the event, repository, run and token, may read Actions, and passes the answer on" ok \
+  || check "#2690 the deal job asks the reuse helper with the event, repository, run and token, may read Actions, and passes the answer on" "missing:$miss"
+code_of "$REAL" | awk '/^permissions:/ { s = 1; next } s && /^[^[:space:]]/ { s = 0 } s' | grep -q 'actions:' \
+  && check "#2690 and the workflow wide token is not widened" "the top level permissions grant actions" \
+  || check "#2690 and the workflow wide token is not widened" ok
+
+# The deal's decision step, RUN: a helper that answers reuse is passed on, and one that exits non
+# zero after printing a reuse is discarded, so a crash in the helper can only ever be a full run.
+deal_step_body(){ # deal_step_body <workflow> <step name> -> that step's run: body, unindented
+  awk -v want="$2" '
+    /^[[:space:]]*- name:/ { l = $0; sub(/^[[:space:]]*- name:[[:space:]]*/, "", l); s = (l == want); inrun = 0; next }
+    s && !inrun && /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ { inrun = 1; match($0, /^[[:space:]]*/); ind = RLENGTH; next }
+    s && inrun { match($0, /^[[:space:]]*/); if ($0 !~ /^[[:space:]]*$/ && RLENGTH <= ind) { s = 0; inrun = 0; next } print substr($0, ind + 3) }
+  ' <<< "$deal_raw"
+}
+rbody="$(deal_step_body "$REAL" "A green run of this exact tree")"
+if [ -z "$rbody" ]; then
+  check "#2690 the deal's reuse step was found to run" "no run body under 'A green run of this exact tree'"
+else
+  RT="$TMPROOT/reuse-step"; mkdir -p "$RT/tools" "$RT/tmp"
+  git -C "$RT" init -q && git -C "$RT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m x
+  want_tree="$(git -C "$RT" rev-parse 'HEAD^{tree}')"
+  reuse_step(){ # reuse_step <helper exit code> -> sets ro to what reached GITHUB_OUTPUT
+    printf '#!/usr/bin/env bash\nprintf "reused-run=5\\nreused-sha=%%s\\nreused-url=u\\n" "$(printf a%%.0s $(seq 40))"\nexit %s\n' "$1" > "$RT/tools/ci-reuse-green-tree.sh"
+    : > "$RT/out"
+    (cd "$RT" && GITHUB_OUTPUT="$RT/out" RUNNER_TEMP="$RT/tmp" bash -e -o pipefail -c "$rbody" > /dev/null 2>&1)
+    ro="$(cat "$RT/out")"
+  }
+  reuse_step 0
+  grep -q '^reused-run=5$' <<< "$ro" && grep -q "^tree=$want_tree$" <<< "$ro" \
+    && check "#2690 the deal's reuse step passes a reuse on, with the tree it tested" ok \
+    || check "#2690 the deal's reuse step passes a reuse on, with the tree it tested" "output: $(tr '\n' ' ' <<< "$ro")"
+  reuse_step 1
+  ! grep -q '^reused-run=' <<< "$ro" && grep -q "^tree=$want_tree$" <<< "$ro" \
+    && check "#2690 a reuse helper that fails is a full run, whatever it printed" ok \
+    || check "#2690 a reuse helper that fails is a full run, whatever it printed" "output: $(tr '\n' ' ' <<< "$ro")"
+fi
+
+# A FULL green run records the tree it proved, last in the fan in so only a run whose every step
+# passed can upload it, and never from a run that itself reused (no chains of reuse).
+suite_steps="$(steps_of "$REAL" suite)"
+last="$(tail -1 <<< "$suite_steps")"
+suite_code="$(wf_job_block "$REAL" suite)"
+case "$last" in
+  "Record that this tree passed	"*"$REUSED == ''"*)
+    grep -qE 'name:[[:space:]]*green-tree-\$\{\{ needs\.deal\.outputs\.tree \}\}' <<< "$suite_code" \
+      && check "#2690 the fan in's last step records the tree, only on a full run, under the name the helper looks for" ok \
+      || check "#2690 the fan in's last step records the tree, only on a full run, under the name the helper looks for" "no green-tree-<tree> artifact name" ;;
+  *) check "#2690 the fan in's last step records the tree, only on a full run, under the name the helper looks for" "last step is: $last" ;;
+esac
+grep -q 'green-tree-' "$DIR/../tools/ci-reuse-green-tree.sh" \
+  && check "#2690 the helper looks for the same green-tree- name" ok \
+  || check "#2690 the helper looks for the same green-tree- name" "the name differs"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
