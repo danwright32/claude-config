@@ -7347,6 +7347,27 @@ file it reaches the template by; when the nearest senders send none of the chang
 on. A file whose send cannot be traced (any other language, a text template, a send the reading
 cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
 the search stops short. A python docstring is never message text (#2574).
+Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
+copy module of four alert messages passed because nothing sent it yet, and the edits that made a
+route import and post it passed because they added no text of their own). A new file that nothing
+sends still passes, since nothing can post it. Once an edit's own wording has passed, an edit to a
+JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
+more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
+send: each sender through the edited file (the file itself when it posts or imports a send helper,
+then every file that sends it) is traced as the edit leaves the file and as it was, down through the
+files it imports, found by the paths its imports name with one `git ls-files` per file and followed
+up to 3 files deep, and wording a send reaches only afterwards, which Dan has not approved, is held.
+The card, refusal and question name the file that holds the text and what sends it. Wording a sender
+already sent is not asked about again, and a name imported for a 404 answer is held only when a send
+takes it. Where names cannot be followed (a sender that takes a module whole, a send the reading
+cannot find, a search for senders that stops short) every message of a newly imported file is held;
+an imported file that cannot be read, a listing that fails or runs late, or names newly handed on
+deeper than the guard follows, holds the call as could not check. This shares the one 7 second
+search time with the edit's own wording. Not covered: a sender in a language the guard does not
+trace that newly reads a text template, a template a sender newly reads by path rather than by an
+import, and a file that only hands names on newly exporting a local copy of an imported value.
+When the nearest sender's part of a change is already approved, the search goes on to the senders
+further along rather than passing the rest (#2637).
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
@@ -7387,7 +7408,7 @@ path the write reader cannot name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637
 
 </td></tr>
 </tbody>
