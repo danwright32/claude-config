@@ -49,7 +49,7 @@ while IFS=$'\t' read -r name baseline measured want; do
   m="$(printf '%b' "${measured//\\n/\\n}")"
 
   got_sh="$(ratchet_verdict "$b" "$m" | sed -n 's/^VERDICT //p')"
-  got_py="$(B="$b" M="$m" python3 -c '
+  got_py="$(B="$b" M="$m" python3 -B -c '
 import os, sys
 sys.path.insert(0, os.environ["LIBDIR"])
 import ratchet
@@ -91,7 +91,7 @@ case "$out" in *"GROWN a.sh 1 3"*) check "shell names the path, what was recorde
   *) check "shell names the path, what was recorded and what is there now" "said: $out" ;; esac
 case "$out" in *"STALE b.sh 5 2"*) check "and the stale one the same way" ok ;;
   *) check "and the stale one the same way" "said: $out" ;; esac
-pyout="$(LIBDIR="$DIR/lib" python3 -c '
+pyout="$(LIBDIR="$DIR/lib" python3 -B -c '
 import os, sys
 sys.path.insert(0, os.environ["LIBDIR"])
 import ratchet
@@ -111,7 +111,7 @@ echo "ratchet: a line it cannot read is skipped, never guessed at"
 out="$(ratchet_verdict "a.sh: not-a-number" "a.sh: 2" | sed -n 's/^VERDICT //p')"
 [ "$out" = "grown" ] && check "shell: a count that is not a number is not a recorded zero" ok \
                      || check "shell: a count that is not a number is not a recorded zero" "got '$out'"
-out="$(LIBDIR="$DIR/lib" python3 -c '
+out="$(LIBDIR="$DIR/lib" python3 -B -c '
 import os, sys
 sys.path.insert(0, os.environ["LIBDIR"])
 import ratchet

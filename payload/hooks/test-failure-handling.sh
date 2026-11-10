@@ -252,7 +252,7 @@ if [ "$got" = "rc=0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL
 # (L11): an unreadable list is not a finding that nothing handles failure.
 printf '' > "$WORK/empty.diff"
 review_line() {   # $1 diff file  $2 a lib path to use instead, or empty
-  python3 - "$DIR/lib/ai-review-run.py" "$1" "$2" <<'PY'
+  python3 -B - "$DIR/lib/ai-review-run.py" "$1" "$2" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("air", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)

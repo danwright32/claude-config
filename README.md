@@ -2281,6 +2281,27 @@ One more gate holds a rule the briefs give every agent, for everyone:
   in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
   is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
 
+And one holds the rule CLAUDE.md gives every worktree session about a stale base:
+
+- `fresh-worktree-base-gate.sh` (PreToolUse, Edit, Write, MultiEdit and NotebookEdit) refuses the
+  first file edit in a fresh worktree, one with no commits of its own, while it is behind the
+  remote's main branch, and names the one command that brings it up to date,
+  `git -C "<worktree>" merge --ff-only origin/main` (claude-config#2517). Worktrees share refs, so
+  once another worktree has fetched, `git fetch` prints nothing however far main has moved, and on
+  2026-09-14 that let a pull request merge without the rebase its brief required. The gate fetches
+  `origin main` itself before judging, bounded at 10 seconds, so an unrefreshed ref cannot answer
+  for it. A pass is kept per session and worktree in `TMPDIR`, so a session pays one fetch per
+  worktree, not one per edit; a refusal is judged again, so the edit after the command goes ahead.
+  A worktree with its own commits, a primary checkout and a repository with no `origin` are passed.
+  A fetch that fails or runs out its bound lets the edit through with a notice that it could not
+  check, once, and tries again after 15 minutes, unless even the local ref already shows the
+  worktree behind, which is refused since the command needs no network. Reading is never refused,
+  and neither is an agent's worktree cut from a freshly fetched `origin/main`. On 2026-11-10 (load
+  average 23 over one minute) the gate took 0.055 to 0.063 seconds on an edit in a primary checkout
+  or outside any repository, 0.31 to 0.38 seconds on a worktree's first edit with its fetch, and
+  0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
+  cannot read is let through with a notice.
+
 ### What a push actually waits on
 
 Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
@@ -5191,10 +5212,22 @@ The change reaches **new** sessions only: a running session keeps the plugins it
 `hooks/rule-files-changed.sh`, the same per prompt check that names a rule file changed under a
 running session, says this too, once: which mods arrived on disk after the session started (not
 loaded in it until a new session) and which were removed (#1535). It compares the set of mod folders
-holding a manifest, from one glob, so it starts no process however many mods there are. It says
-nothing about an EDIT to a mod the session already loaded: Claude Code reloads that mod itself and
-prints its own line ("hooks.json changed, reloaded"), or says the earlier version is still running
-when a reload fails, so a second notice would only repeat it, on every pull that touches a mod.
+holding a manifest, from one glob, so it starts no process however many mods there are. It also
+says, once per replacement, when a pull REPLACED a mod the session already loaded, and to run
+/reload-plugins (#2514). Claude Code does not always reload such a mod by itself. Measured on
+2.1.322 on 2026-11-10 with a probe mod in a headless session and the scripted stand-in model: a
+`claude -p` session (and an SDK host) watches no mod folder unless CLAUDE_CODE_PLUGIN_DIR_WATCH is
+set, so neither an install by rename (a new inode, how the sync installs) nor a write in place
+reloaded it, and nothing was said; with the watch on, both reloaded, each with a "reloaded (1 hook:
+...)" line. So a rename install is not what slips past the watcher. Read from the binary and not
+measured: in an interactive session a reload waits for a running turn to end; Claude Code holds one
+that would change the tool list under the prompt cache ("reload held, run /reload-plugins to apply
+it"), pauses one for a mod changing very often, and lets a hook veto one. The apply records each mod one of whose
+files it wrote or removed in `~/.claude/state/mods-replaced.tsv` (`hooks/lib/mods-replaced.sh`, its
+one writer and reader), and the hook adds that record to the mods snapshot, so a stamp that moved on
+a mod the session already had is a replacement. Whether Claude Code also reloaded it cannot be read
+from a hook, so the notice says what to do either way. An edit made by hand, with no pull, is not
+recorded and not reported.
 Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
 so a change between starting a session and its first prompt is reported too (#1544); the first
 prompt takes them only for a session with no start record. A start that finds a record already
@@ -5269,8 +5302,9 @@ Measured on Daniels-MacBook-Pro-2 on 2026-10-22, with 370 installed mod files of
 behind, one reading each and so only an order of size: status took 12.5 seconds with the comparison
 and 10.8 without it. A first version that hashed one file per process took 28.5.
 
-A change to a mod that is already named does reach running sessions: each one reloads the mod's
-code, at once when idle and at the end of its turn when busy. When one delivery changes mod-kit and
+A change to a mod that is already named does reach running interactive sessions (a headless one
+never reloads by default, #2514 above): each one reloads the mod's code, at once when idle and at
+the end of its turn when busy. When one delivery changes mod-kit and
 a mod that starts using something mod-kit only now provides, a session can reload that mod first,
 against the old mod-kit. Claude Code then unloads it, and its tools and commands are gone from that
 session, although its notice says "the previous version stays loaded" (#960, measured 2026-10-08;
