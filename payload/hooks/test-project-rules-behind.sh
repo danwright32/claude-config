@@ -187,18 +187,88 @@ case "$m" in *"CLAUDE.md ("*) check "CLAUDE.md, identical to origin, is not name
   *) check "CLAUDE.md, identical to origin, is not named among them" ok ;; esac
 
 # ---------------------------------------------------------------------------
-# 5. Changes to tracked files withhold the fast forward; untracked and ignored files do not.
+# 5. Changes to tracked files withhold the fast forward only when the incoming commits change one of
+#    them, which is exactly when git itself refuses it (claude-config#2625). Measured on 2026-11-10:
+#    pull --ff-only over a changed file the incoming commits leave alone exits 0 and keeps the
+#    change; over one they change, it exits 1 and leaves HEAD and the file as they were. The same
+#    holds for a staged change, a deletion and either side of a staged rename. Untracked and ignored
+#    files never withhold it. The cases run the command too, so the notice is held to git's answer
+#    rather than to its own predicate (L721).
 # ---------------------------------------------------------------------------
+# The case that never offered it: a tracked cache file a tool rewrites on every run, untouched upstream.
 world dirty
 upstream CLAUDE.md "short"
 printf 'local edit\n' >> "$W/primary/src/app.ts"
 m="$(msg "$(start s-dirty "$W/primary")")"
 case "$m" in *CLAUDE.md*) check "a checkout with local changes behind on its rules is still told" ok ;;
   *) check "a checkout with local changes behind on its rules is still told" "said: $m" ;; esac
-case "$m" in *"pull --ff-only"*) check "a checkout with changes to tracked files is not offered the fast forward" "offered: $m" ;;
-  *) check "a checkout with changes to tracked files is not offered the fast forward" ok ;; esac
-case "$m" in *"changes to tracked files"*) check "and it says why not" ok ;;
-  *) check "and it says why not" "said: $m" ;; esac
+case "$m" in *"git -C '$W/primary' pull --ff-only"*) check "a changed file the incoming commits do not touch does not withhold the fast forward" ok ;;
+  *) check "a changed file the incoming commits do not touch does not withhold the fast forward" "said: $m" ;; esac
+case "$m" in *"src/app.ts"*) check "and the changed file is named" ok ;;
+  *) check "and the changed file is named" "said: $m" ;; esac
+case "$m" in *"leaves those changes as they are"*) check "and the notice says the changes are kept" ok ;;
+  *) check "and the notice says the changes are kept" "said: $m" ;; esac
+git -C "$W/primary" pull -q --ff-only >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(git -C "$W/primary" rev-parse HEAD)" = "$(git -C "$W/primary" rev-parse origin/main)" ] \
+  && check "the offered command succeeds and brings the checkout up to date" ok \
+  || check "the offered command succeeds and brings the checkout up to date" "exit $rc"
+case "$(cat "$W/primary/src/app.ts")" in *"local edit"*) check "and the local change survives it" ok ;;
+  *) check "and the local change survives it" "src/app.ts lost its edit" ;; esac
+
+# An incoming commit changes the changed file: git would refuse, so no offer, and the file is named.
+world dirty-touched
+upstream CLAUDE.md "short"
+upstream src/app.ts "new code"
+printf 'local edit\n' >> "$W/primary/src/app.ts"
+m="$(msg "$(start s-dirty-touched "$W/primary")")"
+case "$m" in *"pull --ff-only"*) check "a changed file the incoming commits also change withholds the fast forward" "offered: $m" ;;
+  *) check "a changed file the incoming commits also change withholds the fast forward" ok ;; esac
+case "$m" in *"changes to src/app.ts, which origin's new commits also change"*) check "and it names the file and says why" ok ;;
+  *) check "and it names the file and says why" "said: $m" ;; esac
+head_before="$(git -C "$W/primary" rev-parse HEAD)"
+git -C "$W/primary" pull -q --ff-only >/dev/null 2>&1; rc=$?
+[ "$rc" -ne 0 ] && [ "$(git -C "$W/primary" rev-parse HEAD)" = "$head_before" ] \
+  && check "git itself refuses that fast forward, so withholding it matches git" ok \
+  || check "git itself refuses that fast forward, so withholding it matches git" "exit $rc"
+
+# A staged rename away from a file the incoming commits change: the old name counts too.
+world dirty-rename
+upstream CLAUDE.md "short"
+upstream src/app.ts "new code"
+git -C "$W/primary" mv src/app.ts src/main.ts
+m="$(msg "$(start s-dirty-rename "$W/primary")")"
+case "$m" in *"pull --ff-only"*) check "a staged rename away from a file the incoming commits change withholds the fast forward" "offered: $m" ;;
+  *) check "a staged rename away from a file the incoming commits change withholds the fast forward" ok ;; esac
+
+# A staged change, a deletion and three more edits, all untouched upstream: offered, and the list
+# is cut at three with the rest counted.
+world dirty-many
+for n in 1 2 3; do printf 'x\n' > "$W/seed/extra$n.txt"; done
+upstream CLAUDE.md "short"
+git -C "$W/primary" merge -q --ff-only origin/main >/dev/null 2>&1
+upstream CLAUDE.md "shorter"
+printf 'staged\n' >> "$W/primary/src/app.ts"
+git -C "$W/primary" add src/app.ts
+rm "$W/primary/AGENTS.md"
+for n in 1 2 3; do printf 'local\n' >> "$W/primary/extra$n.txt"; done
+m="$(msg "$(start s-dirty-many "$W/primary")")"
+case "$m" in *"git -C '$W/primary' pull --ff-only"*) check "a staged change and a deletion untouched upstream do not withhold the fast forward" ok ;;
+  *) check "a staged change and a deletion untouched upstream do not withhold the fast forward" "said: $m" ;; esac
+case "$m" in *"and 2 more files"*) check "past three changed files the rest are counted, not listed" ok ;;
+  *) check "past three changed files the rest are counted, not listed" "said: $m" ;; esac
+
+# A tree whose state cannot be read (a corrupt index): no offer, and it says so rather than calling
+# the tree clean (L11).
+world dirty-unread
+upstream CLAUDE.md "short"
+printf 'not an index' > "$W/primary/.git/index"
+m="$(msg "$(start s-dirty-unread "$W/primary")")"
+case "$m" in *CLAUDE.md*) check "a checkout whose tree cannot be read is still told it is behind" ok ;;
+  *) check "a checkout whose tree cannot be read is still told it is behind" "said: $m" ;; esac
+case "$m" in *"pull --ff-only"*|*"no changes to tracked files"*) check "a tree that cannot be read is never offered the fast forward or called clean" "said: $m" ;;
+  *) check "a tree that cannot be read is never offered the fast forward or called clean" ok ;; esac
+case "$m" in *"could not be read"*) check "and the notice says what could not be read" ok ;;
+  *) check "and the notice says what could not be read" "said: $m" ;; esac
 
 world untracked
 upstream CLAUDE.md "short"
