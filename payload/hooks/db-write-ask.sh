@@ -22,6 +22,13 @@
 #     migration; psql, mysql, mariadb, sqlite3 and the Supabase CLI's db and migration subcommands
 #     in a Bash command, however wrapped), and each statement goes to the same one predicate. Its
 #     header holds the rules and the tool names and counts they were calibrated on.
+#   - Since #2632, the Supabase tools that change a database with no statement in the call, which
+#     nothing above could see: merge_branch, reset_branch, rebase_branch, delete_branch,
+#     create_branch, create_project, pause_project and restore_project, on any Supabase server,
+#     always. The question names the tool, what it does, and the branch or project its input
+#     names. The list, and why the connector's other tools are left out, is in
+#     lib/db-write-calls.py. The Supabase CLI's branches and projects subcommands that do the same
+#     in a shell (create, delete, pause, unpause, update) are asked about with them.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
 #     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
@@ -179,7 +186,7 @@ if not isinstance(tool, str):
     named = [t for t in WATCHED if t in raw]
     m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\\\]*)\"", raw)
     said = m.group(1) if m else ""
-    if not named and said.startswith("mcp__") and (calls is None or calls.named_for_statements(said)):
+    if not named and said.startswith("mcp__") and (calls is None or calls.named_as_database_call(said)):
         named = [said]
     if not named and said == "Bash" and (calls is None or calls.CLIENT_WORD.search(raw)):
         named = ["Bash and a database client"]
@@ -254,6 +261,17 @@ if tool == "Bash":
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)
     ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""), "2536")
+
+# A Supabase tool that changes a database with no statement to judge: a branch merge, reset, rebase
+# or delete, a new branch or project, a pause or a restore (claude-config#2632). The library builds
+# the whole sentence, the branch or project the input names included.
+try:
+    change = calls.supabase_change(tool, ti)
+except Exception as e:
+    change = (tool + " could not be read (" + type(e).__name__ + "), so whether it changes a database "
+              "could not be told")
+if change is not None:
+    ask(change, "2632")
 
 try:
     found = calls.mcp_finding(tool, ti, judge)
