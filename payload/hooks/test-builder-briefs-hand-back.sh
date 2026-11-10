@@ -185,7 +185,7 @@ check "the bundle check passes the pattern as measured" "$(check_refusal_pattern
 if [ -n "$cc_bin" ] && [ -f "$cc_bin" ]; then
   check "the installed Claude Code refuses exactly the names the rules give" "$(check_refusal_pattern "$cc_bin")"
 else
-  echo "UNMEASURED: no installed Claude Code bundle to read, so the refused file name pattern was not checked against it"
+  echo "SUITE-PART-UNMEASURED the refused file name pattern was not checked against Claude Code, because no installed bundle could be read"
 fi
 
 echo ""
