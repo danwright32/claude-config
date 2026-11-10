@@ -552,6 +552,8 @@ class Judge:
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
         self.known_memo = {}
+        self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
+        self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -1168,6 +1170,20 @@ class Judge:
         v = self.sh_word(text[m.end():end], d, self.sh_var, self.shell["script"], True)[0]
         return value if v is None else v
 
+    # The commands of s read from cwd, and where each is in s: (commands, parts), as the reader's
+    # commands() gives them. Read once for each text in a run: what it gives depends on the text and
+    # the directory alone, and the line being judged, the walk of its variables and the names a
+    # sourced file binds each asked for it again, 40 readings for the 11 files of the merge helper
+    # (claude-config#2576). Each caller gets lists of its own. A text the reader cannot read raises
+    # as it did, every time it is asked for.
+    def parsed(self, s, cwd):
+        key = (s, cwd)
+        if key not in self.parsed_memo:
+            parts = []
+            self.parsed_memo[key] = (self.sw.commands(s, cwd, parts=parts), parts)
+        cmds, parts = self.parsed_memo[key]
+        return list(cmds), [dict(p) for p in parts]
+
     def sh_known(self, s, cwd, script, cwd_known=True, depth=0):
         """sh_walk(), worked out once for each text, which is asked about from several places. A text
         that sources itself finds nothing certain on the way back in."""
@@ -1215,9 +1231,8 @@ class Judge:
         through a variable, and no file sourced where the walk did not follow it (in a function body,
         or past top) binds it, those paths worked out from these same values. A `local` set in a
         function adds a value of its own (sh_locals)."""
-        parts = []
         try:
-            cmds = self.sw.commands(s, cwd, parts=parts)
+            cmds, parts = self.parsed(s, cwd)
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return {"regions": {}, "top": 0, "lost": [], "bodies": []}
         items = list(zip(cmds, parts))
@@ -1253,25 +1268,48 @@ class Judge:
                 regions.setdefault(n, []).append((since[n], at, env[n]))
             env[n], since[n] = (None if n in tainted else v), at
 
-        def calls(name, seen=()):
+        own, reached = {}, {}
+
+        # What the body of the function of s named name does by itself: (the names it can bind,
+        # whether it sources a file or binds a name through a variable, the functions of s it
+        # calls). Worked out once for each function.
+        def body_of(name):
+            if name not in own:
+                bound, more, callees = set(), False, []
+                for o, c in fbody.get(name, ()):
+                    body = s[items[o][1]["start"]:items[c][1]["end"]]
+                    bound |= {n for n in allnames if self.sh_binds(n, body)}
+                    for k in range(o, c + 1):
+                        if len(items[k][1]["scope"]) > 1:
+                            continue
+                        h = head_of(k)
+                        words = self.sw.command_words(self.sw.command_rest(h)[0])
+                        if self.sh_source_target(h) is not None or self.sh_indirect(h):
+                            more = True
+                        elif words and words[0] in fbody:
+                            callees.append(words[0])
+                own[name] = (bound, more, callees)
+            return own[name]
+
+        def calls(name):
             """(the names a call to the function of s named name can bind, whether it can do more than
             that: source a file, bind a name through a variable, or call a function of s that does)."""
-            if name in seen:
-                return set(), False
-            bound, more = set(), False
-            for o, c in fbody.get(name, ()):
-                bound |= {n for n in allnames if self.sh_binds(n, s[items[o][1]["start"]:items[c][1]["end"]])}
-                for k in range(o, c + 1):
-                    if len(items[k][1]["scope"]) > 1:
+            # A call takes in every function it reaches, each once. Followed again down every path
+            # of calls to it, a chain of functions that each call the next twice cost two to the
+            # power of its length, and the merge helper's own functions were walked 2,430 times for
+            # one judgement (claude-config#2576). What is reached is the same either way.
+            if name not in reached:
+                bound, more, todo, seen = set(), False, [name], set()
+                while todo:
+                    f = todo.pop()
+                    if f in seen:
                         continue
-                    h = head_of(k)
-                    words = self.sw.command_words(self.sw.command_rest(h)[0])
-                    if self.sh_source_target(h) is not None or self.sh_indirect(h):
-                        more = True
-                    elif words and words[0] in fbody:
-                        b, m2 = calls(words[0], seen + (name,))
-                        bound, more = bound | b, more or m2
-            return bound, more
+                    seen.add(f)
+                    b, m, callees = body_of(f)
+                    bound, more = bound | b, more or m
+                    todo += callees
+                reached[name] = (bound, more)
+            return reached[name]
 
         def effects(d, head, p, run, when=None):
             """Follow one command: None, or "stop" or "dead" where the walk ends at it ("dead": and
@@ -1859,10 +1897,17 @@ class Judge:
                 text = f.read(MAX_FILE).decode("utf-8", "replace")
         except OSError:
             return set(names)
-        bound = {n for n in names if self.sh_binds(n, text)}
-        parts = []
+        # One file is asked about by every script that sources it, and by each file between them,
+        # with mostly the same names: lib/ai-review-common.sh was read whole 8 times judging the
+        # merge helper. Whether a text binds a name depends on nothing else, so each answer is kept
+        # for the run, by the text itself (claude-config#2576).
+        told = self.binds_memo.setdefault(text, {})
+        for n in names:
+            if n not in told:
+                told[n] = self.sh_binds(n, text)
+        bound = {n for n in names if told[n]}
         try:
-            cmds = self.sw.commands(text, cwd, parts=parts)
+            cmds, parts = self.parsed(text, cwd)
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return set(names)
         known = None
@@ -2221,10 +2266,8 @@ class Judge:
             # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
             # only over part of the text. every_command gives s's own commands in commands() order,
             # with a wrapper's commands after it at a depth of one or more; those take its place.
-            parts = []
             try:
-                self.sw.commands(s, cwd, parts=parts)
-                starts = [p["start"] for p in parts]
+                starts = [p["start"] for p in self.parsed(s, cwd)[1]]
             except self.sw.Unreadable:
                 starts = []  # read by the crude cut, so no command's place is known
             k = 0

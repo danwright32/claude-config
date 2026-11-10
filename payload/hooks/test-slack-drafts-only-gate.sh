@@ -1584,6 +1584,107 @@ PY
 binds="$(python3 "$T/binds.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds compiles each name's patterns once, however many names a script has (#2569)" "$binds"
 
+echo "slack drafts only: the merge helper's own line is judged inside the gate's time (claude-config#2576)"
+
+# On 2026-11-09 no merge through lib/merge-when-ready.sh could start on the work MacBook: the gate
+# follows the helper into everything it sources, and that walk had grown past the gate's time. The
+# cause of that day was #2569, but nothing held the walk of the real helper to a size, so the next
+# file added to what it sources would be found at a merge. Held by the step clock, never the real
+# one (L290). Measured on 2026-11-09: 7,899 steps, 11 files read 32 times, 3.9 seconds of processor
+# time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
+# to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
+# half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
+# the ceiling raised on a new measurement.
+MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
+MWR_STEPS=12000
+run_budget "$MWR_STEPS" "$MWR"
+allowed "the real merge helper, with everything it sources, is judged within $MWR_STEPS steps"
+# The control: the budget is live for this line, and a walk that passes it is refused with the
+# gate's own reason.
+run_budget 2000 "$MWR"
+refused "the merge helper's line under a budget its walk passes is refused"
+says "that refusal says the gate ran out of time" "ran out of time"
+
+# A function of the script that calls others was followed once per path to it, so a chain of
+# functions each calling the next twice cost two to the power of its length: 16,383 walks for 14
+# functions. Each function's own effect is now worked out once and a call takes in everything it
+# reaches. Held by a count of what is read, never the clock, and by the answers being the same.
+cat > "$T/calls.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+chain = "".join("f%d() {\n  f%d\n  f%d\n}\n" % (i, i + 1, i + 1) for i in range(1, 14))
+text = ("KEEP=/keep\nLOSE=/lose\nCYC=/cyc\n" + chain + "f14() {\n  LOSE=changed\n}\n"
+        "a() {\n  b\n}\nb() {\n  a\n  CYC=changed\n}\nf1\na\n: after\n")
+count = [0]
+real = gate.Judge.sh_indirect
+def counting(self, t):
+    count[0] += 1
+    return real(self, t)
+gate.Judge.sh_indirect = counting
+judge = gate.Judge(gate.load_reader())
+known = judge.sh_known(text, "/", None)
+at = text.index(": after")
+got = [judge.sh_at(known, n, at) for n in ("KEEP", "LOSE", "CYC")]
+if got != ["/keep", None, None]:
+    print("after the calls KEEP, LOSE and CYC read %r, not ['/keep', None, None]" % got); sys.exit()
+# A function reached through another that binds a name through a variable ends the walk at the call.
+stop = "KEEP=/keep\ng() {\n  h\n}\nh() {\n  eval \"$1\"\n}\n%s\n: after\n"
+ends = [judge.sh_cwd_at(judge.sh_known(stop % call, "/", None), (stop % call).index(": after")) for call in ("g", ": g")]
+if ends != [False, True]:
+    print("the walk past a call reaching eval, and past none, read %r, not [False, True]" % ends); sys.exit()
+print("ok" if count[0] < 1000 else "following 14 chained functions read %d commands for a name bound through a variable" % count[0])
+PY
+calls="$(python3 "$T/calls.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+check "a function is followed once, however many paths of calls reach it (#2576)" "$calls"
+
+# One script's text was read into commands again by each part of the gate that wanted them (the
+# line being judged, the walk of its variables, the names a sourced file binds), 40 times for the
+# 11 files of the merge helper (counted on 2026-11-09), and a sourced file was asked which names it binds once per script
+# that sources it. Both answers depend on the text alone, so each is worked out once in a run.
+mkdir -p "$T/once"
+printf '%s\n' 'ROOT=/somewhere' '. ./lib.sh' 'echo "$ROOT"' > "$T/once/a.sh"
+printf '%s\n' 'HELPER=1' 'helper() {' '  echo "$HELPER"' '}' > "$T/once/lib.sh"
+cat > "$T/once.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+d = sys.argv[2]
+judge = gate.Judge(gate.load_reader())
+parses, real = {}, judge.sw.commands
+def counting(s, *a, **k):
+    # Only what the gate's own code asks for: the reader's own calls to itself are not the gate's.
+    if sys._getframe(1).f_code.co_filename == gate.__file__:
+        parses[s] = parses.get(s, 0) + 1
+    return real(s, *a, **k)
+judge.sw.commands = counting
+asked, binds = [], gate.Judge.sh_binds
+gate.Judge.sh_binds = staticmethod(lambda name, text, allowed=0: asked.append((name, text)) or binds(name, text, allowed))
+if judge.line("bash a.sh", d, 0, "bash a.sh") is not None:
+    print("a script that sources a helper posting nothing was refused"); sys.exit()
+lib = open(d + "/lib.sh").read()
+names = {"ROOT", "HELPER"}
+first = judge.sh_bound_in(d + "/lib.sh", names, d, True, "./lib.sh", 1, set())
+whole = [a for a in asked if a[1] == lib]
+again = judge.sh_bound_in(d + "/lib.sh", names, d, True, "./lib.sh", 1, set())
+if first != {"HELPER"} or again != first:
+    print("lib.sh was read as binding %r, then %r, not {'HELPER'}" % (first, again)); sys.exit()
+more = len([a for a in asked if a[1] == lib]) - len(whole)
+twice = sorted(n for n in parses.values() if n > 1)
+wrong = []
+if twice:
+    wrong.append("the gate read one text into commands %s times" % twice[-1])
+if len(parses) < 2:
+    wrong.append("the gate read %d texts into commands, and a.sh and lib.sh are two" % len(parses))
+if more:
+    wrong.append("asking lib.sh about the same names again scanned it %d more times" % more)
+print("; ".join(wrong) or "ok")
+PY
+once="$(python3 "$T/once.py" "$DIR/slack_drafts_only_gate.py" "$T/once" 2>&1)"
+check "a text is read into commands once, and a sourced file asked about a name once (#2576)" "$once"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
