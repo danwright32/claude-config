@@ -379,7 +379,7 @@ out="$(PATH="$LOOP/stubborn:$PATH" FUSE="$LOOP/fuse2" CODES="$LOOP/codes" JSON_G
   RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh" bash "$S" 2>&1)"; rc=$?
 ran="$(cat "$LOOP/fuse2" 2>/dev/null || echo 0)"
 check "a gh that runs the stub whatever PATH says is refused by the stub, with its own exit code, and never loops (#2562)" \
-  "$([ ! -e "$LOOP/fuse2.tripped" ] && grep -q '^97$' "$LOOP/codes" 2>/dev/null && echo ok || echo "the guard ran $ran times, the stub's exit codes: $(tr '\n' ' ' < "$LOOP/codes" 2>/dev/null)")"
+  "$([ ! -e "$LOOP/fuse2.tripped" ] && grep -q '^97$' "$LOOP/codes" 2>/dev/null && ! grep -q '^0$' "$LOOP/codes" && echo ok || echo "the guard ran $ran times, the stub's exit codes: $(tr '\n' ' ' < "$LOOP/codes" 2>/dev/null)")"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

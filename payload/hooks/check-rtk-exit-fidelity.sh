@@ -153,6 +153,9 @@ case " \$* " in
     RTK_FIDELITY_IN_GH_STUB=1; export RTK_FIDELITY_IN_GH_STUB
     PATH="\$(cat "$WORK/ghstub/path-before-the-stub")"; export PATH
     err="\$(cd "$WORK/ghstub/not-a-repo" && env -u GH_REPO GH_TOKEN=not-a-token "$real_gh" "\$@" 2>&1 >/dev/null)"
+    code=\$?
+    # A refusal from inside is passed up as it came, never read as gh accepting the field list.
+    [ "\$code" -ne 97 ] || { printf '%s\n' "\$err" >&2; exit 97; }
     case "\$err" in *"Unknown JSON field"*) printf '%s\n' "\$err" >&2; exit 1 ;; esac
     echo '{"currentBranch":null,"createdBy":[],"needsReview":[]}'; exit 0 ;;
 esac
