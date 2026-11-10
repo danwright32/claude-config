@@ -27,6 +27,19 @@
 // arguments, in its own file or from a file that sends it. A file whose send cannot be traced (any
 // other language, a text template, a send the reading cannot find, a module used whole) is held as
 // before. A python docstring is never message text (#2574).
+//
+// Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
+// refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
+// what the Slack drafts gate prints on stderr, and edits to a script its docstrings name, were held
+// as Slack wording. A marker is now told apart by how it is written (matchedAt). A name (an
+// endpoint, an SDK, a setting) written as one alternative of a pattern, or as the middle of a glob,
+// is only being matched; written any other way (in an address, after a dot or a $, as a whole
+// string, as a bare word) it is used, as before. A file is no sender only when every marker it
+// carries is matched that way, or sits in a comment, AND the file makes no request and starts no
+// program that could (makesRequest), so a file that matches an endpoint and then calls it is still
+// one. Only shell, python, JavaScript and TypeScript are read for this: in any other language a
+// marker anywhere is a sender, as before. No file is named or exempted. Not recognised, so still
+// held: a sentence that spells an endpoint out, a list of bare names, a pattern in a regex literal.
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
@@ -90,13 +103,12 @@ export const codeOf = (path: string, text: string): string => withoutComments(te
 
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
 // or in a class, so the guard's rules are not themselves read as a Slack poster.
-export const MARKERS: RegExp[] = [
-  /hooks\.slack\.com/,
-  /chat[._]postMessage/,
-  /@slack\//,
-  /slack[_]sdk/,
-  /slack-go\//,
-  /SLACK[_]\w*(WEBHOOK|TOKEN|CHANNEL)/i,
+//
+// The markers that are a name: a webhook's host, the chat API's method, a Slack SDK, a Slack setting.
+// A name can be written only to be matched (matchedAt).
+const NAMES: RegExp[] = [/hooks\.slack\.com/, /chat[._]postMessage/, /@slack\//, /slack[_]sdk/, /slack-go\//, /SLACK[_]\w*(WEBHOOK|TOKEN|CHANNEL)/i]
+// The markers that are a send helper named for Slack, called or imported, which is always a use.
+const HELPERS: RegExp[] = [
   /\b(send|post|notify|alert)\w*slack\w*\s*\(/i,
   // The same helper imported without being called, as a test asserting its wording does. Only an
   // import or require line counts, so the name in a comment or a config key is not a post.
@@ -105,9 +117,100 @@ export const MARKERS: RegExp[] = [
   /\bslack\w*\.(send|post|notify|chat)\w*\s*\(/i,
   /\bslack\w*(send|post|notify|message|alert)\w*\s*\(/i,
 ]
+export const MARKERS: RegExp[] = [...NAMES, ...HELPERS]
 
-/** Whether a file's text posts to Slack: a webhook, the chat API, a Slack SDK, a Slack env setting, or a send helper named for Slack. */
+/** Whether a text carries a Slack marker: a webhook, the chat API, a Slack SDK, a Slack env setting, or a send helper named for Slack. */
 export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(text))
+
+// Each marker as it is searched for every place it stands, the names first as MARKERS has them.
+const EVERY = MARKERS.map(m => new RegExp(m.source, `${m.flags}g`))
+
+// A bar that separates a pattern's alternatives: one bar, never the two of an "or" in code.
+const barAt = (code: string, i: number, out: 1 | -1): boolean => code[i] === '|' && code[i + out] !== '|'
+/**
+ * Whether the name at [at, to) of a file's code is only being matched (#2662), by how it is written:
+ * the middle of a glob, a star at each side (`*name*`), or one alternative of a pattern, a bar at
+ * one side and at the other a bar, the group's bracket, an anchor or the string's quote
+ * (`'other|name'`). The name is taken to the end of its word first, so a longer name it starts is
+ * judged whole. Anything else is a use: an address (a slash beside it), a setting read (a `$`, a
+ * dot or a brace before it), a method called, a whole quoted string, a bare word. This file's own
+ * source spells no marker out, here included, so the guard never reads itself as a sender.
+ */
+const matchedAt = (code: string, at: number, to: number): boolean => {
+  while (at > 0 && /\w/.test(code[at - 1] as string)) at--
+  while (to < code.length && /\w/.test(code[to] as string)) to++
+  const [l, r] = [code[at - 1] ?? '', code[to] ?? '']
+  if (l === '*' && r === '*') return true
+  const [lBar, rBar] = [barAt(code, at - 1, -1), barAt(code, to, 1)]
+  return (lBar && (rBar || /[)$'"`]/.test(r))) || (rBar && /[(^'"`]/.test(l))
+}
+
+/** The languages a file is read in for whether it makes a request (#2662). */
+export type RequestLanguage = 'shell' | 'python' | 'js'
+/** Which of them a file is written in, by its extension, or its shebang when it has none; none for any other language. */
+export const requestLanguage = (path: string, text: string): RequestLanguage | undefined => {
+  const ext = extOf(path)
+  const end = text.indexOf('\n')
+  const shebang = ext === undefined && text.startsWith('#!') ? text.slice(0, end < 0 ? text.length : end) : ''
+  if (ext === 'py' || /python/.test(shebang)) return 'python'
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || /\b(ba|z|da|k)?sh\b/.test(shebang)) return 'shell'
+  if (ext === undefined ? /\b(node|deno|bun)\b/.test(shebang) : JS.has(ext)) return 'js'
+  return undefined
+}
+
+// What makes a request, or starts a program that could, in each language (#2662). Each is wide on
+// purpose: a sentence that reads like one of these keeps its file a sender, which only holds an edit
+// that was held before. Python and JavaScript reach the network or another program only through a
+// module they import or a call they make, so a program's name in their strings is data (a gate's
+// list of the programs it refuses) and never counts; a shell script's words are what it runs.
+const PY_NET = 'urllib\\d?|requests|httpx|aiohttp|httplib2?|http|socket|socketserver|subprocess|pycurl|websockets?|smtplib|ftplib|telnetlib|asyncio|ssl|xmlrpc|pty|multiprocessing|slack\\w*'
+const PY_REQUEST = new RegExp(
+  `\\bfrom[ \\t]+(${PY_NET})(\\.[\\w.]+)?[ \\t]+import\\b|\\bimport[ \\t]+([\\w.]+([ \\t]+as[ \\t]+\\w+)?[ \\t]*,[ \\t]*)*(${PY_NET})\\b|\\bos\\s*\\.\\s*(system|popen\\w*|exec[lv]\\w*|spawn\\w*|posix_spawn\\w*|startfile)\\s*\\(|\\b(__import__|import_module|urlopen)\\s*\\(`,
+)
+const JS_NET = 'https?|http2|net|tls|dgram|child_process|worker_threads|node-fetch|cross-fetch|undici|axios|got|ky|superagent|needle|request|ws'
+const JS_REQUEST = new RegExp(
+  `\\b(fetch|axios|got|ky|superagent|needle|sendBeacon)\\s*\\(|\\b(axios|got|ky|superagent|needle|https?|undici)\\s*\\.\\s*\\w+\\s*\\(|\\bnew\\s+(XMLHttpRequest|WebSocket|EventSource)\\b|(\\bfrom\\s*|\\brequire\\s*\\(\\s*|\\bimport\\s*\\(\\s*|\\bimport\\s+)["'\`](node:)?(${JS_NET})["'\`/]|\\b(Bun|Deno)\\s*\\.\\s*(spawn\\w*|run|Command|connect)\\b|\\bprocess\\s*\\.\\s*run\\s*\\(|\\$\``,
+)
+// A program that makes a request, followed by what it is handed; HTTPie's http and https; bash's own
+// /dev/tcp; and, where a command starts, any program named for Slack (a helper a script calls with
+// no brackets, which no marker sees).
+const SHELL_REQUEST =
+  /(^|[^\w.-])(curl|wget|xh|httpie|curlie|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|ftp|rsync|sendmail|mailx?|openssl)[ \t]+\S|(^|[\s;&|(])https?[ \t]+[-:\w"'$]|\/dev\/(tcp|udp)\/|(^|[;&|(){]|\b(then|do|else|if|while|until|exec|eval|command|xargs|sudo|nohup|time)[ \t])[ \t]*[\w.\/~$-]*slack[\w.\/-]*([ \t]+\S|[ \t]*$)/im
+
+/** Whether a file's code makes a request, or starts a program that could. Inline python or JavaScript in a shell script is the script's own text, so it is read there too. */
+const makesRequest = (lang: RequestLanguage, code: string): boolean =>
+  lang === 'python' ? PY_REQUEST.test(code) : lang === 'js' ? JS_REQUEST.test(code) : SHELL_REQUEST.test(code) || PY_REQUEST.test(code) || JS_REQUEST.test(code)
+
+// Whether a file's code only names what it matches: every marker in it a name being matched, and
+// nothing in it making a request. Never so in a language not read for requests. The names are read
+// first and the reading stops at the first one that is used, so a file that posts, which is nearly
+// every file carrying a marker, costs what finding its marker did before. Only a file read to the
+// end as matching pays more (2026-11-10, load 22: the 179 KB drafts gate 0.9 ms before, 2.8 to
+// 3.1 ms now; 500 of those would be 1.6 s of SCAN_MS).
+const onlyMatches = (lang: RequestLanguage | undefined, code: string): boolean => {
+  if (lang === undefined) return false
+  for (const m of EVERY.slice(0, NAMES.length)) for (const x of code.matchAll(m)) if (!matchedAt(code, x.index ?? 0, (x.index ?? 0) + x[0].length)) return false
+  return !HELPERS.some(m => m.test(code)) && !makesRequest(lang, code)
+}
+
+/**
+ * Where a file's code names a Slack send (#2662): every marker in it, or none when the file only
+ * names what it matches, as a gate naming the endpoints it refuses does. `lang` is none for a
+ * language not read for requests, where every marker counts as before.
+ */
+export const sendMarks = (lang: RequestLanguage | undefined, code: string): number[] =>
+  onlyMatches(lang, code) ? [] : EVERY.flatMap(m => [...code.matchAll(m)].map(x => x.index ?? 0))
+
+/**
+ * Whether a file posts to Slack: its code (comments left out) carries a marker, and the file does
+ * more than name what it matches (sendMarks). `inComments` for the file being edited or written to,
+ * which a marker in a comment has always made a sender: it still does, unless the file only names
+ * what it matches, a comment naming an endpoint being no more a send than a pattern matching it.
+ */
+export const isSender = (path: string, text: string, inComments = false): boolean => {
+  const code = codeOf(path, text)
+  return slackMarked(inComments ? text : code) && !onlyMatches(requestLanguage(path, text), code)
+}
 
 /**
  * What the repository is searched for before any file is read, case ignored: every marker names
