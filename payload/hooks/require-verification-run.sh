@@ -338,7 +338,9 @@ LOOP_INPUT
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     commit="${line%%$'\t'*}"; folder="${line#*$'\t'}"
-    case "$commit$folder" in *[!A-Za-z0-9/_.-]*) continue ;; esac
+    # Read from the pull request body, so only the shape publish writes reaches a GitHub path:
+    # a 40 hex commit and pr-<number>/<40 hex>, never a dot segment.
+    [[ "$commit" =~ ^[0-9a-f]{40}$ && "$folder" =~ ^pr-[1-9][0-9]*/[0-9a-f]{40}$ ]] || continue
     vr_get "$WORK/shots/$commit.json" "the pictures in $folder at $commit" "repos/$api_slug/contents/$folder?ref=$commit"
     keep_or_fail "$WORK/shots/$commit.json" "$?"
   done <<LOOP_INPUT

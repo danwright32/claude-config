@@ -58,6 +58,7 @@ BEGIN = "<!-- verification-screenshots:begin -->"
 END = "<!-- verification-screenshots:end -->"
 FENCE = "```verification-screenshots"
 UPLOAD_TRIES = 3
+FOLDER_RE = re.compile(r"^pr-[1-9][0-9]{0,9}/[0-9a-f]{40}$")
 ARTIFACT_RE = re.compile(r"^https://claude\.ai/(code/)?artifact/[A-Za-z0-9-]{8,}$")
 
 # Whether a picture committed to a branch shows inline in a PRIVATE repository's PR body, measured in
@@ -516,6 +517,13 @@ def judge(areas, touched, body, head, private, listings, changed_since, home=Non
     commit = m.get("commit")
     if not isinstance(commit, str) or not v.SHA_RE.match(commit):
         add("screenshots-link-unresolved", names, "the block's manifest names no commit its pictures were added in")
+        return out
+    # The folder comes from the PR body, which its author controls, so it is read only in the one
+    # shape publish writes before it reaches any GitHub path.
+    if not isinstance(m["folder"], str) or not FOLDER_RE.match(m["folder"]) or \
+            m["folder"] != "pr-%s/%s" % (m.get("pr"), m["head_sha"]):
+        add("screenshots-link-unresolved", names, "the block's folder %r is not pr-<number>/<head sha>, the only"
+            " place publish puts pictures" % (m["folder"],))
         return out
     if commit not in listings:
         out["need"]["listings"].append({"commit": commit, "folder": m["folder"]})

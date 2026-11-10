@@ -517,6 +517,16 @@ class Judging(Base):
         self.assertIn(LINK, body)
         self.assertEqual(self.judge(body, listing={})["problems"], [])
 
+    def test_a_folder_outside_the_published_shape_is_refused_and_never_listed(self):
+        self.shoot_all()
+        self.gh = FakeGitHub()
+        m = self.publish(self.gh)
+        m["folder"] = "../../other/" + HEAD
+        body = s.render_into_body(m, "x\n", home=self.home)
+        out = self.judge(body, listing={})
+        self.assertEqual(self.kinds(out), ["screenshots-link-unresolved"])
+        self.assertEqual(out["need"]["listings"], [], "a folder from the PR body never reaches a GitHub path")
+
     def test_two_blocks_are_malformed(self):
         body, _ = self.good_body()
         self.assertEqual(self.kinds(self.judge(body + "\n" + body)), ["screenshots-malformed"])

@@ -22,7 +22,12 @@ The bundle is a folder the hook writes:
                                GitHub could not be read for them
   comments.json | comments.err its comments, oldest first
   guides/<area>.md | .absent | .err      each touched area's guide at BASE
-  compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head
+  compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head (or with
+                               the head a screenshots block was rendered at)
+  repo.json | repo.err         gh api repos/<slug>, read only when a screenshots block links images,
+                               for whether the repository is public (#2516)
+  shots/<commit>.json | .err   the folder of pictures a screenshots block links, listed at that commit
+  allow-no-screenshots         present when the merge command carries ALLOW_NO_SCREENSHOTS=1
 
 CLI: merge_check.py verdict <bundle> [--final]
   Prints {"need": {"guides": [{area, path}], "compares": [sha], "listings": [{commit, folder}],
