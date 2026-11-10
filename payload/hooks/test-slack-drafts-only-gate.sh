@@ -1047,7 +1047,9 @@ for kind in outparam evals; do
   allowed "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
 done
 # The real helpers: a script sourcing each, then a file through a variable path, is followed.
-for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh hang-wait.sh full-run-slot.sh \
+# hang-wait.sh is not here: its waits evaluate a condition in the caller's shell on purpose, since
+# callers read what the condition sets, so the gate still loses a script's variables past it (#2538).
+for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh full-run-slot.sh \
               disk-clean-predicates.sh; do
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/$helper\"" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/real-$helper"
   run_bash "bash $T/sv/quiet/real-$helper"

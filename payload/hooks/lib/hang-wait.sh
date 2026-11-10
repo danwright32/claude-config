@@ -30,10 +30,7 @@ case "$HANG_S" in ''|*[!0-9]*) HANG_S=300 ;; esac
 # without it.
 hang_wait(){
   local _hw_t0=$SECONDS _hw_poll="${2:-0.1}"
-  # The condition is evaluated in a subshell, so it can set nothing in the suite: an eval in this
-  # shell can bind any name, and the Slack drafts gate stopped following the variables of every
-  # suite that sourced this file past it (claude-config#2465).
-  until (eval "$1"); do
+  until eval "$1"; do
     [ $(( SECONDS - _hw_t0 )) -lt "$HANG_S" ] || return 1
     sleep "$_hw_poll"
   done
@@ -53,7 +50,7 @@ hang_wait(){
 window_wait(){
   local _ww_t0=$SECONDS _ww_s="${1:-}" _ww_poll="${3:-0.1}"
   case "$_ww_s" in ''|*[!0-9]*) echo "window_wait: the window must be a whole number of seconds, not '$_ww_s'" >&2; return 2 ;; esac
-  until (eval "$2"); do  # in a subshell, as hang_wait's
+  until eval "$2"; do
     [ $(( SECONDS - _ww_t0 )) -lt "$_ww_s" ] || return 1
     sleep "$_ww_poll"
   done
