@@ -58,8 +58,9 @@ that has not yet lasted 30 minutes, free space having gone back up, or not falli
 projects only space that has stayed gone for 30 minutes, because a build or pre push check takes a
 few GB and gives it back within minutes (#1754). Judge it by the exit code, not the wording:
 0 means there is room and no fall reaching zero within six hours was measured (with no rate stated, nothing about the trend was measured yet), 3 under the floor (FREE_SPACE_FLOOR_GB, 20 GiB, which the warning writes in decimal units as 21.5 GB), 4 falling fast
-enough to reach zero within six hours, and 2 that it could not measure, which is not the same as
-fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
+enough to reach zero within six hours, 5 that the disk has room but swap is nearly full of its own
+total (memory being held, which step 3 below covers, #2559), and 2 that it could not measure, which
+is not the same as fine. When it says no rate yet, take the next reading on a later turn, ten or more minutes on,
 rather than waiting inside a command.
 
 ### 3. Swap, which no folder size reaches

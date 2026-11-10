@@ -11,13 +11,14 @@
 # this is the warning.
 #
 # It answers with an EXIT CODE, and a caller must judge by that rather than by a line of the output
-# (L184). The four answers are kept apart on purpose, because a check that reports "fine" when it
+# (L184). The answers are kept apart on purpose, because a check that reports "fine" when it
 # could not read anything is indistinguishable from a healthy disk (L98, L11):
 #
 #   0  measured, and there is room
 #   2  COULD NOT MEASURE, which is not the same as fine
 #   3  under the floor
 #   4  above the floor, but falling fast enough to reach zero inside the horizon
+#   5  the disk has room, but swap is nearly full of its own total (claude-config#2559, see swap_full)
 #
 # WHY BOTH 3 AND 4. A floor alone is a threshold nobody measured: at the rate seen that night
 # (about 19 GB an hour) a 20 GB floor is one hour of notice, which is not enough to find out what
@@ -65,6 +66,7 @@
 #   FREE_SPACE_STATE_DIR      where the readings are kept
 #   FREE_SPACE_SYMBOL_CACHE   the macOS symbol cache folder to look for (default the real one)
 #   FREE_SPACE_SWAP_SHARE_PCT swap above this share of the disk names the memory holders (default 2)
+#   FREE_SPACE_SWAP_FULL_PCT  swap above this share of its own total is nearly full (default 90, #2559)
 #   FREE_SPACE_TOP_SECONDS    the bound on `top` when it names them (default 2, 0 turns it off)
 #   FREE_SPACE_SWAP_CMD, FREE_SPACE_TOP_CMD, FREE_SPACE_DISK_BYTES  the swap, top and disk size
 #                             readers, described where swap is read (claude-config#1770)
@@ -80,7 +82,7 @@
 # room prints nothing, which is right for a warning run on every prompt and useless to somebody
 # triaging. With it, every verdict says how much is left and then either the rate or exactly why
 # there is none (first reading, span too short, a recovery, not falling). The exit codes are the
-# same four either way. Anything else on the command line is refused rather than ignored, because a
+# same either way. Anything else on the command line is refused rather than ignored, because a
 # mistyped flag would otherwise run the quiet mode and read as a report with nothing in it (L320).
 set -uo pipefail
 
@@ -117,6 +119,7 @@ MIN_SPAN_MIN="${FREE_SPACE_MIN_SPAN_MIN:-10}"
 WINDOW_HOURS="${FREE_SPACE_WINDOW_HOURS:-6}"
 PERSIST_MIN="${FREE_SPACE_PERSIST_MIN:-30}"
 SWAP_SHARE_PCT="${FREE_SPACE_SWAP_SHARE_PCT:-2}"
+SWAP_FULL_PCT="${FREE_SPACE_SWAP_FULL_PCT:-90}"
 TOP_SECONDS="${FREE_SPACE_TOP_SECONDS:-2}"
 # A reading higher than an earlier one by MORE than this is a recovery rather than jitter.
 # Every write and delete on a live machine moves the number a little, so a rule that refused
@@ -138,7 +141,8 @@ is_number(){ case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 # because a message that does not say which of the four is wrong cannot be acted on (L11, L80).
 for _setting in FREE_SPACE_FLOOR_GB:"$FLOOR_GB" FREE_SPACE_HORIZON_HOURS:"$HORIZON_HOURS" \
                 FREE_SPACE_MIN_SPAN_MIN:"$MIN_SPAN_MIN" FREE_SPACE_WINDOW_HOURS:"$WINDOW_HOURS" FREE_SPACE_RECOVERY_GB:"$RECOVERY_GB" \
-                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS"; do
+                FREE_SPACE_PERSIST_MIN:"$PERSIST_MIN" FREE_SPACE_SWAP_SHARE_PCT:"$SWAP_SHARE_PCT" \
+                FREE_SPACE_SWAP_FULL_PCT:"$SWAP_FULL_PCT" FREE_SPACE_TOP_SECONDS:"$TOP_SECONDS"; do
   is_number "${_setting#*:}" || cannot "${_setting%%:*} is set to '${_setting#*:}', which is not a number"
 done
 
@@ -373,13 +377,18 @@ swap_bytes=""; swap_why=""
 if [ -n "${FREE_SPACE_SWAP_CMD:-}" ]; then swap_out="$("$FREE_SPACE_SWAP_CMD" 2>&1)"; else swap_out="$(sysctl vm.swapusage 2>&1)"; fi
 # Read from a here string rather than a pipe: awk stops at the first match, and a producer it stops
 # reading from is a failure under pipefail that never happened (L183).
-swap_bytes="$(awk '{
-  for (i = 1; i < NF - 1; i++) if ($i == "used" && $(i + 1) == "=") {
+# Its total is read from the same line (claude-config#2559): "total = ... used = ...", printed as the
+# used bytes and then the total, the total empty when the line has none.
+swap_read="$(awk '{
+  for (i = 1; i < NF - 1; i++) if (($i == "used" || $i == "total") && $(i + 1) == "=") {
     v = $(i + 2); u = substr(v, length(v)); n = substr(v, 1, length(v) - 1)
     m = (u == "K") ? 1024 : (u == "M") ? 1048576 : (u == "G") ? 1073741824 : (u == "T") ? 1099511627776 : 0
-    if (m && n ~ /^[0-9]+(\.[0-9]+)?$/) printf "%.0f\n", n * m
-    exit
-  } }' <<< "$swap_out" 2>/dev/null || true)"
+    if (m && n ~ /^[0-9]+(\.[0-9]+)?$/) b[$i] = sprintf("%.0f", n * m)
+  }
+  if ("used" in b) { print b["used"], (("total" in b) ? b["total"] : ""); exit }
+}' <<< "$swap_out" 2>/dev/null || true)"
+swap_bytes="${swap_read%% *}"; swap_total="${swap_read#* }"
+is_number "$swap_total" || swap_total=""
 if ! is_number "$swap_bytes"; then
   _said="${swap_out:-<nothing>}"; _said="${_said//$'\n'/ }"
   swap_bytes=""; swap_why="sysctl vm.swapusage said '${_said:0:120}'"
@@ -394,6 +403,22 @@ cause_clause=" Nothing here says what is using it."
 if [ -z "$swap_why" ] && [ $((swap_bytes * 100)) -gt $((disk_bytes * SWAP_SHARE_PCT)) ]; then
   swap_over=1
   cause_clause=" Swap is measured below; nothing here says what else is using it."
+fi
+
+# SWAP NEARLY FULL OF ITS OWN TOTAL (claude-config#2559). On 2026-11-09 the personal MacBook had 54
+# GB of its 55 GB swap in use, held by fseventsd (86 GB by top's MEM) and Backblaze's bzserv (67 GB),
+# with the disk far from its floor, so the notes above (said only on a low or falling disk) said
+# nothing, and every push, merge and area check gate timing out for over an hour was read as slow CI.
+# So swap past FREE_SPACE_SWAP_FULL_PCT (90, a setting, not a measurement) of its own total is a
+# verdict of its own on a disk with room, exit 5, and a sentence beside the holders on one without.
+# Its total alone is not enough: macOS adds swap files as it needs them, so a Mac that has just begun
+# to swap has a small total that is nearly all used, which is ordinary paging. It must also be past
+# the 2% share of the disk above, measured for #1770 (ordinary days under 0.02%, leaking days 3.7% and
+# up), so this speaks only where that measured line already says the memory is being held (L36).
+swap_full=0
+if [ "$swap_over" -eq 1 ] && [ -n "$swap_total" ] && [ "$swap_total" -gt 0 ] \
+   && [ $((swap_bytes * 100)) -gt $((swap_total * SWAP_FULL_PCT)) ]; then
+  swap_full=1
 fi
 
 # The day's highest swap reading, kept so the share above can be recalibrated (L172).
@@ -416,6 +441,12 @@ if [ -n "$swap_bytes" ] && [ -n "$swap_day" ]; then
   { printf '%s' "$_days"; printf '%s %s %s\n' "$swap_day" "$_today_max" "${disk_bytes:--}"; } | tail -n 120 > "$_tmp" 2>/dev/null \
     && mv -f "$_tmp" "$SWAP_DAYS" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
 fi
+
+# How full swap is of its own total, in words, for the verdict 5 line and the sentence beside the
+# holders, so the two say it one way (L118).
+swap_full_words(){
+  printf '%s used of %s (%s%%), by sysctl vm.swapusage' "$(fs_words "$swap_bytes")" "$(fs_words "$swap_total")" $(( swap_bytes * 100 / swap_total ))
+}
 
 swap_note(){
   local swap_words=""
@@ -441,7 +472,12 @@ swap_note(){
   [ "$swap_over" -eq 1 ] || return 0
   local pct=$(( (swap_bytes * 1000 / disk_bytes + 5) / 10 )) holders=""
   echo ""
-  echo "Swap holds $swap_words, about $pct% of this disk, by sysctl vm.swapusage. More than $SWAP_SHARE_PCT% is memory that processes are holding rather than ordinary paging, and it is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches."
+  # Under verdict 5 the first line has already said how much swap there is and of what total, so it
+  # is not said twice (L605); on a low or falling disk it is said here, and its fullness beside it.
+  if [ "${1:-}" != full ]; then
+    echo "Swap holds $swap_words, about $pct% of this disk, by sysctl vm.swapusage. More than $SWAP_SHARE_PCT% is memory that processes are holding rather than ordinary paging, and it is kept on /System/Volumes/VM, which shares this disk and which no folder size reaches."
+    [ "$swap_full" -eq 1 ] && echo "That is $(( swap_bytes * 100 / swap_total ))% of swap's own total of $(fs_words "$swap_total"), so swap is nearly full as well."
+  fi
   if [ "$TOP_SECONDS" -eq 0 ]; then
     echo "Naming the processes holding it is turned off here (FREE_SPACE_TOP_SECONDS=0)."
   else
@@ -476,7 +512,10 @@ swap_note(){
       fi
     fi
   fi
-  echo "Swap is given back only when the memory is: restarting the process holding it (quitting its app, or restarting its service), or restarting the Mac, frees the space. Deleting files does not. To list the holders again:"
+  echo "Swap is given back only when the memory is: restarting the process holding it (quitting its app, or restarting its service), or restarting the Mac, frees the space. Deleting files does not."
+  # Both holders on 2026-10-26 and 2026-11-09 (fseventsd, Backblaze's bzserv) were services running
+  # as root (#1770, #2559). Named in no sentence here, which names only what top measured.
+  echo "Restarting a service that runs as root needs Dan's password (sudo), so it is his to run, never a session's. To list the holders again:"
   echo '```'
   echo "top -l 1 -o mem -n 10 -stats pid,command,mem,time"
   echo '```'
@@ -644,6 +683,17 @@ if [ "$falling_fast" -eq 1 ]; then
   swap_note
   symbol_cache_note
   exit 4
+fi
+
+# The disk has room, but swap is nearly full of its own total (claude-config#2559, see swap_full):
+# memory, not files, so nothing here offers the disk's remedies, and the nudge offers none either.
+if [ "$swap_full" -eq 1 ]; then
+  # Worded so the nudge finds no " GB free on " figure in it and keys this on the verdict alone: a
+  # disk that moves while swap stays full is not a new answer about memory.
+  echo "claude-sync: swap is nearly full: $(swap_full_words), while $VOLUME has $free_words to spare, so this is memory that processes are holding, not files."
+  swap_note full
+  [ "$REPORT" -eq 1 ] && echo "claude-sync: $free_words free on $VOLUME, above the $floor_words floor.$rate_clause$no_rate_clause"
+  exit 5
 fi
 
 if [ "$REPORT" -eq 1 ]; then
