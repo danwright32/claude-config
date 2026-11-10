@@ -651,7 +651,7 @@ Slack draft holds, is the reviewed text. Then open it:
 Dan sees nothing. Say in the same reply that focus is about to move.
 
 The file in the editor stays the whole post whatever happens next. Saving it as a Slack draft is
-an optional last step, set out in section 10.
+an optional step after the editor opens, set out in section 10.
 
 Not archived. The window mechanism already prevents repeating content, so there is nothing to
 compare against.
