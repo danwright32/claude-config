@@ -236,20 +236,41 @@ export const scriptWrite = (w: ModKitWrites, home?: string): string | null => {
   return 'path' in t ? `it writes ${t.word}` : `it writes ${t.word}: ${t.unread}`
 }
 
+// Whether a run is the installed spool helper, run by bash or directly: only that path under the home
+// given, since a copy of the helper elsewhere may be any script, and without a home nothing is let off.
+const installedSpool = (r: ModKitRun, home: string | undefined): boolean =>
+  home !== undefined &&
+  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
+  r.path === `${home}/.claude/hooks/lib/issue-spool.sh`
+
 /**
  * Whether a run is a findings note to the installed spool helper (#2254):
  * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
  * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
- * a finding that often holds $ or *, are no files it writes. Only that path under the home given and
- * only its note subcommand: a copy of the helper elsewhere may be any script, and without a home
- * nothing is let off. Any substitution inside the note, and every other part of the command, is read
- * by mod-kit as its own write and judged as before.
+ * a finding that often holds $ or *, are no files it writes. Only its note subcommand. Any
+ * substitution inside the note, and every other part of the command, is read by mod-kit as its own
+ * write and judged as before.
  */
-const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
-  home !== undefined &&
-  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
-  r.path === `${home}/.claude/hooks/lib/issue-spool.sh` &&
-  r.args[0]?.word === 'note'
+const spoolNote = (r: ModKitRun, home: string | undefined): boolean => installedSpool(r, home) && r.args[0]?.word === 'note'
+
+/**
+ * The installed spool helper's subcommands whose first argument is the project folder its spool key
+ * is read from (#2636): the helper reads that folder's git common dir, or resolves it with cd and
+ * pwd, and writes only under its spool root, so the folder is never a place it writes. Each one is a
+ * line of the helper's dispatch handing `"${1:-$PWD}"` on as that folder, and
+ * tests/test-area-check-spool-key-only.sh holds this list to those lines and runs every one against
+ * a throwaway checkout, red when one leaves a file there changed or new. Its other arguments (a
+ * transcript, a stamp it writes) are judged as any script's are; a subcommand handed some other
+ * folder (sweep-stamps, keep-ledgers, which take the review's temp folder) is not in the list.
+ */
+export const SPOOL_KEY_COMMANDS: readonly string[] = [
+  'key', 'read-keys', 'path', 'archive-path', 'append', 'note', 'raw', 'pending', 'has-findings', 'archive',
+  'clear', 'file-errors', 'file-muted', 'muted-summary', 'muted-stamp', 'muted-sent',
+]
+
+// Whether a run's first argument after the subcommand is only the project a spool key is read from.
+const spoolKeyOnly = (r: ModKitRun, home: string | undefined): boolean =>
+  installedSpool(r, home) && SPOOL_KEY_COMMANDS.includes(r.args[0]?.word ?? '')
 
 /**
  * The one file a quoted pattern handed to a script file names (#2255), or undefined. mod-kit marks an
@@ -276,7 +297,8 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  * folder and a mode change add no lines, so they are not judged. A folder handed to a script, or a copy
  * landing in a folder, is given here by its path like a file; the hook finds on the disk that it is a
  * folder and judges the files under it (#2321), since no answer here says so.
- * Nor are the words of a findings note (#2254), given `home`: see spoolNote. A quoted pattern handed to
+ * Nor are the words of a findings note (#2254), given `home`: see spoolNote; nor the project folder
+ * the installed spool helper reads a key from (#2636): see SPOOL_KEY_COMMANDS. A quoted pattern handed to
  * a script file is judged as the one file its characters name (#2255): see quotedName. A word handed
  * to a script that mod-kit marks `unexpanded` holds no value, so it is never read as built while the
  * command runs: every $ in it is in single quotes or after a backslash (#1953), or one the shell leaves
@@ -320,7 +342,9 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   for (const r of w.runs ?? []) {
     if (spoolNote(r, home)) continue
     const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
-    for (const a of r.args) {
+    const keyOnly = spoolKeyOnly(r, home)
+    for (const [i, a] of r.args.entries()) {
+      if (keyOnly && i === 1) continue
       const literal = a.path ? undefined : quotedName(r, a)
       if (a.path) add({ word: a.word, path: a.path, runs: [run] })
       else if (literal) add({ word: a.word, path: literal })

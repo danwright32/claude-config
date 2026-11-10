@@ -187,6 +187,19 @@ print(m.heredoc_opener("x" + h + "1EOF", 1), m.heredoc_opener("x" + h + "1EOF", 
 [ "$py_got" = "('1EOF', False, False, 7) None EOF (2, 'EOF', True, True, 10)" ] \
   && check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" ok \
   || check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" "got [$py_got]"
+# A reader that must not miss a heredoc asks with marker_start False (claude-config#2641: the Slack
+# drafts gate, over a script it cannot follow). Then a marker starting with a digit is an opener,
+# over a whole text of several lines, a here string still is not, and quoted says whether the shell
+# expands the body. The same text asked the default way, as the scans ask, misses the digit marker.
+py_got="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+h = "<" "<"
+text = "bash " + h + "1\necho x\n1\ncat " + h + "\x27EOF\x27\ny\nEOF\ngrep -c x " + h + "<" + " \"$1\"\n"
+print([(o[1], o[3]) for o in m.heredoc_openers(text, marker_start=False)], [(o[1], o[3]) for o in m.heredoc_openers(text)])' "$SW" 2>&1)"
+[ "$py_got" = "[('1', False), ('EOF', True)] [('EOF', True)]" ] \
+  && check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" ok \
+  || check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" "got [$py_got]"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
