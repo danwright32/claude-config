@@ -2815,7 +2815,10 @@ class Judge:
             with writing not counted;
           - what a command that passes sends down a pipe goes to the command the pipe feeds, which is
             then judged as fed it (sh_command_acts), on through each program that only filters it.
-        Both need each command's place in the script (sh_flow). What it still does not follow, so a
+        Both need each command's place in the script (sh_flow). Where there is none (the reader could
+        only cut the script crudely), a script that pipes what it was handed, or that uses it and
+        opens a heredoc the shell may expand it into (sh_doc_expands), is refused as a place the gate cannot
+        follow (claude-config#2641). What it still does not follow, so a
         pass is not read as more than it measured: what the script writes with a redirection or by
         moving a file (SH_INERT says why), a variable set by read from a pipe or a file, a pipe or a
         heredoc inside a string a wrapper runs (eval, bash -c with no arguments handed), and a file
@@ -2879,7 +2882,23 @@ class Judge:
             into = self.sh_piped_into(flow, idx)
             if into is not None:
                 piped.add(into)
+        if flow is None and handed.search(body) and self.sh_doc_expands(body):
+            # No command has a place, so nothing says which heredoc feeds which command, and expands
+            # was False for every one of them. The crude cut hands a heredoc's own lines back as
+            # commands of the script, so `bash <<EOF` over `echo "$1"` read as a bash handed nothing
+            # and an echo, and passed (claude-config#2641). Where the script uses what it was handed
+            # and opens a heredoc the shell may expand it into, that is a place the gate cannot
+            # follow, whatever the heredoc feeds: a shell, an interpreter, or a pipe on to one.
+            return "could not be read as commands to see what a heredoc expands its arguments into"
         return None
+
+    def sh_doc_expands(self, body):
+        """Whether a script's text opens a heredoc the shell expands, which is one with no part of
+        its marker quoted. Each opener is read by the shared reader (heredoc_openers), wherever a <<
+        with a word after it is, a here string apart: in a text whose commands have no places
+        nothing says which << sits in a string or in arithmetic, so one read as an opener by mistake
+        errs toward refusing, and a marker starting with a digit is not missed."""
+        return any(not quoted for _, _, _, quoted, _ in self.sw.heredoc_openers(body, marker_start=False))
 
     def sh_flow(self, body, d, records):
         """Where each command of a shell script's body is in it, for shell_acts: {"part": {its index
