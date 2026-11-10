@@ -1010,7 +1010,10 @@ out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a copy that no longer matches mod-kit's fails the run" ok || check "a copy that no longer matches mod-kit's fails the run" "exit=$code out=$out"
 remedy="$(printf '%s\n' "$out" | grep "reads-real's tests/mod-kit/hooks/register.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
 case "$remedy" in cp*) check "and names the cp that brings it back" ok ;; *) check "and names the cp that brings it back" "$out" ;; esac
-[ -n "$remedy" ] && eval "$remedy"
+# In a subshell, here and for #1281's remedy below: text the checker printed, run in this shell,
+# could set any of this suite's variables, so the Slack drafts gate stopped being sure where ROOT
+# points and refused the whole suite at its ts_source step (#2654). A cp needs nothing from this shell.
+[ -n "$remedy" ] && ( eval "$remedy" )
 out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "and running that cp passes the run again" ok || check "and running that cp passes the run again" "exit=$code out=$out"
 printf 'x\n' > "$M9C/reads-real/tests/mod-kit/hooks/gone.ts"
@@ -1675,7 +1678,7 @@ out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
 remedy="$(printf '%s\n' "$out" | grep "clean-reads-missing's hooks/mod-kit/skew.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
 [ "$code" -eq 1 ] && case "$remedy" in cp*) true ;; *) false ;; esac \
   && check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" ok || check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" "exit=$code out=$out"
-[ -n "$remedy" ] && eval "$remedy"
+[ -n "$remedy" ] && ( eval "$remedy" )
 out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "#1281: and running that cp passes the run again" ok || check "#1281: and running that cp passes the run again" "exit=$code out=$out"
 printf 'export const x = 1\n' > "$M9K/clean-reads-missing/hooks/mod-kit/gone.ts"
