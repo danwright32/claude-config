@@ -312,6 +312,9 @@ check "and reports the RATE it measured, not just the number left" \
 # A rate is only a measurement if the reader can tell what it was measured over (L11, L316).
 check "and says over how long it measured that rate" \
   "$(grep -qiE 'over .*(hour|minute)' <<< "$fast_msg" && echo ok || echo "said: $fast_msg")"
+# The words the swap verdict below must never say (#2559), seen here where they are said.
+check "and says it is above the floor but not for long" \
+  "$(grep -q 'not for long' <<< "$fast_msg" && echo ok || echo "said: $fast_msg")"
 
 # ---- two readings too close together are not a rate ----
 # The same 240 GB fall, over four minutes instead of three hours. Extrapolated it is a catastrophe;
