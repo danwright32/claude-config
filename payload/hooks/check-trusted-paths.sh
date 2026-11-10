@@ -18,8 +18,11 @@
 #
 # An entry is free text, so only what looks like an absolute path is taken from it: a span starting
 # with / or ~/ at the start of the entry, after a space, a ( or an =, or inside backticks or quotes.
-# A backticked or quoted span is taken whole, spaces included; anywhere else a path ends at a space,
-# and trailing punctuation (a full stop, a comma) is dropped. A URL is never read as one, because
+# A backticked or quoted span is taken whole, spaces included. Anywhere else a path is read up to a
+# space, and then again with each further word on the line (up to a backtick, quote or bracket), so a
+# bare folder name holding a space is found whole: the path counts as present when any of those
+# readings exists, and the shortest is named when none does (#2549). Trailing punctuation (a full
+# stop, a comma) is dropped from each reading. A URL is never read as one, because
 # its slashes follow a colon, and a word like read/write is not, because its slash follows a letter.
 # A glob is cut back to the directory before its first wildcard. ~ is expanded against HOME.
 #
@@ -81,33 +84,68 @@ if not isinstance(entries, list):
     sys.exit(0)
 
 # A delimited span first, taken whole so a path with a space in it is not cut short; then a bare
-# span, which ends at whitespace. Either must start with / or ~/ and must not start with //.
+# span, whose first reading ends at whitespace (MORE below adds the longer ones). Either must start
+# with / or ~/ and must not start with //.
 DELIMITED = re.compile(r"""[`"']((?:~/|/(?!/))[^`"'\n]+)[`"']""")
 BARE = re.compile(r"""(?:^|(?<=[\s(=]))((?:~/|/(?!/))[^\s`"'()]+)""")
+# A bare span can be the start of a path whose folder name holds a space: the Trusted repos entry
+# lists checkouts bare, as <path> (<remote url>), so "Apps/Two Words" is read as "Apps/Two"
+# (claude-config#2549). Each further word on the same line, up to a backtick, quote or bracket, gives
+# one longer READING of the same path. Whitespace is kept exactly as written.
+MORE = re.compile(r"""[ \t]+[^\s`"'()]+""")
 TRAILING = ".,;:!?)]}"
 GLOB = re.compile(r"[*?\[]")
 
+def clean(p):
+    p = p.rstrip()
+    while p and p[-1] in TRAILING:
+        p = p[:-1]
+    g = GLOB.search(p)
+    if g:
+        p = p[: p.rfind("/", 0, g.start()) + 1]
+    return p
+
 def paths_in(text):
+    # Each path found is a list of its readings, shortest first. A delimited span has one reading;
+    # a bare one has one per word that could still belong to it.
     found = []
     spans = []
     for m in DELIMITED.finditer(text):
-        found.append(m.group(1))
+        found.append([m.group(1)])
         spans.append(m.span())
     for m in BARE.finditer(text):
         if any(a <= m.start(1) < b for a, b in spans):
             continue
-        found.append(m.group(1))
+        readings = [m.group(1)]
+        end = m.end(1)
+        while True:
+            more = MORE.match(text, end)
+            # A word holding a wildcard ends the readings: cut back to the folder before it, the
+            # reading would name a parent that exists and make a gone path read as present.
+            if not more or GLOB.search(more.group()):
+                break
+            end = more.end()
+            readings.append(text[m.start(1):end])
+        found.append(readings)
     out = []
-    for p in found:
-        p = p.rstrip()
-        while p and p[-1] in TRAILING:
-            p = p[:-1]
-        g = GLOB.search(p)
-        if g:
-            p = p[: p.rfind("/", 0, g.start()) + 1]
-        if p in ("", "/", "~/") or p in out:
+    seen = set()
+    for readings in found:
+        rs = []
+        for r in readings:
+            r = clean(r)
+            if r in ("", "/", "~/") or r in rs:
+                continue
+            # A longer reading must still extend the first one. Anything cleaning cut back to less
+            # than it could only name a parent folder, never the path.
+            if rs and not (r.startswith(rs[0]) and len(r) > len(rs[0])):
+                continue
+            rs.append(r)
+        # Keyed on every reading, not the shortest, so "Apps/Two Words" and "Apps/Two Other" in one
+        # entry stay two paths and one being present cannot answer for the other.
+        if not rs or tuple(rs) in seen:
             continue
-        out.append(p)
+        seen.add(tuple(rs))
+        out.append(rs)
     return out
 
 def line_of(entry, token):
@@ -130,9 +168,17 @@ missing = []
 for entry in entries:
     if not isinstance(entry, str):
         continue
-    for token in paths_in(entry):
-        full = home + token[1:] if token.startswith("~/") else token
-        if os.path.exists(full):
+    for readings in paths_in(entry):
+        # Present when ANY reading exists: the longer ones are how a folder name with a space in it
+        # is read whole. A reading exists only if that path is on disk, so gluing a gone path to the
+        # words after it makes nothing present that is not there. When none exists, the shortest
+        # is named, the span the text plainly marks as a path.
+        if any(os.path.exists(home + r[1:] if r.startswith("~/") else r) for r in readings):
+            continue
+        token = readings[0]
+        # The same gone path written twice in one entry, with different words after each, is one
+        # finding, not two lines naming the same path.
+        if any(t == token and e is entry for t, _, e in missing):
             continue
         missing.append((token, line_of(entry, token), entry))
 

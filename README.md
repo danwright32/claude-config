@@ -3454,8 +3454,11 @@ MacBook one pointed at a folder gone for two weeks after a project move, so the 
 a checkout that no longer existed and did not recognise the real one (#2491).
 `hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
 absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
-backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
-names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+backticks or quotes, trailing punctuation dropped, a URL never), and names each one that is not on
+this Mac with the line of its entry. A bare path is read up to the next space and then again with
+each further word on the line, up to a backtick, quote or bracket, so a folder name holding a space
+(`<path> (<remote url>)` in the Trusted repos entry) is found whole: it counts as present when any of
+those readings exists, and the shortest is named when none does (#2549). No settings file, no `autoMode`
 block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
 is one line and exit 2; no `python3` is exit 3.
 
