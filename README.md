@@ -2281,6 +2281,27 @@ One more gate holds a rule the briefs give every agent, for everyone:
   in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
   is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
 
+And one holds the rule CLAUDE.md gives every worktree session about a stale base:
+
+- `fresh-worktree-base-gate.sh` (PreToolUse, Edit, Write, MultiEdit and NotebookEdit) refuses the
+  first file edit in a fresh worktree, one with no commits of its own, while it is behind the
+  remote's main branch, and names the one command that brings it up to date,
+  `git -C "<worktree>" merge --ff-only origin/main` (claude-config#2517). Worktrees share refs, so
+  once another worktree has fetched, `git fetch` prints nothing however far main has moved, and on
+  2026-09-14 that let a pull request merge without the rebase its brief required. The gate fetches
+  `origin main` itself before judging, bounded at 10 seconds, so an unrefreshed ref cannot answer
+  for it. A pass is kept per session and worktree in `TMPDIR`, so a session pays one fetch per
+  worktree, not one per edit; a refusal is judged again, so the edit after the command goes ahead.
+  A worktree with its own commits, a primary checkout and a repository with no `origin` are passed.
+  A fetch that fails or runs out its bound lets the edit through with a notice that it could not
+  check, once, and tries again after 15 minutes, unless even the local ref already shows the
+  worktree behind, which is refused since the command needs no network. Reading is never refused,
+  and neither is an agent's worktree cut from a freshly fetched `origin/main`. On 2026-11-10 (load
+  average 23 over one minute) the gate took 0.055 to 0.063 seconds on an edit in a primary checkout
+  or outside any repository, 0.31 to 0.38 seconds on a worktree's first edit with its fetch, and
+  0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
+  cannot read is let through with a notice.
+
 ### What a push actually waits on
 
 Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
@@ -3847,12 +3868,28 @@ is told its share, and the product is printed at the top of every run.
 
 </td><td>
 
-CPUs, capped at 8
+CPUs up to 8, then two thirds of the CPUs
 
 </td><td>
 
 How many processes the whole run may have in flight. Everything else is derived from it. A value
-that is not a positive whole number is refused rather than guessed at.
+that is not a positive whole number is refused rather than guessed at. The default keeps what every
+machine of up to 12 cores had under the old cap of 8 and gives a bigger Mac two thirds of its cores
+(12 on 18), the share the 12 core Mac runs at (#2548). Not measured on the 18 core Mac (#2589).
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_CORES`
+
+</td><td>
+
+This machine's CPU count
+
+</td><td>
+
+The core count the default budget is derived from, for one run. Refused unless a positive whole
+number.
 
 </td></tr>
 <tr><td>
@@ -5932,10 +5969,20 @@ Dan. Any draft Slack saved to that thread, under any Slack server and from any p
 next merge. Which came first is kept as a count of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
 The mod never calls a Slack tool.
+Only a thread recorded at the session's start owes a reply after every merge (#2578: on
+2026-11-09 one alert link pasted hours into a session drew three asks for unrelated merges). A
+link in Dan's first prompt before any merge, or a thread read before his second prompt and any
+merge, is where the session started; one recorded later is pasted mid session, and only a merge
+for it owes it a reply: a merged PR whose title, body or comments, or those of an issue it closes,
+link the thread (GitHub is asked only while such a thread is recorded, and a read it refuses is
+toasted and counts as for none), or a PR whose card names the thread as where its Slack draft goes.
+Its hold names those PRs and never says the session started there, and a skip holds until the next
+merge for it. A card asking for no draft keeps the earlier card's record of one asked for (#2515),
+so a card for another PR to the same thread or person still says its draft replaces it.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578
 
 </td></tr>
 <tr><td>
@@ -7156,6 +7203,18 @@ file and in every other file of the repository naming it, is such a value, an im
 its own name, or a part of another such constant. One other use (posted, logged, handed to a
 function, exported under another name), or another file that cannot be read within the search's
 time, and it counts.
+In a JavaScript, TypeScript or python file, only text a Slack send carries is held (#2570; Dan,
+2026-11-09: "these aren't alerts that are going to fire into Slack, right? If not, I don't need you
+to ask me for approval"): `hooks/sends.ts` finds the send calls (one a Slack marker names, one on a
+client built from a Slack marker, a function whose body sends, or the nearest call holding a marker
+in its arguments, never across a function body), and a changed string counts only when it stands in
+a send's arguments or in the value of a name used there, followed name by name within the block
+that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. For a
+file another file sends, each sender is traced and the names it sends followed down through every
+file it reaches the template by; when the nearest senders send none of the change the search goes
+on. A file whose send cannot be traced (any other language, a text template, a send the reading
+cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
+the search stops short. A python docstring is never message text (#2574).
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
