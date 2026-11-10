@@ -354,7 +354,7 @@ out="$(PATH="$LOOP/guard:$LOOP/real:$PATH" FUSE="$LOOP/fuse" REACHED="$LOOP/reac
 ran="$(cat "$LOOP/fuse" 2>/dev/null || echo 0)"
 reached="$(cat "$LOOP/reached" 2>/dev/null | wc -l | tr -d ' ')"
 check "with a guard gh first on PATH, the stub's check of a field list never loops: the fuse is not reached (#2562)" \
-  "$([ ! -e "$LOOP/fuse.tripped" ] && [ "$ran" -ge 1 ] && echo ok || echo "the guard ran $ran times, exit $rc: $(grep -i 'gh-pr-status' <<< "$out" | head -n 2)")"
+  "$([ ! -e "$LOOP/fuse.tripped" ] && [ "$ran" -ge 1 ] && echo ok || echo "the guard ran $ran times, exit $rc: $(grep -i -m 2 'gh-pr-status' <<< "$out")")"
 check "and every run of the guard reaches the real gh behind it ($ran runs)" \
   "$([ "$reached" = "$ran" ] && echo ok || echo "the guard ran $ran times and the real gh $reached")"
 
@@ -366,7 +366,8 @@ cat > "$LOOP/stubborn/gh" <<'STUBBORN'
 n="$(cat "$FUSE" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$FUSE"
 [ "$n" -le 20 ] || { echo tripped > "$FUSE.tripped"; echo "fuse: the guard ran $n times" >&2; exit 99; }
 # The newest probe folder is this run's: an older one can be left behind by a run that was killed.
-stub="$(ls -dt "${TMPDIR:-/tmp}"/claude-sync-work.fidelity-probe.*/ghstub/bin/gh 2>/dev/null | head -n 1)"
+stub=""
+for f in $(ls -dt "${TMPDIR:-/tmp}"/claude-sync-work.fidelity-probe.*/ghstub/bin/gh 2>/dev/null); do stub="$f"; break; done
 [ -n "$stub" ] || exit 127
 "$stub" "$@"
 code=$?
