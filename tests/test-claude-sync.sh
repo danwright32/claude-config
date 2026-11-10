@@ -24807,6 +24807,23 @@ check "#2673 and none of the five is counted as behind" \
   "! line_has \"\$out_mc2\" 'mods behind the shared repo' 'kit-mod|path-mod|side-mod|new-mod|gone-mod'"
 check "#2673 and status exits as it does when nothing failed, even then" \
   "[ $rc_mc2 -eq $rc_mc0 ]"
+# THE REMOVED VERSION: the removal was read, but the version it removed could not be, so whether
+# this Mac still runs that version is unknown (found by the push's lessons review).
+mkdir -p "$MCSHIM/rp-bin"
+cat > "$MCSHIM/rp-bin/git" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"rev-parse -q --verify "*"^:payload/mods/gone-mod/"*) exit 128 ;;
+esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$MCSHIM/rp-bin/git"
+out_mc3="$(env $(mcenv) PATH="$MCSHIM/rp-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2673 status with the removed version unreadable: $out_mc3"
+check "#2673 a removed file whose removed version could not be read is named" \
+  "line_has \"\$out_mc3\" 'could not compare gone-mod/index.ts' 'version origin/main removed' 'exit 128'"
+check "#2673 and the rest are still named as behind" \
+  "line_has \"\$out_mc3\" 'mods behind the shared repo: 5 file' 'kit-mod' 'path-mod'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266

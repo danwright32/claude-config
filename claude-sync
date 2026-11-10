@@ -13057,7 +13057,10 @@ LOOP_INPUT
         rc=0; line="$(git -C "$SYNC_REPO" log -1 --format='%H %ct' --diff-filter=D "$up" -- "payload/mods/$rel" 2>/dev/null)" || rc=$?
         if [ "$rc" -ne 0 ]; then printf 'unread\t%s\t%s\n' "$rel" "reading when $up removed it failed (git log exit $rc)"; continue; fi
         [ -n "$line" ] || continue
-        h="$(git -C "$SYNC_REPO" rev-parse -q --verify "${line%% *}^:payload/mods/$rel" 2>/dev/null)"
+        # The commit before the removal held the file, since the removal is a change to it, so a
+        # read that fails here is a failure, never an answer.
+        rc=0; h="$(git -C "$SYNC_REPO" rev-parse -q --verify "${line%% *}^:payload/mods/$rel" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ] || ! is_object_id "$h"; then printf 'unread\t%s\t%s\n' "$rel" "reading the version $up removed failed (git rev-parse exit $rc)"; continue; fi
         { [ "$h" = "$mine" ] || [ "$h" = "$mine2" ]; } && printf '%s\t%s\n' "${line##* }" "$rel" ;;
     esac
   done <<< "$split"
