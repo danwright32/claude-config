@@ -428,9 +428,10 @@ type Opts = {
    * held (`take`, a `wait` line) and what a failed read's error is to it (`failed`). Every look is
    * taken and every failure is `other` unless said; `next` answers as the library does, the wait
    * doubled up to the caller's ceiling, or its base on a change (hooks/test-gh-poll.sh holds the
-   * library to that).
+   * library to that). `budget` is the session's looks for each clock minute (#2433): past it, a look
+   * is held for the rest of that minute, as the library's cap holds it.
    */
-  poll?: { take?: string; failed?: string }
+  poll?: { take?: string; failed?: string; budget?: number }
   /**
    * The command abandoned (#1677): from the first process.run whose words hold this text, the engine
    * refuses every process and file call, as Claude Code does once a command is interrupted or its
@@ -830,6 +831,12 @@ const world = (on: On, o: Opts = {}) => {
     // The polling policy (#1482), answered as Opts.poll says.
     if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
       w.polls.push({ argv: [...argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
+      if (a[1] === 'take' && o.poll?.budget !== undefined) {
+        const secs = Number(a[2])
+        const minute = Math.floor(secs / 60)
+        const used = w.polls.filter(p => p.argv[2] === 'take' && Math.floor(Number(p.argv[3]) / 60) === minute).length
+        return ok(used <= o.poll.budget ? 'ok\n' : `wait\tcap\t${60 - (secs % 60)}\n`)
+      }
       if (a[1] === 'take') return ok(`${o.poll?.take ?? 'ok'}\n`)
       if (a[1] === 'failed') return ok(`${o.poll?.failed ?? 'other'}\n`)
       if (a[1] === 'answered') return ok('ok\n')
@@ -6889,6 +6896,69 @@ test("Dan's answer to leave the session's own merged branch as it is settles the
   expect((await stop($ as never)).block).toMatch(/the branch scope-modes-616 still exists here/)
 })
 
+// ---- A branch with no PR of its own that is gone, left, or pushed into another's PR (#2533) ----
+// On 2026-11-09 a session made a local branch only to push one commit into another branch's open PR
+// (git worktree add <path> origin/<pr-branch> -b <local>, then git push origin HEAD:<pr-branch>). That
+// PR merged and deployed, the local branch was deleted and never existed on GitHub, and winding down
+// went on saying there was no PR for it, Dan's answer to leave_branch included.
+const prBranchPr = (state: string) => ({ number: 40, state, url: 'https://github.com/o/r/pull/40', headRefName: 'fix-pr', headRefOid: 'abc4040', closingIssuesReferences: [] })
+const pushedIntoPr = async ($: $T) => {
+  expect(await call($, bash('git worktree add ../wt origin/fix-pr -b fix-local', 'w1'))).toBe('ran')
+  expect(await call($, bash('git push origin HEAD:fix-pr', 'p1'))).toBe('ran')
+}
+
+test("a branch pushed into another branch's PR is finished by that PR: held while it is open, finished once merged and live (#2533)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-local', gh: { pr: prBranchPr('OPEN'), issues: {} }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await pushedIntoPr($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #40 is not merged yet\./)
+  w.o.gh = { pr: prBranchPr('MERGED'), issues: {} }
+  await clock.advance(11 * MIN)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+test('the local branch pushed into another PR still holds while it exists here, after that PR merged (#2533)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'fix-local', gh: { pr: prBranchPr('MERGED'), issues: {} }, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await pushedIntoPr($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/the branch fix-local still exists here/)
+})
+
+test('a branch of the session with no PR, gone both here and from GitHub, has nothing left to finish (#2533)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-700', branchHere: false, branchOnGitHub: false })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+for (const [where, opts] of [
+  ['still here', { branchHere: true, branchOnGitHub: false }],
+  ['gone here but still on GitHub', { branchHere: false, branchOnGitHub: true }],
+] as const)
+  test(`a branch of the session with no PR that is ${where} still holds winding down (#2533)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'fix-700', ...opts })
+    await start($ as never, clock)
+    expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+test("Dan's answer to leave a branch with no PR as it is settles the question of its PR (#2533)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-700', ask: 'Leave it as it is' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/there is no PR for fix-700 yet/)
+  await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'fix-700', why: 'its commit shipped in PR #40', tool_use_id: 'b1' } as never)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left as it is by your choice: the branch fix-700 in o/r (its commit shipped in PR #40).'])
+})
+
 // ---- Whose uncommitted files they are (#1108) ----
 // In a shared primary checkout, another session's untracked files blocked every stop of this one
 // until Dan answered leave_branch. Only what this session or its agents wrote is its unfinished work:
@@ -7140,6 +7210,112 @@ test('a failed PR read is handed to the polling policy, which a rate limit answe
   await clock.advance(MIN)
   expect(pollsOf(w, 'failed')[0]?.[1]).toBe(limited)
 })
+
+// ---- Settled PRs past the look budget (#2433) ----
+// On 2026-11-07 a session that merged a train of 19 folded PRs was refused at every stop for over half
+// an hour: each stop read every PR again, the minute's looks ran out before the last one or two, and
+// those were said as unreadable; the next minute spent its looks on the same reads. A PR whose last
+// reading was settled by Dan's recorded choice now keeps that reading when the policy holds its look,
+// and the PRs still to be read take the minute's looks first. A reading from before this session
+// pushed or reopened a PR is not kept that way, and a PR never read is never settled.
+const FOLDED = Array.from({ length: 20 }, (_, i) => 801 + i)
+const foldedTrain = async ($: $T, on: On, o: { unreadable?: number } = {}) => {
+  const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, ask: 'Leave it closed' })
+  w.o.gh = { ...merged(), others: [...FOLDED.map(n => closedPr(n, `h${n}`)), pr716] }
+  await start($ as never, clock)
+  for (const n of [...FOLDED, ...(o.unreadable ? [o.unreadable] : [])]) {
+    w.o.created = `https://github.com/o/r/pull/${n}\n`
+    await $.tool.call({ tool: 'Bash', command: `gh pr create --title fold-${n}`, tool_use_id: `g${n}` } as never)
+  }
+  await command($ as never, 'winddown')
+  for (const n of FOLDED) await call($ as never, leave(n, { repo: 'o/r', why: WHY_CLOSED }, `l${n}`))
+  // Fewer looks a minute than the PRs to read.
+  w.o.poll = { budget: 5 }
+  return { w, clock }
+}
+const UNREAD = /the PR could not be read \(GitHub is not being asked: this session's loops have used their looks for this minute/
+
+test('twenty PRs left closed on Dan\'s choice, with fewer looks a minute than that, finish winding down once each has been read (#2433)', withDeps, async ($, on) => {
+  const { w, clock } = await foldedTrain($, on)
+  // A PR not read yet is never taken as settled: the first stop says so.
+  expect((await stop($ as never)).block).toMatch(UNREAD)
+  let finished = false
+  for (let i = 0; i < 8 && !finished; i++) {
+    await clock.advance(MIN)
+    finished = !lastModes(w)?.includes('WINDING DOWN') || (await stop($ as never)).block === undefined
+  }
+  expect(finished).toBe(true)
+  expect(w.toasts.at(-1)).toMatch(/^Wind down finished: safe to close this session\. Left closed by your choice: PR #801 in o\/r/)
+})
+
+test('a PR that cannot be read still holds winding down, however settled the others are (#2433)', withDeps, async ($, on) => {
+  const { w, clock } = await foldedTrain($, on, { unreadable: 830 })
+  const blocks: string[] = []
+  for (let i = 0; i < 8; i++) {
+    await clock.advance(MIN)
+    blocks.push((await stop($ as never)).block ?? '')
+  }
+  // Every stop refused, on the one PR GitHub never answers for, never taken as settled.
+  expect(blocks.every(b => b.startsWith('Winding down is not finished: the PR could not be read ('))).toBe(true)
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  expect(w.toasts).toEqual([])
+  // By then every folded PR is settled by his choice, and with looks to spare the refusal says why #830 is not.
+  expect(blocks.at(-1)).toMatch(/Left closed by Dan's choice: PR #801 in o\/r .*PR #820 in o\/r /)
+  w.o.poll = {}
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the PR could not be read \(no pull requests found\)\. Left closed by Dan's choice: PR #801/)
+})
+
+test("the branch's own PR left open on Dan's choice keeps its settled reading past the look budget too (#2433)", withDeps, async ($, on) => {
+  const own = { ...merged('OPEN'), pr: { ...merged('OPEN').pr, headRefOid: 'ccc3333' } }
+  const { w, clock } = world(on, { branchHere: false, branchOnGitHub: false, verdict: null, created: 'https://github.com/o/r/pull/40\n', ask: 'Leave it open' })
+  w.o.gh = { ...own, others: [{ ...openPr(40, 'eee5555'), state: 'MERGED' }] }
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title other', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  await call($ as never, leave(12, { why: 'the client signs off next week' }))
+  // #40, merged, has no is it live card yet, which needs no look; #12 is read by its number from the second stop.
+  const card = /^Winding down is not finished: PR #40 has no is it live card yet/
+  expect((await stop($ as never)).block).toMatch(card)
+  expect((await stop($ as never)).block).toMatch(card)
+  w.o.poll = { budget: 0 }
+  const held = (await stop($ as never)).block ?? ''
+  expect(held).toMatch(card)
+  expect(held).toMatch(/ Left open by Dan's choice: PR #12 in o\/r /)
+  expect(held).not.toMatch(/could not be read/)
+})
+
+// The branch's own PR has no is it live card yet, so every stop but the last holds for that alone.
+for (const [what, cmd] of [
+  ['pushed to', 'git push origin fix-31'],
+  ['reopened', 'gh pr reopen 31 --repo o/r'],
+] as const)
+  test(`a PR left open is not taken as settled from a reading older than the session having ${what} a PR: with no look to spare it is said as unreadable, and read it shows the new commits (#2433)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { ...cleaned, verdict: null, created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
+    w.o.gh = { ...merged(), others: [openPr(31, 'aaa1111')] }
+    await start($ as never, clock)
+    await madeOwn($ as never)
+    await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
+    await command($ as never, 'winddown')
+    await call($ as never, leave(31, { repo: 'o/r' }))
+    const card = /^Winding down is not finished: PR #12 has no is it live card yet/
+    // Read twice with looks to spare: #31 settled by his choice, the branch's own PR by its number.
+    expect((await stop($ as never)).block).toMatch(card)
+    expect((await stop($ as never)).block).toMatch(card)
+    // No look to spare: #31's settled reading stands, so only the card is left.
+    w.o.poll = { budget: 0 }
+    const held = (await stop($ as never)).block ?? ''
+    expect(held).toMatch(card)
+    expect(held).toMatch(/ Left open by Dan's choice: PR #31 in o\/r /)
+    expect(held).not.toMatch(/could not be read/)
+    // Once the session has pushed or reopened, that reading is not taken without asking GitHub.
+    w.o.gh = { ...merged(), others: [openPr(31, 'bbb2222')] }
+    await $.tool.call({ tool: 'Bash', command: cmd, tool_use_id: 'p1' } as never)
+    expect((await stop($ as never)).block).toMatch(/the PR could not be read \(GitHub is not being asked/)
+    // With a look, GitHub's answer shows the commits Dan was never asked about.
+    w.o.poll = {}
+    expect((await stop($ as never)).block).toMatch(/PR #31 has new commits since Dan chose to leave it open/)
+  })
 
 // ---- Sleep and wake say what they do, as every other switch does (#1086) ----
 // Dan, 2026-10-12: sleep and wake get the same acknowledgement as the other modes.

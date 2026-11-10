@@ -1090,6 +1090,7 @@ printf '%s\n' "$*" >> "$MT_GH_LOG"
 case "$MT_RUNS_MODE" in
   pages) printf '%s\n' '{"total_count":2,"workflow_runs":[{"name":"Fast","status":"completed"}]}' '{"total_count":2,"workflow_runs":[{"name":"CI","status":"pending"}]}' ;;
   done) printf '%s\n' '{"total_count":1,"workflow_runs":[{"name":"CI","status":"completed"}]}' ;;
+  failed) printf '%s\n' '{"total_count":3,"workflow_runs":[{"id":41,"name":"tests","status":"completed","conclusion":"failure","run_attempt":1},{"id":42,"name":"lint","status":"completed","conclusion":"success","run_attempt":1}]}' '{"total_count":3,"workflow_runs":[{"id":43,"name":"tests","status":"completed","conclusion":"failure","run_attempt":2}]}' ;;
   junk) printf '%s\n' '{"message":"Not Found"}' ;;
   empty) ;;
   reset) echo 'read tcp 10.0.0.2:1->140.82.112.6:443: read: connection reset by peer' >&2; exit 1 ;;
@@ -1098,12 +1099,15 @@ esac
 EOS
 chmod +x "$ghstub/gh"
 export MT_GH_LOG="$ghstub/log"
-for mode in pages done junk empty reset forbidden; do
+for mode in pages done failed junk empty reset forbidden; do
   : > "$MT_GH_LOG"
   MT_RUNS_MODE="$mode" PATH="$ghstub:$PATH" mt_unfinished_runs acme/widget abc123 ""; rc=$?
   case "$mode" in
     pages) eq "$rc|$MT_RUNS_PENDING" "0|CI (pending)" "an unfinished run on the second page is seen" ;;
-    done) eq "$rc|$MT_RUNS_PENDING" "0|" "every run finished reads as nothing pending" ;;
+    done) eq "$rc|$MT_RUNS_PENDING|$MT_RUNS_FAILED" "0||" "every run finished reads as nothing pending and nothing failed" ;;
+    # The completed failed runs, from every page, as id, attempt and name (claude-config#2537).
+    failed) eq "$rc|$MT_RUNS_PENDING|$MT_RUNS_FAILED" "0||41	1	tests
+43	2	tests" "every completed failed run is listed with its attempt, and no other" ;;
     junk) eq "$rc" "1" "an answer that is not a list of runs is a failed read, not an empty list" ;;
     empty) eq "$rc" "1" "no answer at all is a failed read, not an empty list" ;;
     reset) eq "$rc" "$MT_CONNECT_RC" "a reset connection is asked again, as the connection lost (#1735)" ;;

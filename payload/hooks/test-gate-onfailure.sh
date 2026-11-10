@@ -69,6 +69,7 @@ REFUSING=(
   check-add-scope.sh
   no-verify-gate.sh
   amend-force-push-gate.sh
+  temp-worktree-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
   check-wrapped-commands.sh
@@ -80,6 +81,9 @@ REFUSING=(
   chrome-subagent-tab-gate.sh
   no-session-link-in-comments.sh
   slack-drafts-only-gate.sh
+  # It asks rather than refuses, but it fails closed (#2521): a crash or a timeout must stop a
+  # database write, never let it through unasked.
+  db-write-ask.sh
   require-tests-before-push.sh
   simplify-before-push.sh
   check-public-assets.sh
@@ -179,6 +183,7 @@ samples = {
     "NotebookEdit": {"notebook_path": work + "/probe.ipynb", "new_source": "a"},
     "Monitor": {"command": "ls", "description": "probe"},
     "SubagentHandback": {"message": "Done."},
+    "EnterWorktree": {"name": "probe"},
     "mcp__playwright__browser_snapshot": {},
     "mcp__plugin_playwright_playwright__browser_snapshot": {},
     "mcp__claude-in-chrome__navigate": {"url": "https://example.com"},
@@ -187,6 +192,10 @@ samples = {
     # the session link gate's matcher names only send tools, so its probe still takes the send.
     "mcp__claude_ai_Slack__slack_read_channel": {"channel_id": "C0"},
     "mcp__plugin_slack_slack__slack_send_message": {"channel_id": "C0", "message": "hello"},
+    # For the database write question (#2521) an ordinary call is a read, which it passes; the
+    # Salesforce write is probed with no settings.local.json under the probe HOME, so it says nothing.
+    "mcp__claude_ai_Supabase__execute_sql": {"project_id": "probe", "query": "select 1"},
+    "mcp__claude_ai_SFDC_USE__createSobjectRecord": {"sobjectType": "Account", "fields": {}},
 }
 def top_level_alternatives(rx):
     # Split on the bars outside any group, so "a|b_(c|d)" is two alternatives, not three.
@@ -278,12 +287,14 @@ done <<< "$ROWS"
 EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
+temp-worktree-gate.sh Bash,EnterWorktree
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
-slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel"
+slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
+db-write-ask.sh mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord"
 if [ -s "$WORK/received.tsv" ]; then
   received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
   while IFS= read -r script; do
