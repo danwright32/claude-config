@@ -6896,6 +6896,69 @@ test("Dan's answer to leave the session's own merged branch as it is settles the
   expect((await stop($ as never)).block).toMatch(/the branch scope-modes-616 still exists here/)
 })
 
+// ---- A branch with no PR of its own that is gone, left, or pushed into another's PR (#2533) ----
+// On 2026-11-09 a session made a local branch only to push one commit into another branch's open PR
+// (git worktree add <path> origin/<pr-branch> -b <local>, then git push origin HEAD:<pr-branch>). That
+// PR merged and deployed, the local branch was deleted and never existed on GitHub, and winding down
+// went on saying there was no PR for it, Dan's answer to leave_branch included.
+const prBranchPr = (state: string) => ({ number: 40, state, url: 'https://github.com/o/r/pull/40', headRefName: 'fix-pr', headRefOid: 'abc4040', closingIssuesReferences: [] })
+const pushedIntoPr = async ($: $T) => {
+  expect(await call($, bash('git worktree add ../wt origin/fix-pr -b fix-local', 'w1'))).toBe('ran')
+  expect(await call($, bash('git push origin HEAD:fix-pr', 'p1'))).toBe('ran')
+}
+
+test("a branch pushed into another branch's PR is finished by that PR: held while it is open, finished once merged and live (#2533)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-local', gh: { pr: prBranchPr('OPEN'), issues: {} }, branchHere: false, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await pushedIntoPr($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #40 is not merged yet\./)
+  w.o.gh = { pr: prBranchPr('MERGED'), issues: {} }
+  await clock.advance(11 * MIN)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+test('the local branch pushed into another PR still holds while it exists here, after that PR merged (#2533)', withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'fix-local', gh: { pr: prBranchPr('MERGED'), issues: {} }, branchOnGitHub: false, verdict: { state: 'live', at: T0 } })
+  await start($ as never, clock)
+  await pushedIntoPr($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/the branch fix-local still exists here/)
+})
+
+test('a branch of the session with no PR, gone both here and from GitHub, has nothing left to finish (#2533)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-700', branchHere: false, branchOnGitHub: false })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+})
+
+for (const [where, opts] of [
+  ['still here', { branchHere: true, branchOnGitHub: false }],
+  ['gone here but still on GitHub', { branchHere: false, branchOnGitHub: true }],
+] as const)
+  test(`a branch of the session with no PR that is ${where} still holds winding down (#2533)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'fix-700', ...opts })
+    await start($ as never, clock)
+    expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+test("Dan's answer to leave a branch with no PR as it is settles the question of its PR (#2533)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'fix-700', ask: 'Leave it as it is' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git commit -m wip'))).toBe('ran')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/there is no PR for fix-700 yet/)
+  await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'fix-700', why: 'its commit shipped in PR #40', tool_use_id: 'b1' } as never)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session. Left as it is by your choice: the branch fix-700 in o/r (its commit shipped in PR #40).'])
+})
+
 // ---- Whose uncommitted files they are (#1108) ----
 // In a shared primary checkout, another session's untracked files blocked every stop of this one
 // until Dan answered leave_branch. Only what this session or its agents wrote is its unfinished work:
