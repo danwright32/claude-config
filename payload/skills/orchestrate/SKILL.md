@@ -50,7 +50,7 @@ Every brief has exactly these parts, in this order, and nothing else:
 3. The repo's absolute path, and either the worktree path and branch name to build on, or "read only". The worktree path is inside the repo's own `.claude/worktrees/` folder, never under `/tmp`, `/private/tmp` or the scratchpad, which a restart of the Mac empties with any uncommitted work in it (claude-config#2490).
 4. What is off limits because another agent owns it, naming that item.
 5. The working folder: `<notes folder>/<item number>-<short name>/`, under the notes folder the session start notice names (`~/.claude/state/session-notes/<project>/<session>/`), never the scratchpad, which a restart of the Mac empties (claude-config#2490).
-6. What done means for this item, and what must come back to Dan instead of being done.
+6. What done means for this item, and what must come back to Dan instead of being done. Wording comes back to him only when the Slack alert guard holds it, never "any new sentence a person reads" (claude-config#2570).
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
 The rules every agent shares live in `agent-rules.md`, so a brief never restates them. Send a whole wave in one message, one `Agent` call per agent, all in the background, each carrying the `model` its board row shows.
