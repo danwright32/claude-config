@@ -35,7 +35,7 @@ fi
 parts="$(sed 's/[[:space:]]#.*$//' "$WF" | awk '/^[[:space:]]*HOOK_TESTS_DEAL:[[:space:]]*[0-9]+[[:space:]]*$/ && !n { print $2; n = 1 }')"
 # shellcheck source=../payload/hooks/lib/whole-number.sh
 . "$ROOT/payload/hooks/lib/whole-number.sh"
-if whole_above_zero "$parts" parts; then
+if _wn_got="$(whole_above_zero "$parts")"; then parts="$_wn_got"
   check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL ($parts)" ok
 else
   check "#2463 the workflow's number of parts is read from HOOK_TESTS_DEAL" "read '$parts'"; parts=4

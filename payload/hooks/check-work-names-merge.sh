@@ -147,7 +147,7 @@ READ_WAIT_CAP=5
 if [ "${HOOK_TESTS_RUNNING:-}" = 1 ]; then
   READ_TRIES="$(wn_num "${WN_MERGE_READ_TRIES:-}" 3)"
   READ_WAIT="$(wn_num "${WN_MERGE_READ_RETRY_SECONDS:-}" 2)"
-  if whole_above_zero "$READ_WAIT" READ_WAIT; then
+  if _wn_got="$(whole_above_zero "$READ_WAIT")"; then READ_WAIT="$_wn_got";
     case "$READ_WAIT" in ???*) READ_WAIT="$READ_WAIT_CAP" ;; esac
     [ "$READ_WAIT" -le "$READ_WAIT_CAP" ] || READ_WAIT="$READ_WAIT_CAP"
   else
@@ -167,7 +167,7 @@ READ_DEADLINE="$(mt_gate_read_budget "${WN_MERGE_READ_BUDGET_SECONDS:-}" 15)"
 # budget of 08 crashed the gate; then three or more digits are past the cap however the shell would
 # read them, too long for its arithmetic included.
 READ_BUDGET_CAP=15
-if whole_above_zero "$READ_DEADLINE" READ_DEADLINE; then
+if _wn_got="$(whole_above_zero "$READ_DEADLINE")"; then READ_DEADLINE="$_wn_got";
   case "$READ_DEADLINE" in ???*) READ_DEADLINE="$READ_BUDGET_CAP" ;; esac
   [ "$READ_DEADLINE" -le "$READ_BUDGET_CAP" ] || READ_DEADLINE="$READ_BUDGET_CAP"
 else

@@ -98,6 +98,16 @@ eq "suite_isolate refuses a mode it does not know" 2 "$rc"
 # "every" replaces what was inherited, which is what the runner needs.
 r="$(WRAPPED_REFUSAL_LEDGER_DIR=/elsewhere bash -c '. "$1"; suite_isolate "$2" every; printf %s "$WRAPPED_REFUSAL_LEDGER_DIR"' _ "$LIB" "$W/run")"
 eq "every replaces an inherited seam" "$W/run/wrapped-refusals" "$r"
+# Each seam is set by a line naming it (never printf -v "$var", which the Slack drafts gate cannot
+# follow, #2465), so every listed seam must land exactly where the list points it.
+r="$(env "${unsets[@]}" bash -c '. "$1"; suite_isolate "$2" every || exit 9
+  suite_isolation_seams | while read -r v rel; do [ "${!v:-}" = "$2/$rel" ] || printf "%s=%s " "$v" "${!v:-}"; done' _ "$LIB" "$W/each")"
+eq "every listed seam is set to its own place in the folder" "" "$r"
+# A seam added to the list with no line setting it is refused, never skipped and left at the real record.
+r="$(env "${unsets[@]}" bash -c '. "$1"; suite_isolation_seams(){ printf "%s\n" "NEW_SEAM_2465 new"; }
+  suite_isolate "$2" every; printf "rc=%s new=%s" "$?" "${NEW_SEAM_2465:-}"' _ "$LIB" "$W/each" 2>&1)"
+says "a listed seam with no line setting it is refused (2)" "rc=2 new=" "$r"
+says "naming the seam" "the seam NEW_SEAM_2465 is listed but suite_isolate has no line setting it" "$r"
 
 # ---- 2. the runner reads the same list ----
 RUNNER="$HOOKS/run-all-tests.sh"
@@ -207,6 +217,19 @@ eq "and removed every throwaway HOME it made" "" "$left"
 # a copy of suite-deadline.sh in a lib folder without suite-isolation.sh beside it.
 python3 "$HOOKS/lib/install-hook-libs.py" "$HOOKS/lib" "$W/nolib/lib" suite-deadline.sh >/dev/null \
   || bad "#2204 suite-deadline.sh could not be installed with what it sources"
+# It names what it sources as "${BASH_SOURCE[0]%suite-deadline.sh}./x.sh" (#2465), which the installer
+# reads as beside it only when the name cut off is the file's OWN: cut off any other and the path is
+# the whole source path with ./x.sh on the end, nowhere near a helper, and the installer refuses.
+mkdir -p "$W/strip/src" "$W/strip/dst"
+printf '%s\n' '. "${BASH_SOURCE[0]%other.sh}./helper.sh"' > "$W/strip/src/mine.sh"
+printf '%s\n' ': helper' > "$W/strip/src/helper.sh"
+if python3 "$HOOKS/lib/install-hook-libs.py" "$W/strip/src" "$W/strip/dst" mine.sh >/dev/null 2>&1; then
+  bad "#2465 a path cut by a name other than the file's own was read as beside it"
+else ok; fi
+printf '%s\n' '. "${BASH_SOURCE[0]%mine.sh}./helper.sh"' > "$W/strip/src/mine.sh"
+if python3 "$HOOKS/lib/install-hook-libs.py" "$W/strip/src" "$W/strip/dst" mine.sh >/dev/null 2>&1 \
+   && [ -f "$W/strip/dst/helper.sh" ]; then ok
+else bad "#2465 a path cut by the file's own name was not installed with the helper beside it"; fi
 rm -f "$W/nolib/lib/suite-isolation.sh"   # the copy without the list, on purpose
 r="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
   . "$1/lib/suite-deadline.sh" || exit 9
