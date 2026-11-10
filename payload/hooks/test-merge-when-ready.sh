@@ -31,6 +31,56 @@ check(){ if [[ "$3" == *"$2"* ]]; then ok; else bad "$1"; echo "  expected to co
 check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1"; echo "  must not contain: $2"; echo "  actual: ${3:0:2000}"; fi; }
 check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi; }
 
+# Every place that documents running it in the background names --log=, never a pipe into tee (#2304).
+# The README is the repository's, so it is found through the checkout this copy sits in, by the one
+# shared test of that (lib/checkout-root.sh, #1567). The installed copy, which the hook suite runs
+# after every pull, is in none and has no README, so there it is reported unmeasured rather than
+# failing for a file it can never hold (claude-config#2620, L411).
+DOCS=("$DIR/../skills/orchestrate/SKILL.md" "$HELPER")
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$CHECKOUT" ]; then
+  DOCS=("$CHECKOUT/README.md" "${DOCS[@]}")
+else
+  echo "SUITE-PART-UNMEASURED README.md naming --log= for a background run: $DIR/.. is not the payload of a claude-config checkout, so there is no README.md to read"
+fi
+for f in "${DOCS[@]}"; do
+  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
+  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
+done
+
+# MERGE_WHEN_READY_DOCS_ONLY=1 is this suite's own run of a copy of itself, placed as installed and
+# as a fixture checkout (below): only the documentation checks above, then the result.
+if [ -n "${MERGE_WHEN_READY_DOCS_ONLY:-}" ]; then
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+  exit
+fi
+
+# The documentation checks, judged from both places this suite runs (claude-config#2620). Installed,
+# as the hook suite after every pull runs it, there is no README, so its check is reported unmeasured
+# and the run passes (L411). In a checkout whose README has lost --log=, it still fails (L1).
+. "$DIR/lib/placement-copy.sh"
+PLACED=(hooks/test-merge-when-ready.sh hooks/lib skills/orchestrate/SKILL.md)
+placed_run() { MERGE_WHEN_READY_DOCS_ONLY=1 bash "$1/hooks/test-merge-when-ready.sh" 2>&1; }
+if copy="$(placement_copy installed "$WORKDIR/placed-installed" "$DIR/.." "${PLACED[@]}")"; then
+  out="$(placed_run "$copy")"; rc=$?
+  check_eq "#2620 installed, with no README, the documentation run passes" "0" "$rc"
+  check "#2620 and says the README was not measured" "SUITE-PART-UNMEASURED" "$out"
+  check_not "#2620 and fails nothing" "FAIL:" "$out"
+else
+  bad "#2620 an installed copy of this suite could not be placed"
+fi
+if copy="$(placement_copy checkout "$WORKDIR/placed-checkout" "$DIR/.." "${PLACED[@]}")"; then
+  printf '%s\n' 'Run it in the background with: bash merge-when-ready.sh <pr> 2>&1 | tee merge.log' \
+    > "$WORKDIR/placed-checkout/README.md"
+  out="$(placed_run "$copy")"; rc=$?
+  check_eq "#2620 in a checkout whose README lost --log=, the documentation run fails" "1" "$rc"
+  check "#2620 naming the README" "FAIL: #2304 README.md documents --log= for a background run" "$out"
+else
+  bad "#2620 a checkout copy of this suite could not be placed"
+fi
+
 unset PR_REVIEW_READ SKIP_PR_REVIEW ALLOW_RED_MERGE ALLOW_BEHIND_MERGE ALLOW_UNPINNED_MERGE 2>/dev/null || true
 
 OLD="1111111111111111111111111111111111111111"
@@ -1130,12 +1180,6 @@ out="$(run 7 --squash --log=)"; rc=$?
 check_eq "#2304 an empty --log= is refused" "64" "$rc"
 check "#2304 saying it needs a file" "--log needs a file." "$out"
 check_eq "#2304 and GitHub was never asked for the empty one" "0" "$(count gh-calls 'pr view')"
-
-# Every place that documents running it in the background names --log=, never a pipe into tee.
-for f in "$DIR/../../README.md" "$DIR/../skills/orchestrate/SKILL.md" "$HELPER"; do
-  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
-  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
-done
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
