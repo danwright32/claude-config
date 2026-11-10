@@ -46,8 +46,15 @@ pull(){
   HOME="$H" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 \
     SYNC_CLAUDE_BIN="$WORK/no-such-claude-here" CLAUDE_HOME="$C" SYNC_REPO="$R" bash "$SCRIPT" pull > "$WORK/pull.out" 2>&1
 }
-pull
+pull; rc_pull=$?
 check "fixture: the pull applied the changed mod" "grep -q 'v = 2' '$C/mods/changed/hooks/register.ts'"
+# What the pull said, indented under that FAIL so run-all-tests keeps it as the message's own
+# continuation (it keeps a FAIL line and the lines indented past it, nothing else). Without this a
+# red run on another machine shows four verdicts and none of the reason (L177).
+if ! grep -q 'v = 2' "$C/mods/changed/hooks/register.ts" 2>/dev/null; then
+  echo "    the pull exited $rc_pull and said:"
+  sed -n '1,30p' "$WORK/pull.out" | cut -c1-300 | sed 's/^/      /'
+fi
 check "the pull recorded the mod it replaced" "grep -q '^changed	' '$C/state/mods-replaced.tsv'"
 check "and not the mod it left alone" "[ -f '$C/state/mods-replaced.tsv' ] && ! grep -q '^untouched' '$C/state/mods-replaced.tsv'"
 before="$(cat "$C/state/mods-replaced.tsv" 2>/dev/null)"
@@ -55,7 +62,6 @@ pull
 check "a pull that replaced nothing leaves the record as it was" \
   "[ -n '$before' ] && [ \"\$(cat '$C/state/mods-replaced.tsv')\" = '$before' ]"
 
-if [ "$fail" -gt 0 ]; then echo "--- the last pull said:"; sed -n '1,20p' "$WORK/pull.out" | cut -c1-300; fi
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
