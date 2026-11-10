@@ -294,6 +294,9 @@ case "$*" in
     case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
     # merge-lands-fails: the merge lands, and gh prints an error anyway (claude-config#2289).
     [ -s "$ST/merge-lands-fails" ] && { cat "$ST/merge-lands-fails" >&2; rm -f "$ST/merge-lands-fails"; exit 1; }
+    # A merge that landed with nothing to complain about exits 0, as gh does. Without this the test
+    # above was the script's last command, so every merge exited 1 (claude-config#2687).
+    exit 0
     ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
 esac
@@ -506,6 +509,12 @@ fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
 check_eq "#851 an up to date green pull request merges" "0" "$rc"
 check "#851 and says it merged that head" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+# The clean path (claude-config#2687): gh pr merge exits 0, as it does when the merge lands with
+# nothing to complain about. Until #2687 the fake gh exited 1 after every merge, so every merge in
+# this suite took the "gh exited after merging" path and this one was never run.
+check "#2687 a clean merge reports the merge and the branch deleted, with nothing in between" "Merged #7 in acme/widget at ${OLD:0:7}. Deleted its branch feat/x." "$out"
+check_not "#2687 and names no gh failure, since there was none" "gh exited" "$out"
+check_eq "#2687 the branch is deleted, once" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
 check_eq "#851 the branch is not updated when it is not behind" "0" "$(count gh-calls 'pr update-branch')"
 check_eq "#851 exactly one merge" "1" "$(count gh-calls 'pr merge')"
 check "#851 the merge pins the head it judged" "pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
@@ -1116,6 +1125,18 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#2289 a merge that landed though GitHub answered Something went wrong is reported merged" "0" "$rc"
 check "#2289 as merged, naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: GraphQL: Something went wrong" "$out"
 check_eq "#2289 and merged once" "1" "$(count gh-calls 'pr merge')"
+
+# The other shape of merged but exited non zero (claude-config#2687): gh run from a detached HEAD
+# merges and then fails on the local branch, as the global CLAUDE.md records for --delete-branch.
+# The read back still finds it merged, and the branch on GitHub is still deleted.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'could not determine current branch: failed to run git: fatal: not a symbolic ref' > "$ST/merge-lands-fails"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2687 a merge gh failed after, from a detached HEAD, is reported merged" "0" "$rc"
+check "#2687 naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: could not determine current branch" "$out"
+check "#2687 and the branch is still deleted" "Deleted its branch feat/x." "$out"
+check_eq "#2687 once" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#2687 with one merge" "1" "$(count gh-calls 'pr merge')"
 
 # The head moving during the wait is judged as a new head: the old head is never merged again.
 fresh "$OLD" 0 "$GREEN"
