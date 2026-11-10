@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
