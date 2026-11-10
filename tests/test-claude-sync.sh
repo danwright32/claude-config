@@ -2934,6 +2934,8 @@ export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
 # which is the guard working correctly against a fixture that lied about being one machine.
 export SYNC_WATCH_PID_FILE="$WORK/watch-pid-guard.${SUITE_SHARD:-0}"
 export SYNC_HOLD_FILE="$WORK/hold-guard"
+# The retired record (claude-config#2545): present, every locked command here would refuse.
+export SYNC_RETIRED_FILE="$WORK/retired-guard"
 # The sync log a held back hooks block is appended to (claude-config#592), whose default is the
 # log the scheduled and watch jobs write to in the home folder.
 export SYNC_LOG_FILE="$WORK/sync-log-guard"
@@ -7925,6 +7927,9 @@ _snap_setup(){   # $1 = prefix  $2 = snapshot body  $3 = what the shared tip get
 }
 
 # ---- the redundant snapshot: both sides appended at the same spot, and the tip is the superset ----
+# The local day before the drop below runs, so the #365 check can bracket the day the drop records
+# without reading the clock again at check time (#2091).
+SN1_DAY_BEFORE="$(date +%Y%m%d)"
 _snap_setup sn1 \
   "mkskill \"\$SH/skills/s/SKILL.md\" 'L1
 L449'" \
@@ -8155,8 +8160,15 @@ out_dr="$(CLAUDE_HOME="$SN1H" SYNC_REPO="$SN1R" SYNC_HOSTNAME=macsn1 SYNC_NO_NOT
 dbg "#365 status over a clone holding a parked drop: $out_dr"
 check "#365 status names the commits a drop parked in this clone" \
   "line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'parked'"
+# The day status must print is the one the drop wrote into the ref's name, which is what status
+# reads. Comparing with `date` at check time failed whenever local midnight fell between the drop
+# and this check (2026-11-05, and 3 of 3 runs with midnight moved 30s into the section, #2091), so
+# the day comes from the ref, and is bracketed by the day before the drop and the day now (L713).
+_dr_ref="$(git -C "$SN1R" for-each-ref --count=1 --format='%(refname)' refs/claude-sync/dropped 2>/dev/null)"
+_dr_ymd="${_dr_ref##*/}"; _dr_ymd="${_dr_ymd%%-*}"
+_dr_day="${_dr_ymd:0:4}-${_dr_ymd:4:2}-${_dr_ymd:6:2}"
 check "#365 and says when, so an old one can be told from a recent one" \
-  "line_has \"\$out_dr\" 'refs/claude-sync/dropped' \"\$(date +%Y-%m-%d)\""
+  "[[ \"\$_dr_ymd\" =~ ^[0-9]{8}\$ ]] && [ \"\$_dr_ymd\" -ge '$SN1_DAY_BEFORE' ] && [ \"\$_dr_ymd\" -le \"\$(date +%Y%m%d)\" ] && line_has \"\$out_dr\" 'refs/claude-sync/dropped' \"dropped \$_dr_day \""
 check "#365 and says how to read one back" \
   "grep -q 'git -C' <<< \"\$out_dr\" && line_has \"\$out_dr\" 'refs/claude-sync/dropped' 'log'"
 
@@ -8170,7 +8182,10 @@ check "#365 a clone holding no parked commits says so rather than going quiet" \
 # happened. Nothing here waits for time to pass (L290).
 DRKEEP=30
 git -C "$SN1R" update-ref "refs/claude-sync/dropped/19990101-120000-1" "$SN1_HEAD_BEFORE" 2>/dev/null
-git -C "$SN1R" update-ref "refs/claude-sync/dropped/$(date +%Y%m%d)-120000-2" "$SN1_HEAD_BEFORE" 2>/dev/null
+# Its day is read ONCE and named again below, never by a second `date`, which names a ref nothing
+# wrote when local midnight falls between the two (#2091).
+DR_RECENT="refs/claude-sync/dropped/$(date +%Y%m%d)-120000-2"
+git -C "$SN1R" update-ref "$DR_RECENT" "$SN1_HEAD_BEFORE" 2>/dev/null
 # A name nothing can read is a reason to KEEP: this is the only copy of somebody's work and a
 # guess in the deleting direction cannot be taken back (L5).
 git -C "$SN1R" update-ref "refs/claude-sync/dropped/not-a-date-at-all" "$SN1_HEAD_BEFORE" 2>/dev/null
@@ -8183,7 +8198,7 @@ check "#365 a parked ref past the window is removed" \
 check "#365 and the removal is said, not done in silence" \
   "line_has \"\$out_drs\" 'removed' 'parked' '19990101-120000-1'"
 check "#365 a recent one is kept" \
-  "git -C '$SN1R' rev-parse --verify -q \"refs/claude-sync/dropped/\$(date +%Y%m%d)-120000-2\" >/dev/null 2>&1"
+  "git -C '$SN1R' rev-parse --verify -q '$DR_RECENT' >/dev/null 2>&1"
 check "#365 and one whose stamp cannot be read is kept rather than guessed at" \
   "git -C '$SN1R' rev-parse --verify -q refs/claude-sync/dropped/not-a-date-at-all >/dev/null 2>&1"
 # A run that removed nothing must not read like one that removed ten (L98).

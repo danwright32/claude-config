@@ -141,6 +141,34 @@ export const scriptProgram = (run: ShellRun, text: string): { command: string; n
 }
 
 const SOURCES = new Set(['source', '.'])
+// A word that only sets a variable, though the reader gives it as a command: an array's element
+// (`seen[$f]=1`) or an append (`list+=("$f")`), which its own test for an assignment does not match.
+const SETS = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
+
+type ReadCommand = { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }
+
+/**
+ * The commands that are the words of an arithmetic command (#2619), by their place: mod-kit's reader
+ * gives `(( $# < 1 ))` as two `(` commands, the expression's words as commands (`$#` `<` `1`, split
+ * at any `&&` or `||`), and two `)` commands, so a value there reads as a command named by a value
+ * though it names none. Only that exact shape counts: two `(` in a row, no parenthesis between, and
+ * two `)` in a row closing them, in a text that holds `((` at all. Two subshells with nothing else
+ * inside the outer one (`( ( "$TOOL" x ) )`) give the same commands, so in a script that also holds
+ * a `((` somewhere they read as arithmetic too, as they read as no write before #2619; any other
+ * nesting, and every script holding no `((`, is read as the commands it runs.
+ */
+const inArithmetic = (commands: readonly ReadCommand[], text: string): Set<number> => {
+  const is = (i: number, paren: string) => commands[i]?.words.length === 1 && commands[i]?.words[0] === paren
+  const found = new Set<number>()
+  if (!text.includes('((')) return found
+  for (let i = 0; i + 1 < commands.length; i++) {
+    if (!is(i, '(') || !is(i + 1, '(')) continue
+    let j = i + 2
+    while (j < commands.length && !is(j, '(') && !is(j, ')')) j++
+    if (is(j, ')') && is(j + 1, ')')) for (let k = i + 2; k < j; k++) found.add(k)
+  }
+  return found
+}
 
 /**
  * Why the commands mod-kit's pipeline gives for the command scriptProgram built leave what the script
@@ -150,16 +178,47 @@ const SOURCES = new Set(['source', '.'])
  * interpreter, by its path or through source, writes what no word names, which mod-kit's writes give
  * only for one handed arguments, so each is named here. A program run by its bare name (make, npm) is
  * read as the area check reads the same command typed on its own.
+ *
+ * And text the reader does not read as commands (#2619; each measured on 2026-11-10 to give no
+ * write, so a script writing through one was read as writing nothing and the folder it was handed
+ * went unjudged): what eval runs; what an alias makes a later word run; and a command named by a
+ * value (`"$TOOL" --write "$1"`, `$(command -v fixer) "$1"`, `"$@"`, and `bash -c "$FIX"`, which the
+ * reader gives as the command `$FIX`). A word that only sets a variable names no command, nor does
+ * a value inside arithmetic (inArithmetic, told from `source`, the text the commands were read
+ * from; with none given nothing is arithmetic). A trap's text is the caller's to read (trapTexts).
  */
-export const unreadPart = (commands: readonly { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }[], delimiter: string): string | null => {
-  for (const c of commands) {
-    const head = c.words[0] ?? ''
+export const unreadPart = (commands: readonly ReadCommand[], delimiter: string, source = ''): string | null => {
+  const arithmetic = inArithmetic(commands, source)
+  for (const [i, c] of commands.entries()) {
+    // `builtin eval "$FIX"` runs eval: the reader does not look past `builtin`, so it is looked past here.
+    const words = c.words[0] === 'builtin' ? c.words.slice(1) : c.words
+    const head = words[0] ?? ''
     const text = typeof c.program === 'object' && c.program !== null && 'text' in c.program
     if (c.words.some(w => w.includes(delimiter)) && !text) return `${head} is no interpreter whose program mod-kit reads`
     if (c.script && !c.script.stdin) return `it runs the script ${c.script.files[0] ?? head}, whose writes are not read`
-    if (head.includes('/') || (SOURCES.has(head) && c.words.length > 1)) return `it runs ${SOURCES.has(head) ? c.words[1] : head}, whose writes are not read`
+    if (head.includes('/') || (SOURCES.has(head) && words.length > 1)) return `it runs ${SOURCES.has(head) ? words[1] : head}, whose writes are not read`
+    if (head === 'eval') return 'it runs text through eval, whose writes are not read'
+    if (head === 'alias' && words.some(w => w.includes('='))) return `it sets an alias (${words.find(w => w.includes('='))}), so what a later word runs is not read`
+    if (/[$`]/.test(head) && !SETS.test(head) && !arithmetic.has(i)) return `it runs ${head}, which cannot be named before it runs`
   }
   return null
+}
+
+/**
+ * The text each trap a script sets would run (#2619), once each: `trap 'echo x > "$1/big.ts"' EXIT`
+ * reaches the reader as a trap command whose first word is that text, which it reads as no command,
+ * so a write in it was no write. The caller reads each text as the commands it is, with the same
+ * reader and the same rules as the script's own. A trap that lists (`trap`, `-p`, `-l`), resets
+ * (`trap - EXIT`) or ignores (`trap '' HUP`) runs nothing.
+ */
+export const trapTexts = (commands: readonly { words: readonly string[] }[]): string[] => {
+  const texts = new Set<string>()
+  for (const c of commands) {
+    if (c.words[0] !== 'trap') continue
+    const text = c.words[c.words[1] === '--' ? 2 : 1]
+    if (text !== undefined && text.trim() !== '' && !text.startsWith('-')) texts.add(text)
+  }
+  return [...texts]
 }
 
 /**

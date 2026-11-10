@@ -312,6 +312,9 @@ check "and reports the RATE it measured, not just the number left" \
 # A rate is only a measurement if the reader can tell what it was measured over (L11, L316).
 check "and says over how long it measured that rate" \
   "$(grep -qiE 'over .*(hour|minute)' <<< "$fast_msg" && echo ok || echo "said: $fast_msg")"
+# The words the swap verdict below must never say (#2559), seen here where they are said.
+check "and says it is above the floor but not for long" \
+  "$(grep -q 'not for long' <<< "$fast_msg" && echo ok || echo "said: $fast_msg")"
 
 # ---- two readings too close together are not a rate ----
 # The same 240 GB fall, over four minutes instead of three hours. Extrapolated it is a catastrophe;
@@ -399,7 +402,7 @@ check "and that reading really is a number of GB, which is what proves df was pa
 # from reading as a trend, so the skill asks it. But the quiet default prints NOTHING on a healthy
 # disk, which is right for a warning on every prompt and useless to somebody triaging: so --report
 # always says how much is left, and either the rate or exactly why there is none (L11, L540).
-# The exit codes are the same four in both modes, because callers judge by those (L184).
+# The exit codes are the same in both modes, because callers judge by those (L184).
 # (rprobe, the --report form of probe, is defined beside probe at the top.)
 
 # The quiet default stays quiet: the nudge relies on exit 0 saying nothing (claude-config#363).
@@ -612,11 +615,57 @@ swap_probe "$((1 * GB))" "$TMPROOT/state-swap-21" "$SWAP_21" "" FREE_SPACE_DISK_
 check "and just over 2% of it is" \
   "$(grep -qi 'Swap holds 2.3 GB' <<< "$PROBE_MSG" && echo ok || echo "said: $PROBE_MSG")"
 
-# A disk with room says nothing, however much swap there is: the holders ride on a warning that is
-# already firing, never on one of their own.
-swap_probe "$((200 * GB))" "$TMPROOT/state-swap-room" "$SWAP_BIG"
-check "a disk with room says nothing about swap, and runs no top" \
+# A disk with room says nothing about swap that is not near its own total, however much of the disk
+# it holds: macOS adds swap files as it needs them, so a large swap with room in its files is paging.
+SWAP_ROOMY="$TMPROOT/swap-roomy"
+printf '#!/bin/sh\necho "vm.swapusage: total = 200704.00M  used = 94658.81M  free = 106045.19M  (encrypted)"\n' > "$SWAP_ROOMY"; chmod +x "$SWAP_ROOMY"
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-room" "$SWAP_ROOMY"
+check "a disk with room says nothing about swap well short of its own total, and runs no top" \
   "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+
+# ---- swap nearly full, with the disk to spare (#2559) ----
+# On 2026-11-09 the personal MacBook had 54 GB of its 55 GB swap in use, held by fseventsd and
+# Backblaze's bzserv, with the disk far from its floor, so nothing said so (#1770 named the holders
+# only on a low disk) and every gate timing out for an hour was read as slow CI. Swap past
+# FREE_SPACE_SWAP_FULL_PCT of its own total, and past its 2% share of the disk, is now a verdict of its
+# own, exit 5. The readings come from the suite's own reader, as sysctl prints them (L2).
+SWAP_NEAR_FULL="$TMPROOT/swap-near-full"
+printf '#!/bin/sh\necho "vm.swapusage: total = 56320.00M  used = 55296.00M  free = 1024.00M  (encrypted)"\n' > "$SWAP_NEAR_FULL"; chmod +x "$SWAP_NEAR_FULL"
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-full" "$SWAP_NEAR_FULL"; swap_full="$PROBE_MSG"
+check "#2559 swap nearly full of its own total, on a disk with room, exits 5" \
+  "$([ "$PROBE_RC" -eq 5 ] && echo ok || echo "exit $PROBE_RC, said: $swap_full")"
+check "#2559 and says so on its first line, with how much of its total is used" \
+  "$(grep -q '^claude-sync: swap is nearly full: 58.0 GB used of 59.1 GB (98%)' <<< "${swap_full%%$'\n'*}" && echo ok || echo "first line: ${swap_full%%$'\n'*}")"
+check "#2559 and names the processes holding the memory, from top" \
+  "$(grep -q 'bzserv (pid 612): 117G' <<< "$swap_full" && grep -q 'fseventsd (pid 377): 105G' <<< "$swap_full" && echo ok || echo "said: $swap_full")"
+check "#2559 and names the restart that gives it back, and that a root service needs Dan's password" \
+  "$(grep -qi 'restarting the process holding it' <<< "$swap_full" && grep -qi "needs Dan's password" <<< "$swap_full" && echo ok || echo "said: $swap_full")"
+check "#2559 and never says the disk is low, since it is not" \
+  "$(! grep -q 'under the' <<< "$swap_full" && ! grep -q 'not for long' <<< "$swap_full" && echo ok || echo "said: $swap_full")"
+# Both sides of the share of its total (L497): 89% says nothing, 91% speaks.
+SWAP_89="$TMPROOT/swap-89"
+printf '#!/bin/sh\necho "vm.swapusage: total = 100000.00M  used = 89000.00M  free = 11000.00M  (encrypted)"\n' > "$SWAP_89"; chmod +x "$SWAP_89"
+SWAP_91="$TMPROOT/swap-91"
+printf '#!/bin/sh\necho "vm.swapusage: total = 100000.00M  used = 91000.00M  free = 9000.00M  (encrypted)"\n' > "$SWAP_91"; chmod +x "$SWAP_91"
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-89" "$SWAP_89"
+check "#2559 swap at 89% of its total says nothing" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-91" "$SWAP_91"
+check "#2559 and at 91% of it speaks" \
+  "$([ "$PROBE_RC" -eq 5 ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+# A small swap full of its own files is ordinary paging on a Mac that has only just started to swap:
+# the 2% share of the disk, measured for #1770, still has to be passed (L36).
+SWAP_TINY_FULL="$TMPROOT/swap-tiny-full"
+printf '#!/bin/sh\necho "vm.swapusage: total = 1024.00M  used = 1000.00M  free = 24.00M  (encrypted)"\n' > "$SWAP_TINY_FULL"; chmod +x "$SWAP_TINY_FULL"
+swap_probe "$((200 * GB))" "$TMPROOT/state-swap-tiny" "$SWAP_TINY_FULL"
+check "#2559 a small swap full of its own files says nothing, and runs no top" \
+  "$([ "$PROBE_RC" -eq 0 ] && [ -z "$PROBE_MSG" ] && [ ! -e "$TOP_CALLED" ] && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+# On a low disk the verdict stays 3, and the nearly full swap is said beside the holders.
+swap_probe "$((1 * GB))" "$TMPROOT/state-swap-full-low" "$SWAP_NEAR_FULL"
+check "#2559 on a low disk the verdict is still 3, saying swap is nearly full too" \
+  "$([ "$PROBE_RC" -eq 3 ] && grep -q 'nearly full' <<< "$PROBE_MSG" && echo ok || echo "exit $PROBE_RC, said: $PROBE_MSG")"
+check "#2559 the setting that sets the share is validated like the others" \
+  "$(env FREE_SPACE_BYTES=$((200 * GB)) FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/state-swap-bad" FREE_SPACE_PATH=/fixture FREE_SPACE_SWAP_FULL_PCT=abc bash "$CHECK" > /dev/null 2>&1; [ $? -eq 2 ] && echo ok || echo "not refused")"
 
 # Swap that cannot be read is said to be unread, never taken as none (L98, L11).
 SWAP_BROKEN="$TMPROOT/swap-broken"
@@ -1040,6 +1089,26 @@ check "swap crossing its share is said, holders and all, though the free space h
 n_swap_again="$(swap_nudge "$((T0 + 120))" "$SWAP_BIG")"
 check "and the holders are not named again on the next prompt" \
   "$([ -z "$n_swap_again" ] && echo ok || echo "said: $n_swap_again")"
+
+# Swap nearly full on a disk with room (#2559) is said once, and is about memory, not the disk: no
+# Xcode cache sweep is started and the disk-full skill is not offered, since deleting files frees
+# none of it.
+NS_SWAPFULL="$TMPROOT/ns-swapfull"; mkdir -p "$NS_SWAPFULL"
+SWEEP_SPY="$TMPROOT/sweep-spy"
+printf '#!/bin/sh\necho "$*" >> "%s"\n' "$TMPROOT/sweep-spy-calls" > "$SWEEP_SPY"; chmod +x "$SWEEP_SPY"
+full_nudge(){   # full_nudge <epoch>
+  payload sess-swapfull | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$1" FREE_SPACE_STATE_DIR="$NS_SWAPFULL" \
+    FREE_SPACE_PATH=/fixture FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" FREE_SPACE_SWAP_CMD="$SWAP_NEAR_FULL" \
+    FREE_SPACE_TOP_CMD="$TOP_BUSY" FREE_SPACE_DERIVED_DATA_SWEEP="$SWEEP_SPY" bash "$NUDGE" 2>&1
+}
+n_full="$(full_nudge "$T0")"
+check "#2559 the nudge says swap is nearly full on a disk with room, holders and all" \
+  "$(grep -q 'swap is nearly full' <<< "$n_full" && grep -q 'bzserv (pid 612)' <<< "$n_full" && echo ok || echo "said: $n_full")"
+check "#2559 and starts no Xcode cache sweep and offers no disk-full skill" \
+  "$([ ! -e "$TMPROOT/sweep-spy-calls" ] && ! grep -q 'disk-full skill' <<< "$n_full" && echo ok || echo "sweep calls: $(cat "$TMPROOT/sweep-spy-calls" 2>/dev/null); said: $n_full")"
+n_full_again="$(full_nudge "$((T0 + 60))")"
+check "#2559 and is not said again on the next prompt" \
+  "$([ -z "$n_full_again" ] && echo ok || echo "said: $n_full_again")"
 
 # When the warning speaks it clears Xcode's build caches whose project folder is gone, on its own:
 # Dan's decision on claude-config#1369, 2026-10-20. Which folders those are is decided by

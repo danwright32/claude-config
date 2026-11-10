@@ -46,7 +46,7 @@ DIR="$(cd "${DIR:-/}" && pwd)"
 CHECK="$DIR/check-free-space.sh"
 [ -f "$CHECK" ] || exit 0
 
-# The answer, and its exit code, which is what separates the four outcomes. Judged by the CODE and
+# The answer, and its exit code, which is what separates the outcomes. Judged by the CODE and
 # never by a line of the output (L184).
 answer="$(bash "$CHECK" 2>&1)"; verdict=$?
 
@@ -98,6 +98,14 @@ if [ -f "$STATE" ] && [ "$(cat "$STATE" 2>/dev/null || true)" = "$key" ]; then
   exit 0
 fi
 printf '%s' "$key" > "$STATE" 2>/dev/null || true
+
+# 5 is swap nearly full on a disk with room (claude-config#2559): memory, not files. The check's own
+# answer names the holders and the restart that gives it back; clearing Xcode caches or the disk-full
+# skill would free none of it, so neither is offered.
+if [ "$verdict" -eq 5 ]; then
+  echo "$answer"
+  exit 0
+fi
 
 # The remedy is named, and it is a skill rather than a sequence written out here, because the
 # sequence is long, it has to be ready before the disk is full, and a message is not where it can
