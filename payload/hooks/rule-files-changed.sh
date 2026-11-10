@@ -63,7 +63,7 @@
 # record joins the snapshot: a stamp that moved on a mod the session already had is a replacement,
 # said once, with /reload-plugins. Whether Claude Code also reloaded it cannot be read from here, so
 # the notice says what to do either way. An edit made by hand, with no pull, is not recorded and not
-# reported: whoever made it knows, and in an interactive session the edit reloads.
+# reported: whoever made it knows.
 #
 # Env:
 #   CLAUDE_RULES_DIR        the config directory to read (default ~/.claude)

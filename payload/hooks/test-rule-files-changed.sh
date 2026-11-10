@@ -244,10 +244,10 @@ grep -q "gamma-mod" <<< "$m7" && grep -q "CLAUDE.md" <<< "$m7" \
   || check "#1535 a rule file and a mod changing together are both reported" "said: $m7"
 
 # ---------------------------------------------------------------------------
-# A MOD CLAUDE-SYNC REPLACED UNDER A SESSION THAT LOADED IT (claude-config#2514). Claude Code
-# reloads a changed mod by itself only in an interactive session, and even there can hold, pause or
-# refuse the reload (measured on 2.1.322, README "Mods"), so a session can go on running the code it
-# started with and nothing says so. A pull records each mod it replaced (lib/mods-replaced.sh), and
+# A MOD CLAUDE-SYNC REPLACED UNDER A SESSION THAT LOADED IT (claude-config#2514). A headless session
+# reloads no mod by default (measured on 2.1.322), and the binary shows an interactive one holding,
+# pausing or refusing a reload (read, not measured; README "Mods"), so a session can go on running
+# the code it started with and nothing says so. A pull records each mod it replaced (lib/mods-replaced.sh), and
 # the session is told, once per replacement, to run /reload-plugins. An edit made by hand, with no
 # pull, is still left alone (the #1535 check above): nothing records it, and whoever made it knows.
 # ---------------------------------------------------------------------------

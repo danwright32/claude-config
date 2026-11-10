@@ -2,8 +2,8 @@
 # A pull records each mod it replaced, for the sessions that loaded it (claude-config#2514).
 #
 # A running session keeps the mod code it loaded unless Claude Code reloads it, which a headless
-# session never does by default and an interactive one can hold or pause (measured on Claude Code
-# 2.1.322 on 2026-11-10, README "Mods"). So claude-sync's apply records every mod one of whose files
+# session never does by default (measured on Claude Code 2.1.322 on 2026-11-10) and an interactive
+# one can hold or pause (read from the binary, not measured; README "Mods"). So claude-sync's apply records every mod one of whose files
 # it wrote or removed (payload/hooks/lib/mods-replaced.sh, whose own suite holds the record's shape),
 # and rule-files-changed.sh tells a session that loaded one to run /reload-plugins. This suite holds
 # the wiring: a real pull, against a fixture home and repo, writes the record for the mod it changed

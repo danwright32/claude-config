@@ -6,8 +6,9 @@
 #
 # WHY IT EXISTS. A running session keeps the mod code it loaded until Claude Code reloads that mod,
 # and Claude Code does not always: a headless session (claude -p, an SDK host) watches no mod folder
-# unless CLAUDE_CODE_PLUGIN_DIR_WATCH is set, and an interactive one can hold, pause or refuse a
-# reload (measured on Claude Code 2.1.322 on 2026-11-10, README "Mods"). On 2026-11-09 a session
+# unless CLAUDE_CODE_PLUGIN_DIR_WATCH is set (measured on Claude Code 2.1.322 on 2026-11-10), and
+# its binary shows an interactive one holding, pausing or refusing a reload (read, not measured;
+# README "Mods"). On 2026-11-09 a session
 # went on running a guard from before the pull that replaced it, and nothing said so. A pull is
 # what replaces a mod on this Mac, so a pull records it here, and a session's own hook compares it
 # against what that session started with.
