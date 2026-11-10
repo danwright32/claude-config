@@ -46,6 +46,7 @@ endpoint assembled from pieces, an import path built at run time) is not the thr
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
+import faulthandler
 import fnmatch
 import functools
 import glob
@@ -54,6 +55,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import sys
 import time
 import warnings
@@ -110,6 +112,13 @@ MAX_FILE = 2 * 1024 * 1024
 # (MAX_FILE read as commands took 2.8 seconds under a profiler at a load average of 222,
 # 2026-11-09); test-slack-drafts-only-gate.sh holds the budget to the registered timeout.
 BUDGET_SECONDS = 11
+# How long the reader runs at all before a watchdog ends it (claude-config#2571). The budget stops
+# the walk by raising in it, which cannot happen while the reader is held inside one long call into
+# C (measured on 2026-11-10 with Python 3.14: a sum over a long range is such a call, and a
+# regular expression that backtracks is not), so a watchdog that needs nothing from the reader
+# ends it a little later: still inside the 15 second timeout, with 2 seconds left for the wrapper
+# to refuse the call as one it could not judge. test-slack-drafts-only-gate.sh holds it to that.
+HARD_STOP_SECONDS = BUDGET_SECONDS + 2
 PACKAGERS = {"npm", "pnpm", "yarn"}
 NPM_RUN = {"run", "run-script", "rum", "urn"}
 NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "stop": "stop", "restart": "restart"}
@@ -484,8 +493,10 @@ def judge_tool(tool, tool_input):
 
 
 class OutOfTime(BaseException):
-    """Raised by Judge.tick once the budget has passed, carrying what the walk was doing, as the
-    phrase out_of_time() puts after "while". A BaseException, so the `except Exception` around a
+    """Raised by Judge.late once the budget has passed (from tick, at the points the walk looks at
+    the clock, and from the budget's timer, on whatever line the walk is on, claude-config#2571),
+    carrying what the walk was doing, as the phrase out_of_time() puts after "while". A
+    BaseException, so the `except Exception` around a
     script read as commands (script_body) and every other one in the walk lets it through to main()
     rather than reading it as a script that could not be parsed."""
 
@@ -516,11 +527,12 @@ class Judge:
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
-        # commands are being judged (None for the command line itself), for the refusal tick()
-        # raises (claude-config#2432).
+        # commands are being judged (None for the command line itself), for the refusal late()
+        # raises, from tick() and from the budget's timer (claude-config#2432, #2571).
         self.clock, self.budget = budget_clock()
         self.started = self.clock()
         self.walking = None
+        self.overran = None  # the OutOfTime the budget's timer raised, if it fired (interrupt)
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
@@ -540,6 +552,8 @@ class Judge:
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
         self.known_memo = {}
+        self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
+        self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -571,11 +585,45 @@ class Judge:
         about to read, or whose commands it was judging."""
         if self.clock() - self.started <= self.budget:
             return
+        self.late(reading)
+
+    # What tick raises once the budget has passed: OutOfTime, saying what the walk was doing.
+    def late(self, reading=None):
         if reading is not None:
             raise OutOfTime(f"about to read {self.sized(reading)}")
         if self.walking is not None:
             raise OutOfTime(f"judging the commands in {self.sized(self.walking)}")
         raise OutOfTime("judging the command line itself")
+
+    # On the real clock, have the budget interrupt the walk wherever it is (claude-config#2571).
+    # tick looks at the clock only between commands and before each file, so the work inside one
+    # file's walk was never timed: on 2026-11-09 one script's walk took 41 s of processor time
+    # (#2569), the budget passed unseen, and Claude Code killed the hook with no reason given. A
+    # timer set for the moment the budget passes raises the same OutOfTime from whatever line the
+    # walk is on, in every loop there is rather than in the ones somebody remembered to time. The
+    # step clock a test run counts by is left as it was: it has no moment to set a timer for.
+    def watch(self):
+        if self.clock is time.monotonic and hasattr(signal, "setitimer"):
+            signal.signal(signal.SIGALRM, self.interrupt)
+            signal.setitimer(signal.ITIMER_REAL, max(self.budget - (self.clock() - self.started), 0.001))
+
+    # The timer's handler. It keeps what it raises (self.overran) as well as raising it, because an
+    # exception raised from a timer lands on whatever line is running, and that can be code that
+    # discards it (a finaliser, a library's own handler), after which the walk would carry on from
+    # a step that never finished and could answer that nothing posts. main() refuses on what is
+    # kept here whatever the walk went on to answer, so a walk the budget interrupted is never
+    # allowed.
+    def interrupt(self, signum, frame):
+        try:
+            self.late()
+        except OutOfTime as e:
+            self.overran = e
+            raise
+
+    # The walk is over: the timer is taken off, so it cannot raise in what main() does next.
+    def unwatch(self):
+        if self.clock is time.monotonic and hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, 0)
 
     @staticmethod
     def sized(path):
@@ -632,11 +680,16 @@ class Judge:
         is_shell = shell_hint or real.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
         if is_shell and depth < MAX_DEPTH:
             # Read as commands even with no endpoint in it: it can run another script that posts.
+            # Only a text the reader itself says it cannot read (its Unreadable) is judged by what
+            # it names. Any other error is a fault in this gate's own walk, which has judged
+            # nothing, so it is left to end the reader, and the wrapper refuses the call as one it
+            # could not judge (claude-config#2573: with sh_binds raising AttributeError, a script
+            # naming no endpoint passed here whatever it went on to source).
             try:
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
                 self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
                 inner = self.line(body, d, depth + 1, body)
-            except Exception:
+            except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"the script {word} runs a command that posts: {inner}" if inner else None
         if hit:
@@ -1117,6 +1170,20 @@ class Judge:
         v = self.sh_word(text[m.end():end], d, self.sh_var, self.shell["script"], True)[0]
         return value if v is None else v
 
+    # The commands of s read from cwd, and where each is in s: (commands, parts), as the reader's
+    # commands() gives them. Read once for each text in a run: what it gives depends on the text and
+    # the directory alone, and the line being judged, the walk of its variables and the names a
+    # sourced file binds each asked for it again, 40 readings for the 11 files of the merge helper
+    # (claude-config#2576). Each caller gets lists of its own. A text the reader cannot read raises
+    # as it did, every time it is asked for.
+    def parsed(self, s, cwd):
+        key = (s, cwd)
+        if key not in self.parsed_memo:
+            parts = []
+            self.parsed_memo[key] = (self.sw.commands(s, cwd, parts=parts), parts)
+        cmds, parts = self.parsed_memo[key]
+        return list(cmds), [dict(p) for p in parts]
+
     def sh_known(self, s, cwd, script, cwd_known=True, depth=0):
         """sh_walk(), worked out once for each text, which is asked about from several places. A text
         that sources itself finds nothing certain on the way back in."""
@@ -1164,10 +1231,9 @@ class Judge:
         through a variable, and no file sourced where the walk did not follow it (in a function body,
         or past top) binds it, those paths worked out from these same values. A `local` set in a
         function adds a value of its own (sh_locals)."""
-        parts = []
         try:
-            cmds = self.sw.commands(s, cwd, parts=parts)
-        except Exception:
+            cmds, parts = self.parsed(s, cwd)
+        except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return {"regions": {}, "top": 0, "lost": [], "bodies": []}
         items = list(zip(cmds, parts))
         struct = self.sh_struct(items)
@@ -1202,25 +1268,48 @@ class Judge:
                 regions.setdefault(n, []).append((since[n], at, env[n]))
             env[n], since[n] = (None if n in tainted else v), at
 
-        def calls(name, seen=()):
+        own, reached = {}, {}
+
+        # What the body of the function of s named name does by itself: (the names it can bind,
+        # whether it sources a file or binds a name through a variable, the functions of s it
+        # calls). Worked out once for each function.
+        def body_of(name):
+            if name not in own:
+                bound, more, callees = set(), False, []
+                for o, c in fbody.get(name, ()):
+                    body = s[items[o][1]["start"]:items[c][1]["end"]]
+                    bound |= {n for n in allnames if self.sh_binds(n, body)}
+                    for k in range(o, c + 1):
+                        if len(items[k][1]["scope"]) > 1:
+                            continue
+                        h = head_of(k)
+                        words = self.sw.command_words(self.sw.command_rest(h)[0])
+                        if self.sh_source_target(h) is not None or self.sh_indirect(h):
+                            more = True
+                        elif words and words[0] in fbody:
+                            callees.append(words[0])
+                own[name] = (bound, more, callees)
+            return own[name]
+
+        def calls(name):
             """(the names a call to the function of s named name can bind, whether it can do more than
             that: source a file, bind a name through a variable, or call a function of s that does)."""
-            if name in seen:
-                return set(), False
-            bound, more = set(), False
-            for o, c in fbody.get(name, ()):
-                bound |= {n for n in allnames if self.sh_binds(n, s[items[o][1]["start"]:items[c][1]["end"]])}
-                for k in range(o, c + 1):
-                    if len(items[k][1]["scope"]) > 1:
+            # A call takes in every function it reaches, each once. Followed again down every path
+            # of calls to it, a chain of functions that each call the next twice cost two to the
+            # power of its length, and the merge helper's own functions were walked 2,430 times for
+            # one judgement (claude-config#2576). What is reached is the same either way.
+            if name not in reached:
+                bound, more, todo, seen = set(), False, [name], set()
+                while todo:
+                    f = todo.pop()
+                    if f in seen:
                         continue
-                    h = head_of(k)
-                    words = self.sw.command_words(self.sw.command_rest(h)[0])
-                    if self.sh_source_target(h) is not None or self.sh_indirect(h):
-                        more = True
-                    elif words and words[0] in fbody:
-                        b, m2 = calls(words[0], seen + (name,))
-                        bound, more = bound | b, more or m2
-            return bound, more
+                    seen.add(f)
+                    b, m, callees = body_of(f)
+                    bound, more = bound | b, more or m
+                    todo += callees
+                reached[name] = (bound, more)
+            return reached[name]
 
         def effects(d, head, p, run, when=None):
             """Follow one command: None, or "stop" or "dead" where the walk ends at it ("dead": and
@@ -1808,11 +1897,18 @@ class Judge:
                 text = f.read(MAX_FILE).decode("utf-8", "replace")
         except OSError:
             return set(names)
-        bound = {n for n in names if self.sh_binds(n, text)}
-        parts = []
+        # One file is asked about by every script that sources it, and by each file between them,
+        # with mostly the same names: lib/ai-review-common.sh was read whole 8 times judging the
+        # merge helper. Whether a text binds a name depends on nothing else, so each answer is kept
+        # for the run, by the text itself (claude-config#2576).
+        told = self.binds_memo.setdefault(text, {})
+        for n in names:
+            if n not in told:
+                told[n] = self.sh_binds(n, text)
+        bound = {n for n in names if told[n]}
         try:
-            cmds = self.sw.commands(text, cwd, parts=parts)
-        except Exception:
+            cmds, parts = self.parsed(text, cwd)
+        except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return set(names)
         known = None
         for (d, t), p in zip(cmds, parts):
@@ -2170,11 +2266,9 @@ class Judge:
             # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
             # only over part of the text. every_command gives s's own commands in commands() order,
             # with a wrapper's commands after it at a depth of one or more; those take its place.
-            parts = []
             try:
-                self.sw.commands(s, cwd, parts=parts)
-                starts = [p["start"] for p in parts]
-            except Exception:
+                starts = [p["start"] for p in self.parsed(s, cwd)[1]]
+            except self.sw.Unreadable:
                 starts = []  # read by the crude cut, so no command's place is known
             k = 0
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
@@ -2272,7 +2366,7 @@ class Judge:
                 try:
                     inner = self.line(fed, d, depth + 1, fed)
                     return f"{name} runs commands from its input, one of which posts: {inner}" if inner else None
-                except Exception:
+                except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
                     pass
             hit = MARKER.search(fed)
             return f"{name} reads commands from its input, which names {hit.group(0)}" if hit else None
@@ -2632,7 +2726,7 @@ class Judge:
         handed = re.compile(given)
         try:
             records = self.sw.every_command(body, d)
-        except Exception:
+        except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573, #2593)
             return "could not be read as commands to see what it does with its arguments"
         for _, text, _, _, _ in records:
             rest, _ = self.sw.command_rest(text)
@@ -2787,7 +2881,7 @@ class Judge:
                 continue
             try:
                 inner = self.line(cmd, pkg_dir, depth + 1, cmd)
-            except Exception:
+            except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
                 hit = MARKER.search(cmd)
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             if inner:
@@ -2910,6 +3004,10 @@ class Judge:
 def main():
     # A lone surrogate from the payload, echoed in a reason, must not raise on the way out (#1944).
     sys.stdout.reconfigure(errors="replace")
+    # The watchdog (HARD_STOP_SECONDS), on the real clock only: it prints where the reader was and
+    # ends it with a failure, which the wrapper refuses as a call it could not judge.
+    if budget_clock()[0] is time.monotonic:
+        faulthandler.dump_traceback_later(HARD_STOP_SECONDS, exit=True)
     raw = sys.stdin.buffer.read().decode("utf-8", "replace")
     try:
         d = json.loads(raw)
@@ -2938,7 +3036,13 @@ def main():
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
     judge = Judge(load_reader())
     try:
-        reason = judge.line(cmd, cwd, 0, cmd)
+        judge.watch()
+        try:
+            reason = judge.line(cmd, cwd, 0, cmd)
+        finally:
+            judge.unwatch()
+        if judge.overran:
+            raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
     except OutOfTime as e:
         print("refuse\n" + judge.out_of_time(e.doing))
         return
