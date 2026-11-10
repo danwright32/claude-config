@@ -116,8 +116,9 @@ expect "execute_sql whose input is not an object is asked about" ask "$(python3 
 # A migration changes the database by definition, whatever its text.
 expect "apply_migration is asked about even for a select" ask "$(payload "$MIG_TOOL" "select 1")"
 expect "apply_migration of a table is asked about" ask "$(payload "$MIG_TOOL" "create table t (id int)")"
-# Tools it does not watch get nothing from it.
-expect "Bash gets no decision" none "$(tool_payload Bash '{"command": "update t set a = 1"}')"
+# A call naming no database client or tool gets nothing from it: this Bash command holds SQL
+# words but runs no client, so the hook, which now reads every Bash call, has nothing to ask.
+expect "a Bash command with SQL words but no database client gets no decision" none "$(tool_payload Bash '{"command": "update t set a = 1"}')"
 expect "another Supabase tool gets no decision" none "$(tool_payload mcp__claude_ai_Supabase__list_tables '{"project_id": "p"}')"
 
 # --- payloads it cannot read: fail closed when the raw text names a database tool ---------------
