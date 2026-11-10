@@ -5710,7 +5710,17 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with.
+pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
+strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
+request it makes, a module it loads by a name given at run time) is read only through `fileReach`
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
+Slack alert guard kept its own lists of module names, and asks inside a search too short for an
+engine call per file). It counts a name only where the file imports or calls it, never in a string,
+a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
+`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
+The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
+inline code and counts a process word anywhere.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
@@ -7408,6 +7418,25 @@ trace that newly reads a text template, a template a sender newly reads by path 
 import, and a file that only hands names on newly exporting a local copy of an imported value.
 When the nearest sender's part of a change is already approved, the search goes on to the senders
 further along rather than passing the rest (#2637).
+A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
+2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
+prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
+that is a name (a webhook's host, the chat API's method, an SDK, a Slack setting) is only being
+matched when it is written as one alternative of a pattern, a bar beside it, or as the middle of a
+glob, a star at each side. Written any other way (in an address, read as a setting, called, a whole
+quoted string, a bare word) it is used, and a send helper called or imported always is. A file is
+no sender only when every marker in its code is matched that way, or sits in a comment, and the
+file makes no request and starts no program that could: curl, wget and the like or a command named
+for Slack in a shell script, a network or process module in python, fetch, an HTTP client or
+child_process in JavaScript. So a script that refuses and also posts, and one that matches an
+endpoint and then calls it, are held as before. Only shell, python, JavaScript and TypeScript are
+read this way: in any other language a marker anywhere makes a sender, as before. No file is named
+or exempted. Still held, since nothing tells them from a use: a sentence that spells an endpoint
+out, a list of bare endpoint names, a pattern in a regex literal. No longer held: a file that
+matches an endpoint and leaves the posting to another file whose code names nothing of Slack, and,
+as the file being edited, one whose only marker is in a comment and that makes no request.
+`tests/test-slack-alert-guard-real-gate.sh` holds the real drafts gate, and the guard's own source,
+to this.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is

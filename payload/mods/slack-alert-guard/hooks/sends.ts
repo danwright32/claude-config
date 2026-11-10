@@ -14,8 +14,10 @@
 // onto. Names are matched by spelling within the block that declares them, so two locals of one name
 // in different functions are told apart; anything the reading cannot tell apart is counted as
 // reaching the send, never left out. This file's own source holds no marker (rules.ts, MARKERS).
+// A file that only names what it matches, as a gate naming the endpoints it refuses does, holds no
+// send at all (rules.ts, sendMarks, #2662), so the pattern it matches by is never read as one.
 
-import { MARKERS, type Range, moduleSpecs, tokenRanges } from './rules.ts'
+import { MARKERS, type Range, moduleSpecs, sendMarks, tokenRanges } from './rules.ts'
 
 /** The text spans of a file: its strings (formatted: a template literal or an f-string, whose fields are code) and its comments. */
 export type Spans = { strings: (Range & { formatted?: boolean })[]; comments: Range[] }
@@ -272,11 +274,8 @@ const namesIn = (r: Reading, span: Range): { name: string; at: number }[] => {
   return out
 }
 
-const markerPositions = (code: string): number[] => {
-  const out: number[] = []
-  for (const m of MARKERS) for (const x of code.matchAll(new RegExp(m.source, m.flags.includes('g') ? m.flags : `${m.flags}g`))) out.push(x.index ?? 0)
-  return out
-}
+// Where a file's code names a Slack send: none in a file that only names what it matches (#2662).
+const markerPositions = (r: Reading): number[] => sendMarks(r.python ? 'python' : 'js', r.code)
 
 /**
  * The nearest call holding `at` in its arguments, never crossing a function or block body on the
@@ -319,7 +318,7 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
   }
 
   // Names whose value is built from a Slack marker: a webhook address, a client made with the bot token.
-  const markers = markerPositions(r.code)
+  const markers = markerPositions(r)
   const marked = new Set<string>()
   for (let grew = true; grew; ) {
     grew = false
@@ -502,7 +501,7 @@ export const mayBringIn = (before: Reading, after: Reading): boolean => {
   const uses = (r: Reading, name: string) => [...r.skel.matchAll(new RegExp(word(name), 'g'))].length
   const old = importedNames(before)
   for (const n of importedNames(after)) if (!old.has(n) || uses(after, n) > uses(before, n)) return true
-  if (!MARKERS.some(m => m.test(after.code))) return false
+  if (!markerPositions(after).length) return false
   const sent = trace(before).names
   return [...trace(after).names.keys()].some(n => !sent.has(n))
 }
