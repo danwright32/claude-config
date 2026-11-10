@@ -107,7 +107,7 @@ prompt() { # prompt <session id> [now]  -> runs the hook as a UserPromptSubmit w
       CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="${2:-$NOW}" \
       SYNC_NO_NOTIFY=1 bash "$HOOK" 2>/dev/null
 }
-clear_state() { rm -f "$CLONE/.behind-skips" "$CLONE/.ci-red-since" "$CLONE/.watch-stale"; }
+clear_state() { rm -f "$CLONE/.behind-skips" "$CLONE/.ci-red-since" "$CLONE/.watch-stale" "$CLONE/.send-refused"; }
 
 echo "sync stuck notice: a healthy sync says nothing"
 
@@ -212,6 +212,24 @@ silent "the next prompt is quiet" "$out"
 clear_state
 out="$(prompt w2)"
 says "and its end is said to the session that heard it" "$out" "no longer stopped for ending as soon as it started"
+
+echo "sync stuck notice: a refused send is said at once, a higher count is the same stretch, and its end is said (#2530)"
+
+# Fields as the scans write them: latest refusal, what was found, why, how many in a row, and when
+# the first was. A minute old, far under the threshold: a refusal never clears by itself, and before
+# this it reached only the watcher's log.
+printf '%s\tpayload/LESSONS.md:12\twork-names\t5\t%s\n' "$(( NOW - 60 ))" "$(( NOW - 600 ))" > "$CLONE/.send-refused"
+out="$(prompt sr1)"
+says "a refused send is reported without waiting" "$out" "sending is refused"
+says "naming the file and line the scan found" "$out" "payload/LESSONS.md:12"
+says "and how many times in a row" "$out" "5 times in a row"
+says "and what it means for the person" "$out" "not reaching the other Mac"
+printf '%s\tpayload/LESSONS.md:12\twork-names\t6\t%s\n' "$(( NOW - 30 ))" "$(( NOW - 600 ))" > "$CLONE/.send-refused"
+out="$(prompt sr1)"
+silent "a sixth refusal in the same run is not said again" "$out"
+clear_state
+out="$(prompt sr1)"
+says "and its end is said to the session that heard it" "$out" "no longer refused"
 
 echo "sync stuck notice: a record nobody can read is not a healthy sync"
 
