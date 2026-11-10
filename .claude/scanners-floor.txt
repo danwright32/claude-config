@@ -26,6 +26,7 @@ payload/hooks/test-repo-slug.sh
 payload/hooks/test-run-all-tests-real-tree.sh
 payload/hooks/test-suite-result-line.sh
 payload/hooks/test-suite-scratch-isolation.sh
+payload/hooks/test-this-mac.sh
 payload/hooks/test-two-file-awk.sh
 payload/hooks/test-unwaited-children.sh
 payload/hooks/test-whole-number.sh
