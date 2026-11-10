@@ -165,12 +165,9 @@ gone_code=$?
 # ---------------------------------------------------------------------------
 # MODS (claude-config#1535). A session names its mods once, at its start, from
 # CLAUDE_CODE_PLUGIN_DIRS, so a mod that arrives on disk later is not loaded in
-# it until a new session. Claude Code itself reloads a CHANGED mod in a running
-# session and says so in the transcript ("hooks.json changed, reloaded", or that
-# the earlier version is still running when a reload fails), so a code change is
-# not this hook's to report: saying it would repeat Claude Code's own line on
-# every pull that touches a mod, and claim staleness that the reload has already
-# cured (L11, L36). What it reports is the set of mods: one added or removed.
+# it until a new session. What this part reports is the set of mods: one added or
+# removed. A CHANGED mod is reported only when a pull replaced it (#2514, below):
+# an edit made by hand is nobody's record, and whoever made it knows.
 # ---------------------------------------------------------------------------
 MODHOME="$TMPROOT/mods-home"
 mkdir -p "$MODHOME"
@@ -193,13 +190,13 @@ m1="$(modprompt mod-session)"
   && check "#1535 the first prompt of a session with mods is silent" ok \
   || check "#1535 the first prompt of a session with mods is silent" "said: $m1"
 
-# A change to a mod this session already loaded: Claude Code reloads it and says
-# so itself, so this hook stays quiet rather than announcing it a second time.
+# An edit by hand to a mod this session already loaded, with no pull: nothing
+# records it, so this hook stays quiet (the #2514 checks below hold the pull case).
 printf 'export const register = () => { return 2 }\n' > "$MODHOME/mods/alpha-mod/hooks/register.ts"
 m2="$(modprompt mod-session)"
 [ -z "$m2" ] \
-  && check "#1535 an edit to a mod the session loaded is left to Claude Code's own reload line" ok \
-  || check "#1535 an edit to a mod the session loaded is left to Claude Code's own reload line" "said: $m2"
+  && check "#1535 an edit by hand to a mod the session loaded, with no pull, is not reported" ok \
+  || check "#1535 an edit by hand to a mod the session loaded, with no pull, is not reported" "said: $m2"
 
 # A mod that arrives after the session started is not loaded in it.
 mkmod beta-mod
@@ -245,6 +242,87 @@ m7="$(modprompt mod-session)"
 grep -q "gamma-mod" <<< "$m7" && grep -q "CLAUDE.md" <<< "$m7" \
   && check "#1535 a rule file and a mod changing together are both reported" ok \
   || check "#1535 a rule file and a mod changing together are both reported" "said: $m7"
+
+# ---------------------------------------------------------------------------
+# A MOD CLAUDE-SYNC REPLACED UNDER A SESSION THAT LOADED IT (claude-config#2514). Claude Code
+# reloads a changed mod by itself only in an interactive session, and even there can hold, pause or
+# refuse the reload (measured on 2.1.322, README "Mods"), so a session can go on running the code it
+# started with and nothing says so. A pull records each mod it replaced (lib/mods-replaced.sh), and
+# the session is told, once per replacement, to run /reload-plugins. An edit made by hand, with no
+# pull, is still left alone (the #1535 check above): nothing records it, and whoever made it knows.
+# ---------------------------------------------------------------------------
+. "$DIR/lib/mods-replaced.sh"
+pull_replaced() { # pull_replaced <stamp> <mod>...: what a pull's mirror records for these mods
+  local stamp="$1" m; shift
+  : > "$TMPROOT/applied.list"
+  for m in "$@"; do printf 'updated\tmods/%s/hooks/register.ts\n' "$m" >> "$TMPROOT/applied.list"; done
+  mods_replaced_note "$MODHOME" "$TMPROOT/applied.list" "$stamp"
+}
+modstart() { # modstart <session-id>: the SessionStart call, where the baseline is taken
+  python3 - "$1" <<'PY' | CLAUDE_RULES_DIR="$MODHOME" bash "$HOOK" >/dev/null 2>&1
+import json, sys
+print(json.dumps({"session_id": sys.argv[1], "cwd": ".", "hook_event_name": "SessionStart", "source": "startup"}))
+PY
+}
+modstart rs-session
+r0="$(modprompt rs-session)"
+[ -z "$r0" ] \
+  && check "#2514 the first prompt, with nothing replaced, is silent" ok \
+  || check "#2514 the first prompt, with nothing replaced, is silent" "said: $r0"
+
+pull_replaced s1 gamma-mod
+r1="$(modprompt rs-session)"
+grep -q "gamma-mod" <<< "$r1" && grep -q "/reload-plugins" <<< "$r1" \
+  && check "#2514 a mod a pull replaced under the session is named, with /reload-plugins" ok \
+  || check "#2514 a mod a pull replaced under the session is named, with /reload-plugins" "said: $r1"
+grep -q "beta-mod" <<< "$r1" \
+  && check "#2514 and a loaded mod the pull did not touch is not" "named beta-mod too: $r1" \
+  || check "#2514 and a loaded mod the pull did not touch is not" ok
+grep -q "arrived" <<< "$r1" \
+  && check "#2514 and it is not worded as a mod arriving" "said: $r1" \
+  || check "#2514 and it is not worded as a mod arriving" ok
+
+r2="$(modprompt rs-session)"
+[ -z "$r2" ] \
+  && check "#2514 the same replacement is said once, not on every prompt" ok \
+  || check "#2514 the same replacement is said once, not on every prompt" "said again: $r2"
+
+pull_replaced s2 gamma-mod
+r3="$(modprompt rs-session)"
+grep -q "gamma-mod" <<< "$r3" && grep -q "/reload-plugins" <<< "$r3" \
+  && check "#2514 a second pull replacing it again is said again" ok \
+  || check "#2514 a second pull replacing it again is said again" "said: $r3"
+
+# A mod that arrived in the same pull was never loaded here: it is named as arrived, and the
+# reload notice, which would load nothing for it, is not given.
+mkmod delta-mod
+pull_replaced s3 delta-mod
+r4="$(modprompt rs-session)"
+grep -q "delta-mod" <<< "$r4" && grep -q "arrived" <<< "$r4" \
+  && check "#2514 a mod arriving in a pull is named as arrived" ok \
+  || check "#2514 a mod arriving in a pull is named as arrived" "said: $r4"
+grep -q "/reload-plugins" <<< "$r4" \
+  && check "#2514 and is not told to reload, since this session never loaded it" "said: $r4" \
+  || check "#2514 and is not told to reload, since this session never loaded it" ok
+
+# A session that started after the pull loaded the new code: the record it started with is its
+# baseline, so it is told nothing.
+modstart rs-later
+r5="$(modprompt rs-later)"
+[ -z "$r5" ] \
+  && check "#2514 a session started after the pull is not told about it" ok \
+  || check "#2514 a session started after the pull is not told about it" "said: $r5"
+
+# A replaced mod that is then removed is said as removed, never as one to reload.
+pull_replaced s4 beta-mod
+rm -rf "$MODHOME/mods/beta-mod"
+r6="$(modprompt rs-later)"
+grep -q "beta-mod" <<< "$r6" && grep -q "removed" <<< "$r6" \
+  && check "#2514 a replaced mod since removed is named as removed" ok \
+  || check "#2514 a replaced mod since removed is named as removed" "said: $r6"
+grep -q "/reload-plugins" <<< "$r6" \
+  && check "#2514 and not as one to reload" "said: $r6" \
+  || check "#2514 and not as one to reload" ok
 
 # A config directory with no mods folder at all has nothing to report and must not crash.
 nomods="$(printf '{"session_id":"no-mods","cwd":"."}' | CLAUDE_RULES_DIR="$RULES" bash "$HOOK" 2>&1)"
