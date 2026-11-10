@@ -545,7 +545,7 @@ mcp__claude_ai_Supabase__create_edge_function_secret	{"project_id": "p", "name":
 mcp__claude_ai_Supabase__create_notebook	{"project_id": "p", "name": "n", "content": {"cells": [{"type": "database", "sql": "delete from runs", "row_limit": 10}]}}
 mcp__claude_ai_Supabase__delete_notebook	{"project_id": "p", "notebook_id": "n"}
 mcp__claude_ai_Supabase__submit_feedback	{"feedback": "merge_branch gave no result", "project_id": "p"}
-mcp__claude_ai_Supabase__delete_feedback	{"delete_token": "00000000-0000-0000-0000-000000000000", "project_id": "p"}
+mcp__claude_ai_Supabase__delete_feedback	{"delete_token": "t1", "project_id": "p"}
 mcp__claude_ai_Supabase__list_branches	{"project_id": "p"}
 mcp__claude_ai_Supabase__get_project	{"id": "p"}
 mcp__github__create_branch	{"owner": "o", "repo": "supabase-app", "branch": "fix"}
