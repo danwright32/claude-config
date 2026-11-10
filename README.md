@@ -7156,6 +7156,18 @@ file and in every other file of the repository naming it, is such a value, an im
 its own name, or a part of another such constant. One other use (posted, logged, handed to a
 function, exported under another name), or another file that cannot be read within the search's
 time, and it counts.
+In a JavaScript, TypeScript or python file, only text a Slack send carries is held (#2570; Dan,
+2026-11-09: "these aren't alerts that are going to fire into Slack, right? If not, I don't need you
+to ask me for approval"): `hooks/sends.ts` finds the send calls (one a Slack marker names, one on a
+client built from a Slack marker, a function whose body sends, or the nearest call holding a marker
+in its arguments, never across a function body), and a changed string counts only when it stands in
+a send's arguments or in the value of a name used there, followed name by name within the block
+that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. For a
+file another file sends, each sender is traced and the names it sends followed down through every
+file it reaches the template by; when the nearest senders send none of the change the search goes
+on. A file whose send cannot be traced (any other language, a text template, a send the reading
+cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
+the search stops short. A python docstring is never message text (#2574).
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is

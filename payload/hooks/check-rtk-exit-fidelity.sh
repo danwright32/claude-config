@@ -22,7 +22,8 @@
 # Exit codes, because the whole subject of this script is a tool whose exit code lied (L184):
 #   0  every comparison agreed, or its mismatch is contained by the hook
 #   1  a destination the hook ALLOWS disagreed with the real tool, named in the output
-#   2  it could not measure: no rtk, no hook, no probe could run, or its own control failed
+#   2  it could not measure: no rtk, no hook, no probe could run, its own control failed, or the gh
+#      probe's stub was started inside its own call to the real gh (claude-config#2562)
 # There is deliberately no exit 0 for a run that compared nothing, because that is the state that
 # reads exactly like a clean bill of health (L98).
 #
@@ -148,6 +149,7 @@ case " \$* " in
   *" --json "*)
     if [ -n "\${RTK_FIDELITY_IN_GH_STUB:-}" ]; then
       echo "check-rtk-exit-fidelity: the gh stub was run by the gh it asked to check a field list ($real_gh), so it stopped rather than run inside itself (claude-config#2562)." >&2
+      : > "$WORK/ghstub/ran-inside-itself"
       exit 97
     fi
     RTK_FIDELITY_IN_GH_STUB=1; export RTK_FIDELITY_IN_GH_STUB
@@ -337,6 +339,15 @@ done
 echo "tools examined:$tools_seen"
 echo "compared $compared substitution(s) against the real tool, skipped $skipped, broken fixtures $broken, contained by the hook ${#contained[@]}."
 for c in "${contained[@]:-}"; do [ -n "$c" ] && echo "  contained: $c"; done
+
+# Read before any verdict (claude-config#2562). A stub that refused to run inside itself measured
+# nothing, but its exit code 97 reaches the comparison like any other, so without this a loop was
+# reported as rtk lying: a failed run where the hook allows rtk gh, and a GREEN run saying "the
+# refusal is still needed" where it refuses it (L11). The stub leaves a file when it refuses.
+if [ -e "$WORK/ghstub/ran-inside-itself" ]; then
+  echo "check-rtk-exit-fidelity: the probe's gh stub ran inside itself: the gh it hands field lists to ($real_gh) led back into the stub, which refused rather than loop (claude-config#2562). The gh probes measured nothing, so no verdict about rtk gh is given. Find how that gh reaches the stub, and run this again." >&2
+  exit 2
+fi
 
 if [ "$compared" -eq 0 ]; then
   echo "check-rtk-exit-fidelity: nothing was actually compared, so this run says nothing about whether a substitute lies. Treating that as a failure to measure rather than a clean run." >&2
