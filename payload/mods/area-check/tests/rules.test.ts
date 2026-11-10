@@ -47,6 +47,7 @@ import {
   heldUnder,
   shellKey,
   shellTargets,
+  SPOOL_KEY_COMMANDS,
   scriptProgram,
   scriptWrite,
   trapTexts,
@@ -512,6 +513,28 @@ test('only the installed helper, only its note, and only with a home known: ever
   expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, '/Users/dan'))).toEqual([FINDING.word])
   // The helper handed to another interpreter.
   expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
+})
+
+// #2636: `bash ~/.claude/hooks/lib/issue-spool.sh clear <project> <transcript> <stamp>`, the end of turn
+// review's clear line, as mod-kit's reader answers it with cwd /w/app (measured 2026-11-10).
+const clearRun = (path: string, verb = 'clear', what = 'a bash script file') => ({
+  what,
+  script: '~/.claude/hooks/lib/issue-spool.sh',
+  path,
+  args: [{ word: verb, path: `/w/app/${verb}` }, { word: '/w/app', path: '/w/app' }, { word: '/w/app/s1.jsonl', path: '/w/app/s1.jsonl' }],
+})
+
+test("the project folder the installed spool helper reads a key from is no write, and only that argument (#2636)", () => {
+  const words = (t: ShellTarget[]) => t.map(x => x.word)
+  for (const verb of SPOOL_KEY_COMMANDS.filter(v => v !== 'note')) {
+    expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, verb)] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'].map(w => (w === 'clear' ? verb : w)))
+  }
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a script file run directly')] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'])
+  // A subcommand handed a folder it may change, a copy in a checkout, another interpreter, no home: judged as before.
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'sweep-stamps')] }, '/Users/dan'))).toEqual(['sweep-stamps', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun('/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a python3 script file')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL)] }))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
 })
 
 // #2255: `python3 probe.py 'src/*.ts'`, as mod-kit's reader answers it with cwd /w/app (measured
