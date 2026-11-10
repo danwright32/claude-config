@@ -89,10 +89,11 @@ printf '#!/usr/bin/env bash\n. "${BASH_SOURCE[0]%%/*}/no-such-2204.sh"\n' > "$TM
 said="$(python3 "$INSTALL" "$TMPROOT/shbad" "$TMPROOT/shbaddest2" needs-gone.sh 2>&1)"; rc=$?
 check_eq "#2204 the install refuses a helper sourcing a file its folder does not have, naming it" \
   "1 yes" "$rc $(says "needs-gone.sh line 2 sources no-such-2204.sh, which $TMPROOT/shbad does not have" "$said")"
-# The real helpers: merge-target.sh sources five others, directly or through them, and every one arrives with it.
+# The real helpers: merge-target.sh sources six others, directly or through them, and every one arrives with it.
+# this-mac.sh joined them with claude-config#2561, when the ledger's Mac name moved to that one helper.
 said="$(python3 "$INSTALL" "$DIR/lib" "$TMPROOT/mt" merge-target.sh 2>&1)"; rc=$?
-check_eq "#2204 installing merge-target.sh brings the five helpers it sources" \
-  "0 ai-review-common.sh gh-poll.sh hook-notice.sh merge-target.sh push-scope.sh whole-number.sh " \
+check_eq "#2204 #2561 installing merge-target.sh brings the six helpers it sources" \
+  "0 ai-review-common.sh gh-poll.sh hook-notice.sh merge-target.sh push-scope.sh this-mac.sh whole-number.sh " \
   "$rc $(ls "$TMPROOT/mt" | tr '\n' ' ')${said:+ said: $said}"
 # Every shell helper in lib/ installs on its own: each source line in every one resolves.
 every_sh="$(cd "$DIR/lib" && ls -- *.sh)"

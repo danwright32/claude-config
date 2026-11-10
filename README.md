@@ -260,6 +260,7 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 ./claude-sync install-autosync  # background auto-sync (see below)
+./claude-sync retire --yes      # a Mac being cleared: take it out of the sync (see below)
 ```
 
 ## Setting up a new Mac
@@ -338,6 +339,27 @@ alone the same way (#1470).
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
+
+### Retiring a Mac
+
+A Mac being cleared for trade in or resale must stop sending first: while its agents run, every
+file deleted from its `~/.claude` is sent on as a change to the shared config and removed from every
+other Mac (#2545). `claude-sync retire` on its own changes nothing: it says what it would do and
+exits 2. `claude-sync retire --yes` is the inverse of `install-autosync`:
+
+1. It records the Mac as retired in `~/.claude-sync-retired` (outside `~/.claude`, so the record
+   never travels to the other Mac). From then on every command that takes the sync lock (send,
+   push, sync, pull and the watcher's own sends), `watch`, `install-autosync` and
+   `install-schedule` refuse, naming the record.
+2. It unloads and removes `com.claudesync.timer`, `com.claudesync.watch` and the two older agents
+   `install-autosync` replaces, through the same helper `install-autosync` uses for those.
+3. It reads `launchctl list` back and says whether any of them is still loaded, exiting 1 if one is
+   or if launchd cannot be read, rather than trusting the unload's exit code.
+
+It deletes nothing in `~/.claude` or the shared repo, and leaves this Mac's lesson number band and
+lesson counts in the repo for history. Running it again is safe: the first record is kept and it
+says there was nothing left to remove. Under a fixture home it refuses whole, like the installers.
+To bring a retired Mac back, delete `~/.claude-sync-retired` and run `claude-sync install-autosync`.
 
 ### Backups a pull leaves behind expire on their own
 
@@ -3731,7 +3753,11 @@ review's deadline plus a minute, and removes it when the reviewer ends. A window
 positive evidence, its pid running with the start time recorded and inside that time, so a review
 that crashed is never waited for, and one the window's own command started is not counted. The suite
 runner hands every suite a phase folder of its own, so a suite's fixture reviews never publish here.
-`--status` lists the helpers it is not counting, and why. Everything it starts is in its own process group with a
+`--status` lists the helpers it is not counting, and why. A measurement that wants the window only
+for its turn, its wait and its cleanup runs its command with `--workers 0 --spawners 0`, so the
+command is the only load the window adds, and the record, `--status` and the merge helper's sentence
+say it had no busy workers (claude-config#2568); with no command, a window still needs a worker.
+Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
 recorded in `~/.claude/state/load-window/windows.tsv` (`hooks/lib/load-window.sh`), and
 `merge-when-ready.sh` (on every stop with a non zero exit, a merge whose branch could not then be
@@ -5122,7 +5148,9 @@ fallback for a session where no line arrived.
   line, and a default for any Mac the table does not name. To change a Mac's cap, edit that table
   and nothing else. `agent-cap.sh --number` prints this Mac's number alone and `--table` the table.
 - **A hostname that cannot be read** gets the default, and the line says the name could not be
-  read rather than naming a Mac it guessed.
+  read rather than naming a Mac it guessed. The name is read by `hooks/lib/this-mac.sh`, everything
+  before the first dot, the one reading every hook makes; `test-this-mac.sh` fails on a hook under
+  `payload/hooks/` that reads `hostname` itself (#2561).
 - **Everything else points at the line.** The orchestrate, bug bash, architecture pass and
   production readiness skills say "the session's agent cap" and name the `[Agent cap]` line. The
   production audit workflow cannot run a shell, so the skill passes the number as `args.agentCap`;
@@ -5566,7 +5594,14 @@ read of one waits for ever and the call it judges never runs. What a file a call
 read the same way, through `currentText` in that file (#1814), which says such a file is unreadable,
 with why, never empty or absent, as it does a file whose look throws (Claude Code 2.1.312 throws
 EBADF for a link to `/dev/stdin`). The write reader never names a device as an input, and the scan
-fails a mod looping over `.inputs` by hand. That the real engine's `$.fs` reports a fifo and
+fails a mod looping over `.inputs` by hand. A quoted string that is not shell (a TypeScript string,
+a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through `quotedEnd`,
+`yamlScalar` and `yamlFlowList` in `hooks/quoted.ts`, kept by each mod that reads one at
+`hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
+own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
+words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
+pattern, or walking a string to the quote it opened with.
+That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
 `tests/test-fs-kind-engine.sh` against a probe mod run headless, once per Claude Code version, the
@@ -5581,7 +5616,7 @@ reload while its Compact runs.
 </td><td>
 
 #607 to #609, #605, #610, #663, #667, #688, #690, #698, #700, #703, #705, #707, #712, #726, #730,
-#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830, #2100
+#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830, #2100, #2467
 
 </td></tr>
 <tr><td>

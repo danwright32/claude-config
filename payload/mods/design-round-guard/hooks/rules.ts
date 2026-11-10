@@ -1,6 +1,7 @@
 // Design round guard (claude-config#978): which files change how a screen looks, what an issue or
 // branch is keyed by, and every sentence Claude and Dan read. Pure, so each rule is tested on its own.
 import type { DesignRoundSubject } from '../types/index.d.ts'
+import { quotedEnd } from './mod-kit/quoted.ts'
 import { isTestPath } from './mod-kit/testfile.ts'
 
 export const GUARD = 'Design round guard'
@@ -908,19 +909,14 @@ export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments:
   const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
   const space = (c: string | undefined) => c !== undefined && /\s/.test(c)
   // A quote opening a TypeScript string or a JSX attribute's value. This reads source text, not a
-  // shell command, so mod-kit's command reader ($.modkit.commands) is no use here.
+  // shell command, so a string is read by mod-kit's quotedEnd (#2467), never $.modkit.commands.
   const stringQuote = (c: string | undefined): c is string => c !== undefined && /^["']$/.test(c)
   const EXPR_WORDS = new Set(['return', 'yield', 'case', 'default', 'await', 'typeof', 'void', 'in', 'of', 'delete', 'throw', 'else', 'do'])
   const quoted = (i: number): number => {
-    const q = text[i]
-    for (let j = i + 1; j < n; j++) {
-      if (text[j] === '\\') j++
-      else if (text[j] === q) {
-        strings.push([i + 1, j])
-        return j + 1
-      } else if (text[j] === '\n') throw unread
-    }
-    throw unread
+    const j = quotedEnd(text, i, 'code')
+    if (j < 0) throw unread
+    strings.push([i + 1, j])
+    return j + 1
   }
   const template = (i: number): number => {
     let from = i + 1

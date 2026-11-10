@@ -98,8 +98,29 @@ says "#1618 and the refusal names the cap" "outside 1 to 180" "$OUT"
 run --workers 1
 eq "#1618 a window with no --seconds is refused" 2 "$RC"
 run --seconds 5 --workers 0 --spawners 0
-eq "#1618 a window with no workers is refused" 2 "$RC"
+eq "#1618 a window with no workers and no command is refused" 2 "$RC"
+says "#2568 and the refusal says it has nothing to run" "a window with no command needs at least one worker" "$OUT"
 eq "#1618 and none of these recorded a window" "" "$(record)"
+# A window given a command may add no load of its own (#2568): a measurement needs the window only
+# for its turn, its wait for merges and full suites, its ceiling and its cleanup.
+fresh noworkers
+run --seconds 30 --workers 0 --spawners 0 --label "measure only" -- bash "$W/report.sh" "$case_dir/r" 4
+eq "#2568 a command with no workers runs, and its exit comes back" 4 "$RC"
+says "#2568 the command's output is passed through" "the command ran" "$OUT"
+says "#2568 the start says plainly there were no busy workers" "Window started at 20:00:00 ET, until 20:00:30 ET at the latest: no busy workers, \"measure only\"" "$OUT"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$OUT"
+eq "#2568 no workers' group was started for the command to find" "" "$(cat "$case_dir/r.wgroup" 2>/dev/null)"
+rec="$(record)"
+says "#2568 the window is recorded with no workers" "$(printf '\t0\t0\tmeasure only')" "$rec"
+says "#2568 and its end" "the command finished (exit 4)" "$rec"
+run --status
+says "#2568 --status says plainly the window had no busy workers" "no busy workers, \"measure only\"" "$OUT"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$OUT"
+eq "#2568 the window's turn is given up" "" "$(ls "$LOAD_WINDOW_DIR/queue/turn" 2>/dev/null | grep -E '^[0-9]+$')"
+n="$( . "$LIB" && load_window_note "$((T0 + 60))" )"
+says "#2568 the sentence the merge helper appends says it had no busy workers" "(tools/load-window.sh, pid " "$n"
+says "#2568 in words" "no busy workers, \"measure only\")" "$n"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$n"
 # A leading zero is a number, never an octal error that kills the run (lessons review, #1640).
 fresh zeros
 run --seconds 09 --workers 08 --spawners 09 -- bash "$W/report.sh" "$case_dir/r"

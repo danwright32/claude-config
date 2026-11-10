@@ -178,6 +178,14 @@ tail_from_exception="${refl#*EXCEPTION:}"
 [[ "$tail_from_exception" != "$refl" && "$tail_from_exception" == *"goal_accomplished"* ]] \
   && check "#1749 the box reminder holds when the reflection is folded into the issue review" ok \
   || check "#1749 the box reminder holds when the reflection is folded into the issue review" "goal_accomplished is not after the EXCEPTION line"
+# #2523: it did not hold. On 2026-11-09 both hooks fired, the session wrote that turn from the
+# issue review, whose SECOND PASS folds in the reflection's points and said nothing of the box, so
+# the call was dropped. The issue review carries the reminder as its own last step, after the clear.
+rev="$(cat "$DIR/review/issue-review.md")"
+rev_after_clear="${rev#*CLEAR}"
+[[ "$rev_after_clear" != "$rev" && "$rev_after_clear" == *"goal_accomplished"* && "$rev_after_clear" == *"/goal"* ]] \
+  && check "#2523 the issue review asks for the Goal accomplished box as its own last step" ok \
+  || check "#2523 the issue review asks for the Goal accomplished box as its own last step" "issue-review.md names no goal_accomplished call after its CLEAR step"
 
 # ---------------------------------------------------------------------------
 # RELOCATION: the same hooks, run from somewhere else, must point at THEMSELVES.
