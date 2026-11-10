@@ -2452,16 +2452,16 @@ lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
 # that otherwise goes out; this one refuses the send entirely, by the send's own scan, so it is said
 # beside them in its own words (L11) and the send's behaviour is unchanged.
 #
-# A copy of the tool with no scanner beside it (only ever a copy run outside its checkout) says so
-# on stderr and judges nothing, because the send it would warn about refuses on that same ground
-# and says so. Prints the sentence, or nothing when the file names none.
+# A copy of the tool with no scanner beside it (only ever a copy run outside its checkout) judged
+# nothing, so it says so and returns 4 like any scan that could not run: a silent 0 read as the
+# lesson checked and found clean (L11, L98). The send refuses on that same ground. Prints the
+# sentence, or nothing when the file names none.
 lesson_work_name_fault(){   # $1 = tree -> the sentence, or nothing
   local tree="$1" f="$LESSONS_FILE" lib list
   [ -f "$tree/$f" ] || return 0
   lib="$(work_names_lib)"
   if [ ! -f "$lib" ]; then
-    echo "claude-sync: $tree/$f was not checked for work organisation names, because the scanner is not beside this copy of claude-sync ($lib). The send checks it, and refuses without the scanner." >&2
-    return 0
+    printf '%s' "whether $f names a work organisation could not be checked, because the scanner is not beside this copy of claude-sync ($lib), and the send refuses on the same ground"; return 4
   fi
   list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || {
     printf '%s' "whether $f names a work organisation could not be checked: no scratch file could be made for the scan"; return 4; }

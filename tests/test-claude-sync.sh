@@ -13302,6 +13302,14 @@ check "#2530 and says it could not be checked, never that the file names one" \
   "line_has \"\$out_lwn4\" 'could not be checked' 'send refuses' && out_lacks \"\$out_lwn4\" 'names a work organisation, at'"
 if out_lwn5="$(LWN_HOME="$LWNBAD" _lwn next-lesson)"; then rc_lwn5=0; else rc_lwn5=$?; fi
 check "#2530 and next-lesson still mints a number when the scan cannot run" "[ '$rc_lwn5' -eq 0 ] && grep -q '^L' <<< \"\$out_lwn5\""
+# A copy of the tool with no scanner beside it judged nothing too, so it says so with the same exit
+# code, never a clean 0 that reads as a lesson checked and found free of names (L11, L98).
+LWNCOPY="$WORK/refused-lessons-copy"; mkdir -p "$LWNCOPY"; cp "$SCRIPT" "$LWNCOPY/claude-sync"
+if out_lwn6="$(HOME="$RFSE" CLAUDE_HOME="$LWNH" SYNC_REPO="$LWNCOPY" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$LWNCOPY/claude-sync" lesson-faults 2>&1)"; then rc_lwn6=0; else rc_lwn6=$?; fi
+dbg "lesson-faults from a copy with no scanner: rc=$rc_lwn6 $out_lwn6"
+check "#2530 a copy with no work names scanner beside it exits 4 from lesson-faults, not 0" "[ '$rc_lwn6' -eq 4 ]"
+check "#2530 and says the file could not be checked, naming the missing scanner" \
+  "line_has \"\$out_lwn6\" 'could not be checked' 'scanner'"
 
 # The desktop notification a sync posts when its send is refused and it still receives names the
 # scan that refused. It said "the secret scan" for every refusal, so a work name read as a leaked
