@@ -3550,6 +3550,15 @@ check "#2629 saying nothing was merged" "Stopped: no signed in gh account can me
 check "#2629 and what would let it" "gh auth login" "$out"
 check_eq "#2629 before any update, wait or merge" "0 0 0" "$(count gh-calls 'pr update-branch') $(count sleeps .) $(count gh-calls 'pr merge')"
 
+# Already merged, with the branch to delete and no account able to: the branch is left, said as that
+# (stop 4), never as nothing merged.
+fresh "$OLD" 0 "$GREEN"; : > "$ST/merged"; printf 'reader\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"
+out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
+check_eq "#2629 already merged, a branch no account can delete is left (stop 4)" "4" "$rc"
+check "#2629 saying it is merged and the branch was left" "is already merged (head ${OLD:0:7}), and its branch was left in place." "$out"
+check_not "#2629 never that nothing was merged" "Nothing was merged" "$out"
+check_eq "#2629 and the branch was not deleted" "0" "$(count gh-calls 'DELETE')"
+
 # A permission read that fails is said as that, never as no permission, and another account that
 # can merge still does.
 fresh "$OLD" 0 "$GREEN"; printf 'reader\nwriter\n' > "$ST/accounts"; printf 'gh: Forbidden (HTTP 403)' > "$ST/perm-reader-down"

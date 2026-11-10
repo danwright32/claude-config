@@ -667,7 +667,8 @@ read_pr(){   # sets view_env
 }
 # The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
 # runs_pending, and runs_failed (the head's runs that finished as a failure), which
-# rerun_failed_start reads (claude-config#2537). Asked as the account that could see the pull request.
+# rerun_failed_start reads (claude-config#2537). Asked as the account this run merges as, once
+# resolve_merger has chosen it, and before that as the one that could see the pull request (#2629).
 read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
@@ -798,9 +799,12 @@ read_permission(){
 }
 # Sets account to the account this run merges as, or stops when no signed in account can merge.
 # Returns 5 when a read was refused for the rate limit, so the look is made again after the pause.
+# $1 and $2 are the stop's exit and what it says was left undone: 1 and nothing merged, unless the
+# caller is finishing a pull request already merged, where only the branch is left (stop 4).
 resolve_merger(){
   [ -n "$merge_as_known" ] && { account="$merge_as"; return 0; }
-  local rrc listed name i out="" sep="" unread=""
+  local code="${1:-1}" undone="${2:-Nothing was merged.}"
+  local rrc listed names name i out="" sep="" unread=""
   local -a r_acct=() r_said=()
   active_name=""
   perm_account="$view_account"
@@ -816,8 +820,10 @@ resolve_merger(){
   else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
   # The other accounts, listed only now: `gh auth status` checks every account's token with a request
   # of its own, which the run whose first account can merge never needs (claude-config#1014).
+  # Read whole, from here strings, so no pipeline is cut short and no child goes unwaited.
   listed="$(gh auth status 2>/dev/null </dev/null)"
-  active_name="$(printf '%s\n' "$listed" | awk '{ for (i = 1; i < NF; i++) if ($i == "account") n = $(i + 1) } /Active account: true/ { print n; exit }')"
+  active_name="$(awk '{ for (i = 1; i < NF; i++) if ($i == "account") n = $(i + 1) } /Active account: true/ && a == "" { a = n } END { print a }' <<<"$listed")"
+  names="$(awk '{ for (i = 1; i < NF; i++) if ($i == "account" && $(i + 1) ~ /^[A-Za-z0-9_.-]+$/ && !seen[$(i + 1)]++) print $(i + 1) }' <<<"$listed")"
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     [ "$name" = "$view_account" ] && continue
@@ -834,12 +840,14 @@ resolve_merger(){
     r_acct+=("$name")
     if [ "$rrc" -eq 0 ]; then r_said+=(" has $perm_seen")
     else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
-  done < <(printf '%s\n' "$listed" | grep -oE 'account [A-Za-z0-9_.-]+' | awk '!seen[$2]++ { print $2 }')
+  done <<NAMES
+$names
+NAMES
   for i in "${!r_acct[@]}"; do out+="$sep$(who_is "${r_acct[$i]}")${r_said[$i]}"; sep="; "; done
   # A permission that could not be read may be one that can merge, so then it says only what it
   # measured (L11), and that asking again may be the whole remedy.
-  [ -z "$unread" ] || stop 1 "Stopped: could not confirm any signed in gh account can merge in $slug ($out); merging needs WRITE, MAINTAIN or ADMIN. Nothing was merged. Run the same command again once GitHub answers, or sign gh in to an account with write access to $slug (gh auth login)."
-  stop 1 "Stopped: no signed in gh account can merge in $slug ($out); merging needs WRITE, MAINTAIN or ADMIN. Nothing was merged. Sign gh in to an account with write access to $slug (gh auth login), or have write access given to one already signed in, then run the same command again."
+  [ -z "$unread" ] || stop "$code" "Stopped: could not confirm any signed in gh account can merge in $slug ($out); that needs WRITE, MAINTAIN or ADMIN. $undone Run the same command again once GitHub answers, or sign gh in to an account with write access to $slug (gh auth login)."
+  stop "$code" "Stopped: no signed in gh account can merge in $slug ($out); that needs WRITE, MAINTAIN or ADMIN. $undone Sign gh in to an account with write access to $slug (gh auth login), or have write access given to one already signed in, then run the same command again."
 }
 # HOW LONG THE REPOSITORY'S CHECKS TAKE (claude-config#1604), read each time this run is about to
 # take the turn (see turn_weigh): sets checks_took, in seconds, empty when there was nothing to
@@ -1578,8 +1586,8 @@ turn_moved(){
 # and rr_why holds the sentence the stop adds, naming the conflicted files when there are any.
 RR_RESOLVER="$MWR_LIB/readme-rows-merge.py"
 rr_why=""; rr_new=""; rr_report=""
-# A fetch or push from the clone, as the account this run reads GitHub with when it has one, which
-# gh's credential helper honours.
+# A fetch or push from the clone, as the account this run merges as (resolve_merger,
+# claude-config#2629) when it is not the active one, which gh's credential helper honours.
 rr_net(){
   if [ -n "$account" ]; then
     local tok; tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
@@ -1678,7 +1686,7 @@ while :; do
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
     # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629).
     MERGED) if [ -n "$want_delete" ]; then
-              resolve_merger || continue
+              resolve_merger 4 "Pull request #$pr in $slug is already merged (head ${head:0:7}), and its branch was left in place." || continue
               finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
             fi
             merged_now=1
