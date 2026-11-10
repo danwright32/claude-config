@@ -5717,14 +5717,28 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # outputStyle=Explanatory"). /config saves it into one project's settings.local.json, so it reached
 # one project on one Mac. Only a built in style is accepted: a custom style is a file under
 # output-styles, which the payload does not carry, so its name would land naming nothing.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle"
+#
+# The default subagent model is shared (#2645, Dan's choice 2026-11-10). An agent that names no model
+# inherits the session's, so changing the session model moved every such agent with it. Claude Code
+# reads the default from the CLAUDE_CODE_SUBAGENT_MODEL variable in settings.json's env block, and a
+# model named on the call or in an agent's definition still wins (measured on 2.1.322). The env block
+# is otherwise each Mac's own and may hold a credential, so only the variables on SHARED_ENV_ALLOWED
+# are written, one leaf each, and a refusal names a variable and never prints its value. The value is
+# an alias on SHARED_MODEL_ALIASES or a full model name: unlike modelSettings, this variable takes
+# either. Taking it out of the file leaves each Mac's value where it is, as with a model the file
+# stops naming.
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
+SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
+SHARED_MODEL_ALIASES="opus sonnet haiku fable"
 # The one definition of how the shared settings land in settings.json, used by the write and by the
 # question of whether it is applied, so the two cannot disagree: applied is "applying changes nothing".
 SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e (.;
   if $e.key == "modelSettings" then
     reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
+  elif $e.key == "env" then
+    reduce ($e.value | to_entries[]) as $v (.; .env[$v.key] = $v.value)
   else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
@@ -5773,8 +5787,16 @@ shared_settings_wanted(){
             (if has("effortLevel") and ((.effortLevel | level) | not) then "modelSettings.\($m).effortLevel is \(.effortLevel | tojson), not one of low, medium, high, xhigh (max lasts one session and is never saved)" else empty end)
           end)
         end)
+      else empty end),
+      (if has("env") then
+        (.env | if type != "object" then "env is not an object of variables" else
+          ((keys - ($envok | split(" ")))[] | "env.\(.), whose value is left out of this message, is not a variable the sync shares (only \($envok | split(" ") | join(", ")))"),
+          (to_entries[] | select(.key as $k | $envok | split(" ") | index($k)) |
+            (.value as $v | if ($v | type) == "string" and (($aliases | split(" ") | index($v)) or ($v | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$"))) then empty
+             else "env.\(.key) is \($v | tojson), not a model alias (\($aliases | split(" ") | join(", "))) or a full model name like claude-opus-5-5" end))
+        end)
       else empty end)
-    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
+    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0
