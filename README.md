@@ -3600,13 +3600,28 @@ the statement and the project named) for:
   - the same through the Supabase CLI, so that one route is not the way round the other:
     `branches create`, `delete`, `pause`, `unpause` and `update`, and `projects create` and `delete`.
 
-  Left unasked, since none changes a database: `deploy_edge_function` and
+  Left unasked, since none changes a database: `deploy_edge_function` while it keeps JWT
+  verification on (the next rule asks about one that turns it off) and
   `create_edge_function_secret` (code and configuration, as `supabase functions deploy` is in a
   shell; the secret's value, by the tool's description, is typed in the Supabase dashboard),
   `create_notebook` (saved without being run; `run_notebook` is asked about), `delete_notebook`,
   `submit_feedback` and `delete_feedback`. The list is `SUPABASE_CHANGES` in
   `lib/db-write-calls.py`, written by hand from the connector's tool descriptions as read on
   2026-11-10.
+- since #2660, one call that changes no database: a Supabase edge function deploy that turns JWT
+  verification off. The platform then checks no caller, so anyone holding the function's address can
+  call it without signing in, unless its own code checks them. The question names the function and
+  the project, and says "edge function deploy" where the others say "database call":
+  - `deploy_edge_function` on any server whose name holds supabase, when `verify_jwt` is false (or
+    the text false, or a `no_verify_jwt` that is true). A `verify_jwt` that is neither true nor false
+    (null, a number, the text true) is asked about as one that could not be read.
+  - `supabase functions deploy` with `--no-verify-jwt`, unless every one given is `=false`, and with
+    the `--verify-jwt=false` an older CLI took. `functions serve --no-verify-jwt` runs on this Mac
+    only and is passed.
+
+  A deploy that keeps verification on is passed as before: `verify_jwt` true, and `verify_jwt` left
+  out, because the connector's schema (read 2026-11-10) declares it a boolean whose default is true.
+  That default was read from the schema and not measured on a real deploy.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
   one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
   a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
@@ -3628,7 +3643,9 @@ store, most of them reads the rule cannot prove are reads (a dot command, two st
 it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
 does not take as proof. None of the tools or CLI subcommands #2632 added had been called in any
 transcript on the personal MacBook by 2026-11-10 (the connector's calls there were `list_projects`,
-`execute_sql` and `list_tables`), so they add no question to anything measured there.
+`execute_sql` and `list_tables`), so they add no question to anything measured there. Nor does
+#2660's rule: over all 8,368 transcripts there on 2026-11-10, 3 Bash commands ran `supabase
+functions deploy`, none with `--no-verify-jwt`, and no session had called `deploy_edge_function`.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3645,8 +3662,12 @@ connector whose SQL tool has neither sql in its name nor a field named for a sta
 Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
 `exec`, whose `execute-sql` runs HogQL, which only reads; a tool Supabase adds later that changes a
 database with no statement, and any other host's tool of that kind (a Neon branch reset, say), until
-it is listed; and a deploy of an edge function, which is code and not a database. The tool names
-were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+it is listed; and a deploy of an edge function that keeps JWT verification on, which is code and not
+a database. Of a deploy that turns it off, three routes: the setting written in the project's
+`supabase/config.toml` (`verify_jwt = false` under the function), which a plain `supabase functions
+deploy` then applies with no flag in the command; a deploy through a Supabase server whose name does
+not hold supabase; and a call to Supabase's own API (curl, a script). The tool names were measured on
+the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
