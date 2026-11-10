@@ -135,6 +135,9 @@ fresh; run_json push "$S" failure completed "$REPO" ".github/workflows/tests.yml
 full_because "#2690 a red run runs the full suite" "failure"
 fresh; run_json push "$S" "" in_progress "$REPO" ".github/workflows/tests.yml" > "$C/run-$RUN.json"; decide
 full_because "#2690 a run not yet finished runs the full suite" "in_progress"
+# An empty field must stay in its own place, so the log names the real reason (no conclusion).
+fresh; run_json push "$S" "" completed "$REPO" ".github/workflows/tests.yml" > "$C/run-$RUN.json"; decide
+full_because "#2690 a completed run with no conclusion runs the full suite, and says so" "no conclusion"
 
 # 5. No earlier run of this tree at all, and only an expired one.
 fresh; printf '{"total_count":0,"artifacts":[]}\n' > "$C/artifacts.json"; decide

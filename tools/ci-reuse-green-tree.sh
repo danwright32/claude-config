@@ -65,9 +65,11 @@ index_head="$(jq -r '.workflow_run.head_sha // empty' <<< "$art")"
 # 2. The run, read by its id.
 run="$("$gh" api "repos/$repo/actions/runs/$run_id" 2> /dev/null)" \
   || full "could not read run $run_id, which recorded tree $tree."
-fields="$(jq -r '[.status, (.conclusion // ""), .path, .repository.full_name, (.head_repository.full_name // ""), .head_sha, .event, .html_url] | map(tostring) | join("\t")' <<< "$run" 2> /dev/null)" \
+fields="$(jq -r '[.status, (.conclusion // ""), .path, .repository.full_name, (.head_repository.full_name // ""), .head_sha, .event, .html_url] | map(tostring) | join("\u001f")' <<< "$run" 2> /dev/null)" \
   || full "could not read the answer for run $run_id."
-IFS=$'\t' read -r status conclusion path run_repo head_repo run_head run_event url <<< "$fields"
+# Split on the unit separator, never a tab: a tab is whitespace to read, so two in a row (an empty
+# conclusion, a deleted fork's null head repository) would collapse and shift every later field.
+IFS=$'\x1f' read -r status conclusion path run_repo head_repo run_head run_event url <<< "$fields"
 [ "$status" = completed ] || full "run $run_id, which recorded tree $tree, is $status, not completed."
 [ "$conclusion" = success ] || full "run $run_id, which recorded tree $tree, ended in ${conclusion:-no conclusion}, not success."
 [ "$path" = "$workflow_path" ] || full "run $run_id is of workflow $path, not $workflow_path."
