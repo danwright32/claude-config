@@ -6055,18 +6055,22 @@ a reply names its parent through `thread_ts`), and when the main session reads a
 research. A merge GitHub confirms, or a background merge a turn end hears has merged, marks a
 merge landed. Answering the issue's open question the same day, Dan chose one draft after the
 session's last merge from the thread, not one after each; a turn end cannot know a merge is the
-last, so it holds only when a merge landed after the thread's last draft or skip and no merge of
+last, so it holds only when a merge landed after the thread's last draft and no merge of
 the session is in flight: a helper merge still waiting in is it live's own record whose background
 task the job watcher still lists (its list carries each job's task id for this). A helper that
 ended without merging is no longer in flight; with no job list to read, a waiting merge is taken as
-in flight. The hold tells the session to write the reply, run `/no-ai-tells`, ask Dan with
-`AskUserQuestion` carrying `metadata.source` `is-it-live-draft:<channel>:<thread ts>`, whose two
-answers the mod words (Save as a draft, Skip this time), and on Save save that exact text with
-`slack_send_message_draft` to the channel and thread, never a send; Slack keeps one attached draft
-per channel and refuses another with `attached_draft_exists`, which the hold says to resolve with
-Dan. Any draft Slack saved to that thread, under any Slack server and from any part of the session
-(the card's message for a thread requester, #2435, included), or Dan's Skip, settles it until the
-next merge. Which came first is kept as a count of steps in the session, never two clock readings.
+in flight. A message for someone is saved as a draft in the step it is shown, with no question
+(#2630, Dan, 2026-11-10: "Anytime you give me a message for someone, you should also just save it
+as a slack draft in the relevant thread"). So the card's answer says to save its message now,
+without asking Dan, and the hold tells the session to write the reply, run `/no-ai-tells`, show it
+to Dan and save that exact text in the same step with `slack_send_message_draft` to the channel and
+thread, never a send, then say it is a draft waiting there and that nothing was sent. A thread a
+card asked a draft of its message for is held for that message, word for word, never a second
+reply. Slack keeps one attached draft per channel and refuses another with
+`attached_draft_exists`, which the hold says to resolve with Dan. Any draft Slack saved to that
+thread, under any Slack server and from any part of the session (the card's message for a thread
+requester, #2435, included), settles it until the next merge. Which came first is kept as a count
+of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
 The mod never calls a Slack tool.
 Only a thread recorded at the session's start owes a reply after every merge (#2578: on
@@ -6076,13 +6080,14 @@ merge, is where the session started; one recorded later is pasted mid session, a
 for it owes it a reply: a merged PR whose title, body or comments, or those of an issue it closes,
 link the thread (GitHub is asked only while such a thread is recorded, and a read it refuses is
 toasted and counts as for none), or a PR whose card names the thread as where its Slack draft goes.
-Its hold names those PRs and never says the session started there, and a skip holds until the next
-merge for it. A card asking for no draft keeps the earlier card's record of one asked for (#2515),
-so a card for another PR to the same thread or person still says its draft replaces it.
+Its hold names those PRs and never says the session started there, and a draft saved to it holds
+until the next merge for it. A card asking for no draft keeps the earlier card's record of one
+asked for (#2515), so a card for another PR to the same thread or person still says its draft
+replaces it.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630
 
 </td></tr>
 <tr><td>
