@@ -3756,18 +3756,21 @@ printf '%s\n' "$out_la4" | grep -E 'load average could not be read' > /dev/null 
 # the guard beside it passed for the same reason (L159). The checkout that run was handed is in
 # RUN_ALL_TESTS_CHECKOUT, the one variable meant for it, so the script is looked for there when this
 # copy is not inside one. Where neither holds it, both checks are said to be UNMEASURED here, never
-# a red that is about the layout rather than the runner (L411).
+# a red that is about the layout rather than the runner (L411). The checkout a suite's own copy sits
+# in is asked of lib/checkout-root.sh (#1567), never counted two folders up (#2623).
 # ---------------------------------------------------------------------------
 claude_sync_for_suite(){ # claude_sync_for_suite <suite dir> <checkout or empty>: prints the path, or fails
-  local here; here="$(cd "$1/../.." 2>/dev/null && pwd)" || here=""
+  local here; here="$(bash "$DIR/lib/checkout-root.sh" "$1/.." 2>/dev/null)" || here=""
   if [ -n "$here" ] && [ -f "$here/claude-sync" ]; then printf '%s\n' "$here/claude-sync"; return 0; fi
   if [ -n "$2" ] && [ -f "${2%/}/claude-sync" ]; then printf '%s\n' "${2%/}/claude-sync"; return 0; fi
   return 1
 }
-# Resolved through cd and pwd, as the function resolves, so a TMPDIR ending in a slash cannot make
-# the expected path differ from the found one by a doubled separator.
-CSR="$(cd "$TMPROOT" && pwd)/claude-sync-resolve"; mkdir -p "$CSR/home/.claude/hooks" "$CSR/co/payload/hooks"
+# Resolved through cd and pwd -P, as git resolves the checkout the function asks for, so neither a
+# TMPDIR ending in a slash nor one reached through a link can make the expected path differ from
+# the found one. The fixture checkout is a git repository, which is what checkout-root.sh tests.
+CSR="$(cd "$TMPROOT" && pwd -P)/claude-sync-resolve"; mkdir -p "$CSR/home/.claude/hooks" "$CSR/co/payload/hooks"
 : > "$CSR/co/claude-sync"
+git init -q "$CSR/co" 2>/dev/null
 [ "$(claude_sync_for_suite "$CSR/co/payload/hooks" "")" = "$CSR/co/claude-sync" ] \
   && check "#865 a suite in a checkout drives that checkout's claude-sync" ok \
   || check "#865 a suite in a checkout drives that checkout's claude-sync" "got: $(claude_sync_for_suite "$CSR/co/payload/hooks" "")"

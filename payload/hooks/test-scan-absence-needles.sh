@@ -172,6 +172,22 @@ check "#2080 without the shared reader the scan refuses" "$([ "$RC" -eq 2 ] && e
 says "#2080 and names the reader it could not load" "$OUT" "lib/shell-words.py could not be loaded"
 rm -rf "$NOREADER"
 
+# The scan leaves no bytecode in lib (#2600). Its ratchet and shell_code_lines imports left
+# lib/__pycache__ behind, which failed test-work-names.sh's #2444 check beside this suite in CI. Run
+# in a private copy of lib with the environment's bytecode switches cleared, as
+# test-scan-subshell-globals.sh measures its sibling (#2076, L322).
+PYC="$FIX/pyc2600"; mkdir -p "$PYC/lib" "$PYC/tree"
+cp "$SCAN" "$PYC/"
+python3 -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC/lib" ratchet.py shell_code_lines.py shell-words.py \
+  || check "#2600 the hook helpers install into $PYC/lib" "the install refused"
+printf 'echo hi\n' > "$PYC/tree/test-x.sh"
+printf '# none\n' > "$PYC/baseline.txt"
+OUT="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX python3 "$PYC/scan-absence-needles.py" --root "$PYC/tree" --baseline "$PYC/baseline.txt" 2>&1)"; RC=$?
+check "#2600 control: the copied scan ran and judged its tree" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+_pyc="$(find "$PYC/lib" -name '*.pyc' 2>/dev/null | sed 's#.*/##' | tr '\n' ' ')"
+check "#2600 the scan leaves no bytecode in lib" "$([ -z "$_pyc" ] && echo ok || echo "it wrote [$_pyc]")"
+rm -rf "$PYC"
+
 echo "scan absence needles: and the real tree it ships to guard"
 
 OUT="$(cd "$REPO" && python3 "$SCAN" --root . 2>&1)"; RC=$?

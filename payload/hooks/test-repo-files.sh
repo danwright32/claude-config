@@ -127,13 +127,18 @@ out="$(bash "$RF" "$TMPROOT/plain" 2>&1)"; rc=$?
 # only says so on the line, with a reason that begins with a word: `# tracked-only: <why>` (L675).
 # ---------------------------------------------------------------------------
 GUARD_PAT='(git +-C +"\$\{?(ROOT|REPO|root|_sc_root)\}?"|cd +"\$\{?(ROOT|REPO|root)\}?" *&& *git) +ls-files'
-guard_scan(){        # $1 = directory to read -> offending lines as <file>:<line>: text
-  local d="$1" f
-  for f in "$d"/test-*.sh "$d"/../../tests/test-*.sh; do
-    [ -f "$f" ] || continue
-    grep -nE "$GUARD_PAT" "$f" 2>/dev/null \
-      | grep -vE -- '--error-unmatch|--others|# tracked-only: [A-Za-z]' \
-      | sed "s|^|${f#"$d"/}:|"
+guard_scan(){        # guard_scan <dir> [<dir>...] -> offending lines as <file>:<line>: text
+  # A file in the first folder is named as it is there; one in any later folder carries that
+  # folder's own name (tests/test-x.sh), so every finding has the same short shape.
+  local d f base
+  for d in "$@"; do
+    base="${d%/*}"; [ "$d" = "$1" ] && base="$d"
+    for f in "$d"/test-*.sh; do
+      [ -f "$f" ] || continue
+      grep -nE "$GUARD_PAT" "$f" 2>/dev/null \
+        | grep -vE -- '--error-unmatch|--others|# tracked-only: [A-Za-z]' \
+        | sed "s|^|${f#"$base"/}:|"
+    done
   done
   return 0
 }
@@ -149,7 +154,16 @@ planted="$(guard_scan "$TMPROOT/plant")"
 [ "$(printf '%s\n' "$planted" | grep -c . || true)" -eq 1 ] && has "test-planted.sh:1:$bare" "$planted" \
   && check "the guard catches a bare listing of a suite's own root, and only that" ok \
   || check "the guard catches a bare listing of a suite's own root, and only that" "got: $planted"
-real="$(guard_scan "$DIR")"
+# The suites beside this one, and the checkout's own tests/ when this copy sits in a checkout. That
+# folder is found through lib/checkout-root.sh (#1567), never counted up from here: installed, two
+# folders up is the home directory (#2623). The installed copy has no tests/ and says so (L411).
+GUARD_CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$GUARD_CHECKOUT" ]; then
+  real="$(guard_scan "$DIR" "$GUARD_CHECKOUT/tests")"
+else
+  echo "SUITE-PART-UNMEASURED the checkout's tests/ suites listing their own repository: $DIR/.. is not the payload of a claude-config checkout, so only the suites beside this one were read"
+  real="$(guard_scan "$DIR")"
+fi
 case "$real" in
   *[![:space:]]*) check "no suite here lists its own repository with a bare git ls-files" "these do, and are blind to uncommitted files:
 $real

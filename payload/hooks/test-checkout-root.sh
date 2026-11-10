@@ -115,8 +115,47 @@ _UP='/..''/..'
 cp "$TMPROOT/scan/payload/hooks/test-probe.sh" "$TMPROOT/scan/payload/hooks/probe-helper.sh"
 probe="$(printf 'payload/hooks/test-probe.sh\npayload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan")"; probe_rc=$?
 probe_lines="$(printf '%s\n' "$probe" | awk -F: 'NF { printf "%s ", $2 }')"
-check_eq "#1663 the scan sees every upward lookup, and not a path down into a folder, a comment, a fixture or the helper" \
-  "1 2 3 4 " "$probe_rc $probe_lines"
+check_eq "#1663 the scan sees every upward lookup, and not a comment, a fixture or the helper" \
+  "1 2 3 4 5 " "$probe_rc $probe_lines"
+
+# ---- nor reads a FILE above its own payload (claude-config#2623) ----
+# A file path counted up the same way is the same lookup without the cd: `"$DIR/../../README.md"`
+# is the checkout's README from payload/hooks and ~/README.md from the installed copy, which is how
+# #2620 failed every pull on the personal MacBook for two days. Where a path lands depends on how
+# deep the suite sits, so the scan resolves each one from the suite's own folder: refused when it
+# climbs out of the payload (out of the repository, for a suite outside the payload), and left alone
+# when it climbs only to a sibling inside it, which an installed copy holds just the same. Each
+# fixture line is assembled, never written out, or this suite would report itself (L245).
+mkdir -p "$TMPROOT/scan/payload/skills/probe" "$TMPROOT/scan/tests"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'README_FILE="$DIR%s/README.md"\n' "$_UP"
+  printf 'for f in "$d"/test-*.sh "$d"%s/tests/test-*.sh; do :; done\n' "$_UP"
+  printf 'DOC="$DIR%s/../docs/mods-design.md"\n' "$_UP"
+  printf 'here="$(cd "$1%s" 2>/dev/null && pwd)" || here=""\n' "$_UP"
+  printf 'SYNC="${DIR}%s/claude-sync"\n' "$_UP"
+  printf 'LIB="$DIR/../skills/x/run.sh"\n'
+  printf 'CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"; README="$CHECKOUT/README.md"\n'
+  printf '# README_FILE="$DIR%s/README.md" is what this used to say\n' "$_UP"
+} > "$TMPROOT/scan/payload/hooks/test-filepath.sh"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'HOOKS="$(cd "$DIR%s/hooks" && pwd)"\n' "$_UP"
+  printf '. "$DIR%s/hooks/lib/suite-deadline.sh"\n' "$_UP"
+  printf 'REPO="$(bash "$DIR%s/hooks/lib/checkout-root.sh" "$DIR%s" 2>/dev/null || true)"\n' "$_UP" "$_UP"
+  printf 'DESIGN_DOC="$DIR%s/../docs/mods-design.md"\n' "$_UP"
+} > "$TMPROOT/scan/payload/skills/probe/test-skill-probe.sh"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'SYNC="$DIR/../claude-sync"\n'
+  printf 'ELSEWHERE="$DIR%s/elsewhere"\n' "$_UP"
+} > "$TMPROOT/scan/tests/test-outside.sh"
+fp="$(printf 'payload/hooks/test-filepath.sh\npayload/skills/probe/test-skill-probe.sh\ntests/test-outside.sh\n' \
+  | python3 "$SCAN" --root "$TMPROOT/scan")"; fp_rc=$?
+fp_lines="$(printf '%s\n' "$fp" | awk -F: 'NF { printf "%s:%s ", $1, $2 }')"
+check_eq "#2623 the scan sees a file, a glob and a cd climbing out of the payload, and not a sibling inside it, the helper or a comment" \
+  "1 payload/hooks/test-filepath.sh:2 payload/hooks/test-filepath.sh:3 payload/hooks/test-filepath.sh:4 payload/hooks/test-filepath.sh:5 payload/hooks/test-filepath.sh:6 payload/skills/probe/test-skill-probe.sh:5 tests/test-outside.sh:3 " \
+  "$fp_rc $fp_lines"
 FILES="$(bash "$DIR/lib/repo-files.sh" "$SELF_TOP" 2>/dev/null || true)"
 if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ -n "$FILES" ]; then
   found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$SELF_TOP")"; found_rc=$?

@@ -225,8 +225,12 @@ test('a held template names the file that sends it, and says the template itself
 test('a test file is told by its name or a test folder, read from the repository root', () => {
   for (const p of ['lib/alert.test.ts', 'app/route.spec.tsx', 'lib/__tests__/alert.ts', 'tests/notify.py', 'test/notify.js', 'pkg/notify_test.go', 'app/test_notify.py', 'app/notify_test.py', 'lib/notify_spec.rb', 'spec/notify.rb', 'hooks/test-notify.sh', 'lib/__mocks__/slack.ts'])
     expect(testFile(p)).toBe(true)
+  // A node test script, as a work repository runs its tests (#2509): test-*.ts and its JavaScript
+  // and TSX forms, beside the .test. and .spec. files of every one of them.
+  for (const p of ['scripts/test-copy.ts', 'scripts/test-copy.tsx', 'scripts/test-copy.js', 'scripts/test-copy.jsx', 'scripts/test-copy.mjs', 'scripts/test-copy.cjs', 'lib/copy.test.js', 'lib/copy.spec.mjs'])
+    expect(testFile(p)).toBe(true)
   // A word holding "test" or "spec" is not a test.
-  for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts']) expect(testFile(p)).toBe(false)
+  for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts', 'scripts/testflight-notify.ts', 'scripts/tester.ts', 'lib/test-copy.md']) expect(testFile(p)).toBe(false)
 })
 
 test('docs are not text templates any more; a plain text template still is', () => {

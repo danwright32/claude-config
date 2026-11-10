@@ -459,7 +459,7 @@ fi
 # every word the classifier can ask about must hold one of them or that call would never be read.
 screen="$(sed -n 's/^DB_SCREEN_WORDS="\(.*\)"$/\1/p' "$HOOK")"
 [ -n "$screen" ] && check "the hook declares its screen words" ok || check "the hook declares its screen words" "no DB_SCREEN_WORDS line"
-unscreened="$(python3 -I - "$DIR/lib/db-write-calls.py" "$screen" <<'PY'
+unscreened="$(python3 -I -B - "$DIR/lib/db-write-calls.py" "$screen" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("db_write_calls_shared", sys.argv[1])
 m = importlib.util.module_from_spec(spec)

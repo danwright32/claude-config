@@ -155,12 +155,13 @@ fi
 
 # Which computers review at all. This hook syncs to both of Dan's Macs, and he wants the review on
 # the work computer only (2026-09-18), so the list names that one and every other skips out loud.
-# The short name, because `hostname` answers with a trailing .local here (the same reading
-# check-project-list.sh makes). AI_REVIEW_HOSTS is space separated; `*` means every computer.
+# The short name, the one reading every hook makes (ar_host, over lib/this-mac.sh,
+# claude-config#2561). AI_REVIEW_HOSTS is space separated; `*` means every computer.
 # AI_REVIEW_HOST judges as a named machine instead of this one, for the suite.
 review_hosts="${AI_REVIEW_HOSTS-Dans-MacBook-Pro}"
-this_host="${AI_REVIEW_HOST:-$(hostname 2>/dev/null)}"
-this_host="${this_host%.local}"
+. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null \
+  || did_not_run "could not load lib/this-mac.sh, so which computer this is could not be read (reinstall the hooks with claude-sync pull)"
+this_host="$(ar_host)"
 # Matched as text, never looped over unquoted: an unquoted `*` expands to the files in the working
 # directory, so the one value meaning everywhere would match nowhere.
 host_allowed=0

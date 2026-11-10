@@ -18,9 +18,8 @@
 # it stays one short line. SessionStart delivers it again after /clear and each compaction, exactly
 # when the earlier copy is gone (the same reasoning as tdd-nudge.sh).
 #
-# Which Mac this is comes from `hostname`, short name, the reading check-project-list.sh and
-# ai-review-on-push.sh make. A name that cannot be read gets the default and the line says so,
-# never a silent guess (L11).
+# Which Mac this is comes from lib/this-mac.sh, the one reading every hook makes (claude-config#2561).
+# A name that cannot be read gets the default and the line says so, never a silent guess (L11).
 #
 #   agent-cap.sh            the session start line
 #   agent-cap.sh --number   this Mac's cap alone, for a script that needs the number
@@ -47,8 +46,14 @@ if [ "${1:-}" = "--table" ]; then
   exit 0
 fi
 
-host="${AGENT_CAP_HOST-$(hostname 2>/dev/null)}"
-host="${host%%.*}"
+case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
+unread="this Mac's name could not be read"
+if . "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null; then
+  host="$(this_mac_name ${AGENT_CAP_HOST+"$AGENT_CAP_HOST"})"
+else
+  host=""
+  unread="lib/this-mac.sh is missing beside this hook, so which Mac this is could not be read"
+fi
 cap=""
 if [ -n "$host" ]; then
   cap="$(agent_cap_table | awk -v h="$host" '$1 == h { print $2; exit }')"
@@ -65,7 +70,7 @@ if [ "${1:-}" = "--number" ]; then
 fi
 
 if [ -z "$host" ]; then
-  echo "[Agent cap] At most $cap subagents running at once: this Mac's name could not be read, so the default applies."
+  echo "[Agent cap] At most $cap subagents running at once: $unread, so the default applies."
 elif [ "$named" -eq 1 ]; then
   echo "[Agent cap] At most $cap subagents running at once on this Mac ($host)."
 else

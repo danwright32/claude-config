@@ -178,7 +178,10 @@ libs_of(){ # libs_of <gate file>
   grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' \
     | grep -v -E '^[[:space:]]*\.[^|]*&&[^|]*$' | grep -o -E 'lib/[a-z-]+\.sh' | sort -u | while IFS= read -r l; do
     printf '%s\n' "${l#lib/}"
-    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
+    # The same optional shapes are left out one level down: lib/push-changes.sh loads
+    # lib/this-mac.sh with a stand in (`|| this_mac_name() {`), so its absence stops no gate (#2561).
+    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" \
+      | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
   done | sort -u
 }
 
@@ -194,6 +197,15 @@ for want in merge-target.sh push-scope.sh whole-number.sh; do
 done
 [ -z "$probe_missing" ] && ok \
   || bad "libs_of does not follow a library into the ones it loads as { . lib && declare -F f; } || return 1: it listed [$probe_libs] for a gate loading lib/merge-target.sh, without$probe_missing"
+# One level down, a library loaded with a stand in function is optional, as it is at the gate's own
+# level: a gate loading lib/push-changes.sh needs it, never the lib/this-mac.sh it loads with one.
+printf '%s\n' '. "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || { echo "missing push-changes.sh" >&2; exit 2; }' > "$WORK/probe-gate2"
+probe_libs="$(libs_of "$WORK/probe-gate2" | tr '\n' ' ')"
+case " $probe_libs" in
+  *" this-mac.sh "*) bad "libs_of takes lib/this-mac.sh away beneath lib/push-changes.sh, which loads it with a stand in: it listed [$probe_libs]" ;;
+  *" push-changes.sh "*) ok ;;
+  *) bad "libs_of did not list lib/push-changes.sh for a gate loading it: it listed [$probe_libs]" ;;
+esac
 
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put
@@ -528,12 +540,15 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged check-zsh-builtins.sh        Bash "$(bash_call "zsh -c 'log show --last 1m'")" '{}' refuse
   judged check-wrapped-commands.sh    Bash "$(bash_call 'eval $CMD && git status')" '{}' refuse
   judged stacked-branch-delete-gate.sh Bash "$(bash_call 'git push origin :feat/x')" '{}' refuse
-  # Four gates let a call they cannot parse through, saying so, by the decision each records in its
+  # Five gates let a call they cannot parse through, saying so, by the decision each records in its
   # header: refusing there takes away the scratchpad, the hand-back or a browser with no remedy
   # inside the session, since what makes a payload unparseable is not something the agent can change.
   judged scratchpad-subagent-gate.sh  Write '{"file_path": "/private/tmp/claude-501/proj/sess/scratchpad/notes.md", "content": "cut @@", "description": "cut @@"}' "$AGENT" "notice scratchpad-subagent-gate.sh header"
   judged monitor-action-gate.sh       Monitor "$(bash_call 'gh pr merge 5 --squash')" '{}' refuse
   judged handback-claims-gate.sh      SubagentHandback '{"message": "Done. No --no-verify, no overrides. cut @@", "description": "cut @@"}' "{\"agent_id\": \"a1b2c3d4\", \"agent_transcript_path\": \"$WORK/hb/agent.jsonl\"}" "notice handback-claims-gate.sh header"
+  # It only tightens, and a session cannot change a payload Claude Code wrote, so refusing the edit
+  # would stop work with no remedy (#2517).
+  judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse

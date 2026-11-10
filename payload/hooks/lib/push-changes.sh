@@ -25,6 +25,13 @@
 # pc_resolve and pc_judge set globals, so they are called in the gate's own shell, never inside a
 # command substitution, where what they set would be lost with the subshell.
 
+# Which Mac a ledger line came from, the one reading every hook makes (claude-config#2561). Missing,
+# the line is written with no host rather than not at all, and the gate's verdict never changes.
+# Sourced by a bare name, BASH_SOURCE holds no slash and cutting at the last one leaves the file
+# name itself, so that case is this folder.
+_PC_LIB="${BASH_SOURCE[0]%/*}"; [ "$_PC_LIB" != "${BASH_SOURCE[0]}" ] || _PC_LIB=.
+. "$_PC_LIB/this-mac.sh" 2>/dev/null || this_mac_name() { return 1; }
+
 # Never shown to a judge: generated, locked, minified or binary content, which says nothing about
 # the change and spends the budget. One list for every gate (it was two copies).
 PC_EXCLUDES=(':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.snap'
@@ -386,7 +393,7 @@ pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was calle
   case " $PC_OUTCOMES " in *" $outcome "*) ;; *) return 2 ;; esac
   file="$(pc_ledger_path)"; dir="${file%/*}"
   mkdir -p "$dir" 2>/dev/null
-  host="$(hostname 2>/dev/null)"; host="${host%.local}"
+  host="$(this_mac_name 2>/dev/null)"
   repo="$(git rev-parse --show-toplevel 2>/dev/null)"
   head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
   now="$(date +%s)"

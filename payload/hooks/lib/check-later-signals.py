@@ -54,6 +54,7 @@ LIST_ID_RE = re.compile(r"list id `([A-Z0-9]+)`")
 
 
 def _turn_reader():
+    sys.dont_write_bytecode = True   # no cache beside the hooks (#2600)
     spec = importlib.util.spec_from_file_location("turn_worked", os.path.join(HOOKS, "turn-worked.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
