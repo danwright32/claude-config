@@ -280,6 +280,196 @@ case "$(decision "$r")|$(field "$r" message)" in
   *) check "with lib/hook-notice.sh missing, a database question still carries the Salesforce notice" "$(decision "$r") $(field "$r" message)" ;;
 esac
 
+# --- any other database tool, and database clients run in a shell (claude-config#2536) ----------
+# #2521 asked only about the claude.ai Supabase connector's two SQL tools, so a write through any
+# other database tool, or through psql and its like in a Bash call, still went unasked. The same hook
+# now reads those too, with the one read only rule (lib/sql-read-only.py), and asks about anything
+# it cannot classify. The tool names are the ones measured on the personal MacBook on 2026-11-10
+# (settings, ~/.claude.json and every transcript), plus invented ones for a connector not yet seen.
+bash_payload() {  # bash_payload <command>
+  python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": "/tmp", "tool_name": "Bash", "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$1"
+}
+expect_bash() { expect "Bash [$3]: $1" "$2" "$(bash_payload "$3")"; }  # <label> <want> <command>
+reason_of() { field "$(run "$HOOK" "$EMPTY_HOME" "$1")" reason; }
+
+# The cases the issue names.
+PSQL_UPDATE='psql "$DATABASE_URL" -c "update workflows set note = note where false"'
+expect_bash "a psql -c update is asked about" ask "$PSQL_UPDATE"
+reason="$(reason_of "$(bash_payload "$PSQL_UPDATE")")"
+case "$reason" in *"update workflows set note = note where false"*) check "the question about a psql update names the statement" ok ;; *) check "the question about a psql update names the statement" "reason: ${reason:0:300}" ;; esac
+expect_bash "a psql -c select is not" none 'psql "$DATABASE_URL" -c "select id, name from workflows where active = true"'
+UNKNOWN_WRITE="$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "update orders set total = 0"}')"
+expect "an unknown database tool's write is asked about" ask "$UNKNOWN_WRITE"
+expect "an unknown database tool's read is not" none "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select id from orders"}')"
+reason="$(reason_of "$UNKNOWN_WRITE")"
+case "$reason" in *mcp__acme_warehouse__run_sql*"update orders set total = 0"*) check "the question about an unknown tool names the tool and the statement" ok ;; *) check "the question about an unknown tool names the tool and the statement" "reason: ${reason:0:300}" ;; esac
+# A statement it cannot classify is asked about, never passed.
+expect_bash "a statement that does not parse is asked about" ask 'psql -c "selec t frm (( where"'
+expect_bash "a statement held in a shell variable is asked about" ask 'psql -c "$QUERY"'
+expect_bash "a select with a shell variable inside it is asked about" ask 'psql -c "select * from runs where id = $ID"'
+expect_bash "statements in a file are asked about" ask 'psql "$url" -X -1 -v ON_ERROR_STOP=1 -f change.sql'
+expect_bash "statements on its input (a heredoc) are asked about" ask $'psql "$url" <<SQL\nupdate runs set note = 1;\nSQL'
+expect_bash "statements piped into it are asked about" ask 'echo "update runs set note = 1" | psql'
+expect_bash "an option the hook does not know is asked about" ask 'psql --no-such-option -c "select 1"'
+expect_bash "a psql variable in the statement is asked about" ask 'psql -v cond="1; delete from runs" -c "select :cond"'
+expect "an unknown SQL tool with no statement it can find is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"text": "update orders set total = 0"}')"
+expect "an unknown SQL tool whose statement is not text is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": 7}')"
+expect "an unknown SQL tool whose input is not an object is asked about" ask "$(python3 -c 'import json; print(json.dumps({"tool_name": "mcp__acme_warehouse__run_sql", "tool_input": "update t set a = 1"}))')"
+expect "a list of statements holding one write is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"statements": ["select 1", "delete from orders"]}')"
+expect "a list of read only statements is not" none "$(tool_payload mcp__acme_warehouse__run_sql '{"statements": ["select 1", "select 2"]}')"
+
+# psql in the shapes a command really takes.
+expect_bash "bundled options ending in -c, a select" none 'psql "$U" -XAtc "select count(*) from runs"'
+expect_bash "bundled options ending in -c, a delete" ask 'psql "$U" -XAtc "delete from runs"'
+expect_bash "--command= with a select, its output redirected and piped" none 'psql --command="select 1" 2>/dev/null > out.txt | head -5'
+expect_bash "two -c, the second a write" ask 'psql -c "select 1" -c "truncate runs"'
+expect_bash "an assignment, cd and sudo in front" ask 'cd /srv && PGPASSWORD=x sudo -u postgres psql -c "drop table runs"'
+expect_bash "inside bash -c" ask "bash -c 'psql -c \"delete from runs\"'"
+expect_bash "inside a substitution" ask 'n="$(psql -Atc "delete from runs returning 1")"'
+expect_bash "after then, in an if" ask 'if true; then psql -c "alter table runs add column x int"; fi'
+expect_bash "through docker exec, a write" ask 'docker exec -i supabase_db psql -U postgres -c "update runs set note = 1"'
+expect_bash "through docker exec, a select" none 'docker exec -i supabase_db psql -U postgres -c "select 1"'
+expect_bash "through ssh, in one quoted string" ask "ssh db.example.com \"psql -c 'delete from runs'\""
+expect_bash "through npx" ask 'npx supabase db push'
+expect_bash "a psql meta command is not provably a read" ask 'psql -c "\copy runs from stdin"'
+expect_bash "psql --version runs nothing" none 'psql --version'
+expect_bash "psql --help runs nothing" none 'psql --help'
+expect_bash "psql -l only lists" none 'psql -l'
+expect_bash "a wrapper the hook cannot read that names a client" ask 'eval "$RUNNER psql -c \"delete from runs\""'
+# A mention is not a run.
+expect_bash "a search for the word" none 'grep -n psql notes.txt'
+expect_bash "a message naming it" none 'echo "psql is not installed, so nothing ran"'
+expect_bash "asking whether it is installed" none 'if ! command -v psql >/dev/null; then echo missing; fi'
+expect_bash "which" none 'which psql sqlite3 mysql'
+expect_bash "a commit message" none 'git commit -m "psql -c update wrapper"'
+expect_bash "a heredoc body" none $'cat > notes.md <<EOF\npsql -c "delete from runs"\nEOF'
+expect_bash "a script named after it" none 'bash scripts/psql-backup.sh'
+# Both measured in the 30 days of Bash calls to 2026-11-10: eval of what a read prints (10 calls),
+# and a note handed to a script as data (1).
+expect_bash "eval of what a read only client command prints" none 'eval "$(supabase status -o env | grep API_URL)"'
+expect_bash "a script handed the word as data" none 'bash ~/.claude/hooks/lib/issue-spool.sh note . "psql was slow to start" "2536 agent"'
+expect_bash "a command with no client in it" none 'ls -la'
+
+# mysql, mariadb and sqlite3.
+expect_bash "mysql -e, an update" ask 'mysql -uroot -psecret shop -e "update orders set total = 0"'
+expect_bash "mysql -e, a select" none 'mysql -uroot -psecret -NBe "select count(*) from orders" shop'
+expect_bash "mysql --execute=, a drop" ask 'mysql --execute="drop table orders"'
+expect_bash "mysql with nothing to run reads its input" ask 'mysql shop < dump.sql'
+expect_bash "mariadb -e, a delete" ask 'mariadb -e "delete from orders"'
+expect_bash "sqlite3, a select" none 'sqlite3 app.db "select id, name from shows"'
+expect_bash "sqlite3 -readonly with options, a select, redirected" none 'sqlite3 -readonly -header -separator "|" app.db "select id from shows" > out.txt 2>&1'
+expect_bash "sqlite3, a delete" ask 'sqlite3 app.db "delete from shows"'
+expect_bash "sqlite3, two statement words, the second a write" ask 'sqlite3 app.db "select 1" "drop table shows"'
+expect_bash "sqlite3, a dot command" ask 'sqlite3 app.db ".read change.sql"'
+expect_bash "sqlite3 with no statement reads its input" ask 'sqlite3 app.db'
+expect_bash "sqlite3 -cmd holds a statement too" ask 'sqlite3 -cmd "delete from shows" app.db "select 1"'
+expect_bash "a quoted > is a statement word, never a redirection" ask "sqlite3 app.db '>' 'delete from shows'"
+expect_bash "sqlite3 -version runs nothing" none 'sqlite3 -version'
+
+# The Supabase CLI's database subcommands (the routes /db-apply uses).
+expect_bash "supabase db query, a select" none 'supabase db query --linked "select count(*) from runs"'
+expect_bash "supabase db query, an update" ask 'supabase db query --linked --yes "update runs set note = 1"'
+expect_bash "supabase db query from a file" ask 'supabase db query --linked --yes -f change.sql'
+expect_bash "supabase db query asking only for help" none 'supabase db query --linked --file /dev/null --help'
+expect_bash "supabase db push" ask 'supabase db push --yes'
+expect_bash "supabase db push --dry-run changes nothing" none 'supabase db push --dry-run'
+expect_bash "supabase db reset" ask 'supabase db reset --linked'
+expect_bash "supabase migration up" ask 'supabase migration up --linked'
+expect_bash "supabase migration list only reads" none 'supabase migration list'
+expect_bash "supabase db diff only reads" none 'supabase db diff --linked'
+expect_bash "a supabase db subcommand the hook does not know" ask 'supabase db nosuchcmd'
+expect_bash "supabase status" none 'supabase status -o env'
+# A client whose statements the hook does not read is asked about whenever it runs.
+expect_bash "pgcli" ask 'pgcli "$DATABASE_URL"'
+expect_bash "pg_restore" ask 'pg_restore -d shop dump.tar'
+expect_bash "dropdb" ask 'dropdb shop'
+expect_bash "pgcli --help runs nothing" none 'pgcli --help'
+
+# Other database tools, by the names measured on this Mac and by invented ones.
+expect "the project level Supabase server's execute_sql, a write" ask "$(tool_payload mcp__supabase__execute_sql '{"query": "update runs set note = 1"}')"
+expect "the project level Supabase server's execute_sql, a select" none "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')"
+expect "the project level Supabase server's apply_migration" ask "$(tool_payload mcp__supabase__apply_migration '{"name": "n", "query": "select 1"}')"
+expect "query_logs with a select over logs" none "$(tool_payload mcp__claude_ai_Supabase__query_logs '{"project_id": "p", "sql": "select count(*) from logs"}')"
+expect "query_logs with a write" ask "$(tool_payload mcp__claude_ai_Supabase__query_logs '{"project_id": "p", "sql": "insert into logs values (1)"}')"
+expect "run_notebook, whose statements are in the notebook" ask "$(tool_payload mcp__claude_ai_Supabase__run_notebook '{"project_id": "p", "notebook_id": "n", "expected_updated_at": "t"}')"
+expect "a database server's query tool, a delete" ask "$(tool_payload mcp__postgres__query '{"query": "delete from runs"}')"
+expect "a database server's query tool, a select" none "$(tool_payload mcp__postgres__query '{"query": "select 1"}')"
+expect "a database server's tool that carries no statement" none "$(tool_payload mcp__postgres__list_tables '{"schema": "public"}')"
+expect "a camel case SQL tool" ask "$(tool_payload mcp__acme__executeSql '{"sqlQuery": "drop table runs"}')"
+# Measured names that are no database execution: none of them may be asked about.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_SFDC_USE__soqlQuery	{"q": "SELECT Id FROM Account LIMIT 5"}
+mcp__claude_ai_SFDC_-_Read_Only__soqlQuery	{"q": "SELECT Id FROM Account LIMIT 5"}
+mcp__claude_ai_Claude_Docs__query	{"object": "utterance", "payload": "update the plan"}
+mcp__claude_ai_Supabase__search_docs	{"graphql_query": "{ searchDocs(query: \"delete rows\") { nodes { title } } }"}
+mcp__claude_ai_Supabase__list_tables	{"project_id": "p"}
+mcp__posthog__exec	{"command": "call execute-sql {\"query\": \"select 1\"}", "context": "c"}
+mcp__claude_ai_Slack__slack_search_channels	{"query": "update on the migration"}
+mcp__sentry__search_issues	{"query": "is:unresolved delete"}
+mcp__wix__ExecuteWixAPI	{"url": "https://example.com/query", "method": "POST"}
+mcp__plugin_cloudflare_cloudflare-docs__migrate_pages_to_workers_guide	{}
+mcp__job-watcher__keep_job	{"id": "sql"}
+Edit	{"file_path": "/tmp/x.sql", "old_string": "select", "new_string": "delete from runs"}
+TOOLS
+# The read hook never approves any of these, so the two hooks still cannot disagree about one.
+for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')"; do
+  a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$p")")"
+  [ "$a" = "none rc=0" ] && check "the read hook gives no decision on a call outside its own tools" ok || check "the read hook gives no decision on a call outside its own tools" "$a"
+done
+
+# Payloads it cannot read, and its own parts missing: asked about, never passed.
+expect "a Bash call whose command is not text, naming a client" ask "$(tool_payload Bash '{"command": ["psql", "-c", "delete from runs"]}')"
+r="$(cd "$WORK" && printf '{"tool_name": "Bash", "tool_input": {"command": "psql -c \\"delete from runs' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a cut short Bash payload naming a client is asked about" ok || check "a cut short Bash payload naming a client is asked about" "$(decision "$r")"
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__acme_warehouse__run_sql", "tool_input": {"sql": "update t' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a cut short payload naming an unknown SQL tool is asked about" ok || check "a cut short payload naming an unknown SQL tool is asked about" "$(decision "$r")"
+for missing in db-write-calls.py shell-words.py sql-read-only.py; do
+  rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+  cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/$missing"
+  r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(bash_payload 'psql -c "select 1"')")"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"$missing"*) check "with lib/$missing missing, even a psql select is asked about, naming the file" ok ;;
+    *) check "with lib/$missing missing, even a psql select is asked about, naming the file" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
+done
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-write-calls.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-write-calls.py missing, an unknown SQL tool's select is asked about" ok || check "with lib/db-write-calls.py missing, an unknown SQL tool's select is asked about" "$(decision "$r")"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(bash_payload 'ls -la')")"
+[ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-write-calls.py missing, a command naming nothing of a database is still passed" ok || check "with lib/db-write-calls.py missing, a command naming nothing of a database is still passed" "$(decision "$r")"
+# With no python3, a database client in a shell is asked about too, and a plain command is not.
+if ! npp_reaches_python3 "$NOPY"; then
+  r="$(run_nopy "$(bash_payload 'psql -c "select 1"')")"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"python3 is not on PATH"*) check "with no python3, a psql select is asked about, naming python3" ok ;;
+    *) check "with no python3, a psql select is asked about, naming python3" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
+  r="$(run_nopy "$(bash_payload 'ls -la')")"
+  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a command naming nothing of a database is passed" ok || check "with no python3, a command naming nothing of a database is passed" "$(decision "$r")"
+fi
+
+# The hook leaves early, before python3 starts, on a payload holding none of its screen words, so
+# every word the classifier can ask about must hold one of them or that call would never be read.
+screen="$(sed -n 's/^DB_SCREEN_WORDS="\(.*\)"$/\1/p' "$HOOK")"
+[ -n "$screen" ] && check "the hook declares its screen words" ok || check "the hook declares its screen words" "no DB_SCREEN_WORDS line"
+unscreened="$(python3 -I - "$DIR/lib/db-write-calls.py" "$screen" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("db_write_calls_shared", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(m)
+except Exception as e:
+    print("lib/db-write-calls.py did not load: " + type(e).__name__); sys.exit()
+words = sys.argv[2].split()
+print(" ".join(sorted(w for w in m.asked_words() if not any(s in w.lower() for s in words))))
+PY
+)"
+[ -z "$unscreened" ] && check "every client, tool and key the classifier knows holds a screen word" ok || check "every client, tool and key the classifier knows holds a screen word" "not screened: $unscreened"
+
 # --- the settings run it for exactly these tools, and refuse the call if it fails ---------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
@@ -290,16 +480,18 @@ if len(hits) != 1:
     print("registered %d times" % len(hits)); sys.exit()
 m, h = hits[0]
 want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_migration"] + [
-        "mcp__claude_ai_SFDC_USE__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")]
-never = ["mcp__claude_ai_Supabase__list_tables", "mcp__claude_ai_SFDC_USE__soqlQuery",
-         "mcp__claude_ai_SFDC_-_Read_Only__soqlQuery", "Bash", "Edit"]
+        "mcp__claude_ai_SFDC_USE__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")] + [
+        # Since #2536: Bash, for psql and its like, and every MCP tool, since a database tool on a
+        # connector not yet seen can only be told by its name or its input once the hook runs.
+        "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs"]
+never = ["Edit", "Write", "Read", "Monitor", "Agent"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":
     bad.append("onFailure is not block, so a crash or a timeout would let a write through unasked")
 print("ok" if not bad else "matcher %s: %s" % (m, ", ".join(bad)))
 PY
 )"
-check "the settings run the hook for the two Supabase SQL tools and the three Salesforce write tools, blocking on failure" "$wiring"
+check "the settings run the hook for Bash and every MCP tool, blocking on failure" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
