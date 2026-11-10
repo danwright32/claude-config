@@ -111,6 +111,28 @@ two" "$BASH" -c '. "$0" && hook_notice_json "$HN_A" PreToolUse' "$LIB" 2>/dev/nu
 try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"] == "one\ntwo")
 except Exception as e: print("broken: %s" % e)')"
   [ "$ctx" = True ] && ok || bad "#1906 $name: with no context given, the notice itself was not handed to the session: $ctx"
+  # hook_ask_json: a PreToolUse ask whose reason and notice both hold the tricky text, as one valid
+  # object, and with no notice no systemMessage at all (claude-config#2521).
+  out="$(env PATH="$arm" HN_A="$TRICKY" HN_B="notice: $TRICKY" "$BASH" -c '. "$0" && hook_ask_json "$HN_A" "$HN_B"; echo "@@"; hook_ask_json "$HN_A"; echo "@@"; hook_ask_json "$HN_A" ""' "$LIB" 2>/dev/null)"
+  shape="$(printf '%s' "$out" | HN_WANT="$TRICKY" python3 -c '
+import json, os, sys
+want = os.environ["HN_WANT"]
+parts = sys.stdin.read().split("@@\n")
+if len(parts) != 3:
+    print("printed %d parts, not 3: %r" % (len(parts), parts[:2])); sys.exit()
+for n, what, notice in ((0, "with a notice", "notice: " + want), (1, "with no notice", None), (2, "with an empty notice", None)):
+    try:
+        d = json.loads(parts[n])
+    except Exception as e:
+        print("%s: not one JSON object (%s): %r" % (what, e, parts[n][:200])); continue
+    h = d.get("hookSpecificOutput") or {}
+    if h != {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": want}:
+        print("%s: hookSpecificOutput was %r" % (what, h))
+    elif notice is None and "systemMessage" in d:
+        print("%s: it carried a systemMessage anyway: %r" % (what, d))
+    elif notice is not None and d.get("systemMessage") != notice:
+        print("%s: the systemMessage was %r" % (what, d.get("systemMessage")))')"
+  [ -z "$shape" ] && ok || bad "#2521 $name: hook_ask_json did not print one valid ask carrying its reason and notice: $shape"
 done
 
 # --- the event and context arguments, each seen to fail against a library that mishandles it -------
