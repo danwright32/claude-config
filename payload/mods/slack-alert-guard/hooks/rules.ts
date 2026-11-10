@@ -20,6 +20,13 @@
 // scratchpad script is, has nothing that sends it. A module whose user also imports a Slack send
 // helper (a copy or notice builder) is held, which a marker or reference search alone misses. A
 // file a sender only names, never imports or reads, is not its template (refersTo, Dan's item 1).
+//
+// Narrowed to text a Slack send carries (#2570; Dan, 2026-11-09: "these aren't alerts that are going
+// to fire into Slack, right? If not, I don't need you to ask me for approval"): in a JavaScript,
+// TypeScript or python file, a changed string is held only when sends.ts traces it to a send call's
+// arguments, in its own file or from a file that sends it. A file whose send cannot be traced (any
+// other language, a text template, a send the reading cannot find, a module used whole) is held as
+// before. A python docstring is never message text (#2574).
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
