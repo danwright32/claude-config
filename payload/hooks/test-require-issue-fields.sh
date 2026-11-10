@@ -888,6 +888,31 @@ redirected "no milestone, in a later segment behind a redirection" "true && 2>/d
 allows "#2235 control: a complete create behind a redirection" "2>/dev/null gh issue create --title \"T\" $ALL"
 allows "#2235 control: a number then a space runs a command named 2" "2 >/dev/null gh issue create --title \"T\" $P $C"
 
+# The global CLAUDE.md's issue field rule names every section this gate refuses a body without
+# (claude-config#2520): on 2026-11-09 three creates in a row were refused for a missing Open
+# questions section by a session that had followed CLAUDE.md alone. The rule is its bullet and the
+# lines indented under it, up to the next bullet at the left edge.
+echo
+echo "== the global CLAUDE.md's issue field rule names the Open questions section =="
+RULE="$(awk '/^- \*\*Every issue gets a milestone/ { on = 1; print; next } on && /^- / { exit } on { print }' "$DIR/../CLAUDE.md" 2>/dev/null)"
+doc_says() { # doc_says <description> <needle>
+  if [[ -n "$RULE" && "$RULE" == *"$2"* ]]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL: $1 (the rule in $DIR/../CLAUDE.md does not say '$2')"; fi
+}
+if [[ -z "$RULE" ]]; then
+  fail=$((fail + 1)); echo "FAIL: the issue field rule was not found in $DIR/../CLAUDE.md, so nothing below was read"
+fi
+grep -q 'SKIP_OPEN_QUESTIONS_CHECK' "$HOOK" \
+  && doc_says "#2520 the gate refuses a body without Open questions, and the rule names the section" '## Open questions' \
+  || { fail=$((fail + 1)); echo "FAIL: require-issue-fields.sh no longer offers SKIP_OPEN_QUESTIONS_CHECK; revisit #2520's check"; }
+doc_says "#2520 and its item format" '- [ ] '
+doc_says "#2520 and the choices an item ends with" '(choices: '
+doc_says "#2520 and None when there is nothing to ask" '`None`'
+doc_says "#2520 and that it goes before the session line" 'before the `Claude-Session:` line'
+if [[ "$RULE" == *"All three are enforced"* ]]; then
+  fail=$((fail + 1)); echo "FAIL: #2520 the rule still says All three are enforced, though the gate enforces the Open questions section too"
+else pass=$((pass + 1)); fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
