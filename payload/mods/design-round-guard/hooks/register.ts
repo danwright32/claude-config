@@ -659,6 +659,31 @@ const putBack = async ($: EngineInterface, path: string, tree: string, from: str
   }
 }
 
+// #2704: what git puts back, and what it is judged against, read for a file a merge may have left
+// unmerged. Such a file has no copy in the index to put back (`:<path>`, stage 0, which git refuses
+// with exit 128), only the sides of the conflict: ':2', this branch's own, which is what the file was
+// before the merge, and ':3', what is merged in. The file on disk is then the conflict as git wrote
+// it, no screen at all, so the change is judged against this branch's side (`ours`), never the disk.
+// With no side named ('') git refuses the path, or with -m or --conflict writes the conflict again,
+// settling nothing either way, so the text it is judged as leaving is this branch's side too;
+// --ours leaves that side; --theirs leaves the other, judged against this branch's side where that
+// can be read and against the disk, as before, where it cannot. Stage 2 being there is itself what
+// says the file is unmerged, so git's words are never parsed. With neither the index's copy nor
+// this branch's side to read, the reason names both reads and what git said of each, and the whole
+// file is judged as before. A ref (HEAD, main) is read as putBack reads it.
+const putBackOrOurs = async ($: EngineInterface, path: string, tree: string, from: string): Promise<{ text: string; ours?: string } | { why: string }> => {
+  const back = await putBack($, path, tree, from)
+  if (from === '') {
+    if ('text' in back) return back
+    const ours = await putBack($, path, tree, ':2')
+    return 'text' in ours ? { text: ours.text, ours: ours.text } : { why: `${back.why}; nor this branch's side of a merge: ${ours.why}` }
+  }
+  if ('why' in back || (from !== ':2' && from !== ':3')) return back
+  if (from === ':2') return { text: back.text, ours: back.text }
+  const ours = await putBack($, path, tree, ':2')
+  return 'text' in ours ? { text: back.text, ours: ours.text } : back
+}
+
 // #1933: whether git has never tracked the file at `path` in the checkout `tree`, by its own index
 // (`git ls-files`, which names a tracked file, a staged one included, and prints nothing for any
 // other). Matched literally, so a name holding a pattern's characters is no pattern, and in any case,
@@ -720,8 +745,9 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
     return after === undefined ? undefined : { before, after }
   }
   if (notAlone !== undefined) return { unread: notAlone }
-  const back = await putBack($, t.path, tree, t.from)
-  return 'why' in back ? { unread: back.why } : { before, after: back.text }
+  // A file a merge left unmerged is judged against this branch's side of it (#2704), never the disk.
+  const back = await putBackOrOurs($, t.path, tree, t.from)
+  return 'why' in back ? { unread: back.why } : { before: back.ours ?? before, after: back.text }
 }
 
 // Whether changing a React screen file from `before` to `after` changes nothing on screen, the one
@@ -835,13 +861,16 @@ const drawingChange = async (
   } catch {
     return 'held'
   }
-  const now = files.find(f => f.name === name)?.text
+  let now = files.find(f => f.name === name)?.text
   let after: string | undefined
   if (t.from !== undefined) {
     if (notAlone !== undefined) return { unread: notAlone }
-    const back = await putBack($, t.path, tree, t.from)
+    const back = await putBackOrOurs($, t.path, tree, t.from)
     if ('why' in back) return { unread: back.why }
     after = back.text
+    // A file a merge left unmerged is judged against this branch's side of it (#2704), never the
+    // conflict on disk, which is no TypeScript and draws nothing.
+    if (back.ours !== undefined) now = back.ours
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
     // Held where the file draws or sends a message now. One that only sends a message is held for a
