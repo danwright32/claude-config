@@ -175,7 +175,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     // gh named only inside a message is no gh call.
     expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
-  test('a merge may carry only its method, subject and --auto; --admin is refused (#834 review of 1b556d3)', async () => {
+  test('a merge may carry only its method, subject, --auto and --delete-branch (#2580); --admin is refused (#834 review of 1b556d3)', async () => {
     expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
     expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
