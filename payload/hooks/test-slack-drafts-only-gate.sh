@@ -1399,7 +1399,7 @@ check "a function is followed once, however many paths of calls reach it (#2576)
 
 # One script's text was read into commands again by each part of the gate that wanted them (the
 # line being judged, the walk of its variables, the names a sourced file binds), 40 times for the
-# 11 files of the merge helper, and a sourced file was asked which names it binds once per script
+# 11 files of the merge helper (counted on 2026-11-09), and a sourced file was asked which names it binds once per script
 # that sources it. Both answers depend on the text alone, so each is worked out once in a run.
 mkdir -p "$T/once"
 printf '%s\n' 'ROOT=/somewhere' '. ./lib.sh' 'echo "$ROOT"' > "$T/once/a.sh"
