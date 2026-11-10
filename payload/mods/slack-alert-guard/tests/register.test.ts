@@ -1513,3 +1513,24 @@ test('a sender that takes the module whole, where its names cannot be followed, 
   expect(held).toContain(BY_KEY)
   expect(w.ran.length).toBe(0)
 })
+
+test('a search that runs late after finding a sender that sends none of the change holds the rest, naming that sender, never passing it (#2570)', withKit, async ($, on) => {
+  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
+  const files = {
+    [BOOKING_COPY]: BOOKING_COPY_TEXT,
+    [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
+    [BARREL_COPY]: "export * from './booking-copy'\n",
+  }
+  const edit = { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }
+  // With time to follow the barrel and find nothing further sending it, the edit passes.
+  const w = world($, on, { files })
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Each read taking most of the deadline, the search stops at the barrel's importers with only the
+  // nearest sender in hand, so the change is held as before rather than let through unsearched.
+  w.ctl.readMs = 1600
+  const held = refusalOf(await call($, edit))
+  expect(held).toContain('No booking has that id yet')
+  expect(held).toContain(`which ${LATE} sends to Slack`)
+  expect(w.ran.length).toBe(1)
+})
