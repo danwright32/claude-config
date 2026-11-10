@@ -5557,7 +5557,8 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with. That the real engine's `$.fs` reports a fifo and
+pattern, or walking a string to the quote it opened with.
+That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
 `tests/test-fs-kind-engine.sh` against a probe mod run headless, once per Claude Code version, the
