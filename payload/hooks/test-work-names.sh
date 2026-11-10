@@ -264,12 +264,31 @@ PROJECTS_LOCAL="$LOCALDIR/CLAUDE.md"
 printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- Its projects are kept in that Mac'"'"'s own @projects.local.txt instead, which the sync never carries.\n\n## Writing Style\n' > "$PROJECTS_LOCAL"
 INKWELL_HASH="$(printf '%s' "inkwellcove" | shasum -a 256 | cut -d' ' -f1)"
 OTHER_HASH="$(printf '%s' "nothing-named-this" | shasum -a 256 | cut -d' ' -f1)"
+# Outside a test run the scanner ignores WORK_NAMES_PROJECT_LIST and reads the CLAUDE.md two folders
+# above itself, with the projects.local.txt beside it. Run from the installed copy that is the Mac's
+# own ~/.claude, and on the work MacBook its projects.local.txt added that Mac's projects to the
+# count, so the case failed there and passed everywhere else (claude-config#2626, L411). So the
+# "unset" case runs a copy of the scanner placed the installed way under $WORK, beside a CLAUDE.md
+# this suite writes, and never reads the Mac's own list. That the real payload/CLAUDE.md block reads
+# is tests/test-work-names-tree.sh's check, where the repository is.
+. "$HERE/lib/placement-copy.sh" || {
+  echo "FAIL: $(basename "$0"): lib/placement-copy.sh is missing, so the case outside a test run cannot be kept off this Mac's own project list."
+  printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+PLACED="$(placement_copy installed "$WORK/placed" "$HERE/.." hooks/lib/work-names.py hooks/lib/dev-update-registry.js)" \
+  && cp "$PROJECTS_LOCAL" "$PLACED/CLAUDE.md" || {
+  echo "FAIL: $(basename "$0"): the scanner could not be placed beside a fixture CLAUDE.md under $WORK, so the case outside a test run would read this Mac's own project list."
+  printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+PLACED_SCAN="$PLACED/hooks/lib/work-names.py"
 local_texts(){   # <hashes or "unset"> <printf format and arguments> -> text_out, text_rc
   local h="$1"; shift
   if [ "$h" = unset ]; then
     text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
       WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=0 WORK_NAMES_PROJECT_HASHES="" \
-      python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+      python3 "$PLACED_SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
   else
     text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
       WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$h" \
@@ -304,6 +323,16 @@ rm -f "$LOCALDIR/projects.local.txt"
 local_texts unset 'commit 1a2b3c4\0clean\n'
 check "#2112 outside a test run the seam is ignored and the committed hashes make the list readable (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 check "and the six committed hashes are counted beside the list's four names: $text_out" has "$text_out" "10 work repository and owner names"
+# claude-config#2626: what moved that count on the work MacBook, set here instead of found there. A
+# projects.local.txt beside the placed CLAUDE.md is read outside a test run, and its projects are
+# counted on top of the ten and found in a message.
+printf -- '- `~/Apps/Thistledown`: a work app\n- `~/Apps/Marrowgate`: another\n' > "$PLACED/projects.local.txt"
+local_texts unset 'commit 1a2b3c4\0clean\n'
+check "#2626 outside a test run the placed copy's own projects.local.txt is read (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+check "and its two projects are counted beside the ten: $text_out" has "$text_out" "12 work repository and owner names"
+local_texts unset 'commit 5d6e7f8\0Move it\n\nfrom the Thistledown checkout\n'
+check "#2626 and a project it lists is found in a message (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+rm -f "$PLACED/projects.local.txt"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"
