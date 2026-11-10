@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # send-gate: scans settings.hooks.json
 # Tests for the hook that asks Dan before any database SQL call that is not read only
-# (claude-config#2521).
+# (claude-config#2521), and before a Supabase tool that changes a database with no SQL (#2632).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql on both Macs, and auto
@@ -388,6 +388,33 @@ expect_bash "supabase migration list only reads" none 'supabase migration list'
 expect_bash "supabase db diff only reads" none 'supabase db diff --linked'
 expect_bash "a supabase db subcommand the hook does not know" ask 'supabase db nosuchcmd'
 expect_bash "supabase status" none 'supabase status -o env'
+# The CLI's own branch and project subcommands change a database with no statement, as the
+# connector's tools further down do, so asking about one route and not the other would leave the
+# unasked one as the way round (claude-config#2632, L450). Names from the CLI's help (2.75.0).
+expect_bash "supabase branches delete" ask 'supabase branches delete preview-1'
+expect_bash "supabase branches create" ask 'supabase branches create preview-1 --project-ref abcdefgh'
+expect_bash "supabase branches pause" ask 'supabase branches pause preview-1'
+expect_bash "supabase branches unpause" ask 'supabase branches unpause preview-1'
+expect_bash "supabase branches update" ask 'supabase branches update preview-1 --persistent'
+expect_bash "supabase branches behind a project ref" ask 'supabase --project-ref abcdefgh branches delete preview-1'
+expect_bash "supabase branches list only reads" none 'supabase branches list'
+expect_bash "supabase branches get only reads" none 'supabase branches get preview-1'
+expect_bash "a supabase branches subcommand the hook does not know" ask 'supabase branches nosuchcmd'
+expect_bash "supabase projects delete" ask 'supabase projects delete abcdefgh'
+expect_bash "supabase projects create" ask 'supabase projects create shop --org-id exampleorg --region us-east-1'
+expect_bash "supabase projects list only reads" none 'supabase projects list'
+expect_bash "supabase projects api-keys only reads" none 'supabase projects api-keys --project-ref abcdefgh'
+expect_bash "supabase projects --help runs nothing" none 'supabase projects --help'
+expect_bash "supabase branches delete --help runs nothing" none 'supabase branches delete --help'
+expect_bash "supabase functions deploy changes no database" none 'supabase functions deploy hello'
+# The branch and project rule is added to the db and migration one, never read in its place, so no
+# command asked about before #2632 lost its question to a branches or projects word beside it.
+expect_bash "a db reset is asked about whatever stands before it" ask 'supabase projects list db reset'
+expect_bash "a project delete is asked about whatever its ref is" ask 'supabase projects delete db'
+case "$(reason_of "$(bash_payload 'supabase projects delete abcdefgh')")" in
+  *"supabase projects delete deletes a project and its database"*) check "the question about supabase projects delete says what it does" ok ;;
+  *) check "the question about supabase projects delete says what it does" "$(reason_of "$(bash_payload 'supabase projects delete abcdefgh')")" ;;
+esac
 # A client whose statements the hook does not read is asked about whenever it runs.
 expect_bash "pgcli" ask 'pgcli "$DATABASE_URL"'
 expect_bash "pg_restore" ask 'pg_restore -d shop dump.tar'
@@ -429,8 +456,104 @@ mcp__plugin_cloudflare_cloudflare-docs__migrate_pages_to_workers_guide	{}
 mcp__job-watcher__keep_job	{"id": "sql"}
 Edit	{"file_path": "/tmp/x.sql", "old_string": "select", "new_string": "delete from runs"}
 TOOLS
+
+# --- the Supabase tools that change a database with no statement (claude-config#2632) ----------
+# merge_branch, reset_branch and rebase_branch carry no SQL, so nothing above saw them, and each
+# changes a database. The payloads are in the shape the tool schemas declare (read 2026-11-10):
+# merge_branch, rebase_branch and delete_branch take branch_id, reset_branch branch_id and an
+# optional migration_version, create_branch project_id and name, pause_project and restore_project
+# project_id, create_project name, region and organization_id. Every id is invented.
+# expect_change <label> <payload> <text the question must hold>...
+expect_change() {
+  local label="$1" r got reason w missing=""
+  r="$(run "$HOOK" "$EMPTY_HOME" "$2")"; shift 2
+  got="$(decision "$r")"; reason="$(field "$r" reason)"
+  for w in "$@"; do case "$reason" in *"$w"*) ;; *) missing="$missing [$w]" ;; esac; done
+  if [ "$got" = "ask rc=0" ] && [ -z "$missing" ]; then check "$label" ok
+  else check "$label" "wanted ask rc=0, got $got; the question lacks:${missing:- nothing}; it reads: ${reason:0:240}"; fi
+}
+SB="mcp__claude_ai_Supabase__"
+expect_change "merge_branch is asked about, naming the tool, the branch and production" "$(tool_payload "${SB}merge_branch" '{"branch_id": "examplebranch1"}')" "${SB}merge_branch" "branch examplebranch1" "production" "claude-config#2632"
+expect_change "reset_branch is asked about, naming the branch and what is lost" "$(tool_payload "${SB}reset_branch" '{"branch_id": "examplebranch1"}')" "${SB}reset_branch" "branch examplebranch1" "to its migrations" "is lost" "claude-config#2632"
+expect_change "reset_branch to a version names the version" "$(tool_payload "${SB}reset_branch" '{"branch_id": "examplebranch1", "migration_version": "20261101120000"}')" "branch examplebranch1" "migration version 20261101120000" "is lost"
+expect_change "rebase_branch is asked about, naming the branch" "$(tool_payload "${SB}rebase_branch" '{"branch_id": "examplebranch1"}')" "${SB}rebase_branch" "branch examplebranch1" "migrations" "claude-config#2632"
+expect_change "delete_branch is asked about, naming the branch" "$(tool_payload "${SB}delete_branch" '{"branch_id": "examplebranch1"}')" "${SB}delete_branch" "branch examplebranch1" "database"
+expect_change "create_branch is asked about, naming the branch and its project" "$(tool_payload "${SB}create_branch" '{"project_id": "exampleprodproject", "name": "develop"}')" "${SB}create_branch" "named develop" "project exampleprodproject" "billed"
+expect_change "create_project is asked about, naming the project and its organization" "$(tool_payload "${SB}create_project" '{"name": "shop", "region": "us-east-1", "organization_id": "exampleorg"}')" "${SB}create_project" "named shop" "organization exampleorg" "bill"
+expect_change "pause_project is asked about, naming the project" "$(tool_payload "${SB}pause_project" '{"project_id": "exampleprodproject"}')" "${SB}pause_project" "project exampleprodproject" "offline"
+expect_change "restore_project is asked about, naming the project" "$(tool_payload "${SB}restore_project" '{"project_id": "exampleprodproject"}')" "${SB}restore_project" "project exampleprodproject"
+# The same tools on any other Supabase server, and written in camel case.
+expect_change "the project level Supabase server's merge_branch" "$(tool_payload mcp__supabase__merge_branch '{"branch_id": "examplebranch1"}')" "mcp__supabase__merge_branch" "branch examplebranch1"
+expect_change "a plugin's Supabase server's delete_branch" "$(tool_payload mcp__plugin_supabase_supabase__delete_branch '{"branch_id": "examplebranch1"}')" "branch examplebranch1"
+expect_change "a camel case resetBranch on a Supabase server" "$(tool_payload mcp__supabase__resetBranch '{"branch_id": "examplebranch1"}')" "branch examplebranch1" "is lost"
+# A target the call does not name, or names as something other than text, is said to be so: the
+# question never reads as though it named one.
+expect_change "merge_branch naming no branch says none is named" "$(tool_payload "${SB}merge_branch" '{}')" "branch (none named)"
+expect_change "merge_branch with an empty branch says none is named" "$(tool_payload "${SB}merge_branch" '{"branch_id": ""}')" "branch (none named)"
+expect_change "merge_branch whose branch is not text says so" "$(tool_payload "${SB}merge_branch" '{"branch_id": ["examplebranch1"]}')" "branch (not text)"
+expect_change "merge_branch whose input is not an object says none is named" "$(tool_payload "${SB}merge_branch" 'null')" "branch (none named)"
+long_id="$(printf 'b%.0s' $(seq 1 300))"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(tool_payload "${SB}delete_branch" "{\"branch_id\": \"$long_id\"}")")"
+reason="$(field "$r" reason)"
+case "$(decision "$r")|$reason" in
+  *"$long_id"*) check "a very long branch id is cut in the question, with its length said" "the whole 300 characters are in the question" ;;
+  "ask rc=0|"*"300 characters in all"*) check "a very long branch id is cut in the question, with its length said" ok ;;
+  *) check "a very long branch id is cut in the question, with its length said" "$(decision "$r") ${reason:0:240}" ;;
+esac
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__claude_ai_Supabase__merge_branch", "tool_input": {"branch_id": "examplebr' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*merge_branch*) check "a cut short payload naming merge_branch is asked about, naming it" ok ;;
+  *) check "a cut short payload naming merge_branch is asked about, naming it" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# Every tool in the library's table goes through the hook, so an entry added later is exercised on
+# the day it lands and one whose sentence leaves a placeholder unfilled fails here (L96).
+change_tools="$(python3 -I -B - "$DIR/lib/db-write-calls.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("db_write_calls_shared", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(m)
+    print(" ".join(sorted(m.SUPABASE_CHANGES)))
+except Exception as e:
+    print("ERROR:" + type(e).__name__)
+PY
+)"
+case "$change_tools" in
+  *merge_branch*reset_branch*) check "the library lists the Supabase tools that change a database with no statement" ok ;;
+  *) check "the library lists the Supabase tools that change a database with no statement" "got: ${change_tools:-nothing}" ;;
+esac
+for t in $change_tools; do
+  case "$t" in ERROR:*) continue ;; esac
+  r="$(run "$HOOK" "$EMPTY_HOME" "$(tool_payload "${SB}$t" '{"branch_id": "b9", "project_id": "p9", "name": "n9", "organization_id": "o9"}')")"
+  reason="$(field "$r" reason)"
+  case "$(decision "$r")|$reason" in
+    *"{"*|*"}"*) check "$t from the library's table is asked about, its sentence filled in" "a placeholder is left in: ${reason:0:240}" ;;
+    "ask rc=0|"*"${SB}$t "*"9"*) check "$t from the library's table is asked about, its sentence filled in" ok ;;
+    *) check "$t from the library's table is asked about, its sentence filled in" "$(decision "$r") ${reason:0:240}" ;;
+  esac
+done
+# Decided in #2632 as no change to a database, so none of them may be asked about: an edge function
+# deploy and its secret change code and configuration, a notebook is saved without being run
+# (run_notebook is asked about, always), feedback goes to Supabase, and the rest only read. And the
+# same tool names on a server that is not Supabase's are another product's branches.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response('ok'))"}]}
+mcp__claude_ai_Supabase__create_edge_function_secret	{"project_id": "p", "name": "API_KEY"}
+mcp__claude_ai_Supabase__create_notebook	{"project_id": "p", "name": "n", "content": {"cells": [{"type": "database", "sql": "delete from runs", "row_limit": 10}]}}
+mcp__claude_ai_Supabase__delete_notebook	{"project_id": "p", "notebook_id": "n"}
+mcp__claude_ai_Supabase__submit_feedback	{"feedback": "merge_branch gave no result", "project_id": "p"}
+mcp__claude_ai_Supabase__delete_feedback	{"delete_token": "00000000-0000-0000-0000-000000000000", "project_id": "p"}
+mcp__claude_ai_Supabase__list_branches	{"project_id": "p"}
+mcp__claude_ai_Supabase__get_project	{"id": "p"}
+mcp__github__create_branch	{"owner": "o", "repo": "supabase-app", "branch": "fix"}
+mcp__github__merge_branch	{"owner": "o", "repo": "supabase-app", "base": "main", "head": "fix"}
+mcp__linear__delete_branch	{"note": "the supabase reset_branch tool"}
+TOOLS
 # The read hook never approves any of these, so the two hooks still cannot disagree about one.
-for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')"; do
+for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')"; do
   a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$p")")"
   [ "$a" = "none rc=0" ] && check "the read hook gives no decision on a call outside its own tools" ok || check "the read hook gives no decision on a call outside its own tools" "$a"
 done
@@ -498,7 +621,10 @@ want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_
         "mcp__claude_ai_SFDC_USE__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")] + [
         # Since #2536: Bash, for psql and its like, and every MCP tool, since a database tool on a
         # connector not yet seen can only be told by its name or its input once the hook runs.
-        "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs"]
+        "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs",
+        # Since #2632: the Supabase tools that change a database with no statement.
+        "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
+        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch"]
 never = ["Edit", "Write", "Read", "Monitor", "Agent"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":

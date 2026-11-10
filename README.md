@@ -3583,6 +3583,27 @@ the statement and the project named) for:
     `migration up`, `down`, `repair` and `squash`. These are the routes `/db-apply` uses.
   - `pgcli`, `pg_restore`, `dropdb`, `mongosh` and the other clients whose statements it does not
     read: whenever one runs.
+- since #2632, the Supabase tools that change a database with no statement in the call, which no
+  rule above could see because there is nothing to judge. On any server whose name holds supabase
+  (the claude.ai connector, a project's own server, a plugin's), always, with the tool, what it does
+  and the branch or project its input names in the question:
+  - `merge_branch` (a branch's migrations and edge functions go to production), `reset_branch` (data
+    and schema outside a migration are lost), `rebase_branch` (production's newer migrations run on
+    the branch) and `delete_branch` (the branch's database goes).
+  - `create_branch` and `create_project`: each is a new database that is billed, as `createdb` is
+    asked about in a shell. The connector says it confirms the cost itself; that was not measured.
+  - `pause_project` (the database goes offline) and `restore_project` (a database somebody paused
+    comes back into service and into the bill).
+  - the same through the Supabase CLI, so that one route is not the way round the other:
+    `branches create`, `delete`, `pause`, `unpause` and `update`, and `projects create` and `delete`.
+
+  Left unasked, since none changes a database: `deploy_edge_function` and
+  `create_edge_function_secret` (code and configuration, as `supabase functions deploy` is in a
+  shell; the secret's value, by the tool's description, is typed in the Supabase dashboard),
+  `create_notebook` (saved without being run; `run_notebook` is asked about), `delete_notebook`,
+  `submit_feedback` and `delete_feedback`. The list is `SUPABASE_CHANGES` in
+  `lib/db-write-calls.py`, written by hand from the connector's tool descriptions as read on
+  2026-11-10.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
   one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
   a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
@@ -3602,7 +3623,9 @@ MCP calls beyond the two tools #2521 already covered. No call ran psql or mysql 
 (three ran psql through `docker exec`). 62 of the 67 findings were `sqlite3` against a local app
 store, most of them reads the rule cannot prove are reads (a dot command, two statements, a function
 it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
-does not take as proof.
+does not take as proof. None of the tools or CLI subcommands #2632 added had been called in any
+transcript on the personal MacBook by 2026-11-10 (the connector's calls there were `list_projects`,
+`execute_sql` and `list_tables`), so they add no question to anything measured there.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3617,9 +3640,10 @@ held in a variable; a program that opens a database itself (python, node, an ORM
 prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
 connector whose SQL tool has neither sql in its name nor a field named for a statement (the claude.ai
 Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
-`exec`, whose `execute-sql` runs HogQL, which only reads; and the Supabase connector's branch tools
-(`merge_branch`, `reset_branch`, `rebase_branch`), which change a database without a statement. The
-tool names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+`exec`, whose `execute-sql` runs HogQL, which only reads; a tool Supabase adds later that changes a
+database with no statement, and any other host's tool of that kind (a Neon branch reset, say), until
+it is listed; and a deploy of an edge function, which is code and not a database. The tool names
+were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
