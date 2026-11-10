@@ -81,8 +81,9 @@ declare module 'claude-code' {
 /**
  * A Slack thread a session started from (#2436): its channel and its parent message's time, the
  * link Dan pasted when he pasted one, how it was found, when (ms since the epoch), and the step at
- * which its last draft reply was saved or Dan chose to skip one (`settled`). A merge landing at a
- * later step owes the thread a draft.
+ * which its last draft reply was saved or Dan chose to skip one (`settled`). For a thread the
+ * session started from, a merge landing at a later step owes it a draft; for one marked `mid`, only
+ * a merge for it, recorded in `related`, does (#2578).
  * Every draft saved to the thread settles it, whichever prompt led to it, so the card's own message
  * for a requester in that thread (#2435) settles it too, with no second record.
  */

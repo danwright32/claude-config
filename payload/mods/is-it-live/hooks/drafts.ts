@@ -62,7 +62,8 @@ async function changeThreads($: EngineInterface, change: (ts: IsItLiveThread[]) 
   throw new Error('the thread list kept changing under it')
 }
 
-/** A merge of this session has landed: every thread's draft is owed from here. Two merges landing at
+/** A merge of this session has landed: the draft of every thread the session started from is owed
+ * from here, and of each thread pasted mid session that `related` names (#2578). Two merges landing at
  * once can write their steps in either order, so the landed step only ever rises, or a draft settled
  * between them would count for the later merge too (lessons review of 25bcf07). */
 export async function markLanded($: EngineInterface, related: Relation[] = []): Promise<void> {
