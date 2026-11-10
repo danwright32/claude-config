@@ -284,8 +284,8 @@ run_now() { if [ -n "${HOOK_TESTS_NOW:-}" ]; then printf '%s\n' "$HOOK_TESTS_NOW
 # 18 get 12 and 24 get 16, so a third of a bigger Mac stays free for the sessions working on it.
 # NOT MEASURED: no full run has been timed at 12 or 16 on the 18 core Mac; on 2026-11-09 the only
 # Mac reachable was the 12 core one, at a load average of 51 to 81 after a restart (media analysis,
-# Backblaze, Spotlight), which is no reading (L356). The premise to re-measure (L316): full runs on
-# the 18 core Mac at HOOK_TESTS_BUDGET 8, 12 and 16, several each (L395), on a quiet machine.
+# Backblaze, Spotlight), which is no reading (L356). The premise to re-measure (L316, #2589): full
+# runs on the 18 core Mac at HOOK_TESTS_BUDGET 8, 12 and 16, several each (L395), on a quiet machine.
 # Since #2012 only one full run holds a Mac at a time, so this is the whole of what full runs take.
 # HOOK_TESTS_CORES sets the core count for one run (test-run-all-tests-budget.sh), and a value that
 # is not a positive whole number is refused rather than guessed at, like the budget itself (L50).
