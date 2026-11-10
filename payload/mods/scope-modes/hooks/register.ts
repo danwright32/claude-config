@@ -9,6 +9,7 @@ import type {
   ScopeModesLeftBranch,
   ScopeModesOpened,
   ScopeModesPlace,
+  ScopeModesPushedInto,
   ScopeModesScope,
   ScopeModesTarget,
 } from '../types/index.d.ts'
@@ -110,6 +111,7 @@ import { isNewer, placeFile, placeSaid, placeText, readPlace, type PlaceHow, typ
 import { PAGE_TOOL } from './mod-kit/deliver.ts'
 import {
   branchChoiceFor,
+  branchesPushedInto,
   branchesTouched,
   choiceFor,
   CLEANUP_TOOL,
@@ -119,6 +121,7 @@ import {
   isLeftClosed,
   issueRefs,
   LEAVE_BRANCH_TOOL,
+  leftByChoice,
   NEW_WORK,
   neverMergeSaid,
   neverMergeWhy,
@@ -176,6 +179,7 @@ const placeSeenRef = { plugin: 'scope-modes', key: 'placeSeen' } as const
 const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
 const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
 const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
+const pushedIntoRef = { plugin: 'scope-modes', key: 'pushedInto' } as const
 const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
@@ -3608,9 +3612,31 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // Ref or References (#1812), each read the same way. A number a Refs line names that GitHub
 // says is a pull request (`PR`) is no issue to finish, and is not read again. An open issue's last
 // comment is kept beside it (`last`), for what is left on it when the PR states no next step.
+//
+// A PR left as it is on Dan's recorded choice (#2433) can change only by being reopened or pushed to,
+// yet a turn end read it again with the rest, every one. On 2026-11-07 a session with 19 folded PRs left
+// closed ran out of the minute's looks before the last of them at every stop, said those as unreadable,
+// and spent the next minute's looks on the same reads, for over half an hour. So a reading that showed
+// one settled by his choice is kept (`keptByChoice`) when the policy holds a turn end's look, and the
+// finish check reads those PRs after every other, so the looks go to what can still finish first. With
+// a look to spare it is still read, so a PR reopened or pushed to from outside is seen as soon as there
+// is one. A reading from before this session last ran a push or a reopen (`moves`, counted after each
+// such call) is not kept that way: that call may have been to this PR, so only GitHub's answer now
+// settles it. A PR never read is never kept.
 type IssueSeen = 'OPEN' | 'CLOSED' | 'PR'
-type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number }
+type PrSeen = { pr: PrJson | null; issues: Map<number, IssueSeen>; last: Map<number, string>; worked: number[]; askedAt: number; wait: number; moves: number }
 const prSeen = new Map<string, PrSeen>()
+// The pushes and reopens this session and its agents have run, counted after each such call ends.
+let prMoves = 0
+// Where a PR's reading is kept: by repository and number, or branch for the branch's own PR not yet found.
+const prKey = (slug: string | undefined, t: Pick<ScopeModesTarget, 'pr' | 'branch'>) => `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
+/** Whether this kept reading is of a PR left as it is on Dan's choice, read since the session last pushed or reopened. */
+const keptByChoice = (s: PrSeen | undefined, choice: ScopeModesLeftAsIs | undefined): boolean => {
+  const pr = s?.pr
+  if (!s || !pr || s.moves !== prMoves) return false
+  const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
+  return leftByChoice({ state, ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}) }, choice)
+}
 const IDLE_MAX_MS = 10 * MIN
 // The repository a closing reference's issue is in (#2065). gh answers it as {id, name, owner: {id,
 // login}} and carries no nameWithOwner there (measured 2026-11-02), which is read first in case gh
@@ -3748,8 +3774,9 @@ const closingReason = async ($: EngineInterface, gh: GhRead, repo: string | unde
 // pauses every loop in the session), and the wait above is the library's: doubled while the PR has
 // not moved, a minute again once it has, within winding down's own ceiling of ten minutes. A look the
 // policy holds keeps the minute's last reading, never a turn end's, which only GitHub's answer now
-// can finish (#1037). A policy that cannot be asked never stops the read: it is said once in the
-// debug log, and the wait falls back to a minute.
+// can finish (#1037), except a PR last read as left as it is on Dan's choice (#2433, keptByChoice).
+// A policy that cannot be asked never stops the read: it is said once in the debug log, and the wait
+// falls back to a minute.
 let pollNoted = false
 const pollOf = async ($: EngineInterface): Promise<Poll | undefined> => {
   const home = await $.env.get('HOME')
@@ -3794,7 +3821,11 @@ const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: 
   return Array.isArray(all) ? whoseFiles(all, root, await writtenOf($)) : all
 }
 
-type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean }
+// `choices` are Dan's recorded answers about PRs (#2433), the one about the PR read found by the
+// repository its kept reading's link names and its number, as the finish check finds it.
+// `into` are the branches this session pushed the target's branch into (#2533), whose PR is its PR
+// when it has none of its own.
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[]; into?: readonly string[] }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
@@ -3824,16 +3855,19 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
   if (gone && !slug && readsPr) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
   if (readsPr) {
     const now = await $.clock.now()
-    const key = `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
+    const key = prKey(slug, t)
     const seen = prSeen.get(key)
+    // Counted before GitHub is asked, so a push that ends during the read leaves this reading unkept.
+    const moves = prMoves
     let pr: PrJson | null
     let issues: Map<number, IssueSeen>
     let last: Map<number, string>
     let worked: number[]
     const poll = seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait)) ? undefined : await pollOf($)
     const held = poll ? await heldLook($, poll, now) : undefined
-    // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none.
-    if (held !== undefined && (fresh || !seen)) return { reading: { ...r, pr: { unreadable: held } } }
+    // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none,
+    // unless its last reading was of a PR left as it is on Dan's choice (#2433).
+    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, await seenChoice($, seen, slug, o.choices)))))) return { reading: { ...r, pr: { unreadable: held } } }
     if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
@@ -3842,19 +3876,25 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     } else {
       if (t.pr && seen?.pr?.state === 'MERGED') pr = seen.pr
       else {
-        const res = t.pr
-          ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
-          : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
-        if (res.exitCode !== 0) {
-          if (poll) await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
-          return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
-        }
-        try {
-          const j = JSON.parse(res.stdout) as PrJson | PrJson[]
-          const one = Array.isArray(j) ? j[0] : j
-          pr = one && typeof one.number === 'number' ? one : null
-        } catch {
-          return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+        // By its number once found; else by its own branch, then by each branch this session pushed
+        // it into (#2533), whose PR carries its commits.
+        pr = null
+        for (const head of t.pr ? [''] : [t.branch, ...(o.into ?? []).filter(b => b !== t.branch)]) {
+          const res = t.pr
+            ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
+            : await gh(['pr', 'list', '--head', head, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+          if (res.exitCode !== 0) {
+            if (poll) await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
+            return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
+          }
+          try {
+            const j = JSON.parse(res.stdout) as PrJson | PrJson[]
+            const one = Array.isArray(j) ? j[0] : j
+            pr = one && typeof one.number === 'number' ? one : null
+          } catch {
+            return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+          }
+          if (pr) break
         }
       }
       issues = new Map(seen?.issues)
@@ -3898,7 +3938,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
           pollFailed($, err)
         }
       }
-      prSeen.set(key, { pr, issues, last, worked, askedAt: now, wait })
+      prSeen.set(key, { pr, issues, last, worked, askedAt: now, wait, moves })
     }
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
@@ -3933,6 +3973,16 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
       }
     }
   }
+  // The session's own branch with no PR found (#2533): gone both here and from GitHub, nothing of it is
+  // left to put in one. Asked here first, so a branch still here costs one git call; a read that fails
+  // is never read as gone, so the branch holds as before.
+  if (readsPr && !t.pr && r.pr === null && r.branch && !(gone && !main)) {
+    const here = await git(['branch', '--list', r.branch])
+    if (here.exitCode === 0 && here.stdout.trim() === '') {
+      const remote = await git(['ls-remote', '--exit-code', '--heads', 'origin', r.branch])
+      if (remote.exitCode === 2) r.branchGone = true
+    }
+  }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
   if (r.pr && !('unreadable' in r.pr) && r.pr.state === 'MERGED') {
     r.deploy = await readDeploy($, { number: r.pr.number, url: prUrl })
@@ -3963,7 +4013,8 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
   }
   // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
   // Only what this session wrote is its unfinished work; the rest is kept to be said once (#1108).
-  if ((t.isDefault || inherited) && r.pr === null && !gone) {
+  // With no PR, on any branch: the session's own one gone or left on Dan's answer counts it too (#2533).
+  if (r.pr === null && !gone && !t.pr) {
     const split = await uncommittedOwn($, t.root)
     if ('unreadable' in split) r.dirty = split
     else {
@@ -4000,6 +4051,14 @@ const leftOpenOf = async ($: EngineInterface) => (await $.state.get(leftOpenRef)
 // owner/name a PR's link names, read by mod-kit's one reader of a github.com link (#961), or
 // undefined for no link or none it names.
 const repoOfLink = async ($: EngineInterface, url: string | undefined): Promise<string | undefined> => (url ? ((await $.modkit.linkRepo({ link: url })) ?? undefined) : undefined)
+// Dan's answer about the PR a kept reading is of (#2433): by the repository its link names, else the
+// one it was read in, and its number; with neither there is no answer to find, so nothing is kept.
+const seenChoice = async ($: EngineInterface, s: PrSeen, slug: string | undefined, choices: readonly ScopeModesLeftAsIs[] = []): Promise<ScopeModesLeftAsIs | undefined> => {
+  const n = s.pr?.number
+  if (typeof n !== 'number') return undefined
+  const home = (await repoOfLink($, typeof s.pr?.url === 'string' ? s.pr.url : undefined).catch(() => undefined)) ?? slug
+  return home ? choiceFor(choices, home, n) : undefined
+}
 // How a PR left as it is on Dan's choice is listed: by number, repository and the reason he was asked
 // about, those left open and those left closed (#1033) each in a sentence of its own.
 const keptLine = (d: ScopeModesLeftAsIs) => `PR #${d.number} in ${d.repo} (${d.why})`
@@ -4049,13 +4108,16 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
           await $.state.set(targetRef, t)
         }
       }
-      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine) })
-      t = await keepFound($, t, found)
       // A PR is left as it is only on Dan's own answer to leave_pr_open, recorded against its
       // repository and number: open at its head (#917), or closed without merging (#1033). With none
       // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
       // answer to leave_branch, by repository and name (#1074).
       const choices = await leftOpenOf($)
+      // The branches this session pushed its branch into (#2533): with no PR of its own, theirs is its PR.
+      const ownBranch = t.branch
+      const into = ((await $.state.get(pushedIntoRef)).value ?? []).filter(p => p.from === ownBranch).map(p => p.to)
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices, into })
+      t = await keepFound($, t, found)
       const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
       const keptBranches: ScopeModesLeftBranch[] = []
@@ -4081,12 +4143,15 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
       // remote that cannot be read counts every PR as elsewhere, so nothing is read as cleaned.
       const own = opened.length ? await sessionSlug($) : undefined
       const ownLink = found?.url?.toLowerCase()
-      for (const o of opened) {
+      // Those last read as left as it is on Dan's choice are read after the rest (#2433), so the
+      // minute's looks go first to the PRs that can still finish.
+      const keptNow = (o: ScopeModesOpened) => keptByChoice(prSeen.get(prKey(o.repo, { pr: o.number, branch: '' })), choiceFor(choices, o.repo, o.number))
+      for (const o of [...opened.filter(x => !keptNow(x)), ...opened.filter(keptNow)]) {
         const elsewhere = !own || own.toLowerCase() !== o.repo.toLowerCase()
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh })
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, choices })
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
@@ -4395,16 +4460,26 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
   try {
     const cmds = await readCommands($, raw)
     const { named, current } = branchesTouched(cmds)
+    const pushed = branchesPushedInto(cmds)
     const add = [...named]
     const moved = cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
-    if (current && agentId === undefined && !moved) {
+    // The branch checked out where the call ran, read only where it is known and needed.
+    let here: string | undefined
+    if ((current || pushed.some(p => p.from === null)) && agentId === undefined && !moved) {
       const dir = cmds.find(c => c.git?.dir !== undefined)?.git?.dir
       const path = dir === undefined ? await $.session.cwd() : dir.startsWith('/') ? dir : undefined
       const at = path ? await $.modkit.branch({ path }) : null
       if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
-      if (at && !('unreadable' in at) && at.branch) add.push(at.branch)
+      if (at && !('unreadable' in at) && at.branch) here = at.branch
     }
+    if (current && here) add.push(here)
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
+    // Which branch each push into another came from (#2533), so the finish check reads that one's PR.
+    const into = pushed.flatMap(p => {
+      const from = p.from ?? here
+      return from && from !== p.to ? [{ from, to: p.to }] : []
+    })
+    await addToList({ get: () => $.state.get(pushedIntoRef), set: (l, v) => $.state.set(pushedIntoRef, l, { ifVersion: v }) }, into, (a, b) => a.from === b.from && a.to === b.to)
   } catch (err) {
     // A skew is said once, never on every call that notes a branch (#1281), with what it costs
     // until then, since every later note is dropped too (lessons review).
@@ -5345,6 +5420,9 @@ export const register: Register = on => {
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
     const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
     const mayWrite = tool === 'Bash' || EDITORS.has(tool)
+    // A call that may push to or reopen a PR (#2433): once it ends, no reading from before it is kept
+    // as settled by Dan's choice. Counted however it ends, since a call that throws may still have run.
+    const mayMovePr = (/\bgit\b/.test(raw) && /\bpush\b/.test(raw)) || (/\bgh\b/.test(raw) && /\breopen\b/.test(raw))
     // A picker in this session's own morning turn (#1285), counted answered or not, so one left
     // unanswered is asked again; a refused one never reached Dan and counts neither way.
     const ownMorningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningPickers?.turnId !== undefined ? morningPickers : undefined
@@ -5360,6 +5438,8 @@ export const register: Register = on => {
       } catch (err) {
         if (ownMorningPicker) ownMorningPicker.unanswered++
         throw err
+      } finally {
+        if (mayMovePr) prMoves++
       }
       const answered = ownMorningPicker ? pickerAnswered(r) : undefined
       if (ownMorningPicker && answered !== undefined) ownMorningPicker[answered ? 'answered' : 'unanswered']++
@@ -5614,6 +5694,7 @@ export const register: Register = on => {
     await $.state.set(openedRef, [] as ScopeModesOpened[])
     await $.state.set(leftOpenRef, [] as ScopeModesLeftAsIs[])
     await $.state.set(branchesRef, [] as string[])
+    await $.state.set(pushedIntoRef, [] as ScopeModesPushedInto[])
     await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])

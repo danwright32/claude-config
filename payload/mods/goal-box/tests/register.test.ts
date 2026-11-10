@@ -252,10 +252,10 @@ test('the work Dan asked for, finished: the box is the tool result, drawn as the
   await says($, 'Add the goal box from issue 1563')
   const r = await box($, ASKED)
   expect(r.deny).toBeUndefined()
-  const t = textOf(r)
-  expect(t.split('\n').slice(0, 3)).toEqual([`╔${'═'.repeat(19)}╗`, '║ GOAL ACCOMPLISHED ║', `╚${'═'.repeat(19)}╝`])
-  expect(t).toContain('Goal: Show a green box when the goal is met')
-  expect(t).toContain('• PR #1700 merged and live')
+  // #2512: the text result leads with the goal and the shipped lines follow at once, so Claude
+  // Code's collapse of a tool result after its first lines (where the card is not drawn: a resumed
+  // session) still shows the goal and what shipped at rest, never a heading alone above "+5 lines".
+  expect(textOf(r).split('\n')).toEqual(['GOAL ACCOMPLISHED: Show a green box when the goal is met', '• #1563 closed: Goal accomplished box', '• PR #1700 merged and live'])
   expect((r.context ?? []).join(' ')).toMatch(/do not repeat/i)
   const [c] = await cards()
   expect(c?.toolUseId).toBe('b1')
@@ -562,7 +562,7 @@ test('a /goal met: once the turn has ended the session is sent one prompt to sho
   expect(submitted).toHaveLength(1)
   const r = await box($, { goal: 'whatever Claude calls it', shipped: ['#1563 closed'] })
   expect(r.deny).toBeUndefined()
-  expect(textOf(r)).toContain('Goal: complete issue 1563')
+  expect(textOf(r).split('\n')[0]).toBe('GOAL ACCOMPLISHED: complete issue 1563')
   // Once shown, never again for that goal, nor for the request it answered, until Dan asks for more.
   expect((await box($, { goal: 'again', shipped: ['x'] }, 'b2')).deny).toMatch(/already shown/)
   await turnEnds($)
@@ -655,12 +655,12 @@ test('a call missing the goal or what shipped is refused by name', withKit, asyn
   expect((await box($, { goal: 'x' })).deny).toMatch(/shipped must be a list/)
 })
 
-test("mod-kit unable to draw the card still shows the boxed text, and says why in the debug log", withKit, async ($, on) => {
+test("mod-kit unable to draw the card still shows the box as text, the goal first, and says why in the debug log", withKit, async ($, on) => {
   const { logs, cards } = world(on, { cardFails: 'a card needs a title of one or more runs' })
   await start($)
   await says($, 'Add the goal box')
   const r = await box($, ASKED)
   expect(r.deny).toBeUndefined()
-  expect(textOf(r)).toContain('║ GOAL ACCOMPLISHED ║')
+  expect(textOf(r).split('\n')[0]).toBe('GOAL ACCOMPLISHED: Show a green box when the goal is met')
   expect(logs.join('\n')).toMatch(/goal-box: the card could not be drawn \(a card needs a title/)
 })

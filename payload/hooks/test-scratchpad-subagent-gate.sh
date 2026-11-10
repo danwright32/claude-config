@@ -76,6 +76,25 @@ refused Bash "gh pr create --body-file $SP/pr-body.md" a1b2 && check "READING a 
 refused Bash "$(heredoc "$SP/pr-body.md")" - && check "the main thread's redirect into the root is allowed" "refused: $out" \
   || check "the main thread's redirect into the root is allowed" ok
 
+# --- #2490: agents' working folders moved to the session's notes folder, which a restart of the Mac
+#     cannot clear, and its root is shared by every agent just as the scratchpad's is.
+NF="$HOME/.claude/state/session-notes/-Users-x-proj/0a1b2c3d-sess"
+out="$(run Write "$NF/pr-body.md" a1b2)"; rc=$?
+[ "$rc" -eq 2 ] && check "#2490 a subagent writing straight into the notes folder root is refused" ok \
+  || check "#2490 a subagent writing straight into the notes folder root is refused" "rc=$rc out=$out"
+case "$out" in
+  *"$NF/a1b2/pr-body.md"*) check "#2490 and is told its own subfolder there" ok ;;
+  *) check "#2490 and is told its own subfolder there" "out=$out" ;;
+esac
+refused Write "$NF/2490/pr-body.md" a1b2 && check "#2490 a subfolder of the notes folder is allowed" "refused: $out" \
+  || check "#2490 a subfolder of the notes folder is allowed" ok
+refused Write "$NF/handoff.md" - && check "#2490 the main session writes its handoff note in the root" "refused: $out" \
+  || check "#2490 the main session writes its handoff note in the root" ok
+refused Bash "echo hi > $NF/log.txt" a1b2 && check "#2490 a redirect into the notes folder root is refused" ok \
+  || check "#2490 a redirect into the notes folder root is refused" "allowed: $out"
+refused Write "$HOME/.claude/state/session-notes/-Users-x-proj/x.md" a1b2 && check "#2490 a file above a session's folder is not this gate's" "refused: $out" \
+  || check "#2490 a file above a session's folder is not this gate's" ok
+
 # --- a payload it cannot read is let through, and SAYS so, because refusing would stop every write
 #     in the session with no remedy and silence would leave the gate off unnoticed (L98).
 out="$(printf 'not json' | bash "$G" 2>&1)"; rc=$?

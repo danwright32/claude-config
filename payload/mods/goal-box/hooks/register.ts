@@ -27,7 +27,7 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 //    #1749), which fires after every turn that changed something.
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
-// text the shape of the SESSION REFLECTION box wherever the card is not drawn.
+// text led by the goal wherever the card is not drawn (#2512).
 
 const interactiveRef = { plugin: 'goal-box', key: 'interactive' } as const
 const promptsRef = { plugin: 'goal-box', key: 'prompts' } as const

@@ -7,23 +7,24 @@ You are one of several agents, each working one item while the orchestrator sess
 - Work only your item. Something else you notice gets recorded, not fixed:
   `bash ~/.claude/hooks/lib/issue-spool.sh note . "<the finding>" "<item number> agent"`
 - Never touch anything your brief names as another agent's.
-- Write working files only under the scratchpad folder your brief names.
+- Write working files only under the working folder your brief names, which is in the session's notes folder (`~/.claude/state/session-notes/...`), never in the scratchpad under `/private/tmp`: a restart of the Mac empties that (claude-config#2490).
 
 ## Reading code
 
 - Find the place first with `grep -n` or `rg -n`, then read only those lines and about 30 around them, at most 150 lines in one read. Never read a whole large file to look around. Everything you read is read again on every later request you make.
-- When a notice says you are past the context line, do what it says: write `handoff.md` in your scratchpad folder, then hand back unless only the push and the report are left. The orchestrator gives the rest to a fresh agent that starts from your note.
+- When a notice says you are past the context line, do what it says: write `handoff.md` in your working folder, then hand back unless only the push and the report are left. The orchestrator gives the rest to a fresh agent that starts from your note.
 
 ## Building
 
 - Build in your own worktree, never in the main checkout, and never switch its branch:
   `git -C <repo> fetch origin`
   `git -C <repo> worktree add <worktree path> -b <branch> origin/main`
+  The worktree path is the one your brief names, inside the repository's own `.claude/worktrees/` folder. Never put a worktree under `/tmp`, `/private/tmp` or the scratchpad: a restart of the Mac empties them, and an uncommitted fix goes with it (claude-config#2490).
 - Use absolute literal paths, one plain command per call: no shell variables, no loops.
 - Test first with `superpowers:test-driven-development`. The test goes in the same commit as the fix and covers a failure path, not only the happy path. Run the project's whole suite, typecheck and build.
 - Write the commit message to a file and commit with `git commit -F <file>`. End it with the `Claude-Session:` line from your brief. Nothing may say or suggest Claude wrote the work.
 - No dashes as punctuation and no emoji in new lines. Never use `SKIP_TEST_CHECK`, `SKIP_STYLE_CHECK` or any other override; if a hook blocks you, fix the cause.
-- Push your branch. Do not open or merge a pull request. Write the PR description to `pr-body.md` in your scratchpad folder, ending with the session link line from your brief.
+- Push your branch. Do not open or merge a pull request. Write the PR description to `pr-body.md` in your working folder, ending with the session link line from your brief.
 
 ## Never do these yourself
 
@@ -37,7 +38,7 @@ Delete or drop data, apply migrations to a shared database, send anything to peo
 
 ## Your report
 
-Hand back one report of at most 300 words, in this order. Detail goes in files in your scratchpad folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`.
+Hand back one report of at most 300 words, in this order. Detail goes in files in your working folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`.
 
 1. Outcome in one sentence.
 2. Cause, with the evidence that settles it (counts, times in ET, the change responsible). Say plainly what you could not access.
