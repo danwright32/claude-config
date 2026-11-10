@@ -254,8 +254,8 @@ allowed "a script whose heredoc names no endpoint, beside a line that does"
 run_bash "bash $DIR/test-slack-drafts-only-gate.sh"
 allowed "running this suite itself"
 # Every suite sources lib/suite-deadline.sh, which sources its readers from inside its functions,
-# where a global's value cannot be proved (lib/suite-isolation.sh binds names through printf -v), so
-# it names them by its own BASH_SOURCE, which the gate reads (claude-config#2465).
+# where a global's value cannot be proved (a function runs with whatever its caller set), so it names
+# them by its own BASH_SOURCE, which the gate reads (claude-config#2465).
 run_bash "bash $DIR/test-suite-deadline.sh"
 allowed "a suite whose deadline helper sources its readers from inside its functions"
 run_bash "bash <<'EOF'

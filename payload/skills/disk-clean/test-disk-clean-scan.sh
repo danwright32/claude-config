@@ -175,6 +175,9 @@ check "the stuck command's whole process group was killed (nothing left sleeping
   "$([ -z "$left" ] && echo ok || echo "still running:$left")"
 run_scan_env DISK_CLEAN_CATEGORY_SECONDS=soon bash "$SCAN" --only trash
 check "a time bound that is not a number is refused" "$(eq "$RC" 2)"
+check "the refusal names the value it was given" "$(has "$OUT_TEXT" "DISK_CLEAN_CATEGORY_SECONDS is 'soon'")"
+run_scan_env DISK_CLEAN_WALK_SECONDS=later bash "$SCAN" --only trash
+check "a walk bound that is not a number is refused, naming it" "$(has "$RC $OUT_TEXT" "2 disk-clean scan: DISK_CLEAN_WALK_SECONDS is 'later'")"
 
 # A module that fails is unmeasured, saying so, and the rest of the scan goes on.
 fresh

@@ -1857,9 +1857,9 @@ shard_coverage_over_dir(){   # $1 = directory of <shard>.out files, $2 = shards 
 
 shard_coverage_verdict(){   # $1 = shards expected; coverage lines on stdin
   local _cv_n="${1:-}" _cv_line _cv_i _cv_f _cv_l _cv_s _cv_x _cv_k
-  local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" "
+  local _cv_first="" _cv_last="" _cv_seen=" " _cv_got=" " _cv_whole
   local _cv_bad="" _cv_dis="" _cv_dup="" _cv_gone="" _cv_miss="" _cv_extra="" _cv_say=""
-  _cv_n="$(whole_above_zero "$_cv_n")" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
+  _cv_whole="$(whole_above_zero "$_cv_n")" && _cv_n="$_cv_whole" || { printf 'shard coverage: asked to check against "%s" shards, which is not a count of them.\n' "$_cv_n"; return 2; }
   while IFS= read -r _cv_line; do
     case "$_cv_line" in 'SUITE-SHARD-COVERAGE '*) ;; *) continue ;; esac
     _cv_i="${_cv_line#*shard=}";    _cv_i="${_cv_i%% *}"
@@ -1949,7 +1949,7 @@ _fv_get(){   # _fv_get <line> <key> -> the value, or nothing if it is not a whol
 # two faults where there is one (L11).
 fan_totals_verdict(){   # $1 = shards expected; SUITE-SECTIONS lines on stdin
   _fv_n="$1"
-  _fv_n="$(whole_above_zero "$_fv_n")" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
+  _fv_whole="$(whole_above_zero "$_fv_n")" && _fv_n="$_fv_whole" || { printf 'section totals: asked to check against "%s" shards, which is not a count of them.\n' "$_fv_n"; return 2; }
   _fv_seen=""; _fv_bad=""; _fv_pp=""; _fv_pf=""; _fv_dis=""
   _fv_tp=0; _fv_tf=0; _fv_rp=0; _fv_rf=0; _fv_short=""
   while IFS= read -r _fv_l; do
@@ -10934,6 +10934,14 @@ dbg "#146 real filtered run reported: $_ft_line"
 check "#146 a real filtered run says how its checks were divided up" "[ -n \"\$_ft_line\" ]"
 check "#146 and a real line's buckets add up to what that run reported" \
   "printf '%s\n' \"\$_ft_line shard=1\" | fan_totals_verdict 1 >/dev/null"
+# A shard count that is not a number is refused by both verdicts, naming what they were given
+# rather than the blank a refused capture leaves (claude-config#2465).
+_ft_bad="$(printf '' | fan_totals_verdict soon 2>&1)"
+check "#2465 the totals verdict refuses a shard count that is not a number, naming it" \
+  "case \"\$_ft_bad\" in *'against \"soon\" shards'*) true ;; *) false ;; esac"
+_ft_bad="$(printf '' | shard_coverage_verdict soon 2>&1)"
+check "#2465 and so does the coverage verdict" \
+  "case \"\$_ft_bad\" in *'against \"soon\" shards'*) true ;; *) false ;; esac"
 # The prelude really is the bulk of what a one section run does, which is the fact the whole issue
 # rests on. A run whose prelude bucket was zero would satisfy every arithmetic check above (L182).
 _ft_prel="$(printf '%s' "$_ft_line" | sed -n 's/.*prelude_pass=\([0-9]*\).*/\1/p')"
