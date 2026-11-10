@@ -380,6 +380,19 @@ out="$(PATH="$LOOP/stubborn:$PATH" FUSE="$LOOP/fuse2" CODES="$LOOP/codes" JSON_G
 ran="$(cat "$LOOP/fuse2" 2>/dev/null || echo 0)"
 check "a gh that runs the stub whatever PATH says is refused by the stub, with its own exit code, and never loops (#2562)" \
   "$([ ! -e "$LOOP/fuse2.tripped" ] && grep -q '^97$' "$LOOP/codes" 2>/dev/null && ! grep -q '^0$' "$LOOP/codes" && echo ok || echo "the guard ran $ran times, the stub's exit codes: $(tr '\n' ' ' < "$LOOP/codes" 2>/dev/null)")"
+# And the RUN says so. A refusal means the gh probe measured nothing, but its exit code reaches the
+# comparison like any other: where the hook allows rtk gh it was reported as rtk lying (exit 1), and
+# where the hook refuses rtk gh, as the real one does, as "the refusal is still needed" in a GREEN
+# run, so a loop read as a finding about rtk (L11). Both must end in exit 2, could not measure.
+[ "$rc" -eq 2 ] && check "and the run exits 2, could not measure, where the hook allows rtk gh" ok \
+  || check "and the run exits 2, could not measure, where the hook allows rtk gh" "rc=$rc out=$(grep -i -m 3 'gh-pr-status\|ran inside itself' <<< "$out")"
+grep -q 'ran inside itself' <<< "$out" \
+  && check "and names the loop as the reason" ok \
+  || check "and names the loop as the reason" "out=$(grep -i -m 3 'gh-pr-status' <<< "$out")"
+out="$(PATH="$LOOP/stubborn:$PATH" FUSE="$LOOP/fuse3" CODES="$LOOP/codes3" JSON_GH=1 REFUSE="gh" \
+  RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh" bash "$S" 2>&1)"; rc=$?
+[ "$rc" -eq 2 ] && check "and exits 2 where the hook refuses rtk gh, rather than a green run blaming rtk" ok \
+  || check "and exits 2 where the hook refuses rtk gh, rather than a green run blaming rtk" "rc=$rc out=$(grep -i -m 3 'gh-pr-status\|ran inside itself' <<< "$out")"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
