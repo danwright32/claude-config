@@ -33,8 +33,22 @@ export const SOURCE = 'slack-alert-guard'
 export const HEADER = 'Slack alert'
 export const APPROVE = 'Approve wording'
 export const CHANGE = 'Change wording'
-/** How long the search for a file that sends a template may take, every git call and read in it. */
-export const SCAN_MS = 3000
+/**
+ * How long the search for a file that sends a template may take, every git call and read in it.
+ * Claude Code kills a hook that runs past HookBudget.ms, 10 s (tools/typescript/claude-code-types/
+ * claude-code/index.d.ts), so 7 s leaves 3 s to build and return the refusal. The 3 s this replaced
+ * ran out on a work repository's 185 reads even at load 6.4 (#2510).
+ */
+export const SCAN_MS = 7000
+/**
+ * The most files the search reads for one template before it holds the call for Dan, naming no
+ * sender since it could not tell which file sends it (#2364). Sized from the largest real searches
+ * (#2510): NurseDex, the largest repository on the personal MacBook the search walks (1,061
+ * JavaScript, TypeScript and python files), reads 213 files for its widely imported utils.ts, in
+ * 1.65 to 1.70 s at load 27, about 8 ms a file; a work repository's two copy files read 185. 500
+ * leaves more than twice the largest, and at 8 ms a file still ends well inside SCAN_MS.
+ */
+export const MOST_READ = 500
 /** How many files that import and re-export a template the search follows before it holds as could not check (#2286). */
 export const REEXPORT_HOPS = 3
 /**
