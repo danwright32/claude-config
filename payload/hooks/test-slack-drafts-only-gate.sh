@@ -1246,6 +1246,89 @@ OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj
 ERR="$(cat "$errf")"; rm -f "$errf"
 allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
 
+# The budget was looked at only between commands and before each file, so work inside one file's
+# walk was never timed (claude-config#2571): on 2026-11-09 the walk of one script took 41 s of
+# processor time (#2569), the budget passed unseen, Claude Code killed the hook at 15 seconds, and
+# the session saw "[command hook 44]: timed out" with no gate named. On the real clock the budget
+# now interrupts the walk wherever it is, and a reader that cannot be interrupted (held inside one
+# long call into C) is ended a little later by a watchdog, so either way the gate's own refusal is
+# what prints. Proved by which of the two stopped the walk and where, never by how long anything
+# took (L290): the real reader runs behind the real wrapper with a budget of half a second and a
+# hard stop at 2, and the walk of the script's variables is made slow before it starts, by 4
+# seconds of Python or by one call into C that nothing can interrupt and that runs several times
+# longer than the hard stop (a sum over two thousand million numbers: measured on 2026-11-10, the
+# interruption reached a backtracking regular expression at once, and reached this sum only when
+# it had finished). Slow work that was let run to its end leaves a mark, and work the gate stopped
+# part way leaves none: before this the gate refused such a walk too, but only at the next file
+# it came to after the slow work had finished, however long that took. The third slow case is an interruption that something swallowed (an exception raised from
+# a timer can land in code that discards it), after which the walk went on to an answer: once the
+# budget has interrupted a walk, no answer it gives afterwards is an allow.
+mkdir -p "$T/slow/hooks" "$T/slow/lib"
+cp "$HOOK" "$T/slow/hooks/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/slow/hooks/lib"
+cat > "$T/slow/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys, time
+spec = importlib.util.spec_from_file_location("gate", os.environ["SLOW_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+gate.BUDGET_SECONDS = 0.5
+if hasattr(gate, "HARD_STOP_SECONDS"):
+    gate.HARD_STOP_SECONDS = 2.0
+how = os.environ["SLOW_HOW"]
+def spin(seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        pass
+real_walk = gate.Judge.sh_walk
+def slow_walk(self, s, *a, **k):
+    if "SLOW-2571" in s:
+        if how == "python":
+            spin(4)
+        elif how == "c":
+            sum(range(2 * 10**9))
+        open(os.environ["SLOW_MARK"], "a").write("finished\n")
+    return real_walk(self, s, *a, **k)
+gate.Judge.sh_walk = slow_walk
+real_line = gate.Judge.line
+def slow_line(self, s, cwd, depth, whole):
+    out = real_line(self, s, cwd, depth, whole)
+    if how == "swallowed" and depth == 0:
+        try:
+            spin(4)  # the walk has its answer, and the budget passes before it hands it back
+        except BaseException:
+            pass
+    return out
+gate.Judge.line = slow_line
+gate.main()
+PY
+printf '%s\n' 'echo "hi"' > "$T/slow/lib/x.sh"
+printf '%s\n' '#!/bin/bash' '# SLOW-2571' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '. "$ROOT/lib/x.sh"' > "$T/slow/run.sh"
+run_slow() { # run_slow <no|python|swallowed|c>: judge `bash run.sh` on the real clock, slowed that way
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  rm -f "$T/slow/mark"
+  OUT="$(payload Bash "$(bash_input "bash $T/slow/run.sh")" | env -u SLACK_GATE_TICK_BUDGET SLOW_REAL_READER="$DIR/slack_drafts_only_gate.py" SLOW_HOW="$1" SLOW_MARK="$T/slow/mark" bash "$T/slow/hooks/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+unfinished() { if [ -e "$T/slow/mark" ]; then check "$1" "the slow work ran to its end before the gate answered"; else check "$1" ok; fi; }
+# The control: with nothing slow the copy allows the script and the walk of run.sh is reached, so
+# the mark means what it says and the short budget alone refuses nothing.
+run_slow no
+allowed "with nothing slow, a script sourcing a quiet helper passes under the short budget"
+if [ -e "$T/slow/mark" ]; then check "and the walk of the script was reached" ok; else check "and the walk of the script was reached" "no mark was left, so the walk of run.sh was never reached"; fi
+run_slow python
+refused "a walk of one file that runs past the budget is refused"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and names the file whose walk it was in" "judging the commands in $T/slow/run.sh ("
+unfinished "and the walk was stopped inside the file, not after it"
+run_slow swallowed
+refused "a walk whose interruption was swallowed, and which went on to an answer, is refused all the same"
+says "and that refusal says the gate ran out of time too" "ran out of time"
+run_slow c
+refused "a reader held inside one long call into C is refused too"
+says "and says the gate could not judge the call" "could not judge this call"
+says "and that the reader was stopped for taking too long" "Timeout"
+unfinished "and it was stopped inside the call, not after it"
+
 # The budget sits inside the timeout the settings give the gate, with room for python3 to start and
 # for the one file it may be reading when the budget passes (MAX_FILE read as commands took 2.8
 # seconds under a profiler at a load average of 222 on 2026-11-09).
@@ -1266,6 +1349,27 @@ print("ok" if int(m.group(1)) <= timeout - 4 else "BUDGET_SECONDS %s leaves unde
 PY
 )"
 check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
+# And the hard stop, which ends a reader the budget could not interrupt, still leaves the wrapper 2
+# seconds of that timeout to print its refusal (claude-config#2571): a hard stop at or past the
+# timeout is Claude Code's kill again, with no gate named.
+[ -n "$SETTINGS" ] || stop_room="$room"
+[ -z "$SETTINGS" ] || stop_room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
+import json, re, sys
+timeout = None
+for g in json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", []):
+    for h in g.get("hooks", []):
+        if h.get("command", "").endswith("hooks/slack-drafts-only-gate.sh"):
+            timeout = h.get("timeout")
+src = open(sys.argv[2]).read()
+budget = re.search(r"^BUDGET_SECONDS = (\d+)$", src, re.M)
+extra = re.search(r"^HARD_STOP_SECONDS = BUDGET_SECONDS \+ (\d+)$", src, re.M)
+if timeout is None or not budget or not extra:
+    print("no registered timeout, BUDGET_SECONDS line or HARD_STOP_SECONDS line to compare"); sys.exit()
+stop = int(budget.group(1)) + int(extra.group(1))
+print("ok" if stop <= timeout - 2 else "HARD_STOP_SECONDS %s leaves under 2 of the %s second timeout" % (stop, timeout))
+PY
+)"
+check "and its hard stop leaves at least 2 seconds of that timeout" "$stop_room"
 
 echo "slack drafts only: a crash inside the walk of a script is no verdict (claude-config#2573)"
 
