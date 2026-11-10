@@ -34,6 +34,15 @@
 #      refuse naming the payload (or, by recorded decision, let it through saying so); and on an
 #      unrelated call cut short, which it must pass. Stand ins replace gh, claude and curl, so each
 #      gate runs to its decision in about a second.
+#
+# And one the first of these left open (claude-config#2634):
+#
+#   6. A library loaded with a stand in function (`. lib/x.sh || name() {`). The second half of 1
+#      left every such library out as optional, so nothing ran a gate with one gone, and a stand in
+#      that lets the judged call through looked the same here as one that decides nothing. A gate's
+#      stand in is optional only when it is one this suite names as examined; any other library is
+#      needed again and taken away in 1. Each gate is then run with each examined one gone, on its
+#      judged call whole and cut short, and must decide as it does with the library in place.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
@@ -157,6 +166,8 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
+  # It judges a file edit, never a shell command: @fresh-worktree is the edit fixture_payload builds.
+  declare_gate fresh-worktree-base-gate.sh "@fresh-worktree"                -
   declare_gate require-tests-before-push.sh  "git push origin feature"      "allow0 #1912"
   declare_gate simplify-before-push.sh       "git push origin feature"      "allow0 #1912"
   declare_gate check-public-assets.sh        "git push origin feature"      "allow0 #1912"
@@ -166,23 +177,112 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
 payload_for(){ # payload_for <command> <cwd>
   python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": sys.argv[1]}, "cwd": sys.argv[2], "session_id": "s"}))' "$1" "$2"
 }
-# The libraries a gate needs, and, for each, the libraries that one sources in turn. Left out are
+# A judged call that is not a shell command is named @<fixture>, and this builds what it needs under
+# the run's own folder and prints the call.
+#   @fresh-worktree  an Edit in a worktree with no commits of its own, level with its origin, which
+#                    is a bare repository beside it, so no run reaches the network. With every
+#                    library in place the gate fetches, finds the worktree current and passes in
+#                    silence, so a refusal there can only be about the library taken away.
+fx_git(){ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c init.defaultBranch=main "$@" >/dev/null 2>&1; }
+fixture_payload(){ # fixture_payload <@fixture> <run folder>
+  local fx="$2/fx"
+  case "$1" in
+    @fresh-worktree)
+      if [ ! -d "$fx/repo/wt" ]; then
+        mkdir -p "$fx"
+        fx_git init -q --bare "$fx/origin.git"
+        fx_git clone -q "$fx/origin.git" "$fx/repo"
+        printf 'c1\n' > "$fx/repo/c1.txt"
+        fx_git -C "$fx/repo" add c1.txt
+        fx_git -C "$fx/repo" commit -q -m c1
+        fx_git -C "$fx/repo" push -q origin HEAD:main
+        fx_git -C "$fx/repo" worktree add -q "$fx/repo/wt" -b fresh origin/main
+      fi
+      python3 -c 'import json, sys; print(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": sys.argv[1], "old_string": "a", "new_string": "b"}, "cwd": sys.argv[2], "session_id": "s"}))' "$fx/repo/wt/c1.txt" "$fx/repo/wt" ;;
+    *) return 1 ;;
+  esac
+}
+# The fixture is seen to be one the gate passes with everything in place, so that a refusal below
+# is about the library taken away and never about the fixture (L1).
+mkdir -p "$WORK/fx-probe/repo" "$WORK/fx-probe/home"
+fixture_payload @fresh-worktree "$WORK/fx-probe" > "$WORK/fx-probe/in.json"
+fx_out="$( cd "$WORK/fx-probe/repo" && HOME="$WORK/fx-probe/home" FRESH_WORKTREE_STATE_DIR="$WORK/fx-probe/home/state" bash "$DIR/fresh-worktree-base-gate.sh" < "$WORK/fx-probe/in.json" 2>&1 )"; fx_rc=$?
+[ "$fx_rc" -eq 0 ] && [ -z "$fx_out" ] && [ -d "$WORK/fx-probe/fx/repo/wt" ] && ok \
+  || bad "the @fresh-worktree fixture is not an edit fresh-worktree-base-gate.sh passes in silence with every library in place (exit $fx_rc), so a refusal with one gone would prove nothing: ${fx_out:0:200}"
+
+# A library loaded with a stand in function: `. "$X/lib/y.sh" 2>/dev/null || name() {`. The library,
+# the function, and what follows it on the line.
+STANDIN_RE='/([a-z-]+\.sh)"[^|]*\|\|[[:space:]]*([a-z_]+)\(\)(.*)$'
+# The stand ins a GATE may carry on with, each examined: its library, the function standing in, the
+# shape of the stand in on the source line, and why a gate decides the same with it. Any other
+# stand in a gate loads leaves its library NEEDED, so the gate is run with it gone below and must
+# refuse the call it judges, as with any library (claude-config#2634). Until then every stand in
+# was optional by its shape alone, `|| bounded_run() {` among them, and fresh-worktree-base-gate.sh
+# let an edit through that it refuses with the library in place. Naming one here is not enough to
+# pass: each gate is also run with each of these gone, in the last section.
+declare_standin(){ printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4"; }
+{
+  declare_standin hook-notice.sh hook_allow_notice '^[[:space:]]*\{[[:space:]]*(#.*)?$' \
+    "says the notice and exits 0, as the library's own does, so it decides nothing; test-hook-notice.sh holds every hook to the one body the library's header gives (#1906)"
+  declare_standin this-mac.sh this_mac_name '^[[:space:]]*\{[[:space:]]*return 1;[[:space:]]*\}[[:space:]]*$' \
+    "answers as the library's own does when the Mac's name cannot be read; the name goes into a record and decides nothing (#2561)"
+} > "$WORK/standins"
+examined_standin(){ # examined_standin <library> <function> <rest of the line>
+  local lib fn shape _why
+  while IFS=$'\t' read -r lib fn shape _why; do
+    [ "$lib" = "$1" ] && [ "$fn" = "$2" ] && [[ $3 =~ $shape ]] && return 0
+  done < "$WORK/standins"
+  return 1
+}
+# standin_filter <needed|examined> [gate]: source lines on stdin.
+#   needed    the lines whose library the hook cannot do without: every line that is not a stand
+#             in and, for a gate, a stand in nobody examined. For any other hook every stand in is
+#             still optional by its shape: an advisory hook refuses nothing, and this suite does
+#             not run one with a stand in library gone.
+#   examined  the lines whose stand in is optional.
+standin_filter(){
+  local line lib fn rest optional
+  while IFS= read -r line; do
+    if [[ $line =~ $STANDIN_RE ]]; then
+      lib="${BASH_REMATCH[1]}"; fn="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+      optional=1
+      if [ "${2:-}" = gate ] && ! examined_standin "$lib" "$fn" "$rest"; then optional=0; fi
+      if [ "$1" = examined ]; then [ "$optional" = 1 ] && printf '%s\n' "$line"
+      else [ "$optional" = 0 ] && printf '%s\n' "$line"; fi
+    elif [ "$1" = needed ]; then
+      printf '%s\n' "$line"
+    fi
+  done
+  return 0
+}
+# A library's own source lines: the libraries IT loads.
+SUB_SRC_RE='^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"'
+# The libraries a hook needs, and, for each, the libraries that one sources in turn. Left out are
 # the ones it sources as optional, whose absence it carries on past: `|| true`, or a bare `. x &&`
 # that only turns a feature on (scanners-before-push.sh's pid lock), since the gate then goes on to
-# judge the command with what it has. So is lib/hook-notice.sh, sourced with the fallback its header
-# gives (`|| hook_allow_notice() {`): without it the gate judges exactly as before and says any
-# notice through that fallback, which test-hook-notice.sh runs with the library gone (#1906). Any
-# other library sourced with a stand in function (`|| bounded_run() {`) is optional the same way.
-libs_of(){ # libs_of <gate file>
+# judge the command with what it has. So is one loaded with an optional stand in (standin_filter):
+# lib/hook-notice.sh with the fallback its header gives (`|| hook_allow_notice() {`), without which
+# the gate judges exactly as before and says any notice through that fallback (#1906).
+libs_of(){ # libs_of <hook file> [gate]
   local l
-  grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' \
+  grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | standin_filter needed "${2:-}" \
     | grep -v -E '^[[:space:]]*\.[^|]*&&[^|]*$' | grep -o -E 'lib/[a-z-]+\.sh' | sort -u | while IFS= read -r l; do
     printf '%s\n' "${l#lib/}"
     # The same optional shapes are left out one level down: lib/push-changes.sh loads
     # lib/this-mac.sh with a stand in (`|| this_mac_name() {`), so its absence stops no gate (#2561).
-    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" \
-      | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
+    [ -f "$DIR/$l" ] && grep -E "$SUB_SRC_RE" "$DIR/$l" \
+      | grep -v -E '\|\|[[:space:]]*true' | standin_filter needed "${2:-}" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
   done | sort -u
+}
+# The libraries a gate carries on without by an examined stand in, at its own level and beneath
+# each library it needs: what the last section takes away one at a time.
+standin_libs_of(){ # standin_libs_of <gate file>
+  local l
+  { grep -E "$SRC_RE" "$1" | standin_filter examined gate | grep -o -E 'lib/[a-z-]+\.sh' | sed 's#^lib/##'
+    for l in $(libs_of "$1" gate); do
+      [ -f "$DIR/lib/$l" ] && grep -E "$SUB_SRC_RE" "$DIR/lib/$l" | standin_filter examined gate | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
+    done
+  } | sort -u
 }
 
 # A library a gate needs is followed into the libraries IT loads, in either shape a library here
@@ -200,12 +300,35 @@ done
 # One level down, a library loaded with a stand in function is optional, as it is at the gate's own
 # level: a gate loading lib/push-changes.sh needs it, never the lib/this-mac.sh it loads with one.
 printf '%s\n' '. "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || { echo "missing push-changes.sh" >&2; exit 2; }' > "$WORK/probe-gate2"
-probe_libs="$(libs_of "$WORK/probe-gate2" | tr '\n' ' ')"
+probe_libs="$(libs_of "$WORK/probe-gate2" gate | tr '\n' ' ')"
 case " $probe_libs" in
   *" this-mac.sh "*) bad "libs_of takes lib/this-mac.sh away beneath lib/push-changes.sh, which loads it with a stand in: it listed [$probe_libs]" ;;
   *" push-changes.sh "*) ok ;;
   *) bad "libs_of did not list lib/push-changes.sh for a gate loading it: it listed [$probe_libs]" ;;
 esac
+[ "$(standin_libs_of "$WORK/probe-gate2" | tr '\n' ' ')" = "this-mac.sh " ] && ok \
+  || bad "#2634 standin_libs_of should list lib/this-mac.sh, which lib/push-changes.sh loads with an examined stand in, for a gate loading lib/push-changes.sh: it listed [$(standin_libs_of "$WORK/probe-gate2" | tr '\n' ' ')]"
+# A gate's stand in is optional only when it is examined (#2634): the two named above are, in the
+# shape named there. Any other function, or one of those names over another body, leaves the
+# library needed, so the gate is run with it gone. An advisory hook's stand ins stay optional.
+printf '%s\n' \
+  '. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing' \
+  '. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null || this_mac_name() { return 1; }' > "$WORK/probe-gate3"
+[ -z "$(libs_of "$WORK/probe-gate3" gate)" ] && ok \
+  || bad "#2634 libs_of counts a library a gate loads with an examined stand in as needed: it listed [$(libs_of "$WORK/probe-gate3" gate | tr '\n' ' ')]"
+[ "$(standin_libs_of "$WORK/probe-gate3" | tr '\n' ' ')" = "hook-notice.sh this-mac.sh " ] && ok \
+  || bad "#2634 standin_libs_of should list both libraries a gate loads with an examined stand in: it listed [$(standin_libs_of "$WORK/probe-gate3" | tr '\n' ' ')]"
+printf '%s\n' \
+  '. "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null || bounded_run() {  # the library is missing' \
+  '. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() { exit 0; }' \
+  '. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null || this_mac_name() { exit 0; }' \
+  '. "$HOOK_DIR/lib/whole-number.sh" 2>/dev/null || judge() { return 0; }' > "$WORK/probe-gate4"
+[ "$(libs_of "$WORK/probe-gate4" gate | tr '\n' ' ')" = "bounded-run.sh hook-notice.sh this-mac.sh whole-number.sh " ] && ok \
+  || bad "#2634 libs_of should count as needed every library a gate loads with a stand in nobody examined (another function, or an examined name over another body): it listed [$(libs_of "$WORK/probe-gate4" gate | tr '\n' ' ')]"
+[ -z "$(standin_libs_of "$WORK/probe-gate4")" ] && ok \
+  || bad "#2634 standin_libs_of lists a stand in nobody examined as optional: [$(standin_libs_of "$WORK/probe-gate4" | tr '\n' ' ')]"
+[ -z "$(libs_of "$WORK/probe-gate4")" ] && ok \
+  || bad "#2634 libs_of counts an advisory hook's stand ins as needed, which the advisory section does not ask of them: it listed [$(libs_of "$WORK/probe-gate4" | tr '\n' ' ')]"
 
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put
@@ -219,13 +342,19 @@ run_gate(){ # run_gate <gate copy> <command> <cwd> -> OUT and RC
   local home
   home="$(dirname "$1")/home"
   mkdir -p "$home"
-  payload_for "$2" "$3" > "$WORK/in.json"
-  OUT="$( cd "$3" && env -u WRAPPED_REFUSAL_LEDGER_DIR HOME="$home" bash "$1" < "$WORK/in.json" 2>&1 )"; RC=$?
+  case "$2" in
+    @*) fixture_payload "$2" "$(dirname "$1")" > "$WORK/in.json" ;;
+    *) payload_for "$2" "$3" > "$WORK/in.json" ;;
+  esac
+  # fresh-worktree-base-gate.sh keeps its per session record under TMPDIR by default; under that HOME
+  # too, so no run leaves one on the Mac.
+  OUT="$( cd "$3" && env -u WRAPPED_REFUSAL_LEDGER_DIR HOME="$home" FRESH_WORKTREE_STATE_DIR="$home/fresh-worktree-state" bash "$1" < "$WORK/in.json" 2>&1 )"; RC=$?
 }
 n=0
 for g in "${GATES[@]}"; do
-  # Only a library the gate needs: one it sources as optional is not taken away.
-  libs="$(libs_of "$DIR/$g")"
+  # Only a library the gate needs: one it sources as optional is not taken away here. One it loads
+  # with an examined stand in is taken away in the last section instead (#2634).
+  libs="$(libs_of "$DIR/$g" gate)"
   [ -n "$libs" ] || continue
   row="$(awk -F '\t' -v g="$g" '$1 == g' "$WORK/table")"
   if [ -z "$row" ]; then
@@ -614,14 +743,15 @@ for _ in $(seq 1 200); do
   case "$(ps -o command= -p "$WATCH_PID" 2>/dev/null || true)" in *claude-sync*watch*) break ;; esac
 done
 export SYNC_WATCH_PID_FILE="$WORK/watch.pid" SYNC_HOLD_FILE="$WORK/no-hold"
-# run_judged <run dir> <gate> <payload file>: the gate in its own HOME and repo, bounded, and its
-# decision as one line: the exit code, any permissionDecision, and whether it said anything.
+# run_judged <run dir> <gate> <payload file> [<hooks folder>]: the gate in its own HOME and repo,
+# bounded, and its decision as one line: the exit code, any permissionDecision, and whether it said
+# anything. The gate is the one beside this suite unless a copy of the hooks is named.
 run_judged(){
   local R="$1" said decision
   mkdir -p "$R/home" "$R/repo"
   ( cd "$R/repo" && git init -q . 2>/dev/null )
   bounded_run 60 env HOME="$R/home" PATH="$WORK/bin:$PATH" CLAUDE_DETACHED_RUN= \
-    bash -c 'cd "$1" && exec bash "$2" < "$3" 2> "$4"' _ "$R/repo" "$DIR/$2" "$3" "$R/err"
+    bash -c 'cd "$1" && exec bash "$2" < "$3" 2> "$4"' _ "$R/repo" "${4:-$DIR}/$2" "$3" "$R/err"
   # stdout alone, which is where a notice or a permissionDecision has to be; stderr beside it for
   # the reason a refusal gives.
   printf '%s' "$BOUNDED_OUT" > "$R/stdout"
@@ -631,6 +761,17 @@ run_judged(){
   [[ $BOUNDED_OUT =~ $re ]] && decision="${BASH_REMATCH[1]}"
   printf 'exit %s, decision %s, %s\n' "$BOUNDED_RC" "$decision" "$([ -n "$said" ] && echo "said something" || echo "said nothing")" > "$R/decision"
   printf '%s' "$said" > "$R/said"
+}
+# What a gate does with a call it cannot parse, by its row: refuse it, let it through saying so, or
+# ask. decided_as <unread> <decision line> is true when the decision is the one the row names.
+UNREAD_SAID_RE='(?i)did not run|not judged|could not (read|judge|parse)|unread'
+decided_as(){
+  case "$1" in
+    refuse) case "$2" in "exit 2,"*|*"decision deny"*) return 0 ;; esac ;;
+    notice*) [ "$2" = "exit 0, decision none, said something" ] && return 0 ;;
+    ask*) case "$2" in "exit 0, decision ask,"*) return 0 ;; esac ;;
+  esac
+  return 1
 }
 # Each gate's runs go in the background, a few at a time, since each waits on its own git and python.
 # Waited on by pid, never with a bare wait, which would wait on the watcher above too.
@@ -664,14 +805,14 @@ while IFS=$'\t' read -r g tool inp extra unread; do
   cut="$(cat "$R/cut/said" 2>/dev/null)"; cutd="$(cat "$R/cut/decision" 2>/dev/null)"
   case "$unread" in
     refuse)
-      case "$cutd" in "exit 2,"*|*"decision deny"*) ok ;; *) bad "$g let a call it could not parse through although its raw text names what it judges ($cutd): ${cut:0:200}" ;; esac
+      decided_as "$unread" "$cutd" && ok || bad "$g let a call it could not parse through although its raw text names what it judges ($cutd): ${cut:0:200}"
       case "$cut" in *payload*|*Payload*) ok ;; *) bad "$g refused a call it could not parse without naming the payload as the reason: ${cut:0:200}" ;; esac ;;
     notice*)
-      case "$cutd" in "exit 0, decision none, said something") ok ;; *) bad "$g, which lets a call it cannot parse through by recorded decision (${unread#notice }), should allow it and say so ($cutd): ${cut:0:200}" ;; esac
-      v="$(hook_notice_verdict "$(cat "$R/cut/stdout" 2>/dev/null)" '(?i)did not run|not judged|could not (read|judge|parse)|unread' 2>&1)"
+      decided_as "$unread" "$cutd" && ok || bad "$g, which lets a call it cannot parse through by recorded decision (${unread#notice }), should allow it and say so ($cutd): ${cut:0:200}"
+      v="$(hook_notice_verdict "$(cat "$R/cut/stdout" 2>/dev/null)" "$UNREAD_SAID_RE" 2>&1)"
       [ -z "$v" ] && ok || bad "$g let a call it could not parse through without saying so in a systemMessage: $v" ;;
     ask*)
-      case "$cutd" in "exit 0, decision ask,"*) ok ;; *) bad "$g, which asks Dan about a call it cannot classify (${unread#ask }), let one it could not parse through without asking ($cutd): ${cut:0:200}" ;; esac
+      decided_as "$unread" "$cutd" && ok || bad "$g, which asks Dan about a call it cannot classify (${unread#ask }), let one it could not parse through without asking ($cutd): ${cut:0:200}"
       case "$cut" in *payload*|*Payload*) ok ;; *) bad "$g asked about a call it could not parse without naming the payload as the reason: ${cut:0:200}" ;; esac ;;
   esac
   otherd="$(cat "$R/other/decision" 2>/dev/null)"
@@ -698,6 +839,150 @@ while IFS=$'\t' read -r g tool inp extra unread; do
   od="$(cat "$R/olist/decision" 2>/dev/null)"
   case "$od" in "exit 0, decision none"*) ok ;; *) bad "#2057 $g refused an unrelated call whose command came as a list of words ($od): $(head -c 200 "$R/olist/said" 2>/dev/null)" ;; esac
 done < "$WORK/judged"
+
+# ---------------------------------------------------------------------------
+echo "a gate decides alike without a library it loads with a stand in (claude-config#2634)"
+
+# The first section takes away only what a gate needs, so a library loaded with an examined stand
+# in was run with it gone nowhere, and "the stand in decides nothing" was a sentence in a comment.
+# Each blocking gate is run here from a copy of the hooks with that one library gone, beside a whole
+# copy, so the two differ in the library and nothing else: its judged call must be decided alike,
+# the same call cut short must still be refused, said or asked about as its row says, and an
+# unrelated call must pass.
+copy_hooks(){ # copy_hooks <dest>: the hooks as they are installed
+  mkdir -p "$1" && cp -R "$DIR/." "$1/"
+}
+# standin_runs <folder> <gate> <tool> <input> <extra> <whole copy> <copy without the library>
+standin_runs(){
+  local S="$1" c
+  mkdir -p "$S"
+  judged_payload "$3" "$4" "$5" 'Q' "$S/with/repo" whole > "$S/with.json"
+  judged_payload "$3" "$4" "$5" 'Q' "$S/whole/repo" whole > "$S/whole.json"
+  judged_payload "$3" "$4" "$5" '' "$S/cut/repo" cut > "$S/cut.json"
+  judged_payload Bash '{"command": "ls -la"}' '{}' '' "$S/other/repo" cut > "$S/other.json"
+  # Each run's records in a folder of its own, wherever the runner pointed them (lib/suite-isolation.sh),
+  # so the two arms' can be read side by side below.
+  WRAPPED_REFUSAL_LEDGER_DIR="$S/with/ledger" PUSH_GATE_LEDGER_DIR="$S/with/ledger" run_judged "$S/with" "$2" "$S/with.json" "$6"
+  for c in whole cut other; do
+    WRAPPED_REFUSAL_LEDGER_DIR="$S/$c/ledger" PUSH_GATE_LEDGER_DIR="$S/$c/ledger" run_judged "$S/$c" "$2" "$S/$c.json" "$7"
+  done
+}
+# The Mac each line of a run's records names: the second field of both records a gate keeps.
+macs_recorded(){ # macs_recorded <run folder>
+  cat "$1"/ledger/*.tsv 2>/dev/null | cut -f2
+}
+# standin_verdict <folder> <unread>: each way the gate decided otherwise with the library gone, or
+# nothing.
+standin_verdict(){
+  local S="$1" with gone cutd otherd v
+  with="$(cat "$S/with/decision" 2>/dev/null)"; gone="$(cat "$S/whole/decision" 2>/dev/null)"
+  cutd="$(cat "$S/cut/decision" 2>/dev/null)"; otherd="$(cat "$S/other/decision" 2>/dev/null)"
+  case "$with" in ''|"exit 124"*) printf 'with every library in place its judged call came to no decision (%s), so there is nothing to compare; ' "${with:-no run}" ;; esac
+  [ "$gone" = "$with" ] || printf 'it decides its judged call differently (%s) than with the library in place (%s), and said: %s; ' "${gone:-no run}" "${with:-no run}" "$(head -c 200 "$S/whole/said" 2>/dev/null)"
+  decided_as "$2" "$cutd" || printf 'the same call cut short is decided "%s" where its row says %s, and it said: %s; ' "${cutd:-no run}" "$2" "$(head -c 200 "$S/cut/said" 2>/dev/null)"
+  case "$2" in notice*)
+    v="$(hook_notice_verdict "$(cat "$S/cut/stdout" 2>/dev/null)" "$UNREAD_SAID_RE" 2>&1)"
+    [ -z "$v" ] || printf 'it let the call cut short through without saying so in a systemMessage (%s); ' "$v" ;;
+  esac
+  case "$otherd" in "exit 0, decision none"*) ;; *) printf 'it does not pass an unrelated call (%s): %s; ' "${otherd:-no run}" "$(head -c 200 "$S/other/said" 2>/dev/null)" ;; esac
+}
+
+# Every blocking gate and each library it loads with an examined stand in, with the call its row
+# in the table above judges.
+: > "$WORK/standin-pairs"
+m=0
+while IFS=$'\t' read -r g tool inp extra unread; do
+  for lib in $(standin_libs_of "$DIR/$g"); do
+    m=$((m + 1))
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$m" "$g" "$lib" "$tool" "$inp" "$extra" "$unread" >> "$WORK/standin-pairs"
+  done
+done < "$WORK/judged"
+# Twenty four on 2026-11-10: lib/hook-notice.sh under twenty gates, lib/this-mac.sh under four.
+[ "$m" -ge 20 ] && ok || bad "#2634 only $m pairs of a blocking gate and a library it loads with an examined stand in were found, so the enumeration is reading the wrong thing"
+copies_ok=1
+copy_hooks "$WORK/hooks/whole" || copies_ok=0
+for lib in $(cut -f3 "$WORK/standin-pairs" | sort -u); do
+  copy_hooks "$WORK/hooks/without-$lib" && rm -f "$WORK/hooks/without-$lib/lib/$lib" || copies_ok=0
+  [ -f "$WORK/hooks/whole/lib/$lib" ] && [ ! -e "$WORK/hooks/without-$lib/lib/$lib" ] || copies_ok=0
+done
+[ "$copies_ok" = 1 ] && ok || bad "#2634 the hooks could not be copied whole and with each stand in library gone under $WORK/hooks, so no gate was run without one"
+
+# The check is seen to fail on a gate whose stand in lets a call through, and to pass the same gate
+# with a stand in that does not (L1). Three canaries, each refusing every push it can read:
+#   canary-said.sh   lets a push it cannot parse through saying so, with the stand in the library's
+#                    header gives. Passes.
+#   canary-quiet.sh  the same gate with a stand in that says nothing, so that push passes in
+#                    silence with the library gone. Must fail.
+#   canary-open.sh   names the Mac before it refuses, with a stand in that ends the gate, so every
+#                    push passes with the library gone. Must fail.
+canary(){ # canary <name> <library> <stand in line...>: a gate under $WORK/canary
+  local name="$1" lib="$2"; shift 2
+  { printf '%s\n' '#!/usr/bin/env bash' 'HOOK_DIR="${BASH_SOURCE[0]%/*}"'
+    printf '%s\n' "$@"
+    printf '%s\n' 'payload="$(cat)"' 'case "$payload" in *"git push"*) ;; *) exit 0 ;; esac'
+    printf '%s\n' 'if ! printf "%s" "$payload" | python3 -c '"'"'import json, sys; json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))'"'"' 2>/dev/null; then'
+    case "$lib" in
+      hook-notice.sh) printf '%s\n' '  hook_allow_notice "CANARY DID NOT RUN: it could not read the hook payload, so this push was not judged."' ;;
+      *) printf '%s\n' '  echo "REFUSED: the canary could not read the hook payload." >&2; exit 2' ;;
+    esac
+    printf '%s\n' 'fi'
+    [ "$lib" = this-mac.sh ] && printf '%s\n' 'this_mac_name >/dev/null'
+    printf '%s\n' 'echo "REFUSED: the canary refuses every push it can read." >&2' 'exit 2'
+  } > "$WORK/canary/$name"
+  cp "$WORK/canary/$name" "$WORK/hooks/whole/$name" && cp "$WORK/canary/$name" "$WORK/hooks/without-$lib/$name"
+}
+mkdir -p "$WORK/canary"
+canary canary-said.sh hook-notice.sh \
+  '. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing' \
+  '  printf '"'"'%s\n'"'"' "$1" >&2' \
+  '  printf '"'"'{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n'"'"' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }'
+canary canary-quiet.sh hook-notice.sh \
+  '. "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() { exit 0; }'
+canary canary-open.sh this-mac.sh \
+  '. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null || this_mac_name() { exit 0; }'
+PUSH_CALL="$(bash_call 'git push origin feature')"
+
+# A few pairs at a time, as above, and waited on by pid.
+pids=()
+while IFS=$'\t' read -r i g lib tool inp extra unread; do
+  ( standin_runs "$WORK/st$i" "$g" "$tool" "$inp" "$extra" "$WORK/hooks/whole" "$WORK/hooks/without-$lib" ) &
+  pids+=("$!")
+  if [ "${#pids[@]}" -ge 6 ]; then wait "${pids[@]}"; pids=(); fi
+done < "$WORK/standin-pairs"
+( standin_runs "$WORK/st-said" canary-said.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
+  standin_runs "$WORK/st-quiet" canary-quiet.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-hook-notice.sh"
+  standin_runs "$WORK/st-open" canary-open.sh Bash "$PUSH_CALL" '{}' "$WORK/hooks/whole" "$WORK/hooks/without-this-mac.sh" ) &
+pids+=("$!")
+wait "${pids[@]}"
+
+why="$(standin_verdict "$WORK/st-said" "notice canary")"
+[ -z "$why" ] && ok || bad "#2634 canary: a gate whose stand in says the notice as the library's header gives fails the check: $why"
+why="$(standin_verdict "$WORK/st-quiet" "notice canary")"
+case "$why" in *"cut short"*) ok ;; *) bad "#2634 canary: a gate whose stand in lets a call it cannot parse through in silence passes the check, so the check cannot see a stand in that allows quietly (it said: ${why:-nothing})" ;; esac
+why="$(standin_verdict "$WORK/st-open" refuse)"
+case "$why" in *"decides its judged call differently"*) ok ;; *) bad "#2634 canary: a gate whose stand in ends it before it refuses passes the check, so the check cannot see a stand in that lets the judged call through (it said: ${why:-nothing})" ;; esac
+
+reached=0
+while IFS=$'\t' read -r i g lib tool inp extra unread; do
+  why="$(standin_verdict "$WORK/st$i" "$unread")"
+  [ -z "$why" ] && ok || bad "#2634 $g with lib/$lib gone, which it loads with a stand in: $why"
+  # Deciding alike proves little about a stand in the call never reached. Where the judged call
+  # makes the gate record what it did, naming the Mac, the same record written with lib/this-mac.sh
+  # gone names none, which is the stand in answering, and the decision above was made past it.
+  [ "$lib" = this-mac.sh ] || continue
+  named="$(macs_recorded "$WORK/st$i/with" | grep -c '[A-Za-z0-9]')"
+  [ "$named" -gt 0 ] || continue
+  reached=$((reached + 1))
+  unnamed="$(macs_recorded "$WORK/st$i/whole" | grep -c -x -E '(unknown)?')"
+  [ "$unnamed" -eq "$named" ] && ok \
+    || bad "#2634 $g with lib/this-mac.sh gone: its judged call writes $named record line(s) naming the Mac with the library in place, and should write as many naming none through the stand in; it wrote $unnamed such line(s): $(cat "$WORK/st$i/whole/ledger"/*.tsv 2>/dev/null | head -c 200)"
+done < "$WORK/standin-pairs"
+# Three of the four did on 2026-11-10 (scanners-before-push.sh records nothing on a push with
+# nothing to scan). Not asked where this machine's name cannot be read at all, since the library's
+# own answer is then the stand in's (L411).
+if ( . "$DIR/lib/this-mac.sh" 2>/dev/null && this_mac_name >/dev/null 2>&1 ); then
+  [ "$reached" -ge 1 ] && ok || bad "#2634 no gate's judged call reached this_mac_name, so deciding alike with lib/this-mac.sh gone shows nothing about its stand in"
+fi
 
 # Every PreToolUse hook registered without onFailure block is advisory by design, and each is named
 # here with the reason, so a hook registered later is neither judged above nor exempt by being

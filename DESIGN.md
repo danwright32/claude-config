@@ -2311,6 +2311,15 @@ while it is behind the remote's main branch. The choices, and what each rules ou
   measurement), because a session that cannot reach GitHub must still be able to
   work. The one exception refuses: when even the unrefreshed local ref shows the worktree behind, it
   is behind at least that far, and `git merge --ff-only origin/main` needs no network.
+- **A fetch that was never run is refused, not treated as a failed one (#2634).** With
+  `lib/bounded-run.sh` missing the gate's stand in runs nothing, and with the `lib/whole-number.sh`
+  it reads its bound with missing the library runs nothing; both answer 125. The gate took that
+  down the failed fetch path, so a worktree it refuses with the library in place was let through
+  with a notice said once and then in silence for the retry window. The reason a failed fetch
+  passes does not hold here: nothing on the network is wrong, waiting does not clear it, and
+  `claude-sync pull` does. It went unseen because `test-gates-fail-closed.sh` left out every
+  library loaded with a stand in function as optional. That suite now counts such a library as
+  needed unless it names the stand in as examined, and runs each gate with each examined one gone.
 - **The fetch is bounded at 10 seconds inside a 30 second registration timeout.** The gate is
   registered with onFailure block (#1899), so a gate Claude Code kills is a refused edit; the bound
   makes the gate settle itself long before that. Eight fetches with nothing new took 0.18 to 0.33

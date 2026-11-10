@@ -484,7 +484,12 @@ When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses a
 payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
 says once a session that it could not check; both used to say nothing (#1900). Every other gate
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
-one with each such library taken away.
+one with each such library taken away. A library a gate loads with a stand in function
+(`. lib/x.sh || name() {`) is needed too, unless the suite names that stand in as examined:
+`hook_allow_notice` for `lib/hook-notice.sh`, which says the notice as the library does, and
+`this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
+each examined one gone as well, and must decide its judged call as it does with the library in
+place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
 
 Every hook takes its payload through `ps_read_payload` in `hooks/lib/push-scope.sh`, or cleans a raw
 capture with `ps_clean_payload` before anything parses it, because jq rejects a whole payload holding
@@ -2317,7 +2322,9 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   A worktree with its own commits, a primary checkout and a repository with no `origin` are passed.
   A fetch that fails or runs out its bound lets the edit through with a notice that it could not
   check, once, and tries again after 15 minutes, unless even the local ref already shows the
-  worktree behind, which is refused since the command needs no network. Reading is never refused,
+  worktree behind, which is refused since the command needs no network. A fetch that was never
+  run, because `lib/bounded-run.sh` or the `lib/whole-number.sh` it loads is missing, is refused
+  every time, naming the file and `claude-sync pull` (#2634). Reading is never refused,
   and neither is an agent's worktree cut from a freshly fetched `origin/main`. On 2026-11-10 (load
   average 23 over one minute) the gate took 0.055 to 0.063 seconds on an edit in a primary checkout
   or outside any repository, 0.31 to 0.38 seconds on a worktree's first edit with its fetch, and
