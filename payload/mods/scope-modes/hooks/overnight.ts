@@ -10,7 +10,8 @@ import { browserRefusal, type Browser } from './browser.ts'
 // recommended an allow list instead (L42, L615); Dan chose the ban list knowing an action it does
 // not name is approved. So the list here is the plan's, item for item:
 //
-// - issue, label and milestone writes by gh or gh api; any other GitHub write (a comment, which
+// - issue, label and milestone writes by gh or gh api, except filing an issue with its milestone
+//   and labels on this checkout's repository (Dan, 2026-11-09, #2581); any other GitHub write (a comment, which
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
 //   whose repository cannot be resolved is refused (L75);
@@ -21,7 +22,8 @@ import { browserRefusal, type Browser } from './browser.ts'
 //   host, readers included, and anything reaching past the session's tabs (browser.ts, #2064);
 //   headless automation (Playwright, by tool or by command) is on no list;
 // - git checkout or switch in a primary checkout (H7);
-// - force pushes and branch deletes;
+// - force pushes and branch deletes, except the merged branch a gh pr merge deletes with -d
+//   (Dan, 2026-11-09, #2580);
 //   none of these three in a throwaway repository under the temp folder (#1124), below;
 // - claude-sync send, sync, apply-only and install, and a pull from anywhere but the live sync clone
 //   or with its environment changed. The live clone's pull is the config repository's deploy step
