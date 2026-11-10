@@ -429,19 +429,21 @@ const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: 
 const GH_READ_ACTS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch'])
 const GH_READ_SUBS = new Set(['search', 'help', 'version', 'completion', 'status'])
 // The writes overnight work needs, each a subcommand and action and the only flags it may carry
-// beyond -R or --repo: a comment on the issue being worked (decision 3), opening, readying and
-// merging its PR (phase 7 judges merges further), and changing that PR's title or body. Nothing is
-// filed overnight, so no issue is created, and no merge skips its checks: --admin is refused unless
+// beyond -R or --repo: a comment on the issue being worked (decision 3), filing an issue with its
+// milestone and labels (Dan, 2026-11-09, #2581: the issue field gate still judges each one),
+// opening, readying and merging its PR (phase 7 judges merges further), with the merged branch
+// deleted (#2580), and changing that PR's title or body. No merge skips its checks: --admin is refused unless
 // the judge handed in (`adminMerge`, adminmerge.ts, #2125) finds the repository opted in and its
 // pinned head commit green on GitHub. One left to land once its checks pass (--auto) still waits on them.
 const BODY = ['-t', '--title', '-b', '--body', '-F', '--body-file']
 const GH_WRITES: Record<string, string[]> = {
   'issue comment': ['-b', '--body', '-F', '--body-file'],
+  'issue create': [...BODY, '-m', '--milestone', '-l', '--label'],
   'pr comment': ['-b', '--body', '-F', '--body-file'],
   'pr create': [...BODY, '-B', '--base', '-H', '--head', '-d', '--draft', '-f', '--fill', '--fill-first', '--fill-verbose'],
   'pr edit': BODY,
   'pr ready': [],
-  'pr merge': ['-s', '--squash', '-m', '--merge', '-r', '--rebase', '-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '--auto'],
+  'pr merge': ['-s', '--squash', '-m', '--merge', '-r', '--rebase', '-t', '--subject', '-b', '--body', '-F', '--body-file', '--match-head-commit', '--auto', '-d', '--delete-branch'],
 }
 // GraphQL mutations that are issue, label and milestone writes, named in the refusal as such; every
 // mutation is refused overnight, each by its exact name.
@@ -472,7 +474,8 @@ const ghVerdict = (a: ModKitGh | undefined): GhVerdict => {
   if (sub === 'pr') {
     const labels = LABELS_ON_PR[act]
     if (labels && hasFlag(a, ...labels)) return { refuse: 'set labels or a milestone on a PR' }
-    if ((act === 'merge' || act === 'close') && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
+    // A merge deletes the branch it merged (Dan, 2026-11-09, #2580); closing a PR unmerged does not.
+    if (act === 'close' && hasFlag(a, '-d', '--delete-branch')) return { refuse: 'delete a branch' }
   }
   const key = `${sub} ${act}`
   if (!Object.prototype.hasOwnProperty.call(GH_WRITES, key)) return { refuse: `run gh ${key}`.trim() }
