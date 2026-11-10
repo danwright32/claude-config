@@ -51,6 +51,20 @@ mods_replaced_note "$H" "$TMP/applied2" s2
 check_eq "a second pull moves only the stamp of the mod it replaced" "alpha${T}s2
 beta${T}s1" "$(sort "$H/state/mods-replaced.tsv")"
 
+# A pull replacing SEVERAL mods over a record that holds others keeps the others: the names it
+# replaced reach the rewrite as a list, which must not be lost on the way in.
+mkmod delta
+printf 'gamma\tg0\ndelta\td0\n' >> "$H/state/mods-replaced.tsv"
+printf 'updated\tmods/alpha/hooks/register.ts\nupdated\tmods/beta/hooks/register.ts\n' > "$TMP/applied-two"
+mods_replaced_note "$H" "$TMP/applied-two" s2b; rc=$?
+check_eq "a pull replacing two mods succeeds" 0 "$rc"
+check_eq "and keeps every mod it did not replace" "alpha${T}s2b
+beta${T}s2b
+delta${T}d0
+gamma${T}g0" "$(sort "$H/state/mods-replaced.tsv")"
+printf 'alpha\ts2\nbeta\ts1\n' > "$H/state/mods-replaced.tsv"
+rm -rf "$H/mods/delta"
+
 # A pull that wrote nothing under mods leaves the record exactly as it was.
 printf 'updated\thooks/other.sh\n' > "$TMP/applied3"
 before="$(cat "$H/state/mods-replaced.tsv")"
