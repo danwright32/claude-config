@@ -403,17 +403,21 @@ part_run "$FX/twice.tsv" 2 2
 # The fan in's verdict, RUN rather than read: the body of the step that decides it is taken from the
 # workflow as it stands and executed with each result a part job can end in, so a red part is
 # proved to make a red `suite`, the one check every merge waits on (L305). A grep for its wording
-# would pass a body that tested the wrong variable or never exited non zero.
+# would pass a body that tested the wrong variable or never exited non zero. Both helpers read
+# only the `suite` job, so a step of the same name in another job cannot stand in for it.
+suite_job_raw(){ # suite_job_raw <workflow> -> the suite job's lines as written, comments kept
+  awk '/^  suite:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }' "$1"
+}
 fanin_verdict_body(){ # fanin_verdict_body <workflow> -> the run: body of the fan in's verdict step, unindented
-  awk '
+  suite_job_raw "$1" | awk '
     /^[[:space:]]*- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
     s && !inrun && /^[[:space:]]*- / { exit }
     s && !inrun && /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ { inrun = 1; match($0, /^[[:space:]]*/); ind = RLENGTH; next }
     inrun { match($0, /^[[:space:]]*/); if ($0 !~ /^[[:space:]]*$/ && RLENGTH <= ind) exit; print substr($0, ind + 3) }
-  ' "$1"
+  '
 }
 fanin_verdict_env(){ # fanin_verdict_env <workflow> -> the env: lines of that step, comments stripped
-  code_of "$1" | awk '
+  wf_job_block "$1" suite | awk '
     /- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
     s && /^[[:space:]]*(- |run:)/ { exit }
     s { print }'
