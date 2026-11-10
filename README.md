@@ -260,6 +260,7 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 ./claude-sync install-autosync  # background auto-sync (see below)
+./claude-sync retire --yes      # a Mac being cleared: take it out of the sync (see below)
 ```
 
 ## Setting up a new Mac
@@ -338,6 +339,27 @@ alone the same way (#1470).
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
+
+### Retiring a Mac
+
+A Mac being cleared for trade in or resale must stop sending first: while its agents run, every
+file deleted from its `~/.claude` is sent on as a change to the shared config and removed from every
+other Mac (#2545). `claude-sync retire` on its own changes nothing: it says what it would do and
+exits 2. `claude-sync retire --yes` is the inverse of `install-autosync`:
+
+1. It records the Mac as retired in `~/.claude-sync-retired` (outside `~/.claude`, so the record
+   never travels to the other Mac). From then on every command that takes the sync lock (send,
+   push, sync, pull and the watcher's own sends), `watch`, `install-autosync` and
+   `install-schedule` refuse, naming the record.
+2. It unloads and removes `com.claudesync.timer`, `com.claudesync.watch` and the two older agents
+   `install-autosync` replaces, through the same helper `install-autosync` uses for those.
+3. It reads `launchctl list` back and says whether any of them is still loaded, exiting 1 if one is
+   or if launchd cannot be read, rather than trusting the unload's exit code.
+
+It deletes nothing in `~/.claude` or the shared repo, and leaves this Mac's lesson number band and
+lesson counts in the repo for history. Running it again is safe: the first record is kept and it
+says there was nothing left to remove. Under a fixture home it refuses whole, like the installers.
+To bring a retired Mac back, delete `~/.claude-sync-retired` and run `claude-sync install-autosync`.
 
 ### Backups a pull leaves behind expire on their own
 
@@ -5214,10 +5236,22 @@ The change reaches **new** sessions only: a running session keeps the plugins it
 `hooks/rule-files-changed.sh`, the same per prompt check that names a rule file changed under a
 running session, says this too, once: which mods arrived on disk after the session started (not
 loaded in it until a new session) and which were removed (#1535). It compares the set of mod folders
-holding a manifest, from one glob, so it starts no process however many mods there are. It says
-nothing about an EDIT to a mod the session already loaded: Claude Code reloads that mod itself and
-prints its own line ("hooks.json changed, reloaded"), or says the earlier version is still running
-when a reload fails, so a second notice would only repeat it, on every pull that touches a mod.
+holding a manifest, from one glob, so it starts no process however many mods there are. It also
+says, once per replacement, when a pull REPLACED a mod the session already loaded, and to run
+/reload-plugins (#2514). Claude Code does not always reload such a mod by itself. Measured on
+2.1.322 on 2026-11-10 with a probe mod in a headless session and the scripted stand-in model: a
+`claude -p` session (and an SDK host) watches no mod folder unless CLAUDE_CODE_PLUGIN_DIR_WATCH is
+set, so neither an install by rename (a new inode, how the sync installs) nor a write in place
+reloaded it, and nothing was said; with the watch on, both reloaded, each with a "reloaded (1 hook:
+...)" line. So a rename install is not what slips past the watcher. Read from the binary and not
+measured: in an interactive session a reload waits for a running turn to end; Claude Code holds one
+that would change the tool list under the prompt cache ("reload held, run /reload-plugins to apply
+it"), pauses one for a mod changing very often, and lets a hook veto one. The apply records each mod one of whose
+files it wrote or removed in `~/.claude/state/mods-replaced.tsv` (`hooks/lib/mods-replaced.sh`, its
+one writer and reader), and the hook adds that record to the mods snapshot, so a stamp that moved on
+a mod the session already had is a replacement. Whether Claude Code also reloaded it cannot be read
+from a hook, so the notice says what to do either way. An edit made by hand, with no pull, is not
+recorded and not reported.
 Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
 so a change between starting a session and its first prompt is reported too (#1544); the first
 prompt takes them only for a session with no start record. A start that finds a record already
@@ -5292,8 +5326,9 @@ Measured on Daniels-MacBook-Pro-2 on 2026-10-22, with 370 installed mod files of
 behind, one reading each and so only an order of size: status took 12.5 seconds with the comparison
 and 10.8 without it. A first version that hashed one file per process took 28.5.
 
-A change to a mod that is already named does reach running sessions: each one reloads the mod's
-code, at once when idle and at the end of its turn when busy. When one delivery changes mod-kit and
+A change to a mod that is already named does reach running interactive sessions (a headless one
+never reloads by default, #2514 above): each one reloads the mod's code, at once when idle and at
+the end of its turn when busy. When one delivery changes mod-kit and
 a mod that starts using something mod-kit only now provides, a session can reload that mod first,
 against the old mod-kit. Claude Code then unloads it, and its tools and commands are gone from that
 session, although its notice says "the previous version stays loaded" (#960, measured 2026-10-08;
@@ -5379,7 +5414,9 @@ words that only run the command after them, each read by its own options, a shel
 a cluster such as `bash -lc` or `zsh -ec`, and a shell's script fed on standard input (a heredoc, a
 here-string, `echo` or `cat` piped in), each read as the commands it runs, `env -S`'s string, what
 `find -exec` runs past any wrapper, a `case`'s clauses, a redirect as its own word however it is
-spaced, a subshell's parentheses as commands their own; `$.modkit.pipeline` gives the same commands,
+spaced, a subshell's parentheses as commands their own, the words naming a function (`w()`,
+`function w`) as a command of their own, so a body on the same line (`w(){ sed -i ...; }`) is read
+as the commands it holds (#2619); `$.modkit.pipeline` gives the same commands,
 each with the words of the command a `|` feeds it from, since only the reader can tell a pipe from a
 `;` or `&&`, the body of each heredoc feeding it and whether its delimiter was quoted, which stops
 the shell expanding it (#831), whether the shell left its program's text as written (`asWritten`,
@@ -5553,7 +5590,14 @@ read of one waits for ever and the call it judges never runs. What a file a call
 read the same way, through `currentText` in that file (#1814), which says such a file is unreadable,
 with why, never empty or absent, as it does a file whose look throws (Claude Code 2.1.312 throws
 EBADF for a link to `/dev/stdin`). The write reader never names a device as an input, and the scan
-fails a mod looping over `.inputs` by hand. That the real engine's `$.fs` reports a fifo and
+fails a mod looping over `.inputs` by hand. A quoted string that is not shell (a TypeScript string,
+a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through `quotedEnd`,
+`yamlScalar` and `yamlFlowList` in `hooks/quoted.ts`, kept by each mod that reads one at
+`hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
+own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
+words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
+pattern, or walking a string to the quote it opened with.
+That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
 `tests/test-fs-kind-engine.sh` against a probe mod run headless, once per Claude Code version, the
@@ -5568,7 +5612,7 @@ reload while its Compact runs.
 </td><td>
 
 #607 to #609, #605, #610, #663, #667, #688, #690, #698, #700, #703, #705, #707, #712, #726, #730,
-#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830, #2100
+#743, #744, #939, #1012, #1190, #1252, #1306, #1484, #1682, #1765, #1814, #1830, #2100, #2467
 
 </td></tr>
 <tr><td>
@@ -6680,7 +6724,9 @@ question was left on is written to `state/sleep/unanswered/<generation>` before 
 night's queue leaves it out (a list that cannot be written stops sleep starting), and the question
 is noted again for the morning report. A question in the design round guard's words is never asked
 or checked off, an answer on record included, since only the guard's own picker settles it, and
-`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`). Waking (#837, Dan's
+`/sleep` names them once (#2261, mod-kit's shared `hooks/designquestions.ts`), leaving out one
+whose issue is closed and marking it in `state/sleep/closed-holds/` so its issue is not read again,
+and naming one whose issue could not be read as not checked (#2585). Waking (#837, Dan's
 decisions of 2026-10-07): only `/wake` or "I'm up" ends sleep, in every session; a message from
 Dan between 7 AM and 7 PM ET while asleep has Claude ask once a night, in a plain line, whether he
 is up (`isDaytimeEt` in `hooks/sleep.ts`,
@@ -6711,7 +6757,7 @@ routes still count as the session's.
 
 #616, #621, #707, #712, #730, #805, #834, #835, #836, #837, #840, #841, #844, #856, #843, #917,
 #922, #1033, #1037, #1051, #1074, #1086, #1106, #1119, #1124, #1242, #1269, #1252, #1545, #1592,
-#1765, #1812, #2064, #2261
+#1765, #1812, #2064, #2261, #2585
 
 </td></tr>
 <tr><td>
@@ -7072,7 +7118,11 @@ program that builds its own file names (`node gen.js`) reads as writing nothing,
 A folder a script is handed is judged as a write of every file under it (#2321), unless the
 script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
 copies into a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527,
-and #2565 is to hold such a script only for the files its writes can reach. A loop over quoted
+and #2565 is to hold such a script only for the files its writes can reach. A script whose text
+runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
+it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
+whose own text, read as the commands it is, writes. A value in an argument, an assignment or
+arithmetic names no command. A loop over quoted
 search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).

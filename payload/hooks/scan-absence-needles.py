@@ -27,6 +27,9 @@ import os
 import re
 import sys
 
+# No bytecode cache beside the hooks, as scan-subshell-globals.py keeps none: a ratchet cache left in
+# lib/__pycache__ failed test-work-names.sh's #2444 check beside it (#2600).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/lib")
 import ratchet  # noqa: E402  the one rule a count based ratchet applies (claude-config#377)
 import shell_code_lines  # noqa: E402  the one reader of where a heredoc's body is (#2080)

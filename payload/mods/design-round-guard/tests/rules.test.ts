@@ -746,6 +746,15 @@ test('the JSX reader finds elements only where an expression starts, past string
   }
 })
 
+test("the source reader's strings end where mod-kit's quotedEnd says, and one a line break leaves open is unread (#2467)", () => {
+  const text = `const a = 'it\\'s'; const b = "say \\"hi\\""; const c = 'one\\\ntwo'`
+  const spans = sourceSpans(text, false)
+  if (!spans) throw new Error('the fixture could not be read')
+  expect(spans.strings.map(([x, y]) => text.slice(x, y))).toEqual(["it\\'s", 'say \\"hi\\"', 'one\\\ntwo'])
+  // A string a bare line break leaves open, or the end of the text, is read as nothing at all.
+  for (const bad of ["const s = 'open\nshut'", 'const s = "open', "const s = 'ends\\"]) expect(sourceSpans(bad, false)).toBeNull()
+})
+
 test('a mod hook edit is logic only when it touches no JSX line and names no drawing word, comments aside', () => {
   const swapIn = (from: string, to: string) => {
     if (!TSX.includes(from)) throw new Error(`the fixture holds no ${from}`)

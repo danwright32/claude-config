@@ -694,3 +694,42 @@ describe('comments (#2407)', () => {
     expect(commands("cat <<'EOF' # it's text\nbody\nEOF\nls")).toEqual([['cat', '<<EOF'], ['ls']])
   })
 })
+
+// #2619: a function whose first command is on the line that names it (`w(){ sed ...; }`,
+// `w() { ...`, `w()( ... )`, `function w { ...`) was read as one command named for the function with
+// the body's words as its own, so what the body ran was no command and a write in it was no write.
+// The words naming a function are now a command of their own, and its body the commands it holds, as
+// a body starting on the next line always was.
+describe('a function defined on one line (#2619)', () => {
+  const fed = (cmd: string) => pipeline(cmd).map(c => [c.words[0], c.pipedFrom?.[0]])
+  test('the words naming a function are a command of their own, and its body is the commands it holds', () => {
+    expect(commands("w(){ sed -i '' s/a/b/ f.ts; }; w")).toEqual([['w()'], ['sed', '-i', '', 's/a/b/', 'f.ts'], ['}'], ['w']])
+    expect(commands('w() { git push; }')).toEqual([['w()'], ['git', 'push'], ['}']])
+    expect(commands('w()( git push )')).toEqual([['w()'], ['('], ['git', 'push'], [')']])
+    expect(commands('fix-all(){ git push; }; fix-all')).toEqual([['fix-all()'], ['git', 'push'], ['}'], ['fix-all']])
+    expect(commands('function w { git push; }')).toEqual([['function', 'w'], ['git', 'push'], ['}']])
+    expect(commands('function w() { git push; }')).toEqual([['function', 'w()'], ['git', 'push'], ['}']])
+    expect(commands('function w(){ git push; }')).toEqual([['function', 'w()'], ['git', 'push'], ['}']])
+  })
+  test('one defined after a reserved word, a separator or a new line is read the same way', () => {
+    expect(commands('if true; then w(){ git push; }; fi')).toEqual([['true'], ['w()'], ['git', 'push'], ['}'], ['fi']])
+    expect(commands('true && w() { git push; }')).toEqual([['true'], ['w()'], ['git', 'push'], ['}']])
+    expect(commands('echo a\nfunction w { git push; }\nw')).toEqual([['echo', 'a'], ['function', 'w'], ['git', 'push'], ['}'], ['w']])
+  })
+  test('a body starting on the next line is the commands it holds too, and a name spaced from its parentheses reads as before', () => {
+    expect(commands('w() {\n  git push\n}\nw')).toEqual([['w()'], ['git', 'push'], ['}'], ['w']])
+    expect(commands('w()\n{\n  git push\n}')).toEqual([['w()'], ['git', 'push'], ['}']])
+    expect(commands('function w {\n  git push\n}')).toEqual([['function', 'w'], ['git', 'push'], ['}']])
+    expect(commands('w () { git push; }')).toEqual([['w'], ['('], [')'], ['git', 'push'], ['}']])
+    expect(commands('function w () { git push; }')).toEqual([['function', 'w'], ['('], [')'], ['git', 'push'], ['}']])
+  })
+  test('a word holding () that names no function, or the word function as an argument, is left as it was', () => {
+    expect(commands('echo w() x')).toEqual([['echo', 'w()', 'x']])
+    expect(commands('grep function w.sh')).toEqual([['grep', 'function', 'w.sh']])
+    expect(commands('x=()')).toEqual([])
+    expect(commands('echo $(w) "w()" w\\(\\)')).toEqual([['w'], ['echo', '$(w)', 'w()', 'w()']])
+  })
+  test("the body's braces are a group of their own, so its closing brace takes no feed from the group around it", () => {
+    expect(fed('curl x | while read l; do w() { cat; }; sh; done')).toEqual([['curl', undefined], ['read', 'curl'], ['w()', 'curl'], ['cat', 'curl'], ['}', undefined], ['sh', 'curl'], ['done', undefined]])
+  })
+})

@@ -16,6 +16,7 @@ payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-written-lib-list.sh
 payload/hooks/test-hand-rolled-wait.sh
 payload/hooks/test-heredoc-in-substitution.sh
+payload/hooks/test-lib-bytecode-importers.sh
 payload/hooks/test-lib-self-locate.sh
 payload/hooks/test-pipefail-shortcircuit.sh
 payload/hooks/test-push-changes.sh
