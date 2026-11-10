@@ -1785,7 +1785,18 @@ and lessons review and is judged by every gate as any update's is. Any other con
 branch, stops as before, naming the conflicted files. Each row was one line of up to 29 KB until
 the table became an HTML table of wrapped cells (claude-config#2108), which lets edits to different
 lines of one description merge cleanly, but two pull requests adding an issue number to one mod
-still meet in its Issue cell, so the resolver stays. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+still meet in its Issue cell, so the resolver stays. One CI start that never began is re-run
+rather than stopped on (claude-config#2537): on 2026-11-09 pull requests #2495, #2496 and #2534
+stopped on `block-red-merge.sh`'s "PR has NO checks at all" because each head's tests run had
+finished as a failure with zero jobs ("This run likely failed because of a workflow file issue")
+while main's workflow was fine, and a plain `gh run rerun` started each properly. Once no run for
+the head is unfinished, the helper reads the jobs of each run for that exact head that finished as a
+failure, and one with no jobs on its first attempt is re-run once for that head, said in its output
+and log, and waited on like any other run. A run whose jobs ran and failed is never re-run, a run
+already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
+left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
+gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
+has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -2553,7 +2564,8 @@ script file or interpreter is answered before anything loads; it acts on a Slack
 
 </td><td>
 
-2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push
+2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root or the session's
+notes folder root (#2490), not a push
 
 </td></tr>
 <tr><td>
@@ -3480,8 +3492,11 @@ MacBook one pointed at a folder gone for two weeks after a project move, so the 
 a checkout that no longer existed and did not recognise the real one (#2491).
 `hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
 absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
-backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
-names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+backticks or quotes, trailing punctuation dropped, a URL never), and names each one that is not on
+this Mac with the line of its entry. A bare path is read up to the next space and then again with
+each further word on the line, up to a backtick, quote or bracket, so a folder name holding a space
+(`<path> (<remote url>)` in the Trusted repos entry) is found whole: it counts as present when any of
+those readings exists, and the shortest is named when none does (#2549). No settings file, no `autoMode`
 block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
 is one line and exit 2; no `python3` is exit 3.
 
@@ -5026,11 +5041,25 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's first request, or of the first request after its latest compaction. A builder (any
   subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
   last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
-  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  `handoff.md` in the working folder its brief names and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
-  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
+  in `handoff.md` in its notes folder (below), named in full in the notice, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session.
+- **The notes folder** (claude-config#2490). The scratchpad Claude Code gives a session is under
+  `/private/tmp`, which macOS empties on every restart; on 2026-11-09 a restart of the work
+  MacBook took a session's `handoff.md`, a guide and a background agent's working tree with it.
+  So each session has a notes folder, `~/.claude/state/session-notes/<project>/<session>/`, where
+  `<project>` is the folder name Claude Code keys the session's transcript by. It is on disk,
+  outlives a restart, and is never synced: claude-sync carries only the payload's folders, never
+  `state/`, so a note naming work repositories cannot reach this public repository.
+  `~/.claude/projects` was the other candidate, also unsynced, but Claude Code owns its layout and
+  deletes its contents after `cleanupPeriodDays`. `hooks/lib/session_notes.py` decides the folder
+  for every caller; `hooks/session-notes-folder.sh` (SessionStart) makes it and tells the session,
+  pointing at a `handoff.md` already there and copying one still in the scratchpad in once, never
+  over a note already in the folder. Agents dispatched by the session get their working folders
+  under it, and `scratchpad-subagent-gate.sh` refuses a subagent's write into its root as it does
+  the scratchpad's. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;

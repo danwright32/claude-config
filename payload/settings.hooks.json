@@ -523,6 +523,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/gh-guard-path.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/session-notes-folder.sh",
+            "timeout": 10
           }
         ]
       }
