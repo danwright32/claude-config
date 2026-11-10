@@ -377,6 +377,11 @@ expect_bash "supabase db query from a file" ask 'supabase db query --linked --ye
 expect_bash "supabase db query asking only for help" none 'supabase db query --linked --file /dev/null --help'
 expect_bash "supabase db push" ask 'supabase db push --yes'
 expect_bash "supabase db push --dry-run changes nothing" none 'supabase db push --dry-run'
+expect_bash "supabase db push --dry-run=true changes nothing" none 'supabase db push --dry-run=true'
+# A dry run flag set to anything but true is a real push (lessons review, fc56bfb).
+expect_bash "supabase db push --dry-run=false is a real push" ask 'supabase db push --dry-run=false'
+expect_bash "supabase db push --dry-run=0 is a real push" ask 'supabase db push --dry-run=0'
+expect_bash "a dry run flag undone by a later false is a real push" ask 'supabase db push --dry-run --dry-run=false'
 expect_bash "supabase db reset" ask 'supabase db reset --linked'
 expect_bash "supabase migration up" ask 'supabase migration up --linked'
 expect_bash "supabase migration list only reads" none 'supabase migration list'
@@ -480,7 +485,7 @@ PY
 )"
 [ -z "$unscreened" ] && check "every client, tool and key the classifier knows holds a screen word" ok || check "every client, tool and key the classifier knows holds a screen word" "not screened: $unscreened"
 
-# --- the settings run it for exactly these tools, and refuse the call if it fails ---------------
+# --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
 d = json.load(open(sys.argv[1]))

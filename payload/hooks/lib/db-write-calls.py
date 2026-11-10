@@ -403,6 +403,9 @@ def _shell_client(prog, words, judge):
 def _supabase(words, judge):
     """The findings for one run of the Supabase CLI: its db and migration subcommands."""
     path, flags, files = [], set(), []
+    # A dry run only while every --dry-run is bare or =true: --dry-run=false is a real push, and so
+    # is a dry run undone by a later false. Any value but true counts as not dry.
+    dry = None
     i, n = 1, len(words)
     while i < n:
         w = words[i]
@@ -412,6 +415,8 @@ def _supabase(words, judge):
             continue
         name, eq, value = w.partition("=")
         flags.add(name)
+        if name == "--dry-run":
+            dry = dry is not False and (not eq or value.lower() == "true")
         if not eq and name in SUPABASE_VALUED and i < n:
             value = words[i]
             i += 1
@@ -435,7 +440,7 @@ def _supabase(words, judge):
     if sub in SUPABASE_DB_READS:
         return []
     if sub == "push":
-        return [] if "--dry-run" in flags else [(name + " applies the pending migrations to the database", None)]
+        return [] if dry else [(name + " applies the pending migrations to the database", None)]
     if sub == "reset":
         return [(name + " drops the database and builds it again from the migrations", None)]
     if sub != "query":
