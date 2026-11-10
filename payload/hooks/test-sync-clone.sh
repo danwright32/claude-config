@@ -202,9 +202,14 @@ case "$nr_out" in *"git checkout -- payload/hooks/lib/hold-record.sh"*) check "a
 echo "sync clone: one reading of the hold record"
 
 # claude-sync and these hooks must read the record one way, or "is this my hold" has two answers
-# (L370). The parser lives in lib/hold-record.sh, and claude-sync keeps no copy of it.
-SYNC_SCRIPT="$DIR/../../claude-sync"
-if [ -f "$SYNC_SCRIPT" ]; then
+# (L370). The parser lives in lib/hold-record.sh, and claude-sync keeps no copy of it. claude-sync
+# sits at the top of the checkout and is never installed, so it is found through the checkout this
+# copy sits in (lib/checkout-root.sh, #1567); the installed copy is in none, and says so (#2623, L411).
+SYNC_CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+SYNC_SCRIPT="${SYNC_CHECKOUT:+$SYNC_CHECKOUT/claude-sync}"
+if [ -z "$SYNC_SCRIPT" ] || [ ! -f "$SYNC_SCRIPT" ]; then
+  echo "SUITE-PART-UNMEASURED claude-sync reading the hold record through lib/hold-record.sh: $DIR/.. is not the payload of a claude-config checkout, so there is no claude-sync to read"
+else
   if grep -q 'hold_record_rows' "$SYNC_SCRIPT" && ! grep -q 'substr($4, 9)' "$SYNC_SCRIPT"; then
     check "claude-sync reads the hold record through lib/hold-record.sh, not a copy of its own" ok
   else

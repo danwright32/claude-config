@@ -8,12 +8,23 @@ unrelated repository. lib/checkout-root.sh is the one test of whether a folder i
 claude-config checkout (#1567), and every suite that needs the checkout asks it. This finds the next
 suite that hand rolls the lookup instead (L613), so the fix is not converted one site at a time.
 
-WHAT IT LOOKS FOR, in a suite file (a test-*.sh): an upward derivation, a command substitution that
-changes into a variable's folder (or a `dirname`) followed only by two or more `..` and prints where
-it landed (`$(cd "$DIR/../.." && pwd)`). A path that goes up and then down again into something
-named (`$DIR/../../hooks`) is not a lookup of the repository and is not reported. Comments, and a
-line inside a quoted string spanning lines (a fixture of some other check's input), are not code and
-are not judged (lib/shell_code_lines.py).
+WHAT IT LOOKS FOR, in a suite file (a test-*.sh), two shapes:
+
+- An upward derivation, a command substitution that changes into a variable's folder (or a
+  `dirname`) followed only by two or more `..` and prints where it landed (`$(cd "$DIR/../.." &&
+  pwd)`), wherever the suite sits.
+- Any path written from a variable (or a `dirname`) that climbs two or more `..` OUT OF THE PAYLOAD,
+  with or without a file named after it (`"$DIR/../../README.md"`, `"$d"/../../tests/test-*.sh`,
+  `"$1/../.."`), claude-config#2623. The variable is taken to be the suite's own folder, and the
+  path is resolved from where the suite sits in the tree: from payload/hooks two `..` leave the
+  payload, from payload/skills/<name> three do, and for a suite outside the payload (tests/) the
+  boundary is the repository itself. A path that climbs only to a sibling inside the payload
+  (`$DIR/../../hooks` from a skill) is there in the installed copy too and is not reported. That is
+  how #2620 shipped: two suites read the README two folders up, which is the checkout's from
+  payload/hooks and ~/README.md from the installed copy.
+
+Comments, and a line inside a quoted string spanning lines (a fixture of some other check's input),
+are not code and are not judged (lib/shell_code_lines.py).
 
 Reads the paths to judge, relative to --root, one per line on stdin, and judges only the suite files
 among them. Prints `<path>:<line>: <text>` for each, and exits 1 when there is any.
@@ -30,10 +41,27 @@ from shell_code_lines import code_lines  # noqa: E402
 
 SUITE = re.compile(r'(^|/)test-[^/]*\.sh$')
 UPWARD = re.compile(r'\$\(\s*cd\s+"?(?:\$\{?\w+\}?|\$\(dirname[^)]*\))(?:/\.\.){2,}/?"?\s*(?:&&|;)\s*pwd')
+# A variable (or a dirname) and the run of `..` straight after it, a closing quote allowed between
+# the two (`"$d"/../..`). The run must end at a path separator or the end of the word, so `/...x` is
+# not counted as a climb.
+CLIMB = re.compile(r'\$(?:\{\w+\}|\w+|\(dirname[^)]*\))"?((?:/\.\.)+)(?=/|"|\'|\s|\)|;|$)')
 
 
-def judge(text):
-    return [(n, line.strip()) for n, line in code_lines(text) if UPWARD.search(line)]
+def climbs_out(rel, line):
+    """True when a path in the line climbs two or more folders and out of the payload (out of the
+    repository, for a suite outside it) from the suite at rel."""
+    folders = rel.split('/')[:-1]
+    room = len(folders) - (1 if folders and folders[0] == 'payload' else 0)
+    for m in CLIMB.finditer(line):
+        ups = m.group(1).count('..')
+        if ups >= 2 and ups > room:
+            return True
+    return False
+
+
+def judge(text, rel=''):
+    return [(n, line.strip()) for n, line in code_lines(text)
+            if UPWARD.search(line) or climbs_out(rel, line)]
 
 
 def main():
@@ -50,7 +78,7 @@ def main():
                 text = fh.read()
         except OSError:
             continue
-        for n, t in judge(text):
+        for n, t in judge(text, rel):
             any_found = True
             print('%s:%d: %s' % (rel, n, t))
     return 1 if any_found else 0
