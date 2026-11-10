@@ -2,7 +2,7 @@
 // Pure, so each rule is tested on its own. Looks settled with Dan on 2026-10-04 (docs/mods-design.md,
 // Is it live); the spec agreed 2026-10-03.
 
-import { NEVER } from './threads.ts'
+import { NEVER, UNASKED } from './threads.ts'
 
 export const MOD = 'is-it-live'
 
@@ -214,18 +214,18 @@ const EXISTS =
 export const draftLineOf = (d: DraftAsk): string => {
   const { name } = d.requester
   const s = d.slack
-  const words = `with message set to exactly the message on this card, word for word. Run /no-ai-tells on it first; if that changes a word, call this card again with the new message before saving, so the draft is the text Dan saw. ${NEVER}`
+  const words = `with message set to exactly the message on this card, word for word. Run /no-ai-tells on it first; if that changes a word, call this card again with the new message before saving, so the draft is the text Dan saw. ${UNASKED} ${NEVER}`
   let how: string
   let where: string
   if (d.requester.via === 'slack') {
     if (!(s?.channel_id && s.thread_ts))
-      return `No Slack thread was given for the message for ${name}, which is owed as a Slack draft reply in the thread ${name} asked in. Find that thread (the link Dan pasted names its channel id and its parent message time) and save it with slack_send_message_draft with that channel_id and thread_ts, ${words} If the thread cannot be found, save nothing and tell Dan the message for ${name} has no Slack draft because its thread is not known. Pass slack.channel_id and slack.thread_ts on the next card for this thread. ${EXISTS}`
+      return `No Slack thread was given for the message for ${name}, which is owed as a Slack draft reply in the thread ${name} asked in. Find that thread (the link Dan pasted names its channel id and its parent message time) and save it now, without asking Dan first, with slack_send_message_draft with that channel_id and thread_ts, ${words} If the thread cannot be found, save nothing and tell Dan the message for ${name} has no Slack draft because its thread is not known. Pass slack.channel_id and slack.thread_ts on the next card for this thread. ${EXISTS}`
     how = `slack_send_message_draft with channel_id "${s.channel_id}" and thread_ts "${s.thread_ts}"`
     where = 'in that thread'
   } else {
     where = `in a DM to ${name}`
     if (!s?.user_id)
-      return `The message for ${name} is owed as a Slack draft ${where}. Find ${name}'s Slack user id with slack_search_users, then save it with slack_send_message_draft with that user id as channel_id (Slack takes a user id as the DM's channel), ${words} If no Slack user is clearly ${name}, save nothing and tell Dan the message for ${name} has no Slack draft because ${name} could not be found in Slack. ${EXISTS}`
+      return `The message for ${name} is owed as a Slack draft ${where}. Find ${name}'s Slack user id with slack_search_users, then save it now, without asking Dan first, with slack_send_message_draft with that user id as channel_id (Slack takes a user id as the DM's channel), ${words} If no Slack user is clearly ${name}, save nothing and tell Dan the message for ${name} has no Slack draft because ${name} could not be found in Slack. ${EXISTS}`
     how = `slack_send_message_draft with channel_id "${s.user_id}" (Slack takes a user id as the DM's channel)`
   }
   const lead = d.earlier
@@ -233,7 +233,7 @@ export const draftLineOf = (d: DraftAsk): string => {
       ? `A Slack draft of this message was already asked for on an earlier card for #${d.earlier.pr}: save it only if it is not saved yet. `
       : `An earlier card (#${d.earlier.pr}) already asked for a draft ${where}, and Slack keeps one per channel, so this draft replaces that one. `
     : ''
-  return `${lead}Save the message for ${name} as a Slack draft ${where} for Dan to send himself: call ${how}, ${words} Then tell Dan it is a draft waiting ${where} and that nothing was sent. ${EXISTS}`
+  return `${lead}Save the message for ${name} as a Slack draft ${where} for Dan to send himself, now, in the same step as this card, without asking Dan first: call ${how}, ${words} Then tell Dan it is a draft waiting ${where} and that nothing was sent. ${EXISTS}`
 }
 
 /** /live: the project's recent cards, newest first, then every message not yet marked sent. */
