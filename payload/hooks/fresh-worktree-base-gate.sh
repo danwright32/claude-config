@@ -178,7 +178,8 @@ own="$(count "$base..HEAD")"
 case "$own" in ''|0) ;; *) record ok; exit 0 ;; esac
 
 # Zero written any way, or anything not a whole number, is the default (lib/whole-number.sh, which
-# lib/bounded-run.sh loads; with neither, the default too).
+# lib/bounded-run.sh loads). With either library missing the bound is the default as well, but no
+# fetch is run with it: bounded_run answers 125 and the edit is refused below (claude-config#2634).
 secs="$(whole_above_zero "${FRESH_WORKTREE_FETCH_SECONDS:-10}" 2>/dev/null)" || secs=10
 bounded_run "$secs" env GIT_TERMINAL_PROMPT=0 git -C "$top" fetch --quiet origin "$branch"
 if [ "$BOUNDED_RC" -ne 0 ]; then
