@@ -62,13 +62,17 @@ fi
 # its session was started in, which files its findings under a key that session's
 # review never opens (see issue_spool_key). `cwd` is still RECORDED on the
 # record: it is how that split was found, and it is worth keeping.
+# What the library SAID when it refused goes into the log beside the lost record (claude-config#2639):
+# with no digest program it refuses to name a spool file at all, and a log line saying only that
+# the append failed left the reason nowhere.
 spool_append() { # spool_append <record>
-  if bash "$SPOOL" append "$cwd" "$1" "${parent:-}" 2>/dev/null; then
+  local said
+  if said="$(bash "$SPOOL" append "$cwd" "$1" "${parent:-}" 2>&1 >/dev/null)"; then
     recorded=1
     return 0
   fi
   printf '%s\n' "$1" >> "$lost_records" 2>/dev/null
-  note_unrecorded "a record could not be appended to the spool; it is in $lost_records"
+  note_unrecorded "a record could not be appended to the spool; it is in $lost_records${said:+. The spool said: $(printf '%s' "$said" | tr '\n' ' ')}"
   return 1
 }
 

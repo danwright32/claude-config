@@ -8,11 +8,33 @@ decided here: every statement found is handed to judge(), which is lib/sql-read-
 rule read-only-query-allow.sh approves by (L342), so the two hooks cannot disagree about one.
 Anything that runs statements this file cannot find, or cannot read, is asked about.
 
+Since #2632 it also names the Supabase tools that change a database with no statement at all
+(SUPABASE_CHANGES), which the rules above could not see because there is nothing to judge.
+
   mcp_finding(tool, tool_input, judge)   one MCP call other than the two #2521 named
+  supabase_change(tool, tool_input)      the sentence for a call in SUPABASE_CHANGES, or None
+  named_as_database_call(tool)           whether a tool's name alone says any of the above
   bash_findings(command, judge, sw)      one Bash command; sw is lib/shell-words.py, loaded
   asked_words()                          every word a call must hold for this file to ask about it
 
 Each finding is (why the call is asked about, the statement it is about or None).
+
+SUPABASE TOOLS WITH NO STATEMENT (claude-config#2632), decided from the claude.ai connector's tool
+descriptions as read on 2026-11-10. None had been called on the personal MacBook by then, so the
+questions were measured as costing nothing there. Asked about on every call, on any server whose
+name holds supabase, with the branch or project the input names:
+  - merge_branch (a branch's migrations and edge functions go to production), reset_branch (data
+    and schema outside a migration are lost), rebase_branch (production's newer migrations run on
+    the branch) and delete_branch (the branch's database goes);
+  - create_branch and create_project, each a new database that is billed, as createdb is asked
+    about in a shell. The connector says it confirms the cost itself, which was not measured (L82);
+  - pause_project (the database goes offline) and restore_project (a database somebody paused
+    comes back into service and into the bill).
+Left unasked, since none changes a database: deploy_edge_function and create_edge_function_secret
+(code and configuration, as `supabase functions deploy` is unasked in a shell; the secret's value,
+by the tool's description, is typed in the Supabase dashboard and never passes through the
+session), create_notebook (saved without being run; run_notebook is asked about), delete_notebook,
+submit_feedback and delete_feedback.
 
 MCP TOOLS, calibrated on every tool name on the personal MacBook on 2026-11-10 (settings,
 ~/.claude.json, and the 185 names in its transcripts). A tool is read as running statements when:
@@ -40,7 +62,10 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
   - the Supabase CLI: `db query` by its statement, `db push` (unless --dry-run), `db reset`, and
     `migration up`, `down`, `repair` and `squash`. Measured as the write routes in use here: 76
     sqlite3 runs, 8 `supabase db query`, 2 `db push` and 1 `migration up` in 107,120 Bash calls
-    over the 30 days to 2026-11-10, and no psql or mysql in command position at all.
+    over the 30 days to 2026-11-10, and no psql or mysql in command position at all. Since #2632
+    also `branches create`, `delete`, `pause`, `unpause` and `update` and `projects create` and
+    `delete` (SUPABASE_STATE_GROUPS), the shell route to what SUPABASE_CHANGES names, so that one
+    is not the way round the other (L450). No transcript on the personal MacBook had run one.
   - UNREAD_CLIENTS (pgcli, pg_restore, dropdb, mongosh and the rest): asked about whenever one
     runs, since this file does not read their statements.
   - a client run through CARRIERS (docker exec, ssh, npx, a secret runner) is read from the
@@ -48,7 +73,9 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
 
 WHAT IT DOES NOT SEE: a script file's commands (`bash change.sh`), a client run by a name held in a
 variable, a program that opens a database itself (python, node, an ORM's own CLI), and a carrier
-not on CARRIERS, which is a hand written list (L96).
+not on CARRIERS, which is a hand written list (L96). SUPABASE_CHANGES is one too: a tool Supabase
+adds later that changes a database with no statement, and any other host's tool of that kind (a
+Neon branch reset, say), is unasked until it is listed.
 """
 import re
 
@@ -57,6 +84,25 @@ SUPABASE = "mcp__claude_ai_Supabase__"
 ALWAYS_ASKED = {
     SUPABASE + "run_notebook": "run_notebook runs the statements saved in a notebook, which are not in the call",
 }
+# The Supabase tools that change a database and carry no statement (claude-config#2632), each with
+# what it does, after its own description (read 2026-11-10). A {field} is filled from the
+# call's input by supabase_change(); {reset_to} is the migration version a reset names, or its
+# migrations. Asked about on every call, on any Supabase server.
+SUPABASE_CHANGES = {
+    "merge_branch": "applies the migrations and edge functions of branch {branch_id} to its production project",
+    "reset_branch": ("resets branch {branch_id} to {reset_to}, and any data or schema change outside "
+                     "a migration is lost"),
+    "rebase_branch": "runs production's newer migrations on branch {branch_id}",
+    "delete_branch": "deletes branch {branch_id} and the database it holds",
+    "create_branch": "creates a branch named {name} of project {project_id}, a new database billed by the hour",
+    "create_project": ("creates a project named {name} in organization {organization_id}, a new database "
+                       "that can add to the bill"),
+    "pause_project": "takes project {project_id} and its database offline until it is restored",
+    "restore_project": "brings paused project {project_id} and its database back into service",
+}
+SUPABASE_CHANGE_FIELDS = ("branch_id", "project_id", "name", "organization_id")
+# How much of a branch, project or organization name a question shows.
+TARGET_SHOWN = 80
 STATEMENT_KEYS = {"query", "queries", "statement", "statements"}
 # What may stand beside sql in a field's name for the field to hold a statement: sql_query, raw_sql.
 SQL_KEY_WORDS = {"query", "queries", "statement", "statements", "text", "string", "raw", "command",
@@ -76,12 +122,14 @@ SHELL_VALUE = "it holds a shell variable or a substitution, known only as it run
 # A psql variable (:name, :'name', :"name"), which psql fills in before the statement runs. A cast
 # (::text) and a time ('12:30') are not one.
 PSQL_VARIABLE = re.compile(r"""(?<!:):[A-Za-z_'"]""")
+# One word of a tool, server or field name, however it is cased: execute_sql, executeSql, runSQL.
+NAME_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 
 
 def tokens(name):
     """The lower case words of a tool, server or field name: execute_sql, executeSql and runSQL all
     hold sql, and soqlQuery holds soql and query, never sql."""
-    return {t.lower() for t in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", name)}
+    return {t.lower() for t in NAME_WORD.findall(name)}
 
 
 def mcp_parts(tool):
@@ -90,13 +138,52 @@ def mcp_parts(tool):
     return (server, name) if sep else ("", server)
 
 
-def named_for_statements(tool):
-    """Whether an MCP tool's NAME alone says it runs statements or applies a migration: what is
-    left to go on when its payload cannot be read."""
-    if tool in ALWAYS_ASKED:
+def named_as_database_call(tool):
+    """Whether an MCP tool's NAME alone says it runs statements, applies a migration or is one of
+    SUPABASE_CHANGES: what is left to go on when its payload cannot be read."""
+    if tool in ALWAYS_ASKED or _supabase_change_name(tool):
         return True
     nt = tokens(mcp_parts(tool)[1])
     return "sql" in nt or bool(nt & MIGRATION_WORDS and nt & RUN_WORDS)
+
+
+def _supabase_change_name(tool):
+    """The SUPABASE_CHANGES key an MCP tool answers to, or None. The server is everything before
+    the tool's last __, and any server whose name holds supabase counts (the claude.ai connector,
+    a project's own server, a plugin's), since each offers these same tools. The tool's words are
+    compared, so resetBranch is reset_branch. Another product's merge_branch is not one."""
+    head, sep, name = tool.rpartition("__")
+    if not sep or not head.startswith("mcp__") or "supabase" not in head.lower():
+        return None
+    snake = "_".join(t.lower() for t in NAME_WORD.findall(name))
+    return snake if snake in SUPABASE_CHANGES else None
+
+
+def _target(ti, key):
+    """What a call names in one of its input fields, as the question shows it: cut at
+    TARGET_SHOWN characters, and said to be missing or not text when it is."""
+    v = ti.get(key) if isinstance(ti, dict) else None
+    if v is None or v == "":
+        return "(none named)"
+    if not isinstance(v, str):
+        return "(not text)"
+    shown = " ".join(v.split())
+    if len(shown) > TARGET_SHOWN:
+        shown = shown[:TARGET_SHOWN] + " ... (" + str(len(v)) + " characters in all)"
+    return shown or "(none named)"
+
+
+def supabase_change(tool, ti):
+    """None unless an MCP call is one of SUPABASE_CHANGES; else the sentence the question shows:
+    the tool, what it does, and the branch or project its input names."""
+    name = _supabase_change_name(tool)
+    if name is None:
+        return None
+    named = {k: _target(ti, k) for k in SUPABASE_CHANGE_FIELDS}
+    version = ti.get("migration_version") if isinstance(ti, dict) else None
+    named["reset_to"] = "its migrations" if version is None or version == "" else (
+        "migration version " + _target(ti, "migration_version"))
+    return tool + " " + SUPABASE_CHANGES[name].format_map(named)
 
 
 def _judged(subject, statements, judge, shell=False, psql=False):
@@ -244,6 +331,23 @@ SUPABASE_VALUED = {"--workdir", "--profile", "--output", "-o", "--dns-resolver",
 SUPABASE_DB_READS = {"pull", "diff", "dump", "lint", "start", "stop", "test"}
 SUPABASE_MIGRATION_READS = {"list", "new", "fetch"}
 SUPABASE_MIGRATION_WRITES = {"up", "down", "repair", "squash"}
+# The CLI's subcommands that change a branch or a project with no statement, the shell route to
+# what SUPABASE_CHANGES names (claude-config#2632): group -> (those that only read, those that
+# change something and what). From `supabase branches --help` and `supabase projects --help`, CLI
+# 2.75.0; any other subcommand of these groups is asked about as unknown.
+SUPABASE_STATE_GROUPS = {
+    "branches": ({"get", "list"}, {
+        "create": "creates a preview branch, a new database that is billed",
+        "delete": "deletes a preview branch and the database it holds",
+        "pause": "takes a preview branch and its database offline",
+        "unpause": "brings a paused preview branch and its database back into service",
+        "update": "changes a preview branch's name, git branch, persistence or status",
+    }),
+    "projects": ({"list", "api-keys"}, {
+        "create": "creates a project, a new database that can add to the bill",
+        "delete": "deletes a project and its database",
+    }),
+}
 REDIRECT = re.compile(r"&>>?|<<<|<<-?|<>|[<>]&|>>|>\||<|>")
 
 
@@ -252,7 +356,9 @@ def asked_words():
     leaves before python3 starts on a payload holding none of its screen words, so each of these
     must hold one (test-db-write-ask.sh checks it), or the call would never be read."""
     return (set(CLIENTS) | STATEMENT_KEYS | {"sql", "migration", "migrations"}
-            | {t[len("mcp__"):] for t in ALWAYS_ASKED})
+            | {t[len("mcp__"):] for t in ALWAYS_ASKED}
+            # SUPABASE_CHANGES are told by their server's name, which holds this word.
+            | {"supabase"})
 
 
 def strip_redirects(s):
@@ -401,7 +507,8 @@ def _shell_client(prog, words, judge):
 
 
 def _supabase(words, judge):
-    """The findings for one run of the Supabase CLI: its db and migration subcommands."""
+    """The findings for one run of the Supabase CLI: its db and migration subcommands, and the
+    branches and projects ones that change a database with no statement."""
     path, flags, files = [], set(), []
     # A dry run only while every --dry-run is bare or =true: --dry-run=false is a real push, and so
     # is a dry run undone by a later false. Any value but true counts as not dry.
@@ -424,6 +531,29 @@ def _supabase(words, judge):
             files.append(value)
     if flags & {"--help", "-h"} or path[:1] == ["help"]:
         return []
+    return _supabase_state(path) + _supabase_db(path, files, dry, judge)
+
+
+def _supabase_state(path):
+    """The finding for a branches or projects subcommand (SUPABASE_STATE_GROUPS). It is read on
+    its own and added to what the db and migration rule finds, never in its place, so a command
+    that rule asked about before #2632 is still asked about whatever else its words hold."""
+    at = next((k for k, w in enumerate(path) if w in SUPABASE_STATE_GROUPS), None)
+    if at is None or at + 1 >= len(path):
+        return []
+    group, sub = path[at], path[at + 1]
+    name = "supabase " + group + " " + sub
+    reads, changes = SUPABASE_STATE_GROUPS[group]
+    if sub in reads:
+        return []
+    if sub in changes:
+        return [(name + " " + changes[sub], None)]
+    return [(name + " is not a subcommand this hook knows, so whether it changes a database could "
+             "not be told", None)]
+
+
+def _supabase_db(path, files, dry, judge):
+    """The findings for the db or migration subcommand among a Supabase CLI run's words."""
     at = next((k for k, w in enumerate(path) if w in ("db", "migration", "migrations")), None)
     if at is None or at + 1 >= len(path):
         return []
