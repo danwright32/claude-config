@@ -211,8 +211,15 @@ const compactionEnded = async ($: EngineInterface) => {
 // the note is there, so a session never compacts away decisions it has not written down, and
 // refused to a subagent, which hands back instead.
 const COMPACT_TOOL = 'queue_compact'
-// The note #1960's notice asks for: handoff.md at the root of the session's scratchpad folder.
-const NOTE_TAIL = '/scratchpad/handoff.md'
+// The note #1960's notice asks for: handoff.md in the session's notes folder, which a restart of the
+// Mac cannot clear (#2490: on 2026-11-09 a restart emptied /private/tmp, and a scratchpad note with it).
+const NOTES_ROOT = (h: string) => `${h}/.claude/state/session-notes`
+const NOTE_NAME = 'handoff.md'
+// A folder name in a note's path, never one that climbs out of the folder it names.
+const plain = (part: string | undefined): part is string => part !== undefined && part !== '' && part !== '.' && part !== '..'
+const NOTE_WHERE = `~/.claude/state/session-notes/<project>/<session>/${NOTE_NAME}`
+// Where the note was kept before #2490, which a session mid stretch may still pass once.
+const LEGACY_NOTE = /^(?:\/private)?\/tmp\/claude-\d+\/([^/]+)\/([^/]+)\/scratchpad\/handoff\.md$/
 // A note older than this, or than the last compaction, belongs to an earlier stretch of the
 // conversation, and the session at the line has decided more since.
 const NOTE_FRESH_MS = HOUR
@@ -221,12 +228,12 @@ const COMPACT_TOOL_SPEC = {
   name: COMPACT_TOOL,
   description:
     'Queues a Compact of this conversation that runs when this turn ends, the same as pressing Compact on the status bar (a /goal run is one turn until the goal is met or stopped). ' +
-    'Call it at the context line, only after writing handoff.md at the root of your scratchpad folder with everything you have decided, and pass that file\'s absolute path as note. ' +
+    `Call it at the context line, only after writing handoff.md in this session's notes folder, ${NOTE_WHERE} (the session start notice names it in full; never the scratchpad, which a restart of the Mac empties), with everything you have decided, and pass that file's absolute path as note. ` +
     'Refused until that note is there, not empty, and written since this conversation was last compacted and within the last hour. ' +
     'Main session only: a subagent writes the note and hands back instead.',
   inputSchema: {
     type: 'object',
-    properties: { note: { type: 'string', description: `The absolute path of handoff.md at the root of your scratchpad folder, ending ${NOTE_TAIL}.` } },
+    properties: { note: { type: 'string', description: `The absolute path of handoff.md in this session's notes folder, ${NOTE_WHERE}.` } },
     required: ['note'],
   },
 } as const
@@ -245,20 +252,61 @@ const notePath = (e: Record<string, unknown>): { note: string } | { deny: string
   if (note === undefined) {
     // A blank note or handoff is no path, so it is not reported as one passed.
     const others = Object.keys(e).filter(k => !CALL_KEYS.has(k) && !(NOTE_KEYS as readonly string[]).includes(k) && e[k] !== undefined)
-    return { deny: `Pass the absolute path of handoff.md at the root of your scratchpad folder as note, ending ${NOTE_TAIL}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
+    return { deny: `Pass the absolute path of handoff.md in this session's notes folder as note, ${NOTE_WHERE}${others.length ? `: this call passed ${others.join(', ')}, and no note` : ''}.` }
   }
-  if (!note.startsWith('/') || !note.endsWith(NOTE_TAIL)) return { deny: `The handoff note is handoff.md at the root of your scratchpad folder: pass its absolute path as note, ending ${NOTE_TAIL}, not ${note}.` }
+  if (!note.startsWith('/') || !note.endsWith(`/${NOTE_NAME}`)) return { deny: `The handoff note is handoff.md in this session's notes folder: pass its absolute path as note, ${NOTE_WHERE}, not ${note}.` }
   return { note }
 }
 
-// Why the compact tool will not queue a Compact for this call, or the note's path when it will.
-const compactRefusal = async ($: EngineInterface, e: Record<string, unknown>): Promise<{ note: string } | { deny: string }> => {
-  if (e.agentId !== undefined) return { deny: 'A subagent never compacts: write handoff.md in your scratchpad folder, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.' }
+// Where this session's note is kept: a note in its notes folder as given, or a note still in the
+// scratchpad (before #2490) with the notes folder path it is carried to. Another session's note,
+// or one anywhere else, is refused naming this session's.
+const placeNote = async ($: EngineInterface, note: string): Promise<{ note: string; from?: string } | { deny: string }> => {
+  if (!home) return { deny: 'The home folder is not known, so the notes folder for the handoff note cannot be found.' }
+  const id = await $.session.id()
+  const root = NOTES_ROOT(home)
+  const mine = (key: string) => `${root}/${key}/${id}/${NOTE_NAME}`
+  if (note.startsWith(`${root}/`)) {
+    const parts = note.slice(root.length + 1).split('/')
+    const [key, sess, name] = parts
+    if (parts.length === 3 && name === NOTE_NAME && plain(key) && plain(sess)) {
+      if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
+      return { note }
+    }
+  }
+  const legacy = LEGACY_NOTE.exec(note)
+  const [, key, sess] = legacy ?? []
+  if (plain(key) && plain(sess)) {
+    if (sess !== id) return { deny: `${note} is another session's handoff note: write this session's at ${mine(key)}.` }
+    const target = mine(key)
+    const there = await $.fs.stat(target).then(() => true, () => false)
+    if (there) return { deny: `A handoff note is already in the notes folder at ${target}, so ${note} was not copied over it: pass ${target} as note, after writing what you have decided in it.` }
+    return { note: target, from: note }
+  }
+  return { deny: `The handoff note is handoff.md in this session's notes folder, ${NOTE_WHERE}, not ${note}.` }
+}
+
+// Why the compact tool will not queue a Compact for this call, or the note's path when it will. A
+// note still in the scratchpad is copied into the notes folder first, once, and then used from there.
+const compactRefusal = async ($: EngineInterface, e: Record<string, unknown>): Promise<{ note: string; from?: string } | { deny: string }> => {
+  if (e.agentId !== undefined) return { deny: 'A subagent never compacts: write handoff.md in the working folder your brief names, then hand back, saying you stopped at the context line, so the main session gives the rest to a fresh agent.' }
   if (!interactive) return { deny: 'This session has no screen, so a queued Compact would never run here.' }
   const path = notePath(e)
   if ('deny' in path) return path
-  const why = await noteRefusal($, path.note)
-  return why === undefined ? path : { deny: why }
+  const placed = await placeNote($, path.note)
+  if ('deny' in placed) return placed
+  const why = await noteRefusal($, placed.from ?? placed.note)
+  if (why !== undefined) return { deny: why }
+  if (placed.from === undefined) return placed
+  const dir = placed.note.slice(0, placed.note.lastIndexOf('/'))
+  const made = await $.process.run(['mkdir', '-p', dir]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
+  if (made.exitCode !== 0) return { deny: `The notes folder ${dir} could not be made (${String(made.stderr ?? '').trim() || `exit ${made.exitCode}`}), so ${placed.from} was not copied and no Compact was queued.` }
+  try {
+    await $.fs.write(placed.note, await $.fs.read(placed.from))
+  } catch (err) {
+    return { deny: `${placed.from} could not be copied to ${placed.note} (${msg(err)}), so no Compact was queued.` }
+  }
+  return placed
 }
 
 // Why the note at this path will not do: missing, unreadable, empty, or older than what has been decided.
@@ -907,14 +955,14 @@ export const register: Register = on => {
     if (screened) return screened
     const why = await compactRefusal($, e as unknown as Record<string, unknown>)
     if ('deny' in why) return why
-    const { note } = why
+    const { note, from } = why
     await setCompactQueued($, true)
     await setFollowUp($, { note, ranAt: null, compacted: false })
     await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
     return {
       result:
         'Compact queued: it runs when this turn ends, the same as pressing Compact on the status bar, and Dan can cancel it there. ' +
-        `End this reply now; the conversation after it starts from the summary, and ${note} holds what you decided. ` +
+        `End this reply now; the conversation after it starts from the summary, and ${note} holds what you decided${from ? ` (copied from ${from}, which a restart clears)` : ''}. ` +
         'In a /goal run the turn goes on until the goal is met or stopped, so the Compact waits until then.',
     }
   })
