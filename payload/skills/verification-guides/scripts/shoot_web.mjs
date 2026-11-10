@@ -62,7 +62,9 @@ export async function shoot(o, pw) {
     if (o.rows) {
       try {
         await page.waitForFunction(([sel, n]) => document.querySelectorAll(sel).length >= n, [o.rows, o.min], { timeout: READY_TIMEOUT_MS });
-      } catch {
+      } catch (e) {
+        // Only the wait running out means too few rows; a bad selector or a closed page is its own fault.
+        if (e?.name !== "TimeoutError") throw e;
         const n = await page.evaluate((sel) => document.querySelectorAll(sel).length, o.rows);
         return { ok: false, why: `${o.url} shows ${n} rows matching ${o.rows}, and the screen is shot at ${o.min} or more` };
       }

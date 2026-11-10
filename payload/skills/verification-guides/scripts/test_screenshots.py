@@ -532,7 +532,7 @@ class ShootWeb(unittest.TestCase):
         r = subprocess.run([node, "--test", os.path.join(HERE, "test_shoot_web.mjs")], capture_output=True, text=True,
                            timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
-        self.assertIn("# pass 6", r.stdout)
+        self.assertIn("# pass 9", r.stdout)
 
 
 if __name__ == "__main__":
