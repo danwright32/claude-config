@@ -7,6 +7,7 @@ import {
   GUARD,
   HEADER,
   MARKER_PREFILTER,
+  MOST_READ,
   PATHSPEC_BYTES,
   REEXPORT_HOPS,
   SCAN_MS,
@@ -195,10 +196,6 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
   for (const k of keys) if ((await $.store.get(k)) === undefined) out.push(k)
   return out
 }
-
-// The most files the search reads for one template before it holds the call for Dan, naming no
-// sender since it could not tell which file sends it (#2364).
-const MOST_READ = 200
 
 // How much of a command's output $.process.run keeps, in MiB: the first 4194304 bytes, the rest
 // dropped and the result marked isStdoutTruncated (read from Claude Code 2.1.319's own runner).
