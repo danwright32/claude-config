@@ -1308,7 +1308,7 @@ fi
 # `bash lib/merge-when-ready.sh` showed 1,002,444 compilations and 41 s of processor time, past the
 # 15 s the gate is given, and no session could start the helper (2026-11-09). Held by the count of
 # compilations, never by the clock (L290).
-binds="$(python3 - "$DIR/slack_drafts_only_gate.py" <<'PY' 2>&1
+cat > "$T/binds.py" <<'PY'
 import importlib.util, re, sys
 spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
 gate = importlib.util.module_from_spec(spec)
@@ -1339,7 +1339,7 @@ finally:
     comp.compile = real
 print("ok" if again and count[0] == 0 else "a second pass over 700 names compiled %d patterns" % count[0])
 PY
-)"
+binds="$(python3 "$T/binds.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "sh_binds compiles each name's patterns once, however many names a script has (#2569)" "$binds"
 
 echo
