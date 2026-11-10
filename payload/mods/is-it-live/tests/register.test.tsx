@@ -610,6 +610,16 @@ test('a second live card for the same thread says its draft replaces the first; 
   expect(said(second)).toContain('attached_draft_exists')
 })
 
+test('a later card for the PR that asks for no draft keeps the record of the earlier one, so another PR to the thread still says it replaces it (#2515)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, slack: ASKED_IN }
+  expect(said(await card($, { ...CARD, ...ask, message: 'The venue filter is live now.' }))).toContain('slack_send_message_draft')
+  const failed = await card($, { ...CARD, ...ask, message: 'The venue filter is live now.', deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(said(failed)).not.toContain('slack_send_message_draft')
+  const other = await card($, { ...CARD, ...ask, pr: 413, message: 'Both venue fixes are live now.' })
+  expect(said(other)).toContain('An earlier card (#412) already asked for a draft in that thread')
+})
+
 test('a card refuses Slack fields with nobody named, and a malformed thread, before GitHub is asked (#2435)', withKit, async ($, on) => {
   const w = world(on)
   expect((await card($, { ...CARD, slack: ASKED_IN })).deny).toContain('slack is only for the person a message is for')

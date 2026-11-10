@@ -533,6 +533,9 @@ export const register: Register = on => {
       notes.push(draftLineOf({ requester: kept.requester, message: kept.message, ...(kept.slack ? { slack: kept.slack } : {}), ...earlier }))
       if (key !== undefined) kept.draftAsked = key
     }
+    // A card asking for no draft (deploying, failed, sent) still replaces the PR's earlier card, so
+    // it keeps the record that a draft was asked for there: it is still in Slack (#2515).
+    if (kept.draftAsked === undefined && before?.draftAsked !== undefined) kept.draftAsked = before.draftAsked
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
     await $.state.set(verdictsRef, { ...verdicts, [verdictKey(repo, input.pr)]: { state, at: now } })
