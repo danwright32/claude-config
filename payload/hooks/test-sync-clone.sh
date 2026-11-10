@@ -62,7 +62,7 @@ echo "sync clone: whether a clone is a plain copy with no repository around it (
 DESC="a copy of the tree with no repository is a plain copy"; yes sc_is_plain_copy "$FIX/clone"
 cp -R "$FIX/clone" "$FIX/gitclone"
 git init -q "$FIX/gitclone" 2>/dev/null
-[ -d "$FIX/gitclone/.git" ] && check "the checkout fixture was built" ok || check "the checkout fixture was built" "git init left no .git at $FIX/gitclone"
+[ -e "$FIX/gitclone/.git" ] && check "the checkout fixture was built" ok || check "the checkout fixture was built" "git init left no .git at $FIX/gitclone"
 DESC="the same tree with a repository in it is not"; no sc_is_plain_copy "$FIX/gitclone"
 mkdir -p "$FIX/gitclone/inner/copy/payload"
 : > "$FIX/gitclone/inner/copy/claude-sync"

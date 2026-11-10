@@ -57,7 +57,7 @@ mkdir -p "$FIX/dev/tests"
 # and never for being a plain copy.
 git init -q "$FIX/dev" 2>/dev/null
 git init -q "$FIX/src" 2>/dev/null
-[ -d "$FIX/dev/.git" ] && [ -d "$FIX/src/.git" ] || {
+[ -e "$FIX/dev/.git" ] && [ -e "$FIX/src/.git" ] || {
   echo "test-payload-write-gate: git init left no repository in the fixture checkouts, so no case could ask about a checkout." >&2
   printf 'SUITE-NOT-RUN %s\n' "the fixture checkouts could not be made git checkouts"
   echo "passed: $pass, failed: $fail"
@@ -883,9 +883,23 @@ edit_nopy "$FIX/src/payload/LESSONS.md" "$FIX/src"
 allowed "the clone the watcher runs from is not refused over the missing reader"
 
 # A plain copy is not let through here (claude-config#2705): which file the call writes cannot be
-# read, so it may be one in a real checkout, named from a session sitting in the copy.
-edit_nopy "$N/copy/payload/hooks/a.sh" "$N/copy"
+# read, so it may be one in a real checkout, named from a session sitting in the copy. git is put
+# back on PATH here, beside no python3, so the copy question gets git's real answer and the
+# refusal can only come from the call that cannot be read, never from git being missing.
+NOPY_GIT="$NOPY_ROOT/git"; mkdir -p "$NOPY_GIT"
+gitpath="$(command -v git 2>/dev/null)"
+[ -n "$gitpath" ] && ln -s "$gitpath" "$NOPY_GIT/git" 2>/dev/null
+case "$(cd "$N/copy" && PATH="$NOPY:$NOPY_GIT" LC_ALL=C git rev-parse --is-inside-work-tree 2>&1)" in
+  "fatal: not a git repository"*) check "with git and no python3 on PATH, git says the plain copy has no repository" ok ;;
+  *) check "with git and no python3 on PATH, git says the plain copy has no repository" "git did not answer, so the case below would measure git's absence" ;;
+esac
+if PATH="$NOPY:$NOPY_GIT" "$NOPY/bash" -c 'command -v python3 >/dev/null 2>&1'; then
+  check "adding git to PATH still reaches no python3" "it found one"
+else check "adding git to PATH still reaches no python3" ok; fi
+OUT="$(printf '{"tool_name":"Edit","session_id":"%s","cwd":"%s","tool_input":{"file_path":"%s"}}' "$SID" "$N/copy" "$N/copy/payload/hooks/a.sh" \
+  | ( cd "$N/copy" && env SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" PATH="$NOPY:$NOPY_GIT" "$NOPY/bash" "$HOOK" 2>&1 ))"; RC=$?
 refused "with no python3 a write from a plain copy is still refused"
+says "and the refusal names the reader that is missing" "python3"
 
 # The control: the same write with python3 present and no watcher to revert it is allowed, so the
 # refusal above is the reader's absence rather than a fixture that refuses everything (L159).

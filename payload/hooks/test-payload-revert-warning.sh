@@ -59,7 +59,7 @@ mkdir -p "$FIX/dev/payload/hooks" "$FIX/src/payload/hooks" "$FIX/state" "$FIX/el
 # never for being a plain copy.
 git init -q "$FIX/dev" 2>/dev/null
 git init -q "$FIX/src" 2>/dev/null
-[ -d "$FIX/dev/.git" ] && [ -d "$FIX/src/.git" ] || {
+[ -e "$FIX/dev/.git" ] && [ -e "$FIX/src/.git" ] || {
   echo "test-payload-revert-warning: git init left no repository in the fixture checkouts, so no case could ask about a checkout." >&2
   printf 'SUITE-NOT-RUN %s\n' "the fixture checkouts could not be made git checkouts"
   echo "passed: $pass, failed: $fail"
