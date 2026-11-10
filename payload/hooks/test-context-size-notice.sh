@@ -94,6 +94,10 @@ ctx="$(field "$out" additionalContext)"
 check "1 a builder past the line is told its size" "352,345" "$ctx"
 check "1 and the line" "330,000" "$ctx"
 check "1 and where to write down what it decided" "handoff.md" "$ctx"
+# #2490: a builder's note goes in the working folder its brief names, under the session's notes
+# folder now, never "your scratchpad folder", which a restart of the Mac empties.
+check "1 in the working folder its brief names (#2490)" "working folder your brief names" "$ctx"
+check_not "1 never in the scratchpad (#2490)" "scratchpad" "$ctx"
 check "1 and what to write down: the decisions" "every decision" "$ctx"
 check "1 and the state left behind" "commit" "$ctx"
 check "1 and to hand back to a fresh agent" "hand back" "$ctx"
@@ -153,8 +157,27 @@ check "2 and a fresh session" "fresh session" "$ctx"
 # #2025: the tool that queues the compact itself once the note is written, given the note's path.
 check "2 and the tool that queues a compact once the note is written" "mcp__status-bar__queue_compact" "$ctx"
 check "2 given the note's path" "absolute path of handoff.md" "$ctx"
+# #2490: the note's place is the session's notes folder, named in full, where a restart cannot clear it.
+check "2 the note is in the session's notes folder, named in full (#2490)" "$CLAUDE_HOME/state/session-notes/proj/m1/handoff.md" "$ctx"
+check_not "2 never in the scratchpad (#2490)" "scratchpad" "$ctx"
+[ -d "$CLAUDE_HOME/state/session-notes/proj/m1" ] && check "2 and that folder is there to write in (#2490)" ok ok \
+  || check "2 and that folder is there to write in (#2490)" ok "missing"
 check "2 Dan sees it too" "370,000" "$(field "$out" system)"
 check_eq "2 once per band" "" "$(main_fire m1 "$M")"
+# #2490: a notes folder that cannot be made is said, to the session and to Dan, never left for the
+# compact tool to refuse with no reason given.
+# Root ignores a folder's permissions, so there the folder is made and this cannot be measured.
+if [ "$(id -u)" != 0 ]; then
+  M9="$WORK/proj/m9.jsonl"; : > "$M9"
+  start "$M9"; agent_call "$M9"; usage "$M9" msg_1 370000
+  mkdir -p "$WORK/rohome/state"; chmod a-w "$WORK/rohome/state"
+  out="$(printf '{"session_id":"m9","transcript_path":"%s","cwd":"/tmp","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' "$M9" | CLAUDE_HOME="$WORK/rohome" bash "$HOOK" 2>/dev/null)"
+  chmod u+w "$WORK/rohome/state"
+  check "2 a notes folder that cannot be made is said to the session (#2490)" "could not be created" "$(field "$out" additionalContext)"
+  check "2 and to Dan (#2490)" "could not be created" "$(field "$out" system)"
+else
+  echo "SUITE-PART-UNMEASURED a notes folder that cannot be made (#2490): running as root, which ignores folder permissions"
+fi
 G="$WORK/proj/g1.jsonl"; : > "$G"
 goal_set "$G"
 start "$G"

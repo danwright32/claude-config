@@ -4132,9 +4132,12 @@ file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.
 - **The box.** The mod's `goal_accomplished` tool result, drawn as mod-kit's card with `border:
   'success'` (the one card with a border of its own colour, a field mod-kit gained for it), the
   heading GOAL ACCOMPLISHED bold in the success green, then the goal and one line per thing that
-  shipped, each led by a green bullet, the words themselves plain. The tool's text result is the
-  same box as text, a three line double box the shape of SESSION REFLECTION, which is what the model
-  reads and what a surface that cannot draw the card shows; the model is told not to repeat it.
+  shipped, each led by a green bullet, the words themselves plain. mod-kit keeps the card in its
+  session `$.state`, so a reload of mod-kit still draws it (#2512). The tool's text result is the
+  box as text, `GOAL ACCOMPLISHED: <goal>` on its first line and each shipped line after it, so
+  Claude Code's collapse of a tool result after its first lines never hides them (#2512, Dan's
+  choice on 2026-11-09, replacing a three line double box); it is what the model reads and what Dan
+  sees wherever the card is not drawn; the model is told not to repeat it.
 - **A /goal met.** Read through mod-kit's one goal reader, whose `none` reading now carries `met`
   when Claude Code's own check cleared the goal as met (a goal_status record without the sentinel;
   16 of the 159 goal records on this Mac on 2026-10-24, the 22 ended sentinels being /goal clear or

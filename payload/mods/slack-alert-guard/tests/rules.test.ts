@@ -42,6 +42,7 @@ import {
   templateLines,
   testFile,
   textTemplate,
+  uiComponent,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -563,6 +564,17 @@ test('a file hands a template on when it can export what it imports: a JS or TS 
   // A shell script, a text file, or JSON hands nothing on.
   expect(handsOn('bin/run.sh', 'export DEPLOY=./deploy\n')).toBe(false)
   expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
+})
+
+// claude-config#2519, Dan 2026-11-09: a file imported only by UI components is not on a path that
+// posts to Slack. A UI component is a React file (.tsx, .jsx) in a components, screens or views folder.
+test('a UI component is a React file in a components, screens or views folder, and nothing else is', () => {
+  for (const p of ['apps/web/src/components/TracePanel.tsx', 'src/components/ui/Card.jsx', 'app/screens/Home.tsx', 'src/Views/Row.tsx', 'components/Logic.tsx'])
+    expect(uiComponent(p)).toBe(true)
+  // A plain module beside components, a React file outside those folders (an email or a Slack
+  // message built in JSX), python, and a test are judged as any other file is.
+  for (const p of ['apps/web/src/components/format.ts', 'apps/web/src/lib/logic-card.ts', 'emails/alert.tsx', 'lib/slack/blocks.tsx', 'app/pages/index.tsx', 'app/components/views.py', 'src/components/Card.test.tsx'])
+    expect(uiComponent(p)).toBe(false)
 })
 
 // A line the search lists for `rels`: one git grep lists for holding a name as a whole word (`words`,
