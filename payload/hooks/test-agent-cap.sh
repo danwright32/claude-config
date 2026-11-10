@@ -39,7 +39,10 @@ REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 PAYLOAD=""
 [ -n "$REPO" ] && PAYLOAD="$REPO/payload"
 CLAUDE_MD="${AGENT_CAP_CLAUDE_MD:-$DIR/../CLAUDE.md}"
-SETTINGS="${AGENT_CAP_SETTINGS:-$DIR/../settings.hooks.json}"
+# The hooks block beside this copy, by the one shared lookup (#1237): the repository's spelling in a
+# checkout, settings.json once installed, where claude-sync runs this suite after every pull.
+. "$DIR/lib/settings-file.sh"
+SETTINGS="${AGENT_CAP_SETTINGS:-$(hook_settings_file "$DIR/..")}"
 
 pass=0
 fail=0
