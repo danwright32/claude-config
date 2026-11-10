@@ -236,20 +236,21 @@ export const scriptWrite = (w: ModKitWrites, home?: string): string | null => {
   return 'path' in t ? `it writes ${t.word}` : `it writes ${t.word}: ${t.unread}`
 }
 
-/**
- * Whether a run is a findings note to the installed spool helper (#2254):
- * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
- * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
- * a finding that often holds $ or *, are no files it writes. Only that path under the home given and
- * only its note subcommand: a copy of the helper elsewhere may be any script, and without a home
- * nothing is let off. Any substitution inside the note, and every other part of the command, is read
- * by mod-kit as its own write and judged as before.
- */
+// Whether a run is the installed spool helper, run by bash or directly: only that path under the home
+// given, since a copy of the helper elsewhere may be any script, and without a home nothing is let off.
 const installedSpool = (r: ModKitRun, home: string | undefined): boolean =>
   home !== undefined &&
   (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
   r.path === `${home}/.claude/hooks/lib/issue-spool.sh`
 
+/**
+ * Whether a run is a findings note to the installed spool helper (#2254):
+ * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
+ * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
+ * a finding that often holds $ or *, are no files it writes. Only its note subcommand. Any
+ * substitution inside the note, and every other part of the command, is read by mod-kit as its own
+ * write and judged as before.
+ */
 const spoolNote = (r: ModKitRun, home: string | undefined): boolean => installedSpool(r, home) && r.args[0]?.word === 'note'
 
 /**

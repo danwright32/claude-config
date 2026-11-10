@@ -36,6 +36,7 @@ trap 'rm -rf "$TMP"' EXIT
 # The list as the area check holds it.
 cat >"$TMP/list.mjs" <<'JS'
 const { SPOOL_KEY_COMMANDS } = await import(process.argv[2])
+// Code unit order, which LC_ALL=C sort gives the dispatch's names too.
 console.log([...SPOOL_KEY_COMMANDS].sort().join('\n'))
 JS
 listed="$(node --experimental-strip-types --no-warnings "$TMP/list.mjs" "$ROOT/payload/mods/area-check/hooks/rules.ts" 2>&1)" || {
@@ -45,7 +46,7 @@ listed="$(node --experimental-strip-types --no-warnings "$TMP/list.mjs" "$ROOT/p
 }
 # The helper's dispatch lines handing "${1:-$PWD}" on as the folder.
 dispatched="$(sed -n '/^if \[ "\${BASH_SOURCE\[0\]}" = "\${0}" \]; then/,/^fi$/p' "$HELPER" \
-  | grep -F '"${1:-$PWD}"' | sed -E 's/^[[:space:]]*([a-z-]+)\).*/\1/' | sort)"
+  | grep -F '"${1:-$PWD}"' | sed -E 's/^[[:space:]]*([a-z-]+)\).*/\1/' | LC_ALL=C sort)"
 [ -n "$dispatched" ] && [ "$(printf '%s\n' "$dispatched" | wc -l | tr -d ' ')" -ge 10 ] \
   && check "the helper's dispatch is found" ok || check "the helper's dispatch is found" "found: $dispatched"
 [ "$listed" = "$dispatched" ] && check "SPOOL_KEY_COMMANDS is exactly the subcommands handed a project folder" ok \
