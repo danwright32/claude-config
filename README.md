@@ -3437,6 +3437,23 @@ The gate cannot trace which string reaches the sink (a variable, a function, ano
 any file reached names one, the walk starts again following every string, as before. Measured over
 1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
 
+A type only import statement of a declaration file that is not there is not followed either (#2526):
+`import type { A } from '../types/index.d.ts'`, `import type A from` and `import type * as ns from`,
+where the path as written ends `.d.ts`. The whole statement is erased before anything runs, so no
+module is loaded for it whatever a resolver would make of the path. Measured 2026-11-10 with bun
+1.3.11, node 22.22.2 and deno, with and without `verbatimModuleSyntax`: a module that prints when
+loaded printed under none of them, and a missing one stopped none of them. Before this, `bun test` on
+a mod's test was refused in every agent worktree, because the tests import the generated
+`.claude-plugin/types/mod-kit/index.d.ts` for its types and a worktree does not have it. Nothing
+wider passes. `import { type A } from` is still refused, because node only blanks the names and
+loads the module (measured the same day: the module printed), and so are a value import, a mixed
+one, a bare `import`, `require`, `import()`, `import type A = require()` and `export type ... from`
+of the same missing file, a type only import of a missing file that is not a `.d.ts`, and a default
+import that is merely named `type`. A declaration file that is there is read and judged like any
+module. Measured over the 469 scripts in this repository, run as `bun test <file>` in a worktree:
+52 went from refused to passing, every one refused before for that one generated file, and none
+went the other way.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
