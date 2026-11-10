@@ -69,6 +69,7 @@ REFUSING=(
   check-add-scope.sh
   no-verify-gate.sh
   amend-force-push-gate.sh
+  temp-worktree-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
   check-wrapped-commands.sh
@@ -182,6 +183,7 @@ samples = {
     "NotebookEdit": {"notebook_path": work + "/probe.ipynb", "new_source": "a"},
     "Monitor": {"command": "ls", "description": "probe"},
     "SubagentHandback": {"message": "Done."},
+    "EnterWorktree": {"name": "probe"},
     "mcp__playwright__browser_snapshot": {},
     "mcp__plugin_playwright_playwright__browser_snapshot": {},
     "mcp__claude-in-chrome__navigate": {"url": "https://example.com"},
@@ -285,6 +287,7 @@ done <<< "$ROWS"
 EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
+temp-worktree-gate.sh Bash,EnterWorktree
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot

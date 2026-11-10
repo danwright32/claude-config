@@ -2,8 +2,8 @@
 # Tests for the check-later skill's instructions.
 #
 # The skill writes rows to a Slack list by column KEY, so a key that drifts from the list's schema
-# writes nothing or the wrong column; the Skill tool must not start it on its own (Dan types it, or the end of turn hook sends a
-# session to it); and the list's
+# writes nothing or the wrong column; a session may start it itself, as may Dan typing it or the end
+# of turn hook sending a session to it, but nothing is written before Dan picks; and the list's
 # Reminder Saved box is Dan's own record that he set the reminder, so the skill must never tick it.
 # Nothing here reaches Slack. CHECK_LATER_SKILL points the suite at another copy, which is how a
 # broken copy is shown to fail.
@@ -30,10 +30,22 @@ check "the skill is there to read" "$([ -f "$SKILL" ] && echo ok || echo "no $SK
 front="$(awk 'NR==1 && $0=="---" {on=1; next} on && $0=="---" {exit} on {print}' "$SKILL" 2>/dev/null)"
 
 check "its name is check-later" "$(grep -qx 'name: check-later' <<< "$front" && echo ok || echo "frontmatter: $front")"
-# #2079: the end of turn hook points a session at this file, so the skill no longer runs only when
-# Dan types it; what stays true is that the Skill tool cannot start it on its own.
-check "the Skill tool cannot start it on its own" \
-  "$(grep -qx 'disable-model-invocation: true' <<< "$front" && echo ok || echo "no disable-model-invocation: true")"
+# #2532, Dan 2026-11-09: "there's no reason you shouldn't be able to start that yourself". A session
+# that knows a step is due at a later time starts the skill through the Skill tool, so the frontmatter
+# must not switch model invocation off; the guard that stays is step 6, nothing written before Dan picks.
+check "a session can start it through the Skill tool" \
+  "$(grep -q '^disable-model-invocation:' <<< "$front" && echo "frontmatter still sets disable-model-invocation" || echo ok)"
+check "the description says a session starts it itself when work is due at a later time" \
+  "$(grep -qi 'session needs work done at a later' <<< "$front" && echo ok || echo "the description does not say a session may start it")"
+self_section="$(awk '/^## Started by the session itself/{on=1; next} /^## /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
+check "the skill has a section on a session starting it itself" \
+  "$([ -n "$self_section" ] && echo ok || echo "no '## Started by the session itself' section")"
+check "that section says what a session may schedule" \
+  "$(grep -qi 'A session may schedule' <<< "$self_section" && echo ok || echo "no 'A session may schedule'")"
+check "that section says what a session may not schedule" \
+  "$(grep -qi 'A session may not' <<< "$self_section" && echo ok || echo "no 'A session may not'")"
+check "that section keeps Dan's pick before any row is written" \
+  "$(grep -qi 'Nothing is written before Dan picks' <<< "$self_section" && echo ok || echo "no approval rule in the section")"
 check "the description says the end of turn hook starts it too" \
   "$(grep -qi 'end of turn' <<< "$front" && echo ok || echo "the description says nothing of the end of turn hook")"
 check "its trigger is /check-later" "$(grep -qx 'trigger: /check-later' <<< "$front" && echo ok || echo "no trigger line")"

@@ -153,6 +153,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
   declare_gate design-score-gate.sh        "gh pr merge 5 --squash"         -
   declare_gate check-rtk-init.sh           "rtk init -g"                    -
+  declare_gate temp-worktree-gate.sh       "git worktree add /tmp/wt-2528"  ALLOW_TEMP_WORKTREE
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
@@ -520,6 +521,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged check-add-scope.sh           Bash "$(bash_call 'git add -A')" '{}' refuse
   judged no-verify-gate.sh            Bash "$(bash_call 'git commit --no-verify -m wip')" "$AGENT" refuse
   judged amend-force-push-gate.sh     Bash "$(bash_call 'git commit --amend -m wip')" "$AGENT" refuse
+  judged temp-worktree-gate.sh        Bash "$(bash_call 'git worktree add /tmp/wt-2528 -b fix/2528')" '{}' refuse
   judged check-gh-watch-interval.sh   Bash "$(bash_call 'gh run watch 5')" '{}' "notice #1912"
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
   # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).

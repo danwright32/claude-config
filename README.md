@@ -239,6 +239,7 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync sync              # two-way: send local, then receive remote
 ./claude-sync status            # show differences, no changes
 ./claude-sync hold 30 "why"     # stop the watcher committing while you commit by hand
+./claude-sync hold --extend 30 "why" # renew your own hold of that label
 ./claude-sync release           # lift your own hold now instead of waiting for it to run out
 ./claude-sync release "why"     # lift only the hold you took with that label
 ./claude-sync release --other S # lift the hold session S took (status names each hold's session)
@@ -355,7 +356,7 @@ files as `sync from <host>`. It holds the watcher only: `claude-sync send` typed
 works, because the person asking is not the thing being held off. The hold fails open, which is the
 point of the expiry: a hold that outlived the session that took it would silently stop the sync,
 which is the hardest failure here to notice. It defaults to 30 minutes (`SYNC_HOLD_MINUTES`, a chosen number and not a measurement: what it
-costs to be wrong is one more `hold` or one earlier `release`), lifts
+costs to be wrong is one `hold --extend` or one earlier `release`), lifts
 itself when that runs out and says so, is listed by `claude-sync status` for as long as it is live,
 and `claude-sync release` ends it early. A marker nothing can read is cleared and reported in those
 words, never treated as a hold and never treated as absent.
@@ -380,7 +381,7 @@ the watcher then sent that session's half finished work. Now:
   and stays held by the rest.
 - `hold` changes only the caller's own hold. Another session's is kept as it is, whatever its
   length, and named on the line after the success line. The caller's own hold is never shortened:
-  asking for less than it already has keeps the longer one and says so.
+  renewing it for less than it already has keeps the longer one and says so.
 - `release` lifts only the caller's own hold, plus any `unknown` one. Another session's hold is
   lifted only by naming it: `claude-sync release --other <session>`, where the session is the
   short name `status` shows (the first eight characters of its id; any unique start of the id
@@ -396,9 +397,21 @@ each took `hold 60 "build #N"`: each hold replaced the last, and each builder's 
 lifted the hold a sibling was still working under. The record's shape did not change, since every
 line already carried its label. What changed:
 
-- `hold` replaces only the caller's own line with the SAME label. A second `hold` from the same
-  session under another label is a second hold, kept beside the first and counted; the watcher
-  stays held until every one is released or has expired.
+- A second `hold` from the same session under another label is a second hold, kept beside the
+  first and counted; the watcher stays held until every one is released or has expired.
+- A second `hold` from the same session under the SAME label is refused (#2468): it exits
+  non-zero, says no hold was taken, leaves the record exactly as it was, and names the hold already
+  in force and `claude-sync hold --extend <minutes> "<label>"`. Until #2468 it replaced the line,
+  which is how a builder extended its own hold, but a sibling builder that picked the same label
+  replaced the first builder's line just as silently, shortening or ending a hold it was still
+  working under. The two cannot be told apart from the record, since both carry the session's id
+  and the label, so renewing became its own explicit act.
+- `hold --extend [minutes] [why]` renews the caller's own line of that label in place, never
+  adding a second line, and never shortening it. With no live hold of that label it takes nothing
+  and exits non-zero, saying the hold it meant to renew may have run out or been released, and
+  naming the plain `hold` that takes a new one: a renewal that quietly took a fresh hold would hide
+  the gap in which the watcher was free to send. `--extend` comes straight after `hold`, before
+  the minutes, so a label beginning with a dash is still read as a label.
 - `release "<label>"` lifts only the caller's own (or an `unknown`) hold of that label. A label
   the caller holds no hold by (mistyped, already lifted, or another session's) lifts nothing, exits
   non-zero, and names the holds the caller does hold and any other session's, each with its end and
@@ -1772,7 +1785,18 @@ and lessons review and is judged by every gate as any update's is. Any other con
 branch, stops as before, naming the conflicted files. Each row was one line of up to 29 KB until
 the table became an HTML table of wrapped cells (claude-config#2108), which lets edits to different
 lines of one description merge cleanly, but two pull requests adding an issue number to one mod
-still meet in its Issue cell, so the resolver stays. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+still meet in its Issue cell, so the resolver stays. One CI start that never began is re-run
+rather than stopped on (claude-config#2537): on 2026-11-09 pull requests #2495, #2496 and #2534
+stopped on `block-red-merge.sh`'s "PR has NO checks at all" because each head's tests run had
+finished as a failure with zero jobs ("This run likely failed because of a workflow file issue")
+while main's workflow was fine, and a plain `gh run rerun` started each properly. Once no run for
+the head is unfinished, the helper reads the jobs of each run for that exact head that finished as a
+failure, and one with no jobs on its first attempt is re-run once for that head, said in its output
+and log, and waited on like any other run. A run whose jobs ran and failed is never re-run, a run
+already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
+left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
+gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
+has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -2228,9 +2252,24 @@ A fourth gate reads the same library for a different thing an agent does to its 
   the flags, `--fixup`, `--no-force`, and the main session are untouched. A payload it cannot read
   is refused when it names an amend or a force, as `no-verify-gate.sh` does with a skip.
 
+One more gate holds a rule the briefs give every agent, for everyone:
+
+- `temp-worktree-gate.sh` (PreToolUse, Bash and EnterWorktree) refuses a git worktree placed under a
+  temp folder a restart empties: `/tmp`, `/private/tmp`, `/var/folders` (with or without
+  `/private`), or a path starting with `$TMPDIR`, `$TMP` or `$TEMP`, by `git worktree add`, `git
+  worktree move` or EnterWorktree's `path`, and names the repository's `.claude/worktrees/<name>`
+  instead (claude-config#2528). On 2026-11-09 a restart emptied `/private/tmp` and took an agent's
+  worktree holding an uncommitted fix; #2490 said the rule in prose, and this makes it hold. The
+  reading is `lib/temp-worktree.py` over the shared shell reader, so it sees through rtk, env, a cd,
+  `git -C` and a `bash -c` string, takes a relative path from where the command runs, and resolves
+  symbolic links; list, remove and prune pass, `/var/tmp` (which a restart keeps) passes, and so does
+  a worktree of a repository that is itself in a temp folder. It judges the main session too. A path
+  in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
+  is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
+
 ### What a push actually waits on
 
-Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2477,6 +2516,18 @@ subagent's `git push --force`, refused
 </td></tr>
 <tr><td>
 
+`temp-worktree-gate.sh` (#2528)
+
+</td><td>
+
+2026-11-09: 0.034 to 0.038 seconds on `git push -u origin feat/x` from the main checkout, which
+names no worktree and leaves before anything loads; 0.040 to 0.043 seconds on the same push from a
+folder under `.claude/worktrees/`, whose name makes it read the command; 0.098 to 0.102 seconds on
+`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59
+
+</td></tr>
+<tr><td>
+
 `check-add-scope.sh`
 
 </td><td>
@@ -2513,7 +2564,8 @@ script file or interpreter is answered before anything loads; it acts on a Slack
 
 </td><td>
 
-2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push
+2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root or the session's
+notes folder root (#2490), not a push
 
 </td></tr>
 <tr><td>
@@ -3472,8 +3524,11 @@ MacBook one pointed at a folder gone for two weeks after a project move, so the 
 a checkout that no longer existed and did not recognise the real one (#2491).
 `hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
 absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
-backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
-names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+backticks or quotes, trailing punctuation dropped, a URL never), and names each one that is not on
+this Mac with the line of its entry. A bare path is read up to the next space and then again with
+each further word on the line, up to a backtick, quote or bracket, so a folder name holding a space
+(`<path> (<remote url>)` in the Trusted repos entry) is found whole: it counts as present when any of
+those readings exists, and the shortest is named when none does (#2549). No settings file, no `autoMode`
 block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
 is one line and exit 2; no `python3` is exit 3.
 
@@ -5018,11 +5073,25 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's first request, or of the first request after its latest compaction. A builder (any
   subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
   last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
-  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  `handoff.md` in the working folder its brief names and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
-  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
+  in `handoff.md` in its notes folder (below), named in full in the notice, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session.
+- **The notes folder** (claude-config#2490). The scratchpad Claude Code gives a session is under
+  `/private/tmp`, which macOS empties on every restart; on 2026-11-09 a restart of the work
+  MacBook took a session's `handoff.md`, a guide and a background agent's working tree with it.
+  So each session has a notes folder, `~/.claude/state/session-notes/<project>/<session>/`, where
+  `<project>` is the folder name Claude Code keys the session's transcript by. It is on disk,
+  outlives a restart, and is never synced: claude-sync carries only the payload's folders, never
+  `state/`, so a note naming work repositories cannot reach this public repository.
+  `~/.claude/projects` was the other candidate, also unsynced, but Claude Code owns its layout and
+  deletes its contents after `cleanupPeriodDays`. `hooks/lib/session_notes.py` decides the folder
+  for every caller; `hooks/session-notes-folder.sh` (SessionStart) makes it and tells the session,
+  pointing at a `handoff.md` already there and copying one still in the scratchpad in once, never
+  over a note already in the folder. Agents dispatched by the session get their working folders
+  under it, and `scratchpad-subagent-gate.sh` refuses a subagent's write into its root as it does
+  the scratchpad's. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
@@ -6324,7 +6393,12 @@ counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the br
 as it is (why)?" with Leave it as it is or Clean it up, and records only the first, by repository
 and branch: winding down then stops waiting for that branch to be deleted here or a worktree on it
 to go, and for the uncommitted files his question named, while a change to any other file asks again
-and the branch on GitHub is still deleted. Uncommitted work is named by its files, and a branch to
+and the branch on GitHub is still deleted. On the session's own branch with no PR, his answer
+settles the question of its PR too (#2533). So does the branch being gone both here and from
+GitHub, which leaves nothing to put in a PR, and a branch the session pushed into another by
+refspec (`git push origin HEAD:fix-pr` from `fix-local`, recorded as `pushedInto` in its state) is
+finished by that other branch's PR when it has none of its own, while `fix-local` still existing
+here holds as any merged PR's branch does. Uncommitted work is named by its files, and a branch to
 commit it starts only on Dan's answer to `open_cleanup_branch` (#1051), which names the files git
 status lists and records only his Open it: that branch may then start once, by `git switch -c` or
 `git checkout -b`, while nothing beyond those files is uncommitted, and any other branch is still
@@ -7064,7 +7138,11 @@ word slack or postMessage and the template's name in a form a reference takes (a
 file name with its extension, after its folder and a dot, or on a python import line, never a word
 the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
 each, all within 3 seconds per call, following files that
-re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
+`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
+so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
+component that itself sends, or imports a send helper, is still its sender, and a file with any
+other importer is followed as before. A search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
 holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
@@ -7073,7 +7151,7 @@ name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519
 
 </td></tr>
 </tbody>
@@ -8000,7 +8078,8 @@ wrong when it is removed
 
 </td><td>
 
-`claude-sync hold`, and `claude-sync release`, which removes the caller's own line of the label
+`claude-sync hold` (a second line of the same session and label refused, renewed with
+`--extend`, #2468), and `claude-sync release`, which removes the caller's own line of the label
 it names, or its only one (or a named session's, with `--other`, or every line, with `--force`)
 
 </td><td>
