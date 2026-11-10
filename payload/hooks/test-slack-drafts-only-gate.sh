@@ -879,8 +879,8 @@ says "that refusal names the module the writer imports" "rules.ts"
 # that refuses it fails here rather than in a session (L48). The installed copy of these hooks has
 # no tools/ folder beside it, and says so rather than passing (L411).
 if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tools/area-check-replay.ts" ] && [ -f "$MODS_REPO/tools/area-check-fixture.ts" ]; then
-  run_bash "cd $MODS_REPO && bun test tools/area-check-replay.ts"
-  allowed "the area check's replay, bun test tools/area-check-replay.ts, is not refused (claude-config#2681)"
+  run_bash "bun test $MODS_REPO/tools/area-check-replay.ts"
+  allowed "the area check's replay, bun test on tools/area-check-replay.ts, is not refused (claude-config#2681)"
   run_bash "cd $MODS_REPO && node tools/area-check-replay.ts . --repo danwright32/claude-config"
   allowed "the same replay run by node on a checkout is not refused"
 else
