@@ -317,6 +317,20 @@ export const handsOn = (rel: string, text: string): boolean => {
   return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
 }
 
+// The paths of a JavaScript or TypeScript file's local imports, as written: a relative or aliased
+// path, never a bare package.
+const localSpecs = (text: string): string[] =>
+  [...withoutComments(text, false).matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)]
+    .map(m => m[1] as string)
+    .filter(spec => spec.startsWith('.') || spec.includes('/'))
+
+/**
+ * Every module a file imports, as the file names it (#2637): each local JavaScript or TypeScript
+ * import path whole, and each python module. Two files of one name in different folders are two
+ * modules here, where importTerms gives one word for both.
+ */
+export const moduleSpecs = (text: string): string[] => [...new Set([...localSpecs(text), ...importedModules(withoutComments(text, true))])]
+
 /**
  * The words a search for the modules a file imports looks for (#2361): the last name of each local
  * JavaScript or TypeScript import (a relative or aliased path, never a bare package), its folder's for
@@ -324,10 +338,7 @@ export const handsOn = (rel: string, text: string): boolean => {
  */
 export const importTerms = (text: string): string[] => {
   const out = new Set<string>()
-  const code = withoutComments(text, false)
-  for (const m of code.matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)) {
-    const spec = m[1] as string
-    if (!spec.startsWith('.') && !spec.includes('/')) continue
+  for (const spec of localSpecs(text)) {
     const segs = spec.split('/').filter(s => s && s !== '.' && s !== '..')
     const stem = stemOf(segs[segs.length - 1] ?? '')
     const term = PACKAGE.has(stem) ? (segs[segs.length - 2] ?? '') : stem
@@ -1068,27 +1079,34 @@ export const changeText = (added: string[], removed: string[]): string =>
 /**
  * What is held, as the card and both refusals open. A shell command carries no wording the guard
  * can read before it runs, so it is named as that rather than as an empty list taken away. A
- * template another file sends (#2248) names that file, its sender, so Dan sees what posts it.
+ * template another file sends (#2248) names that file, its sender, so Dan sees what posts it. An
+ * edit that adds no text of its own and brings another file's to a send (#2637) names that file,
+ * `from`, as where the text is.
  */
-export const heldText = (file: string, added: string[], removed: string[], sender?: string): string =>
-  added.length || removed.length
+export const heldText = (file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
+  from
+    ? `This edit to ${file} makes ${sender && sender !== file ? sender : 'it'} send Slack message text from ${from} that Dan has not approved: ${listed(added)}`
+    : added.length || removed.length
     ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : ''} ${changeText(added, removed)}`
     : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
-const blocked = (file: string, added: string[], removed: string[], sender?: string): string =>
-  `Blocked: t${heldText(file, added, removed, sender).slice(1)}`
+const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
+  `Blocked: t${heldText(file, added, removed, sender, from).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
-export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
-  `${blocked(file, added, removed, sender)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
+  `${blocked(file, added, removed, sender, from)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
-export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
-  `${blocked(file, added, removed, sender)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
+  `${blocked(file, added, removed, sender, from)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets
- * the held edit through, so the question never asks to post (claude-config#2284).
+ * the held edit through, so the question never asks to post (claude-config#2284). For wording an
+ * edit brings in from another file (#2637), `from` is the file that holds it.
  */
-export const question = (file: string, rendered: string): string =>
-  `Approve the wording of an automated Slack alert defined in ${file}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`
+export const question = (file: string, rendered: string, from?: string): string =>
+  from
+    ? `Approve the wording of an automated Slack alert defined in ${from}, which the held edit to ${file} brings into use? Approving sends nothing: it only lets that edit go ahead.\n\n${rendered}`
+    : `Approve the wording of an automated Slack alert defined in ${file}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`

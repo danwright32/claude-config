@@ -30,6 +30,7 @@ import {
   isProseFile,
   literalsOf,
   mentionsStore,
+  moduleSpecs,
   namePatterns,
   plainYamlValues,
   question,
@@ -714,6 +715,35 @@ test('the question approves the wording of an automated alert in the named file,
   expect(lead).toContain('automated')
   expect(lead).toContain('sends nothing')
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
+})
+
+// claude-config#2637: wording an edit adds none of and brings to a send from a file it imports.
+
+test('a held edit that brings in another file\'s wording names that file as where the text is, and what sends it; the question names it too and never asks to post (#2637)', () => {
+  const ROUTE = '/w/a/monitor/route.ts'
+  const COPY = '/w/a/monitor/quiet-feed-copy.ts'
+  expect(heldText(ROUTE, ['The feed has gone quiet'], [], undefined, COPY)).toBe(`This edit to ${ROUTE} makes it send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
+  expect(heldText('/w/a/barrel.ts', ['The feed has gone quiet'], [], ROUTE, COPY)).toBe(`This edit to /w/a/barrel.ts makes ${ROUTE} send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
+  for (const r of [refusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY), agentRefusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY)]) {
+    expect(r.startsWith(`Blocked: this edit to ${ROUTE} makes it send Slack message text from ${COPY}`)).toBe(true)
+    expect(r).not.toContain('adds Slack message text')
+  }
+  // With no such file the wording is as it was.
+  expect(refusal('t1', ROUTE, ['The feed has gone quiet'], [])).toContain(`this edit to ${ROUTE} adds Slack message text Dan has not approved`)
+  const q = question(ROUTE, 'The orders feed has gone quiet', COPY)
+  const [lead] = q.split('\n\n')
+  expect(readsAsSend(lead ?? '')).toBe(false)
+  expect(lead).toContain(`defined in ${COPY}`)
+  expect(lead).toContain(`the held edit to ${ROUTE}`)
+  expect(lead).toContain('sends nothing')
+  expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
+})
+
+test('every module a file imports is named as the file names it, so one file name in two folders is two modules; a bare package is none (#2637)', () => {
+  const ts = "import { a } from './copy'\nimport { b } from '../other/copy'\nimport React from 'react'\nconst c = require('@/lib/notify/post')\n// import { d } from './commented'\n"
+  expect(moduleSpecs(ts).sort()).toEqual(['../other/copy', './copy', '@/lib/notify/post'])
+  expect(moduleSpecs('from app.alerts.copy import late_booking\nimport app.jobs.digest as digest\n')).toEqual(expect.arrayContaining(['app.alerts.copy', 'app.jobs.digest']))
+  expect(moduleSpecs('export const x = 1\n')).toEqual([])
 })
 
 // #2368's line reader and #2361's comment blanking were one rule written twice; codeOf is now the
