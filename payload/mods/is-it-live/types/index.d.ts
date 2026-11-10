@@ -65,7 +65,7 @@ declare module 'claude-code' {
       threads: IsItLiveThread[]
       /**
        * #2436: the order of this session's thread events, counted up by one for each merge learned
-       * of and each draft saved or skipped, so which came first never rests on two clock readings.
+       * of and each draft saved, so which came first never rests on two clock readings.
        */
       step: number
       /** #2436: the step at which this session last learned a merge of its own landed. */
@@ -81,7 +81,7 @@ declare module 'claude-code' {
 /**
  * A Slack thread a session started from (#2436): its channel and its parent message's time, the
  * link Dan pasted when he pasted one, how it was found, when (ms since the epoch), and the step at
- * which its last draft reply was saved or Dan chose to skip one (`settled`). For a thread the
+ * which its last draft reply was saved (`settled`). For a thread the
  * session started from, a merge landing at a later step owes it a draft; for one marked `mid`, only
  * a merge for it, recorded in `related`, does (#2578).
  * Every draft saved to the thread settles it, whichever prompt led to it, so the card's own message
@@ -99,9 +99,15 @@ export type IsItLiveThread = {
    * only a merge for it owes it a reply, never every merge of the session.
    */
   mid?: true
-  /** #2578: for a thread recorded mid session, the step of the latest merge for it, and those merges since its last draft or skip. */
+  /** #2578: for a thread recorded mid session, the step of the latest merge for it, and those merges since its last draft. */
   related?: number
   prs?: string[]
+  /**
+   * #2630: the message an is it live card asked a draft of in this thread (its PR as owner/name#n,
+   * the person, the words), until a draft saved to the thread settles it. The hold names it rather
+   * than asking for a second reply, since it is the text Dan was shown.
+   */
+  card?: { pr: string; name: string; message: string }
 }
 
 /**

@@ -27,7 +27,10 @@ back.
   `skillListingMaxDescChars` (300 since 2026-10-15, the characters of each skill description listed
   to Claude on every request), and `outputStyle` (`Explanatory` since 2026-10-30, Dan's choice for
   every session; only a built in style, `default`, `Explanatory` or `Learning`, is accepted, since a
-  custom style is a file under `output-styles` the sync does not carry). It is edited in the
+  custom style is a file under `output-styles` the sync does not carry), and
+  `env.CLAUDE_CODE_SUBAGENT_MODEL` (`opus` since 2026-11-10, the model an agent runs on when neither
+  the call nor the agent's definition names one, #2645; it is the only variable under `env` the sync
+  writes, and the rest of that block stays each Mac's own). It is edited in the
   repo, never published back from a Mac, and a pull writes each value into `settings.json`
   (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
   value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
@@ -361,6 +364,16 @@ lesson counts in the repo for history. Running it again is safe: the first recor
 says there was nothing left to remove. Under a fixture home it refuses whole, like the installers.
 To bring a retired Mac back, delete `~/.claude-sync-retired` and run `claude-sync install-autosync`.
 
+On a retired Mac, `claude-sync status` says so before anything else: when it was retired (read from
+the record), that it neither sends nor receives, and the way back (#2633). It offers no remedy
+that would refuse. The automatic sync line says the agents are off because the Mac is retired,
+rather than offering `install-autosync`, and an agent's plist found back on disk is named with
+`claude-sync retire --yes`, which runs on a retired Mac, as the way to remove it. The checks about
+sending and receiving (superseded snapshots, a clone stopped mid rebase, the CI verdict, a stuck
+send or receive, this Mac's last send, watcher holds, mods behind the shared repo) are not run, and
+one line names them, since every remedy they offer is a send, a receive or a release. On a Mac that
+is not retired, status reads exactly as before.
+
 ### Backups a pull leaves behind expire on their own
 
 A pull that overwrites a file keeps the previous copy beside it as `.syncbak`, and every later run
@@ -484,7 +497,12 @@ When `hooks/lib/sync-clone.sh` itself cannot be loaded, the write gate refuses a
 payload names `payload/`, naming the file and `claude-sync pull` as the fix, and the prompt hook
 says once a session that it could not check; both used to say nothing (#1900). Every other gate
 that refuses does the same for a library it needs, and `hooks/test-gates-fail-closed.sh` runs each
-one with each such library taken away.
+one with each such library taken away. A library a gate loads with a stand in function
+(`. lib/x.sh || name() {`) is needed too, unless the suite names that stand in as examined:
+`hook_allow_notice` for `lib/hook-notice.sh`, which says the notice as the library does, and
+`this_mac_name` for `lib/this-mac.sh`, which only names the Mac in a record. Each gate is run with
+each examined one gone as well, and must decide its judged call as it does with the library in
+place. Until #2634 every stand in was optional by its shape, so no gate was ever run without one.
 
 Every hook takes its payload through `ps_read_payload` in `hooks/lib/push-scope.sh`, or cleans a raw
 capture with `ps_clean_payload` before anything parses it, because jq rejects a whole payload holding
@@ -2317,7 +2335,9 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   A worktree with its own commits, a primary checkout and a repository with no `origin` are passed.
   A fetch that fails or runs out its bound lets the edit through with a notice that it could not
   check, once, and tries again after 15 minutes, unless even the local ref already shows the
-  worktree behind, which is refused since the command needs no network. Reading is never refused,
+  worktree behind, which is refused since the command needs no network. A fetch that was never
+  run, because `lib/bounded-run.sh` or the `lib/whole-number.sh` it loads is missing, is refused
+  every time, naming the file and `claude-sync pull` (#2634). Reading is never refused,
   and neither is an agent's worktree cut from a freshly fetched `origin/main`. On 2026-11-10 (load
   average 23 over one minute) the gate took 0.055 to 0.063 seconds on an edit in a primary checkout
   or outside any repository, 0.31 to 0.38 seconds on a worktree's first edit with its fetch, and
@@ -6079,18 +6099,22 @@ a reply names its parent through `thread_ts`), and when the main session reads a
 research. A merge GitHub confirms, or a background merge a turn end hears has merged, marks a
 merge landed. Answering the issue's open question the same day, Dan chose one draft after the
 session's last merge from the thread, not one after each; a turn end cannot know a merge is the
-last, so it holds only when a merge landed after the thread's last draft or skip and no merge of
+last, so it holds only when a merge landed after the thread's last draft and no merge of
 the session is in flight: a helper merge still waiting in is it live's own record whose background
 task the job watcher still lists (its list carries each job's task id for this). A helper that
 ended without merging is no longer in flight; with no job list to read, a waiting merge is taken as
-in flight. The hold tells the session to write the reply, run `/no-ai-tells`, ask Dan with
-`AskUserQuestion` carrying `metadata.source` `is-it-live-draft:<channel>:<thread ts>`, whose two
-answers the mod words (Save as a draft, Skip this time), and on Save save that exact text with
-`slack_send_message_draft` to the channel and thread, never a send; Slack keeps one attached draft
-per channel and refuses another with `attached_draft_exists`, which the hold says to resolve with
-Dan. Any draft Slack saved to that thread, under any Slack server and from any part of the session
-(the card's message for a thread requester, #2435, included), or Dan's Skip, settles it until the
-next merge. Which came first is kept as a count of steps in the session, never two clock readings.
+in flight. A message for someone is saved as a draft in the step it is shown, with no question
+(#2630, Dan, 2026-11-10: "Anytime you give me a message for someone, you should also just save it
+as a slack draft in the relevant thread"). So the card's answer says to save its message now,
+without asking Dan, and the hold tells the session to write the reply, run `/no-ai-tells`, show it
+to Dan and save that exact text in the same step with `slack_send_message_draft` to the channel and
+thread, never a send, then say it is a draft waiting there and that nothing was sent. A thread a
+card asked a draft of its message for is held for that message, word for word, never a second
+reply. Slack keeps one attached draft per channel and refuses another with
+`attached_draft_exists`, which the hold says to resolve with Dan. Any draft Slack saved to that
+thread, under any Slack server and from any part of the session (the card's message for a thread
+requester, #2435, included), settles it until the next merge. Which came first is kept as a count
+of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
 The mod never calls a Slack tool.
 Only a thread recorded at the session's start owes a reply after every merge (#2578: on
@@ -6100,13 +6124,14 @@ merge, is where the session started; one recorded later is pasted mid session, a
 for it owes it a reply: a merged PR whose title, body or comments, or those of an issue it closes,
 link the thread (GitHub is asked only while such a thread is recorded, and a read it refuses is
 toasted and counts as for none), or a PR whose card names the thread as where its Slack draft goes.
-Its hold names those PRs and never says the session started there, and a skip holds until the next
-merge for it. A card asking for no draft keeps the earlier card's record of one asked for (#2515),
-so a card for another PR to the same thread or person still says its draft replaces it.
+Its hold names those PRs and never says the session started there, and a draft saved to it holds
+until the next merge for it. A card asking for no draft keeps the earlier card's record of one
+asked for (#2515), so a card for another PR to the same thread or person still says its draft
+replaces it.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630
 
 </td></tr>
 <tr><td>
