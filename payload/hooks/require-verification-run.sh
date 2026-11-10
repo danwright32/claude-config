@@ -47,6 +47,14 @@
 # a hook the harness kills for overrunning says nothing, which for a PreToolUse gate can read as an
 # allow (#1081).
 #
+# SCREENSHOTS (claude-config#2516): a pull request touching an area that declares `screens` must
+# carry its before and after pictures in a `## Screenshots` block of its body, judged by
+# skills/verification-guides/scripts/screenshots.py under areas.json's own `screenshots.mode`
+# (warn by default). Only when a block links pictures does this read more: whether the repository
+# is public, and the folder of pictures at the commit the block links. In warn mode the verdict is
+# handed to the session even when the run records pass in block mode. Their own override is
+# ALLOW_NO_SCREENSHOTS=1 <the same command>, which lifts the pictures check alone.
+#
 # Deliberate override: ALLOW_UNVERIFIED_MERGE=1 <the same command> (visible in the command).
 #
 # Seams, for the tests: VR_READ_TRIES (3 in all), VR_READ_RETRY_SECONDS (2), VR_READ_BUDGET_SECONDS
@@ -267,6 +275,10 @@ case "${MT_API_ROUTE:-}" in
   pr|rest|graphql) mt_merge_pin "$command"; printf 'required %s' "$MT_PIN_SHA" > "$WORK/pin" ;;
   *) printf 'not-required' > "$WORK/pin" ;;
 esac
+# The screenshots check's own override (#2516): it lifts that check alone, never the run records.
+case "$command" in
+  *ALLOW_NO_SCREENSHOTS=1*) : > "$WORK/allow-no-screenshots" ;;
+esac
 
 # What a failed read leaves: its .err beside where the answer would have been, and no answer.
 keep_or_fail(){  # $1 = the answer file, $2 = vr_get's return code
@@ -314,16 +326,37 @@ LOOP_INPUT
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
+  # The screenshots check's reads (#2516), asked only when a pictures block makes them matter:
+  # whether the repository is public, and each folder of pictures on the pr-screenshots branch at
+  # the commit the block links.
+  if [ "$(printf '%s' "$verdict" | jq -r '.need.repo // false')" = "true" ]; then
+    vr_get "$WORK/repo.json" "whether $api_slug is public" "repos/$api_slug"
+    keep_or_fail "$WORK/repo.json" "$?"
+  fi
+  mkdir -p "$WORK/shots"
+  loop_input="$(printf '%s' "$verdict" | jq -r '.need.listings[]? | "\(.commit)\t\(.folder)"')" || true
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    commit="${line%%$'\t'*}"; folder="${line#*$'\t'}"
+    case "$commit$folder" in *[!A-Za-z0-9/_.-]*) continue ;; esac
+    vr_get "$WORK/shots/$commit.json" "the pictures in $folder at $commit" "repos/$api_slug/contents/$folder?ref=$commit"
+    keep_or_fail "$WORK/shots/$commit.json" "$?"
+  done <<LOOP_INPUT
+$loop_input
+LOOP_INPUT
   judge --final || judge_failed
 fi
 
 decision=$(printf '%s' "$verdict" | jq -r '.decision // ""' 2>/dev/null)
 text=$(printf '%s' "$verdict" | jq -r '.text // ""' 2>/dev/null)
 mode=$(printf '%s' "$verdict" | jq -r '.mode // ""' 2>/dev/null)
+# Said on an allow in warn mode, and whenever the screenshots check found something (#2516), so its
+# warning reaches the session behind a passing block mode run check too.
+say=$(printf '%s' "$verdict" | jq -r '.say // false' 2>/dev/null)
 case "$decision" in
   refuse) deny "$text" ;;
   allow)
-    if [ "$mode" = warn ]; then
+    if [ "$mode" = warn ] || [ "$say" = true ]; then
       jq -nc --arg t "$text" '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $t}}'
     fi
     exit 0 ;;
