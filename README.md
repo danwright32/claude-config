@@ -27,7 +27,10 @@ back.
   `skillListingMaxDescChars` (300 since 2026-10-15, the characters of each skill description listed
   to Claude on every request), and `outputStyle` (`Explanatory` since 2026-10-30, Dan's choice for
   every session; only a built in style, `default`, `Explanatory` or `Learning`, is accepted, since a
-  custom style is a file under `output-styles` the sync does not carry). It is edited in the
+  custom style is a file under `output-styles` the sync does not carry), and
+  `env.CLAUDE_CODE_SUBAGENT_MODEL` (`opus` since 2026-11-10, the model an agent runs on when neither
+  the call nor the agent's definition names one, #2645; it is the only variable under `env` the sync
+  writes, and the rest of that block stays each Mac's own). It is edited in the
   repo, never published back from a Mac, and a pull writes each value into `settings.json`
   (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
   value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
