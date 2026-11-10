@@ -59,12 +59,13 @@ export const readInput = (raw: Record<string, unknown>): BoxInput | { refusal: s
 const HEADING = 'GOAL ACCOMPLISHED'
 
 /**
- * The box as text: a three line double box labelled GOAL ACCOMPLISHED, the shape of the SESSION
- * REFLECTION box, then the goal and what shipped. It is the tool's result, so it is what the model
- * reads and what a surface that cannot draw the card shows.
+ * The box as text: one line, GOAL ACCOMPLISHED and the goal, then each thing shipped. It is the
+ * tool's result, so it is what the model reads and what Dan sees wherever the card is not drawn.
+ * Claude Code collapses a tool result after its first lines, so the goal and the shipped lines come
+ * first (#2512, Dan's choice on 2026-11-09): the three line double box it had before filled the
+ * visible lines alone and hid everything under "+5 lines".
  */
-export const boxText = (goal: string, shipped: string[]): string =>
-  [`╔${'═'.repeat(HEADING.length + 2)}╗`, `║ ${HEADING} ║`, `╚${'═'.repeat(HEADING.length + 2)}╝`, `Goal: ${goal}`, 'Shipped:', ...shipped.map(s => `• ${s}`)].join('\n')
+export const boxText = (goal: string, shipped: string[]): string => [`${HEADING}: ${goal}`, ...shipped.map(s => `• ${s}`)].join('\n')
 
 /**
  * The same box as mod-kit's card, as Dan settled it in the #1563 design round (2026-10-24, "Green

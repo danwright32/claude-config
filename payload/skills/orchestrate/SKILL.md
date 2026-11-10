@@ -46,9 +46,9 @@ Every brief has exactly these parts, in this order, and nothing else:
 
 1. `Read ~/.claude/skills/orchestrate/agent-rules.md before anything else and follow it.`
 2. The item in Dan's words, plus what is already known (alert text, times in ET, links). State what is known and what is ruled out; never state your guess at the cause as fact.
-3. The repo's absolute path, and either the worktree path and branch name to build on, or "read only".
+3. The repo's absolute path, and either the worktree path and branch name to build on, or "read only". The worktree path is inside the repo's own `.claude/worktrees/` folder, never under `/tmp`, `/private/tmp` or the scratchpad, which a restart of the Mac empties with any uncommitted work in it (claude-config#2490).
 4. What is off limits because another agent owns it, naming that item.
-5. The scratchpad folder: `<scratchpad>/<item number>-<short name>/`.
+5. The working folder: `<notes folder>/<item number>-<short name>/`, under the notes folder the session start notice names (`~/.claude/state/session-notes/<project>/<session>/`), never the scratchpad, which a restart of the Mac empties (claude-config#2490).
 6. What done means for this item, and what must come back to Dan instead of being done.
 7. For a `build` item only: the `Claude-Session:` line for commits and the session link line for the PR body, copied from this session's attribution note.
 
@@ -62,7 +62,7 @@ The rules every agent shares live in `agent-rules.md`, so a brief never restates
 - Dan adds items mid run: add them to the board and run the matching rules again. When a running agent already owns that area, send the new item to it with `SendMessage` instead of starting another agent: it fixes both on its branch only if they are one fault, and otherwise finishes its own item, reports on the new one, and builds it once its own pull request has merged.
 - An agent's question that only Dan can answer becomes one picker while the others keep running.
 - Never report or predict a result an agent has not handed back.
-- An agent that hands back at the context line has not failed: start a fresh agent on the same item with the same brief plus one line, `Read <its scratchpad folder>/handoff.md first: it holds what the last agent on this item decided and left.` Its report is at most 300 words; read the files it names only when the report leaves a question open.
+- An agent that hands back at the context line has not failed: start a fresh agent on the same item with the same brief plus one line, `Read <its working folder>/handoff.md first: it holds what the last agent on this item decided and left.` Its report is at most 300 words; read the files it names only when the report leaves a question open.
 
 ## 5. When an agent reports
 
@@ -102,7 +102,7 @@ When nothing is running or queued:
 4. The board: each item's state, and the exact next step of each item in progress.
 5. Every question waiting on Dan.
 
-A decision that belongs to an issue goes on that issue as a comment, where the next session and the issue's next reader will find it. The rest goes in `handoff.md` at the root of the scratchpad folder, with the board. Then call `mcp__status-bar__queue_compact` with that file's absolute path (claude-config#2025). It refuses until the note is there, written since the last compaction and within the hour, and otherwise queues a compact that runs when this turn ends, shown on the status bar with Cancel. A /goal run is one turn until its goal is met or stopped, so there the compact waits until then. Once it has run, the status bar sends this session one prompt to read the note and carry on (claude-config#2082), so the work picks up from the note without Dan typing. Tell Dan in one line that the session is at the context line and where the note is, so he can cancel the compact, type /compact himself if the tool was not there or refused, or start a fresh session from the note. Agents already running carry on either way.
+A decision that belongs to an issue goes on that issue as a comment, where the next session and the issue's next reader will find it. The rest goes in `handoff.md` at the root of this session's notes folder, with the board: the folder the session start notice and the context line notice name, which a restart of the Mac cannot clear (claude-config#2490). Then call `mcp__status-bar__queue_compact` with that file's absolute path (claude-config#2025). It refuses until the note is there, written since the last compaction and within the hour, and otherwise queues a compact that runs when this turn ends, shown on the status bar with Cancel. A /goal run is one turn until its goal is met or stopped, so there the compact waits until then. Once it has run, the status bar sends this session one prompt to read the note and carry on (claude-config#2082), so the work picks up from the note without Dan typing. Tell Dan in one line that the session is at the context line and where the note is, so he can cancel the compact, type /compact himself if the tool was not there or refused, or start a fresh session from the note. Agents already running carry on either way.
 
 ## Common mistakes
 

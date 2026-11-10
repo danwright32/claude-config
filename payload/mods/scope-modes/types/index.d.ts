@@ -35,6 +35,8 @@ export type ScopeModesLeftAsIs = ScopeModesLeftOpen | ScopeModesLeftClosed
  * branch; one per branch. The branch on GitHub is not covered: it holds no checkout.
  */
 export type ScopeModesLeftBranch = { repo: string; branch: string; files: string[]; why: string }
+/** A branch this session pushed into another by refspec (#2533): from the branch pushed, to the one it landed in. */
+export type ScopeModesPushedInto = { from: string; to: string }
 /**
  * A cleanup branch Dan agreed to while winding down (#1051), from his answer to open_cleanup_branch:
  * the branch may start in the checkout at `root`, by checkout or switch, while nothing beyond `files`
@@ -103,6 +105,11 @@ declare module 'claude-code' {
        * of its agents. Winding down finishes only these, never a branch its checkout merely sat on.
        */
       branches: string[]
+      /**
+       * The branches this session pushed into another branch by refspec (#2533), `git push origin
+       * HEAD:fix-pr` from fix-local, say: winding down finishes fix-local by fix-pr's PR.
+       */
+      pushedInto: ScopeModesPushedInto[]
       /** The branches Dan chose to leave as they are (#1074). */
       leftBranch: ScopeModesLeftBranch[]
       /** The cleanup branches Dan agreed to while winding down (#1051), each removed once used. */
