@@ -41,7 +41,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=44
+EXPECTED=46
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -106,6 +106,10 @@ const SCAN = { what: 'a bash script file', path: '/w/app/scan.sh' }
 const REWRITE = { what: 'a python3 script file', path: '/w/app/rewrite.py' }
 is('a folder handed to a scan and then to a rewrite carries both scripts', 'bash scan.sh src/ && python3 rewrite.py src/', [{ word: 'src/', path: '/w/app/src', runs: [SCAN, REWRITE] }])
 is('a folder handed to a rewrite and then to a scan carries both scripts', 'python3 rewrite.py src/ && bash scan.sh src/', [{ word: 'src/', path: '/w/app/src', runs: [REWRITE, SCAN] }])
+// #2527: a loop's quoted search term is handed by its characters, as the term spelled out is (#2255),
+// and a loop over words the reader cannot read hands a script a name it cannot read.
+is("a loop's quoted search term is handed by its characters", `for t in "*push*" gate; do bash scan.sh "$t"; done`, [{ word: '*push*', path: '/w/app/*push*' }, { word: '$t', path: '/w/app/gate', runs: [SCAN] }])
+unread("a loop whose words cannot be read hands a script a name it cannot read", 'for t in $(cat list); do bash scan.sh "$t"; done', '$t', 'built as the command runs', undefined)
 
 // #2255: text whose every pattern character is quoted reaches a script file as its characters, so it
 // is judged as the one file they name; a pattern the shell or a tool expands, a value filled in as the

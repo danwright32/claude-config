@@ -3447,6 +3447,34 @@ test('#1953: a script or tool handed a name a shell variable fills in is held as
   expect(w.ran.length).toBe(5)
 })
 
+// #2527: on 2026-11-09 a read only probe over search terms (`for t in "*push*" gate; do bash probe.sh
+// --like "$t"; done`) was held as writing "$t": mod-kit left a loop over a quoted pattern as written,
+// so the guard read its variable as a name it cannot read. mod-kit now hands the script each term as
+// its characters, judged as the one file they name (#1951), as the term spelled out is. A folder a
+// script is handed (`bash tools/check-mods.sh <payload/mods>`) is the one path it names, never every
+// file under it, as it always was here. A loop whose words cannot be read, a quoted term naming a
+// screen file, and a screen file a script is handed are still held.
+test('#2527: a loop handing a script quoted search terms, or a script handed a folder of mods, runs; an unreadable loop or a screen file is still held', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  for (const command of [
+    `for t in "*push*" 'gate'; do bash scripts/probe.sh --like "$t"; done`,
+    'for t in "a" "b"; do bash scripts/probe.sh --like "$t"; done',
+    'bash tools/check-mods.sh /w/slate/payload/mods',
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(3)
+  for (const command of [
+    'for t in $(cat list); do bash scripts/probe.sh "$t"; done',
+    `for t in "app/page.tsx" 'x'; do python3 scripts/gen.py "$t"; done`,
+    'python3 scripts/gen.py app/page.tsx',
+    `for t in "*push*"; do echo x > "app/$t.tsx"; done`,
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) || why.includes('could not be followed') }).toEqual({ command, held: true })
+  }
+  expect(w.ran.length).toBe(3)
+})
+
 test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
   const w = world($, on)
   expect(refusalOf(await call($, GEN(STORE)))).toContain('own record')

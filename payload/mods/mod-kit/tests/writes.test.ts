@@ -656,7 +656,7 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     const args = (command: string) => runs(command).map(r => r.args.map(a => [a.word, a.path ?? null]))
     expect(args('for t in a.sh b.sh; do python3 run.py tests/$t; done')).toEqual([[['tests/$t', `${CWD}/tests/a.sh`], ['tests/$t', `${CWD}/tests/b.sh`]]])
     expect(args('for f in page.tsx; do python3 gen.py "app/${f}"; done')).toEqual([[['app/${f}', `${CWD}/app/page.tsx`]]])
-    for (const loop of ['for f in app/*.tsx', 'for f in $LIST', "for f in 'a*' b", 'for f in $(ls)', 'for f'])
+    for (const loop of ['for f in app/*.tsx', 'for f in $LIST', 'for f in $(ls)', 'for f'])
       expect({ loop, args: args(`${loop}; do python3 gen.py $f; done`) }).toEqual({ loop, args: [[['$f', null]]] })
     // A word holding a space (an issue's title) is read whole and as each piece a split would make,
     // with and without the text around it: more readings than any shell makes, never fewer.
@@ -668,6 +668,32 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     // after it, as every other variable's is (lessons review of #1968 at a47a667).
     expect(args('for f in a.md; do eval "f=app/page.tsx"; python3 gen.py $f; done')).toEqual([[['$f', null]]])
     expect(args('for f in a.md; do . ./setf.sh; python3 gen.py $f; done')).toEqual([[['$f', null]]])
+  })
+  // #2527: a loop over quoted search terms (`for t in "*push*" gate; do bash probe.sh --like "$t";
+  // done`) left its variable as written, since a pattern character is no plain word, so both guards
+  // held a read only probe as writing "$t". A word the shell hands on as written (every pattern
+  // character quoted, nothing expanded) is a loop word the reader follows too, and where its value
+  // reaches a script as its characters it is marked quoted, named by those characters, as the same
+  // word spelled out is (#1951). Only bash and sh match an unquoted value against files (#1834), so
+  // there the value is a pattern again, and an expansion in the loop's words leaves it unknown.
+  test('a loop over quoted patterns hands a script each as its characters, where the shell matches it against no file (#2527)', () => {
+    const handed = (command: string, shell?: string) => commandWrites(command, CWD, HOME, shell).runs?.map(r => r.args)
+    expect(handed(`for t in "*push*" 'gate'; do bash probe.sh --like "$t"; done`)).toEqual([[{ word: '*push*', folder: CWD, quoted: true }, { word: '$t', path: `${CWD}/gate` }]])
+    // As the same word spelled out is.
+    expect(handed(`bash probe.sh --like "*push*"`)).toEqual([[{ word: '*push*', folder: CWD, quoted: true }]])
+    // Under zsh an unquoted value is matched against no file either.
+    expect(handed(`for t in "*push*"; do bash probe.sh $t; done`, '/bin/zsh')).toEqual([[{ word: '*push*', folder: CWD, quoted: true }]])
+    // Under bash it is: a pattern again, given by its folder, never marked.
+    expect(handed(`for t in "*push*"; do bash probe.sh $t; done`, '/bin/bash')).toEqual([[{ word: '$t', folder: CWD }]])
+    expect(handed(`for t in "*push*"; do bash probe.sh "$t"; done`, '/bin/bash')).toEqual([[{ word: '*push*', folder: CWD, quoted: true }]])
+    // A pattern beside the value, or another variable's value in the word, may be matched: not marked.
+    expect(handed(`for t in "a*"; do bash probe.sh $t*; done`)).toEqual([[{ word: '$t*', folder: CWD }]])
+    expect(handed(`P=x; for t in "a*"; do bash probe.sh "$P$t"; done`)).toEqual([[{ word: '$P$t', folder: CWD }]])
+    // A loop word the shell matches or expands still leaves the value unknown, given as written.
+    for (const loop of [`for t in "*push*" *.md`, `for t in "*push*" "$X"`, `for t in "*push*" $(cat list)`])
+      expect({ loop, handed: handed(`${loop}; do bash probe.sh "$t"; done`) }).toEqual({ loop, handed: [[{ word: '$t' }]] })
+    // A write the loop's value names is still a write, given by its folder as a pattern is.
+    expect(read(`for t in "a*b" c; do echo x > "$t"; done`).files).toEqual([{ word: '$t', folder: CWD }, { word: '$t', path: `${CWD}/c` }])
   })
   // #1953: a $ in single quotes or after a backslash is no variable, but the run's argument read the
   // same as one, its quotes taken off, so a script handed a regex ('x$') or prose ('costs $5') read as

@@ -69,6 +69,12 @@ const WRITES: Record<string, unknown> = {
   'bash scan.sh src/ && bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash rewrite.sh src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash scan.sh src/ && bash scan.sh ./src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: './src', path: '/w/app/src' }] }] },
+  // #2527: a check like tools/check-mods.sh handed a folder, held by Dan's decision, and a loop handing
+  // a script quoted search terms, plain words, and words it cannot read.
+  'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
+  "for t in \"*push*\" 'gate'; do bash check.sh --like \"$t\"; done": { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '*push*', folder: '/w/app', quoted: true }, { word: '$t', path: '/w/app/gate' }] }] },
+  'for t in "a" "b"; do bash check.sh --like "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t', path: '/w/app/a' }, { word: '$t', path: '/w/app/b' }] }] },
+  'for t in $(cat list); do bash check.sh "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t' }] }] },
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -878,6 +884,33 @@ test('a script handed a folder that cannot be read, is not there, or runs under 
   expect(refusal(await bash($ as never, w, 'bash locked.sh src/'))).toContain('which writes src/big.ts.')
   expect(refusal(await bash($ as never, w, './odd.sh src/', {}, 'b2'))).toContain('which writes src/big.ts.')
   expect(refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b3'))).toContain('which writes src/big.ts.')
+})
+
+// #2527, Dan's decision (2026-11-09): `bash tools/check-mods.sh <payload/mods>` copies into a folder it
+// makes with mktemp and runs an inline perl program, so its own text writes, and a folder it is handed
+// stays held for the held files under it, as #2321 holds any script's. Where a script's writes really
+// land is a follow up; until then the hold fails closed.
+const CHECK = 'scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
+
+test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/check.sh`] = `#!/bin/bash\n${CHECK}`
+  expect(refusal(await bash($ as never, w, 'bash check.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// #2527: `for t in "*push*" gate; do bash probe.sh --like "$t"; done`, a read only probe over search
+// terms, was held as writing "$t": mod-kit left a loop over a quoted pattern as written. It now hands
+// the script each term as its characters, judged as the one file they name (#2255); a loop whose
+// words cannot be read is still held, since the files they name cannot be.
+test('a loop handing a script quoted search terms runs; one whose words cannot be read is still held (#2527)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/check.sh`] = CHECK
+  expect((await bash($ as never, w, `for t in "*push*" 'gate'; do bash check.sh --like "$t"; done`)).result).toBe('done')
+  expect((await bash($ as never, w, 'for t in "a" "b"; do bash check.sh --like "$t"; done', {}, 'b2')).result).toBe('done')
+  const why = refusal(await bash($ as never, w, 'for t in $(cat list); do bash check.sh "$t"; done', {}, 'b3'))
+  expect(why).toContain('$t')
+  expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$t', decision: 'held' })
 })
 
 // #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is

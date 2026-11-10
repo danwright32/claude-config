@@ -524,6 +524,8 @@ test('a quoted pattern handed to a script file is judged as the one file its cha
   expect(shellTargets(probe([{ word: 'every *.ts file, why?', folder: '/w/app', quoted: true }]))).toEqual([{ word: 'every *.ts file, why?', path: '/w/app/every *.ts file, why?' }])
   // Anything else the command writes is judged beside it: `python3 probe.py 'src/*.ts' > src/big.ts`.
   expect(shellTargets({ ...probe([QUOTED]), files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts' }] })).toEqual([{ word: 'src/big.ts', path: '/w/app/src/big.ts' }, { word: 'src/*.ts', path: '/w/app/src/*.ts' }])
+  // `for t in "*push*"; do python3 probe.py "$t"; done`, as mod-kit gives a loop's quoted term since #2527.
+  expect(shellTargets(probe([{ word: '*push*', folder: '/w/app', quoted: true }]))).toEqual([{ word: '*push*', path: '/w/app/*push*' }])
 })
 
 test('a pattern the shell or a tool may expand, a group, and one reaching across folders stay unread (#2255)', () => {
