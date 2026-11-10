@@ -51,7 +51,13 @@ export async function shoot(o, pw) {
   try {
     const context = await browser.newContext({ viewport: { width: o.width, height: HEIGHT }, colorScheme: o.theme, deviceScaleFactor: 1 });
     const page = await context.newPage();
-    const res = await page.goto(o.url, { waitUntil: "load", timeout: READY_TIMEOUT_MS });
+    let res;
+    try {
+      res = await page.goto(o.url, { waitUntil: "load", timeout: READY_TIMEOUT_MS });
+    } catch (e) {
+      // A refused connection or a load past the timeout is the screen not loading (exit 1), not a usage fault.
+      return { ok: false, why: `${o.url} did not load: ${String(e).split("\n")[0]}` };
+    }
     if (!res || !res.ok()) return { ok: false, why: `${o.url} answered ${res ? res.status() : "nothing"}` };
     if (o.rows) {
       try {

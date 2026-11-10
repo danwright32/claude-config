@@ -438,7 +438,7 @@ def judge(areas, touched, body, head, private, listings, changed_since, home=Non
     {commit: [file names in the block's folder] or None when GitHub could not list it}. changed_since:
     the pull request's own files changed since the block's head, or None when not yet read. A listing
     GitHub failed is None or the reason it gave.
-    Returns {"required", "problems" [{kind, area, message}], "need" {"compares", "listings"},
+    Returns {"required", "problems" [{kind, area, message}], "need" {"compares", "listings", "repo"},
     "unmeasured", "note", "mode"}.
     """
     out = {"required": [], "problems": [], "need": {"compares": [], "listings": [], "repo": False}, "unmeasured": False,
