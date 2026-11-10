@@ -24643,11 +24643,32 @@ check "#1535 a file installed with this Mac's home path in it is matched to the 
 # When it is not, what status said, the installed bytes and the history it was matched against are
 # the diagnosis, so they are printed (L177). This check failed once under load on 2026-11-02
 # (claude-config#2091) while the two above it passed, and the kept output held only the FAIL line.
+# It has not been reproduced since: on 2026-11-10, 0 misses in 416 pulls into a fresh home each
+# followed by a status read, at load 23 to 115 on 12 cores, some of it inside a load window. So
+# the print also answers the two questions the next look needs. Is the INSTALLED file a version the
+# repo held? Its hashes, raw and with the placeholder put back, are looked up in the history, and
+# its size says whether an install left it empty. Does the miss persist? A second status read, at
+# once, says whether the first one failed only that once.
 if ! line_has "$out_ml1" 'mods behind the shared repo' 'path-mod'; then
   printf '%s\n' "$out_ml1" | sed 's/^/    status said: /'
+  printf '    CLAUDE_HOME status was given: %s\n' "$MLH"
   sed 's/^/    installed paths.ts: /' "$MLH/mods/path-mod/hooks/paths.ts" 2>&1
-  git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1 \
-    | sed 's/^/    repo history: /'
+  _ml_raw="$(git hash-object "$MLH/mods/path-mod/hooks/paths.ts" 2>&1)"
+  _ml_tok="$(HT_FROM="$MLH" HT_TO='__CLAUDE_HOME__' perl -pe 's/\Q$ENV{HT_FROM}\E/$ENV{HT_TO}/g' < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | git hash-object --stdin 2>&1)"
+  printf '    installed paths.ts: %s bytes, blob %s, blob with the placeholder put back %s\n' \
+    "$(wc -c < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | tr -d ' ')" "$_ml_raw" "$_ml_tok"
+  _ml_hist="$(git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1)"
+  printf '%s\n' "$_ml_hist" | sed 's/^/    repo history: /'
+  if grep -qF -e " $_ml_raw " -e " $_ml_tok " <<< "$_ml_hist"; then
+    echo "    the installed file is a version the repo held, so the pull installed it correctly and status failed to match it"
+  else
+    echo "    the installed file is no version the repo held, so the pull installed something wrong"
+  fi
+  if line_has "$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)" 'mods behind the shared repo' 'path-mod'; then
+    echo "    a second status read at once named path-mod, so the first read failed only that once"
+  else
+    echo "    a second status read at once missed path-mod too, so the miss persists"
+  fi
 fi
 check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
   "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
