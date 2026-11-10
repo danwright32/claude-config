@@ -364,6 +364,16 @@ lesson counts in the repo for history. Running it again is safe: the first recor
 says there was nothing left to remove. Under a fixture home it refuses whole, like the installers.
 To bring a retired Mac back, delete `~/.claude-sync-retired` and run `claude-sync install-autosync`.
 
+On a retired Mac, `claude-sync status` says so before anything else: when it was retired (read from
+the record), that it neither sends nor receives, and the way back (#2633). It offers no remedy
+that would refuse. The automatic sync line says the agents are off because the Mac is retired,
+rather than offering `install-autosync`, and an agent's plist found back on disk is named with
+`claude-sync retire --yes`, which runs on a retired Mac, as the way to remove it. The checks about
+sending and receiving (superseded snapshots, a clone stopped mid rebase, the CI verdict, a stuck
+send or receive, this Mac's last send, watcher holds, mods behind the shared repo) are not run, and
+one line names them, since every remedy they offer is a send, a receive or a release. On a Mac that
+is not retired, status reads exactly as before.
+
 ### Backups a pull leaves behind expire on their own
 
 A pull that overwrites a file keeps the previous copy beside it as `.syncbak`, and every later run
