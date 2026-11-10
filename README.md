@@ -1785,7 +1785,18 @@ and lessons review and is judged by every gate as any update's is. Any other con
 branch, stops as before, naming the conflicted files. Each row was one line of up to 29 KB until
 the table became an HTML table of wrapped cells (claude-config#2108), which lets edits to different
 lines of one description merge cleanly, but two pull requests adding an issue number to one mod
-still meet in its Issue cell, so the resolver stays. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+still meet in its Issue cell, so the resolver stays. One CI start that never began is re-run
+rather than stopped on (claude-config#2537): on 2026-11-09 pull requests #2495, #2496 and #2534
+stopped on `block-red-merge.sh`'s "PR has NO checks at all" because each head's tests run had
+finished as a failure with zero jobs ("This run likely failed because of a workflow file issue")
+while main's workflow was fine, and a plain `gh run rerun` started each properly. Once no run for
+the head is unfinished, the helper reads the jobs of each run for that exact head that finished as a
+failure, and one with no jobs on its first attempt is re-run once for that head, said in its output
+and log, and waited on like any other run. A run whose jobs ran and failed is never re-run, a run
+already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
+left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
+gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
+has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
