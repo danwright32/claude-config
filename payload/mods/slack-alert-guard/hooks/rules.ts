@@ -158,19 +158,16 @@ export const requestLanguage = (path: string, text: string): RequestLanguage | u
   return undefined
 }
 
+import { fileReach } from './mod-kit/reaches.ts'
+
 // What makes a request, or starts a program that could, in each language (#2662). Each is wide on
 // purpose: a sentence that reads like one of these keeps its file a sender, which only holds an edit
 // that was held before. Python and JavaScript reach the network or another program only through a
-// module they import or a call they make, so a program's name in their strings is data (a gate's
-// list of the programs it refuses) and never counts; a shell script's words are what it runs.
-const PY_NET = 'urllib\\d?|requests|httpx|aiohttp|httplib2?|http|socket|socketserver|subprocess|pycurl|websockets?|smtplib|ftplib|telnetlib|asyncio|ssl|xmlrpc|pty|multiprocessing|slack\\w*'
-const PY_REQUEST = new RegExp(
-  `\\bfrom[ \\t]+(${PY_NET})(\\.[\\w.]+)?[ \\t]+import\\b|\\bimport[ \\t]+([\\w.]+([ \\t]+as[ \\t]+\\w+)?[ \\t]*,[ \\t]*)*(${PY_NET})\\b|\\bos\\s*\\.\\s*(system|popen\\w*|exec[lv]\\w*|spawn\\w*|posix_spawn\\w*|startfile)\\s*\\(|\\b(__import__|import_module|urlopen)\\s*\\(`,
-)
-const JS_NET = 'https?|http2|net|tls|dgram|child_process|worker_threads|node-fetch|cross-fetch|undici|axios|got|ky|superagent|needle|request|ws'
-const JS_REQUEST = new RegExp(
-  `\\b(fetch|axios|got|ky|superagent|needle|sendBeacon)\\s*\\(|\\b(axios|got|ky|superagent|needle|https?|undici)\\s*\\.\\s*\\w+\\s*\\(|\\bnew\\s+(XMLHttpRequest|WebSocket|EventSource)\\b|(\\bfrom\\s*|\\brequire\\s*\\(\\s*|\\bimport\\s*\\(\\s*|\\bimport\\s+)["'\`](node:)?(${JS_NET})["'\`/]|\\b(Bun|Deno)\\s*\\.\\s*(spawn\\w*|run|Command|connect)\\b|\\bprocess\\s*\\.\\s*run\\s*\\(|\\$\``,
-)
+// module they import or a call they make, which mod-kit's file reader judges (fileReach, #2710: the
+// one judge of what code can do lives in mod-kit, #712), so a program's name in their strings, a
+// pattern or a comment is data (a gate's list of the programs it refuses) and never counts. A shell
+// script's words are what it runs, and its inline python or node sits in its quotes, so that is
+// read whole.
 // A program that makes a request, followed by what it is handed; HTTPie's http and https; bash's own
 // /dev/tcp; and, where a command starts, any program named for Slack (a helper a script calls with
 // no brackets, which no marker sees).
@@ -179,7 +176,11 @@ const SHELL_REQUEST =
 
 /** Whether a file's code makes a request, or starts a program that could. Inline python or JavaScript in a shell script is the script's own text, so it is read there too. */
 const makesRequest = (lang: RequestLanguage, code: string): boolean =>
-  lang === 'python' ? PY_REQUEST.test(code) : lang === 'js' ? JS_REQUEST.test(code) : SHELL_REQUEST.test(code) || PY_REQUEST.test(code) || JS_REQUEST.test(code)
+  lang === 'python'
+    ? fileReach('python', code) !== undefined
+    : lang === 'js'
+      ? fileReach('node', code) !== undefined
+      : SHELL_REQUEST.test(code) || fileReach('python', code, { whole: true }) !== undefined || fileReach('node', code, { whole: true }) !== undefined
 
 // Whether a file's code only names what it matches: every marker in it a name being matched, and
 // nothing in it making a request. Never so in a language not read for requests. The names are read

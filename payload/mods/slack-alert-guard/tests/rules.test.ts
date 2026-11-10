@@ -170,6 +170,25 @@ test('a file that matches a Slack endpoint and then makes a request is still a s
     expect(js(body)).toBe(true)
 })
 
+test("what a file reaches is read by mod-kit's file reader, so a program or module it only names in a string or pattern starts nothing (#2710)", () => {
+  const py = (body: string) => isSender('hooks/gate.py', `${PY_PATTERN}${body}\n`)
+  for (const body of [
+    'HELP = "run: import subprocess, then os.system(cmd)"',
+    "RUNS = re.compile(r'\\b(subprocess|pty|multiprocessing)\\b')",
+    '"""\nimport urllib.request\n"""',
+  ])
+    expect(py(body)).toBe(false)
+  // The control: the same file that does import one, or posts through a subprocess, still is one.
+  expect(py('import subprocess\nsubprocess.run(["curl", "-d", text, url])')).toBe(true)
+  expect(py('HELP = "import subprocess"\nimport subprocess')).toBe(true)
+  const js = (body: string) => isSender('src/gate.ts', `const SLACK = new RegExp('slack_webhook|hooks[.]slack[.]com')\n${body}\n`)
+  for (const body of ["const HINT = 'call fetch(u) or require(\"child_process\") yourself'", 'const RUNS = /\\b(child_process|fetch\\(|axios)/', 'const T = `import axios from "axios"`'])
+    expect(js(body)).toBe(false)
+  expect(js("const { exec } = require('child_process')")).toBe(true)
+  // A shell script's inline python or node sits in quotes, so its text is read whole, as before.
+  expect(isSender('scripts/relay.sh', `#!/bin/bash\ncase "$1" in *hooks.slack.com*) python3 -c "import subprocess" ;; esac\n`)).toBe(true)
+})
+
 test('only shell, python, JavaScript and TypeScript are read for a pattern: in any other language a marker is a sender, as before (#2662)', () => {
   expect(requestLanguage('hooks/gate.sh', '')).toBe('shell')
   expect(requestLanguage('hooks/gate', '#!/usr/bin/env python3\n')).toBe('python')

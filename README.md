@@ -5694,7 +5694,17 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with.
+pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
+strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
+request it makes, a module it loads by a name given at run time) is read only through `fileReach`
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
+Slack alert guard kept its own lists of module names, and asks inside a search too short for an
+engine call per file). It counts a name only where the file imports or calls it, never in a string,
+a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
+`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
+The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
+inline code and counts a process word anywhere.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
