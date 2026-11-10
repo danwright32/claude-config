@@ -1057,6 +1057,22 @@ test('a real write chained with the clear line is held, and a copy of the helper
   expect(refusal(await bash($ as never, w, 'bash payload/hooks/lib/issue-spool.sh clear /w/app', {}, 'b3'))).toContain('which writes src/big.ts.')
 })
 
+// Two fast growing files under src, so a folder reach judged file by file holds twice.
+const TWO_GROWING = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big.ts', '\x1eMore', '700\t50\tsrc/pay/stripe.ts'].join('\n')
+
+test('a folder reach whose open issues cannot be read is one hold for the whole command, saying so, and one proceed lets it run (#2636)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.numstat = TWO_GROWING
+  w.ctl.lines = 'origin/main:src/big.ts:2400\norigin/main:src/pay/stripe.ts:2000\n'
+  w.ctl.gh = () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })
+  const why = refusal(await bash($ as never, w, FIND))
+  expect(why).toContain('src reaches every file under it, and its open issues could not be read (error connecting to api.github.com)')
+  expect(why).not.toContain('which writes src/big.ts')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND, {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+})
+
 test('with its open issues unread, a command that names a fast growing file is still held for that file (#2636)', KIT, async ($, on) => {
   const w = world($, on)
   w.ctl.gh = () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })
