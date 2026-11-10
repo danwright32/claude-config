@@ -492,8 +492,10 @@ def judge_tool(tool, tool_input):
 
 
 class OutOfTime(BaseException):
-    """Raised by Judge.tick once the budget has passed, carrying what the walk was doing, as the
-    phrase out_of_time() puts after "while". A BaseException, so the `except Exception` around a
+    """Raised by Judge.late once the budget has passed (from tick, at the points the walk looks at
+    the clock, and from the budget's timer, on whatever line the walk is on, claude-config#2571),
+    carrying what the walk was doing, as the phrase out_of_time() puts after "while". A
+    BaseException, so the `except Exception` around a
     script read as commands (script_body) and every other one in the walk lets it through to main()
     rather than reading it as a script that could not be parsed."""
 

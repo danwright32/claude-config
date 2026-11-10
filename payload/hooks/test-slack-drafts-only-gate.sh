@@ -1351,7 +1351,10 @@ PY
 check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
 # And the hard stop, which ends a reader the budget could not interrupt, still leaves the wrapper 2
 # seconds of that timeout to print its refusal (claude-config#2571): a hard stop at or past the
-# timeout is Claude Code's kill again, with no gate named.
+# timeout is Claude Code's kill again, with no gate named. The 2 is the floor this check sets, not
+# measured; on 2026-11-10, with the Mac's load average over 50, a hook whose reader was ended by
+# a hard stop set at 1 s had answered 1.19 s after it was started, so everything outside the
+# reader's own time (the wrapper, python3 starting, the refusal) took 0.19 s.
 [ -n "$SETTINGS" ] || stop_room="$room"
 [ -z "$SETTINGS" ] || stop_room="$(python3 - "$SETTINGS" "$DIR/slack_drafts_only_gate.py" <<'PY'
 import json, re, sys
