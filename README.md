@@ -6983,10 +6983,11 @@ its words do not name) is held saying it cannot be read, and may only proceed; i
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
-A folder a script is handed is judged as a write of every file under it (#2321), unless the script's
-own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which copies into
-a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527, and #2565 is to hold
-such a script only for the files its writes can reach. A loop over quoted search terms
+A folder a script is handed is judged as a write of every file under it (#2321), unless the
+script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
+copies into a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527,
+and #2565 is to hold such a script only for the files its writes can reach. A loop over quoted
+search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).
 One narrowing (#2254): a findings note to the installed helper,
