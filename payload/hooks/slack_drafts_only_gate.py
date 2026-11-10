@@ -114,9 +114,10 @@ MAX_FILE = 2 * 1024 * 1024
 BUDGET_SECONDS = 11
 # How long the reader runs at all before a watchdog ends it (claude-config#2571). The budget stops
 # the walk by raising in it, which cannot happen while the reader is held inside one long call into
-# C (a regular expression that backtracks), so a watchdog that needs nothing from the reader ends
-# it a little later: still inside the 15 second timeout, with 2 seconds left for the wrapper to
-# refuse the call as one it could not judge. test-slack-drafts-only-gate.sh holds it to that.
+# C (measured on 2026-11-10 with Python 3.14: a sum over a long range is such a call, and a
+# regular expression that backtracks is not), so a watchdog that needs nothing from the reader
+# ends it a little later: still inside the 15 second timeout, with 2 seconds left for the wrapper
+# to refuse the call as one it could not judge. test-slack-drafts-only-gate.sh holds it to that.
 HARD_STOP_SECONDS = BUDGET_SECONDS + 2
 PACKAGERS = {"npm", "pnpm", "yarn"}
 NPM_RUN = {"run", "run-script", "rum", "urn"}
@@ -526,13 +527,13 @@ class Judge:
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
-        # commands are being judged (None for the command line itself), for the refusal tick()
-        # raises (claude-config#2432).
+        # commands are being judged (None for the command line itself), for the refusal late()
+        # raises, from tick() and from the budget's timer (claude-config#2432, #2571).
         self.clock, self.budget = budget_clock()
         self.started = self.clock()
         self.walking = None
         self.overran = None  # the OutOfTime the budget's timer raised, if it fired (interrupt)
-        nudge =os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
+        nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = None  # the last import modules() could not follow (unfollow)
