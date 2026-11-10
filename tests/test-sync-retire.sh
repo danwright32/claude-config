@@ -193,7 +193,7 @@ check "retire twice: still confirms from launchd" has "$out" "launchctl list sho
 # which refuses. Every remedy it names on a retired Mac must be one that would run.
 retired_when="$(date -r "$(awk 'NR == 1 { print $2 }' "$RECORD")" '+%Y-%m-%d %H:%M %Z')"
 out="$(run status)"; rc=$?
-first_line="$(printf '%s\n' "$out" | awk 'NF { print; exit }')"
+first_line="$(awk 'NF { print; exit }' <<< "$out")"
 check "status on a retired Mac: exits 0" same "$rc" 0
 check "status on a retired Mac: the first thing it says is that this Mac is retired" has "$first_line" "this Mac is RETIRED from the sync"
 check "status on a retired Mac: says when, from the record" has "$out" "retired from the sync on $retired_when"
