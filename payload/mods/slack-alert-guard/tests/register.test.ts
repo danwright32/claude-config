@@ -483,6 +483,25 @@ const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.
 const ROUTE = '/w/app/src/app/api/cron/route.ts'
 const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
 
+test('a node test script importing a copy builder and its Slack send helper is not a sender, so the copy passes; a route that does the same is (#2509)', withKit, async ($, on) => {
+  const NODE_TEST = '/w/app/scripts/test-outage-copy.ts'
+  const w = world($, on, {
+    files: {
+      [COPY]: COPY_TEXT,
+      [POST]: POST_TEXT,
+      [NODE_TEST]: "import { lateBooking } from '../src/lib/notify/outage-copy'\nimport { postAlert } from '../src/lib/notify/post'\nassert.equal(lateBooking('1'), 'Booking 1 is late')\nvoid postAlert\n",
+    },
+  })
+  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same imports in a route make it the sender, so the guard is still deciding.
+  w.files[ROUTE] = ROUTE_TEXT
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(`which ${ROUTE} sends to Slack`)
+  expect(why).not.toContain(NODE_TEST)
+})
+
 test('a copy builder whose text a route posts through a Slack send helper is held, naming the route as its sender', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
   const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
