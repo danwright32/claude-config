@@ -503,7 +503,7 @@ steps_of(){ # steps_of <workflow> <job>
 # out, or redo the work, so it is refused by name.
 REUSED="needs.deal.outputs.reused-run"
 reuse_gated(){ # reuse_gated <workflow> -> ok, or each step that is wrong
-  local job label cond out="" n=0
+  local job label cond js out="" n=0
   for job in parts suite; do
     while IFS="$(printf '\t')" read -r label cond; do
       [ -n "$label$cond" ] || continue
@@ -522,7 +522,8 @@ STEPS
   done
   [ "$n" -gt 0 ] || { echo "no steps were read from the parts and suite jobs"; return; }
   for job in parts suite; do
-    steps_of "$1" "$job" | grep -q "^Reused a green run of this exact tree	" || out="$out $job has no step naming the reused run;"
+    js="$(steps_of "$1" "$job")"
+    grep -q "^Reused a green run of this exact tree	" <<< "$js" || out="$out $job has no step naming the reused run;"
   done
   [ -z "$out" ] && echo ok || echo "${out# }"
 }
@@ -571,7 +572,8 @@ done
 [ -z "$miss" ] \
   && check "#2690 the deal job asks the reuse helper with the event, repository, run and token, may read Actions, and passes the answer on" ok \
   || check "#2690 the deal job asks the reuse helper with the event, repository, run and token, may read Actions, and passes the answer on" "missing:$miss"
-code_of "$REAL" | awk '/^permissions:/ { s = 1; next } s && /^[^[:space:]]/ { s = 0 } s' | grep -q 'actions:' \
+top_perms="$(code_of "$REAL" | awk '/^permissions:/ { s = 1; next } s && /^[^[:space:]]/ { s = 0 } s')"
+grep -q 'actions:' <<< "$top_perms" \
   && check "#2690 and the workflow wide token is not widened" "the top level permissions grant actions" \
   || check "#2690 and the workflow wide token is not widened" ok
 

@@ -82,8 +82,8 @@ trap 'rm -rf "$dl"' EXIT
 "$gh" run download "$run_id" -R "$repo" -n "$name" -D "$dl" > /dev/null 2>&1 \
   || full "could not download the record $name from run $run_id."
 [ -f "$dl/tested.txt" ] || full "could not find tested.txt in the record from run $run_id."
-tested="$(sed -n 's/^sha=//p' "$dl/tested.txt" | head -1)"
-recorded_run="$(sed -n 's/^run=//p' "$dl/tested.txt" | head -1)"
+tested="$(sed -n '/^sha=/{s/^sha=//p;q;}' "$dl/tested.txt")"
+recorded_run="$(sed -n '/^run=/{s/^run=//p;q;}' "$dl/tested.txt")"
 is_sha "$tested" || full "the record from run $run_id names no tested commit."
 [ "$recorded_run" = "$run_id" ] || full "the record names run '$recorded_run', but it was uploaded by run $run_id."
 commit="$("$gh" api "repos/$repo/git/commits/$tested" 2> /dev/null)" \
