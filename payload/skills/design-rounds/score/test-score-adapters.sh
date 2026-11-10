@@ -32,6 +32,12 @@ suite_deadline_arm || exit $?
   exit 1
 }
 
+# Where inline python imports a module of this folder (pngio, design_score), the folder is spelt
+# from BASH_SOURCE at that step, never "$HERE": the waits sourced above run their condition in this
+# shell, where it can set any name, so past that line the Slack drafts gate is sure of no variable.
+# It could not find pngio through $HERE and refused the whole suite when a session ran it
+# (claude-config#2668). test-slack-drafts-only-gate.sh judges this suite, so handing python "$HERE"
+# for an import fails there.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$(cd "$HERE/.." && pwd)"
 SCORE="$HERE/design_score.py"
@@ -141,7 +147,7 @@ else
   run_web "$T/web-match"; rc=$?
   if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$T/web-match.log"; then ok; else bad "a build drawing what the design draws scores 100% on both halves through the web adapter (rc=$rc)" "$(cat "$T/web-match.log")"; fi
   if python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); sys.exit(0 if c["platform"] == "web" and c["dirty"] is False and len(c["commit"]) == 40 and c["frames"][0]["designChecks"][0]["ok"] else 1)' "$T/web-match/capture.json" 2>/dev/null; then ok; else bad "its capture names the platform, the build's commit, a clean checkout and the design's own checks passing" "$(cat "$T/web-match/capture.json" 2>/dev/null)"; fi
-  if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pngio; w,h,_=pngio.read_png(sys.argv[2]); sys.exit(0 if (w,h)==(640,240) else 1)' "$HERE" "$T/web-match/f1-design.png"; then ok; else bad "a frame declaring 640 by 240 is drawn at exactly that size"; fi
+  if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pngio; w,h,_=pngio.read_png(sys.argv[2]); sys.exit(0 if (w,h)==(640,240) else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$T/web-match/f1-design.png"; then ok; else bad "a frame declaring 640 by 240 is drawn at exactly that size"; fi
   # The card's blue channel 19 levels off (227 to 208), past the tolerance of 8.
   run_web "$T/web-off" --perturb ".card { background: #f6efd0 }"; rc=$?
   if [ "$rc" -eq 1 ] && said "not matched yet" "$T/web-off.log" && said "see f1-diff.png" "$T/web-off.log"; then ok; else bad "the same build with its card drawn 19 levels off scores below 100%, naming the frame (rc=$rc)" "$(cat "$T/web-off.log")"; fi
@@ -357,9 +363,9 @@ PY
   DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$EM/settled.html" --build "file://$EM/app/index.html" \
     --fixture "$EM/fixture.json" --out "$EM/match" --channel chrome --repo "$APP" > "$EM/match.log" 2>&1; rc=$?
   if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$EM/match.log" && said "an email, with no product page around it" "$EM/match.log"; then ok; else bad "a settled email, against an app drawing the same email alone, scores 100% on both halves and says it is an email (rc=$rc)" "$(cat "$EM/match.log")"; fi
-  if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pngio; w,h,_=pngio.read_png(sys.argv[2]); sys.exit(0 if (w,h)==(600,200) else 1)' "$HERE" "$EM/match/f1-design.png" 2>/dev/null; then ok; else bad "an email frame declaring 600 by 200 is drawn at exactly that size"; fi
+  if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pngio; w,h,_=pngio.read_png(sys.argv[2]); sys.exit(0 if (w,h)==(600,200) else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$EM/match/f1-design.png" 2>/dev/null; then ok; else bad "an email frame declaring 600 by 200 is drawn at exactly that size"; fi
   python3 "$SCORE" show "$EM/match/score.json" > "$EM/show.log" 2>&1; rc=$?
-  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "matched" and not p and s.get("kind") == "email" else 1)' "$HERE" "$EM/match/score.json"; then ok; else bad "the close gate's reader of a score file holds the email's score as matched (rc=$rc)" "$(cat "$EM/show.log")"; fi
+  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "matched" and not p and s.get("kind") == "email" else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$EM/match/score.json"; then ok; else bad "the close gate's reader of a score file holds the email's score as matched (rc=$rc)" "$(cat "$EM/show.log")"; fi
   email_app "Invoice"
   DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$EM/settled.html" --build "file://$EM/app/index.html" \
     --fixture "$EM/fixture.json" --out "$EM/off" --channel chrome --repo "$APP" > "$EM/off.log" 2>&1; rc=$?
@@ -397,12 +403,12 @@ JSON
     || bad "make-settled.py writes a settled terminal design" "$(cat "$TM/make.log")"
   DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$TM/settled.html" --out "$TM/cap" --design-only \
     --fixture "$TM/fixture.json" --channel chrome --repo "$APP" > "$TM/design.log" 2>&1; rc=$?
-  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; w,_,_=pngio.read_png(sys.argv[2] + "/t1-design.png"); c=json.load(open(sys.argv[2] + "/capture.json")); sys.exit(0 if w == 640 and [(r["id"], r["ok"]) for r in c["frames"][0]["designChecks"]] == [("D1", True)] else 1)' "$HERE" "$TM/cap" 2>/dev/null; then ok; else bad "the web adapter draws a terminal frame at its own width and its check passes on the design (rc=$rc)" "$(cat "$TM/design.log"; cat "$TM/cap/capture.json" 2>/dev/null)"; fi
+  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; w,_,_=pngio.read_png(sys.argv[2] + "/t1-design.png"); c=json.load(open(sys.argv[2] + "/capture.json")); sys.exit(0 if w == 640 and [(r["id"], r["ok"]) for r in c["frames"][0]["designChecks"]] == [("D1", True)] else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$TM/cap" 2>/dev/null; then ok; else bad "the web adapter draws a terminal frame at its own width and its check passes on the design (rc=$rc)" "$(cat "$TM/design.log"; cat "$TM/cap/capture.json" 2>/dev/null)"; fi
   # The build's side as a mod's own test would fill it: its checks, and no picture, since none can be taken.
   python3 -c 'import json,sys; p=sys.argv[1] + "/capture.json"; c=json.load(open(p)); [f.update(checks=[{"id": "D1", "ok": True, "detail": ""}]) for f in c["frames"]]; c["build"]="the account room mod"; json.dump(c, open(p, "w"))' "$TM/cap"
   python3 "$SCORE" score "$TM/cap" > "$TM/score.log" 2>&1; rc=$?
   if [ "$rc" -eq 2 ] && said "decisions  1 of 1 met (100%)" "$TM/score.log" && said "the picture half of a terminal design is unmeasured" "$TM/score.log" && said "the Claude Code terminal" "$TM/score.log"; then ok; else bad "a terminal design scores its decision half and says its picture half is unmeasured, no score (rc=$rc)" "$(cat "$TM/score.log")"; fi
-  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "unmeasured" and not p and s.get("kind") == "terminal" else 1)' "$HERE" "$TM/cap/score.json"; then ok; else bad "the close gate's reader of a score file holds the terminal design's score as unmeasured" "$(cat "$TM/score.log")"; fi
+  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "unmeasured" and not p and s.get("kind") == "terminal" else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$TM/cap/score.json"; then ok; else bad "the close gate's reader of a score file holds the terminal design's score as unmeasured" "$(cat "$TM/score.log")"; fi
 fi
 
 # --- 3f. the terminal adapter for real: a mod's own band against a settled terminal design (#1414) -----
@@ -452,7 +458,7 @@ JSON
   }
   run_terminal "$TB/match" "$TB/match.json"; rc=$?
   if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$TB/match.log" && said "pictures   100% of pixels match over 1 frame" "$TB/match.log" && said "only the band is the build's" "$TB/match.log"; then ok; else bad "the status bar's own band, drawn by the terminal adapter, scores 100% on both halves against the design drawing the same band (rc=$rc)" "$(cat "$TB/match.log")"; fi
-  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; c=json.load(open(sys.argv[2] + "/capture.json")); w,_,_=pngio.read_png(sys.argv[2] + "/t1-built.png"); sys.exit(0 if c["platform"] == "terminal" and w == 640 and c["frames"][0]["checks"] == [{"id": "D1", "ok": True, "detail": "PR #636 checks failing | 2 unpushed commits"}] else 1)' "$HERE" "$TB/match" 2>/dev/null; then ok; else bad "its capture is the terminal's, the build pictured at the frame's 640, and the build's check read the mod's band" "$(cat "$TB/match/capture.json" 2>/dev/null)"; fi
+  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; c=json.load(open(sys.argv[2] + "/capture.json")); w,_,_=pngio.read_png(sys.argv[2] + "/t1-built.png"); sys.exit(0 if c["platform"] == "terminal" and w == 640 and c["frames"][0]["checks"] == [{"id": "D1", "ok": True, "detail": "PR #636 checks failing | 2 unpushed commits"}] else 1)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$TB/match" 2>/dev/null; then ok; else bad "its capture is the terminal's, the build pictured at the frame's 640, and the build's check read the mod's band" "$(cat "$TB/match/capture.json" 2>/dev/null)"; fi
   run_terminal "$TB/off" "$TB/off.json"; rc=$?
   if [ "$rc" -eq 1 ] && said "not matched yet" "$TB/off.log" && said "see t1-diff.png" "$TB/off.log" && ! grep -q "pictures   100%" "$TB/off.log"; then ok; else bad "the same band with one character changed (3 unpushed commits) scores below 100% on the picture, naming the frame (rc=$rc)" "$(cat "$TB/off.log")"; fi
   run_terminal "$TB/green" "$TB/green.json"; rc=$?

@@ -1803,7 +1803,14 @@ included) as above, and never updates the same head twice; four minutes after th
 nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
 repository's settings, merges by the one method they allow, and when they allow more (claude-config
 and a work repository allow all three) stops at once naming them rather than at the merge after the wait.
-It does not guess squash from history, which GitHub does not record a method for. While it waits it
+It does not guess squash from history, which GitHub does not record a method for. It merges as an
+account that can merge, not the first that could read the pull request: at its first look it asks
+GitHub the permission (`viewerPermission`) of the account that read it, and when that is below
+WRITE asks each other account gh is signed in to, with a token scoped to each call and never
+`gh auth switch`. Every write in the run is made as the first with WRITE, MAINTAIN or ADMIN, and it
+says which and why; when none can, it stops before any update or wait, naming each account and its
+permission. On 2026-11-10 a read only active account waited 7m 30s and was then refused at the merge
+(claude-config#2629). While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
 one can be told apart (claude-config#1476). Its looks follow the one polling policy,
 `hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
@@ -5406,6 +5413,15 @@ repo but not applied here (what a pull that stops before its apply leaves). The 
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
 
+A file status could not compare is said on its own, whatever the window, under `mods not compared
+with the shared repo`, one line per file naming the step that failed and its exit status: hashing
+it, putting the home path placeholder back, hashing it with the placeholder put back, or reading
+when the shared repo added it, changed it or removed it (#2673). Such a file is counted neither as
+behind nor as this Mac's own work, and status exits as it would otherwise. Before this, every one
+of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
+and read as unsent work here, dropping out of the lag line with nothing said; one failed
+placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
@@ -5698,7 +5714,17 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with.
+pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
+strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
+request it makes, a module it loads by a name given at run time) is read only through `fileReach`
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
+Slack alert guard kept its own lists of module names, and asks inside a search too short for an
+engine call per file). It counts a name only where the file imports or calls it, never in a string,
+a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
+`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
+The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
+inline code and counts a process word anywhere.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
@@ -7375,6 +7401,46 @@ file it reaches the template by; when the nearest senders send none of the chang
 on. A file whose send cannot be traced (any other language, a text template, a send the reading
 cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
 the search stops short. A python docstring is never message text (#2574).
+Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
+copy module of four alert messages passed because nothing sent it yet, and the edits that made a
+route import and post it passed because they added no text of their own). A new file that nothing
+sends still passes, since nothing can post it. Once an edit's own wording has passed, an edit to a
+JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
+more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
+send: each sender through the edited file (the file itself when it posts or imports a send helper,
+then every file that sends it) is traced as the edit leaves the file and as it was, down through the
+files it imports, found by the paths its imports name with one `git ls-files` per file and followed
+up to 3 files deep, and wording a send reaches only afterwards, which Dan has not approved, is held.
+The card, refusal and question name the file that holds the text and what sends it. Wording a sender
+already sent is not asked about again, and a name imported for a 404 answer is held only when a send
+takes it. Where names cannot be followed (a sender that takes a module whole, a send the reading
+cannot find, a search for senders that stops short) every message of a newly imported file is held;
+an imported file that cannot be read, a listing that fails or runs late, or names newly handed on
+deeper than the guard follows, holds the call as could not check. This shares the one 7 second
+search time with the edit's own wording. Not covered: a sender in a language the guard does not
+trace that newly reads a text template, a template a sender newly reads by path rather than by an
+import, and a file that only hands names on newly exporting a local copy of an imported value.
+When the nearest sender's part of a change is already approved, the search goes on to the senders
+further along rather than passing the rest (#2637).
+A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
+2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
+prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
+that is a name (a webhook's host, the chat API's method, an SDK, a Slack setting) is only being
+matched when it is written as one alternative of a pattern, a bar beside it, or as the middle of a
+glob, a star at each side. Written any other way (in an address, read as a setting, called, a whole
+quoted string, a bare word) it is used, and a send helper called or imported always is. A file is
+no sender only when every marker in its code is matched that way, or sits in a comment, and the
+file makes no request and starts no program that could: curl, wget and the like or a command named
+for Slack in a shell script, a network or process module in python, fetch, an HTTP client or
+child_process in JavaScript. So a script that refuses and also posts, and one that matches an
+endpoint and then calls it, are held as before. Only shell, python, JavaScript and TypeScript are
+read this way: in any other language a marker anywhere makes a sender, as before. No file is named
+or exempted. Still held, since nothing tells them from a use: a sentence that spells an endpoint
+out, a list of bare endpoint names, a pattern in a regex literal. No longer held: a file that
+matches an endpoint and leaves the posting to another file whose code names nothing of Slack, and,
+as the file being edited, one whose only marker is in a comment and that makes no request.
+`tests/test-slack-alert-guard-real-gate.sh` holds the real drafts gate, and the guard's own source,
+to this.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
@@ -7415,7 +7481,7 @@ path the write reader cannot name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637
 
 </td></tr>
 </tbody>
