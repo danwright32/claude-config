@@ -156,10 +156,22 @@ eq "#2080 a quoted in part or hyphenated end marker is read whole, and arithmeti
 # Without lib/shell-words.py beside it there is no reading of a marker, and the reader says so the
 # first time it is asked, rather than reading every heredoc as never closing. Importing it still
 # works, so a scan that checks its own readers first can say which one is missing.
+#
+# The reader is lib's own, and the one load of shell-words.py it makes is pointed at an empty folder,
+# so the load fails as it does where the file is missing, and the refusal has to name that folder.
+# A copy of the reader made in $W and imported from there showed the same, but the Slack drafts
+# gate reads this suite before it runs, when that copy is not on disk: it could not find the
+# module and refused the whole suite when a session ran it (claude-config#2668).
+# test-slack-drafts-only-gate.sh judges this suite, so importing from a folder made here fails there.
 mkdir -p "$W/nolib"
-cp "$LIB/shell_code_lines.py" "$W/nolib/"
 noreader="$(python3 -I -B -c '
-import sys
+import importlib.util, os, sys
+found = importlib.util.spec_from_file_location
+def beside_nothing(name, location=None, *rest, **more):
+    if os.path.basename(str(location)) == "shell-words.py":
+        location = os.path.join(sys.argv[2], "shell-words.py")
+    return found(name, location, *rest, **more)
+importlib.util.spec_from_file_location = beside_nothing
 sys.path.insert(0, sys.argv[1])
 from shell_code_lines import read_lines
 print("imported")
@@ -168,10 +180,10 @@ try:
     print("read with no reader")
 except Exception as e:
     print("refused: %s" % e)
-' "$W/nolib" 2>&1 | paste -sd'|' -)"
+' "$LIB" "$W/nolib" 2>&1 | paste -sd'|' -)"
 case "$noreader" in
-  "imported|refused: "*"lib/shell-words.py could not be loaded"*) eq "#2080 without shell-words.py the reader refuses, loudly" ok ok ;;
-  *) eq "#2080 without shell-words.py the reader refuses, loudly" "imported|refused: ...lib/shell-words.py could not be loaded..." "$noreader" ;;
+  "imported|refused: "*"lib/shell-words.py could not be loaded"*"nolib/shell-words.py"*) eq "#2080 without shell-words.py the reader refuses, loudly" ok ok ;;
+  *) eq "#2080 without shell-words.py the reader refuses, loudly" "imported|refused: ...lib/shell-words.py could not be loaded...nolib/shell-words.py..." "$noreader" ;;
 esac
 _pyc="$(ls "$LIB/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
 eq "#2080 loading the reader leaves no shell-words bytecode in lib/" 0 "$_pyc"

@@ -390,6 +390,69 @@ part_run "$FX/absent.tsv" 1 2
 [ "$part_rc" -ne 0 ] \
   && check "#2463 a deal file that is not there is refused" ok \
   || check "#2463 a deal file that is not there is refused" "it ran"
+# A suite dealt to TWO parts would run twice, and its second run could pass where its first failed,
+# so the count executed would exceed the count expected (L288). The duplicate goes into the other
+# part, so a check reading only one part's lines could not see it.
+{ cat "$FX/deal.tsv"; awk -F'\t' -v OFS='\t' '$1 == 1 { $1 = 2; print; exit }' "$FX/deal.tsv"; } > "$FX/twice.tsv"
+dup="$(awk -F'\t' '$1 == 1 { print $2; exit }' "$FX/deal.tsv")"
+part_run "$FX/twice.tsv" 2 2
+{ [ -n "$dup" ] && [ "$part_rc" -ne 0 ] && grep -qF "$dup is dealt twice" <<< "$part_out" && ! grep -qE 'ok +test-[a-d]\.sh' <<< "$part_out"; } \
+  && check "#2463 a suite dealt to two parts makes the part refuse, naming it, and run nothing" ok \
+  || check "#2463 a suite dealt to two parts makes the part refuse, naming it, and run nothing" "rc=$part_rc, dup '$dup': $(tail -2 <<< "$part_out" | tr '\n' ' ')"
+
+# The fan in's verdict, RUN rather than read: the body of the step that decides it is taken from the
+# workflow as it stands and executed with each result a part job can end in, so a red part is
+# proved to make a red `suite`, the one check every merge waits on (L305). A grep for its wording
+# would pass a body that tested the wrong variable or never exited non zero. Both helpers read
+# only the `suite` job, so a step of the same name in another job cannot stand in for it.
+suite_job_raw(){ # suite_job_raw <workflow> -> the suite job's lines as written, comments kept
+  awk '/^  suite:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }' "$1"
+}
+# Each reads the job into a variable first: an awk that exits early at the end of a pipe would kill
+# its producer, which pipefail reports as a failure that never happened.
+fanin_verdict_body(){ # fanin_verdict_body <workflow> -> the run: body of the fan in's verdict step, unindented
+  local job; job="$(suite_job_raw "$1")"
+  awk '
+    /^[[:space:]]*- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
+    s && !inrun && /^[[:space:]]*- / { exit }
+    s && !inrun && /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ { inrun = 1; match($0, /^[[:space:]]*/); ind = RLENGTH; next }
+    inrun { match($0, /^[[:space:]]*/); if ($0 !~ /^[[:space:]]*$/ && RLENGTH <= ind) exit; print substr($0, ind + 3) }
+  ' <<< "$job"
+}
+fanin_verdict_env(){ # fanin_verdict_env <workflow> -> the env: lines of that step, comments stripped
+  local job; job="$(wf_job_block "$1" suite)"
+  awk '
+    /- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
+    s && /^[[:space:]]*(- |run:)/ { exit }
+    s { print }' <<< "$job"
+}
+fanin_rc(){ # fanin_rc <body> <deal result> <parts result> -> sets fanin_rc to the body's exit code
+  DEAL="$2" PARTS="$3" bash -c "$1" > /dev/null 2>&1; fanin_rc=$?
+}
+verdict="$(fanin_verdict_body "$REAL")"
+venv="$(fanin_verdict_env "$REAL")"
+grep -qE 'DEAL:[[:space:]]*\$\{\{[[:space:]]*needs\.deal\.result[[:space:]]*\}\}' <<< "$venv" \
+  && grep -qE 'PARTS:[[:space:]]*\$\{\{[[:space:]]*needs\.parts\.result[[:space:]]*\}\}' <<< "$venv" \
+  && check "#2463 the fan in's verdict reads the deal's and the parts' own results" ok \
+  || check "#2463 the fan in's verdict reads the deal's and the parts' own results" "env is: $(tr '\n' ' ' <<< "$venv")"
+if [ -z "$verdict" ]; then
+  check "#2463 the fan in's verdict step was found to run" "no run body under 'The deal and every part passed'"
+else
+  fanin_rc "$verdict" success success
+  [ "$fanin_rc" -eq 0 ] \
+    && check "#2463 the fan in is green when the deal and every part passed" ok \
+    || check "#2463 the fan in is green when the deal and every part passed" "rc=$fanin_rc"
+  bad=""
+  for pr in failure cancelled skipped ""; do
+    fanin_rc "$verdict" success "$pr"; [ "$fanin_rc" -ne 0 ] || bad="$bad parts '$pr' passed;"
+  done
+  for dr in failure cancelled; do
+    fanin_rc "$verdict" "$dr" skipped; [ "$fanin_rc" -ne 0 ] || bad="$bad deal '$dr' passed;"
+  done
+  [ -z "$bad" ] \
+    && check "#2463 a part that failed, was cancelled or never ran, or a failed deal, turns the fan in red" ok \
+    || check "#2463 a part that failed, was cancelled or never ran, or a failed deal, turns the fan in red" "${bad# }"
+fi
 
 # The workflow: the parts' matrix comes from the deal job's own count, the part number reaches the
 # runner, and the job named `suite`, the check every merge reads (block-red-merge.sh and

@@ -41,7 +41,7 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-area-check-shell-reader.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=46
+EXPECTED=48
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync } from 'node:fs'
@@ -96,10 +96,20 @@ is('a copy of the spool helper in a checkout is judged as any script', `bash pay
   { word: F, unread: `a bash script file is handed ${F}, built as the command runs` },
   { word: 'builder 2254', path: '/w/app/builder 2254', runs: [COPY] },
 ])
-is("the spool helper's other subcommands are judged as before", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
+// #2636: the project folder a subcommand reads a spool key from is no write; its other words still are.
+is("the spool helper's other subcommands are judged as before, but for the project folder they read a key from", 'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"', [
   { word: 'append', path: '/w/app/append', runs: [HELPER] },
-  { word: '.', path: '/w/app', runs: [HELPER] },
   { word: '$RECORD', unread: 'a bash script file is handed $RECORD, built as the command runs' },
+])
+is("the end of turn review's clear line judges its transcript and stamp, never the project folder", 'bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app /Users/dan/s1.jsonl /tmp/review.s1.manifest', [
+  { word: 'clear', path: '/w/app/clear', runs: [HELPER] },
+  { word: '/Users/dan/s1.jsonl', path: '/Users/dan/s1.jsonl', runs: [HELPER] },
+  { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest', runs: [HELPER] },
+])
+is('a spool subcommand handed a folder it may change keeps that folder judged', 'bash ~/.claude/hooks/lib/issue-spool.sh sweep-stamps src/ review.', [
+  { word: 'sweep-stamps', path: '/w/app/sweep-stamps', runs: [HELPER] },
+  { word: 'src/', path: '/w/app/src', runs: [HELPER] },
+  { word: 'review.', path: '/w/app/review.', runs: [HELPER] },
 ])
 // #2426 lessons review: one folder handed to two scripts carries both, in either order, so each is read.
 const SCAN = { what: 'a bash script file', path: '/w/app/scan.sh' }

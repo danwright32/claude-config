@@ -1537,14 +1537,18 @@ check_not "#583 a file marked generated only by this branch is not" "new.gen" "$
 # skill's own design_file.py --sealed (#1524), the same check the design round guard runs: the text is
 # exactly what make-settled.py wrote. A hand edited, unsealed or misplaced page is still read, and so
 # is every page when the check cannot run or answers in another shape.
-DESIGN_PY="$DIR/../skills/design-rounds/design_file.py"
+# The skill's folder is spelt from BASH_SOURCE where python is handed it, never held in a variable:
+# this suite sources hang-wait.sh, whose waits run their condition in this shell, where it can set
+# any name, so past that line the Slack drafts gate is sure of no variable. It could not find
+# design_file through one and refused the whole suite when a session ran it (claude-config#2668).
+# test-slack-drafts-only-gate.sh judges this suite, so putting a variable back fails there.
 seal_page(){   # $1 = the page's words -> a settled design page, sealed by design_file.py's own seal()
   python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import design_file
 page = "<html><body><p>" + sys.argv[2] + "</p>\n" \
   + "<script type=\"application/json\" id=\"decision-map\">{\"decisions\": []}</script>\n" \
   + "<script type=\"application/json\" id=\"design-frames\">{\"frames\": []}</script>\n" \
   + "<script>try { load() } catch (e) { return [] }</script></body></html>\n"
-sys.stdout.write(design_file.seal(page))' "${DESIGN_PY%/*}" "$1"
+sys.stdout.write(design_file.seal(page))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/design-rounds" "$1"
 }
 DREPO="$WORKDIR/design"; git init -q "$DREPO"
 DG(){ git -C "$DREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
