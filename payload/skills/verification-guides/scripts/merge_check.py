@@ -38,7 +38,11 @@ ambiguous-file, no-record, malformed-record, failing-record, record-not-base-gui
 done-when-changed, stale-record, receipt-other-machine, receipt-missing, receipt-unreadable,
 receipt-mismatch, receipt-not-stopped, record-not-rendered, record-edited, egress-unmeasured,
 egress-not-clean, stamp-missing, stamp-failed, stamp-mismatch, no-drive, merge-unpinned,
-merge-pinned-elsewhere.
+merge-pinned-elsewhere. The screenshots check (#2516, screenshots.py) has its own, judged under
+screenshots.mode and reported under "screenshots": screenshots-missing, screenshots-malformed,
+screenshots-receipt-unreadable, screenshots-edited, screenshots-stale, screenshots-missing-shot,
+screenshots-bad-link, screenshots-github-unreadable, screenshots-public-not-synthetic,
+screenshots-link-unresolved.
 """
 
 import json

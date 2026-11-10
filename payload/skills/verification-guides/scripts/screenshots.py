@@ -158,10 +158,6 @@ def _json(out):
         return None
 
 
-class _Lost(Exception):
-    """The branch moved between reading its tip and moving it: build again on the new tip."""
-
-
 def _upload(gh, slug, files, message):
     """Commit `files` [(path, bytes)] onto BRANCH, keeping every file already there. Returns the commit.
 
