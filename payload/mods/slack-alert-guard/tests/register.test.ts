@@ -1581,7 +1581,9 @@ test('a search that runs late after finding a sender that sends none of the chan
   expect(w.ran.length).toBe(1)
   // Each read taking most of the deadline, the search stops at the barrel's importers with only the
   // nearest sender in hand, so the change is held as before rather than let through unsearched.
-  w.ctl.readMs = 1600
+  // Sized from SCAN_MS (8/15 of it, which was 1600 ms at 3 s), so the two reads after the deadline is
+  // set still overrun it whatever the deadline is: a fixed 1600 let the search finish once it was 7 s.
+  w.ctl.readMs = Math.ceil(SCAN_MS * 8 / 15)
   const held = refusalOf(await call($, edit))
   expect(held).toContain('No booking has that id yet')
   expect(held).toContain(`which ${LATE} sends to Slack`)
