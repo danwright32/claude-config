@@ -753,6 +753,94 @@ read_methods(){
   [ "$rc" -ne 0 ] || return 1
   mt_gh_read_class "$out" "$account"
 }
+# WHICH ACCOUNT IT MERGES AS (claude-config#2629). The account that could READ the pull request is
+# not necessarily one that can merge it: on 2026-11-10 the active account could read a repository
+# owned by a second personal account and only read it, so the merge ran as that account and GitHub
+# refused it ("does not have the correct permissions to execute MergePullRequest") after a 7m 30s
+# wait for checks and review that were already green. So at its first look the run asks GitHub what
+# permission the account that read the pull request has on the repository (viewerPermission), and
+# when that is not WRITE, MAINTAIN or ADMIN it asks each other account gh is signed in to, scoping a
+# token to each call as mt_pr_view does, never `gh auth switch`, which would move every other
+# session's account too. The first that can merge is the one every write here is made as (the update,
+# a re-run, a base reset, the merge and the branch's deletion), and the run says which and why.
+# When none can, it stops before any update or wait, naming each account and its permission. It is
+# decided once in a run, at the start rather than after a refused merge, because a refusal arriving
+# only at the merge costs the whole wait first (L667).
+merge_as=""; merge_as_known=""; perm_account=""; perm_seen=""; active_name=""
+can_merge(){ case "$1" in ADMIN|MAINTAIN|WRITE) return 0 ;; esac; return 1; }
+# An account as a sentence names it: $1 is the account, empty for the active one.
+who_is(){
+  if [ -z "$1" ]; then
+    if [ -n "$active_name" ]; then printf '%s (the active account)' "$active_name"; else printf 'the active gh account'; fi
+  elif [ "$1" = "$active_name" ]; then printf '%s (the active account)' "$1"
+  else printf '%s' "$1"; fi
+}
+# The permission perm_account (empty for the active one) has on the repository: sets perm_seen.
+# A named account with no token is a read that failed, never the active account asked instead.
+read_permission(){
+  local out rc tok
+  perm_seen=""
+  if [ -n "$perm_account" ]; then
+    tok="$(gh auth token -u "$perm_account" 2>/dev/null)" || tok=""
+    [ -n "$tok" ] || { read_err="gh read no token for it"; return 1; }
+    out="$(GH_TOKEN="$tok" gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+  else
+    out="$(gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    perm_seen="$(printf '%s' "$out" | jq -r '.viewerPermission // ""' 2>/dev/null)" || perm_seen=""
+    [ -n "$perm_seen" ] && return 0
+    read_err="GitHub named no permission: ${out:0:200}"; return 1
+  fi
+  read_err="${out:0:300}, exit $rc"
+  ghp_rate_limited "$out" && return 5
+  mt_gh_read_class "$out" "$perm_account"
+}
+# Sets account to the account this run merges as, or stops when no signed in account can merge.
+# Returns 5 when a read was refused for the rate limit, so the look is made again after the pause.
+resolve_merger(){
+  [ -n "$merge_as_known" ] && { account="$merge_as"; return 0; }
+  local rrc listed name i out="" sep="" unread=""
+  local -a r_acct=() r_said=()
+  active_name=""
+  perm_account="$view_account"
+  with_retries "the permission $(who_is "$perm_account") has on $slug" read_permission; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  if [ "$rrc" -eq 0 ] && can_merge "$perm_seen"; then
+    merge_as="$perm_account"; merge_as_known=1; account="$merge_as"
+    say "Merging as $(who_is "$merge_as"): it has $perm_seen on $slug."
+    return 0
+  fi
+  r_acct+=("$perm_account")
+  if [ "$rrc" -eq 0 ]; then r_said+=(" has $perm_seen")
+  else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
+  # The other accounts, listed only now: `gh auth status` checks every account's token with a request
+  # of its own, which the run whose first account can merge never needs (claude-config#1014).
+  listed="$(gh auth status 2>/dev/null </dev/null)"
+  active_name="$(printf '%s\n' "$listed" | awk '{ for (i = 1; i < NF; i++) if ($i == "account") n = $(i + 1) } /Active account: true/ { print n; exit }')"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$name" = "$view_account" ] && continue
+    [ -z "$view_account" ] && [ "$name" = "$active_name" ] && continue
+    perm_account="$name"
+    with_retries "the permission $name has on $slug" read_permission; rrc=$?
+    [ "$rrc" -eq 5 ] && return 5
+    if [ "$rrc" -eq 0 ] && can_merge "$perm_seen"; then
+      merge_as="$name"; merge_as_known=1; account="$merge_as"
+      for i in "${!r_acct[@]}"; do out+="$sep$(who_is "${r_acct[$i]}")${r_said[$i]}"; sep="; "; done
+      say "Merging as $name: it has $perm_seen on $slug, and $out."
+      return 0
+    fi
+    r_acct+=("$name")
+    if [ "$rrc" -eq 0 ]; then r_said+=(" has $perm_seen")
+    else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
+  done < <(printf '%s\n' "$listed" | grep -oE 'account [A-Za-z0-9_.-]+' | awk '!seen[$2]++ { print $2 }')
+  for i in "${!r_acct[@]}"; do out+="$sep$(who_is "${r_acct[$i]}")${r_said[$i]}"; sep="; "; done
+  # A permission that could not be read may be one that can merge, so then it says only what it
+  # measured (L11), and that asking again may be the whole remedy.
+  [ -z "$unread" ] || stop 1 "Stopped: could not confirm any signed in gh account can merge in $slug ($out); merging needs WRITE, MAINTAIN or ADMIN. Nothing was merged. Run the same command again once GitHub answers, or sign gh in to an account with write access to $slug (gh auth login)."
+  stop 1 "Stopped: no signed in gh account can merge in $slug ($out); merging needs WRITE, MAINTAIN or ADMIN. Nothing was merged. Sign gh in to an account with write access to $slug (gh auth login), or have write access given to one already signed in, then run the same command again."
+}
 # HOW LONG THE REPOSITORY'S CHECKS TAKE (claude-config#1604), read each time this run is about to
 # take the turn (see turn_weigh): sets checks_took, in seconds, empty when there was nothing to
 # measure. It is the longest of the ten most recent heads among the repository's latest successful
@@ -1577,7 +1665,10 @@ while :; do
   fi
   # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
   ghp_answered
-  account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
+  # The account that could read the pull request; every write is made as the one resolve_merger
+  # picked, once it has (claude-config#2629).
+  view_account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
+  if [ -n "$merge_as_known" ]; then account="$merge_as"; else account="$view_account"; fi
   view="$(printf '%s' "$view_env" | jq -c '.view')"
   state="$(printf '%s' "$view" | jq -r '.state // ""')"
   head="$(printf '%s' "$view" | jq -r '.headRefOid // ""')"
@@ -1585,7 +1676,11 @@ while :; do
   branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
-    MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+    # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629).
+    MERGED) if [ -n "$want_delete" ]; then
+              resolve_merger || continue
+              finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+            fi
             merged_now=1
             stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
     OPEN) ;;
@@ -1593,6 +1688,10 @@ while :; do
   esac
   [ -n "$head" ] && [ -n "$base" ] || stop 1 "Stopped: GitHub did not report the head commit or base branch of #$pr. Nothing was merged."
   if [ "$head" != "$head_seen" ]; then head_seen="$head"; head_since="$(now)"; fi
+
+  # Which account merges, decided at the first look that finds it open, before any update or wait,
+  # and stopping here when none of the signed in accounts can (claude-config#2629, L667).
+  resolve_merger || continue
 
   # No method passed: the repository's settings choose one, or it stops here, before the changelog
   # gate judges a merge command and before any update or wait (claude-config#1476, L667).

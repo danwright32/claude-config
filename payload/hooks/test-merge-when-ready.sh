@@ -107,11 +107,41 @@ fail_read(){
   return 0
 }
 gone(){ : > "$ST/branch-deleted"; printf 'feat/x\n' >> "$ST/deleted"; cat "$ST/stacked" >> "$ST/closed" 2>/dev/null; : > "$ST/stacked"; }
+# Which signed in account a call is made as (claude-config#2629): accounts lists the names gh is
+# signed in to, one per line, the first the active one, and a call scoped to one carries the stand in
+# token below. With no accounts file there is one account, the active one, named active.
+who(){
+  case "${GH_TOKEN:-}" in
+    token-for-*) printf '%s' "${GH_TOKEN#token-for-}" ;;
+    *) if [ -s "$ST/accounts" ]; then head -1 "$ST/accounts"; else printf active; fi ;;
+  esac
+}
 case "$*" in
-  "auth status"*) exit 0 ;;
+  "auth status"*)
+    # As gh prints it, with each account's token check and scopes left out.
+    if [ -s "$ST/accounts" ]; then
+      printf 'github.com\n'; first=true
+      while read -r a; do
+        printf '  Logged in to github.com account %s (keyring)\n  - Active account: %s\n\n' "$a" "$first"; first=false
+      done < "$ST/accounts"
+    fi
+    exit 0 ;;
   # The token read made after a refused sign in (claude-config#1615): token-empty makes the keyring
-  # read come back empty. A stand in, never a token shape.
-  "auth token"*) [ -e "$ST/token-empty" ] || echo stand-in; exit 0 ;;
+  # read come back empty. A stand in, never a token shape. With accounts listed, each account's
+  # token names it, so a call scoped to it is answered as that account (claude-config#2629).
+  "auth token"*)
+    [ -e "$ST/token-empty" ] && exit 0
+    if [ -s "$ST/accounts" ]; then printf 'token-for-%s\n' "$(printf '%s\n' "$*" | sed -nE 's/.*-u ([^ ]+).*/\1/p')"
+    else echo stand-in; fi
+    exit 0 ;;
+  # The permission the account asking has on the repository (claude-config#2629): perm-<account>
+  # holds it, WRITE when unset, and perm-<account>-fails or -down make that account's read fail.
+  "repo view acme/widget --json viewerPermission"*)
+    w="$(who)"; printf '%s\n' "$w" >> "$ST/perm-asked"
+    fail_read "perm-$w"
+    p="$(rd "perm-$w")"
+    printf '{"viewerPermission":"%s"}\n' "${p:-WRITE}"
+    ;;
   # The rate limit probe (claude-config#1482): probe holds GitHub's whole answer, headers and body,
   # as `gh api -i` prints it; with none it is a call nothing expected.
   "api -i rate_limit"*)
@@ -276,6 +306,12 @@ case "$*" in
       *) echo "--merge, --rebase, or --squash required when not running interactively" >&2; exit 1 ;;
     esac
     printf '%s\n' "$(rd clock)" >> "$ST/merge-times"
+    # The account the merge is made as, refused as GitHub refuses one that can only read or triage
+    # (claude-config#2629, seen 2026-11-10).
+    w="$(who)"; printf '%s\n' "$w" >> "$ST/merge-as"
+    case "$(rd "perm-$w")" in
+      READ|TRIAGE) printf 'GraphQL: %s does not have the correct permissions to execute `MergePullRequest` (mergePullRequest)\n' "$w" >&2; exit 1 ;;
+    esac
     # merge-fails holds one error per line, each spent by one merge that merges nothing, as GitHub's
     # "Something went wrong" did on 2026-11-05 (claude-config#2289).
     if e="$(pop merge-fails)"; then printf '%s\n' "$e" >&2; exit 1; fi
@@ -3479,6 +3515,75 @@ check_eq "#1867 the resolver exits 10 for a case it does not handle" "10" "$rc"
 check_eq "#1867 and writes nothing then" "$before" "$(cat "$d/README.md")"
 python3 "$RR_LIB" "$RR/union-session" >/dev/null 2>&1; rc=$?
 check_eq "#1867 the resolver exits 2 when README.md is not in conflict there" "2" "$rc"
+
+# =================================================================================================
+# 28. It merges as an account that can merge (claude-config#2629). On 2026-11-10 a run against a
+#     repository owned by a second personal account waited 7m 30s, then stopped on GitHub's
+#     "does not have the correct permissions to execute MergePullRequest": the active account could
+#     read the pull request, so it was the one the merge ran as, and it could only read. The fake gh
+#     answers each call as the account its token names, and refuses a merge from READ or TRIAGE.
+# =================================================================================================
+# Two accounts, the active one able only to read: the one with write merges, and the run says so.
+fresh "$OLD" 0 "$GREEN"; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 a read only active account beside one with write still merges" "0" "$rc"
+check_eq "#2629 merged as the account with write" "writer" "$(cat "$ST/merge-as" 2>/dev/null)"
+check "#2629 saying which account it merges as and why" "Merging as writer: it has WRITE on acme/widget, and reader (the active account) has READ." "$out"
+check "#2629 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+
+# The same, behind its base: the update, a write too, is made as the account that can merge, and the
+# permissions are read once in the run, not at every look.
+fresh "$OLD" 1 "$GREEN"; printf 'reader\nwriter\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"
+printf '%s\n' "$NEW" > "$ST/next-heads"; printf '%s' "$GREEN" > "$ST/rollup-after-update"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 behind its base, it updates and merges" "0" "$rc"
+check_eq "#2629 each account's permission read once in the run" "reader writer" "$(paste -sd ' ' - < "$ST/perm-asked")"
+check_eq "#2629 and merged as the account with write" "writer" "$(cat "$ST/merge-as" 2>/dev/null)"
+
+# No account can merge: it stops at its first look, naming each account and its permission, before
+# any update, wait or merge.
+fresh "$OLD" 1 "$PENDING"; printf 'reader\ntriager\n' > "$ST/accounts"; printf READ > "$ST/perm-reader"; printf TRIAGE > "$ST/perm-triager"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 no account able to merge stops, needing a person" "1" "$rc"
+check "#2629 naming each account and its permission" "reader (the active account) has READ; triager has TRIAGE" "$out"
+check "#2629 saying nothing was merged" "Stopped: no signed in gh account can merge in acme/widget" "$out"
+check "#2629 and what would let it" "gh auth login" "$out"
+check_eq "#2629 before any update, wait or merge" "0 0 0" "$(count gh-calls 'pr update-branch') $(count sleeps .) $(count gh-calls 'pr merge')"
+
+# A permission read that fails is said as that, never as no permission, and another account that
+# can merge still does.
+fresh "$OLD" 0 "$GREEN"; printf 'reader\nwriter\n' > "$ST/accounts"; printf 'gh: Forbidden (HTTP 403)' > "$ST/perm-reader-down"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 a permission read that fails for the active account still merges as the other" "0" "$rc"
+check_eq "#2629 as the other" "writer" "$(cat "$ST/merge-as" 2>/dev/null)"
+check "#2629 saying the active account's permission could not be read" "reader (the active account): could not read its permission on acme/widget (gh: Forbidden (HTTP 403)" "$out"
+
+# Every read failing: it stops, naming each failure, and merges nothing.
+fresh "$OLD" 0 "$GREEN"; printf 'reader\nwriter\n' > "$ST/accounts"
+printf 'gh: Forbidden (HTTP 403)' > "$ST/perm-reader-down"; printf 'gh: Forbidden (HTTP 403)' > "$ST/perm-writer-down"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 no permission readable stops" "1" "$rc"
+check "#2629 saying it could not confirm, never that no account can merge" "Stopped: could not confirm any signed in gh account can merge in acme/widget" "$out"
+check_not "#2629 so not claiming what it never read" "no signed in gh account can merge" "$out"
+check "#2629 naming the first account's failed read" "reader (the active account): could not read its permission" "$out"
+check "#2629 and the second's" "writer: could not read its permission" "$out"
+check_eq "#2629 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A read that fails once in transit is asked again, as every read here is.
+fresh "$OLD" 0 "$GREEN"; printf 'read tcp: connection reset by peer\n' > "$ST/perm-active-fails"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 a permission read that fails once in transit still merges" "0" "$rc"
+check_eq "#2629 asked twice" "2" "$(count perm-asked .)"
+
+# Control: one account, with write, merges as before, asking for its permission once and never
+# listing the accounts, which costs gh a request per account.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2629 control: the active account with write merges" "0" "$rc"
+check_eq "#2629 control: as the active account" "active" "$(cat "$ST/merge-as" 2>/dev/null)"
+check_eq "#2629 control: its permission read once" "1" "$(count perm-asked .)"
+check_eq "#2629 control: the accounts never listed" "0" "$(count gh-calls '^auth status')"
+check "#2629 control: saying which account and why" "Merging as the active gh account: it has WRITE on acme/widget." "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

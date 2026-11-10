@@ -1788,7 +1788,14 @@ included) as above, and never updates the same head twice; four minutes after th
 nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
 repository's settings, merges by the one method they allow, and when they allow more (claude-config
 and a work repository allow all three) stops at once naming them rather than at the merge after the wait.
-It does not guess squash from history, which GitHub does not record a method for. While it waits it
+It does not guess squash from history, which GitHub does not record a method for. It merges as an
+account that can merge, not the first that could read the pull request: at its first look it asks
+GitHub the permission (`viewerPermission`) of the account that read it, and when that is below
+WRITE asks each other account gh is signed in to, with a token scoped to each call and never
+`gh auth switch`. Every write in the run is made as the first with WRITE, MAINTAIN or ADMIN, and it
+says which and why; when none can, it stops before any update or wait, naming each account and its
+permission. On 2026-11-10 a read only active account waited 7m 30s and was then refused at the merge
+(claude-config#2629). While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
 one can be told apart (claude-config#1476). Its looks follow the one polling policy,
 `hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
