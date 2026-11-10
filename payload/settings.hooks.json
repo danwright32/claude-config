@@ -240,6 +240,13 @@
             "command": "__CLAUDE_HOME__/hooks/no-verify-gate.sh",
             "timeout": 15,
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/fresh-worktree-base-gate.sh",
+            "timeout": 30,
+            "onFailure": "block",
+            "statusMessage": "Checking a fresh worktree is not behind origin main"
           }
         ]
       },
