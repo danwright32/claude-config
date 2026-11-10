@@ -3213,6 +3213,19 @@ ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT"
 [ "$ns_rc" -eq 4 ] \
   && check "#2639 and so does filing the failures" ok \
   || check "#2639 and so does filing the failures" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does a raw read" ok \
+  || check "#2639 and so does a raw read" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does reading the archive" ok \
+  || check "#2639 and so does reading the archive" "exit $ns_rc said=${ns_err:0:300}"
+mkdir -p "$CLAUDE_TRANSCRIPT_ROOT/r2639-project"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" reach-report 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does the reachability report" ok \
+  || check "#2639 and so does the reachability report" "exit $ns_rc said=${ns_err:0:300}"
 
 # A shasum that is there but gives no digest is a different cause, and gets its own words (L11).
 FAILSHA="$TMPROOT/failsha-bin"

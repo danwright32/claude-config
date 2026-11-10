@@ -1377,7 +1377,7 @@ issue_spool_reach_report() { # reach-report -> 0 when every pending key is reach
   for d in "${CLAUDE_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"/*; do
     [ -d "$d" ] || continue
     dirs=$(( dirs + 1 ))
-    key="$(issue_spool_key "" "$d/x.jsonl")" || { rm -f "$reachable"; return; }; printf '%s\n' "$key" >> "$reachable"
+    key="$(issue_spool_key "" "$d/x.jsonl")" || { rm -f "$reachable"; return "$ISSUE_SPOOL_NO_KEY_RC"; }; printf '%s\n' "$key" >> "$reachable"
   done
   # Reading NO transcript directory is not a clean answer: every key would read as unreachable and
   # the report would be a wall of false alarms (L98, L36).
@@ -2091,14 +2091,14 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     mark-ended)   issue_spool_mark_ended "${1:-}" ;;
-    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
+    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     seen-ledger)  issue_spool_seen_ledger "${1:-}" ;;
     sweep-stamps) issue_spool_sweep_stamps "${1:-}" "${2:-}" ;;
     kept-ledger)  issue_spool_kept_ledger "${1:-}" ;;
     keep-ledgers) issue_spool_keep_ledgers "${1:-}" "${2:-}" ;;
-    archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
+    archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
     file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;
