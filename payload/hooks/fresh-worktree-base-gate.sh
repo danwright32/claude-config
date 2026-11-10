@@ -143,7 +143,7 @@ record() { # record <text>: written whole, so a reader never sees half of it
 }
 now="$(date +%s)"
 retry="${FRESH_WORKTREE_RETRY_MINUTES:-15}"
-case "$retry" in ''|*[!0-9]*) retry=15 ;; esac
+case "$retry" in ''|*[!0-9]*) retry=15 ;; *) retry=$((10#$retry)) ;; esac
 if [ -n "$state" ] && [ -f "$state" ]; then
   was="$(cat "$state" 2>/dev/null)"
   case "$was" in
@@ -166,8 +166,9 @@ refuse() { # refuse <behind> <extra sentence or empty>
 own="$(count "$base..HEAD")"
 case "$own" in ''|0) ;; *) record ok; exit 0 ;; esac
 
-secs="${FRESH_WORKTREE_FETCH_SECONDS:-10}"
-case "$secs" in ''|*[!0-9]*|0) secs=10 ;; esac
+# Zero written any way, or anything not a whole number, is the default (lib/whole-number.sh, which
+# lib/bounded-run.sh loads; with neither, the default too).
+secs="$(whole_above_zero "${FRESH_WORKTREE_FETCH_SECONDS:-10}" 2>/dev/null)" || secs=10
 bounded_run "$secs" env GIT_TERMINAL_PROMPT=0 git -C "$top" fetch --quiet origin "$branch"
 if [ "$BOUNDED_RC" -ne 0 ]; then
   case "$BOUNDED_RC" in 124) why="it took longer than $secs seconds" ;; *) why="$(printf '%s' "$BOUNDED_OUT" | tr '\n' ' ' | cut -c1-200)" ;; esac
