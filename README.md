@@ -3847,12 +3847,28 @@ is told its share, and the product is printed at the top of every run.
 
 </td><td>
 
-CPUs, capped at 8
+CPUs up to 8, then two thirds of the CPUs
 
 </td><td>
 
 How many processes the whole run may have in flight. Everything else is derived from it. A value
-that is not a positive whole number is refused rather than guessed at.
+that is not a positive whole number is refused rather than guessed at. The default keeps what every
+machine of up to 12 cores had under the old cap of 8 and gives a bigger Mac two thirds of its cores
+(12 on 18), the share the 12 core Mac runs at (#2548). Not measured on the 18 core Mac (#2589).
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_CORES`
+
+</td><td>
+
+This machine's CPU count
+
+</td><td>
+
+The core count the default budget is derived from, for one run. Refused unless a positive whole
+number.
 
 </td></tr>
 <tr><td>
@@ -5945,10 +5961,20 @@ Dan. Any draft Slack saved to that thread, under any Slack server and from any p
 next merge. Which came first is kept as a count of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
 The mod never calls a Slack tool.
+Only a thread recorded at the session's start owes a reply after every merge (#2578: on
+2026-11-09 one alert link pasted hours into a session drew three asks for unrelated merges). A
+link in Dan's first prompt before any merge, or a thread read before his second prompt and any
+merge, is where the session started; one recorded later is pasted mid session, and only a merge
+for it owes it a reply: a merged PR whose title, body or comments, or those of an issue it closes,
+link the thread (GitHub is asked only while such a thread is recorded, and a read it refuses is
+toasted and counts as for none), or a PR whose card names the thread as where its Slack draft goes.
+Its hold names those PRs and never says the session started there, and a skip holds until the next
+merge for it. A card asking for no draft keeps the earlier card's record of one asked for (#2515),
+so a card for another PR to the same thread or person still says its draft replaces it.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578
 
 </td></tr>
 <tr><td>
