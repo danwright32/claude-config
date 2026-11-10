@@ -851,8 +851,12 @@ cp -R "$DIR/lib" "$PYC2353/lib" && find "$PYC2353/lib" -name __pycache__ -type d
 pyc2353_run() { env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$@"; }
 # Only the runner's own bytecode counts: the probe below loads ai-review-placement.py itself.
 pyc2353_left() { find "$PYC2353/lib" -name 'ai-review-run*.pyc' -print | tr '\n' ' '; }
+# The probe loads the placement with bytecode off, then turns it back on, so what is measured is
+# runner()'s own setting alone (#2600 requires every lib loader to start with it off).
 pyc2353_ans="$(pyc2353_run python3 -c 'import importlib.util,sys
+sys.dont_write_bytecode=True
 s=importlib.util.spec_from_file_location("p",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+sys.dont_write_bytecode=False
 print(hasattr(m.runner(),"framework_line"))' "$PYC2353/lib/ai-review-placement.py" 2>&1)"
 pyc2353_got="$(pyc2353_left)"
 if [ "$pyc2353_ans" != "True" ]; then

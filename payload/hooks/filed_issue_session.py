@@ -31,6 +31,8 @@ import sys
 import time
 from datetime import datetime
 
+# No bytecode cache beside the hooks, from the siblings it loads or what they load from lib/ (#2600).
+sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 
