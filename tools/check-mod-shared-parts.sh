@@ -97,6 +97,12 @@
 #             prefix off an error (a pattern on ': \$\.')       a caller deciding by its code (#2150: auto
 #                                                               session name stripped it alone, every other
 #                                                               mod showed it to Dan)
+#   quoted-reader                                               quotedEnd, yamlScalar and yamlFlowList from
+#             reading a quoted string that is not shell, or     the copy of hooks/quoted.ts kept at
+#             a YAML flow list, by hand (YAML's '' undone by    hooks/mod-kit/quoted.ts (#2467: the design
+#             /''/g, a pattern matching '(?:'' for a single     round guard read TypeScript strings its own
+#             quoted scalar, or a walk to `] === q)`)            way and the Slack alert guard GitLab's flow
+#                                                               lists; $.modkit.commands reads shell only)
 #   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -225,6 +231,10 @@ PARTS=(
   # #2150: a pattern reading the engine's "<mod>: $.noun.member: " prefix off an error. errorText says
   # such a failure in words without it, and errorCode gives its code to a caller deciding by it.
   "engine-prefix|: \\\\\\\$\\\\\\.|errorText(err, mod) (errorCode(err) for its code) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts, which says an engine call's failure in words without its prefix"
+  # #2467: a quoted string that is not shell, or a YAML flow list, read by hand: YAML's '' escape
+  # undone (/''/g), a single quoted YAML scalar matched by a pattern ('(?:''|), or a string walked to
+  # the quote it opened with (] === q)). These are the spellings the two copies used, not every one.
+  "quoted-reader|/''/g|'\\(\\?:''\\||\\] === (q|quote)\\)|quotedEnd, yamlScalar and yamlFlowList from the copy of hooks/quoted.ts kept at hooks/mod-kit/quoted.ts"
 )
 
 n=0
