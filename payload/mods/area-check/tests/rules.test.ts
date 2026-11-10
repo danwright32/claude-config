@@ -49,6 +49,7 @@ import {
   shellTargets,
   scriptProgram,
   scriptWrite,
+  trapTexts,
   unreadPart,
   type ShellTarget,
 } from '../hooks/rules.ts'
@@ -637,6 +638,46 @@ test('a program mod-kit did not read, a script run in turn, or one sourced, leav
   expect(unreadPart([{ words: ['python3', 'fix.py'], script: { files: ['fix.py'] } }], 'D')).toContain('fix.py')
   expect(unreadPart([{ words: ['./tools/fix'] }], 'D')).toContain('./tools/fix')
   expect(unreadPart([{ words: ['source', 'lib.sh'] }], 'D')).toContain('lib.sh')
+})
+
+// #2619: text the reader gives no write for, as the commands it gives for each (measured 2026-11-10).
+test('text run through eval or an alias, and a command named by a value, leave what the script writes unread (#2619)', () => {
+  expect(unreadPart([{ words: ['eval', '$FIX'] }], 'D')).toContain('eval')
+  expect(unreadPart([{ words: ['builtin', 'eval', '$FIX'] }], 'D')).toContain('eval')
+  expect(unreadPart([{ words: ['builtin', 'source', 'lib.sh'] }], 'D')).toContain('lib.sh')
+  expect(unreadPart([{ words: ['builtin', 'echo', '$x'] }], 'D')).toBeNull()
+  expect(unreadPart([{ words: ['alias', 'fix=sed -i'] }], 'D')).toContain('alias')
+  // `bash -c "$FIX"` comes back as the command `$FIX`; a substitution or backticks name one the same way.
+  expect(unreadPart([{ words: ['$FIX'] }], 'D')).toContain('$FIX')
+  expect(unreadPart([{ words: ['$TOOL', '--write', '$1'] }], 'D')).toContain('$TOOL')
+  expect(unreadPart([{ words: ['$(command -v fixer)', '$1'] }], 'D')).toContain('$(command -v fixer)')
+  expect(unreadPart([{ words: ['`command -v fixer`', '$1'] }], 'D')).toContain('`command -v fixer`')
+  expect(unreadPart([{ words: ['$@'] }], 'D')).toContain('$@')
+})
+
+test('a value in an argument, an assignment or arithmetic names no command, and listing aliases runs no text (#2619)', () => {
+  expect(unreadPart([{ words: ['grep', '-n', '$PATTERN', '$1/*.ts'] }], 'D')).toBeNull()
+  expect(unreadPart([{ words: ['alias'] }, { words: ['alias', '-p'] }], 'D')).toBeNull()
+  // An array's element and an append reach the reader as one word, which sets a variable.
+  expect(unreadPart([{ words: ['seen[$f]=1'] }, { words: ['list+=($f)'] }, { words: ['total+= $f'] }], 'D')).toBeNull()
+  // `(( $# < 1 ))` and `(( $a == 0 || $b < 2 ))` come back as two ( commands, their words, and two ).
+  const usage = [{ words: ['('] }, { words: ['('] }, { words: ['$#', '<', '1'] }, { words: [')'] }, { words: [')'] }]
+  expect(unreadPart(usage, 'D', '(( $# < 1 ))')).toBeNull()
+  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['$a', '==', '0'] }, { words: ['$b', '<', '2'] }, { words: [')'] }, { words: [')'] }, { words: ['exit', '0'] }], 'D', '(( $a == 0 || $b < 2 )) && exit 0')).toBeNull()
+  // The same commands from a text holding no `((`, or with no text given, are two subshells running it.
+  expect(unreadPart(usage, 'D', '( ( $# < 1 ) )')).toContain('$#')
+  expect(unreadPart(usage, 'D')).toContain('$#')
+  // One subshell, or two that do not close together, is no arithmetic: the value names a command.
+  expect(unreadPart([{ words: ['('] }, { words: ['$TOOL', 'x'] }, { words: [')'] }], 'D', '(( n++ )); ( $TOOL x )')).toContain('$TOOL')
+  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['$TOOL', 'x'] }, { words: [')'] }, { words: ['('] }, { words: ['echo'] }, { words: [')'] }, { words: [')'] }], 'D', '(($TOOL x); (echo))')).toContain('$TOOL')
+  expect(unreadPart([{ words: ['('] }, { words: ['('] }, { words: ['n++'] }, { words: [')'] }, { words: [')'] }, { words: ['$TOOL', 'x'] }], 'D', '(( n++ )); $TOOL x')).toContain('$TOOL')
+})
+
+test("a trap's text is what it runs: none for a trap that lists, resets or ignores (#2619)", () => {
+  expect(trapTexts([{ words: ['trap', 'echo x > "$1/big.ts"', 'EXIT'] }, { words: ['grep', 'trap', 'x'] }])).toEqual(['echo x > "$1/big.ts"'])
+  expect(trapTexts([{ words: ['trap', '--', 'sed -i s/a/b/ f.ts', 'EXIT', 'INT'] }])).toEqual(['sed -i s/a/b/ f.ts'])
+  expect(trapTexts([{ words: ['trap', 'cleanup', 'EXIT'] }, { words: ['trap', 'cleanup', 'INT'] }])).toEqual(['cleanup'])
+  expect(trapTexts([{ words: ['trap'] }, { words: ['trap', '-p'] }, { words: ['trap', '-l'] }, { words: ['trap', '-', 'EXIT'] }, { words: ['trap', '', 'HUP'] }, { words: ['trap', '--', '-', 'INT'] }])).toEqual([])
 })
 
 test('a script writes there when its text writes any file the area check could judge or runs another script; none is null', () => {

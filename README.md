@@ -5377,7 +5377,9 @@ words that only run the command after them, each read by its own options, a shel
 a cluster such as `bash -lc` or `zsh -ec`, and a shell's script fed on standard input (a heredoc, a
 here-string, `echo` or `cat` piped in), each read as the commands it runs, `env -S`'s string, what
 `find -exec` runs past any wrapper, a `case`'s clauses, a redirect as its own word however it is
-spaced, a subshell's parentheses as commands their own; `$.modkit.pipeline` gives the same commands,
+spaced, a subshell's parentheses as commands their own, the words naming a function (`w()`,
+`function w`) as a command of their own, so a body on the same line (`w(){ sed -i ...; }`) is read
+as the commands it holds (#2619); `$.modkit.pipeline` gives the same commands,
 each with the words of the command a `|` feeds it from, since only the reader can tell a pipe from a
 `;` or `&&`, the body of each heredoc feeding it and whether its delimiter was quoted, which stops
 the shell expanding it (#831), whether the shell left its program's text as written (`asWritten`,
@@ -7070,7 +7072,11 @@ program that builds its own file names (`node gen.js`) reads as writing nothing,
 A folder a script is handed is judged as a write of every file under it (#2321), unless the
 script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
 copies into a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527,
-and #2565 is to hold such a script only for the files its writes can reach. A loop over quoted
+and #2565 is to hold such a script only for the files its writes can reach. A script whose text
+runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
+it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
+whose own text, read as the commands it is, writes. A value in an argument, an assignment or
+arithmetic names no command. A loop over quoted
 search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).
