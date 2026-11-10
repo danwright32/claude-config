@@ -2326,7 +2326,7 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
 
 ### What a push actually waits on
 
-Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2796,6 +2796,17 @@ file at its base commit, run beside `block-red-merge.sh`, which reads the same p
 2026-10-28: 0.009 to 0.011 seconds. Earlier: 0.014 seconds, five readings on 2026-10-13; it acts on
 a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading
 anything
+
+</td></tr>
+<tr><td>
+
+`db-write-ask.sh` (#2536)
+
+</td><td>
+
+2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
+average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
+before python3 starts
 
 </td></tr>
 </tbody>
