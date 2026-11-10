@@ -440,6 +440,12 @@ OS_FILES = frozenset({
 SH_BLOCK = re.compile(r"\s*(?:while|until|for|if|select|case|time|!|\{)(?=\s|$)|\s*(?:\S+=\S*\s+)*read(?=\s|$)")
 # A pipe in a script's text, `||` apart.
 SH_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+# A heredoc opener in a script's text, a here string (<<<) apart. quoted is set only where the whole
+# delimiter is quoted or escaped (<<'EOF', <<"EOF", <<\EOF), which is where the shell expands nothing
+# into the heredoc. Any other opener may expand: a delimiter quoted in part, and whatever else this
+# reads as an opener in a text it does not parse (a shift in arithmetic), which errs toward refusing.
+SH_DOC = re.compile(r"""(?<!<)<<(?!<)-?[ \t]*(?P<quoted>(?P<q>['"])[A-Za-z_][\w.-]*(?P=q)(?![\w'"\\$])|"""
+                    r"""\\[A-Za-z_][\w.-]*(?![\w'"\\$]))?""")
 # What a Python import's folder can be handed through: a shell variable in an argument, PYTHONPATH or
 # an exported variable (claude-config#2449). A variable's value is known only where it is certain
 # (sh_walk), mostly over the script's straight run of commands at its top; these mark where that stops: a
@@ -2815,7 +2821,10 @@ class Judge:
             with writing not counted;
           - what a command that passes sends down a pipe goes to the command the pipe feeds, which is
             then judged as fed it (sh_command_acts), on through each program that only filters it.
-        Both need each command's place in the script (sh_flow). What it still does not follow, so a
+        Both need each command's place in the script (sh_flow). Where there is none (the reader could
+        only cut the script crudely), a script that pipes what it was handed, or that uses it and
+        opens a heredoc the shell may expand it into (SH_DOC), is refused as a place the gate cannot
+        follow (claude-config#2641). What it still does not follow, so a
         pass is not read as more than it measured: what the script writes with a redirection or by
         moving a file (SH_INERT says why), a variable set by read from a pipe or a file, a pipe or a
         heredoc inside a string a wrapper runs (eval, bash -c with no arguments handed), and a file
@@ -2879,6 +2888,14 @@ class Judge:
             into = self.sh_piped_into(flow, idx)
             if into is not None:
                 piped.add(into)
+        if flow is None and handed.search(body) and any(not m.group("quoted") for m in SH_DOC.finditer(body)):
+            # No command has a place, so nothing says which heredoc feeds which command, and expands
+            # was False for every one of them. The crude cut hands a heredoc's own lines back as
+            # commands of the script, so `bash <<EOF` over `echo "$1"` read as a bash handed nothing
+            # and an echo, and passed (claude-config#2641). Where the script uses what it was handed
+            # and opens a heredoc the shell may expand it into, that is a place the gate cannot
+            # follow, whatever the heredoc feeds: a shell, an interpreter, or a pipe on to one.
+            return "could not be read as commands to see what a heredoc expands its arguments into"
         return None
 
     def sh_flow(self, body, d, records):
