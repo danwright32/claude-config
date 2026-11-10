@@ -16,7 +16,10 @@ Two routes are judged:
     endpoint, an inline script holding one, a script fed on stdin holding one, or a script file run
     by the command that holds one. A command that only MENTIONS an endpoint (a grep, an echo, a
     test) runs nothing that posts and passes. A shell script is read as commands, so one that only
-    greps passes and one that curls is refused. A package script (`npm run digest`, pnpm, yarn,
+    greps passes and one that curls is refused. A file a command names through a variable or a
+    substitution whose value is certain (`python3 "$ROOT/tools/post.py"`, with ROOT set from
+    BASH_SOURCE) is read as one named by a literal path is (claude-config#2678). A package script
+    (`npm run digest`, pnpm, yarn,
     npm test) is followed through the nearest package.json, pre and post scripts included, and
     judged as the command line it runs. The local modules a JavaScript, TypeScript or Python script
     imports, from a file, inline code (`node -e`, `python3 -c`) or its input, are followed, each
@@ -39,7 +42,9 @@ Two routes are judged:
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
 through a path alias (`@/lib/x`), a Python module in the standard library or installed, a module run
 with `python3 -m`, and an import of another language's files are
-not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
+not followed; a program run by bare name from the PATH is not read; a file run, rather than sourced,
+through a variable or a substitution whose value the gate cannot work out is not read
+(claude-config#2678); a shell script's data reaching a
 program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
 shell script's writes are not counted as acting on a data file; and deliberate obfuscation (an
 endpoint assembled from pieces, an import path built at run time) is not the threat this answers.

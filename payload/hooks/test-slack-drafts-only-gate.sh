@@ -919,6 +919,29 @@ for sw_suite in hooks/test-context-size-notice.sh hooks/test-pr-review.sh hooks/
     echo "SUITE-PART-UNMEASURED #2668 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that suite was not judged here"
   fi
 done
+# The scripts a sweep of every tracked shell script found refused once a file run through a variable
+# was read (claude-config#2678, 530 scripts on 2026-11-10), each fixed in the script and never in the
+# gate: the tally notice handed its inline python a folder that started from an environment variable,
+# the replay suite's fixture maker spelt a module path inside two strings it writes, and the README
+# table suite handed README.md, which names an endpoint, to a script that can act. As a session runs
+# them, so a change to one of them, or to the walk, that gets it refused again fails here (L48). The
+# first two are in the installed copy too; the last two live only in the repository (L411).
+for sw_suite in hooks/verification-tally-notice.sh hooks/test-require-verification-run.sh; do
+  if [ -f "$sw_from/$sw_pre$sw_suite" ]; then
+    run_bash "cd $sw_from && bash $sw_pre$sw_suite"
+    allowed "a script of this repository is not refused when a session runs it: bash $sw_pre$sw_suite (claude-config#2678)"
+  else
+    echo "SUITE-PART-UNMEASURED #2678 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that script was not judged here"
+  fi
+done
+for sw_suite in tests/test-readme-mods-table.sh tools/test-area-check-replay.sh; do
+  if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/$sw_suite" ]; then
+    run_bash "cd $MODS_REPO && bash $sw_suite"
+    allowed "a suite of this repository is not refused when a session runs it: bash $sw_suite (claude-config#2678)"
+  else
+    echo "SUITE-PART-UNMEASURED #2678 the gate allows bash $sw_suite: $DIR is not in a claude-config checkout holding $sw_suite (the installed copy of the hooks is not), so that suite was not judged here"
+  fi
+done
 
 # A file a script runs by a path the gate can work out is read as one run by a literal path is
 # (claude-config#2678). Measured through this wrapper on 2026-11-10, in a script whose first lines
