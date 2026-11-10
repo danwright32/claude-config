@@ -137,38 +137,31 @@ MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcr
 # It also subsumes the worktree case this used to solve: an agent in a worktree
 # still reports its parent session's transcript, so it lands in the session's
 # spool rather than under a path nobody opens.
-# THE 12 HEX CHARACTERS A KEY IS MADE OF (claude-config#281).
+# THE 12 HEX CHARACTERS A KEY IS MADE OF (claude-config#281, claude-config#2446).
 #
-# `shasum` on macOS is a perl script and costs 11.5ms a call, against openssl's 5.2ms, measured on
-# this Mac 2026-09-03. A key is computed on nearly every operation here, so one run of
-# test-subagent-issue-harvest.sh made 690 of them, about a quarter of that suite's whole cost, and
-# every one of them was followed by a `cut` as well.
+# The digest is `shasum`, called by its literal name, and the first 12 characters are cut in the
+# shell, with no `cut`.
+#
+# From 2026-09-03 to 2026-11-10 it was openssl where that worked, because `shasum` on macOS is a
+# perl script and cost 11.5ms a call against openssl's 5.2ms (measured 2026-09-03; 18.1 to 19.0 ms
+# against 8.6 to 9.6 on 2026-11-10, three samples of 100 calls on a loaded Mac), and a key is
+# computed on nearly every operation here. The program was read from CLAUDE_ISSUE_SPOOL_SHA, so the
+# text this script was handed was piped into a program named by a variable. The Slack drafts gate
+# reads this script every turn, when the end of turn `clear` line hands it a transcript, and it
+# cannot know a program named by a variable to be unable to send a request or run code, so once it
+# followed pipes it refused that line (#2446). Dan chose on 2026-11-10: "Hash with shasum". So the
+# speed is given up on purpose, nothing reads CLAUDE_ISSUE_SPOOL_SHA any more, and no program this
+# function pipes its text into is named by a variable. Putting a faster digest back means a program
+# the gate knows by name, which is Dan's to approve, never a variable.
 #
 # THE VALUE MUST NOT CHANGE BY A CHARACTER. A key is a FILENAME, so a different digest strands
 # every record already pending under the old name with nothing left that could find it (L92). Both
-# tools compute the same SHA-1; only the printing differs, and the two openssl builds a Mac can
-# have differ from each other (Homebrew's OpenSSL prints "SHA1(stdin)= <hex>", the system LibreSSL
-# prints the bare hex). So the LAST whitespace separated field is taken, and it is accepted only
-# when it is exactly 40 hex characters. Anything else, including openssl not being installed at
-# all, falls back to shasum, which is the reference implementation the suite pins this against.
-#
-# The fallback is correct and merely slower, which is why it is silent, and why the suite proves
-# the fast path is the one actually being taken rather than trusting an agreement that both halves
-# could satisfy by running shasum (L289, L159).
+# tools compute the same SHA-1, and the suite pins this against constants recorded while openssl
+# made the keys and against openssl itself where it is installed.
 issue_spool_sha12() { # sha12 <text> -> the first 12 hex characters of its SHA-1
-  local tool out hex
-  tool="${CLAUDE_ISSUE_SPOOL_SHA-openssl}"
-  hex=""
-  if [ -n "$tool" ] && command -v "$tool" >/dev/null 2>&1; then
-    out="$(printf '%s' "$1" | "$tool" dgst -sha1 2>/dev/null)" || out=""
-    hex="${out##* }"
-    case "$hex" in *[!0-9a-f]*) hex="" ;; esac
-    [ "${#hex}" -eq 40 ] || hex=""
-  fi
-  if [ -z "$hex" ]; then
-    out="$(printf '%s' "$1" | shasum 2>/dev/null)"
-    hex="${out%% *}"
-  fi
+  local out hex
+  out="$(printf '%s' "$1" | shasum 2>/dev/null)"
+  hex="${out%% *}"
   printf '%s' "${hex:0:12}"
 }
 
