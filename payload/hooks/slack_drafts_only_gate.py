@@ -592,9 +592,13 @@ class Judge:
         self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
         self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
         # Whether the command being judged is one sh_placed wrote out (claude-config#2678), and the
-        # script files found clean under such a command, each by the way it was run (script).
+        # script files found clean under such a command, each by the way it was read, with what was
+        # exported once it had been (script).
         self.placing = False
-        self.clean = set()
+        self.clean = {}
+        self.sourcing_memo = {}  # {(a sourced text, directory): what sh_bound_in reads it for}, for sh_sourcing
+        self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
+        self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -699,12 +703,13 @@ class Judge:
         file a source or . command reads, whose exports reach the commands after it.
 
         Under a command sh_placed wrote out (placing), a file found clean is not read again where it
-        is run the same way: a suite runs one hook by a variable hundreds of times, and each of those
-        is now a read of the hook and of everything it runs (claude-config#2678). The same way is the
-        file, the word and directory it is run by, the depth, the program, and where the Python it
-        starts looks for imports and what it is handed. Every reading under such a command is one
-        the gate did not make before, so nothing it used to refuse goes through this. A sourced file
-        is always read, since reading it is what carries its exports to the commands after it."""
+        is read the same way: a suite runs one hook by a variable hundreds of times, and each of those
+        is now a read of the hook and of everything it runs and sources (claude-config#2678). The same
+        way is the file, whether it is sourced, the word and directory it is read by, the depth, the
+        program, and where the Python it starts looks for imports and what it is handed. What a
+        sourced file exports is kept with it and put back, since that reaches the commands after it.
+        Every reading under such a command is one the gate did not make before, so nothing it used
+        to refuse goes through this."""
         path = self.resolve(word, d)
         if not os.path.isfile(path):
             return None  # nothing there to run
@@ -712,14 +717,16 @@ class Judge:
         if self.nudge and real == self.nudge:
             return None  # /nudge, the one exemption (Dan, 2026-11-05)
         key = None
-        if self.placing and not sourced:
+        if self.placing:
             # A directory that is not there (a cd the reader kept as written, `cd "$WORK"`) is one
             # directory to this: no relative path is found under any of them.
             there = not d or os.path.isdir(d)
             py = dict(self.py_cmd, cwd=self.py_cmd["cwd"] if there else None)
-            key = (real, word, d if there else None, depth, shell_hint, lang,
+            key = (real, sourced, word, d if there else None, depth, shell_hint, lang,
                    self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported))
             if key in self.clean:
+                if sourced:
+                    self.exported = self.clean[key]
                 return None
         self.tick(path)
         walking, self.walking = self.walking, path
@@ -728,7 +735,7 @@ class Judge:
         finally:
             self.walking = walking  # once read, back to the commands of the file that ran it
         if key and not reason:
-            self.clean.add(key)
+            self.clean[key] = self.exported
         return reason
 
     def script_body(self, word, path, real, d, depth, shell_hint, lang):
@@ -1229,7 +1236,7 @@ class Judge:
             if v is None or splits:
                 return None, True
         else:
-            words = self.sw.command_words(self.sw.command_rest(text)[0])
+            words = self.words_of(self.rest_of(text)[0])
             if len(words) < 2:
                 return None, False
             v = words[1]
@@ -1362,7 +1369,7 @@ class Judge:
                         if len(items[k][1]["scope"]) > 1:
                             continue
                         h = head_of(k)
-                        words = self.sw.command_words(self.sw.command_rest(h)[0])
+                        words = self.words_of(self.rest_of(h)[0])
                         if self.sh_source_target(h) is not None or self.sh_indirect(h):
                             more = True
                         elif words and words[0] in fbody:
@@ -1401,8 +1408,8 @@ class Judge:
                 spans.setdefault(a[0], []).append((p["start"], p["end"]))
                 setv(a[0], self.sh_word(a[1], where(d, p["start"]), look, script, True)[0] if run else None, w)
                 return None
-            rest, _ = self.sw.command_rest(head)
-            words = self.sw.command_words(rest)
+            rest, _ = self.rest_of(head)
+            words = self.words_of(rest)
             if self.sh_indirect(head):
                 return "dead"
             wd = where(d, p["start"])
@@ -1533,8 +1540,8 @@ class Judge:
         # `LIBDIR="$DIR/lib" python3 ...` beside `export LIBDIR=...`.
         temp = {}
         for (d, t), p in items:
-            rest_t, assigns = self.sw.command_rest(t)
-            words = self.sw.command_words(rest_t)
+            rest_t, assigns = self.rest_of(t)
+            words = self.words_of(rest_t)
             if words and words[0] not in SH_SPECIAL and words[0] not in funcs:
                 for a in assigns.split("\n"):
                     n = a.split("=", 1)[0]
@@ -1633,7 +1640,7 @@ class Judge:
         a value such as $(( ... )) stays one word, and a name is one only with no $ or ` in it."""
         if re.search(r"\(\([^()]*\$\{?\w+\}?\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", text):
             return True
-        toks = self.sh_tokens(self.sw.command_rest(text)[0])
+        toks = self.sh_tokens(self.rest_of(text)[0])
         words, k = [], 0
         while k < len(toks):
             kind, raw = toks[k]
@@ -1921,8 +1928,8 @@ class Judge:
         plain NAME=value, a local or declare naming its names outright, or one of SH_KEEPS."""
         if not head:
             return True
-        rest, _ = self.sw.command_rest(head)
-        words = self.sw.command_words(rest)
+        rest, _ = self.rest_of(head)
+        words = self.words_of(rest)
         if not words:
             return True
         if words[0] in ("local", "declare", "typeset", "readonly", "export"):
@@ -1933,7 +1940,7 @@ class Judge:
 
     def sh_source_target(self, t):
         """The raw word a source or . command names, or None for any other command."""
-        rest, _ = self.sw.command_rest(t)
+        rest, _ = self.rest_of(t)
         rest = rest.lstrip()
         end = self.sh_word_end(rest, 0)
         if rest[:end] not in ("source", "."):
@@ -1986,25 +1993,45 @@ class Judge:
                 told[n] = self.sh_binds(n, text)
         bound = {n for n in names if told[n]}
         try:
-            cmds, parts = self.parsed(text, cwd)
+            steps = self.sh_sourcing(text, cwd)
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return set(names)
         known = None
-        for (d, t), p in zip(cmds, parts):
-            if len(p["scope"]) > 1:
-                continue  # a subshell's or a substitution's (h="$(eval ...)"): it binds nothing here
-            if self.sh_indirect(self.sh_strip_openers(t)):
+        for step in steps:
+            if step is None:
                 return set(names)
-            if self.sh_source_target(t) is None:
-                continue
+            d, t, start = step
             if known is None:
                 known = self.sh_known(text, cwd, word, cwd_known, depth)
-            wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, p["start"]) else SH_UNKNOWN_DIR
-            v, bad = self.sh_source_word(t, wd, lambda n, at=p["start"]: self.sh_home(
+            wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, start) else SH_UNKNOWN_DIR
+            v, bad = self.sh_source_word(t, wd, lambda n, at=start: self.sh_home(
                 n, text, self.sh_at(known, n, at)), word)
             if v is not None and os.path.isfile(self.resolve(v, d)):
                 bound |= self.sh_bound_in(self.resolve(v, d), names, d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen)
         return bound
+
+    def sh_sourcing(self, text, cwd):
+        """What sh_bound_in reads a sourced text's commands for, in the order they come: (directory,
+        command, where it starts) for each source or . command outside a subshell or a substitution
+        (h="$(eval ...)" binds nothing here), and None, ending the list, at the first command that
+        can bind a name it does not spell out (sh_indirect). It depends on the text and the directory
+        alone, and one file is asked about by every script that sources it, so it is worked out once
+        for each pair: every command of lib/ai-review-common.sh was read this way for each of them
+        (claude-config#2678). A text the reader cannot read raises, every time it is asked for."""
+        key = (text, cwd)
+        if key not in self.sourcing_memo:
+            cmds, parts = self.parsed(text, cwd)
+            steps = []
+            for (d, t), p in zip(cmds, parts):
+                if len(p["scope"]) > 1:
+                    continue
+                if self.sh_indirect(self.sh_strip_openers(t)):
+                    steps.append(None)
+                    break
+                if self.sh_source_target(t) is not None:
+                    steps.append((d, t, p["start"]))
+            self.sourcing_memo[key] = steps
+        return self.sourcing_memo[key]
 
     def py_args(self, text, name, d):
         """(sys.argv, the variables in os.environ) for the python command text runs, as far as they are
@@ -2368,12 +2395,12 @@ class Judge:
         does not change what the rest of this command is judged with. Each command is one step of
         the walk's budget (tick)."""
         self.tick()
-        rest, assigns = self.sw.command_rest(text)
-        words = self.sw.command_words(rest)
+        rest, assigns = self.rest_of(text)
+        words = self.words_of(rest)
         self.sh_note(text, words, assigns, d)
         value = None
         for a in assigns.split("\n"):
-            for w in self.sw.command_words(a) if a.strip() else ():
+            for w in self.words_of(a) if a.strip() else ():
                 if w.startswith("PYTHONPATH="):
                     value = self.sh_pythonpath(w[len("PYTHONPATH="):], text, d)
         if words and words[0] == "export":
@@ -2403,6 +2430,24 @@ class Judge:
             if not sourced:
                 self.exported = saved_exported
 
+    def rest_of(self, text):
+        """The shared reader's command_rest(text), worked out once for each text. What it gives
+        depends on the text alone, and the walk of a script's variables, the names a command binds
+        and the judging of each command all ask it of the same commands: 120,404 times judging the
+        suite of the merge helper, a sixth of that walk's time (measured 2026-11-10, #2678)."""
+        got = self.rest_memo.get(text)
+        if got is None:
+            got = self.rest_memo[text] = self.sw.command_rest(text)
+        return got
+
+    def words_of(self, rest):
+        """The shared reader's command_words(rest), worked out once for each text, as a list of the
+        caller's own."""
+        got = self.words_memo.get(rest)
+        if got is None:
+            got = self.words_memo[rest] = tuple(self.sw.command_words(rest))
+        return list(got)
+
     def judge(self, d, text, wrapper, why, depth, whole):
         """The reason one command posts, or None: the command as it is written, and then, where a word
         of it holds a variable or a substitution whose value is certain, the same command with those
@@ -2428,20 +2473,24 @@ class Judge:
         word is. A word whose value is not certain stays as written, so it names no file and is not
         read, as before: refusing it is the half of claude-config#2678 kept off until what it would
         refuse in this repository is measured. A source or . command has its own reading (judge)."""
-        rest, _ = self.sw.command_rest(text)
-        if not re.search(r"[$`]", rest):
+        if "$" not in text and "`" not in text:
             return None
-        toks = self.sh_tokens(rest)
-        if not toks or toks[0][0] != "word" or toks[0][1] in ("source", "."):
+        rest = self.rest_of(text)[0].lstrip()
+        if not re.search(r"[$`]", rest):
             return None
         # Only a command judge_written reads files or addresses for: a program named through a
         # variable or by a path, a shell, an interpreter, a launcher, a package manager or a sender.
         # Every other command with a $ in it (echo, [, a suite's own check) is most of a script, and
-        # working its words out would be the larger part of reading it.
-        first = toks[0][1]
+        # working its words out would be the larger part of reading it. Asked of the first word
+        # alone, before the rest is cut into words.
+        first = rest[:self.sh_word_end(rest, 0)]
         name = os.path.basename(first.strip("'\""))
-        if not (re.search(r"[$`/]", first) or name in SHELLS or name in LAUNCHERS or name in PACKAGERS
+        if not first or first in ("source", ".") or not (
+                re.search(r"[$`/]", first) or name in SHELLS or name in LAUNCHERS or name in PACKAGERS
                 or name in SENDERS or name == "uv" or INTERPRETER.match(name)):
+            return None
+        toks = self.sh_tokens(rest)
+        if not toks or toks[0][0] != "word":
             return None
         wd, script = self.sh_cwd(d), self.shell["script"]
         out, changed = [], False
@@ -2461,8 +2510,8 @@ class Judge:
         its input (fed) is found in the script by the words the script wrote."""
         sw = self.sw
         fed_by = fed_by or text
-        rest, _ = sw.command_rest(text)
-        words = sw.command_words(rest)
+        rest, _ = self.rest_of(text)
+        words = self.words_of(rest)
         if not words:
             return None
         name = os.path.basename(words[0])
@@ -2959,14 +3008,14 @@ class Judge:
         flow = self.sh_flow(body, d, records)
         piped = set()  # the commands a pipe feeds what the script was handed (their index in records)
         for idx, (_, text, _, _, _) in enumerate(records):
-            rest, assigns = self.sw.command_rest(text)
-            words = self.sw.command_words(rest)
+            rest, assigns = self.rest_of(text)
+            words = self.words_of(rest)
             if words and not words[0].strip():
                 # A line continued with a backslash inside $(...) comes back with the newline as its
                 # first word and its assignments still in front (issue-spool.sh's append), so it is
                 # read again from its first real word.
-                rest, more = self.sw.command_rest(self.sw.rejoin([w for w in words if w.strip()]))
-                words, assigns = self.sw.command_words(rest), assigns + "\n" + more
+                rest, more = self.rest_of(self.sw.rejoin([w for w in words if w.strip()]))
+                words, assigns = self.words_of(rest), assigns + "\n" + more
             if not words:
                 continue
             if re.match(r"[A-Za-z_]\w*(\[[^]]*\])?\+?=", words[0]):

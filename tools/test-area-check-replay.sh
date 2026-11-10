@@ -77,6 +77,14 @@ case "$code $r" in "0 same "*'"withHold":1'*) check "--fixture writes a folder w
 [ ! -e "$W/fx/sessions-9.ts" ] && check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" ok || check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" "$(ls "$W/fx")"
 n="$(grep -c '"day":' "$W/fx/sessions-1.ts" 2>/dev/null)"
 [ "${n:-0}" -eq 4 ] && check "each session is a line of its own" ok || check "each session is a line of its own" "${n:-none} session lines in $(ls "$W/fx" 2>&1)"
+# The files written import the rules' types by their path from the fixture folder, the lines the
+# committed month carries. The writer names that path once and puts it into each line it writes
+# (claude-config#2678), and a type import is erased before anything runs, so a wrong path there
+# fails no replay: only this reads it.
+grep -q -x -F "import type { ReplayInput, ReplaySummary } from '../../hooks/rules.ts'" "$W/fx/index.ts" 2>/dev/null \
+  && grep -q -x -F "import type { CachedIssue } from '../../hooks/rules.ts'" "$W/fx/issues-1.ts" 2>/dev/null \
+  && check "the written files import the rules' types by their path from the fixture folder" ok \
+  || check "the written files import the rules' types by their path from the fixture folder" "$(grep -h 'import type' "$W/fx/index.ts" "$W/fx/issues-1.ts" 2>&1)"
 
 out="$(PATH="$W/bin:$PATH" AREA_CHECK_FIXTURE_PART_BYTES=300 node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx2" 2>&1)"; code=$?
 r="$(fixture_replays "$W/fx2")"

@@ -56,6 +56,11 @@ SCRIPTS="${VR_SCRIPTS:-$HOOK_DIR/../skills/verification-guides/scripts}"
 due="$(python3 "$SCRIPTS/verification.py" tally due 2>/dev/null)" || exit 0
 [ -n "$due" ] || exit 0
 
+# The folder the code below imports verification from, only for its TALLY_ASK_EVERY, is spelt from
+# BASH_SOURCE where it is handed over, never taken from $SCRIPTS: that one starts from VR_SCRIPTS,
+# which the environment may set, so the Slack drafts gate cannot tell which verification.py would be
+# imported and refuses this hook, and since claude-config#2678 the suite that runs it, as an import
+# it cannot place (measured through the gate's wrapper, 2026-11-10). Cut in bash, as HOOK_DIR is.
 reason="$(printf '%s' "$due" | python3 -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
@@ -85,7 +90,7 @@ print("The verification merge check has watched enough merges to ask about block
       " .claude/verification/areas.json through a pull request in that repository) and \"Keep warn\" (asked again"
       " after %d more pull requests). Put the numbers above in the question. Make no change for Keep warn."
       % v.TALLY_ASK_EVERY)
-' "$SCRIPTS" 2>/dev/null)" || exit 0
+' "$(cd "${BASH_SOURCE[0]%/*}/../skills/verification-guides/scripts" && pwd)" 2>/dev/null)" || exit 0
 [ -n "$reason" ] || exit 0
 
 out="$(python3 -c 'import json, sys; print(json.dumps({"decision": "block", "reason": sys.argv[1]}))' "$reason" 2>/dev/null)" || exit 0

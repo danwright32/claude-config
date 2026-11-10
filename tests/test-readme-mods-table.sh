@@ -17,7 +17,6 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-README="$ROOT/README.md"
 RESOLVER="$ROOT/payload/hooks/lib/readme-rows-merge.py"
 . "$ROOT/payload/hooks/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
@@ -36,10 +35,16 @@ fi
 # to a file rather than through $( ): bash 3.2 misreads a quoted heredoc holding an apostrophe there.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-python3 -B - "$RESOLVER" "$README" > "$tmp/out" 2>&1 <<'PY'
-import importlib.util, re, sys
+#
+# The checkout's folder is handed over, as the resolver itself is handed it, never README.md's own
+# path. The Slack drafts gate refuses a script that can start a program (the resolver runs git)
+# when it is handed a file naming a Slack endpoint, and README.md names them where it describes
+# that gate. Once the gate read a file run through a variable (claude-config#2678) it refused this
+# suite for that (measured through its wrapper, 2026-11-10). The code below only reads the file.
+python3 -B - "$RESOLVER" "$ROOT" > "$tmp/out" 2>&1 <<'PY'
+import importlib.util, os, re, sys
 
-resolver_path, readme_path = sys.argv[1], sys.argv[2]
+resolver_path, readme_path = sys.argv[1], os.path.join(sys.argv[2], "README.md")
 spec = importlib.util.spec_from_file_location("readme_rows_merge", resolver_path)
 rr = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rr)
