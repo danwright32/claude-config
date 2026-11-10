@@ -44,7 +44,7 @@
 # the global rule files under the config directory: a project's own CLAUDE.md is
 # not what a config sync changes underneath a session.
 #
-# MODS TOO, BUT ONLY THE SET OF THEM (claude-config#1535). A session names its mods once, at its
+# MODS TOO: THE SET OF THEM (claude-config#1535), AND ONE A PULL REPLACED (#2514, below). A session names its mods once, at its
 # start, from CLAUDE_CODE_PLUGIN_DIRS, so a mod that arrives on disk later is not loaded in it until
 # a new session, and a mod removed from disk is still whatever the session made of it. That is the
 # same shape as a rule file, so it is the same check over a second snapshot: the names of the mod
@@ -347,6 +347,6 @@ case "$removed" in *[![:space:]]*)
   echo "claude-sync: these mods were removed from disk after this session started: ${removed}. A new session runs without them; this one may still be running what it loaded." ;;
 esac
 case "$replaced" in *[![:space:]]*)
-  echo "claude-sync: a pull replaced these mods after this session loaded them: ${replaced}. Unless Claude Code has said it reloaded them, this session is still running the earlier version: Claude Code reloads a changed mod by itself only in an interactive session, and can hold or pause that reload. Run /reload-plugins to load the new version, or start a new session." ;;
+  echo "claude-sync: a pull replaced these mods after this session loaded them: ${replaced}. Unless Claude Code has said it reloaded them, this session is still running the earlier version: Claude Code does not reload a changed mod in a headless session, and in an interactive one it can hold or pause the reload. Run /reload-plugins to load the new version, or start a new session." ;;
 esac
 exit 0

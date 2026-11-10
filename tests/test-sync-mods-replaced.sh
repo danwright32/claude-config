@@ -55,7 +55,7 @@ pull
 check "a pull that replaced nothing leaves the record as it was" \
   "[ -n '$before' ] && [ \"\$(cat '$C/state/mods-replaced.tsv')\" = '$before' ]"
 
-if [ "$fail" -gt 0 ]; then echo "--- the last pull said:"; cut -c1-300 "$WORK/pull.out" | head -20; fi
+if [ "$fail" -gt 0 ]; then echo "--- the last pull said:"; sed -n '1,20p' "$WORK/pull.out" | cut -c1-300; fi
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
