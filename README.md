@@ -3710,7 +3710,11 @@ review's deadline plus a minute, and removes it when the reviewer ends. A window
 positive evidence, its pid running with the start time recorded and inside that time, so a review
 that crashed is never waited for, and one the window's own command started is not counted. The suite
 runner hands every suite a phase folder of its own, so a suite's fixture reviews never publish here.
-`--status` lists the helpers it is not counting, and why. Everything it starts is in its own process group with a
+`--status` lists the helpers it is not counting, and why. A measurement that wants the window only
+for its turn, its wait and its cleanup runs its command with `--workers 0 --spawners 0`, so the
+command is the only load the window adds, and the record, `--status` and the merge helper's sentence
+say it had no busy workers (claude-config#2568); with no command, a window still needs a worker.
+Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
 recorded in `~/.claude/state/load-window/windows.tsv` (`hooks/lib/load-window.sh`), and
 `merge-when-ready.sh` (on every stop with a non zero exit, a merge whose branch could not then be

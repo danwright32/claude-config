@@ -16,8 +16,8 @@
 # event, tab separated, appended:
 #   start <id> <start epoch> <deadline epoch> <pid> <busy workers> <process launching workers> <label>
 #   end   <id> <end epoch> <how it ended>
-# A start with no end is judged by its deadline alone, never by its pid: the helper's workers end
-# themselves at the deadline even when the helper itself is killed without a chance to write its end,
+# A start with no end is judged by its deadline alone, never by its pid: the helper's workers and
+# command end themselves at the deadline even when the helper itself is killed without a chance to write its end,
 # so the load lasts until the deadline whatever happened to the helper.
 #
 # Under this Mac's own state, never synced: ${CLAUDE_HOME:-$HOME/.claude}/state/load-window, or
@@ -102,21 +102,30 @@ $loop_input
 LOOP_INPUT
   if [ -n "$act" ]; then
     IFS=$'\t' read -r id st dl pid w s lb <<<"$act"
-    printf 'A deliberate load window is running on this Mac (tools/load-window.sh, pid %s, %s busy and %s process launching workers, "%s"), from %s until %s at the latest, so a timing or GitHub read failure here may have measured that load: run it again after %s before treating it as broken.' \
-      "$pid" "$w" "$s" "$lb" "$(load_window_et "$st")" "$(load_window_et "$dl")" "$(load_window_et "$dl")"
+    printf 'A deliberate load window is running on this Mac (tools/load-window.sh, pid %s, %s, "%s"), from %s until %s at the latest, so a timing or GitHub read failure here may have measured that load: run it again after %s before treating it as broken.' \
+      "$pid" "$(load_window_workers "$w" "$s")" "$lb" "$(load_window_et "$st")" "$(load_window_et "$dl")" "$(load_window_et "$dl")"
     return 0
   fi
   if [ -n "$last" ]; then
     IFS=$'\t' read -r st e en pid w s lb <<<"$last"
     if [ "$en" = "-" ]; then
-      printf 'A deliberate load window ran on this Mac from %s until %s (tools/load-window.sh, pid %s, %s busy and %s process launching workers, "%s"; its run recorded no end, so this is when its workers end themselves), %s ago, so a timing or GitHub read failure here may have measured that load.' \
-        "$(load_window_et "$st")" "$(load_window_et "$e")" "$pid" "$w" "$s" "$lb" "$(load_window_ago $(( now - e )))"
+      printf 'A deliberate load window ran on this Mac from %s until %s (tools/load-window.sh, pid %s, %s, "%s"; its run recorded no end, so this is when everything it started ends itself), %s ago, so a timing or GitHub read failure here may have measured that load.' \
+        "$(load_window_et "$st")" "$(load_window_et "$e")" "$pid" "$(load_window_workers "$w" "$s")" "$lb" "$(load_window_ago $(( now - e )))"
     else
-      printf 'A deliberate load window ran on this Mac from %s to %s (tools/load-window.sh, pid %s, %s busy and %s process launching workers, "%s"), ended %s ago, so a timing or GitHub read failure here may have measured that load.' \
-        "$(load_window_et "$st")" "$(load_window_et "$e")" "$pid" "$w" "$s" "$lb" "$(load_window_ago $(( now - e )))"
+      printf 'A deliberate load window ran on this Mac from %s to %s (tools/load-window.sh, pid %s, %s, "%s"), ended %s ago, so a timing or GitHub read failure here may have measured that load.' \
+        "$(load_window_et "$st")" "$(load_window_et "$e")" "$pid" "$(load_window_workers "$w" "$s")" "$lb" "$(load_window_ago $(( now - e )))"
     fi
   fi
   return 0
+}
+
+# How a window's workers are named wherever one is reported, the one place the words live (L94,
+# L370): "N busy and M process launching workers", or, for a window given a command and no workers
+# (claude-config#2568, a measurement that wants the window only for its turn, its wait and its
+# cleanup), "no busy workers", never a count of zero that reads as a load somebody forgot to set.
+load_window_workers(){   # $1 = busy workers, $2 = process launching workers
+  if [ "${1:-0}" = 0 ] && [ "${2:-0}" = 0 ]; then printf 'no busy workers'
+  else printf '%s busy and %s process launching workers' "$1" "$2"; fi
 }
 
 load_window_ago(){ if [ "$1" -ge 60 ]; then printf '%dm %02ds' "$(( $1 / 60 ))" "$(( $1 % 60 ))"; else printf '%ds' "$1"; fi; }
