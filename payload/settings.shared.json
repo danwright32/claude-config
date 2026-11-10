@@ -9,5 +9,8 @@
     }
   },
   "skillListingMaxDescChars": 300,
-  "outputStyle": "Explanatory"
+  "outputStyle": "Explanatory",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
+  }
 }

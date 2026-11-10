@@ -1115,6 +1115,22 @@ happened on 2026-11-09, when Fable 5.2 became Dan's default: `claude-fable-5-2` 
 beside the Opus entry, which stays for the builders and sessions still on Opus (#2547), and the sync
 suite reads the real file to confirm status says nothing for either.
 
+On 2026-11-10 Dan chose to share the default subagent model too, as `opus` (#2645). The same change
+of default had a second effect nobody chose: an agent that names no model inherits the session's, so
+the planning panel, plan-lite's agents and every ad hoc agent call moved onto Fable with it, while
+the model tiers in the orchestrate skill cover only that skill's builders. Claude Code reads the
+default from `CLAUDE_CODE_SUBAGENT_MODEL` in the `env` block of `settings.json`. Measured on 2.1.322
+with a headless Fable run starting one agent that names no model: the agent ran on
+`claude-fable-5-2` with nothing set and on `claude-opus-5-5` with the variable set, and a call
+naming `sonnet` still ran on Sonnet, so it is a default and never an override (L82, L188). Workflow
+agents are documented as taking the same default and were not measured. The `env` block is otherwise
+each Mac's own (it holds `CLAUDE_CODE_PLUGIN_DIRS`, and may hold a credential), so the file may
+carry that one variable under `env` and the pull writes that one leaf. Any other variable refuses
+the whole file, named but with its value left out of the message, since a refusal reaches the log
+and a notification. The value is an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full model name:
+unlike `modelSettings`, this variable takes either. Taking it out of the file leaves each Mac's
+value in place, as with a model the file stops naming.
+
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
 
