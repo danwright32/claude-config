@@ -22,7 +22,8 @@
 # Exit codes, because the whole subject of this script is a tool whose exit code lied (L184):
 #   0  every comparison agreed, or its mismatch is contained by the hook
 #   1  a destination the hook ALLOWS disagreed with the real tool, named in the output
-#   2  it could not measure: no rtk, no hook, no probe could run, or its own control failed
+#   2  it could not measure: no rtk, no hook, no probe could run, its own control failed, or the gh
+#      probe's stub was started inside its own call to the real gh (claude-config#2562)
 # There is deliberately no exit 0 for a run that compared nothing, because that is the state that
 # reads exactly like a clean bill of health (L98).
 #
@@ -131,13 +132,32 @@ export NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_CACHE
 # not one, in a directory that is not a repository: gh refuses an unknown field before it needs
 # either, and fails on the missing repository, still offline, for a list it accepts (L2).
 # A probe directory holding a bin/ has it first on PATH for every run in that directory.
+#
+# The stub must never run inside itself (claude-config#2562). "The real gh" found here can be a
+# wrapper that runs the first gh on PATH outside its own folder: in a Claude session it is the work
+# names guard, hooks/bin/gh. With the stub's folder first on PATH that wrapper ran the stub, the stub
+# ran the wrapper, and on 2026-11-09 one run held 4,037 stub processes after eight minutes, on the
+# way to the account's process limit. So the real gh is run with the PATH this script had before
+# the stub was put on it, kept in a file because a PATH can hold characters a heredoc would mangle,
+# and a stub that finds itself already running refuses, saying so, with an exit code of its own.
 mkdir -p "$WORK/ghstub/bin" "$WORK/ghstub/not-a-repo"
 real_gh="$(command -v gh 2>/dev/null || true)"
+printf '%s' "$PATH" > "$WORK/ghstub/path-before-the-stub"
 cat > "$WORK/ghstub/bin/gh" <<GHSTUB
 #!/bin/sh
 case " \$* " in
   *" --json "*)
+    if [ -n "\${RTK_FIDELITY_IN_GH_STUB:-}" ]; then
+      echo "check-rtk-exit-fidelity: the gh stub was run by the gh it asked to check a field list ($real_gh), so it stopped rather than run inside itself (claude-config#2562)." >&2
+      : > "$WORK/ghstub/ran-inside-itself"
+      exit 97
+    fi
+    RTK_FIDELITY_IN_GH_STUB=1; export RTK_FIDELITY_IN_GH_STUB
+    PATH="\$(cat "$WORK/ghstub/path-before-the-stub")"; export PATH
     err="\$(cd "$WORK/ghstub/not-a-repo" && env -u GH_REPO GH_TOKEN=not-a-token "$real_gh" "\$@" 2>&1 >/dev/null)"
+    code=\$?
+    # A refusal from inside is passed up as it came, never read as gh accepting the field list.
+    [ "\$code" -ne 97 ] || { printf '%s\n' "\$err" >&2; exit 97; }
     case "\$err" in *"Unknown JSON field"*) printf '%s\n' "\$err" >&2; exit 1 ;; esac
     echo '{"currentBranch":null,"createdBy":[],"needsReview":[]}'; exit 0 ;;
 esac
@@ -319,6 +339,15 @@ done
 echo "tools examined:$tools_seen"
 echo "compared $compared substitution(s) against the real tool, skipped $skipped, broken fixtures $broken, contained by the hook ${#contained[@]}."
 for c in "${contained[@]:-}"; do [ -n "$c" ] && echo "  contained: $c"; done
+
+# Read before any verdict (claude-config#2562). A stub that refused to run inside itself measured
+# nothing, but its exit code 97 reaches the comparison like any other, so without this a loop was
+# reported as rtk lying: a failed run where the hook allows rtk gh, and a GREEN run saying "the
+# refusal is still needed" where it refuses it (L11). The stub leaves a file when it refuses.
+if [ -e "$WORK/ghstub/ran-inside-itself" ]; then
+  echo "check-rtk-exit-fidelity: the probe's gh stub ran inside itself: the gh it hands field lists to ($real_gh) led back into the stub, which refused rather than loop (claude-config#2562). The gh probes measured nothing, so no verdict about rtk gh is given. Find how that gh reaches the stub, and run this again." >&2
+  exit 2
+fi
 
 if [ "$compared" -eq 0 ]; then
   echo "check-rtk-exit-fidelity: nothing was actually compared, so this run says nothing about whether a substitute lies. Treating that as a failure to measure rather than a clean run." >&2
