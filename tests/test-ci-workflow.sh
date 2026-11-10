@@ -408,19 +408,23 @@ part_run "$FX/twice.tsv" 2 2
 suite_job_raw(){ # suite_job_raw <workflow> -> the suite job's lines as written, comments kept
   awk '/^  suite:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }' "$1"
 }
+# Each reads the job into a variable first: an awk that exits early at the end of a pipe would kill
+# its producer, which pipefail reports as a failure that never happened.
 fanin_verdict_body(){ # fanin_verdict_body <workflow> -> the run: body of the fan in's verdict step, unindented
-  suite_job_raw "$1" | awk '
+  local job; job="$(suite_job_raw "$1")"
+  awk '
     /^[[:space:]]*- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
     s && !inrun && /^[[:space:]]*- / { exit }
     s && !inrun && /^[[:space:]]*run:[[:space:]]*\|[[:space:]]*$/ { inrun = 1; match($0, /^[[:space:]]*/); ind = RLENGTH; next }
     inrun { match($0, /^[[:space:]]*/); if ($0 !~ /^[[:space:]]*$/ && RLENGTH <= ind) exit; print substr($0, ind + 3) }
-  '
+  ' <<< "$job"
 }
 fanin_verdict_env(){ # fanin_verdict_env <workflow> -> the env: lines of that step, comments stripped
-  wf_job_block "$1" suite | awk '
+  local job; job="$(wf_job_block "$1" suite)"
+  awk '
     /- name:[[:space:]]*The deal and every part passed[[:space:]]*$/ { s = 1; next }
     s && /^[[:space:]]*(- |run:)/ { exit }
-    s { print }'
+    s { print }' <<< "$job"
 }
 fanin_rc(){ # fanin_rc <body> <deal result> <parts result> -> sets fanin_rc to the body's exit code
   DEAL="$2" PARTS="$3" bash -c "$1" > /dev/null 2>&1; fanin_rc=$?
