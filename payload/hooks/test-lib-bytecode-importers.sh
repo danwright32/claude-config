@@ -26,9 +26,11 @@
 #   2. by path: spec_from_file_location, SourceFileLoader, run_path or import_module, in a program
 #      whose string literals (or, for a shell program, its command line) name a file in lib/ or a lib
 #      folder.
-# NOT READ: a heredoc piped into python3 from another command (`cat <<EOF | python3`) and a here
-# string, neither used anywhere on 2026-11-10; programs in files that are not Python or shell (a
-# Markdown example, a TypeScript test's strings), which never run as written.
+# NOT READ: a program held in a shell variable (`python3 -B -c "$BUDGET_PY"` in test-work-names.sh,
+# which test-work-names.sh's own #2444 check covers); a heredoc piped into python3 from another
+# command (`cat <<EOF | python3`) and a here string, neither used anywhere on 2026-11-10; programs
+# in files that are not Python or shell (a Markdown example, a TypeScript test's strings), which
+# never run as written.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
