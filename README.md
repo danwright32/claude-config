@@ -2281,6 +2281,27 @@ One more gate holds a rule the briefs give every agent, for everyone:
   in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
   is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
 
+And one holds the rule CLAUDE.md gives every worktree session about a stale base:
+
+- `fresh-worktree-base-gate.sh` (PreToolUse, Edit, Write, MultiEdit and NotebookEdit) refuses the
+  first file edit in a fresh worktree, one with no commits of its own, while it is behind the
+  remote's main branch, and names the one command that brings it up to date,
+  `git -C "<worktree>" merge --ff-only origin/main` (claude-config#2517). Worktrees share refs, so
+  once another worktree has fetched, `git fetch` prints nothing however far main has moved, and on
+  2026-09-14 that let a pull request merge without the rebase its brief required. The gate fetches
+  `origin main` itself before judging, bounded at 10 seconds, so an unrefreshed ref cannot answer
+  for it. A pass is kept per session and worktree in `TMPDIR`, so a session pays one fetch per
+  worktree, not one per edit; a refusal is judged again, so the edit after the command goes ahead.
+  A worktree with its own commits, a primary checkout and a repository with no `origin` are passed.
+  A fetch that fails or runs out its bound lets the edit through with a notice that it could not
+  check, once, and tries again after 15 minutes, unless even the local ref already shows the
+  worktree behind, which is refused since the command needs no network. Reading is never refused,
+  and neither is an agent's worktree cut from a freshly fetched `origin/main`. On 2026-11-10 (load
+  average 23 over one minute) the gate took 0.055 to 0.063 seconds on an edit in a primary checkout
+  or outside any repository, 0.31 to 0.38 seconds on a worktree's first edit with its fetch, and
+  0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
+  cannot read is let through with a notice.
+
 ### What a push actually waits on
 
 Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,

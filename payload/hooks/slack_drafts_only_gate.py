@@ -46,6 +46,7 @@ endpoint assembled from pieces, an import path built at run time) is not the thr
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
+import faulthandler
 import fnmatch
 import functools
 import glob
@@ -54,6 +55,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import sys
 import time
 import warnings
@@ -110,6 +112,13 @@ MAX_FILE = 2 * 1024 * 1024
 # (MAX_FILE read as commands took 2.8 seconds under a profiler at a load average of 222,
 # 2026-11-09); test-slack-drafts-only-gate.sh holds the budget to the registered timeout.
 BUDGET_SECONDS = 11
+# How long the reader runs at all before a watchdog ends it (claude-config#2571). The budget stops
+# the walk by raising in it, which cannot happen while the reader is held inside one long call into
+# C (measured on 2026-11-10 with Python 3.14: a sum over a long range is such a call, and a
+# regular expression that backtracks is not), so a watchdog that needs nothing from the reader
+# ends it a little later: still inside the 15 second timeout, with 2 seconds left for the wrapper
+# to refuse the call as one it could not judge. test-slack-drafts-only-gate.sh holds it to that.
+HARD_STOP_SECONDS = BUDGET_SECONDS + 2
 PACKAGERS = {"npm", "pnpm", "yarn"}
 NPM_RUN = {"run", "run-script", "rum", "urn"}
 NPM_LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "stop": "stop", "restart": "restart"}
@@ -484,8 +493,10 @@ def judge_tool(tool, tool_input):
 
 
 class OutOfTime(BaseException):
-    """Raised by Judge.tick once the budget has passed, carrying what the walk was doing, as the
-    phrase out_of_time() puts after "while". A BaseException, so the `except Exception` around a
+    """Raised by Judge.late once the budget has passed (from tick, at the points the walk looks at
+    the clock, and from the budget's timer, on whatever line the walk is on, claude-config#2571),
+    carrying what the walk was doing, as the phrase out_of_time() puts after "while". A
+    BaseException, so the `except Exception` around a
     script read as commands (script_body) and every other one in the walk lets it through to main()
     rather than reading it as a script that could not be parsed."""
 
@@ -516,11 +527,12 @@ class Judge:
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
-        # commands are being judged (None for the command line itself), for the refusal tick()
-        # raises (claude-config#2432).
+        # commands are being judged (None for the command line itself), for the refusal late()
+        # raises, from tick() and from the budget's timer (claude-config#2432, #2571).
         self.clock, self.budget = budget_clock()
         self.started = self.clock()
         self.walking = None
+        self.overran = None  # the OutOfTime the budget's timer raised, if it fired (interrupt)
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
@@ -573,11 +585,45 @@ class Judge:
         about to read, or whose commands it was judging."""
         if self.clock() - self.started <= self.budget:
             return
+        self.late(reading)
+
+    # What tick raises once the budget has passed: OutOfTime, saying what the walk was doing.
+    def late(self, reading=None):
         if reading is not None:
             raise OutOfTime(f"about to read {self.sized(reading)}")
         if self.walking is not None:
             raise OutOfTime(f"judging the commands in {self.sized(self.walking)}")
         raise OutOfTime("judging the command line itself")
+
+    # On the real clock, have the budget interrupt the walk wherever it is (claude-config#2571).
+    # tick looks at the clock only between commands and before each file, so the work inside one
+    # file's walk was never timed: on 2026-11-09 one script's walk took 41 s of processor time
+    # (#2569), the budget passed unseen, and Claude Code killed the hook with no reason given. A
+    # timer set for the moment the budget passes raises the same OutOfTime from whatever line the
+    # walk is on, in every loop there is rather than in the ones somebody remembered to time. The
+    # step clock a test run counts by is left as it was: it has no moment to set a timer for.
+    def watch(self):
+        if self.clock is time.monotonic and hasattr(signal, "setitimer"):
+            signal.signal(signal.SIGALRM, self.interrupt)
+            signal.setitimer(signal.ITIMER_REAL, max(self.budget - (self.clock() - self.started), 0.001))
+
+    # The timer's handler. It keeps what it raises (self.overran) as well as raising it, because an
+    # exception raised from a timer lands on whatever line is running, and that can be code that
+    # discards it (a finaliser, a library's own handler), after which the walk would carry on from
+    # a step that never finished and could answer that nothing posts. main() refuses on what is
+    # kept here whatever the walk went on to answer, so a walk the budget interrupted is never
+    # allowed.
+    def interrupt(self, signum, frame):
+        try:
+            self.late()
+        except OutOfTime as e:
+            self.overran = e
+            raise
+
+    # The walk is over: the timer is taken off, so it cannot raise in what main() does next.
+    def unwatch(self):
+        if self.clock is time.monotonic and hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, 0)
 
     @staticmethod
     def sized(path):
@@ -2958,6 +3004,10 @@ class Judge:
 def main():
     # A lone surrogate from the payload, echoed in a reason, must not raise on the way out (#1944).
     sys.stdout.reconfigure(errors="replace")
+    # The watchdog (HARD_STOP_SECONDS), on the real clock only: it prints where the reader was and
+    # ends it with a failure, which the wrapper refuses as a call it could not judge.
+    if budget_clock()[0] is time.monotonic:
+        faulthandler.dump_traceback_later(HARD_STOP_SECONDS, exit=True)
     raw = sys.stdin.buffer.read().decode("utf-8", "replace")
     try:
         d = json.loads(raw)
@@ -2986,7 +3036,13 @@ def main():
     cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
     judge = Judge(load_reader())
     try:
-        reason = judge.line(cmd, cwd, 0, cmd)
+        judge.watch()
+        try:
+            reason = judge.line(cmd, cwd, 0, cmd)
+        finally:
+            judge.unwatch()
+        if judge.overran:
+            raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
     except OutOfTime as e:
         print("refuse\n" + judge.out_of_time(e.doing))
         return
