@@ -310,8 +310,8 @@ export PATH="$BIN:$PATH"
 # million seconds for the next read. A clock it cannot read stops it, loudly, with the clock untouched.
 # The sleep and the clock are exported shell functions (claude-config#2674): the helper runs whatever
 # command MWR_SLEEP and MWR_NOW name, and a function is one, so each read of the clock costs a subshell
-# rather than a bash and a cat started for it, and each sleep a subshell rather than a bash. A simple
-# merge read the clock 27 times, and the long waits thousands. The sleep runs in a subshell with the
+# rather than a bash and a cat started for it, and each sleep a subshell rather than a bash. Measured
+# on 2026-11-10, a simple merge read the clock 27 times, and the long waits thousands. The sleep runs in a subshell with the
 # helper's shell options turned off, as the script it replaces ran, so a step it runs can neither
 # change the helper nor be stopped by its set -u. The files remain for the sections that put a sleep
 # on the PATH (#2399), and run these same functions. A step that signals the helper names it as
@@ -1025,7 +1025,7 @@ check "#2303 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$ou
 check_eq "#2303 it waited past the 40 minutes" "yes" "$( [ "$(( $(cat "$ST/clock") - 1000000 ))" -ge 2400 ] && echo yes || echo no)"
 check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 2m 00s reading pull request #7" "$out"
 check "#2303 and how long it will wait" "stops once it has waited 60m (MWR_NET_WAIT_SECONDS)" "$out"
-# Not measured, worked out from the settings this suite sets: said at the end of the first round, its
+# Worked out from the settings this suite sets, not measured: said at the end of the first round, its
 # three waits of 40s at 2m, then on the first try at least the 120s heartbeat after the last line.
 # Every try falls on a multiple of 40s, and 120 is one, so the lines fall every 2m and the last line
 # before 40m is 38m 00s.
@@ -3107,8 +3107,8 @@ drive_queue(){ local i; for i in $(seq 1 400); do printf '"$BIN_DIR/drive"\n' >>
 # secs_of <line>: the elapsed figure a said line carries ([Xm YYs]), in seconds.
 secs_of(){ local l="${1%%$'\n'*}"; [[ "$l" =~ ^merge-when-ready:\ \[([0-9]+)m\ ([0-9]+)s\] ]] && printf '%s' $(( 10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]} )); }
 # Every run here: deadline 15m, line budget 15m, and no holder passed over by this run. It looks
-# every 60s rather than the suite's 30 (claude-config#2674): each look in a line of several costs
-# about 90 processes, these four runs were a fifth of the suite's time, and every figure they judge
+# every 60s rather than the suite's 30 (claude-config#2674): measured on 2026-11-10, each look in a
+# line of several cost about 90 processes, and these four runs were a fifth of the suite's time, and every figure they judge
 # (passed over at 5m, a holder leaving every 4m, the 15m budgets) is a whole number of minutes, so a
 # look lands on each of them at either pace.
 line_run(){ MWR_POLL_SECONDS=60 MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
