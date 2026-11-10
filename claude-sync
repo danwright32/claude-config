@@ -1923,6 +1923,131 @@ LOOP_INPUT
   printf '%s' "$dst"
 }
 
+# THE MIRRORED TREES IN ONE RSYNC PER STEP (claude-config#2614). Each step that compares or copies
+# the trees in MIRROR_DIRS used to start one rsync per tree. A local rsync costs about 35 ms however
+# little it moves, nearly all of it the tool starting and waiting on its own second process, so on
+# these small trees the fixed cost was the whole price: a sync started 16 rsync runs, a third of its
+# time. One call naming every tree costs the same as a call naming one (measured on rsync 3.4.1 and
+# on the openrsync macOS ships, 2026-11-10).
+#
+# Each tree is named WITHOUT its trailing slash, so it lands under its own name inside the
+# destination root, and --delete reaches only inside the trees named: nothing else in the root is
+# touched, and the root's own mode and time are left alone. An exclude anchored to one tree's top
+# ("/held.sh") becomes "/hooks/held.sh"; an anchored exclude in COMMON_EXCLUDES is written once per
+# tree, as each per tree call applied it to its own top. An unanchored exclude matches at any depth
+# either way, so the shared ones pass through as they are, and one handed for a single tree is
+# refused, because in a combined call it would reach every tree.
+#
+# A tree that is a symbolic link at either end is still run alone with its trailing slash, exactly as
+# before: without the slash rsync copies the link itself, and onto a linked destination it would
+# replace the link with a folder. So is a tree whose source is not a folder named after it, and every
+# tree when the destination root is not a folder. Their lines are given the tree's name in front, so a
+# caller reads every tree the same way through mirror_rsync_lines.
+#
+# tests/test-mirror-rsync.sh holds the equivalence: for every flag set the callers use, against every
+# rsync on the machine, one call leaves the destination exactly as one call per tree did and itemizes
+# the same lines per tree. The one line it does not reproduce is "created directory <path>", which a
+# per tree DRY RUN prints for a destination tree that does not exist yet and which no caller acts on.
+MR_TREES=(); MR_SRCS=(); MR_EX_OWNER=(); MR_EX_VAL=()
+mirror_rsync_reset(){ MR_TREES=(); MR_SRCS=(); MR_EX_OWNER=(); MR_EX_VAL=(); }
+mirror_rsync_add(){   # $1 = tree name  $2 = the folder to copy from  $3.. = this tree's own excludes, each anchored
+  local tree="$1" src="${2%/}" e; shift 2
+  for e in "$@"; do
+    case "$e" in
+      --exclude=/*) ;;
+      *) echo "claude-sync: internal error: the exclude '$e' handed for $tree is not anchored to the tree's top, so it would reach every tree in a combined rsync. Nothing was copied." >&2
+         return 1 ;;
+    esac
+  done
+  for e in "$@"; do MR_EX_OWNER+=("${#MR_TREES[@]}"); MR_EX_VAL+=("$e"); done
+  MR_TREES+=("$tree"); MR_SRCS+=("$src")
+  return 0
+}
+# The trees a receiving dry run compares: each one both the payload and this Mac hold, read from the
+# folder the apply copies from (apply_source_dir), exactly as those loops filtered them per tree.
+mirror_rsync_add_arriving(){
+  local d
+  mirror_rsync_reset
+  for d in "${MIRROR_DIRS[@]}"; do
+    if [ -d "$PAYLOAD/$d" ] && [ -d "$CLAUDE_HOME/$d" ]; then mirror_rsync_add "$d" "$(apply_source_dir "$d")"; fi
+  done
+  return 0
+}
+mirror_rsync_alone(){   # $1 = tree  $2 = source  $3 = destination root -> 0 when the tree must run on its own
+  [ -d "$3" ] && [ ! -L "${3%/}" ] || return 0
+  [ -d "$2" ] && [ ! -L "$2" ] || return 0
+  [ "${2##*/}" = "$1" ] || return 0
+  [ ! -L "${3%/}/$1" ] || return 0
+  return 1
+}
+mirror_rsync_prefix(){   # $1 = tree: put the tree's name in front of each itemized path, the root as "<tree>/"
+  local line change path
+  while IFS= read -r line; do
+    change="${line%%[[:space:]]*}"
+    path="${line#"$change"}"
+    path="${path#"${path%%[![:space:]]*}"}"
+    if [ -z "$path" ]; then printf '%s\n' "$line"; continue; fi
+    case "$path" in .|./) printf '%s%s/\n' "${line%"$path"}" "$1" ;; *) printf '%s%s/%s\n' "${line%"$path"}" "$1" "$path" ;; esac
+  done
+  return 0
+}
+mirror_rsync_go(){   # $1 = destination root  $2.. = rsync flags -> runs the trees added, printing what rsync prints
+  local dst="${1%/}" i j d src rc=0 e shared=() anchored=() combined=() ex=() own=()
+  shift
+  for e in "${COMMON_EXCLUDES[@]}"; do
+    case "$e" in --exclude=/*) anchored+=("${e#--exclude=}") ;; *) shared+=("$e") ;; esac
+  done
+  i=0
+  while [ "$i" -lt "${#MR_TREES[@]}" ]; do
+    d="${MR_TREES[$i]}"; src="${MR_SRCS[$i]}"
+    if ! mirror_rsync_alone "$d" "$src" "$dst"; then
+      combined+=("$src")
+      for e in ${anchored[@]+"${anchored[@]}"}; do ex+=(--exclude="/$d$e"); done
+      j=0
+      while [ "$j" -lt "${#MR_EX_VAL[@]}" ]; do
+        [ "${MR_EX_OWNER[$j]}" = "$i" ] && ex+=(--exclude="/$d${MR_EX_VAL[$j]#--exclude=}")
+        j=$((j + 1))
+      done
+    fi
+    i=$((i + 1))
+  done
+  if [ "${#combined[@]}" -gt 0 ]; then
+    rsync "$@" "${shared[@]}" ${ex[@]+"${ex[@]}"} "${combined[@]}" "$dst/" || return $?
+  fi
+  i=0
+  while [ "$i" -lt "${#MR_TREES[@]}" ]; do
+    d="${MR_TREES[$i]}"; src="${MR_SRCS[$i]}"
+    if mirror_rsync_alone "$d" "$src" "$dst"; then
+      own=()
+      j=0
+      while [ "$j" -lt "${#MR_EX_VAL[@]}" ]; do
+        [ "${MR_EX_OWNER[$j]}" = "$i" ] && own+=("${MR_EX_VAL[$j]}")
+        j=$((j + 1))
+      done
+      rc=0
+      rsync "$@" "${COMMON_EXCLUDES[@]}" ${own[@]+"${own[@]}"} "$src/" "$dst/$d/" | mirror_rsync_prefix "$d" || rc=$?
+      [ "$rc" -eq 0 ] || return "$rc"
+    fi
+    i=$((i + 1))
+  done
+  return 0
+}
+mirror_rsync_lines(){   # $1 = tree  $2 = what mirror_rsync_go printed -> that tree's lines, as a call for it alone prints them
+  local line change path
+  while IFS= read -r line; do
+    change="${line%%[[:space:]]*}"
+    path="${line#"$change"}"
+    path="${path#"${path%%[![:space:]]*}"}"
+    case "$path" in
+      "$1"/) printf '%s./\n' "${line%"$path"}" ;;
+      "$1"/*) printf '%s%s\n' "${line%"$path"}" "${path#"$1"/}" ;;
+    esac
+  done <<MR_LINES
+$2
+MR_LINES
+  return 0
+}
+
 # The payload's copy of one path, as it should look on THIS Mac. EVERY comparison between the two
 # sides has to go through this. A tokenized file never equals its payload copy byte for byte, so a
 # raw comparison reads it as locally ahead on every single run, holds it back on every apply, and
@@ -5107,7 +5232,32 @@ SWPROT
     note_held_back "$_sw_stale"
     echo "claude-sync: NOT publishing $(comma_list "$_sw_stale") because this Mac's copy is an earlier version the shared repo has since replaced, so sending it would undo that change there. Nothing here was altered. $(if [ "${SYNC_RECEIVES_NEXT:-0}" = "1" ]; then printf 'This sync goes on to bring the current version onto this Mac.'; else printf "Run '%s' to bring the current version onto this Mac." "$(receive_command)"; fi)" >&2
   fi
+  # The mirrored trees are judged one by one, in order, and copied up TOGETHER in one rsync once the
+  # last has been judged, which is when skills' turn comes (claude-config#2614); skills keeps an rsync
+  # of its own. Nothing a tree's judgement reads is written by another tree's copy, so judging them all
+  # first decides exactly what judging each before its own copy did.
+  local mr_mods=""
+  mirror_rsync_reset
   for d in "${MIRROR_DIRS[@]}" skills; do
+    if [ "$d" = skills ]; then
+      mirror_rsync_go "$PAYLOAD" -ac --delete
+      # git cannot record an empty directory, so when this Mac deletes its last mod the tree vanishes
+      # from the payload, and the other Mac, finding no such tree, skips it and keeps every mod: the
+      # removal never arrives (claude-config#606). A placeholder keeps "emptied" a state the payload
+      # can hold. But an empty folder is not evidence of a deletion: a fresh Mac's, or one Claude Code
+      # made, is empty too, and a placeholder for it would have the other Mac mirror its tree down to
+      # nothing (found by review). So it is written only for mods, and only when this Mac HAD mods at
+      # its last send or apply (MODS_SEEN_FILE): they were here, so their absence now is a deletion.
+      if [ -n "$mr_mods" ]; then
+        if [ -z "$(ls -A "$PAYLOAD/mods" 2>/dev/null)" ] && mods_were_here; then
+          # Kept in this Mac's own mods folder too, so the next send carries it rather than deleting it:
+          # a placeholder the history deleted and then saw again byte for byte is removed as a
+          # resurrected deletion, and the next emptying would not arrive.
+          : > "$PAYLOAD/mods/.gitkeep"; : > "$CLAUDE_HOME/mods/.gitkeep"
+        fi
+        record_mods_seen
+      fi
+    fi
     [ -d "$CLAUDE_HOME/$d" ] || continue
     # ex is what the mirror leaves out; hx is the part of it this run added (refused skills, held back
     # paths), which is all tree_holds_files is handed, since it reads the shared skill list itself
@@ -5134,21 +5284,13 @@ PROT
       continue
     fi
     mkdir -p "$PAYLOAD/$d"
-    rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
-    # git cannot record an empty directory, so when this Mac deletes its last mod the tree vanishes
-    # from the payload, and the other Mac, finding no such tree, skips it and keeps every mod: the
-    # removal never arrives (claude-config#606). A placeholder keeps "emptied" a state the payload
-    # can hold. But an empty folder is not evidence of a deletion: a fresh Mac's, or one Claude Code
-    # made, is empty too, and a placeholder for it would have the other Mac mirror its tree down to
-    # nothing (found by review). So it is written only for mods, and only when this Mac HAD mods at
-    # its last send or apply (MODS_SEEN_FILE): they were here, so their absence now is a deletion.
-    if [ "$d" = mods ] && [ -z "$(ls -A "$PAYLOAD/$d" 2>/dev/null)" ] && mods_were_here; then
-      # Kept in this Mac's own mods folder too, so the next send carries it rather than deleting it:
-      # a placeholder the history deleted and then saw again byte for byte is removed as a
-      # resurrected deletion, and the next emptying would not arrive.
-      : > "$PAYLOAD/$d/.gitkeep"; : > "$CLAUDE_HOME/$d/.gitkeep"
+    if [ "$d" = skills ]; then
+      rsync -ac --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/"
+    else
+      # ex is only held back paths here, each anchored to the tree's top, which mirror_rsync_add needs.
+      mirror_rsync_add "$d" "$CLAUDE_HOME/$d" ${ex[@]+"${ex[@]}"}
+      [ "$d" = mods ] && mr_mods=1
     fi
-    [ "$d" = mods ] && record_mods_seen
   done
   # After every tree has been judged, so this send's own decisions read the record the last run left.
   record_trees_seen
@@ -6567,8 +6709,23 @@ MOVED
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.
-  local kex p2
+  #
+  # The mirrored trees are applied TOGETHER in one rsync, once the last has had its excludes worked
+  # out, which is when skills' turn comes; skills keeps an rsync of its own (claude-config#2614).
+  # Each tree's lines are recorded under its own name and in the order they always were. A failing
+  # rsync still fails the apply, after recording what it did write.
+  local kex p2 mr_out mr_rc mr_d
+  mirror_rsync_reset
   for d in "${MIRROR_DIRS[@]}" skills; do
+    if [ "$d" = skills ]; then
+      mr_rc=0
+      mr_out="$(mirror_rsync_go "$CLAUDE_HOME" -rlpgoDic --delete)" || mr_rc=$?
+      for mr_d in ${MR_TREES[@]+"${MR_TREES[@]}"}; do
+        mirror_rsync_lines "$mr_d" "$mr_out" | record_rsync "$mr_d"
+      done
+      # As the per tree pipeline did: under errexit a failed rsync ends the run here.
+      [ "$mr_rc" -eq 0 ]
+    fi
     [ -d "$PAYLOAD/$d" ] || continue
     mkdir -p "$CLAUDE_HOME/$d"
     # per-subtree excludes: the plugin-managed skills, plus the locally-ahead
@@ -6611,7 +6768,12 @@ KEEP
     # can be OLDER than a payload copy git rewrote with the same bytes; that function returns early
     # on identical content, and an untouched old release is still judged stale once the repo moves
     # on (both held in the #638 section of tests/test-claude-sync.sh, #790).
-    rsync -rlpgoDic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
+    if [ "$d" = skills ]; then
+      rsync -rlpgoDic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
+    else
+      # kex is only anchored paths here (held back files and new mod folders), as mirror_rsync_add needs.
+      mirror_rsync_add "$d" "$(apply_source_dir "$d")" ${kex[@]+"${kex[@]}"}
+    fi
   done
   # Each mod this pull wrote into, for the sessions that loaded it, which keep running the old code
   # unless Claude Code reloads it (claude-config#2514); rule-files-changed.sh reads it per prompt.
@@ -7131,8 +7293,14 @@ local_copy_is_past_release(){   # $1 = path relative to the payload
 # The paths under the mirrored trees and the top level rule files where this Mac's copy differs from
 # the payload and is a version the repo has since replaced. One per line, relative to the payload.
 past_release_paths(){
-  local d line change path tf
+  local d line change path tf mirrored
   have_git || return 0
+  # The mirrored trees in one dry run (claude-config#2614); skills keeps its own, below.
+  mirror_rsync_reset
+  for d in "${MIRROR_DIRS[@]}"; do
+    if [ -d "$CLAUDE_HOME/$d" ]; then mirror_rsync_add "$d" "$CLAUDE_HOME/$d"; fi
+  done
+  mirrored="$(mirror_rsync_go "$PAYLOAD" -ainc 2>/dev/null || true)"
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
@@ -7151,7 +7319,11 @@ UNLOADABLE
     # Against the payload as STORED: a tokenized file then differs by construction, and the
     # predicate answers no for it because its stored form is exactly what the repo holds now.
     local loop_input
-    loop_input="$(rsync -ainc "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null || true)"
+    if [ "$d" = skills ]; then
+      loop_input="$(rsync -ainc "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$CLAUDE_HOME/$d/" "$PAYLOAD/$d/" 2>/dev/null || true)"
+    else
+      loop_input="$(mirror_rsync_lines "$d" "$mirrored")"
+    fi
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
@@ -7197,12 +7369,21 @@ deleted_leftovers_here(){
   ever_deleted="
 $ever_deleted
 "
+  # The mirrored trees in one dry run (claude-config#2614); skills keeps its own, below.
+  local mirrored
+  mirror_rsync_add_arriving
+  mirrored="$(mirror_rsync_go "$CLAUDE_HOME" -ain --delete 2>/dev/null || true)" || true
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
     [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
-    local loop_input; loop_input="$(rsync -ain --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
+    local loop_input
+    if [ "$d" = skills ]; then
+      loop_input="$(rsync -ain --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
+    else
+      loop_input="$(mirror_rsync_lines "$d" "$mirrored")"
+    fi
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
@@ -7258,12 +7439,21 @@ $(unapplied_paths)
 $(printf '%s\n' "$1" | cut -f1)
 "
   fi
+  # The mirrored trees in one dry run (claude-config#2614); skills keeps its own, below.
+  local mirrored
+  mirror_rsync_add_arriving
+  mirrored="$(mirror_rsync_go "$CLAUDE_HOME" -ainc --delete 2>/dev/null || true)" || true
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
     [ -d "$CLAUDE_HOME/$d" ] || continue
     local ex=()
     [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
-    local loop_input; loop_input="$(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
+    local loop_input
+    if [ "$d" = skills ]; then
+      loop_input="$(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)" || true
+    else
+      loop_input="$(mirror_rsync_lines "$d" "$mirrored")"
+    fi
     while IFS= read -r line; do
       change="${line%%[[:space:]]*}"
       path="${line#"$change"}"
