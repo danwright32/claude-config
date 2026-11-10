@@ -5629,9 +5629,9 @@ test('a question, the plan approval and what Dan bans are never approved, and a 
   expect(q.decision?.behavior).toBe('deny')
   expect(q.decision?.message).toMatch(/nothing is asked overnight/)
   expect((await permission($ as never, 'ExitPlanMode', {})).decision?.message).toMatch(/no plan is approved overnight/)
-  const banned = await permission($ as never, 'Bash', { command: 'gh issue create --title x --body y' })
+  const banned = await permission($ as never, 'Bash', { command: 'gh issue close 5' })
   expect(banned.decision?.behavior).toBe('deny')
-  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue create\./)
+  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue close\./)
   // Never an allow over a refusal beneath (Dan's own checks stay on).
   expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'deny', message: 'a rule said no' })
 })
