@@ -7134,7 +7134,8 @@ SDK, a Slack env setting, or a send helper named for Slack, called or imported, 
 template such a file sends (below). A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a
-`_test` or `test_` one, a `test-*.sh` suite, or anything under a test or mock folder) and a doc send
+`_test` or `test_` one, a `test-*.sh` suite or a `test-*.ts` node test script in any JavaScript or
+TypeScript form (#2509), or anything under a test or mock folder) and a doc send
 nothing, so neither is held nor read as a sender; a string handed to a query builder call
 (`.select(`, `.eq(`, `.order(` and the like, as a direct argument, never inside a call nested in
 one), a database select list, a SQL statement or

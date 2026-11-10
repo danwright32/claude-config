@@ -119,13 +119,15 @@ export const MARKER_PREFILTER = [
 
 /**
  * Whether a path, relative to its repository's root, is a test: a .test. or .spec. file, a _test or
- * _spec one, a python test_ module, a test- shell suite, or anything in a test or mock folder. A test
- * never posts to Slack, so its titles and fixtures are never message text (#2290).
+ * _spec one, a python test_ module, a test- shell suite or node test script (test-*.ts and its
+ * JavaScript and TSX forms, #2509, as a work repository runs its tests), or anything in a test or
+ * mock folder. A test never posts to Slack, so its titles and fixtures are never message text
+ * (#2290), and it is never a sender.
  */
 export const testFile = (rel: string): boolean => {
   const segs = rel.split('/')
   const name = segs[segs.length - 1] ?? ''
-  if (/\.(test|spec)\.[^/]+$/.test(name) || /_(test|spec)\.[^/.]+$/.test(name) || /^test_[^/]*\.py$/.test(name) || /^test-[^/]*\.(sh|bash|zsh)$/.test(name)) return true
+  if (/\.(test|spec)\.[^/]+$/.test(name) || /_(test|spec)\.[^/.]+$/.test(name) || /^test_[^/]*\.py$/.test(name) || /^test-[^/]*\.(sh|bash|zsh|[cm]?[jt]sx?)$/.test(name)) return true
   return segs.slice(0, -1).some(s => TEST_DIRS.has(s))
 }
 const TEST_DIRS = new Set(['__tests__', '__mocks__', '__fixtures__', 'test', 'tests', 'spec', 'specs', 'e2e'])
