@@ -1249,9 +1249,13 @@ do_forget_clone(){   # $1 = the directory to forget
 # (L247), and by the watcher and the two installers before they start. Receiving is refused too: a
 # pull mirrors with --delete into the ~/.claude being cleared and publishes a marker that makes the
 # Mac read as alive to the other one.
+# One predicate and one way back, read by the refusal and by status alike (claude-config#2633), so
+# the two can never disagree about whether this Mac is retired or how it returns (L261).
+this_mac_is_retired(){ [ -n "$SYNC_RETIRED_FILE" ] && [ -f "$SYNC_RETIRED_FILE" ]; }
+retired_way_back(){ printf 'rm %s, then claude-sync install-autosync' "$SYNC_RETIRED_FILE"; }
 refuse_when_retired(){
-  [ -n "$SYNC_RETIRED_FILE" ] && [ -f "$SYNC_RETIRED_FILE" ] || return 0
-  die "this Mac was retired from the sync$(retired_since_words), so it neither sends to nor receives from the shared repo, and nothing was changed. To bring it back: rm $SYNC_RETIRED_FILE, then claude-sync install-autosync"
+  this_mac_is_retired || return 0
+  die "this Mac was retired from the sync$(retired_since_words), so it neither sends to nor receives from the shared repo, and nothing was changed. To bring it back: $(retired_way_back)"
 }
 retired_since_words(){   # " on <date>" from the record, or nothing when it holds no time
   local stamp when
@@ -5717,14 +5721,28 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # outputStyle=Explanatory"). /config saves it into one project's settings.local.json, so it reached
 # one project on one Mac. Only a built in style is accepted: a custom style is a file under
 # output-styles, which the payload does not carry, so its name would land naming nothing.
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle"
+#
+# The default subagent model is shared (#2645, Dan's choice 2026-11-10). An agent that names no model
+# inherits the session's, so changing the session model moved every such agent with it. Claude Code
+# reads the default from the CLAUDE_CODE_SUBAGENT_MODEL variable in settings.json's env block, and a
+# model named on the call or in an agent's definition still wins (measured on 2.1.322). The env block
+# is otherwise each Mac's own and may hold a credential, so only the variables on SHARED_ENV_ALLOWED
+# are written, one leaf each, and a refusal names a variable and never prints its value. The value is
+# an alias on SHARED_MODEL_ALIASES or a full model name: unlike modelSettings, this variable takes
+# either. Taking it out of the file leaves each Mac's value where it is, as with a model the file
+# stops naming.
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
+SHARED_ENV_ALLOWED="CLAUDE_CODE_SUBAGENT_MODEL"
+SHARED_MODEL_ALIASES="opus sonnet haiku fable"
 # The one definition of how the shared settings land in settings.json, used by the write and by the
 # question of whether it is applied, so the two cannot disagree: applied is "applying changes nothing".
 SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e (.;
   if $e.key == "modelSettings" then
     reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
+  elif $e.key == "env" then
+    reduce ($e.value | to_entries[]) as $v (.; .env[$v.key] = $v.value)
   else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
@@ -5773,8 +5791,16 @@ shared_settings_wanted(){
             (if has("effortLevel") and ((.effortLevel | level) | not) then "modelSettings.\($m).effortLevel is \(.effortLevel | tojson), not one of low, medium, high, xhigh (max lasts one session and is never saved)" else empty end)
           end)
         end)
+      else empty end),
+      (if has("env") then
+        (.env | if type != "object" then "env is not an object of variables" else
+          ((keys - ($envok | split(" ")))[] | "env.\(.), whose value is left out of this message, is not a variable the sync shares (only \($envok | split(" ") | join(", ")))"),
+          (to_entries[] | select(.key as $k | $envok | split(" ") | index($k)) |
+            (.value as $v | if ($v | type) == "string" and (($aliases | split(" ") | index($v)) or ($v | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$"))) then empty
+             else "env.\(.key) is \($v | tojson), not a model alias (\($aliases | split(" ") | join(", "))) or a full model name like claude-opus-5-5" end))
+        end)
       else empty end)
-    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
+    ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
   if [ -n "$bad" ]; then
     echo "claude-sync: refused $SHARED_SETTINGS_FILE because $bad, so nothing from it was written into settings.json. Fix the value in the repo." >&2
     printf '{}'; return 0
@@ -13243,7 +13269,21 @@ report_automatic_jobs(){
     return 0
   fi
   local tp="$agentdir/com.claudesync.timer.plist" wp="$agentdir/com.claudesync.watch.plist"
-  local prog interval
+  local prog interval left=""
+
+  # Retired (claude-config#2633): the agents are absent on purpose, and install-autosync refuses,
+  # so it is never offered. One left on disk is named with the remedy that does run here, retire
+  # again, which removes whatever agents it finds and keeps the first record.
+  if this_mac_is_retired; then
+    [ -f "$tp" ] && left="com.claudesync.timer"
+    [ -f "$wp" ] && left="${left:+$left, }com.claudesync.watch"
+    if [ -z "$left" ]; then
+      echo "automatic sync: off, because this Mac is retired (said at the top): neither launch agent is installed, which is how retire leaves it."
+    else
+      echo "automatic sync: off, because this Mac is retired (said at the top), but $left is still installed in $agentdir, and every run it starts refuses. Remove it with: claude-sync retire --yes"
+    fi
+    return 0
+  fi
 
   if [ ! -f "$tp" ] && [ ! -f "$wp" ]; then
     echo "automatic sync: neither launch agent is installed on this Mac, so nothing here sends or receives on its own and every sync is one somebody typed. Install both with: claude-sync install-autosync"
@@ -13482,12 +13522,21 @@ record_payload_path(){   # $1 = tag, $2 = the record's text
 }
 
 do_status(){
-  local line tag text rel
+  local line tag text rel retired=0
   local DRIFT_EXPANSIONS=0 SUPERSEDED_FILES=0
+  # A RETIRED MAC IS SAID FIRST (claude-config#2633). Before this, status read the agents retire
+  # removed as merely not installed and offered install-autosync, which refuses, so the Mac looked
+  # switched off for no stated reason with a remedy that could not run.
+  if this_mac_is_retired; then
+    retired=1
+    echo "--- this Mac is RETIRED from the sync ---"
+    echo "  This Mac was retired from the sync$(retired_since_words), as recorded in $SYNC_RETIRED_FILE, so it neither sends to nor receives from the shared repo, and every send, receive, watch and install-autosync here refuses."
+    echo "  To bring it back: $(retired_way_back)"
+  fi
   # Status compares skills/ too, and takes no lock, so it asks for the list itself (#415).
   require_unmanaged_skill_list
   if have_git; then git -C "$SYNC_REPO" fetch -q 2>/dev/null || true; git -C "$SYNC_REPO" status -sb; fi
-  report_superseded_snapshot
+  [ "$retired" = 1 ] || report_superseded_snapshot
   report_dropped_snapshots
   report_sync_times
   report_unapplied_payload
@@ -13551,12 +13600,19 @@ payload/$rel
   report_duplicate_plugin_skills || true
   report_duplicate_skill_jobs || true
   report_conflict_copies
-  report_blocked_clone
-  report_ci_unreadable
-  report_sync_stuck
-  report_my_push
-  report_watcher_hold
-  report_mods_behind_main
+  # Each of these is about this Mac sending or receiving, and every remedy they name is a send, a
+  # receive or a release of the watcher, all of which refuse on a retired Mac. So on one they are
+  # not run, and the line below NAMES them rather than dropping them silently (L98).
+  if [ "$retired" = 1 ]; then
+    echo "Not checked while this Mac is retired, since each is about sending or receiving and the remedy for any of them would refuse: superseded snapshots, a clone stopped mid rebase, the CI verdict, a stuck send or receive, this Mac's last send, watcher holds, and mods behind the shared repo."
+  else
+    report_blocked_clone
+    report_ci_unreadable
+    report_sync_stuck
+    report_my_push
+    report_watcher_hold
+    report_mods_behind_main
+  fi
   report_automatic_jobs
   report_hook_suite_result
   report_outage_tally
@@ -15126,7 +15182,7 @@ RETIRE_LABELS
     echo "Still running: a claude-sync watcher as process $pid, which launchd did not start. Its next send refuses, since this Mac is retired. End it with: kill $pid"
   fi
   echo "Left alone: $left."
-  echo "To bring this Mac back into the sync: rm $SYNC_RETIRED_FILE, then claude-sync install-autosync"
+  echo "To bring this Mac back into the sync: $(retired_way_back)"
   return "$rc"
 }
 
