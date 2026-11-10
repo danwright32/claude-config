@@ -48,7 +48,9 @@
 #                             unset, the real clock
 #   HOOK_TESTS_JOB_STARTED    the epoch second the CI job started, recorded by the workflow's first step
 #   HOOK_TESTS_JOBS           how many suites run at once
-#   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: cores, max 8)
+#   HOOK_TESTS_BUDGET         processes this whole run may have in flight (default: the cores up
+#                             to 8, then two thirds of them, #2548)
+#   HOOK_TESTS_CORES          the core count that default is derived from (default: this machine's)
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
 #   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
@@ -273,10 +275,32 @@ run_now() { if [ -n "${HOOK_TESTS_NOW:-}" ]; then printf '%s\n' "$HOOK_TESTS_NOW
 # Mac. So the budget below is granted to the suites running at once, each is TOLD its share in
 # HOOK_TESTS_SLOTS, and the total is printed rather than left to be worked out. The shares are not
 # equal: see the lanes further down (#139).
-_ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | awk 'NR <= 1' )"
-case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
-[ "$_ncpu" -gt 0 ] || _ncpu=4
-_default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
+#
+# THE DEFAULT, when HOOK_TESTS_BUDGET is unset (claude-config#2548): every core up to 8, then two
+# thirds of the cores once that is more. It was the cores capped at 8, a figure chosen with #130 on
+# 2026-08-21 and never measured, which gave an 18 core Mac the 12 core Mac's 8. Two thirds is the
+# share the 12 core Mac has run at since then, kept rather than replaced: every machine of up to 12
+# cores gets exactly what it got before (the CI runner's 2, the 12 core Mac's 8), 16 cores get 10,
+# 18 get 12 and 24 get 16, so a third of a bigger Mac stays free for the sessions working on it.
+# NOT MEASURED: no full run has been timed at 12 or 16 on the 18 core Mac; on 2026-11-09 the only
+# Mac reachable was the 12 core one, at a load average of 51 to 81 after a restart (media analysis,
+# Backblaze, Spotlight), which is no reading (L356). The premise to re-measure (L316, #2589): full
+# runs on the 18 core Mac at HOOK_TESTS_BUDGET 8, 12 and 16, several each (L395), on a quiet machine.
+# Since #2012 only one full run holds a Mac at a time, so this is the whole of what full runs take.
+# HOOK_TESTS_CORES sets the core count for one run (test-run-all-tests-budget.sh), and a value that
+# is not a positive whole number is refused rather than guessed at, like the budget itself (L50).
+if [ -n "${HOOK_TESTS_CORES+set}" ]; then
+  if _wn_got="$(whole_above_zero "$HOOK_TESTS_CORES")"; then _ncpu="$_wn_got"; else
+    echo "run-all-tests: HOOK_TESTS_CORES='$HOOK_TESTS_CORES' is not a positive whole number of cores. Refusing rather than guessing, because the default budget is derived from it." >&2
+    exit 1
+  fi
+else
+  _ncpu="$( (sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4) | awk 'NR <= 1' )"
+  case "$_ncpu" in ''|*[!0-9]*) _ncpu=4 ;; esac
+  [ "$_ncpu" -gt 0 ] || _ncpu=4
+fi
+_default_budget=$(( _ncpu * 2 / 3 ))
+[ "$_default_budget" -ge 8 ] || _default_budget=$(( _ncpu > 8 ? 8 : _ncpu ))
 [ "$_default_budget" -gt 0 ] || _default_budget=1
 BUDGET="${HOOK_TESTS_BUDGET-$_default_budget}"
 if _wn_got="$(whole_above_zero "$BUDGET")"; then BUDGET="$_wn_got"; else

@@ -9,6 +9,7 @@ import {
   SKIP,
   draftHoldOf,
   draftLetGoOf,
+  draftOwedFrom,
   draftSaved,
   isSlackTool,
   owedThreads,
@@ -29,6 +30,13 @@ const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
 const stepRef = { plugin: 'is-it-live', key: 'step' } as const
 const landedRef = { plugin: 'is-it-live', key: 'landed' } as const
 const draftRefusedRef = { plugin: 'is-it-live', key: 'draftRefused' } as const
+const promptsRef = { plugin: 'is-it-live', key: 'prompts' } as const
+
+// #2578: whether a thread recorded now comes once the session is under way, given how many prompts
+// Dan had typed before it: any merge landed, or more than `before` of them.
+async function underWay($: EngineInterface, typed: number, before: number): Promise<boolean> {
+  return typed > before || (await $.state.get(landedRef)).value !== undefined
+}
 
 const msg = (err: unknown) => errorText(err, MOD)
 
@@ -54,11 +62,13 @@ async function changeThreads($: EngineInterface, change: (ts: IsItLiveThread[]) 
   throw new Error('the thread list kept changing under it')
 }
 
-/** A merge of this session has landed: every thread's draft is owed from here. Two merges landing at
+/** A merge of this session has landed: the draft of every thread the session started from is owed
+ * from here, and of each thread pasted mid session that `related` names (#2578). Two merges landing at
  * once can write their steps in either order, so the landed step only ever rises, or a draft settled
  * between them would count for the later merge too (lessons review of 25bcf07). */
-export async function markLanded($: EngineInterface): Promise<void> {
+export async function markLanded($: EngineInterface, related: Relation[] = []): Promise<void> {
   const n = await nextStep($)
+  await relate($, related, n)
   for (let i = 0; i < 10; i++) {
     const held = await $.state.get(landedRef)
     if ((held.value ?? 0) >= n) return
@@ -67,9 +77,35 @@ export async function markLanded($: EngineInterface): Promise<void> {
   throw new Error('the landed step kept changing under it')
 }
 
+/** #2578: a merge (`pr`, named as the hold names it) is for the thread pasted mid session that `key` names. */
+export type Relation = { key: string; pr: string }
+
+// A merge for a thread pasted mid session owes it a reply from step n; a later one only rises.
+async function relate($: EngineInterface, related: Relation[], n: number): Promise<void> {
+  if (!related.length) return
+  await changeThreads($, ts =>
+    ts.map(x => {
+      const prs = related.filter(r => x.mid && r.key === threadKey(x)).map(r => r.pr)
+      return prs.length ? { ...x, related: Math.max(x.related ?? 0, n), prs: [...new Set([...(x.prs ?? []), ...prs])] } : x
+    }),
+  )
+}
+
+/** #2578: the threads pasted mid session, which only a merge for them owes a reply. */
+export async function pastedThreads($: EngineInterface): Promise<IsItLiveThread[]> {
+  return ((await $.state.get(threadsRef)).value ?? []).filter(t => t.mid)
+}
+
+/** #2578: a card naming a thread pasted mid session as where its Slack draft goes makes its PR a merge for it. */
+export async function relateCard($: EngineInterface, t: { channel: string; ts: string }, pr: string): Promise<void> {
+  const key = threadKey(t)
+  if (!(await pastedThreads($)).some(x => threadKey(x) === key)) return
+  await relate($, [{ key, pr }], await nextStep($))
+}
+
 async function settle($: EngineInterface, t: { channel: string; ts: string }): Promise<void> {
   const step = await nextStep($)
-  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? { ...x, settled: step } : x)))
+  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
 }
 
 async function recorded($: EngineInterface, t: { channel: string; ts: string }): Promise<IsItLiveThread | undefined> {
@@ -107,7 +143,7 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
   const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value)
   if (!due.length || (await inFlight($, owed))) return undefined
   const landed = (await $.state.get(landedRef)).value
-  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${landed}`
+  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${draftOwedFrom(t, landed)}`
   const held = (await $.state.get(draftRefusedRef)).value
   const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
   const fresh = due.filter(t => !before.keys.includes(keyOf(t)))
@@ -128,15 +164,22 @@ type AskResult = { answers?: Record<string, unknown>; questions?: { question?: u
 
 export function registerDrafts(on: On): void {
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
-  // what he types, never a notification or another plugin's prompt).
+  // what he types, never a notification or another plugin's prompt), when in his first prompt and
+  // before any merge; one linked later is recorded as pasted mid session (#2578). His prompts are
+  // counted as far as the second, so isDans is asked of no later prompt without a link.
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
     if (r.drop !== undefined) return r
     try {
       const found = threadsIn(String(e.text ?? ''))
-      if (!found.length || !(await $.modkit.isDans({ origin: e.origin }))) return r
+      const typed = (await $.state.get(promptsRef)).value ?? 0
+      if (!found.length && typed >= 2) return r
+      if (!(await $.modkit.isDans({ origin: e.origin }))) return r
+      if (typed < 2) await $.state.set(promptsRef, typed + 1)
+      if (!found.length) return r
+      const mid = (await underWay($, typed, 0)) ? { mid: true as const } : {}
       const at = await $.clock.now()
-      await changeThreads($, ts => [...ts, ...found.filter(t => !ts.some(x => threadKey(x) === threadKey(t))).map(t => ({ ...t, from: 'link' as const, at }))])
+      await changeThreads($, ts => [...ts, ...found.filter(t => !ts.some(x => threadKey(x) === threadKey(t))).map(t => ({ ...t, from: 'link' as const, at, ...mid }))])
     } catch (err) {
       $.ui.log(`is-it-live: could not record the Slack thread Dan linked to: ${msg(err)}`, { to: 'debug' })
     }
@@ -153,12 +196,14 @@ export function registerDrafts(on: On): void {
     try {
       if (reads) {
         // The thread the main session reads when it has none is its starting point; a later one,
-        // or one a subagent reads, is research.
+        // or one a subagent reads, is research. Read once the session is under way (after Dan's
+        // second prompt, or a merge), it is recorded as pasted mid session (#2578).
         if (e.agentId !== undefined || done.deny !== undefined || done.isError === true) return done
         if (typeof input.channel_id !== 'string' || typeof input.message_ts !== 'string') return done
         const t = { channel: input.channel_id, ts: input.message_ts }
+        const mid = (await underWay($, (await $.state.get(promptsRef)).value ?? 0, 1)) ? { mid: true as const } : {}
         const at = await $.clock.now()
-        await changeThreads($, ts => (ts.length ? ts : [{ ...t, from: 'read', at }]))
+        await changeThreads($, ts => (ts.length ? ts : [{ ...t, from: 'read', at, ...mid }]))
         return done
       }
       // A draft saved to a recorded thread, by anyone in the session, settles it.
