@@ -215,10 +215,22 @@ CRASHPY="$WORK/crashpy"; mkdir -p "$CRASHPY"
 REALPY="$(command -v python3)"
 printf '#!/bin/bash\ncase "$*" in *temp-worktree.py*) echo "Traceback: boom" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$REALPY" > "$CRASHPY/python3"
 chmod +x "$CRASHPY/python3"
-errf="$(mktemp "$WORK/err.XXXXXXXX")"
-OUT="$(bash_payload 'git worktree add /tmp/wt-2528' | PATH="$CRASHPY:$WORK/bin:$PATH" bash "$GATE" 2>"$errf")"; RC=$?
-ERR="$(cat "$errf")"; rm -f "$errf"
-if [ "$RC" -eq 2 ]; then check "a reader that crashes still refuses a worktree add" ok; else check "a reader that crashes still refuses a worktree add" "exit $RC: ${ERR:0:300}"; fi
+run_crashpy() { # run_crashpy <command>
+  local errf; errf="$(mktemp "$WORK/err.XXXXXXXX")"
+  OUT="$(bash_payload "$1" | PATH="$CRASHPY:$WORK/bin:$PATH" bash "$GATE" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+# Only a command that adds or moves a worktree can place one under a temp folder, so a crash refuses
+# those and lets the rest through (claude-config#2560).
+for c in 'git worktree add /tmp/wt-2528' 'git worktree move /opt/work/wt /tmp/wt-2528' 'cd /opt/work/apps/proj && git -C . worktree add ../wt-2528'; do
+  run_crashpy "$c"
+  if [ "$RC" -eq 2 ]; then check "a reader that crashes still refuses: $c" ok; else check "a reader that crashes still refuses: $c" "exit $RC: ${ERR:0:300}"; fi
+done
+says "a crash refusal names the reader's exit" "exit 1"
+for c in 'git worktree list' 'git worktree list --porcelain' 'git worktree remove /tmp/wt-2528' 'git worktree prune' 'git -C /opt/work/apps/proj worktree list' 'cd /opt/work/apps/proj && git worktree prune -v'; do
+  run_crashpy "$c"
+  if [ "$RC" -eq 0 ]; then check "a reader that crashes lets through: $c" ok; else check "a reader that crashes lets through: $c" "exit $RC: ${ERR:0:300}"; fi
+done
 
 # A library the gate cannot load is not a command with nothing to check (claude-config#1900).
 T="$WORK/nolib"; mkdir -p "$T/lib"

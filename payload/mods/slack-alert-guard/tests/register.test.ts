@@ -483,6 +483,25 @@ const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.
 const ROUTE = '/w/app/src/app/api/cron/route.ts'
 const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
 
+test('a node test script importing a copy builder and its Slack send helper is not a sender, so the copy passes; a route that does the same is (#2509)', withKit, async ($, on) => {
+  const NODE_TEST = '/w/app/scripts/test-outage-copy.ts'
+  const w = world($, on, {
+    files: {
+      [COPY]: COPY_TEXT,
+      [POST]: POST_TEXT,
+      [NODE_TEST]: "import { lateBooking } from '../src/lib/notify/outage-copy'\nimport { postAlert } from '../src/lib/notify/post'\nassert.equal(lateBooking('1'), 'Booking 1 is late')\nvoid postAlert\n",
+    },
+  })
+  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same imports in a route make it the sender, so the guard is still deciding.
+  w.files[ROUTE] = ROUTE_TEXT
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(`which ${ROUTE} sends to Slack`)
+  expect(why).not.toContain(NODE_TEST)
+})
+
 test('a copy builder whose text a route posts through a Slack send helper is held, naming the route as its sender', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
   const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
@@ -594,7 +613,7 @@ test('a write to a file with a common short name (et.ts, memory.ts) is judged by
   expect(w.ran.length).toBe(2)
   // A file that does send it to Slack is still found, in the same crowd, and the edit is held naming it.
   const DIGEST = '/w/app/src/jobs/digest.ts'
-  w.files[DIGEST] = "import { nowEt } from '../lib/et'\nexport const send = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: nowEt() })\n"
+  w.files[DIGEST] = "import { nowEt, label } from '../lib/et'\nexport const send = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: `${nowEt()} ${label}` })\n"
   const why = refusalOf(await call($, relabel(ET)))
   expect(why).toContain(`which ${DIGEST} sends to Slack`)
   expect(why).toContain('Eastern time, as Dan reads it')
@@ -810,7 +829,7 @@ test('a nested template literal in a Slack sender is held when its inner wording
   const w = world($, on, {
     files: {
       [BACKUP]:
-        'export const note = (db: string, late: boolean, hours: number) => `Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}`\nexport const post = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: t })\n',
+        'export const note = (db: string, late: boolean, hours: number) => `Backup of ${db} ${late ? `is ${hours} hours late` : "finished"}`\nexport const post = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: t })\nexport const run = () => post(note("orders", true, 3))\n',
     },
   })
   const edit = { tool: 'Edit', file_path: BACKUP, old_string: 'hours late', new_string: 'hours behind' }
@@ -1427,4 +1446,144 @@ test('the calls waiting on Dan are dropped at session end', withKit, async ($, o
   const why = refusalOf(await call($, REWORD))
   await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
   expect(refusalOf(await ask($, w, why, APPROVE))).toContain('No Slack alert edit is waiting')
+})
+
+// Only text a Slack send carries is held (#2570). Dan, 2026-11-09: "these aren't alerts that are going
+// to fire into Slack, right? If not, I don't need you to ask me for approval." A route that posts to
+// Slack also answers its caller, logs, and throws; none of that is Slack wording.
+const BOOK = '/w/app/src/app/api/book/route.ts'
+const BOOK_TEXT = [
+  'export async function POST(req: Request) {',
+  '  const body = await req.json()',
+  "  if (body.taken) return Response.json({ error: 'That slot is already booked' }, { status: 409 })",
+  "  await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: `Booking ${body.id} was made` }) })",
+  '  return Response.json({ ok: true })',
+  '}',
+  '',
+].join('\n')
+const bookEdit = (old_string: string, new_string: string) => ({ tool: 'Edit', file_path: BOOK, old_string, new_string })
+
+test('in a route that posts to Slack, a new 409 answer, a log line and a thrown error pass; a changed or new Slack message is still held (#2570)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [BOOK]: BOOK_TEXT } })
+  const answer = bookEdit('  if (body.taken)', "  if (body.past) return Response.json({ error: 'That slot is in the past' }, { status: 409 })\n  if (body.taken)")
+  expect(refusalOf(await call($, answer))).toBe('')
+  expect(refusalOf(await call($, bookEdit('  const body = await req.json()', "  console.log('Booking request received')\n  const body = await req.json()")))).toBe('')
+  expect(refusalOf(await call($, bookEdit('  return Response.json({ ok: true })', "  if (!body.id) throw new Error('A booking came back with no id')\n  return Response.json({ ok: true })")))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // The Slack message, changed and new, is held in the same file.
+  expect(refusalOf(await call($, bookEdit('was made', 'was made by a client')))).toContain('Booking ${body.id} was made by a client')
+  const fresh = bookEdit(
+    '  return Response.json({ ok: true })',
+    "  await fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: 'The booking queue is backing up' }) })\n  return Response.json({ ok: true })",
+  )
+  expect(refusalOf(await call($, fresh))).toContain('The booking queue is backing up')
+  expect(w.ran.length).toBe(3)
+})
+
+test('a sentence moved out of a Slack posting file unchanged passes, as one moved within it does; the Slack message moved within it is no change either (#2570)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [BOOK]: BOOK_TEXT, '/w/app/src/lib/errors.ts': "export const TAKEN = 'That slot is already booked'\n" } })
+  expect(refusalOf(await call($, bookEdit("{ error: 'That slot is already booked' }", '{ error: TAKEN }')))).toBe('')
+  const within = BOOK_TEXT.replace('  const body = await req.json()', '  const body = await req.json()\n  const text = `Booking ${body.id} was made`').replace('{ text: `Booking ${body.id} was made` }', '{ text }')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: BOOK, content: within }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+const BOOKING_COPY = '/w/app/src/lib/notify/booking-copy.ts'
+const BOOKING_COPY_TEXT = "export const lateBooking = (id: string) => `Booking ${id} is late`\nexport const NOT_FOUND = 'No booking has that id'\n"
+const LATE = '/w/app/src/lib/notify/late.ts'
+const LATE_TEXT = "import { lateBooking, NOT_FOUND } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\nexport const miss = () => new Response(NOT_FOUND, { status: 404 })\n"
+
+test('in a module a Slack sender imports, the text the sender sends is held naming it, and text it uses some other way passes (#2570)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'is late', new_string: 'is running late' }))
+  expect(held).toContain('Booking ${id} is running late')
+  expect(held).toContain(LATE)
+})
+
+test('a file that posts to Slack in a way the guard cannot trace is held as before', withKit, async ($, on) => {
+  const CONFIG = '/w/app/src/lib/digest-config.ts'
+  world($, on, { files: { [CONFIG]: "const CHANNEL = process.env.SLACK_ALERT_CHANNEL\nexport const config = { channel: CHANNEL, intro: 'Morning digest' }\n" } })
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: CONFIG, old_string: 'Morning digest', new_string: 'Morning digest for the team' }))).toContain('Morning digest for the team')
+})
+
+// A docstring documents code and is sent nowhere (#2574): on 2026-11-09 one added to a Slack gate's
+// helper was held as Slack message text.
+const DIGEST = '/w/app/jobs/digest.py'
+const DIGEST_TEXT = [
+  'import os',
+  'from slack_sdk import WebClient',
+  'client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])',
+  '',
+  'def post_digest(rows):',
+  '    client.chat_postMessage(channel="C1", text=f"{len(rows)} bookings are late")',
+  '',
+].join('\n')
+
+test('a python docstring in a file that posts to Slack passes; the message the file posts is still held (#2574)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [DIGEST]: DIGEST_TEXT } })
+  const helper = '\ndef count_late(rows):\n    """Count the bookings that are past their start time."""\n    return len([r for r in rows if r.late])\n'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'bookings are late")\n', new_string: `bookings are late")\n${helper}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'bookings are late', new_string: 'bookings are running late' }))).toContain('{len(rows)} bookings are running late')
+})
+
+test('a module, class or function docstring passes even where the guard cannot trace the send, and a string beside them is still held (#2574)', withKit, async ($, on) => {
+  const GATE = '/w/app/hooks/gate.py'
+  const w = world($, on, { files: { [GATE]: 'SLACK_ALERT_CHANNEL = "C1"\nNOTE = "Gate ready"\n' } })
+  const docs = (body: string) => ({ tool: 'Edit', file_path: GATE, old_string: 'NOTE = "Gate ready"\n', new_string: `NOTE = "Gate ready"\n${body}` })
+  expect(refusalOf(await call($, { tool: 'Write', file_path: GATE, content: '"""Refuse every send that is not a draft."""\nSLACK_ALERT_CHANNEL = "C1"\nNOTE = "Gate ready"\n' }))).toBe('')
+  w.files[GATE] = 'SLACK_ALERT_CHANNEL = "C1"\nNOTE = "Gate ready"\n'
+  expect(refusalOf(await call($, docs('class Rule:\n    """One pattern the gate refuses, compiled once."""\n    pass\n')))).toBe('')
+  expect(refusalOf(await call($, docs('def compiled(\n    patterns,\n):\n    """Compile the patterns that name a posting endpoint."""\n    return patterns\n')))).toBe('')
+  expect(w.ran.length).toBe(3)
+  expect(refusalOf(await call($, docs('LATE = "The gate refused a send"\n')))).toContain('The gate refused a send')
+})
+
+test('when the nearest sender sends none of the edited text, the search goes on and a sender further along that does is named (#2570)', withKit, async ($, on) => {
+  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
+  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
+  const w = world($, on, {
+    files: {
+      [BOOKING_COPY]: BOOKING_COPY_TEXT,
+      [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
+      [BARREL_COPY]: "export * from './booking-copy'\n",
+      [NIGHTLY]: "import { NOT_FOUND } from '../lib/notify'\nexport const nightly = () => sendSlackAlert(NOT_FOUND)\n",
+    },
+  })
+  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))
+  expect(held).toContain('No booking has that id yet')
+  expect(held).toContain(NIGHTLY)
+  expect(w.ran.length).toBe(0)
+})
+
+test('a sender that takes the module whole, where its names cannot be followed, holds the edit as before, naming it (#2570)', withKit, async ($, on) => {
+  const BY_KEY = '/w/app/src/lib/notify/by-key.ts'
+  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [BY_KEY]: "import * as copy from './booking-copy'\nexport const run = (key: string) => sendSlackAlert(copy[key])\n" } })
+  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))
+  expect(held).toContain('No booking has that id yet')
+  expect(held).toContain(BY_KEY)
+  expect(w.ran.length).toBe(0)
+})
+
+test('a search that runs late after finding a sender that sends none of the change holds the rest, naming that sender, never passing it (#2570)', withKit, async ($, on) => {
+  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
+  const files = {
+    [BOOKING_COPY]: BOOKING_COPY_TEXT,
+    [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
+    [BARREL_COPY]: "export * from './booking-copy'\n",
+  }
+  const edit = { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }
+  // With time to follow the barrel and find nothing further sending it, the edit passes.
+  const w = world($, on, { files })
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Each read taking most of the deadline, the search stops at the barrel's importers with only the
+  // nearest sender in hand, so the change is held as before rather than let through unsearched.
+  w.ctl.readMs = 1600
+  const held = refusalOf(await call($, edit))
+  expect(held).toContain('No booking has that id yet')
+  expect(held).toContain(`which ${LATE} sends to Slack`)
+  expect(w.ran.length).toBe(1)
 })

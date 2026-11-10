@@ -59,7 +59,7 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # the payload is read as it came.
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null && payload="$(ps_clean_payload "$payload")"
 
-verdict="$(printf '%s' "$payload" | python3 -I -c '
+verdict="$(printf '%s' "$payload" | python3 -I -B -c '
 import importlib.util, json, sys
 sys.stdout.reconfigure(errors="replace")
 

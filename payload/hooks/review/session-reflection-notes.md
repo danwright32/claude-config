@@ -38,6 +38,9 @@ reminded it to: on 2026-10-26 a Slate session finished every part of a request, 
 showed no box until Dan asked whether it was done (claude-config#1749). The reflection fires after
 every turn that changed something, which is the turn requested work finishes on, so it carries the
 reminder at no extra turn; a chat only turn finishes no work, so missing it costs nothing. The line
-sits after the EXCEPTION so a reflection folded into the issue review still asks. The tool's own
+sits after the EXCEPTION so a reflection folded into the issue review still asks, but on 2026-11-09
+a folded reflection's line was dropped all the same, because the session wrote that turn from the
+issue review (claude-config#2523), so the issue review now carries the same request as its own
+last step. The tool's own
 checks (agents running, a merge or deploy unconfirmed, a pull request still open, one box per
 request) stay the gate, so a call made too early is refused rather than shown.

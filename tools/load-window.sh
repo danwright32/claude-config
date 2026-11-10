@@ -51,7 +51,8 @@
 #   tools/load-window.sh --seconds S [--workers N] [--spawners M] [--label TEXT] [-- command ...]
 #   tools/load-window.sh --status
 #     --seconds   the window's ceiling, 1 to 180
-#     --workers   busy loops (default: this Mac's core count)
+#     --workers   busy loops (default: this Mac's core count); 0 with --spawners 0 runs the command
+#                 alone, for a measurement that wants only the window's turn, wait and cleanup
 #     --spawners  process launching loops, which load the kernel's process table the way a suite
 #                 does (default 0)
 #     --label     what the window is for, named wherever it is reported (default: the command)
@@ -238,11 +239,11 @@ if [ -n "$status" ]; then
   while IFS=$'\t' read -r id st dl en pid w s how lb; do
     [ -n "$id" ] || continue
     if [ "$en" = "-" ] && [ "$t" -lt "$dl" ]; then
-      say "  RUNNING since $(load_window_et "$st"), until $(load_window_et "$dl") at the latest: pid $pid, $w busy and $s process launching workers, \"$lb\""
+      say "  RUNNING since $(load_window_et "$st"), until $(load_window_et "$dl") at the latest: pid $pid, $(load_window_workers "$w" "$s"), \"$lb\""
     elif [ "$en" = "-" ]; then
-      say "  $(load_window_et "$st") to $(load_window_et "$dl") (no end recorded; its workers ended themselves then): pid $pid, $w busy and $s process launching workers, \"$lb\""
+      say "  $(load_window_et "$st") to $(load_window_et "$dl") (no end recorded; everything it started ended itself then): pid $pid, $(load_window_workers "$w" "$s"), \"$lb\""
     else
-      say "  $(load_window_et "$st") to $(load_window_et "$en"), $how: pid $pid, $w busy and $s process launching workers, \"$lb\""
+      say "  $(load_window_et "$st") to $(load_window_et "$en"), $how: pid $pid, $(load_window_workers "$w" "$s"), \"$lb\""
     fi
   done <<<"$list"
   # Counted here rather than by turn_look, which tidies a dead holder's ticket away: --status changes
@@ -270,7 +271,10 @@ seconds=$(( 10#$seconds ))
 num "$workers" || usage "--workers must be a whole number."
 num "$spawners" || usage "--spawners must be a whole number."
 workers=$(( 10#$workers )); spawners=$(( 10#$spawners ))
-[ $(( workers + spawners )) -ge 1 ] || usage "a window needs at least one worker."
+# A window given a command may add no load of its own (--workers 0 --spawners 0, claude-config#2568):
+# a measurement wants the window only for its turn, its wait for merges and full suites, its ceiling
+# and its cleanup. Without a command, a window with no workers has nothing to do.
+[ $(( workers + spawners )) -ge 1 ] || [ ${#cmd[@]} -gt 0 ] || usage "a window with no command needs at least one worker."
 [ $(( workers + spawners )) -le 256 ] || usage "$workers busy and $spawners process launching workers is more than 256, more than any reproduction here has needed."
 [ -n "$label" ] || label="${cmd[*]:-load only}"
 
@@ -367,7 +371,7 @@ load_window_begin "$window_id" "$start" "$deadline" "$$" "$workers" "$spawners" 
   exit 1
 }
 load_window_trim
-say "Window started at $(load_window_et "$start"), until $(load_window_et "$deadline") at the latest: $workers busy and $spawners process launching workers, \"$label\"."
+say "Window started at $(load_window_et "$start"), until $(load_window_et "$deadline") at the latest: $(load_window_workers "$workers" "$spawners"), \"$label\"."
 set -m
 # The workers' group: each loop ends itself at the limit (bash's SECONDS, no fork), and a watchdog
 # in the same group kills the whole group then, which holds even if this run is killed outright.
@@ -375,13 +379,17 @@ set -m
 # reap them, and safe to keep (L1035, #2015): nothing this shell prints comes between their start and
 # that reaping. The loop below writes nothing itself (what it captures is written by subshells), and
 # its one line, on yielding, is held in $early until finish has reaped both.
-bash -c '
-  lim=$1; n=$2; m=$3
-  (sleep "$lim"; kill -KILL 0) &
-  i=0; while [ "$i" -lt "$n" ]; do bash -c "while [ \$SECONDS -lt $lim ]; do :; done" & i=$((i + 1)); done
-  i=0; while [ "$i" -lt "$m" ]; do bash -c "while [ \$SECONDS -lt $lim ]; do /usr/bin/true; done" & i=$((i + 1)); done
-  wait' load-window-workers "$limit" "$workers" "$spawners" </dev/null >/dev/null 2>&1 &
-wpid=$!
+# A window with no workers starts no group at all, so its command is the only load it adds, and finds
+# LOAD_WINDOW_WORKERS_PGID empty.
+if [ $(( workers + spawners )) -gt 0 ]; then
+  bash -c '
+    lim=$1; n=$2; m=$3
+    (sleep "$lim"; kill -KILL 0) &
+    i=0; while [ "$i" -lt "$n" ]; do bash -c "while [ \$SECONDS -lt $lim ]; do :; done" & i=$((i + 1)); done
+    i=0; while [ "$i" -lt "$m" ]; do bash -c "while [ \$SECONDS -lt $lim ]; do /usr/bin/true; done" & i=$((i + 1)); done
+    wait' load-window-workers "$limit" "$workers" "$spawners" </dev/null >/dev/null 2>&1 &
+  wpid=$!
+fi
 if [ ${#cmd[@]} -gt 0 ]; then
   # The command's group carries the same watchdog. Its output is the run's output; the watchdog's
   # is not, so it never holds the caller's pipe open after the window (L235).

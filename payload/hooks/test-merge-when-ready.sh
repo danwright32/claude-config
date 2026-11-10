@@ -31,6 +31,56 @@ check(){ if [[ "$3" == *"$2"* ]]; then ok; else bad "$1"; echo "  expected to co
 check_not(){ if [[ "$3" != *"$2"* ]]; then ok; else bad "$1"; echo "  must not contain: $2"; echo "  actual: ${3:0:2000}"; fi; }
 check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3')"; fi; }
 
+# Every place that documents running it in the background names --log=, never a pipe into tee (#2304).
+# The README is the repository's, so it is found through the checkout this copy sits in, by the one
+# shared test of that (lib/checkout-root.sh, #1567). The installed copy, which the hook suite runs
+# after every pull, is in none and has no README, so there it is reported unmeasured rather than
+# failing for a file it can never hold (claude-config#2620, L411).
+DOCS=("$DIR/../skills/orchestrate/SKILL.md" "$HELPER")
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$CHECKOUT" ]; then
+  DOCS=("$CHECKOUT/README.md" "${DOCS[@]}")
+else
+  echo "SUITE-PART-UNMEASURED README.md naming --log= for a background run: $DIR/.. is not the payload of a claude-config checkout, so there is no README.md to read"
+fi
+for f in "${DOCS[@]}"; do
+  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
+  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
+done
+
+# MERGE_WHEN_READY_DOCS_ONLY=1 is this suite's own run of a copy of itself, placed as installed and
+# as a fixture checkout (below): only the documentation checks above, then the result.
+if [ -n "${MERGE_WHEN_READY_DOCS_ONLY:-}" ]; then
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+  exit
+fi
+
+# The documentation checks, judged from both places this suite runs (claude-config#2620). Installed,
+# as the hook suite after every pull runs it, there is no README, so its check is reported unmeasured
+# and the run passes (L411). In a checkout whose README has lost --log=, it still fails (L1).
+. "$DIR/lib/placement-copy.sh"
+PLACED=(hooks/test-merge-when-ready.sh hooks/lib skills/orchestrate/SKILL.md)
+placed_run() { MERGE_WHEN_READY_DOCS_ONLY=1 bash "$1/hooks/test-merge-when-ready.sh" 2>&1; }
+if copy="$(placement_copy installed "$WORKDIR/placed-installed" "$DIR/.." "${PLACED[@]}")"; then
+  out="$(placed_run "$copy")"; rc=$?
+  check_eq "#2620 installed, with no README, the documentation run passes" "0" "$rc"
+  check "#2620 and says the README was not measured" "SUITE-PART-UNMEASURED" "$out"
+  check_not "#2620 and fails nothing" "FAIL:" "$out"
+else
+  bad "#2620 an installed copy of this suite could not be placed"
+fi
+if copy="$(placement_copy checkout "$WORKDIR/placed-checkout" "$DIR/.." "${PLACED[@]}")"; then
+  printf '%s\n' 'Run it in the background with: bash merge-when-ready.sh <pr> 2>&1 | tee merge.log' \
+    > "$WORKDIR/placed-checkout/README.md"
+  out="$(placed_run "$copy")"; rc=$?
+  check_eq "#2620 in a checkout whose README lost --log=, the documentation run fails" "1" "$rc"
+  check "#2620 naming the README" "FAIL: #2304 README.md documents --log= for a background run" "$out"
+else
+  bad "#2620 a checkout copy of this suite could not be placed"
+fi
+
 unset PR_REVIEW_READ SKIP_PR_REVIEW ALLOW_RED_MERGE ALLOW_BEHIND_MERGE ALLOW_UNPINNED_MERGE 2>/dev/null || true
 
 OLD="1111111111111111111111111111111111111111"
@@ -376,6 +426,13 @@ EOS
 cat > "$STUBS/work-names-gate.sh" <<'EOS'
 #!/usr/bin/env bash
 cat >> "$ST/work-names-gate-payloads"; printf '\n' >> "$ST/work-names-gate-payloads"
+# work-names-gate-queue: one answer per ask, taken from the top (a blank line allows), for a gate whose
+# answer changes from one ask to the next (claude-config#2558); once it is empty, the file below.
+if [ -s "$ST/work-names-gate-queue" ]; then
+  r="$(head -1 "$ST/work-names-gate-queue")"; tail -n +2 "$ST/work-names-gate-queue" > "$ST/work-names-gate-queue.tmp"; mv "$ST/work-names-gate-queue.tmp" "$ST/work-names-gate-queue"
+  [ -z "$r" ] || jq -nc --arg r "$r" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+fi
 [ -s "$ST/work-names-gate-deny" ] && jq -nc --arg r "$(cat "$ST/work-names-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
@@ -1123,12 +1180,6 @@ out="$(run 7 --squash --log=)"; rc=$?
 check_eq "#2304 an empty --log= is refused" "64" "$rc"
 check "#2304 saying it needs a file" "--log needs a file." "$out"
 check_eq "#2304 and GitHub was never asked for the empty one" "0" "$(count gh-calls 'pr view')"
-
-# Every place that documents running it in the background names --log=, never a pipe into tee.
-for f in "$DIR/../../README.md" "$DIR/../skills/orchestrate/SKILL.md" "$HELPER"; do
-  check "#2304 $(basename "$f") documents --log= for a background run" "--log=" "$(cat "$f")"
-  check_not "#2304 $(basename "$f") never pipes the helper into tee" "merge-when-ready.sh <pr> 2>&1 | tee" "$(cat "$f")"
-done
 
 # Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
 # to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
@@ -3129,6 +3180,46 @@ hp="$(cat "$ST/helper-pid" 2>/dev/null)"
 check_eq "#1676 control: while the run is alive and waiting, its record is believed" "believed" "$(cat "$ST/verdict-alive" 2>/dev/null)"
 check_eq "#1676 a run killed outright leaves its record behind" "yes" "$( [ -n "$hp" ] && [ -e "$MWR_PHASE_DIR/$hp" ] && echo yes || echo no)"
 check_eq "#1676 which is not believed once its run has gone" "busy" "$( ( eval "$MP_LIBS" && mp_waiting "$hp" "$(cat "$ST/clock")" ) && echo waiting || echo busy)"
+
+# =================================================================================================
+# 26b. A gate that ran out of its own time decided nothing, so it is asked again (claude-config#2558).
+#     On 2026-11-09, with the Mac out of memory, the helper stopped three times on
+#     check-work-names-merge.sh saying its read budget of 15 seconds was spent, and each stopped pull
+#     request lost its place in the line. The refusal each gate gives then is read from the gate's own
+#     source here, so a gate rewording it fails this section rather than going back to stopping.
+# =================================================================================================
+export MWR_GATE_TIMEOUT_TRIES=3 MWR_GATE_TIMEOUT_RETRY_SECONDS=11
+asks(){ grep -c 'tool_input' "$ST/work-names-gate-payloads" 2>/dev/null || true; }
+for g in check-work-names-merge.sh check-closing-merge.sh require-verification-run.sh; do
+  spent="$(sed -n 's/^BUDGET_SPENT="\(.*\)"$/\1/p' "$DIR/$g")"; spent="${spent//\$READ_DEADLINE/15}"
+  check "#2558 $g says in its source when its read budget was spent" "seconds was spent" "$spent"
+  fresh "$OLD" 0 "$GREEN"
+  printf 'Refusing to merge PR #7: GitHub could not be read for payload/x: %s.\n' "$spent" "$spent" > "$ST/work-names-gate-queue"
+  printf '\n' >> "$ST/work-names-gate-queue"
+  out="$(run 7 --repo acme/widget --squash)"; rc=$?
+  check_eq "#2558 a gate saying what $g says when it ran out of time is asked again, and the merge goes through" "0" "$rc"
+  check_eq "#2558 ($g's wording) asked three times at the first look and once at the merge" "4" "$(asks)"
+  check_eq "#2558 ($g's wording) the wait between asks is the injected one, twice" "2" "$(count sleeps '^11$')"
+done
+check "#2558 the retried timeout is said in the run's log, naming the gate" "work-names-gate.sh ran out of its own time and decided nothing (ask 1 of 3); asking it again in 11s" "$out"
+check_eq "#2558 and the merge is made once" "1" "$(count gh-calls 'pr merge')"
+# Out of time on every ask: it stops, as before, but only after the bounded asks, and says so.
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7: %s.\n' "this hook's read budget of 15 seconds was spent before it could be read" > "$ST/work-names-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2558 a gate out of time on every ask still stops the helper" "1" "$rc"
+check_eq "#2558 after exactly the bounded number of asks" "3" "$(asks)"
+check "#2558 saying it ran out of time on every ask" "ran out of its own time on each of 3 asks" "$out"
+check_eq "#2558 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+# A gate that decided to refuse stops the merge at once: asked once, no wait.
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7: it names a work organisation. title:1: a work organisation name' > "$ST/work-names-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#2558 a gate that decided to refuse still stops the helper" "1" "$rc"
+check_eq "#2558 asked once, never again" "1" "$(asks)"
+check_eq "#2558 with no wait for it" "0" "$(count sleeps '^11$')"
+check_not "#2558 and never said to have run out of time" "ran out of its own time" "$out"
+unset MWR_GATE_TIMEOUT_TRIES MWR_GATE_TIMEOUT_RETRY_SECONDS
 
 # =================================================================================================
 # 27. A conflict confined to README.md's mods table rows is merged here (claude-config#1867). On
