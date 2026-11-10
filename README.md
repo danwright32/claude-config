@@ -7305,10 +7305,10 @@ so the search settles there rather than following the components on (Dan, 2026-1
 component that itself sends, or imports a send helper, is still its sender, and a file with any
 other importer is followed as before. A search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
-than 500 files to read (the largest real one read 213, #2510), or a send helper search that fails, runs late or meets an unreadable helper,
-holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
-nothing he can answer (#2364). A shell write to a path the write reader cannot
-name is outside it.
+than 500 files to read (the largest real one read 213, #2510), or a send helper search that
+fails, runs late or meets an unreadable helper, holds the call for Dan to approve like any other,
+naming no sender, rather than refusing it with nothing he can answer (#2364). A shell write to a
+path the write reader cannot name is outside it.
 
 </td><td>
 
