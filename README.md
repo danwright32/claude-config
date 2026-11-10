@@ -260,6 +260,7 @@ keep it, and the pull says a send will not carry it.
 ./claude-sync reap-scratch      # reclaim scratch a killed run left behind
 ./claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
 ./claude-sync install-autosync  # background auto-sync (see below)
+./claude-sync retire --yes      # a Mac being cleared: take it out of the sync (see below)
 ```
 
 ## Setting up a new Mac
@@ -338,6 +339,27 @@ alone the same way (#1470).
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
+
+### Retiring a Mac
+
+A Mac being cleared for trade in or resale must stop sending first: while its agents run, every
+file deleted from its `~/.claude` is sent on as a change to the shared config and removed from every
+other Mac (#2545). `claude-sync retire` on its own changes nothing: it says what it would do and
+exits 2. `claude-sync retire --yes` is the inverse of `install-autosync`:
+
+1. It records the Mac as retired in `~/.claude-sync-retired` (outside `~/.claude`, so the record
+   never travels to the other Mac). From then on every command that takes the sync lock (send,
+   push, sync, pull and the watcher's own sends), `watch`, `install-autosync` and
+   `install-schedule` refuse, naming the record.
+2. It unloads and removes `com.claudesync.timer`, `com.claudesync.watch` and the two older agents
+   `install-autosync` replaces, through the same helper `install-autosync` uses for those.
+3. It reads `launchctl list` back and says whether any of them is still loaded, exiting 1 if one is
+   or if launchd cannot be read, rather than trusting the unload's exit code.
+
+It deletes nothing in `~/.claude` or the shared repo, and leaves this Mac's lesson number band and
+lesson counts in the repo for history. Running it again is safe: the first record is kept and it
+says there was nothing left to remove. Under a fixture home it refuses whole, like the installers.
+To bring a retired Mac back, delete `~/.claude-sync-retired` and run `claude-sync install-autosync`.
 
 ### Backups a pull leaves behind expire on their own
 

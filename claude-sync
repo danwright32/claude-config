@@ -33,6 +33,7 @@
 #   claude-sync record-lesson-tags first|second F # commit the tags of this Mac's new lessons for the re-rank
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
+#   claude-sync retire --yes      # a Mac being cleared: remove both agents, refuse every later sync
 #   claude-sync help
 #
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
@@ -271,6 +272,10 @@ not_users_own_home(){ printf "this run's config (%s) is not this user's own ~/.c
 # Empty under a fixture home with no SYNC_HOLD_FILE (claude-config#1470): the hold is this Mac's
 # watcher's, so a fixture neither reads one (and never clears an expired one) nor takes or lifts one.
 SYNC_HOLD_FILE="$(store_for_this_home "${SYNC_HOLD_FILE:-}" "$HOME/.claude-sync-hold")"
+# A Mac taken out of the sync by `claude-sync retire` (claude-config#2545). Outside $CLAUDE_HOME for
+# the reason the hold is: it describes THIS Mac, and inside ~/.claude it would travel to the other
+# one and retire that too. Empty under a fixture home with no SYNC_RETIRED_FILE, like the hold.
+SYNC_RETIRED_FILE="$(store_for_this_home "${SYNC_RETIRED_FILE:-}" "$HOME/.claude-sync-retired")"
 # How long a hold lasts when none is named. It fails OPEN on purpose: a hold that outlives the
 # session that took it silently stops the sync, and #196 already records how hard a watcher that
 # has stopped sending is to notice from outside (L523).
@@ -1238,11 +1243,31 @@ do_forget_clone(){   # $1 = the directory to forget
   return 0
 }
 
+# A RETIRED MAC NEITHER SENDS NOR RECEIVES (claude-config#2545). Asked in with_lock, which every
+# command that writes the shared repo or this Mac's config takes (the watcher's sends included), so
+# the refusal covers every route by the one place they all pass rather than by a list of commands
+# (L247), and by the watcher and the two installers before they start. Receiving is refused too: a
+# pull mirrors with --delete into the ~/.claude being cleared and publishes a marker that makes the
+# Mac read as alive to the other one.
+refuse_when_retired(){
+  [ -n "$SYNC_RETIRED_FILE" ] && [ -f "$SYNC_RETIRED_FILE" ] || return 0
+  die "this Mac was retired from the sync$(retired_since_words), so it neither sends to nor receives from the shared repo, and nothing was changed. To bring it back: rm $SYNC_RETIRED_FILE, then claude-sync install-autosync"
+}
+retired_since_words(){   # " on <date>" from the record, or nothing when it holds no time
+  local stamp when
+  stamp="$(awk 'NR == 1 { print $2 }' "$SYNC_RETIRED_FILE" 2>/dev/null || true)"
+  case "$stamp" in ''|*[!0-9]*) return 0 ;; esac
+  when="$(date_from_epoch "$stamp" '+%Y-%m-%d %H:%M %Z')"
+  [ -n "$when" ] && printf ' on %s' "$when"
+  return 0
+}
+
 with_lock(){   # $@ = the command to run while holding the lock
   local rc=0
   # Re-entrant within one run: do_send falls through to do_sync, and a second acquire
   # there would deadlock against this run's own lock.
   if [ "${LOCK_HELD:-0}" = 1 ]; then "$@"; return $?; fi
+  refuse_when_retired
   # Before the lock, so a run that cannot read the skills list stops holding nothing (#415).
   require_unmanaged_skill_list
   acquire_lock || die "${LOCK_REFUSAL:-another claude-sync run is already running and still holds $SYNC_LOCK, so this one stopped instead of working on the same files at the same time. Nothing was changed. Run 'claude-sync status' to see where things stand.}"
@@ -14202,6 +14227,7 @@ do_recheck(){
 
 # ---------- install-schedule ----------
 do_install_schedule(){
+  refuse_when_retired
   local agentdir; agentdir="$(launchagents_for_this_home)"
   [ -n "$agentdir" ] || die "nothing was installed: $(not_users_own_home), so this Mac's launch agents are not its to change. Name a directory to write the agent into in SYNC_LAUNCHAGENTS."
   local plist="$agentdir/com.claudesync.pull.plist"
@@ -14306,6 +14332,7 @@ script_digest(){   # -> a content hash of the claude-sync file this process was 
 }
 
 do_watch(){
+  refuse_when_retired
   local fs="${SYNC_FSWATCH:-fswatch}"
   command -v "$fs" >/dev/null 2>&1 || \
     die "fswatch not installed — run: brew install fswatch, then: claude-sync install-autosync"
@@ -14783,6 +14810,24 @@ watch_park(){
 # installed still matches. Two copies would drift and the check would then be about a definition
 # nobody installs (L41, L70).
 agent_labels(){ printf '%s\n' com.claudesync.timer com.claudesync.watch; }
+# The agents these two replaced: install-autosync removes them wherever it finds them, and so does
+# retire, so one list serves both.
+legacy_agent_labels(){ printf '%s\n' com.claudesync.pull com.claudesync.auto; }
+# Unloaded from launchd where launchctl may run, and its plist removed. The one way an agent is taken
+# out, shared by install-autosync (the legacy agents) and retire (all of them).
+unload_and_remove_agent(){   # $1 = the agents folder  $2 = a label
+  local plist="$1/$2.plist"
+  if launchctl_may_run && [ -f "$plist" ]; then launchctl unload "$plist" 2>/dev/null || true; fi
+  rm -f "$plist"
+}
+# Which of the labels given launchd LISTS as loaded, read from launchd itself rather than from an
+# unload's exit code (L184). Fails when launchd cannot be read, which is never the same as none.
+loaded_agent_labels(){   # $1 = newline separated labels -> those loaded, one per line
+  local listed
+  listed="$(launchctl list 2>/dev/null)" || return 1
+  printf '%s\n' "$listed" | awk -v want="$(printf '%s' "$1" | tr '\n' ' ')" 'BEGIN { n = split(want, w, " "); for (i = 1; i <= n; i++) k[w[i]] = 1 }
+    ($3 in k) { print $3 }'
+}
 agent_arg(){
   case "$1" in
     *.timer) printf 'sync' ;;
@@ -14934,6 +14979,7 @@ ensure_zsh_alias(){
 }
 
 do_install_autosync(){
+  refuse_when_retired
   local agentdir; agentdir="$(launchagents_for_this_home)"
   # Refused whole under a fixture home with no SYNC_LAUNCHAGENTS (claude-config#1470), before any
   # agent is retired or written: half an install into the real folder is worse than none.
@@ -14945,13 +14991,10 @@ do_install_autosync(){
   # appears daily (L51), and it cost 46 hours of silent drift on 2026-09-07. It takes effect on the
   # next `claude-sync install-autosync`, since that is what writes the launch agent.
   local interval="${SYNC_INTERVAL:-86400}"   # default daily
-  local legacy lp
+  local legacy
   # retire superseded agents (old monthly pull, old WatchPaths auto)
-  for legacy in com.claudesync.pull com.claudesync.auto; do
-    lp="$agentdir/$legacy.plist"
-    [ -f "$lp" ] || continue
-    if launchctl_may_run; then launchctl unload "$lp" 2>/dev/null || true; fi
-    rm -f "$lp"
+  for legacy in $(legacy_agent_labels); do
+    if [ -f "$agentdir/$legacy.plist" ]; then unload_and_remove_agent "$agentdir" "$legacy"; fi
   done
   # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle).
   # The keys come from agent_extra, which is also what the out of date check compares against, so
@@ -14969,6 +15012,122 @@ do_install_autosync(){
   say_not_loaded
   ensure_zsh_alias
   echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
+}
+
+# ---------- retire: take this Mac out of the sync (claude-config#2545) ----------
+# For a Mac being cleared for trade in or resale. While its agents run, every file deleted from its
+# ~/.claude by hand is sent on as a change to the shared config and removed from every other Mac;
+# on 2026-11-09 the only protection was a spoken warning to turn the Wi-Fi off first.
+#
+# The inverse of install-autosync, through the same helpers. The record goes FIRST, so a run either
+# agent starts meanwhile already refuses (refuse_when_retired); then every agent install-autosync
+# writes or replaced is unloaded and removed; then launchd is READ BACK, because an unload that
+# exits 0 can leave a job loaded (L184). Nothing in ~/.claude or the shared repo is deleted, and this
+# Mac's lesson band and lesson counts stay in the repo for history.
+#
+# Confirmed by --yes rather than a prompt (L9): a session cannot answer a prompt, and the command
+# is run from one. Without the flag it says what it would do, changes nothing, and exits 2, so
+# nothing reads the preview as done.
+do_retire(){
+  local yes=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --yes) yes=1 ;;
+      *) die "retire takes only --yes, not '$arg'. Nothing was changed." ;;
+    esac
+  done
+  local agentdir; agentdir="$(launchagents_for_this_home)"
+  if [ -z "$agentdir" ] || [ -z "$SYNC_RETIRED_FILE" ]; then
+    die "nothing was retired: $(not_users_own_home), so this Mac's launch agents and its retired record are not its to change. Name them in SYNC_LAUNCHAGENTS and SYNC_RETIRED_FILE."
+  fi
+  launchctl_may_run || die "nothing was retired: launchctl does not run here (SYNC_NO_LAUNCHCTL=1, or $(not_users_own_home)), and retire has to unload the agents and read launchd back to confirm they are gone."
+  local all label targets="" loaded_now="" readable=1
+  all="$(agent_labels; legacy_agent_labels)"
+  loaded_now="$(loaded_agent_labels "$all")" || readable=0
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if [ -f "$agentdir/$label.plist" ]; then
+      targets="${targets:+$targets, }$label"
+    else
+      case $'\n'"$loaded_now"$'\n' in *$'\n'"$label"$'\n'*) targets="${targets:+$targets, }$label" ;; esac
+    fi
+  done <<RETIRE_LABELS
+$all
+RETIRE_LABELS
+  local left="everything in $CLAUDE_HOME, the shared repo and its history, this Mac's lesson number band and lesson counts there, the clone at $SYNC_REPO, and the log at $HOME/.claude-sync.log"
+
+  if [ "$yes" != 1 ]; then
+    echo "claude-sync retire takes this Mac out of the sync, so nothing deleted from its config afterwards reaches the shared repo or the other Mac. It would:"
+    echo "  record this Mac as retired in $SYNC_RETIRED_FILE, after which every send, receive, watch and install-autosync here refuses"
+    if [ -n "$targets" ]; then
+      echo "  unload and remove these launch agents: $targets"
+    else
+      echo "  remove no launch agent, since none is installed or loaded"
+    fi
+    echo "  read launchd back to confirm none of them is still loaded"
+    [ "$readable" = 1 ] || echo "launchd's list of loaded jobs could not be read just now, so a loaded agent whose plist is gone may be missing from that list."
+    echo "It would leave alone: $left."
+    echo "Nothing was changed. To go ahead: claude-sync retire --yes"
+    exit 2
+  fi
+
+  local recorded
+  if [ -f "$SYNC_RETIRED_FILE" ]; then
+    recorded="This Mac was already recorded as retired$(retired_since_words) in $SYNC_RETIRED_FILE, and that record is kept as it was."
+  else
+    if ! { printf 'retired %s %s\n' "$(date +%s)" "$(sync_hostname)" > "$SYNC_RETIRED_FILE.$$" && mv -f "$SYNC_RETIRED_FILE.$$" "$SYNC_RETIRED_FILE"; } 2>/dev/null; then
+      rm -f "$SYNC_RETIRED_FILE.$$" 2>/dev/null || true
+      die "the retired record could not be written to $SYNC_RETIRED_FILE, so nothing else was changed: the agents are still installed and this Mac still sends."
+    fi
+    recorded="Recorded this Mac as retired$(retired_since_words) in $SYNC_RETIRED_FILE."
+  fi
+
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    case ", $targets, " in *", $label, "*) unload_and_remove_agent "$agentdir" "$label" ;; esac
+  done <<RETIRE_LABELS
+$all
+RETIRE_LABELS
+  # A job still loaded with its plist gone cannot be unloaded by path, so it is removed by label.
+  local still=""
+  if still="$(loaded_agent_labels "$all")"; then
+    while IFS= read -r label; do
+      [ -n "$label" ] || continue
+      launchctl remove "$label" 2>/dev/null || true
+    done <<RETIRE_LABELS
+$still
+RETIRE_LABELS
+  fi
+
+  echo "$recorded Every send, receive, watch and install-autosync here now refuses."
+  if [ -n "$targets" ]; then echo "Unloaded and removed: $targets."; else echo "Removed nothing: no launch agent was installed or loaded."; fi
+  local rc=0 leftover="" pid
+  while IFS= read -r label; do
+    [ -n "$label" ] || continue
+    if [ -e "$agentdir/$label.plist" ]; then leftover="${leftover:+$leftover, }$agentdir/$label.plist"; fi
+  done <<RETIRE_LABELS
+$all
+RETIRE_LABELS
+  if [ -n "$leftover" ]; then
+    echo "NOT removed: $leftover could not be deleted. Delete it by hand."
+    rc=1
+  fi
+  if ! still="$(loaded_agent_labels "$all")"; then
+    echo "NOT confirmed: launchd's list of loaded jobs could not be read (launchctl list failed), so whether any claude-sync agent is still loaded is unknown. The record above makes any run of one refuse. Check by hand with: launchctl list | grep com.claudesync"
+    rc=1
+  elif [ -n "$still" ]; then
+    still="$(printf '%s\n' "$still" | paste -sd ',' - | sed 's/,/, /g')"
+    echo "NOT confirmed: launchctl list still shows $still loaded after it was unloaded and removed. The record above makes its runs refuse, but it is still running. Remove it with: launchctl bootout gui/$(id -u)/<label>, for each label named."
+    rc=1
+  else
+    echo "Confirmed: launchctl list shows neither com.claudesync.timer nor com.claudesync.watch loaded, and no older claude-sync agent either."
+  fi
+  if pid="$(watch_already_running)"; then
+    echo "Still running: a claude-sync watcher as process $pid, which launchd did not start. Its next send refuses, since this Mac is retired. End it with: kill $pid"
+  fi
+  echo "Left alone: $left."
+  echo "To bring this Mac back into the sync: rm $SYNC_RETIRED_FILE, then claude-sync install-autosync"
+  return "$rc"
 }
 
 cmd="${1:-help}"
@@ -15006,6 +15165,7 @@ case "$cmd" in
   apply-only) with_lock do_apply_only ;;   # internal: resume point after a self-update
   install-schedule) do_install_schedule ;;
   install-autosync) do_install_autosync ;;
+  retire) do_retire "${@:2}" ;;   # its inverse: this Mac stops sending and receiving (#2545)
   # Read-only about the config: it runs the checks and records what they said, nothing else.
   recheck) do_recheck ;;
   # Reserves the number it prints (claude-config#1148), so two sessions asking at once get two.
@@ -15089,5 +15249,5 @@ case "$cmd" in
   help|-h|--help) awk 'NR > 1 { if ($0 ~ /^# *Env overrides/) exit; buf[n++] = $0 }
                         END { while (n > 0 && buf[n-1] == "#") n--; for (i = 0; i < n; i++) print buf[i] }' \
                     "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, help)" ;;
+  *) die "unknown command '$cmd' (try: push, pull, sync, watch, hold, release, status, verify, recheck, reap-scratch, clean-backups, forget-mac, forget-clone, next-lesson, check-lessons, lesson-faults, lesson-index-faults, lesson-short-forms, stuck, repo-slug, cite-scan, cite-pin, cite-check, check-skills, lesson, install-autosync, retire, help)" ;;
 esac
