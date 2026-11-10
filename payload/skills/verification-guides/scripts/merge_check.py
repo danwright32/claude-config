@@ -25,10 +25,13 @@ The bundle is a folder the hook writes:
   compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head
 
 CLI: merge_check.py verdict <bundle> [--final]
-  Prints {"need": {"guides": [{area, path}], "compares": [sha]}} while the bundle lacks something a
-  verdict needs; the hook fetches those and asks again with --final, where anything still missing is
-  GitHub unreadable. Otherwise the verdict: {"mode", "passed", "decision" (allow or refuse), "text",
-  "problems" [{kind, area, message}], "touched_areas", "head_sha"}. In mode warn the verdict is also
+  Prints {"need": {"guides": [{area, path}], "compares": [sha], "listings": [{commit, folder}],
+  "repo": true or false}} while the bundle lacks something a verdict needs; the hook fetches those
+  (listings into shots/<commit>.json, the repository into repo.json) and asks again with --final,
+  where anything still missing is GitHub unreadable. Otherwise the verdict: {"mode", "passed",
+  "decision" (allow or refuse), "text", "problems" [{kind, area, message}], "touched_areas",
+  "head_sha", "say" (hand the text to the session on an allow), "screenshots" {mode, problems,
+  note, overridden}}. The bundle may also hold allow-no-screenshots. In mode warn the verdict is also
   appended to the warn tally. Exit 0 whenever it printed an answer, 2 on usage; a crash prints no
   JSON, and the hook refuses on that.
 
