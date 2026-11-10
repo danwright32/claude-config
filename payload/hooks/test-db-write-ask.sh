@@ -274,6 +274,11 @@ case "$(decision "$r")|$(field "$r" message)" in
   "none rc=0|"*createSobjectRecord*"lib/hook-notice.sh is missing"*) check "with lib/hook-notice.sh missing, the Salesforce notice is still said" ok ;;
   *) check "with lib/hook-notice.sh missing, the Salesforce notice is still said" "$(decision "$r") $(field "$r" message)" ;;
 esac
+r="$(run "$NOLIB/db-write-ask.sh" "$SF_HOME" "$(payload "$SQL_TOOL" "$STMT")")"
+case "$(decision "$r")|$(field "$r" message)" in
+  "ask rc=0|"*createSobjectRecord*) check "with lib/hook-notice.sh missing, a database question still carries the Salesforce notice" ok ;;
+  *) check "with lib/hook-notice.sh missing, a database question still carries the Salesforce notice" "$(decision "$r") $(field "$r" message)" ;;
+esac
 
 # --- the settings run it for exactly these tools, and refuse the call if it fails ---------------
 wiring="$(python3 - "$SETTINGS" <<'PY'
