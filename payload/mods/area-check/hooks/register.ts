@@ -627,6 +627,11 @@ const underTree = async ($: EngineInterface, path: string, max: number): Promise
   const rel = path === b.root ? '' : relTo(path, b.root)
   const held = heldUnder(rel, { tracked: ranked.tracked, top: ranked.ranked.top, issues: issues.state === 'unread' ? [] : issues.issues })
   if (held.length > max) return { unread: `${held.length} files under it could be held, more than the ${max} the area check judges one by one (among them ${held.slice(0, 3).join(', ')})` }
+  // With its open issues unread (#2636), which of the files under it the area check would hold cannot
+  // be checked: judged one by one they were held on growth alone, one hold per file, each naming a
+  // file the command may never touch, and a proceed claimed only that file. Said once instead, and
+  // decided for the command as a whole.
+  if (held.length && issues.state === 'unread') return { unread: `its open issues could not be read (${issues.why}), so which of the files under it the area check would hold cannot be checked (among them ${held.slice(0, 3).join(', ')})` }
   return { paths: held.map(r => `${b.root}/${r}`) }
 }
 
