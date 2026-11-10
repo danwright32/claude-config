@@ -928,6 +928,148 @@ for reads in "reads.sh" "hand-reader.sh"; do
   run_bash "cd $T/dj && bash $reads msg.json"
   allowed "a shell script handing its argument only to what cannot act, handed a data file naming the endpoint: $reads"
 done
+# Code a shell script writes inline and hands its arguments, and what it pipes from the file it is
+# handed, are followed (claude-config#2446). Each of these passed: the code given to bash -c, python3
+# -c or a heredoc was read only for what it names, and a pipe was not followed at all.
+mkdir -p "$T/ip"
+cp "$T/ds/msg.json" "$T/ip/msg.json"
+printf '%s\n' '#!/bin/bash' "bash -c '. \"\$0\"' \"\$1\"" > "$T/ip/zero.sh"
+printf '%s\n' '#!/bin/bash' "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' \"\$1\"" > "$T/ip/py-c.sh"
+printf '%s\n' '#!/bin/bash' "node -e 'require(\"child_process\").execSync(\"bash \" + process.argv[1])' \"\$1\"" > "$T/ip/node-e.sh"
+printf '%s\n' '#!/bin/bash' "ruby -e 'load ARGV[0]' \"\$1\"" > "$T/ip/ruby-e.sh"
+cat > "$T/ip/py-doc.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import sys, urllib.request
+urllib.request.urlopen(open(sys.argv[1]).read().strip())
+PY
+SH
+cat > "$T/ip/os-run.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+os.system("bash " + sys.argv[1])
+PY
+SH
+cat > "$T/ip/os-loose.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" <<'PY'
+import os, sys
+tool = os
+tool.system("bash " + sys.argv[1])
+PY
+SH
+cat > "$T/ip/sh-doc.sh" <<'SH'
+#!/bin/bash
+bash - "$1" <<'EOF'
+. "$1"
+EOF
+SH
+cat > "$T/ip/doc-expands.sh" <<'SH'
+#!/bin/bash
+bash <<EOF
+$(cat "$1")
+EOF
+SH
+cat > "$T/ip/no-code.sh" <<'SH'
+#!/bin/bash
+python3 - "$1"
+SH
+printf '%s\n' '#!/bin/bash' 'cat "$1" | bash' > "$T/ip/pipe.sh"
+printf '%s\n' '#!/bin/bash' 'grep -v "^#" "$1" | tr a b | sh' > "$T/ip/pipe-far.sh"
+printf '%s\n' '#!/bin/bash' 'cat "$1" | while read -r line; do eval "$line"; done' > "$T/ip/pipe-loop.sh"
+printf '%s\n' '#!/bin/bash' 'cat "$1" | { read -r first; eval "$first"; }' > "$T/ip/pipe-block.sh"
+printf '%s\n' '#!/bin/bash' 'run() { bash; }' 'cat "$1" | run' > "$T/ip/pipe-func.sh"
+printf '%s\n' '#!/bin/bash' 'cat "$1" | ./helper.sh' > "$T/ip/pipe-script.sh"
+printf '%s\n' '#!/bin/bash' 'bash' > "$T/ip/helper.sh"
+chmod +x "$T/ip/helper.sh"
+printf '%s\n' '#!/bin/bash' "cat \"\$1\" | python3 -c 'import sys; exec(sys.stdin.read())'" > "$T/ip/pipe-py.sh"
+printf '%s\n' '#!/bin/bash' 'bash <<< "$(cat "$1")"' > "$T/ip/here-string.sh"
+# Python a script runs from its environment (issue-spool.sh's shape) is read only where the script
+# sets that variable once, to a quoted literal: here it comes from the file handed, is bound a second
+# time by read, or is a literal that itself runs the file.
+cat > "$T/ip/env-handed.sh" <<'SH'
+#!/bin/bash
+CODE="$(cat "$1")" python3 - "$1" <<'PY'
+import os
+exec(os.environ["CODE"])
+PY
+SH
+cat > "$T/ip/env-rebound.sh" <<'SH'
+#!/bin/bash
+SHARED='
+import json
+'
+read -r SHARED < /tmp/shared.py
+CODE="$SHARED" python3 - "$1" <<'PY'
+import os
+exec(os.environ["CODE"])
+PY
+SH
+cat > "$T/ip/env-runs.sh" <<'SH'
+#!/bin/bash
+SHARED='
+import subprocess, sys
+subprocess.run(["bash", sys.argv[1]])
+'
+CODE="$SHARED" python3 - "$1" <<'PY'
+import os
+exec(os.environ["CODE"])
+PY
+SH
+# A script the reader can only cut crudely gives no place to its commands, so where it pipes what it
+# is handed cannot be followed.
+printf '%s\n' '#!/bin/bash' 'cat "$1" | wc -l' "echo 'never closed" > "$T/ip/crude.sh"
+for acts in "zero.sh:(.)" "py-c.sh:subprocess" "node-e.sh:child_process" "ruby-e.sh:does not read" "py-doc.sh:urllib" \
+  "os-run.sh:uses os for more" "os-loose.sh:uses os for more" "sh-doc.sh:(.)" "doc-expands.sh:a heredoc that expands it" \
+  "no-code.sh:code from its input" "pipe.sh:through a pipe (bash)" "pipe-far.sh:through a pipe (sh)" \
+  "pipe-loop.sh:loop or block" "pipe-block.sh:loop or block" "pipe-func.sh:a function" "pipe-script.sh:helper.sh" \
+  "pipe-py.sh:(exec)" "here-string.sh:a here string" "env-handed.sh:(exec)" "env-rebound.sh:(exec)" \
+  "env-runs.sh:subprocess" "crude.sh:where it pipes"; do
+  run_bash "cd $T/ip && bash ${acts%%:*} msg.json"
+  refused "a shell script whose inline or piped code can act on what it is handed: ${acts%%:*}"
+  says "that refusal says how ${acts%%:*} acts" "${acts#*:}"
+done
+# The controls: inline code that only reads or writes files, Python run from the environment that
+# the script wrote as a literal, and a pipe into programs that cannot act, are data read as data. A
+# shell script's writes are not counted (SH_INERT), so neither are those of the code it writes inline.
+printf '%s\n' '#!/bin/bash' "python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))))' \"\$1\"" \
+  "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' \"\$1\"" \
+  "node -e 'require(\"fs\").writeFileSync(process.argv[1] + \".bak\", \"1\")' \"\$1\"" \
+  "bash -c 'echo \"\$0\"' \"\$1\"" > "$T/ip/reads-inline.sh"
+cat > "$T/ip/writes-doc.sh" <<'SH'
+#!/bin/bash
+python3 - "$1" "$1.kept" <<'PY'
+import os, stat, sys, tempfile
+src, dst = sys.argv[1], sys.argv[2]
+if stat.S_ISREG(os.lstat(src).st_mode):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dst))
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        out.write(open(src, encoding="utf-8").read())
+    os.replace(tmp, dst)
+    os.makedirs(os.path.join(os.path.dirname(dst), "kept"), exist_ok=True)
+PY
+SH
+cat > "$T/ip/env-literal.sh" <<'SH'
+#!/bin/bash
+SHARED='
+import datetime as _dt, os as _os
+LIMIT = int(_os.environ.get("LIMIT") or 10)
+def old(path):
+    return _os.stat(path).st_mtime < LIMIT
+'
+CODE="$SHARED" python3 - "$1" <<'PY'
+import os, sys
+exec(os.environ["CODE"])
+print(old(sys.argv[1]))
+PY
+SH
+printf '%s\n' '#!/bin/bash' 'cat "$1" | grep -c chat' 'cat "$1" | tr a b | wc -l' 'jq -r .text "$1" | head -1 | cut -c1-20' \
+  > "$T/ip/pipe-reads.sh"
+for reads in reads-inline.sh writes-doc.sh env-literal.sh pipe-reads.sh; do
+  run_bash "cd $T/ip && bash $reads msg.json"
+  allowed "a shell script whose inline or piped code cannot act on what it is handed: $reads"
+done
 printf '%s\n' 'curl -s -X POST https://hooks.slack.com/services/T0/B0/x -d text=hi' > "$T/ds/hook.conf"
 printf '%s\n' '#!/bin/bash' 'cfg="$1"' 'source "$cfg"' > "$T/ds/load.sh"
 printf '%s\n' '#!/bin/bash' 'exec bash "$@"' > "$T/ds/run-it.sh"
