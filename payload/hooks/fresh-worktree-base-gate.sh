@@ -195,7 +195,7 @@ if [ "$BOUNDED_RC" -ne 0 ]; then
   # (claude-config#2634). It used to take the failed fetch path below, which let through, with a
   # notice said once, an edit this gate refuses with the library in place.
   if [ "$BOUNDED_RC" -eq 125 ]; then
-    [ -n "${why// /}" ] || why="nothing was run"
+    case "$why" in *[![:space:]]*) ;; *) why="nothing was run" ;; esac
     printf '%s\n' "REFUSED: fresh-worktree-base-gate.sh could not run its fetch of origin $branch at all ($why), so whether the worktree $top, which has no commits of its own yet, is behind $base was not checked (claude-config#2634). A part of the hooks is missing, which is not a network fault and will not clear by waiting. Reinstall the hooks with claude-sync pull, then make the edit again. Reading files is not affected." >&2
     exit 2
   fi

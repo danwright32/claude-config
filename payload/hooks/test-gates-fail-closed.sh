@@ -204,9 +204,10 @@ fixture_payload(){ # fixture_payload <@fixture> <run folder>
 }
 # The fixture is seen to be one the gate passes with everything in place, so that a refusal below
 # is about the library taken away and never about the fixture (L1).
-mkdir -p "$WORK/fx-probe/repo" "$WORK/fx-probe/home"
+fx_home="$WORK/fx-probe/home"
+mkdir -p "$WORK/fx-probe/repo" "$fx_home"
 fixture_payload @fresh-worktree "$WORK/fx-probe" > "$WORK/fx-probe/in.json"
-fx_out="$( cd "$WORK/fx-probe/repo" && HOME="$WORK/fx-probe/home" FRESH_WORKTREE_STATE_DIR="$WORK/fx-probe/home/state" bash "$DIR/fresh-worktree-base-gate.sh" < "$WORK/fx-probe/in.json" 2>&1 )"; fx_rc=$?
+fx_out="$( cd "$WORK/fx-probe/repo" && HOME="$fx_home" FRESH_WORKTREE_STATE_DIR="$fx_home/state" bash "$DIR/fresh-worktree-base-gate.sh" < "$WORK/fx-probe/in.json" 2>&1 )"; fx_rc=$?
 [ "$fx_rc" -eq 0 ] && [ -z "$fx_out" ] && [ -d "$WORK/fx-probe/fx/repo/wt" ] && ok \
   || bad "the @fresh-worktree fixture is not an edit fresh-worktree-base-gate.sh passes in silence with every library in place (exit $fx_rc), so a refusal with one gone would prove nothing: ${fx_out:0:200}"
 
@@ -974,8 +975,9 @@ while IFS=$'\t' read -r i g lib tool inp extra unread; do
   [ "$named" -gt 0 ] || continue
   reached=$((reached + 1))
   unnamed="$(macs_recorded "$WORK/st$i/whole" | grep -c -x -E '(unknown)?')"
+  gone_records="$(cat "$WORK/st$i/whole/ledger"/*.tsv 2>/dev/null)"
   [ "$unnamed" -eq "$named" ] && ok \
-    || bad "#2634 $g with lib/this-mac.sh gone: its judged call writes $named record line(s) naming the Mac with the library in place, and should write as many naming none through the stand in; it wrote $unnamed such line(s): $(cat "$WORK/st$i/whole/ledger"/*.tsv 2>/dev/null | head -c 200)"
+    || bad "#2634 $g with lib/this-mac.sh gone: its judged call writes $named record line(s) naming the Mac with the library in place, and should write as many naming none through the stand in; it wrote $unnamed such line(s): ${gone_records:0:200}"
 done < "$WORK/standin-pairs"
 # Three of the four did on 2026-11-10 (scanners-before-push.sh records nothing on a push with
 # nothing to scan). Not asked where this machine's name cannot be read at all, since the library's
