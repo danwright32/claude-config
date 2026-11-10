@@ -196,7 +196,8 @@
 # on every try keeps being asked before it stops, claude-config#2303), MWR_MERGE_TRIES (3: how many
 # times in all a merge GitHub answers "Something went wrong" is tried, claude-config#2289) and
 # MWR_MERGE_RETRY_SECONDS (120: the wait between; settings, not measurements), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
-# the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
+# the gates it asks, see ask_gate), MWR_GATE_TIMEOUT_TRIES (4: how many times in all a gate that ran out of its own time
+# is asked, claude-config#2558) and MWR_GATE_TIMEOUT_RETRY_SECONDS (30: the wait between; settings, not measurements), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
 # measurement), and the commands and scripts it runs, each honoured only with
@@ -468,7 +469,37 @@ merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "
 # could read areas.json, twice. MWR_GATE_READ_BUDGET_SECONDS (90) is a setting, not a measurement; a
 # budget only bounds how long a read is asked again, and a read that never answers still refuses.
 GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
-ask_gate(){   # $1 = gate script, $2 = command text
+
+# A GATE THAT RAN OUT OF ITS OWN TIME DECIDED NOTHING, so it is asked again (claude-config#2558). On
+# 2026-11-09, with this Mac out of memory, this stopped three times on check-work-names-merge.sh
+# saying "this hook's read budget of 15 seconds was spent" (that gate caps its budget at 15 whatever
+# it is handed) when the same read by hand took 3.6 seconds, and each stopped pull request lost its
+# place in the line. A refusal carrying that sentence, which check-work-names-merge.sh,
+# check-closing-merge.sh and require-verification-run.sh each build as BUDGET_SPENT, is asked again
+# up to MWR_GATE_TIMEOUT_TRIES (4) times in all, MWR_GATE_TIMEOUT_RETRY_SECONDS (30) apart through the
+# injected sleep (L524), each retry said in this run's log; both are settings, not measurements. A
+# gate that still has no time after that stops the run as before, saying how many asks it had. Any
+# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready.sh reads
+# the sentence from each gate's own source, so a gate that rewords it fails the suite.
+GATE_TRIES="$(num_or "${MWR_GATE_TIMEOUT_TRIES:-}" 4)"; [ "$GATE_TRIES" -ge 1 ] || GATE_TRIES=1
+GATE_WAIT="$(num_or "${MWR_GATE_TIMEOUT_RETRY_SECONDS:-}" 30)"
+gate_out_of_time(){ case "$1" in *"read budget of "*" seconds was spent"*) return 0 ;; esac; return 1; }
+ask_gate(){   # $1 = gate script, $2 = command text; prints the refusal's reason, as ask_gate_once does
+  local ask=1 why
+  while :; do
+    why="$(ask_gate_once "$1" "$2")" && return 0
+    gate_out_of_time "$why" || { printf '%s' "$why"; return 1; }
+    if [ "$ask" -ge "$GATE_TRIES" ]; then
+      [ "$ask" -gt 1 ] && why="$why (it ran out of its own time on each of $ask asks, $(dur "$GATE_WAIT") apart)"
+      printf '%s' "$why"; return 1
+    fi
+    # On stderr: the caller keeps stdout for a refusal's reason.
+    say "${1##*/} ran out of its own time and decided nothing (ask $ask of $GATE_TRIES); asking it again in $(dur "$GATE_WAIT")." >&2
+    rest "$GATE_WAIT"
+    ask=$((ask + 1))
+  done
+}
+ask_gate_once(){   # $1 = gate script, $2 = command text
   local payload out rc reason context
   # A gate is local work (claude-config#1676): it runs here, and a load window must not overlap it.
   phase_local "asking ${1##*/} about the merge of #$pr"
