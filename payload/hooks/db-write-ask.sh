@@ -3,7 +3,7 @@
 # db-write-ask.sh
 # Claude Code PreToolUse(Bash|mcp__.*)
 # hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
-# and before an edge function deploy that turns JWT verification off (#2660).
+# and before an edge function deploy that turns JWT verification off, or may (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql, on both Macs, and
@@ -30,13 +30,15 @@
 #     names. The list, and why the connector's other tools are left out, is in
 #     lib/db-write-calls.py. The Supabase CLI's branches and projects subcommands that do the same
 #     in a shell (create, delete, pause, unpause, update) are asked about with them.
-#   - Since #2660, one call that changes no database: a Supabase edge function deploy that turns
-#     JWT verification off, which publishes a function the platform lets anyone call without
-#     signing in. deploy_edge_function with verify_jwt false on any Supabase server, and `supabase
-#     functions deploy --no-verify-jwt` in a shell, with the function and the project named. A
-#     verify_jwt that is neither true nor false is asked about too. A deploy that keeps
-#     verification on is passed, verify_jwt left out included: the connector's schema gives true
-#     as its default (lib/db-write-calls.py says where that was read, and what this cannot see).
+#   - Since #2660, one kind of call that changes no database: a Supabase edge function deploy that
+#     turns JWT verification off, or may, which publishes a function the platform lets anyone call
+#     without signing in. deploy_edge_function with verify_jwt false on any Supabase server, with
+#     the function and the project named; a verify_jwt that is neither true nor false is asked
+#     about too, and one that is true or left out is passed, since the connector's schema gives
+#     true as its default. And every `supabase functions deploy` in a shell, whatever its flags
+#     (Dan, 2026-11-10: "Ask on every shell deploy"), since the setting can sit in the project's
+#     supabase/config.toml, which no flag shows and this hook never reads. lib/db-write-calls.py
+#     says where each of these was read, and what this cannot see.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
 #     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
@@ -179,8 +181,8 @@ def emit(decision_reason=None, message=None):
     sys.exit()
 
 DATABASE_CALL = "database call"
-# The one call asked about that changes no database: an edge function deploy that turns JWT
-# verification off (claude-config#2660).
+# The one kind of call asked about that changes no database: an edge function deploy that turns
+# JWT verification off, or may (claude-config#2660).
 DEPLOY = "edge function deploy"
 
 def ask(why, issue="2521", what=DATABASE_CALL):
@@ -279,9 +281,9 @@ if tool == "Bash":
         sys.exit()
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)
-    # A deploy that turns JWT verification off is not a database call, so the question says which
-    # of the two the command holds, or both, and names the issue behind each (claude-config#2660).
-    deploys = [f for f in found if calls.is_open_deploy(f)]
+    # An edge function deploy is not a database call, so the question says which of the two the
+    # command holds, or both, and names the issue behind each (claude-config#2660).
+    deploys = [f for f in found if calls.is_function_deploy(f)]
     kinds = ([DATABASE_CALL] if len(deploys) < len(found) else []) + ([DEPLOY] if deploys else [])
     issues = (["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
     ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""),

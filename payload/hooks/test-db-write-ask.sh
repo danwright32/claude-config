@@ -407,11 +407,16 @@ expect_bash "supabase projects list only reads" none 'supabase projects list'
 expect_bash "supabase projects api-keys only reads" none 'supabase projects api-keys --project-ref abcdefgh'
 expect_bash "supabase projects --help runs nothing" none 'supabase projects --help'
 expect_bash "supabase branches delete --help runs nothing" none 'supabase branches delete --help'
-expect_bash "supabase functions deploy changes no database" none 'supabase functions deploy hello'
-# A deploy that turns JWT verification off publishes a function the platform lets anyone call
-# without signing in, which is not a change to a database and is asked about all the same
-# (claude-config#2660). The flag and the subcommands are from `supabase functions deploy --help`
-# and `supabase functions --help`, CLI 2.75.0. A deploy that keeps verification on stays unasked.
+# A deploy with JWT verification off publishes a function the platform lets anyone call without
+# signing in, which is not a change to a database and is asked about all the same
+# (claude-config#2660). In a shell the setting can sit in the project's supabase/config.toml, where
+# no flag shows it and the hook never reads, so Dan decided on 2026-11-10 ("Ask on every shell
+# deploy") that every `supabase functions deploy` is asked about, whatever its flags. That reverses
+# #2632's "supabase functions deploy changes no database", which this check held as a pass. The
+# flag and the subcommands are from `supabase functions deploy --help` and `supabase functions
+# --help`, CLI 2.75.0.
+expect_bash "a plain function deploy, naming no function" ask 'supabase functions deploy'
+expect_bash "a function deploy naming its function" ask 'supabase functions deploy hello'
 expect_bash "a function deploy with --no-verify-jwt" ask 'supabase functions deploy hello --no-verify-jwt'
 expect_bash "--no-verify-jwt before the function's name" ask 'supabase functions deploy --no-verify-jwt hello'
 expect_bash "--no-verify-jwt with no function named, which deploys them all" ask 'supabase functions deploy --no-verify-jwt'
@@ -423,10 +428,16 @@ expect_bash "--no-verify-jwt in the second command of a line" ask 'cd app && sup
 expect_bash "--no-verify-jwt set to false and then given bare" ask 'supabase functions deploy hello --no-verify-jwt=false --no-verify-jwt'
 expect_bash "--no-verify-jwt with a value that is neither true nor false" ask 'supabase functions deploy hello --no-verify-jwt=maybe'
 expect_bash "an older CLI's --verify-jwt=false" ask 'supabase functions deploy hello --verify-jwt=false'
-expect_bash "--no-verify-jwt=false keeps verification on" none 'supabase functions deploy hello --no-verify-jwt=false'
-expect_bash "--verify-jwt=true keeps verification on" none 'supabase functions deploy hello --verify-jwt=true'
-expect_bash "a deploy with its other flags keeps verification on" none 'supabase functions deploy hello --project-ref abcdefgh --use-api -j 4 --import-map ./import_map.json'
+expect_bash "a deploy with --no-verify-jwt=false is asked about as any deploy is" ask 'supabase functions deploy hello --no-verify-jwt=false'
+expect_bash "a deploy with --verify-jwt=true is asked about as any deploy is" ask 'supabase functions deploy hello --verify-jwt=true'
+expect_bash "a deploy with its other flags" ask 'supabase functions deploy hello --project-ref abcdefgh --use-api -j 4 --import-map ./import_map.json'
+expect_bash "a plain deploy through npx" ask 'npx supabase functions deploy hello'
+expect_bash "a plain deploy behind a workdir" ask 'supabase --workdir app functions deploy hello'
 expect_bash "a deploy --no-verify-jwt --help runs nothing" none 'supabase functions deploy --no-verify-jwt --help'
+expect_bash "a deploy --help runs nothing" none 'supabase functions deploy --help'
+expect_bash "a mention of a deploy runs nothing" none 'echo "then run supabase functions deploy hello"'
+expect_bash "supabase functions new only writes a file here" none 'supabase functions new hello'
+expect_bash "supabase functions download" none 'supabase functions download hello'
 expect_bash "supabase functions serve --no-verify-jwt runs on this Mac only" none 'supabase functions serve --no-verify-jwt'
 expect_bash "supabase functions serve of a function named deploy" none 'supabase functions serve deploy --no-verify-jwt'
 expect_bash "supabase functions list" none 'supabase functions list --project-ref abcdefgh'
@@ -440,8 +451,29 @@ esac
 case "$reason" in *"database call"*) check "the question about a --no-verify-jwt deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a --no-verify-jwt deploy does not call it a database call" ok ;; esac
 reason="$(reason_of "$(bash_payload 'supabase functions deploy --no-verify-jwt')")"
 case "$reason" in
-  *"every edge function"*"the linked project"*) check "a --no-verify-jwt deploy naming no function or project says every function and the linked project" ok ;;
-  *) check "a --no-verify-jwt deploy naming no function or project says every function and the linked project" "reason: ${reason:0:400}" ;;
+  *"all functions"*"the linked project"*"JWT verification off"*) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" ok ;;
+  *) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" "reason: ${reason:0:400}" ;;
+esac
+# A deploy whose flags do not turn verification off says where the setting it cannot see is kept,
+# and never says verification is off or on.
+reason="$(reason_of "$(bash_payload 'supabase functions deploy')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming no function says all functions and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"supabase functions deploy publishes all functions"*"the linked project"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming no function says all functions and where the setting is kept" ok ;;
+  *) check "a plain deploy naming no function says all functions and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --project-ref abcdefgh')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming its function names it, the project and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming its function names it, the project and where the setting is kept" ok ;;
+  *) check "a plain deploy naming its function names it, the project and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a plain deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a plain deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --no-verify-jwt=false')")"
+case "$reason" in
+  *"JWT verification off"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "it says verification is off: ${reason:0:400}" ;;
+  *"--no-verify-jwt=false"*"edge function hello"*"config.toml"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" ok ;;
+  *) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "reason: ${reason:0:400}" ;;
 esac
 reason="$(reason_of "$(bash_payload 'supabase functions deploy hello world -j 2 --no-verify-jwt')")"
 case "$reason" in
