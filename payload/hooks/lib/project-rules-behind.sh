@@ -179,17 +179,23 @@ else:
     offer="$branch also has $ahead $s_ahead origin/$branch does not have, so it cannot simply be fast forwarded; bring it up to date by hand."
   else
     # The changed tracked files, staged or not, with both sides of a rename (--no-renames), since git
-    # refuses a fast forward that changes either name. -z keeps an unusual name whole, and a bash
-    # variable cannot hold its NULs, so the stream is read directly, with git's exit status as a
-    # last entry no porcelain line can look like (each of those has a space at its third character).
-    local entry rc="" unread=0 dirty=() touched=() touched_out
-    while IFS= read -r -d '' entry; do
-      case "$entry" in
-        prb-exit=*) rc="${entry#prb-exit=}" ;;
-        ??' '?*) dirty+=("${entry:3}") ;;
-      esac
-    done < <(git -C "$primary" status --porcelain -z --no-renames --untracked-files=no 2>/dev/null; printf 'prb-exit=%s\0' "$?")
-    [ "$rc" = 0 ] || unread=1
+    # refuses a fast forward that changes either name. Read into a variable, which waits for git
+    # (a loop fed by a process substitution leaves a child bash 3.2 never reaps, #1984), so not -z,
+    # whose NULs a variable cannot hold. A name git still quotes (a quote, tab, newline or backslash
+    # in it) cannot be handed back to git literally, so it makes the answer unread, never untouched.
+    local entry status unread=0 dirty=() touched=() touched_out
+    if status="$(git -C "$primary" -c core.quotePath=false status --porcelain --no-renames --untracked-files=no 2>/dev/null)"; then
+      while IFS= read -r entry; do
+        case "$entry" in
+          ??' "'*) unread=1 ;;
+          ??' '?*) dirty+=("${entry:3}") ;;
+        esac
+      done <<STATUS_LINES
+$status
+STATUS_LINES
+    else
+      unread=1
+    fi
     if [ "$unread" = 0 ] && [ "${#dirty[@]}" -gt 0 ]; then
       # Which of them the incoming commits change. Git refuses the fast forward exactly then, and
       # otherwise applies it and keeps the changes (measured, claude-config#2625).

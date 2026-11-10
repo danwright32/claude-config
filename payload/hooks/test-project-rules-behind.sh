@@ -270,6 +270,20 @@ case "$m" in *"pull --ff-only"*|*"no changes to tracked files"*) check "a tree t
 case "$m" in *"could not be read"*) check "and the notice says what could not be read" ok ;;
   *) check "and the notice says what could not be read" "said: $m" ;; esac
 
+# A changed file whose name git has to quote cannot be handed back to git literally, so it is not
+# judged untouched on the strength of a name that matched nothing.
+world dirty-quoted
+printf 'x\n' > "$W/seed/say \"hi\".txt"
+upstream CLAUDE.md "short"
+git -C "$W/primary" merge -q --ff-only origin/main >/dev/null 2>&1
+upstream CLAUDE.md "shorter"
+printf 'local\n' >> "$W/primary/say \"hi\".txt"
+m="$(msg "$(start s-dirty-quoted "$W/primary")")"
+case "$m" in *"pull --ff-only"*) check "a changed file whose name git quotes withholds the fast forward" "offered: $m" ;;
+  *) check "a changed file whose name git quotes withholds the fast forward" ok ;; esac
+case "$m" in *"could not be read"*) check "and says it could not be read" ok ;;
+  *) check "and says it could not be read" "said: $m" ;; esac
+
 world untracked
 upstream CLAUDE.md "short"
 mkdir -p "$W/primary/node_modules" "$W/primary/.cache"
