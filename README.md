@@ -127,6 +127,17 @@ its checkout looks. Suites that run a copy give it the scanner rather than being
 use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
 scans, since it sends on every change for as long as it runs.
 
+A refused send is reported until a send gets through (#2530). The change watcher's refusal used to
+reach only `~/.claude-sync.log` (71 of them on one Mac while `status` said only when it last sent),
+so `claude-sync status`, `claude-sync stuck` and the per prompt notice now say the latest refusal:
+which scan, what it found (file and line, never the name), how many sends in a row it has refused
+and since when, and what to change. The lessons file is also asked when a lesson is written, by the
+same scanner: `claude-sync lesson-faults`, which the lesson entry hook runs after every write to it,
+exits 3 and names the line when the file names a work organisation, and 4 when the scan could not
+run, so a scan that judged nothing is never reported as a name found (the hook tells the session
+that wrote it, in words that fit each, while it can fix it), `check-lessons` refuses on either, and `next-lesson` still mints a
+number but warns that every send is refused until the line is fixed.
+
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
 text too (`--texts0-from`), and two gates ask it. `scanners-before-push.sh` reads the messages of
@@ -569,7 +580,9 @@ it is said once in the session, in status's own words and naming the clone, and 
 ends that session is told it is moving again. A count going up is the same stretch and is not said
 twice. A change watcher stuck on an older `claude-sync` because the newer one on disk is broken
 (#1569) is said at once rather than after the threshold, since no wait clears it, and its end is
-said too. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
+said too. So is a send refused by the secret scan or the work names scan (`send-refused`, #2530):
+every later send meets the same content, so it never clears by itself, and the session hears again
+when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
 too old to have the command are each said once in their own words, never read as a healthy sync.
 It asks nothing of the network and takes no lock: measured 2026-09-17, about 70ms per prompt with
 one clone to ask, and 16ms on a Mac with no automatic sync installed, where there is nothing that
@@ -7919,18 +7932,26 @@ catch up and after it is read, so it can only describe the run that wrote it
 
 </td><td>
 
-the secret scan, whenever it refuses a send (#947)
+the secret scan or the work names scan, whenever either refuses a send (#947, #1568), through one
+writer, `record_send_refused`
 
 </td><td>
 
 a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone,
-to name the scan's finding as the cause rather than leave git's complaint as the only explanation
+to name the scan's finding as the cause rather than leave git's complaint as the only explanation;
+and `claude-sync status`, `claude-sync stuck` and so the per prompt notice, which report it as
+`send-refused` until a send gets through (#2530)
 
 </td><td>
 
-absent means no send is being refused by the scan, which is the normal state. It holds when the scan
-last refused and the files it found. The next scan that passes removes it. A time that will not
-parse is left out of the sentence rather than guessed
+absent means no send is being refused by the scan, which is the normal state. One line, tab
+separated: when the latest refusal was, what it found, why (empty for a possible secret, else
+`unlisted`, `work-names` or `work-names-unjudged`), how many sends in a row have been refused, and
+when the first of them was, plus `atleast` when that run began under a record from before the
+count, which makes the count a floor. The secret scan removes it whenever it passes or is skipped,
+and the work names scan after it writes only on a refusal, so it stands exactly while sends are
+refused. A record from before the count is reported without one; one that cannot be read, or whose
+time will not parse, is reported as `send-refused-unreadable`, never as nothing refused
 
 </td></tr>
 <tr><td>

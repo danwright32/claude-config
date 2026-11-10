@@ -65,6 +65,9 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
 says() { # says <description> <text> <substring>
   case "$2" in *"$3"*) check "$1" ok ;; *) check "$1" "did not say '$3' (said: ${2:0:200})" ;; esac
 }
+never_says() { # never_says <description> <text> <substring>
+  case "$2" in *"$3"*) check "$1" "said '$3' (said: ${2:0:200})" ;; *) check "$1" ok ;; esac
+}
 silent() { # silent <description> <text>
   if [ -z "$(printf '%s' "$2" | tr -d '[:space:]')" ]; then check "$1" ok; else check "$1" "it said: ${2:0:200}"; fi
 }
@@ -142,6 +145,36 @@ says "the same rule stored under two numbers is refused" "$out" "L1 and L2"
 printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n  SHORT: a rule that fits.\n  SHORT: a rule.\n' > "$HOME_FIX/LESSONS.md"
 out="$(run_hook Edit "$HOME_FIX/LESSONS.md")"
 says "an entry carrying two SHORT lines is refused" "$out" "2 SHORT lines"
+
+# A lesson naming a work organisation (claude-config#2530). The send refused it on one Mac five
+# times in one morning, saying so only in the watcher's log; asked here, the session that wrote it
+# hears it. The organisation is invented and handed to the one scanner as a hash, its test seam, so
+# no real name is written here, and HOME is empty so no Mac's registry is read.
+WN_HASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+mkdir -p "$WORK/emptyhome"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** seen in acme-hq/widgets#4\n' > "$HOME_FIX/LESSONS.md"
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | HOME="$WORK/emptyhome" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" \
+       CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+says "a lesson naming a work organisation is refused where it was written" "$out" '"decision":"block"'
+says "and the refusal names the line" "$out" "LESSONS.md:5"
+says "and says the send is refused, which is what it costs" "$out" "every send from this Mac is refused"
+never_says "and never repeats the name it found" "$out" "acme-hq"
+never_says "and does not claim the index lost the entry, which it did not" "$out" "absent from the generated lessons index"
+# The control in the same fixture: the same lesson without the organisation is not spoken about.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** seen in widgets#4\n' > "$HOME_FIX/LESSONS.md"
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | HOME="$WORK/emptyhome" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" \
+       CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+silent "control: the same lesson without the name is not spoken about" "$out"
+# A scan that could not run judged nothing: said as that, never as a lesson naming an organisation
+# (L11). A registry that will not parse is how the scanner refuses to judge.
+mkdir -p "$WORK/badhome/.claude/skills/pennie-dev-update"
+printf '{ not json\n' > "$WORK/badhome/.claude/skills/pennie-dev-update/repos.local.json"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body, the second\n' > "$HOME_FIX/LESSONS.md"
+out="$(payload_for Edit "$HOME_FIX/LESSONS.md" | HOME="$WORK/badhome" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$WN_HASH" \
+       CLAUDE_HOME="$HOME_FIX" SYNC_CLONE_REGISTRY="$REG" bash "$HOOK" 2>&1)"
+says "a work names scan that could not run is still said" "$out" '"decision":"block"'
+says "as a check that could not be made" "$out" "could not be checked"
+never_says "and never as a lesson that names one" "$out" "names a work organisation, and this repository is public"
 
 # And it says so ONLY into the session. The tool notifies the desktop on a non interactive failure,
 # which is right for the background sync job and wrong here: it reaches somebody who is already

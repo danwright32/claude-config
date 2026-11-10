@@ -18,7 +18,8 @@
 # nothing here to change.
 #
 # CHEAP, because it runs on every prompt in every project. No network and no CI query: `stuck` reads
-# the two small records the sync already keeps (.behind-skips and .ci-red-since) and takes no lock,
+# the small records the sync already keeps (.behind-skips, .ci-red-since, .watch-stale and, since
+# #2530, .send-refused) and takes no lock,
 # so it never waits on a watcher that is busy (L110). Measured 2026-09-17 on this Mac over 20 prompts
 # each: 70ms per prompt with one clone to ask (75ms while a stuck stretch is on record), and 16ms on
 # a Mac with no automatic sync installed, which never starts claude-sync at all. Most of the 70 is
@@ -259,6 +260,16 @@ while IFS= read -r clone; do
         if in_list "$told" "$entry"; then remember "$entry"; continue; fi
         say "claude-sync: in the automatic sync at $clone, ${sentence} This is said once in this session, and again here when it clears."
         remember "$entry" ;;
+      send-refused)
+        # A send refused by the secret scan or the work names scan (claude-config#2530). Said AT
+        # ONCE: a refusal never clears by itself, since every later send meets the same content, and
+        # before this it reached only ~/.claude-sync.log (71 times on one Mac). Keyed on when the run
+        # of refusals began, so a count going up is the same stretch; a record from before the count
+        # has no start and is keyed as unknown.
+        case "$first" in ''|*[!0-9]*) entry="$clone$T$kind$T?" ;; *) entry="$clone$T$kind$T$first" ;; esac
+        if in_list "$told" "$entry"; then remember "$entry"; continue; fi
+        say "claude-sync: in the automatic sync at $clone, ${sentence} This is said once in this session, and again here when a send gets through."
+        remember "$entry" ;;
       *)
         # An unreadable record, or a kind added to the tool after this hook was written: said once
         # in the tool's own words rather than dropped, because a kind nobody handles would otherwise
@@ -272,7 +283,7 @@ while IFS= read -r clone; do
   done <<< "$recs"
 
   # Every stretch this session was told about that the clone no longer reports has ENDED. Only the
-  # two stuck directions and a stuck watcher have an end worth saying; an unreadable record that
+  # two stuck directions, a stuck watcher and a refused send have an end worth saying; an unreadable record that
   # became readable is followed by whatever it now says, which is its own notice if anything is wrong.
   while IFS= read -r t; do
     case "$t" in "$clone$T"*) ;; *) continue ;; esac
@@ -283,6 +294,7 @@ while IFS= read -r clone; do
       receiving) say "claude-sync: receiving on this Mac is moving again. The stuck stretch reported earlier in this session, in the automatic sync at $clone, has ended." ;;
       watcher-stale) say "claude-sync: the change watcher in the automatic sync at $clone is no longer stuck on an older claude-sync. The stretch reported earlier in this session has ended." ;;
       watcher-looping) say "claude-sync: the change watcher in the automatic sync at $clone is no longer stopped for ending as soon as it started. The stretch reported earlier in this session has ended." ;;
+      send-refused) say "claude-sync: sending from this Mac is no longer refused. A send from the automatic sync at $clone got past the scans that refused it earlier in this session." ;;
     esac
   done <<< "$told"
 done <<< "$clones"

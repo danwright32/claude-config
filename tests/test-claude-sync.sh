@@ -13217,6 +13217,134 @@ check "#1621 and the refusal still names the file and line" \
 check "#1621 and the watcher's refusal points the override at a send run by hand" \
   "line_has \"\$out_wn3\" 'names a work organisation' 'one send run by hand' 'claude-sync send'"
 
+section "== a refused send is reported by status and stuck until a send gets through, and a lesson naming a work organisation is caught when written (#2530) =="
+# On one Mac the change watcher's send was refused 71 times by the work names scan, and the only
+# trace was ~/.claude-sync.log: stuck said nothing and status said only "last sent: 2 days ago".
+# The same invented organisation and seam as the section above, so no real name is written here.
+RFSH="$WORK/refused-home"; mkdir -p "$RFSH"; echo '{"hooks":{}}' > "$RFSH/settings.json"
+printf '# rules\nsee acme-hq/widgets#12 for the history\n' > "$RFSH/CLAUDE.md"
+RFSE="$WORK/refused-emptyhome"; mkdir -p "$RFSE"
+RFSR="$WORK/refused-repo"; mkdir -p "$RFSR/payload"
+RFSHASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+_rfs(){ HOME="$RFSE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" SYNC_LOG_FILE="$WORK/refused-sync.log" CLAUDE_HOME="$RFSH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+# The control: nothing refused yet, so stuck has nothing to say.
+out_rfs0="$(_rfs stuck)"
+check "#2530 control: before any refusal, stuck says nothing about a refused send" \
+  "! grep -q 'send-refused' <<< \"\$out_rfs0\""
+_rfs push >/dev/null; _rfs push >/dev/null; _rfs push >/dev/null
+out_rfs1="$(_rfs stuck)"
+dbg "stuck after three refused sends: $out_rfs1"
+check "#2530 stuck reports the refused send as its own kind, with how many times in a row" \
+  "printf '%s\n' \"\$out_rfs1\" | awk -F'\t' '\$1==\"send-refused\" && \$2==3 {f=1} END{exit !f}'"
+check "#2530 and its sentence names the reason, the file and the line, and the count" \
+  "line_has \"\$out_rfs1\" 'send-refused' 'work organisation' 'CLAUDE\.md:2' '3 times'"
+check "#2530 and never the name it found" "out_lacks \"\$out_rfs1\" 'acme-hq'"
+out_rfs2="$(_rfs status)"
+dbg "status after three refused sends: $out_rfs2"
+check "#2530 status says the same, in the same words" \
+  "line_has \"\$out_rfs2\" 'work organisation' 'CLAUDE\.md:2' '3 times'"
+# A send that gets through ends it, on both surfaces.
+printf '# rules\nsee widgets#12 for the history\n' > "$RFSH/CLAUDE.md"
+if out_rfs3="$(_rfs push)"; then rc_rfs3=0; else rc_rfs3=$?; fi
+dbg "push after the name was dropped: $out_rfs3"
+check "#2530 control: the send goes through once the name is gone" "[ '$rc_rfs3' -eq 0 ]"
+out_rfs4="$(_rfs stuck)"; out_rfs5="$(_rfs status)"
+check "#2530 a send that gets through clears it from stuck" "! grep -q 'send-refused' <<< \"\$out_rfs4\""
+check "#2530 and from status" "out_lacks \"\$out_rfs5\" 'refused every send'"
+# A refusal after that starts a new count rather than resuming the old one.
+printf '# rules\nsee acme-hq/widgets#12 again\n' > "$RFSH/CLAUDE.md"
+_rfs push >/dev/null
+out_rfs6="$(_rfs stuck)"
+check "#2530 a refusal after a send got through counts from one again" \
+  "printf '%s\n' \"\$out_rfs6\" | awk -F'\t' '\$1==\"send-refused\" && \$2==1 {f=1} END{exit !f}'"
+# A record that is there and cannot be read is said, never read as nothing refused (L98).
+printf 'not-a-time\tsomething\n' > "$RFSR/.send-refused"
+out_rfs7="$(_rfs stuck)"
+check "#2530 a refused send record that will not parse is said, not dropped" \
+  "line_has \"\$out_rfs7\" 'send-refused-unreadable' '\.send-refused'"
+printf '1\tx\twork-names\t1\t1\n' > "$RFSR/.send-refused"; chmod 000 "$RFSR/.send-refused"
+out_rfs8="$(_rfs stuck)"; chmod 644 "$RFSR/.send-refused"
+check "#2530 a refused send record that cannot be opened is said, not dropped" \
+  "line_has \"\$out_rfs8\" 'send-refused-unreadable' 'could not be read'"
+# A record written before the count existed holds three fields: what it can say, without a count it
+# never measured (L11).
+printf '%s\tCLAUDE.md:2\twork-names\n' "$(date +%s)" > "$RFSR/.send-refused"
+out_rfs9="$(_rfs stuck)"
+check "#2530 a record from before the count says the refusal and claims no count" \
+  "line_has \"\$out_rfs9\" 'send-refused' 'CLAUDE\.md:2' 'not counted'"
+# The secret scan's refusals share the record and the report, each said as itself (L11).
+printf '%s\tagents/leak.md\t\t2\t%s\n' "$(date +%s)" "$(date +%s)" > "$RFSR/.send-refused"
+out_rfs10="$(_rfs stuck)"
+check "#2530 a refusal by the secret scan is reported as that, never as a work name" \
+  "line_has \"\$out_rfs10\" 'secret' 'agents/leak\.md' '2 times' && out_lacks \"\$out_rfs10\" 'work organisation'"
+rm -f "$RFSR/.send-refused"
+
+# The lessons file is checked for the same names when a lesson is WRITTEN, by the same scanner, so
+# the refusal is met by the session that wrote it rather than by the watcher days later.
+LWNH="$WORK/refused-lessons-home"; mkdir -p "$LWNH"
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2. another sound rule.** seen in acme-hq/widgets#4\n' > "$LWNH/LESSONS.md"
+_lwn(){ HOME="${LWN_HOME:-$RFSE}" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" CLAUDE_HOME="$LWNH" SYNC_REPO="$RFSR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" "$@" 2>&1; }
+if out_lwn1="$(_lwn lesson-faults)"; then rc_lwn1=0; else rc_lwn1=$?; fi
+dbg "lesson-faults over a lesson naming the organisation: rc=$rc_lwn1 $out_lwn1"
+check "#2530 lesson-faults refuses a lesson naming a work organisation, with its own exit code" "[ '$rc_lwn1' -eq 3 ]"
+check "#2530 and names the file and line, never the name" \
+  "line_has \"\$out_lwn1\" 'work organisation' 'LESSONS\.md:6' && out_lacks \"\$out_lwn1\" 'acme-hq'"
+if out_lwn2="$(_lwn next-lesson)"; then rc_lwn2=0; else rc_lwn2=$?; fi
+dbg "next-lesson over a lesson naming the organisation: rc=$rc_lwn2 $out_lwn2"
+check "#2530 next-lesson still mints a number" "[ '$rc_lwn2' -eq 0 ] && grep -q '^L3$' <<< \"\$out_lwn2\""
+check "#2530 and warns that the lessons file already names a work organisation" \
+  "line_has \"\$out_lwn2\" 'work organisation' 'LESSONS\.md:6'"
+# The control in the same fixture: the same lesson without the organisation is clean and silent.
+printf '# Lessons\n\n## Proof over green\n\n- **L1. a sound rule.** body\n- **L2. another sound rule.** seen in widgets#4\n' > "$LWNH/LESSONS.md"
+if out_lwn3="$(_lwn lesson-faults)"; then rc_lwn3=0; else rc_lwn3=$?; fi
+check "#2530 control: the same lesson without the name passes lesson-faults silently" \
+  "[ '$rc_lwn3' -eq 0 ] && [ -z \"\$(printf '%s' \"\$out_lwn3\" | tr -d '[:space:]')\" ]"
+# A scan that could not run judged nothing, so it is said as that, with its own exit code, never as
+# a lesson naming an organisation (L11). A registry that will not parse is how the scanner refuses.
+LWNBAD="$WORK/refused-lessons-badhome"; mkdir -p "$LWNBAD/.claude/skills/pennie-dev-update"
+printf '{ not json\n' > "$LWNBAD/.claude/skills/pennie-dev-update/repos.local.json"
+if out_lwn4="$(LWN_HOME="$LWNBAD" _lwn lesson-faults)"; then rc_lwn4=0; else rc_lwn4=$?; fi
+dbg "lesson-faults with a scanner that cannot judge: rc=$rc_lwn4 $out_lwn4"
+check "#2530 a work names scan that could not run exits 4, not 3" "[ '$rc_lwn4' -eq 4 ]"
+check "#2530 and says it could not be checked, never that the file names one" \
+  "line_has \"\$out_lwn4\" 'could not be checked' 'send refuses' && out_lacks \"\$out_lwn4\" 'names a work organisation, at'"
+if out_lwn5="$(LWN_HOME="$LWNBAD" _lwn next-lesson)"; then rc_lwn5=0; else rc_lwn5=$?; fi
+check "#2530 and next-lesson still mints a number when the scan cannot run" "[ '$rc_lwn5' -eq 0 ] && grep -q '^L' <<< \"\$out_lwn5\""
+# A copy of the tool with no scanner beside it judged nothing too, so it says so with the same exit
+# code, never a clean 0 that reads as a lesson checked and found free of names (L11, L98).
+LWNCOPY="$WORK/refused-lessons-copy"; mkdir -p "$LWNCOPY"; cp "$SCRIPT" "$LWNCOPY/claude-sync"
+if out_lwn6="$(HOME="$RFSE" CLAUDE_HOME="$LWNH" SYNC_REPO="$LWNCOPY" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$LWNCOPY/claude-sync" lesson-faults 2>&1)"; then rc_lwn6=0; else rc_lwn6=$?; fi
+dbg "lesson-faults from a copy with no scanner: rc=$rc_lwn6 $out_lwn6"
+check "#2530 a copy with no work names scanner beside it exits 4 from lesson-faults, not 0" "[ '$rc_lwn6' -eq 4 ]"
+check "#2530 and says the file could not be checked, naming the missing scanner" \
+  "line_has \"\$out_lwn6\" 'could not be checked' 'scanner'"
+
+# The desktop notification a sync posts when its send is refused and it still receives names the
+# scan that refused. It said "the secret scan" for every refusal, so a work name read as a leaked
+# credential (L11). A sync, since only a sync with git hands the refusal back and still receives.
+RFSB="$WORK/refused-notice-bare.git"; git init -q --bare "$RFSB"
+RFSC="$WORK/refused-notice-clone"; git clone -q "$RFSB" "$RFSC" 2>/dev/null
+RFSN="$WORK/refused-notice-home"; mkdir -p "$RFSN/agents"; echo '{"hooks":{}}' > "$RFSN/settings.json"
+printf 'base\n' > "$RFSN/agents/base.md"
+RFSREC="$WORK/refused-notice.rec"; RFSNOTIFIER="$WORK/refused-notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$RFSREC" > "$RFSNOTIFIER"; chmod +x "$RFSNOTIFIER"
+_rfsn(){ env HOME="$RFSE" HOOK_TESTS_RUNNING=1 WORK_NAMES_EXTRA_HASHES="$RFSHASH" SYNC_LOG_FILE="$WORK/refused-sync.log" SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 SYNC_HOSTNAME=rfsmac CLAUDE_HOME="$RFSN" SYNC_REPO="$RFSC" "$@" bash "$SCRIPT" sync 2>&1; }
+_rfsn SYNC_NO_NOTIFY=1 >/dev/null || true
+check "#2530 control: the notice fixture's first sync sends" "git -C '$RFSB' log -1 >/dev/null 2>&1"
+printf 'see acme-hq/widgets#12\n' > "$RFSN/agents/named.md"
+: > "$RFSREC"; _rfsn SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RFSNOTIFIER" >/dev/null || true
+rfs_notice_wn="$(grep 'still receives' "$RFSREC" 2>/dev/null || true)"
+dbg "notice for a work name refusal: $rfs_notice_wn"
+check "#2530 a work name refusal's notice names the work names scan" "grep -q 'work names scan' <<< \"\$rfs_notice_wn\""
+check "#2530 and does not call it a secret" "[ -n \"\$rfs_notice_wn\" ] && ! grep -qi 'secret' <<< \"\$rfs_notice_wn\""
+rm -f "$RFSN/agents/named.md"
+# Made from a hash, so this file holds no AWS shaped key for the whole tree scan to refuse (#1128).
+printf 'export AWS_KEY=AKIA%s\n' "$(printf 'a refused send names its scan' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)" > "$RFSN/agents/leak.md"
+: > "$RFSREC"; _rfsn SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$RFSNOTIFIER" >/dev/null || true
+rfs_notice_sec="$(grep 'still receives' "$RFSREC" 2>/dev/null || true)"
+dbg "notice for a secret scan refusal: $rfs_notice_sec"
+check "#2530 a secret scan refusal's notice still names the secret scan" "grep -q 'secret scan' <<< \"\$rfs_notice_sec\""
+
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
 # file inside a skills entry that cannot load that is false: the send refuses the whole entry
