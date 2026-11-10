@@ -3855,8 +3855,9 @@ CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "
 check "#2004 the pull writes the synced folder inside the real skill" "[ -f '$SEH/skills/real-skill/synced/kept.md' ]"
 check "#2004 and never the .trash folder inside it, as the check judged" "[ ! -e '$SEH/skills/real-skill/.trash' ]"
 # THE FAILURE PATH. The filter's empty answer means "left out", so a filter that FAILS (the list
-# unreadable, so the tool's stand in runs and exits) must answer "not applied", or a broken reader
-# would read every skills path as excluded and wave it through. Called directly: every run that
+# unreadable, so the tool's stand in runs and exits) must never answer "applied", or a broken reader
+# would read every skills path as excluded and wave it through. Since #2682 it answers "could not
+# compare" (2), which every caller that acts treats as it treated "not applied" (1). Called directly: every run that
 # reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
 SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
 sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
@@ -3869,8 +3870,8 @@ se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/no
 dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
 check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
 check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
-check "#2004 with the list unreadable, it answers not applied rather than left out, and says why" \
-  "[ \"\$se_rc_bad\" -eq 1 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
+check "#2004 with the list unreadable, it answers could not compare rather than left out, and says why" \
+  "[ \"\$se_rc_bad\" -eq 2 ] &&line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
 
 section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
 # On 2026-10-12 a session backed up the tracker's token file as
@@ -24875,7 +24876,7 @@ cat > "$CCSHIM/perl-bin/perl" <<EOS
 # Fails a swap FROM the placeholder (claude-sync's detok) of any content holding CC_FAIL_ON, and is
 # the real perl for everything else.
 if [ "\${HT_FROM:-}" = "__CLAUDE_HOME__" ] && [ -n "\${CC_FAIL_ON:-}" ]; then
-  t="\$(mktemp "$CCSHIM/in.XXXXXX")"; cat > "\$t"
+  t="$CCSHIM/held-input.\$\$"; cat > "\$t"
   if grep -qF -- "\$CC_FAIL_ON" "\$t"; then rm -f "\$t"; : > "$CCSHIM/perl-failed"; exit 2; fi
   "$(command -v perl)" "\$@" < "\$t"; rc=\$?; rm -f "\$t"; exit \$rc
 fi
@@ -24891,8 +24892,8 @@ check "#2682 a config file whose home path swap failed is named, with the step a
   "line_has \"\$out_cc1\" 'could not compare settings\.hooks\.json' 'home path' 'exit 2'"
 check "#2682 under a heading saying how many files, in the words the mods comparison uses" \
   "line_has \"\$out_cc1\" 'config not compared with the shared repo: status could not compare 1 file' 'applied'"
-check "#2682 and it is no longer said that the shared repo changed it" \
-  "! line_has \"\$out_cc1\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 and settings.hooks.json is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc1\"'settings\.hooks\.json: the shared repo changed it' 'not applied'"
 check "#2682 while the file it could compare is still said to be unapplied" \
   "line_has \"\$out_cc1\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
 check "#2682 and status exits as it does when nothing failed" \
@@ -24903,8 +24904,8 @@ out_cc2="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bas
 dbg "#2682 status with the tokenized hook's home path swap failing: $out_cc2"
 check "#2682 a tokenized file whose copy for this Mac could not be made is named, with the step" \
   "line_has \"\$out_cc2\" 'could not compare hooks/demo\.sh' 'exit 2'"
-check "#2682 and it is no longer said that the shared repo changed it" \
-  "! line_has \"\$out_cc2\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+check "#2682 and the tokenized hook is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc2\"'hooks/demo\.sh: the shared repo changed it' 'not applied'"
 # AND THE JQ STEP: a settings.json jq cannot read is a comparison that failed, not a difference.
 cp "$CCH/settings.json" "$WORK/cfgcmp-settings.keep"
 printf 'not json\n' > "$CCH/settings.json"
@@ -24913,8 +24914,8 @@ cp "$WORK/cfgcmp-settings.keep" "$CCH/settings.json"
 dbg "#2682 status with settings.json unreadable to jq: $out_cc3"
 check "#2682 a hooks block jq could not compare is named, with the step and its exit status" \
   "line_has \"\$out_cc3\" 'could not compare settings\.hooks\.json' 'jq exit'"
-check "#2682 and it is no longer said that the shared repo changed it" \
-  "! line_has \"\$out_cc3\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 and a hooks block jq could not read is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc3\"'settings\.hooks\.json: the shared repo changed it' 'not applied'"
 # THE SEND asks the same question to decide what to hold back. A file it could not compare is still
 # held back, but no longer said to be one the shared repo changed.
 out_cc4="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bash "$SCRIPT" push 2>&1 || true)"
