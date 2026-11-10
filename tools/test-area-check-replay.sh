@@ -77,6 +77,17 @@ case "$code $r" in "0 same "*'"withHold":1'*) check "--fixture writes a folder w
 [ ! -e "$W/fx/sessions-9.ts" ] && check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" ok || check "a fixture written again replaces the whole folder, so no part from an earlier month is left behind" "$(ls "$W/fx")"
 n="$(grep -c '"day":' "$W/fx/sessions-1.ts" 2>/dev/null)"
 [ "${n:-0}" -eq 4 ] && check "each session is a line of its own" ok || check "each session is a line of its own" "${n:-none} session lines in $(ls "$W/fx" 2>&1)"
+# The folder written takes its types from the mod's rules, named by the path from where the
+# committed folder sits. The writer holds that path as a value and puts it into the text it writes
+# (#2681), so what each written file names is read back here and followed from the committed folder
+# to the rules the writer itself imports.
+COMMITTED="$DIR/../payload/mods/area-check/tests/replay-fixture"
+for named in "index.ts:ReplayInput, ReplaySummary" "issues-1.ts:CachedIssue"; do
+  to="$(sed -n "s/^import type { ${named#*:} } from '\(.*\)'\$/\1/p" "$W/fx/${named%%:*}" 2>/dev/null)"
+  [ -n "$to" ] && [ "$COMMITTED/$to" -ef "$RULES" ] \
+    && check "the ${named%%:*} written imports its types from the mod's rules, as seen from the committed folder" ok \
+    || check "the ${named%%:*} written imports its types from the mod's rules, as seen from the committed folder" "names '${to:-nothing}' in: $(grep -n "import type" "$W/fx/${named%%:*}" 2>&1)"
+done
 
 out="$(PATH="$W/bin:$PATH" AREA_CHECK_FIXTURE_PART_BYTES=300 node "$TOOL" "$W/app" --repo dan/app --fixture "$W/fx2" 2>&1)"; code=$?
 r="$(fixture_replays "$W/fx2")"

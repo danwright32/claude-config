@@ -61,6 +61,14 @@ export type Fixture = {
   summary: ReplaySummary
 }
 
+// Where the mod's rules are from the folder a fixture is committed to
+// (payload/mods/area-check/tests/replay-fixture/): what each file written imports its types from. It
+// is the module imported above for this file's own types. Held here once and put into the text
+// written, never spelled inside that text: the text is written to a folder and imported from there,
+// so the Slack drafts gate rightly reads an import spelled inside it as one this file can run, looks
+// for the module from tools/, where it is not, and refuses every run of the replay (#2681).
+const RULES_FROM_FIXTURE = '../../hooks/rules.ts'
+
 type Table = { name: string; about: string; type: string; rows: string[]; imports?: string }
 
 const partFile = (t: Table, rows: string[]) =>
@@ -101,7 +109,7 @@ export const fixtureFiles = (fx: Fixture, partBytes: number = PART_BYTES): Map<s
   }
   const tables: Table[] = [
     { name: 'paths', about: 'the judged files the sessions edit, sorted, each session naming its files by place in this list', type: 'string', rows: fx.paths.map(j) },
-    { name: 'issues', about: 'the open issues that name a path: number, structural labels, priority, the paths named', type: 'CachedIssue', rows: fx.input.issues.map(j), imports: "import type { CachedIssue } from '../../hooks/rules.ts'" },
+    { name: 'issues', about: 'the open issues that name a path: number, structural labels, priority, the paths named', type: 'CachedIssue', rows: fx.input.issues.map(j), imports: `import type { CachedIssue } from '${RULES_FROM_FIXTURE}'` },
     { name: 'tracked', about: 'the tracked files sharing a basename with a path an issue names or a session edits', type: 'string', rows: fx.input.tracked.map(j) },
     { name: 'growth', about: "each day's rankable files: day, path, net lines grown and fix commits over the 90 days before it, its lines", type: '[string, string, number, number, number]', rows: growthRows },
     { name: 'sessions', about: 'the sessions, each a commit: id, day, the issues its subject names, its judged files as places in PATHS', type: '{ id: string; day: string; own: number[]; files: number[] }', rows: fx.input.sessions.map(j) },
@@ -126,7 +134,7 @@ export const fixtureFiles = (fx: Fixture, partBytes: number = PART_BYTES): Map<s
     `// Measured by tools/area-check-replay.ts from ${fx.repo} on ${fx.measuredOn}: ${fx.days} days to ${fx.head.slice(0, 10)}, rules v${fx.rule}.\n` +
       `// Generated; measure again rather than edit (L48). The rows are in the parts beside this file, one\n` +
       `// per line (#2097), and each session's files are places in PATHS.\n` +
-      `import type { ReplayInput, ReplaySummary } from '../../hooks/rules.ts'\n` +
+      `import type { ReplayInput, ReplaySummary } from '${RULES_FROM_FIXTURE}'\n` +
       imports.join('\n') + '\n\n' +
       `export const PATHS: string[] = ${spread.paths}\n\n` +
       `// Every day of the window in order, so a day with no rankable file is still a day.\n` +

@@ -3454,6 +3454,19 @@ module. Measured over the 469 scripts in this repository, run as `bun test <file
 52 went from refused to passing, every one refused before for that one generated file, and none
 went the other way.
 
+A script that generates a module, writes it and imports it back is running its own string, so an
+import spelled inside that string is followed, and it is looked for from the script's folder, not
+from where the written file will sit (#2681). `tools/area-check-fixture.ts` held its generated
+`index.ts` that way, naming the area check's rules by the path from the fixture folder, and the
+replay tool was refused in every checkout (`bun test tools/area-check-replay.ts` and
+`node tools/area-check-replay.ts <checkout> --repo <owner/name>`, measured through the wrapper on
+2026-11-10). The gate was applying its rule, so the writer changed and the gate did not: the writer
+holds that path once, as a value, and the generated text takes it from there, which is a path put
+together at run time and names no file to read. Nothing goes unread for it, because the module the
+generated text names is the one the writer imports for its own types, and that import is read and
+judged. A writer of generated modules does the same; the gate suite holds both halves and judges the
+real replay tool.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next

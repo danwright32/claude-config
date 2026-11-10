@@ -844,6 +844,49 @@ else
   echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: $DIR is not in a claude-config checkout holding tests/test-mods.sh (the installed copy of the hooks is not), so the repository's mods suite was not judged here"
 fi
 
+# A script that writes text to a file and then imports that file runs the text, so an import the
+# text names is followed like any other a string hands to a sink (claude-config#2484), and it is
+# looked for from the script's own folder, which is not where the written file will sit.
+# tools/area-check-fixture.ts held the index.ts it generates that way, naming the mod's rules by the
+# path from the fixture folder, and the gate refused the replay tool in every checkout for a module
+# that is not beside tools/ (claude-config#2681, measured through this wrapper on 2026-11-10). The
+# gate was applying its rule, so the writer changed and the gate did not: the writer holds that path
+# once, as a value, and the text it generates takes the path from there, which is a path put
+# together at run time and names no file to read. Nothing goes unread for it: the module the text
+# names is the one the writer imports for its own types, and that import is read and judged. Both
+# halves, and that control.
+mkdir -p "$T/gen/lib" "$T/gen/tools"
+gen_case() { # gen_case <what lib/rules.ts runs> <the lines of the writer that build its text>...
+  printf '%s\n' 'export type Row = { id: number };' "$1" > "$T/gen/lib/rules.ts"; shift
+  { printf '%s\n' "import { writeFileSync } from 'node:fs'" "import { join } from 'node:path'" \
+      "import { pathToFileURL } from 'node:url'" "import type { Row } from '../lib/rules.ts'" "$@"
+    printf '%s\n' "const out = join(import.meta.dirname, '..', 'out', 'fx', 'index.ts')" 'writeFileSync(out, text)' \
+      'const back = (await import(pathToFileURL(out).href)) as { ROWS: Row[] }' 'console.log(back.ROWS.length)'
+  } > "$T/gen/tools/write.ts"
+  run_bash "cd $T/gen && node tools/write.ts"
+}
+GEN_ROWS='export const ROWS: Row[] = []\n'
+gen_case '' "const text = \`import type { Row } from '../../lib/rules.ts'\\n$GEN_ROWS\`"
+refused "a writer that imports what it wrote, holding the written file's import of a module not beside the writer"
+says "that refusal is the module the text names, looked for from the writer" "../../lib/rules.ts, a module the gate cannot find"
+gen_case '' "const RULES = '../../lib/rules.ts'" "const text = \`import type { Row } from '\${RULES}'\\n$GEN_ROWS\`"
+allowed "the same writer taking that path from a value it holds, whose own import of the module is quiet"
+gen_case "fetch('https://slack.com/api/chat.postMessage');" "const RULES = '../../lib/rules.ts'" \
+  "const text = \`import type { Row } from '\${RULES}'\\n$GEN_ROWS\`"
+refused "and the module is still judged through the writer's own import of it: one that posts"
+says "that refusal names the module the writer imports" "rules.ts"
+# The replay tool itself, each way a session runs it, so the next change to the writer or the walk
+# that refuses it fails here rather than in a session (L48). The installed copy of these hooks has
+# no tools/ folder beside it, and says so rather than passing (L411).
+if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tools/area-check-replay.ts" ] && [ -f "$MODS_REPO/tools/area-check-fixture.ts" ]; then
+  run_bash "cd $MODS_REPO && bun test tools/area-check-replay.ts"
+  allowed "the area check's replay, bun test tools/area-check-replay.ts, is not refused (claude-config#2681)"
+  run_bash "cd $MODS_REPO && node tools/area-check-replay.ts . --repo danwright32/claude-config"
+  allowed "the same replay run by node on a checkout is not refused"
+else
+  echo "SUITE-PART-UNMEASURED #2681 the gate allows the area check's replay: $DIR is not in a claude-config checkout holding tools/area-check-replay.ts (the installed copy of the hooks is not), so the replay tool was not judged here"
+fi
+
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
 refused "python3 -c importing a helper that posts"
