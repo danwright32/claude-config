@@ -492,6 +492,9 @@ note_unsent_work(){ SEND_PENDING=1; }
 # The secret scan's refusal, when a sync asked for it to be handed back rather than end the run
 # (claude-config#947). Empty means no send this run was refused.
 SEND_REFUSED=""
+# Which scan refused it, in words, for the notice that says this Mac still receives. That notice
+# said "the secret scan" for every refusal, so a work name read as a leaked credential (#2530, L11).
+SEND_REFUSED_BY=""
 
 record_sent_if_shipped(){
   have_git || return 0
@@ -931,7 +934,7 @@ acquire_lock(){
     case "$max" in ''|*[!0-9]*) max="$PULL_LOCK_WAIT_DEFAULT" ;; esac
   fi
   case "$max" in ''|*[!0-9]*) max=90 ;; esac
-  whole_above_zero "$report_every" report_every || report_every=30
+  report_every="$(whole_above_zero "$report_every")" || report_every=30
   lock_t0="$(date +%s)"
   last_report="$lock_t0"
   lock_wait_expired(){   # -> true once `max` seconds have really passed since the first attempt
@@ -1677,6 +1680,10 @@ ENTRIES
   if [ -n "$fresh" ] && ! notify_posted "$3"; then
     cur="$told"
   fi
+  # Nothing to record under this key and nothing recorded there to clear: the rewrite below would
+  # put back the same file, two programs on every run for nothing (claude-config#2472). Only when
+  # the record exists, so a missing one is still created as before.
+  [ "$cur" = / ] && [ -z "$prev" ] && [ -f "$f" ] && return 0
   # Written beside the record and renamed over it, so a run that dies mid write leaves the old record
   # whole. Named for this tool and this run, not scratch: it never leaves the sync clone, where the
   # gitignore covers it, and the sync lock means only one run writes here at a time.
@@ -2433,6 +2440,41 @@ lesson_publish_faults(){   # $1 = tree to inspect -> the sentence, or nothing
   done
   printf '%s' "$faults"
   return 0
+}
+
+# THE LESSONS FILE ASKED ABOUT WORK NAMES WHEN A LESSON IS WRITTEN (claude-config#2530). A lesson
+# whose provenance names a work organisation was met only by the send, which refuses the WHOLE send
+# and, in the change watcher, says so only in ~/.claude-sync.log: on one Mac five refusals in one
+# morning for a single lesson, written by a session long gone. Asked here, through the one scanner
+# the send asks (work_names_run), the session that wrote the lesson hears it while it can fix it.
+#
+# Not one of LESSON_PUBLISH_FAULT_KINDS on purpose. Those hold the lessons file back from a send
+# that otherwise goes out; this one refuses the send entirely, by the send's own scan, so it is said
+# beside them in its own words (L11) and the send's behaviour is unchanged.
+#
+# A copy of the tool with no scanner beside it (only ever a copy run outside its checkout) judged
+# nothing, so it says so and returns 4 like any scan that could not run: a silent 0 read as the
+# lesson checked and found clean (L11, L98). The send refuses on that same ground. Prints the
+# sentence, or nothing when the file names none.
+lesson_work_name_fault(){   # $1 = tree -> the sentence, or nothing
+  local tree="$1" f="$LESSONS_FILE" lib list
+  [ -f "$tree/$f" ] || return 0
+  lib="$(work_names_lib)"
+  if [ ! -f "$lib" ]; then
+    printf '%s' "whether $f names a work organisation could not be checked, because the scanner is not beside this copy of claude-sync ($lib), and the send refuses on the same ground"; return 4
+  fi
+  list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || {
+    printf '%s' "whether $f names a work organisation could not be checked: no scratch file could be made for the scan"; return 4; }
+  printf '%s\0' "$f" > "$list"
+  work_names_run "$tree" "$list"
+  rm -f "$list"
+  # 0 when it judged (the sentence, if any, is a name found), 4 when it could not, so a caller never
+  # reports a scan that judged nothing as a lesson that names one (L11).
+  case "$WORK_NAMES_RC" in
+    0) return 0 ;;
+    1) printf '%s' "$f names a work organisation, at: $WORK_NAMES_FOUND. Every send from this Mac is refused while it does, so nothing edited here reaches the other Mac. Drop the organisation from that line (write name#123, never owner/name#123), or invent one in a fixture"; return 0 ;;
+    *) printf '%s' "whether $f names a work organisation could not be checked, and the send refuses on the same ground: $(printf '%s' "$WORK_NAMES_OUT" | tr '\n' ' ' | cut -c1-300)"; return 4 ;;
+  esac
 }
 
 # One past the highest number in use, never a gap: a skipped number was skipped
@@ -3963,10 +4005,12 @@ LESSON_BAND_SIZE="${SYNC_LESSON_BAND_SIZE:-500}"
 # also the width of a claim already recorded in lesson-bands, so a nonsense one is not a thing to
 # guess a default for.
 # Only a size given explicitly needs reading: the default is a whole number by construction.
-if [ -n "${SYNC_LESSON_BAND_SIZE:-}" ] && ! whole_above_zero "$LESSON_BAND_SIZE" LESSON_BAND_SIZE; then
+_wn_got=""
+if [ -n "${SYNC_LESSON_BAND_SIZE:-}" ] && ! _wn_got="$(whole_above_zero "$LESSON_BAND_SIZE")"; then
   [ -z "$WHOLE_NUMBER_MISSING" ] || die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE' and could not be read: $WHOLE_NUMBER_MISSING. NOTHING was done."
   die "SYNC_LESSON_BAND_SIZE is set to '$LESSON_BAND_SIZE', which is not a whole number of numbers a band can hold, and bash would read it as zero, making every band empty. NOTHING was done. Unset it to use the default of 500, which is what the bands in $LESSON_BANDS_DIR were claimed under."
 fi
+[ -z "$_wn_got" ] || LESSON_BAND_SIZE="$_wn_got"
 
 # Every band any Mac has claimed, as "host<TAB>start". A file that does not hold a number is
 # skipped rather than read as zero: a zero would look like a legitimate band below everyone else's
@@ -4238,7 +4282,7 @@ LOOP_INPUT
 # deadline fires without waiting ten seconds of real time for it (L524).
 take_reservations_lock(){
   local lock="$LESSON_RESERVATIONS_FILE.lock" max="${SYNC_LESSON_LOCK_WAIT:-10}" rc=0
-  whole_above_zero "$max" max || max=10
+  max="$(whole_above_zero "$max")" || max=10
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
   take_pid_lock "$lock" "$max" || rc=$?
   case "$rc" in
@@ -4272,6 +4316,11 @@ do_next_lesson(){
     echo "claude-sync: $num is reserved for $(duration_in_words "$LESSON_RESERVE_SECONDS"), so no other ask on this Mac is given it. Write the lesson under it before then; a number nobody writes lapses and is offered again." >&2
   fi
   release_reservations_lock
+  # A warning, never a refusal: the number is still good, and the lesson about to be written is not
+  # the one at fault. Said here because this is the moment a lesson is about to be added, and the
+  # file it goes into already stops every send (claude-config#2530).
+  local wnfault; wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || true
+  is_blank "$wnfault" || echo "claude-sync: warning: $wnfault." >&2
   printf '%s\n' "$num"
 }
 
@@ -5248,6 +5297,12 @@ LOOP_INPUT
   # After everything has been mirrored in, and before the scan, so what is scanned and what is
   # committed are the same bytes the other Mac will receive.
   tokenize_payload
+  # The record of the last refusal as it stood BEFORE either scan, read by record_send_refused to
+  # count refusals in a row (claude-config#2530). The secret scan clears the record when it passes,
+  # before the work names scan runs, so without this a run of work names refusals would count one
+  # each time. Local, so it lives for these two scans only.
+  local SEND_REFUSED_PRIOR=""
+  [ -z "${SEND_REFUSED_FILE:-}" ] || SEND_REFUSED_PRIOR="$(head -n 1 "$SEND_REFUSED_FILE" 2>/dev/null || true)"
   scan_secrets   # never let a credential reach the shared remote  # LAST, once everything this send would carry is in the payload, so it sees the finished state
   # rather than one of the code paths that built it (L78).
   # A refusal handed back to a sync ends the staging here: nothing staged is going anywhere, so
@@ -5256,6 +5311,79 @@ LOOP_INPUT
   scan_work_names  # nor a work organisation's name (claude-config#1568), on the same finished state
   if [ -n "$SEND_REFUSED" ]; then return 0; fi
   refuse_resurrected_deletions
+}
+
+# THE RECORD OF A REFUSED SEND, one line in $SEND_REFUSED_FILE (claude-config#947, #2530):
+#   when \t found \t why \t count \t first [\t atleast]
+# when    the epoch of the latest refusal
+# found   what the scan found, "path:line ..." or the secret scan's file list, empty when it found
+#         nothing because it could not look
+# why     empty for a possible secret, else unlisted, work-names or work-names-unjudged
+# count   refused sends in a row since a send last got past both scans
+# first   the epoch of the first of them
+# atleast present when the run began under a record from before the count existed, so count is a
+#         floor rather than a measurement (L11)
+# One writer, so the count cannot be kept by one scan and lost by the other. Removed by the secret
+# scan whenever it passes or is skipped, and the work names scan runs after it and writes only on a
+# refusal, so the record stands exactly while sends are being refused. Read by sync_stuck_records,
+# which is what status and the per prompt notice report it from, and by pending_edits_cause.
+record_send_refused(){   # $1 = what was found  $2 = why
+  [ -n "${SEND_REFUSED_FILE:-}" ] || return 0
+  local now prior pwhen pcount pfirst patleast count=1 first atleast=""
+  now="$(date +%s)"; first="$now"
+  # The record as it stood before this send's scans when the staging captured it, else the file.
+  if [ -n "${SEND_REFUSED_PRIOR+set}" ]; then prior="$SEND_REFUSED_PRIOR"
+  else prior="$(head -n 1 "$SEND_REFUSED_FILE" 2>/dev/null || true)"; fi
+  if [ -n "$prior" ]; then
+    # awk rather than read: tab is whitespace to read, so the empty found of a refusal that could
+    # not look would shift every later field left.
+    pwhen="$(printf '%s' "$prior" | awk -F'\t' '{print $1}')"
+    pcount="$(printf '%s' "$prior" | awk -F'\t' '{print $4}')"
+    pfirst="$(printf '%s' "$prior" | awk -F'\t' '{print $5}')"
+    patleast="$(printf '%s' "$prior" | awk -F'\t' '{print $6}')"
+    case "$pcount$pfirst" in
+      ''|*[!0-9]*)
+        # A record from before the count, or one that will not parse: it was one refusal at least,
+        # and when the run began is unknown, so the count from here on is a floor.
+        case "$pwhen" in ''|*[!0-9]*) ;; *) count=2; first="$pwhen"; atleast=atleast ;; esac ;;
+      *)
+        if [ -n "$pcount" ] && [ -n "$pfirst" ]; then count=$(( pcount + 1 )); first="$pfirst"; atleast="$patleast"; fi ;;
+    esac
+  fi
+  if [ -n "$atleast" ]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "$1" "$2" "$count" "$first" "$atleast" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  else
+    printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$1" "$2" "$count" "$first" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# THE ONE WORK NAMES SCANNER, asked from here by the send (scan_work_names) and by the lesson check
+# (lesson_work_name_fault, claude-config#2530), so the two cannot disagree about what a name is
+# (L370). hooks/lib/work-names.py does the judging; this only runs it and reads its verdict.
+work_names_lib(){ printf '%s' "$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py"; }
+# Sets WORK_NAMES_RC (0 clean, 1 found, 2 could not judge), WORK_NAMES_FOUND ("path:line ..." when
+# 1) and WORK_NAMES_OUT (what the scanner said, or why it could not run). The scanner itself must be
+# there; each caller says in its own words what its absence means.
+work_names_run(){   # $1 = the root the listed paths are relative to  $2 = a file of NUL separated paths
+  local lib; lib="$(work_names_lib)"
+  WORK_NAMES_FOUND=""; WORK_NAMES_OUT=""; WORK_NAMES_RC=0
+  if ! command -v python3 >/dev/null 2>&1; then
+    WORK_NAMES_OUT="python3, which runs the work names scanner ($lib), is not on PATH"; WORK_NAMES_RC=2; return 0
+  fi
+  # Read in an && || list: under set -e a bare assignment from a scan that exits 1 or 2 would end
+  # the run there, before any refusal could say what it found.
+  WORK_NAMES_OUT="$(python3 "$lib" --root "$1" --files0-from "$2" 2>&1)" && WORK_NAMES_RC=0 || WORK_NAMES_RC=$?
+  if [ "$WORK_NAMES_RC" -eq 1 ]; then
+    WORK_NAMES_FOUND="$(printf '%s\n' "$WORK_NAMES_OUT" | grep -v '^work-names:' | cut -d: -f1,2 | sort -u | tr '\n' ' ')"
+    WORK_NAMES_FOUND="${WORK_NAMES_FOUND% }"
+    # Exit 1 with nothing found is a scanner that crashed (python's own exit for an uncaught
+    # error), never a finding: said as a scan that could not judge (L11).
+    is_blank "$WORK_NAMES_FOUND" && WORK_NAMES_RC=2
+  elif [ "$WORK_NAMES_RC" -ne 0 ]; then
+    WORK_NAMES_RC=2
+  fi
+  return 0
 }
 
 # Refuse to publish a file that names a work GitHub organisation (claude-config#1568). The repository
@@ -5290,7 +5418,8 @@ scan_work_names(){
       return 0
     fi
   fi
-  local lib="$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py" list="" listing="" listed=0 out="" rc=0 refusal found
+  local lib list="" listing="" listed=0 out="" rc=0 refusal found
+  lib="$(work_names_lib)"
   if [ -f "$lib" ]; then
     list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
     # A listing that failed, or that came back empty, is not a clean tree: it is a scan of nothing,
@@ -5310,12 +5439,8 @@ scan_work_names(){
     out="the files this send would publish could not be listed: ${listing:0:300}"; rc=2
   elif [ ! -s "$list" ]; then
     out="listing the files this send would publish found none, so nothing could be scanned"; rc=2
-  elif ! command -v python3 >/dev/null 2>&1; then
-    out="python3, which runs the work names scanner ($lib), is not on PATH"; rc=2
   else
-    # Read in an && || list: under set -e a bare assignment from a scan that exits 1 or 2 would end
-    # the run there, before any refusal could say what it found.
-    out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)" && rc=0 || rc=$?
+    work_names_run "$SYNC_REPO" "$list"; out="$WORK_NAMES_OUT"; rc="$WORK_NAMES_RC"; found="$WORK_NAMES_FOUND"
   fi
   [ -z "$list" ] || rm -f "$list"
   [ "$rc" -eq 0 ] && return 0
@@ -5323,14 +5448,13 @@ scan_work_names(){
   local override="SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one run"
   [ "${SYNC_IN_WATCH:-0}" = "1" ] && override="SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one send run by hand (claude-sync send), never in the change watcher"
   if [ "$rc" -eq 1 ]; then
-    found="$(printf '%s\n' "$out" | grep -v '^work-names:' | cut -d: -f1,2 | sort -u | tr '\n' ' ')"
-    refusal="a file this send would publish names a work organisation, at: ${found% }. Drop the organisation from prose and provenance (write name#123, never owner/name#123) or invent one in a fixture, then sync again. $override"
-    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\twork-names\n' "$(date +%s)" "${found% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+    refusal="a file this send would publish names a work organisation, at: $found. Drop the organisation from prose and provenance (write name#123, never owner/name#123) or invent one in a fixture, then sync again. $override"
+    record_send_refused "$found" work-names
   else
     refusal="the work names scan could not judge what this send would publish, so nothing is sent: $(printf '%s' "$out" | tr '\n' ' ')"
-    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t\twork-names-unjudged\n' "$(date +%s)" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+    record_send_refused "" work-names-unjudged
   fi
-  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; return 0; fi
+  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the work names scan"; return 0; fi
   die "$refusal"
 }
 
@@ -5427,15 +5551,15 @@ LOOP_INPUT
     # the second field names what the scan FOUND, and here it found nothing, it could not look, so
     # that field stays empty and a third says why (L11).
     refusal="git could not list the files outside the payload this push would publish, so they were not scanned for secrets and nothing is sent: $(printf '%s' "$unlisted" | tr '\n' ' ')"
-    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t\tunlisted\n' "$(date +%s)" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+    [ -z "${SEND_REFUSED_FILE:-}" ] || record_send_refused "" unlisted
   else
     refusal="possible secret found in: ${findings% }. Remove it, allowlist its fingerprint in .secret-allowlist, or set SYNC_SKIP_SECRET_SCAN=1 to override"
-    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\n' "$(date +%s)" "${findings% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+    [ -z "${SEND_REFUSED_FILE:-}" ] || record_send_refused "${findings% }" ""
   fi
   # A sync asks for the refusal to be HANDED BACK rather than ending the run, so its receiving half
   # still runs (claude-config#947). Nothing is weaker for it: do_sync then sets the staged edits
   # aside, commits nothing, pushes nothing, and still fails the run with these same words.
-  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; return 0; fi
+  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; SEND_REFUSED_BY="the secret scan"; return 0; fi
   die "$refusal"
 }
 
@@ -6317,6 +6441,16 @@ apply_payload_to_local(){
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
   move_shared_files_to_local # before anything reads or mirrors them (claude-config#1526)
+  # What the shared repo changed that this Mac has not applied, worked out ONCE for the steps below
+  # (claude-config#2472). merge_rule_files, preserve_local_conflicts and locally_ahead_paths each
+  # asked unapplied_paths, about nine programs every time, and nothing between them moves HEAD, the
+  # applied marker or the shared branch, so all three got the same answer. Local, so it is visible
+  # only to what this function calls and is gone when it returns: a later step that does move HEAD
+  # asks afresh. Worked out before the flag is set, or it would read its own empty answer, and not
+  # at all without git, where the answer is always nothing.
+  local APPLY_UNAPPLIED="" APPLY_UNAPPLIED_KNOWN=""
+  if have_git; then APPLY_UNAPPLIED="$(unapplied_paths)"; fi
+  APPLY_UNAPPLIED_KNOWN=1
   merge_rule_files           # entry level merge first: what merges is no conflict
   preserve_local_conflicts   # then whatever genuinely clashed, before it is overwritten
   # Hold back local edits the repo has not seen (see locally_ahead_paths): the
@@ -6793,7 +6927,7 @@ SYNCBAKS
 # that names it.
 backup_keep_days(){
   local d="${SYNC_BACKUP_KEEP_DAYS:-90}"
-  whole_above_zero "$d" d || d=90
+  d="$(whole_above_zero "$d")" || d=90
   printf '%s' "$d"
 }
 
@@ -6868,6 +7002,12 @@ ALLBAKS
 # more rather than mirroring over the other Mac's work (L42).
 unapplied_paths(){
   local last head changed branch upstream bases theirs _b
+  # Inside one apply the answer is worked out once and read by every step that asks
+  # (claude-config#2472): see apply_payload_to_local, the only place this is set.
+  if [ -n "${APPLY_UNAPPLIED_KNOWN:-}" ]; then
+    [ -z "$APPLY_UNAPPLIED" ] || printf '%s\n' "$APPLY_UNAPPLIED"
+    return 0
+  fi
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
@@ -8383,13 +8523,18 @@ receive_command(){
 #   concludable  in progress, no work left in the todo, nothing unmerged: finishing it is safe
 #   conflict     in progress with paths still unmerged: only a person can settle that
 sync_rebase_dir(){   # prints the directory of an in progress rebase, or nothing
-  local d
-  for d in rebase-merge rebase-apply; do
-    d="$(git -C "$SYNC_REPO" rev-parse --git-path "$d" 2>/dev/null || true)"
+  # Both places asked in ONE git call, which prints one path per line in the order asked
+  # (claude-config#2472): every mutating run asks this at least twice, and a git start is the
+  # costliest thing a run does.
+  local d paths
+  paths="$(git -C "$SYNC_REPO" rev-parse --git-path rebase-merge --git-path rebase-apply 2>/dev/null || true)"
+  while IFS= read -r d; do
     [ -n "$d" ] || continue
     case "$d" in /*) ;; *) d="$SYNC_REPO/$d" ;; esac
     [ -d "$d" ] && { printf '%s' "$d"; return 0; }
-  done
+  done <<REBASE_PATHS
+$paths
+REBASE_PATHS
   return 1
 }
 
@@ -9625,7 +9770,7 @@ HSCOVEOF
     IFS="$(printf '\t')" read -r partial_n partial_names <<HSPARTEOF
 $(hook_suite_partial "$out")
 HSPARTEOF
-    whole_above_zero "$partial_n" partial_n || partial_n=''
+    partial_n="$(whole_above_zero "$partial_n")" || partial_n=''
     if [ "$ran" != '?' ] && [ "$notrun" -eq 0 ] && [ -n "$partial_n" ]; then
       # Every suite ran, but not every part of them (claude-config#1452): "all N of its suites" is
       # the reassuring reading this exists to refuse, so it is not said.
@@ -10395,7 +10540,7 @@ do_sync(){
     refused_all="$(pending_payload_edits)" || die "$SEND_REFUSED"
     while IFS= read -r rp; do [ -n "$rp" ] && refused_list+=("$rp"); done <<< "$refused_all"
     if [ "${#refused_list[@]}" -gt 0 ]; then set_aside_payload_edits "${refused_list[@]}"; fi
-    notify "send refused by the secret scan; this Mac still receives"
+    notify "send refused by ${SEND_REFUSED_BY:-a scan that did not say which}; this Mac still receives"
     echo "claude-sync: this sync SENT NOTHING, because $SEND_REFUSED" >&2
     if [ "${#refused_list[@]}" -gt 0 ]; then report_set_aside "The receiving half of this sync still runs"; fi
   fi
@@ -11230,9 +11375,9 @@ hold_write_rows(){
 # takes it. SYNC_HOLD_LOCK_WAIT shortens the wait for the suite.
 hold_lock(){   # $1 = seconds to wait at most (optional; SYNC_HOLD_LOCK_WAIT, else ten)
   local max="${SYNC_HOLD_LOCK_WAIT:-10}"
-  whole_above_zero "$max" max || max=10
+  max="$(whole_above_zero "$max")" || max=10
   local want
-  if whole_above_zero "${1:-}" want; then [ "$want" -ge "$max" ] || max="$want"; fi
+  if want="$(whole_above_zero "${1:-}")"; then [ "$want" -ge "$max" ] || max="$want"; fi
   take_pid_lock "$SYNC_HOLD_FILE.lock" "$max"
 }
 hold_unlock(){ rm -f "$SYNC_HOLD_FILE.lock" 2>/dev/null || true; }
@@ -12324,7 +12469,7 @@ hook_suite_headroom(){   # $1 = seconds the run took, or ? -> a clause, or nothi
 # and some whose names this record does not carry (L11).
 hook_suite_skipped(){   # $1 = the notrun count  $2 = the names, or ? / empty
   local n
-  whole_above_zero "${1:-}" n || return 0
+  n="$(whole_above_zero "${1:-}")" || return 0
   case "${2:-}" in
     ''|'?') printf ', though %s of its suites could not run here and this record does not name them' "$n" ;;
     *)      printf ', though %s of its suites could not run here: %s' "$n" "$(printf '%s' "$2" | tr ',' ' ')" ;;
@@ -12484,7 +12629,9 @@ report_ci_unreadable(){
 #                disk, because that one fails its self test (claude-config#1569)
 #   watcher-looping  the change watcher kept ending as soon as it started, so it stopped restarting
 #                and sends nothing until a different claude-sync is on disk (claude-config#1594)
-#   sending-unreadable, receiving-unreadable, watcher-stale-unreadable
+#   send-refused the secret scan or the work names scan refused the latest send, and every send
+#                since a send last got through (claude-config#2530); see send_refused_record
+#   sending-unreadable, receiving-unreadable, watcher-stale-unreadable, send-refused-unreadable
 #                the record is THERE and its count will not parse, so whether anything is stuck
 #                cannot be answered from it. Said rather than read as zero: a record nobody can
 #                read and a sync with nothing wrong must not arrive as the same silence (L98, L11).
@@ -12560,6 +12707,66 @@ sync_stuck_records(){
               "the change watcher is stuck on an older claude-sync, so config edited on this Mac is not reaching the other Mac: it runs ${runs:-an unrecorded copy}, and the newer one on disk, ${disk:-an unrecorded copy}, $(script_fault_words "$fault"), so it cannot restart onto it. It has refused $n change(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))"), and restarts by itself once a claude-sync that runs is in $SYNC_REPO; a fixed version arrives with: git -C $SYNC_REPO pull" ;;
         esac ;;
     esac
+  fi
+  send_refused_record "$now"
+  return 0
+}
+
+# A send refused by the secret scan or the work names scan (claude-config#2530). The refusal is
+# said by the run that refused, which for the change watcher reaches ~/.claude-sync.log and nothing
+# else: on one Mac 71 refusals sat there while stuck said nothing and status said only when this Mac
+# last sent. Read from the record the scans keep (record_send_refused), which stands exactly while
+# sends are being refused, so it is reported until a send gets past both scans.
+#   send-refused             count (or - for a record from before the count), first (or -), sentence
+#   send-refused-unreadable  the record is there and cannot be read or will not parse
+send_refused_record(){   # $1 = now
+  local now="$1" line when found why count first atleast scan reason remedy times since
+  [ -n "${SEND_REFUSED_FILE:-}" ] && [ -e "$SEND_REFUSED_FILE" ] || return 0
+  if [ ! -r "$SEND_REFUSED_FILE" ] || ! line="$(head -n 1 "$SEND_REFUSED_FILE" 2>/dev/null)"; then
+    printf 'send-refused-unreadable\t-\t-\t%s\n' "the record of the last refused send, at $SEND_REFUSED_FILE, could not be read, so whether sends from this Mac are being refused cannot be told from it. The next send rewrites it, or removes it once a send gets through; if this keeps being said, run 'claude-sync push' from $SYNC_REPO and read what it says."
+    return 0
+  fi
+  when="$(printf '%s' "$line" | awk -F'\t' '{print $1}')"
+  found="$(printf '%s' "$line" | awk -F'\t' '{print $2}')"
+  why="$(printf '%s' "$line" | awk -F'\t' '{print $3}')"
+  count="$(printf '%s' "$line" | awk -F'\t' '{print $4}')"
+  first="$(printf '%s' "$line" | awk -F'\t' '{print $5}')"
+  atleast="$(printf '%s' "$line" | awk -F'\t' '{print $6}')"
+  case "$when" in
+    ''|*[!0-9]*)
+      printf 'send-refused-unreadable\t-\t-\t%s\n' "the record of the last refused send, at $SEND_REFUSED_FILE, will not parse, so whether sends from this Mac are being refused cannot be told from it. The next send rewrites it, or removes it once a send gets through; if this keeps being said, run 'claude-sync push' from $SYNC_REPO and read what it says."
+      return 0 ;;
+  esac
+  case "$why" in
+    work-names)
+      scan="the work names scan"
+      reason="a file it would publish names a work organisation, at: ${found:-a place the record does not name}"
+      remedy="Drop the organisation from that line in this Mac's config (write name#123, never owner/name#123), and the next send goes out." ;;
+    work-names-unjudged)
+      scan="the work names scan"
+      reason="the scan could not run, so nothing was judged"
+      remedy="Run 'claude-sync push' from $SYNC_REPO to see why it could not run." ;;
+    unlisted)
+      scan="the secret scan"
+      reason="git could not list the files outside the payload it would publish, so they went unscanned"
+      remedy="Run 'claude-sync push' from $SYNC_REPO to see what git said." ;;
+    *)
+      scan="the secret scan"
+      reason="it found a possible secret in: ${found:-a file the record does not name}"
+      remedy="Remove it from this Mac's config, or allowlist its fingerprint in .secret-allowlist if it is not one, and the next send goes out." ;;
+  esac
+  case "$count" in ''|*[!0-9]*) count="" ;; esac
+  case "$first" in ''|*[!0-9]*) first="" ;; esac
+  if [ -n "$count" ] && [ -n "$first" ]; then
+    times="$count times in a row"; [ -n "$atleast" ] && times="at least $count times in a row"
+    since="$times since $(age_in_words "$(( now - first ))"), the latest $(age_in_words "$(( now - when ))")"
+    printf 'send-refused\t%s\t%s\t%s\n' "$count" "$first" \
+      "sending is refused: $scan has refused every send from this clone $since, so config edited on this Mac is not reaching the other Mac. The latest refusal: $reason. $remedy"
+  else
+    # A record from before the count existed: the refusal is real, how many there were was never
+    # measured, and saying one would be a claim nobody made (L11).
+    printf 'send-refused\t-\t-\t%s\n' \
+      "sending is refused: $scan refused a send from this clone $(age_in_words "$(( now - when ))") (how many times in a row was not counted by the version that wrote the record), so config edited on this Mac is not reaching the other Mac. The latest refusal: $reason. $remedy"
   fi
   return 0
 }
@@ -13477,7 +13684,8 @@ esac
 # Only a timeout given explicitly needs reading: the default is a whole number by construction.
 _sct_given="${SYNC_CLAUDE_CHECK_TIMEOUT:-}"
 SYNC_CLAUDE_CHECK_TIMEOUT="${SYNC_CLAUDE_CHECK_TIMEOUT:-30}"
-if [ -n "$_sct_given" ] && ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT" SYNC_CLAUDE_CHECK_TIMEOUT; then
+_wn_got=""
+if [ -n "$_sct_given" ] && ! _wn_got="$(whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT")"; then
   if [ -n "$WHOLE_NUMBER_MISSING" ]; then
     echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' could not be read: $WHOLE_NUMBER_MISSING. Refusing to run rather than asking claude about the mods with a bound nobody read." >&2
     exit 2
@@ -13485,6 +13693,7 @@ if [ -n "$_sct_given" ] && ! whole_above_zero "$SYNC_CLAUDE_CHECK_TIMEOUT" SYNC_
   echo "claude-sync: SYNC_CLAUDE_CHECK_TIMEOUT='$SYNC_CLAUDE_CHECK_TIMEOUT' is not a positive whole number of seconds. Refusing to run rather than asking claude about the mods with no bound nobody can read." >&2
   exit 2
 fi
+[ -z "$_wn_got" ] || SYNC_CLAUDE_CHECK_TIMEOUT="$_wn_got"
 
 SYNC_SCRATCH_DU_TIMEOUT="${SYNC_SCRATCH_DU_TIMEOUT:-30}"
 case "$SYNC_SCRATCH_DU_TIMEOUT" in
@@ -14820,11 +15029,22 @@ case "$cmd" in
   # Read only, LOCK FREE, and silent when nothing is stuck: whether this clone's sync is stuck, as
   # the tab separated records sync_stuck_records describes (claude-config#391). What the per prompt
   # notice runs on every prompt, so it must never wait on the lock the watcher is holding (L110),
-  # and it reads two small files rather than asking the network anything.
+  # and it reads the small records the sync keeps (.behind-skips, .ci-red-since, .watch-stale and
+  # .send-refused) rather than asking the network anything.
   stuck) sync_stuck_records ;;
+  # Exit 1 for a fault that holds the lessons file back (with any work name fault said beside it),
+  # 3 when the only fault is a work organisation name, which refuses the whole send instead
+  # (claude-config#2530), and 4 when the work names scan could not run, so the hook that runs this
+  # can say which it is (L11).
   lesson-faults)
     faults="$(lesson_publish_faults "$CLAUDE_HOME")"
-    if ! is_blank "$faults"; then die "$faults"; fi
+    wnrc=0; wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || wnrc=$?
+    if ! is_blank "$faults"; then die "$faults${wnfault:+ $wnfault.}"; fi
+    if ! is_blank "$wnfault"; then
+      echo "claude-sync: $wnfault." >&2
+      [ "$wnrc" -eq 0 ] && exit 3
+      exit 4
+    fi
     ;;
   # Read only: do the generated index files hold every lesson in the LESSONS.md beside them exactly
   # once. verify_lesson_index otherwise runs only INSIDE a write, so the only way to reach it was to
@@ -14846,7 +15066,8 @@ case "$cmd" in
     # second. That is exactly how the cap fault surfaced only after the bold markers were fixed.
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
     lessonfaults="$(lesson_publish_faults "$CLAUDE_HOME")"
-    if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
+    wnfault="$(lesson_work_name_fault "$CLAUDE_HOME")" || true   # claude-config#2530, its words say which
+    if ! is_blank "$lessonfaults$wnfault"; then die "${lessonfaults}${lessonfaults:+${wnfault:+ }}${wnfault:+$wnfault.}"; fi
     # A preview: it skips reserved numbers, so it names what the next ask gets, and reserves nothing.
     require_readable_reservations
     lesson_band_with_room "$CLAUDE_HOME"

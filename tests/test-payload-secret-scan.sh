@@ -44,6 +44,15 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # The function and the helper it calls, cut from claude-sync by name. die is replaced so a refusal
 # is reported here instead of ending this suite (and without the notification the real one posts).
 SCAN_SRC="$(sed -n '/^scan_secrets(){/,/^}/p' "$SCRIPT")"
+# Its refusals are recorded by the one writer the work names scan shares (claude-config#2530), so
+# that writer is cut out with it, and the record below is what the real send leaves.
+RECORD_SRC="$(sed -n '/^record_send_refused(){/,/^}/p' "$SCRIPT")"
+case "$RECORD_SRC" in
+  *'SEND_REFUSED_FILE'*) check "record_send_refused was cut from claude-sync" ok ;;
+  *) check "record_send_refused was cut from claude-sync" "not found" ;;
+esac
+SCAN_SRC="$SCAN_SRC
+$RECORD_SRC"
 BLANK_SRC="$(sed -n '/^is_blank(){/p' "$SCRIPT")"
 case "$SCAN_SRC" in
   *'apat='*'grep -rIoE'*'die '*) check "scan_secrets was cut from claude-sync whole" ok ;;
@@ -385,7 +394,7 @@ esac
 # finding, and why. A later pull reads the record through pending_edits_cause, cut out here too.
 rec="$(cat "$OC/.send-refused" 2>/dev/null)"
 case "$rec" in
-  [0-9]*"$(printf '\t\t')unlisted") check "#1133 that refusal is recorded with no finding and the reason" ok ;;
+  [0-9]*"$(printf '\t\t')unlisted$(printf '\t')1$(printf '\t')"[0-9]*) check "#1133 that refusal is recorded with no finding and the reason" ok ;;
   *) check "#1133 that refusal is recorded with no finding and the reason" "got: '$rec'" ;;
 esac
 CAUSE_SRC="$(sed -n '/^pending_edits_cause(){/,/^}/p' "$SCRIPT")"

@@ -61,6 +61,7 @@ NAME = r'([A-Za-z0-9._+-]+)'
 SELF_DIR = (r'\$\{BASH_SOURCE(?:\[0\])?%/\*\}', r'\$\(dirname \$\{?BASH_SOURCE(?:\[0\])?\}?\)',
             r'\$\(cd \$\(dirname \$\{?BASH_SOURCE(?:\[0\])?\}?\) && pwd\)')
 SELF_PATH = re.compile(r'^(?:' + '|'.join(SELF_DIR) + r')/' + NAME + r'$')
+SELF_STRIP = re.compile(r'^\$\{BASH_SOURCE(?:\[0\])?%' + NAME + r'\}\./' + NAME + r'$')
 VAR_PATH = re.compile(r'^\$\{?([A-Za-z_]\w*)\}?/' + NAME + r'$')
 VAR_ONLY = re.compile(r'^\$\{?([A-Za-z_]\w*)\}?$')
 
@@ -136,6 +137,12 @@ def sourced(path):
         m = SELF_PATH.match(op)
         if m:
             return m.group(1)
+        # "${BASH_SOURCE[0]%<this file's name>}./x.sh": its own name cut off is its folder, or
+        # nothing when it was sourced by bare name, so the ./ keeps it beside the helper either way
+        # (lib/suite-deadline.sh, claude-config#2465). Only its OWN name: any other leaves the path whole.
+        m = SELF_STRIP.match(op)
+        if m and m.group(1) == os.path.basename(path):
+            return m.group(2)
         m = VAR_PATH.match(op)
         if m and self_dir(m.group(1)):
             return m.group(2)

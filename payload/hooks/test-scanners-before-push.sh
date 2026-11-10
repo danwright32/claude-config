@@ -259,7 +259,7 @@ commit_all(){ git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -q -m "fixt
 FIRE_DEADLINE="${SCANNERS_TEST_FIRE_DEADLINE:-60}"
 # shellcheck source=lib/whole-number.sh
 . "$DIR/lib/whole-number.sh"
-if ! whole_above_zero "$FIRE_DEADLINE" FIRE_DEADLINE; then
+if _wn_got="$(whole_above_zero "$FIRE_DEADLINE")"; then FIRE_DEADLINE="$_wn_got"; else
   echo "test-scanners-before-push: SCANNERS_TEST_FIRE_DEADLINE='$FIRE_DEADLINE' is not a whole number of seconds above zero. Refusing to run the gate calls unbounded." >&2
   exit 2
 fi

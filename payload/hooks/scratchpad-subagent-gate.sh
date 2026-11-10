@@ -18,6 +18,11 @@
 # The main thread is left alone: it has no sibling to collide with, and it is where a file meant
 # for every agent to READ is written.
 #
+# The same holds for the session's NOTES FOLDER (claude-config#2490), ~/.claude/state/session-notes/
+# <project>/<session>/, where agents' working folders live now that a restart of the Mac has been
+# seen to empty the scratchpad: its root is the main session's (handoff.md), and a subagent's write
+# there is refused the same way.
+#
 # WHO IS CALLING is read from `agent_id`, present only inside a subagent (measured 2026-09-17, see
 # playwright-subagent-gate.sh). A SCRATCHPAD is a directory named `scratchpad` under the harness's
 # per user temp folder, /tmp/claude-<uid>/ or its /private spelling, so a project folder that
@@ -40,6 +45,7 @@ payload="$(cat 2>/dev/null || true)"
 # too broken to contain either is still one this gate cannot judge, and says so below.
 case "$payload" in
   *'"agent_id"'*scratchpad*|*scratchpad*'"agent_id"'*) ;;
+  *'"agent_id"'*session-notes*|*session-notes*'"agent_id"'*) ;;
   *'"tool_name"'*) exit 0 ;;
 esac
 
@@ -73,7 +79,11 @@ if tool not in ("Write", "Bash") or "agent_id" not in d:
 agent = str(d.get("agent_id") or "agent")
 inp = d.get("tool_input") or {}
 # A scratchpad ROOT file: <temp>/claude-<uid>/<project>/<session>/scratchpad/<name>, nothing deeper.
-ROOT_FILE = r"(?:/private)?/tmp/claude-[0-9]+/[^/\s\"\x27]+/[^/\s\"\x27]+/scratchpad/[^/\s\"\x27]+"
+# Or a notes folder ROOT file (#2490): .claude/state/session-notes/<project>/<session>/<name>, the
+# folder a restart cannot clear, where agents are now given their working folders (lib/session_notes.py).
+SEG = r"[^/\s\"\x27]+"
+ROOT_FILE = (r"(?:(?:/private)?/tmp/claude-[0-9]+/" + SEG + "/" + SEG + "/scratchpad/" + SEG
+             + r"|~?(?:/" + SEG + r")*?/\.claude/state/session-notes/" + SEG + "/" + SEG + "/" + SEG + ")")
 def suggest(path):
     head, name = os.path.split(path)
     return os.path.join(head, agent, name)
@@ -96,7 +106,7 @@ print("refuse\t" + "; ".join("%s -> %s" % (t, suggest(t)) for t in dict.fromkeys
 
 case "$verdict" in
   refuse$'\t'*)
-    echo "REFUSED: a subagent is writing straight into the scratchpad every agent in this session shares, where a sibling picking the same name overwrites it between your write and your read (claude-config#527). Write it in a subdirectory of your own instead: ${verdict#*$'\t'}. Create the directory first (mkdir -p), and read the file back from that same path." >&2
+    echo "REFUSED: a subagent is writing straight into the scratchpad or notes folder every agent in this session shares, where a sibling picking the same name overwrites it between your write and your read (claude-config#527). Write it in a subdirectory of your own instead: ${verdict#*$'\t'}. Create the directory first (mkdir -p), and read the file back from that same path." >&2
     exit 2
     ;;
   allow$'\t'*)

@@ -153,6 +153,7 @@ declare_gate(){ printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
   declare_gate require-verification-run.sh "gh pr merge 5 --squash"         ALLOW_UNVERIFIED_MERGE
   declare_gate design-score-gate.sh        "gh pr merge 5 --squash"         -
   declare_gate check-rtk-init.sh           "rtk init -g"                    -
+  declare_gate temp-worktree-gate.sh       "git worktree add /tmp/wt-2528"  ALLOW_TEMP_WORKTREE
   declare_gate stacked-branch-delete-gate.sh "git push origin :feat/x"      -
   declare_gate check-wrapped-commands.sh   "eval \$CMD && git status"       -
   declare_gate pr-review-gate.sh           "cat x/helper-key"               -
@@ -520,6 +521,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged check-add-scope.sh           Bash "$(bash_call 'git add -A')" '{}' refuse
   judged no-verify-gate.sh            Bash "$(bash_call 'git commit --no-verify -m wip')" "$AGENT" refuse
   judged amend-force-push-gate.sh     Bash "$(bash_call 'git commit --amend -m wip')" "$AGENT" refuse
+  judged temp-worktree-gate.sh        Bash "$(bash_call 'git worktree add /tmp/wt-2528 -b fix/2528')" '{}' refuse
   judged check-gh-watch-interval.sh   Bash "$(bash_call 'gh run watch 5')" '{}' "notice #1912"
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
   # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).
@@ -536,6 +538,9 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
   judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
+  # It never refuses: it ASKS Dan about a database call it cannot classify, by Dan's decision on
+  # 2026-11-09 (#2521), so a call it cannot parse is asked about, naming the payload.
+  judged db-write-ask.sh mcp__claude_ai_Supabase__execute_sql '{"query": "update runs set note = '"'"'@@'"'"' where false", "project_id": "probe"}' '{}' "ask db-write-ask.sh header"
 } > "$WORK/judged"
 # Every blocking gate is in the table, so one added later is not exempt by being unlisted (L96).
 while IFS= read -r g; do
@@ -648,6 +653,9 @@ while IFS=$'\t' read -r g tool inp extra unread; do
       case "$cutd" in "exit 0, decision none, said something") ok ;; *) bad "$g, which lets a call it cannot parse through by recorded decision (${unread#notice }), should allow it and say so ($cutd): ${cut:0:200}" ;; esac
       v="$(hook_notice_verdict "$(cat "$R/cut/stdout" 2>/dev/null)" '(?i)did not run|not judged|could not (read|judge|parse)|unread' 2>&1)"
       [ -z "$v" ] && ok || bad "$g let a call it could not parse through without saying so in a systemMessage: $v" ;;
+    ask*)
+      case "$cutd" in "exit 0, decision ask,"*) ok ;; *) bad "$g, which asks Dan about a call it cannot classify (${unread#ask }), let one it could not parse through without asking ($cutd): ${cut:0:200}" ;; esac
+      case "$cut" in *payload*|*Payload*) ok ;; *) bad "$g asked about a call it could not parse without naming the payload as the reason: ${cut:0:200}" ;; esac ;;
   esac
   otherd="$(cat "$R/other/decision" 2>/dev/null)"
   case "$otherd" in "exit 0, decision none"*) ok ;; *) bad "$g refused an unrelated call it could not parse ($otherd): $(head -c 200 "$R/other/said" 2>/dev/null)" ;; esac
@@ -662,6 +670,8 @@ while IFS=$'\t' read -r g tool inp extra unread; do
         case "$cd_" in "exit 2,"*|*"decision deny"*) ok ;; *) bad "#2057 $g let a call whose payload parses as JSON it cannot read ($c) through, though every word of what it judges is in it ($cd_): ${cs:0:200}" ;; esac ;;
       notice*)
         case "$cd_" in "exit 2,"*|*"decision deny"*|"exit 0, decision none, said something") ok ;; *) bad "#2057 $g let a call whose payload parses as JSON it cannot read ($c) through without saying so ($cd_): ${cs:0:200}" ;; esac ;;
+      ask*)
+        case "$cd_" in "exit 0, decision ask,"*) ok ;; *) bad "#2057 $g let a call whose payload parses as JSON it cannot read ($c) through without asking ($cd_): ${cs:0:200}" ;; esac ;;
     esac
   done
   # An empty payload names nothing, so by #1922's recorded decision it passes as any call naming

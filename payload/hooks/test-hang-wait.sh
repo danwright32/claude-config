@@ -32,6 +32,11 @@ eq "#1620 a condition already true is met" 0 "$(bash -c ". '$LIB'; hang_wait tru
 # released by the wait having started, so nothing here is timed.
 rc="$(bash -c ". '$LIB'; ( until [ -e '$W/started' ]; do sleep 0.05; done; : > '$W/ready' ) & : > '$W/started'; hang_wait \"[ -e '$W/ready' ]\" 0.05; echo \$?")"
 eq "#1620 a condition that becomes true while it waits is met" 0 "$rc"
+# The condition runs in the caller's own shell, and what it sets stays set: suites wait on a function
+# that records what it found (a child's pid, a count) and read it afterwards. Run in a subshell, as
+# #2465 once tried, those were lost and a check reading one passed on a value nobody wrote.
+eq "#2465 what hang_wait's condition sets is kept in the caller" "changed" "$(bash -c ". '$LIB'; x=kept; hang_wait 'x=changed; true'; printf %s \"\$x\"")"
+eq "#2465 what window_wait's condition sets is kept in the caller" "changed" "$(bash -c ". '$LIB'; x=kept; window_wait \"\$HANG_S\" 'x=changed; true'; printf %s \"\$x\"")"
 # One that never holds gives up at the ceiling, here set to one second, with 1.
 eq "#1620 a condition that never holds gives up at the ceiling with 1" 1 "$(SUITE_HANG_SECONDS=1 bash -c ". '$LIB'; hang_wait false 0.05; echo \$?")"
 

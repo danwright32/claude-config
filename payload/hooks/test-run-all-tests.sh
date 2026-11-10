@@ -3542,7 +3542,7 @@ lt_plain="$(awk 'NR == 1 { print $1 }' "$LTSTORE/suites%2Ftest-plain.sh" 2>/dev/
   || check "#1297 the time a suite waited for its lock is taken off the time recorded for it" "exit=$code_lt waited='$lt_waited' store=$(ls "$LTSTORE" | tr '\n' ' ') out=$out_lt"
 # shellcheck source=lib/whole-number.sh
 . "$DIR/lib/whole-number.sh"
-if whole_above_zero "$lt_plain" lt_plain; then
+if _wn_got="$(whole_above_zero "$lt_plain")"; then lt_plain="$_wn_got";
   check "#1297 and a suite that did not wait keeps its measured time" ok
 else
   check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'"

@@ -126,6 +126,17 @@ its checkout looks. Suites that run a copy give it the scanner rather than being
 use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
 scans, since it sends on every change for as long as it runs.
 
+A refused send is reported until a send gets through (#2530). The change watcher's refusal used to
+reach only `~/.claude-sync.log` (71 of them on one Mac while `status` said only when it last sent),
+so `claude-sync status`, `claude-sync stuck` and the per prompt notice now say the latest refusal:
+which scan, what it found (file and line, never the name), how many sends in a row it has refused
+and since when, and what to change. The lessons file is also asked when a lesson is written, by the
+same scanner: `claude-sync lesson-faults`, which the lesson entry hook runs after every write to it,
+exits 3 and names the line when the file names a work organisation, and 4 when the scan could not
+run, so a scan that judged nothing is never reported as a name found (the hook tells the session
+that wrote it, in words that fit each, while it can fix it), `check-lessons` refuses on either, and `next-lesson` still mints a
+number but warns that every send is refused until the line is fixed.
+
 Text that is never a file is held to the same rule (#1995), because this repository squash merges
 with the commit messages as the body: a name in a message lands in main. The scanner reads labelled
 text too (`--texts0-from`), and two gates ask it. `scanners-before-push.sh` reads the messages of
@@ -568,7 +579,9 @@ it is said once in the session, in status's own words and naming the clone, and 
 ends that session is told it is moving again. A count going up is the same stretch and is not said
 twice. A change watcher stuck on an older `claude-sync` because the newer one on disk is broken
 (#1569) is said at once rather than after the threshold, since no wait clears it, and its end is
-said too. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
+said too. So is a send refused by the secret scan or the work names scan (`send-refused`, #2530):
+every later send meets the same content, so it never clears by itself, and the session hears again
+when a send gets through. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
 too old to have the command are each said once in their own words, never read as a healthy sync.
 It asks nothing of the network and takes no lock: measured 2026-09-17, about 70ms per prompt with
 one clone to ask, and 16ms on a Mac with no automatic sync installed, where there is nothing that
@@ -1785,7 +1798,18 @@ and lessons review and is judged by every gate as any update's is. Any other con
 branch, stops as before, naming the conflicted files. Each row was one line of up to 29 KB until
 the table became an HTML table of wrapped cells (claude-config#2108), which lets edits to different
 lines of one description merge cleanly, but two pull requests adding an issue number to one mod
-still meet in its Issue cell, so the resolver stays. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+still meet in its Issue cell, so the resolver stays. One CI start that never began is re-run
+rather than stopped on (claude-config#2537): on 2026-11-09 pull requests #2495, #2496 and #2534
+stopped on `block-red-merge.sh`'s "PR has NO checks at all" because each head's tests run had
+finished as a failure with zero jobs ("This run likely failed because of a workflow file issue")
+while main's workflow was fine, and a plain `gh run rerun` started each properly. Once no run for
+the head is unfinished, the helper reads the jobs of each run for that exact head that finished as a
+failure, and one with no jobs on its first attempt is re-run once for that head, said in its output
+and log, and waited on like any other run. A run whose jobs ran and failed is never re-run, a run
+already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
+left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
+gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
+has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -2241,9 +2265,24 @@ A fourth gate reads the same library for a different thing an agent does to its 
   the flags, `--fixup`, `--no-force`, and the main session are untouched. A payload it cannot read
   is refused when it names an amend or a force, as `no-verify-gate.sh` does with a skip.
 
+One more gate holds a rule the briefs give every agent, for everyone:
+
+- `temp-worktree-gate.sh` (PreToolUse, Bash and EnterWorktree) refuses a git worktree placed under a
+  temp folder a restart empties: `/tmp`, `/private/tmp`, `/var/folders` (with or without
+  `/private`), or a path starting with `$TMPDIR`, `$TMP` or `$TEMP`, by `git worktree add`, `git
+  worktree move` or EnterWorktree's `path`, and names the repository's `.claude/worktrees/<name>`
+  instead (claude-config#2528). On 2026-11-09 a restart emptied `/private/tmp` and took an agent's
+  worktree holding an uncommitted fix; #2490 said the rule in prose, and this makes it hold. The
+  reading is `lib/temp-worktree.py` over the shared shell reader, so it sees through rtk, env, a cd,
+  `git -C` and a `bash -c` string, takes a relative path from where the command runs, and resolves
+  symbolic links; list, remove and prune pass, `/var/tmp` (which a restart keeps) passes, and so does
+  a worktree of a repository that is itself in a temp folder. It judges the main session too. A path
+  in any other variable or a substitution, a relative path after `cd -`, or a payload it cannot read
+  is refused when it names a worktree add or move. For one command: `ALLOW_TEMP_WORKTREE=1`.
+
 ### What a push actually waits on
 
-Thirty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2490,6 +2529,18 @@ subagent's `git push --force`, refused
 </td></tr>
 <tr><td>
 
+`temp-worktree-gate.sh` (#2528)
+
+</td><td>
+
+2026-11-09: 0.034 to 0.038 seconds on `git push -u origin feat/x` from the main checkout, which
+names no worktree and leaves before anything loads; 0.040 to 0.043 seconds on the same push from a
+folder under `.claude/worktrees/`, whose name makes it read the command; 0.098 to 0.102 seconds on
+`git worktree add /tmp/wt-x`, refused. Five readings of each at load average 33 to 59
+
+</td></tr>
+<tr><td>
+
 `check-add-scope.sh`
 
 </td><td>
@@ -2526,7 +2577,8 @@ script file or interpreter is answered before anything loads; it acts on a Slack
 
 </td><td>
 
-2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root, not a push
+2026-10-28: 0.009 to 0.026 seconds; it acts on a write into the scratchpad root or the session's
+notes folder root (#2490), not a push
 
 </td></tr>
 <tr><td>
@@ -3409,7 +3461,7 @@ reading such data files as code; the same line now takes 0.27 seconds against a 
 extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
 and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
 distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
-the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added). The suite times the budget
+the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
@@ -3443,6 +3495,38 @@ over a view that calls a function that writes, an operator or cast the database 
 a table's row type called as a column (`t.some_function`), or a function the database defined under
 the name of a built in one, can still write. Suite: `test-read-only-query-allow.sh`.
 
+The rules for "read only" live in one file, `hooks/lib/sql-read-only.py`, which this hook and the
+write question below both load (#2521).
+
+## Database writes ask Dan first
+
+On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
+production database through the claude.ai Supabase `execute_sql`, on both Macs, and auto mode, every
+hook and every prompt let it through (the classifier judged it harmless itself). Dan decided that day
+that he is asked first. `hooks/db-write-ask.sh` answers "ask" (the call goes in front of Dan, with
+the statement and the project named) for:
+
+- any `execute_sql` that `read-only-query-allow.sh` would not approve. Both load
+  `lib/sql-read-only.py`, so a statement the read hook approves is never asked about and every other
+  one is; `test-db-write-ask.sh` runs one set of statements through both hooks and fails unless
+  exactly one of them decides each.
+- every `apply_migration`, whatever its text.
+- anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
+  one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). It
+  is registered with `onFailure: "block"`, so a crash or a timeout refuses the call rather than letting
+  a write through unasked.
+
+It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
+pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
+`updateSobjectRecord`, `deleteSobjectRecord`, or the whole `mcp__claude_ai_SFDC_USE` server). Such a
+rule lets those writes skip auto mode entirely, and the work MacBook's file held all three on
+2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
+on that Mac. The message comes on each call of one of those tools and on every database question,
+never on a read it passes.
+
+What it does not cover: a database tool on any other connector, which is not asked about until it is
+named in the hook and its registration. Suite: `test-db-write-ask.sh`.
+
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
 
@@ -3453,8 +3537,11 @@ MacBook one pointed at a folder gone for two weeks after a project move, so the 
 a checkout that no longer existed and did not recognise the real one (#2491).
 `hooks/check-trusted-paths.sh` reads this Mac's `settings.json` (never writes it), takes every
 absolute path out of those free text entries (a span starting with `/` or `~/`, whole when it is in
-backticks or quotes, otherwise up to the next space, trailing punctuation dropped, a URL never), and
-names each one that is not on this Mac with the line of its entry. No settings file, no `autoMode`
+backticks or quotes, trailing punctuation dropped, a URL never), and names each one that is not on
+this Mac with the line of its entry. A bare path is read up to the next space and then again with
+each further word on the line, up to a backtick, quote or bracket, so a folder name holding a space
+(`<path> (<remote url>)` in the Trusted repos entry) is found whole: it counts as present when any of
+those readings exists, and the shortest is named when none does (#2549). No settings file, no `autoMode`
 block or no path at all is silent (exit 0); a missing path is exit 1; a file that is not valid JSON
 is one line and exit 2; no `python3` is exit 3.
 
@@ -4999,11 +5086,25 @@ anybody wrote. Both rules were decided by Dan on 2026-11-01.
   session's first request, or of the first request after its latest compaction. A builder (any
   subagent) or an orchestrator (a main session that has dispatched an agent or set a /goal) whose
   last request carried more work than that is told to write down what it has decided and then restart or compact. A builder writes
-  `handoff.md` in its scratchpad folder and hands back, unless only the push and the report are
+  `handoff.md` in the working folder its brief names and hands back, unless only the push and the report are
   left, and the orchestrator gives the rest to a fresh agent that starts from the note. An
   orchestrator puts each decision that belongs to an issue on that issue as a comment and the rest
-  in `handoff.md`, then tells Dan, who sees the notice too, so he can type /compact or start a
-  fresh session. It is said once per band of the line (330K, 660K, ... of work) and again after a
+  in `handoff.md` in its notes folder (below), named in full in the notice, then tells Dan, who sees the notice too, so he can type /compact or start a
+  fresh session.
+- **The notes folder** (claude-config#2490). The scratchpad Claude Code gives a session is under
+  `/private/tmp`, which macOS empties on every restart; on 2026-11-09 a restart of the work
+  MacBook took a session's `handoff.md`, a guide and a background agent's working tree with it.
+  So each session has a notes folder, `~/.claude/state/session-notes/<project>/<session>/`, where
+  `<project>` is the folder name Claude Code keys the session's transcript by. It is on disk,
+  outlives a restart, and is never synced: claude-sync carries only the payload's folders, never
+  `state/`, so a note naming work repositories cannot reach this public repository.
+  `~/.claude/projects` was the other candidate, also unsynced, but Claude Code owns its layout and
+  deletes its contents after `cleanupPeriodDays`. `hooks/lib/session_notes.py` decides the folder
+  for every caller; `hooks/session-notes-folder.sh` (SessionStart) makes it and tells the session,
+  pointing at a `handoff.md` already there and copying one still in the scratchpad in once, never
+  over a note already in the folder. Agents dispatched by the session get their working folders
+  under it, and `scratchpad-subagent-gate.sh` refuses a subagent's write into its root as it does
+  the scratchpad's. It is said once per band of the line (330K, 660K, ... of work) and again after a
   compaction brings the session back under it, never on every call.
 - **What must be written down before a restart**, so nothing decided lives only in the
   transcript: the goal or list in Dan's words with every constraint he stated, quoted and dated;
@@ -6305,7 +6406,12 @@ counts, as on the default branch. The `leave_branch` tool asks Dan "Leave the br
 as it is (why)?" with Leave it as it is or Clean it up, and records only the first, by repository
 and branch: winding down then stops waiting for that branch to be deleted here or a worktree on it
 to go, and for the uncommitted files his question named, while a change to any other file asks again
-and the branch on GitHub is still deleted. Uncommitted work is named by its files, and a branch to
+and the branch on GitHub is still deleted. On the session's own branch with no PR, his answer
+settles the question of its PR too (#2533). So does the branch being gone both here and from
+GitHub, which leaves nothing to put in a PR, and a branch the session pushed into another by
+refspec (`git push origin HEAD:fix-pr` from `fix-local`, recorded as `pushedInto` in its state) is
+finished by that other branch's PR when it has none of its own, while `fix-local` still existing
+here holds as any merged PR's branch does. Uncommitted work is named by its files, and a branch to
 commit it starts only on Dan's answer to `open_cleanup_branch` (#1051), which names the files git
 status lists and records only his Open it: that branch may then start once, by `git switch -c` or
 `git checkout -b`, while nothing beyond those files is uncommitted, and any other branch is still
@@ -7047,7 +7153,11 @@ word slack or postMessage and the template's name in a form a reference takes (a
 file name with its extension, after its folder and a dot, or on a python import line, never a word
 the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
 each, all within 3 seconds per call, following files that
-re-export the template up to 3 deep (#2286); a search that fails, runs out of time, meets an
+re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
+`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
+so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
+component that itself sends, or imports a send helper, is still its sender, and a file with any
+other importer is followed as before. A search that fails, runs out of time, meets an
 unreadable file, or would follow further holds the call as could not check. One that finds more
 than 200 files to read, or a send helper search that fails, runs late or meets an unreadable helper,
 holds the call for Dan to approve like any other, naming no sender, rather than refusing it with
@@ -7056,7 +7166,7 @@ name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519
 
 </td></tr>
 </tbody>
@@ -7802,18 +7912,26 @@ catch up and after it is read, so it can only describe the run that wrote it
 
 </td><td>
 
-the secret scan, whenever it refuses a send (#947)
+the secret scan or the work names scan, whenever either refuses a send (#947, #1568), through one
+writer, `record_send_refused`
 
 </td><td>
 
 a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone,
-to name the scan's finding as the cause rather than leave git's complaint as the only explanation
+to name the scan's finding as the cause rather than leave git's complaint as the only explanation;
+and `claude-sync status`, `claude-sync stuck` and so the per prompt notice, which report it as
+`send-refused` until a send gets through (#2530)
 
 </td><td>
 
-absent means no send is being refused by the scan, which is the normal state. It holds when the scan
-last refused and the files it found. The next scan that passes removes it. A time that will not
-parse is left out of the sentence rather than guessed
+absent means no send is being refused by the scan, which is the normal state. One line, tab
+separated: when the latest refusal was, what it found, why (empty for a possible secret, else
+`unlisted`, `work-names` or `work-names-unjudged`), how many sends in a row have been refused, and
+when the first of them was, plus `atleast` when that run began under a record from before the
+count, which makes the count a floor. The secret scan removes it whenever it passes or is skipped,
+and the work names scan after it writes only on a refusal, so it stands exactly while sends are
+refused. A record from before the count is reported without one; one that cannot be read, or whose
+time will not parse, is reported as `send-refused-unreadable`, never as nothing refused
 
 </td></tr>
 <tr><td>

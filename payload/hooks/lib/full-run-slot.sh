@@ -72,7 +72,9 @@ full_run_slot_settings(){
   local v isset val
   FULL_RUN_SLOT_ERR=""
   for v in HOOK_TESTS_SLOT_WAIT HOOK_TESTS_SLOT_HOLD HOOK_TESTS_SLOT_SAY_EVERY; do
-    eval "isset=\${$v+set}; val=\${$v-}"
+    # Read by indirection, never eval: an eval can bind any name, so the Slack drafts gate stopped
+    # following a script's variables past it (claude-config#2465).
+    isset="${!v+set}"; val="${!v-}"
     [ -n "$isset" ] || continue
     case "$val" in
       ''|*[!0-9]*) FULL_RUN_SLOT_ERR="$v='$val' is not a whole number of seconds"; return 1 ;;

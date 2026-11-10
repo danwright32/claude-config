@@ -215,8 +215,7 @@ human() { dcu_human "$@"; } # lib/disk-clean-units.sh
 
 # Sets SIZE_KIB (empty when unread), SIZE_PARTIAL (1 when du said anything on stderr or failed, so
 # the figure is a lower bound) and SIZE_WORDS, the same in words. Allocated blocks, as du -k reports
-# them. The words come from lib/disk-clean-units.sh's dcu_human_to, the one size rule, which starts
-# no process: this runs for every item.
+# them. The words come from lib/disk-clean-units.sh's dcu_human, the one size rule.
 measure() { # <path>
   local out
   out="$(du -sk "$1" </dev/null 2>"$WORK/err")"
@@ -225,7 +224,7 @@ measure() { # <path>
   SIZE_PARTIAL=""
   if [ "$rc" -ne 0 ] || [ -s "$WORK/err" ]; then SIZE_PARTIAL=1; fi
   if [ -z "$SIZE_KIB" ]; then SIZE_WORDS='size could not be read'; return; fi
-  dcu_human_to SIZE_WORDS "$SIZE_KIB"
+  SIZE_WORDS="$(dcu_human "$SIZE_KIB")"
   [ -z "$SIZE_PARTIAL" ] || SIZE_WORDS="at least $SIZE_WORDS"
 }
 

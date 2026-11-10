@@ -100,6 +100,19 @@ has "the section carries Dan's ruling date" "$reply" "2026-11-04"
 dashes="$(grep -n -e $'\xe2\x80\x94' -e $'\xe2\x80\x93' "$SKILL" 2>/dev/null)"
 check "the orchestrate skill holds no em or en dash" "$([ -z "$dashes" ] && echo ok || echo "$dashes")"
 
+# claude-config#2490: on 2026-11-09 a restart of the work MacBook emptied /private/tmp, taking a
+# session's handoff note and a background agent's working tree with an uncommitted fix. Briefs give
+# each agent a working folder in the session's notes folder and a worktree inside the repo, never
+# anything under the temp folder, and the rules every agent reads say the same.
+RULES="${ORCHESTRATE_RULES:-$DIR/agent-rules.md}"
+has(){ grep -F -q -- "$2" "$1" && echo ok || echo "missing: $2"; }
+check "#2490 a brief's working folder is under the notes folder" "$(has "$SKILL" '5. The working folder: `<notes folder>/')"
+check "#2490 a brief's worktree is inside the repo, never the temp folder" "$(has "$SKILL" 'never under `/tmp`, `/private/tmp` or the scratchpad')"
+check "#2490 the orchestrator's handoff note is in the notes folder" "$(has "$SKILL" '`handoff.md` at the root of this session'"'"'s notes folder')"
+check "#2490 no brief part still names the scratchpad as the working folder" "$(grep -n 'The scratchpad folder:' "$SKILL" >/dev/null && echo 'still names the scratchpad folder' || echo ok)"
+check "#2490 agents write working files in the notes folder" "$(has "$RULES" 'never in the scratchpad under `/private/tmp`')"
+check "#2490 agents never put a worktree in the temp folder" "$(has "$RULES" 'Never put a worktree under `/tmp`')"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

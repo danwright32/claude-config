@@ -83,7 +83,7 @@ _suite_deadline_expired(){
   # run (HOOK_TESTS_SLOTS, handed to it by the runner, 1 when it was started directly) is more than
   # the machine has cores. Everything that cannot be read is NOT busy, so it stays a FAIL: busy
   # excuses a failure, and nothing unreadable may excuse one (L90).
-  local _sd_load="" _sd_cores="" _sd_own="${HOOK_TESTS_SLOTS:-1}" _sd_reader="$_suite_deadline_dir/load-average.sh"
+  local _sd_load="" _sd_cores="" _sd_own="${HOOK_TESTS_SLOTS:-1}" _sd_reader="${BASH_SOURCE[0]%suite-deadline.sh}./load-average.sh"
   if [ -f "$_sd_reader" ] && . "$_sd_reader" 2>/dev/null; then
     _sd_load="$(load_average_one_minute)"
     _sd_cores="$(load_average_cores)"
@@ -155,7 +155,7 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
   # in one folder of its own named so claude-sync's scratch sweep reclaims it. Under the runner every
   # seam is already set and no folder is made. A suite ABOUT one of them unsets it after arming.
   # Here rather than at source time: only suites arm, and claude-sync sources this file too.
-  . "$_suite_deadline_dir/suite-isolation.sh" || {
+  . "${BASH_SOURCE[0]%suite-deadline.sh}./suite-isolation.sh" || {
     echo "$_suite_deadline_label: lib/suite-isolation.sh is missing, so this suite would write into the real records. Refusing to run." >&2
     return 2
   }

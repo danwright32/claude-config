@@ -31,9 +31,8 @@ _KO_LIB="${BASH_SOURCE[0]%/*}"; [ "$_KO_LIB" != "${BASH_SOURCE[0]}" ] || _KO_LIB
 kept_output_save(){
   KEPT_OUTPUT_PATH=""; KEPT_OUTPUT_WHY=""
   local dir="$1" label keep stamp tmp
-  keep="$KEPT_OUTPUT_KEEP"
-  if ! whole_above_zero "$keep" keep; then
-    KEPT_OUTPUT_WHY="KEPT_OUTPUT_KEEP must be a whole number above 0, not '$keep'"
+  if ! keep="$(whole_above_zero "$KEPT_OUTPUT_KEEP")"; then
+    KEPT_OUTPUT_WHY="KEPT_OUTPUT_KEEP must be a whole number above 0, not '$KEPT_OUTPUT_KEEP'"
     cat > /dev/null; return 1
   fi
   if [ -z "$dir" ]; then

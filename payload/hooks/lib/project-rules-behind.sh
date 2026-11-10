@@ -92,8 +92,8 @@ project_rules_behind() {
   read -r ahead behind <<< "$counts"
   # Read through the one whole number check (lib/whole-number.sh, claude-config#1948). Missing, it
   # answers 127, read as not behind, so the start says nothing rather than something unmeasured.
-  whole_above_zero "$behind" behind 2>/dev/null || return 0
-  whole_above_zero "$ahead" ahead 2>/dev/null || ahead=0
+  behind="$(whole_above_zero "$behind" 2>/dev/null)" || return 0
+  ahead="$(whole_above_zero "$ahead" 2>/dev/null)" || ahead=0
 
   # 3. Which rule files origin changed since this checkout's commit.
   local files=() changed loop_input

@@ -217,6 +217,31 @@ case "$out" in
     block "$WRITTEN could not be checked: the clone of claude-sync at $(dirname "$sync") does not have the 'lesson-faults' command yet, so nothing here could judge the entry. That clone updates on its own schedule, and this config reached this Mac first. Run 'claude-sync pull' from that clone, then check the entry with: $sync lesson-faults" ;;
 esac
 
+# Exit 3 is a work organisation name and nothing else (claude-config#2530). The file is not held
+# back and the index is not missing anything; the send's own scan refuses the WHOLE send while the
+# name is there, so the words above would be a cause it never measured (L11).
+if [ "$rc" -eq 3 ]; then
+  block "$WRITTEN names a work organisation, and this repository is public. Fix it now, in this session: while it is there every send from this Mac is refused, so nothing edited here reaches the other Mac.
+
+What claude-sync lesson-faults said:
+
+$out
+
+Fix the line, then confirm with: $sync lesson-faults"
+fi
+# Exit 4 is the work names scan unable to run, so nothing about the lesson was judged, and it is
+# said as that rather than as a lesson naming an organisation (L11). The send refuses on the same
+# ground, so it is not left until then.
+if [ "$rc" -eq 4 ]; then
+  block "$WRITTEN could not be checked for work organisation names: the scan could not run, so nothing judged it, and every send from this Mac is refused on the same ground until it can.
+
+What claude-sync lesson-faults said:
+
+$out
+
+Fix what stopped the scan, then confirm with: $sync lesson-faults"
+fi
+
 block "$WRITTEN leaves the file unable to publish. Fix it now, in this session, rather than leaving it: until it is fixed the entry is absent from the generated lessons index (which the lessons core is chosen from and every PR lessons review reads), unreadable by 'claude-sync lesson', uncounted by the duplicate check and by the number minter, and the WHOLE lessons file is held back from the next send, so every other lesson written since is stuck behind it too.
 
 What claude-sync lesson-faults said:

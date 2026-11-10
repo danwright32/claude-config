@@ -23,8 +23,8 @@ THE THREE SIGNALS, and only these (decided for #2079):
      "re-check on Nov 5"). Tool results are never read, and text inside quotation marks, a code span
      or a quoted block is removed first, so a quoted "tomorrow" is not a promise.
 
-SILENT when the flow already ran this turn: Dan typed /check-later, or a row was written to the
-list the skill names. Matching an item against rows already on the list is the skill's own step 5,
+SILENT when the flow already ran this turn: Dan typed /check-later, the session started the skill
+itself through the Skill tool (claude-config#2532), or a row was written to the list the skill names. Matching an item against rows already on the list is the skill's own step 5,
 which this does not repeat (L655).
 
 "Today" is the local date of the transcript line that carries the signal, so a fixture carries its
@@ -352,6 +352,9 @@ def already_ran(turn, opener, skill):
     for obj in turn:
         for use in tool_uses(obj):
             name = use.get("name") or ""
+            given = use.get("input")
+            if name == "Skill" and isinstance(given, dict) and given.get("skill") == "check-later":
+                return True
             if not name.endswith(("slack_add_list_record", "slack_update_list_record")):
                 continue
             wanted = wanted or list_id(skill)
