@@ -54,6 +54,11 @@
 #       <text>) as hookSpecificOutput.additionalContext for that event.
 #   hook_allow_notice <text> [<event> [<context>]]
 #       the same, with <text> on stderr too for the debug log, then exit 0. The call goes ahead.
+#   hook_ask_json <reason> [<notice>]
+#       print a PreToolUse ask: hookSpecificOutput with permissionDecision "ask" and <reason> as
+#       its permissionDecisionReason, which puts the call in front of the person, plus <notice> as
+#       a systemMessage when one is given. For a hook that asks and has something else to say on
+#       the same call (db-write-ask.sh, claude-config#2521).
 #   hook_notice_verdict <stdout> <ERE>
 #       for the suites: print why <stdout> is not exactly one JSON object whose systemMessage
 #       matches <ERE> (Python's re), or nothing when it is.
@@ -100,6 +105,16 @@ _hn_string() {
   printf '%s%s' "$s" "$cut"
 }
 
+# The Python both builders start with: cut(<bytes>) is the text as a str, cut to HN_MAX and saying so.
+_HN_PY_CUT='
+import json, os
+n = int(os.environ["HN_MAX"])
+def cut(b):
+    m = b.decode("utf-8", "replace")
+    if len(m) > n:
+        m = m[:n] + " ... (cut short at %d characters; the whole notice is in the debug log)" % n
+    return m'
+
 hook_notice_json() {
   local text="$1" event="${2:-}" context="${3-$1}"
   case "$event" in *[!A-Za-z]*) event="" ;; esac
@@ -107,14 +122,7 @@ hook_notice_json() {
     # Bytes in, so text that is not UTF-8 is replaced rather than refused, and ASCII out, so the
     # object survives any locale between here and Claude Code. The two texts travel in the
     # environment, as bytes, so neither needs a delimiter that the other could contain.
-    HN_TEXT="$text" HN_CONTEXT="$context" HN_EVENT="$event" HN_MAX="$HN_MAX" python3 -c '
-import json, os
-n = int(os.environ["HN_MAX"])
-def cut(b):
-    m = b.decode("utf-8", "replace")
-    if len(m) > n:
-        m = m[:n] + " ... (cut short at %d characters; the whole notice is in the debug log)" % n
-    return m
+    HN_TEXT="$text" HN_CONTEXT="$context" HN_EVENT="$event" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
 out = {"systemMessage": cut(os.environb[b"HN_TEXT"])}
 event = os.environ["HN_EVENT"]
 if event:
@@ -126,6 +134,25 @@ print(json.dumps(out))' 2>/dev/null && return 0
       "$(_hn_string "$text")" "$event" "$(_hn_string "$context")"
   else
     printf '{"systemMessage": "%s"}\n' "$(_hn_string "$text")"
+  fi
+}
+
+hook_ask_json() {
+  local reason="$1" notice="${2:-}"
+  if command -v python3 >/dev/null 2>&1; then
+    HN_REASON="$reason" HN_TEXT="$notice" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
+out = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
+                              "permissionDecisionReason": cut(os.environb[b"HN_REASON"])}}
+if os.environb[b"HN_TEXT"]:
+    out["systemMessage"] = cut(os.environb[b"HN_TEXT"])
+print(json.dumps(out))' 2>/dev/null && return 0
+  fi
+  if [ -n "$notice" ]; then
+    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s"}, "systemMessage": "%s"}\n' \
+      "$(_hn_string "$reason")" "$(_hn_string "$notice")"
+  else
+    printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "%s"}}\n' \
+      "$(_hn_string "$reason")"
   fi
 }
 

@@ -1,7 +1,6 @@
 ---
 name: check-later
-disable-model-invocation: true
-description: Use when Dan types /check-later, or the end of turn hook's CHECK LATER pointer sends you here, in a session that has left work waiting on a later date (a canary week, an N day gate, data still accumulating, "we'll check this in a week"), to put that work on his Slack list "Dan Projects To Do List" as a row a fresh session can run, and to hand him a card for setting its reminder.
+description: Use when this session needs work done at a later date or time (a canary week, an N day gate, data still accumulating, a limit to put back once a rolling window clears, "we'll check this in a week"), when Dan types /check-later, or when the end of turn hook's CHECK LATER pointer sends you here, to put that work on his Slack list "Dan Projects To Do List" as a row a fresh session can run, and to hand him a card for setting its reminder.
 trigger: /check-later
 ---
 
@@ -10,6 +9,32 @@ trigger: /check-later
 Turns each thing this session left waiting on a date into a row on Dan's Slack list, with a one line
 prompt a brand new Claude Code session can run cold on the start date, then pins a card telling Dan
 to set the reminder. Dan types nothing after the command: everything comes from this session.
+
+## Started by the session itself
+
+A session that knows a step has to be taken at a later time starts this skill itself, through the Skill
+tool, at the moment it knows, rather than handing Dan the command to type (Dan, 2026-11-09: "there's
+no reason you shouldn't be able to start that yourself", claude-config#2532).
+
+A session may schedule any step this session itself found it needs, at a known later date or a
+known time later the same day: a canary or gate to read, data to check once it has accumulated, a
+setting to put back once a window clears (a daily spend limit restored when yesterday's spend leaves
+its rolling 24 hour window, some hours from now). Each becomes a row on the list below, run cold by a
+fresh session at its start time.
+
+A session may not:
+
+- write a row Dan has not picked. Step 6 still shows each draft as its own question, and Nothing is
+  written before Dan picks, whoever started the skill.
+- keep a timer running in the session (a one shot `CronCreate`, a sleep loop) in place of a row. Such
+  a timer dies with the session, and Dan does not want one held open.
+- schedule a change for the cold session to make without asking. The row's prompt keeps step 4's
+  gate: the cold session reads and reports, and asks Dan with a picker before it closes, deletes,
+  rolls back or changes a setting.
+- tick Reminder Saved, or schedule anything that is not waiting on a date or time (step 1).
+
+The end of turn hook stands down on a turn where the session started this skill, as it does when Dan
+typed it.
 
 ## Started by the end of turn hook
 
@@ -25,7 +50,7 @@ any SESSION REFLECTION or ISSUE REVIEW in the same stop, so these questions come
   and nothing is written before Dan picks.
 
 The hook only points here; it never writes a row, and it stands down on a turn where Dan already
-ran /check-later or a row was already written.
+ran /check-later, the session already started this skill, or a row was already written.
 
 ## The list
 
@@ -50,9 +75,9 @@ nothing. If a column above is missing or renamed, or Status has no `Waiting`, `I
 
 ### 1. Find the waiting items
 
-Read this session's conversation. A waiting item is work that cannot start until a known date: a
-canary or trial week ending, a gate of N days without a hit, data that must accumulate, a change that
-must bake. For each, note the repo, the issue numbers, what unlocks it and what to do once it does.
+Read this session's conversation. A waiting item is work that cannot start until a known date, or
+a known time later today: a canary or trial week ending, a gate of N days without a hit, data that
+must accumulate, a change that must bake, a rolling window that must clear. For each, note the repo, the issue numbers, what unlocks it and what to do once it does.
 Take every one in the session, not just the last.
 
 - Nothing waiting: say "This session left nothing waiting on a date" and stop.
