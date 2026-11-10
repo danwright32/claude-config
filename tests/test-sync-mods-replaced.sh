@@ -28,8 +28,13 @@ check(){ # check <name> <command>
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-sync-mods-replaced.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 H="$WORK/home"; R="$WORK/repo"
-mkdir -p "$H/.claude"
-C="$H/.claude"
+# The fixture config is NOT "$H/.claude". Under run-all-tests, which sets CLAUDE_SUITE_RUN_ID,
+# claude-sync refuses to apply into "$HOME/.claude" as the real config, and with HOME pointed at
+# the fixture that is exactly where this suite used to put it: it passed run by hand and failed
+# 0 of 4 on every runner. The id is set here too, so a run by hand meets the same guard.
+export CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-test-sync-mods-replaced}"
+mkdir -p "$H" "$WORK/dot-claude"
+C="$WORK/dot-claude"
 for m in changed untouched; do
   mkdir -p "$C/mods/$m/.claude-plugin" "$C/mods/$m/hooks" "$R/payload/mods/$m/.claude-plugin" "$R/payload/mods/$m/hooks"
   printf '{ "name": "%s" }\n' "$m" > "$C/mods/$m/.claude-plugin/plugin.json"
