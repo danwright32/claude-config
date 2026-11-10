@@ -632,11 +632,16 @@ class Judge:
         is_shell = shell_hint or real.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
         if is_shell and depth < MAX_DEPTH:
             # Read as commands even with no endpoint in it: it can run another script that posts.
+            # Only a text the reader itself says it cannot read (its Unreadable) is judged by what
+            # it names. Any other error is a fault in this gate's own walk, which has judged
+            # nothing, so it is left to end the reader, and the wrapper refuses the call as one it
+            # could not judge (claude-config#2573: with sh_binds raising AttributeError, a script
+            # naming no endpoint passed here whatever it went on to source).
             try:
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
                 self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
                 inner = self.line(body, d, depth + 1, body)
-            except Exception:
+            except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"the script {word} runs a command that posts: {inner}" if inner else None
         if hit:
@@ -1167,7 +1172,7 @@ class Judge:
         parts = []
         try:
             cmds = self.sw.commands(s, cwd, parts=parts)
-        except Exception:
+        except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return {"regions": {}, "top": 0, "lost": [], "bodies": []}
         items = list(zip(cmds, parts))
         struct = self.sh_struct(items)
@@ -1812,7 +1817,7 @@ class Judge:
         parts = []
         try:
             cmds = self.sw.commands(text, cwd, parts=parts)
-        except Exception:
+        except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return set(names)
         known = None
         for (d, t), p in zip(cmds, parts):
@@ -2174,7 +2179,7 @@ class Judge:
             try:
                 self.sw.commands(s, cwd, parts=parts)
                 starts = [p["start"] for p in parts]
-            except Exception:
+            except self.sw.Unreadable:
                 starts = []  # read by the crude cut, so no command's place is known
             k = 0
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
@@ -2272,7 +2277,7 @@ class Judge:
                 try:
                     inner = self.line(fed, d, depth + 1, fed)
                     return f"{name} runs commands from its input, one of which posts: {inner}" if inner else None
-                except Exception:
+                except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
                     pass
             hit = MARKER.search(fed)
             return f"{name} reads commands from its input, which names {hit.group(0)}" if hit else None
@@ -2787,7 +2792,7 @@ class Judge:
                 continue
             try:
                 inner = self.line(cmd, pkg_dir, depth + 1, cmd)
-            except Exception:
+            except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
                 hit = MARKER.search(cmd)
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             if inner:

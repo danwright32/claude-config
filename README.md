@@ -3851,12 +3851,28 @@ is told its share, and the product is printed at the top of every run.
 
 </td><td>
 
-CPUs, capped at 8
+CPUs up to 8, then two thirds of the CPUs
 
 </td><td>
 
 How many processes the whole run may have in flight. Everything else is derived from it. A value
-that is not a positive whole number is refused rather than guessed at.
+that is not a positive whole number is refused rather than guessed at. The default keeps what every
+machine of up to 12 cores had under the old cap of 8 and gives a bigger Mac two thirds of its cores
+(12 on 18), the share the 12 core Mac runs at (#2548). Not measured on the 18 core Mac (#2589).
+
+</td></tr>
+<tr><td>
+
+`HOOK_TESTS_CORES`
+
+</td><td>
+
+This machine's CPU count
+
+</td><td>
+
+The core count the default budget is derived from, for one run. Refused unless a positive whole
+number.
 
 </td></tr>
 <tr><td>
@@ -7160,6 +7176,18 @@ file and in every other file of the repository naming it, is such a value, an im
 its own name, or a part of another such constant. One other use (posted, logged, handed to a
 function, exported under another name), or another file that cannot be read within the search's
 time, and it counts.
+In a JavaScript, TypeScript or python file, only text a Slack send carries is held (#2570; Dan,
+2026-11-09: "these aren't alerts that are going to fire into Slack, right? If not, I don't need you
+to ask me for approval"): `hooks/sends.ts` finds the send calls (one a Slack marker names, one on a
+client built from a Slack marker, a function whose body sends, or the nearest call holding a marker
+in its arguments, never across a function body), and a changed string counts only when it stands in
+a send's arguments or in the value of a name used there, followed name by name within the block
+that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. For a
+file another file sends, each sender is traced and the names it sends followed down through every
+file it reaches the template by; when the nearest senders send none of the change the search goes
+on. A file whose send cannot be traced (any other language, a text template, a send the reading
+cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
+the search stops short. A python docstring is never message text (#2574).
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
