@@ -43,22 +43,27 @@ done
 # Every run here removes any budget or job count the calling run exported, or that would decide
 # instead of the core count, and keeps the timing record out of the real cache.
 run_with_cores(){ env -u HOOK_TESTS_BUDGET -u HOOK_TESTS_JOBS HOOK_TESTS_TIMINGS= HOOK_TESTS_CORES="$1" bash "$RUNNER" "$FX" 2>&1; }
+# The budget the runner said, read as the whole number ending its line, so a 12 never passes for 1.
+budget_said(){ printf '%s\n' "$1" | sed -n 's/^run-all-tests: .* against a budget of \([0-9][0-9]*\)$/\1/p' | awk 'NR == 1'; }
+
+# The reader itself, seen to fail (L1): a line saying 12 is not read as 1.
+said="$(budget_said "run-all-tests: up to 6 suite(s) at once, so at most 12 process(es) at once, against a budget of 12")"
+[ "$said" = 12 ] && check "the reader takes the whole number, so 12 is not read as 1" ok \
+  || check "the reader takes the whole number, so 12 is not read as 1" "read '$said'"
 
 for pair in 1:1 2:2 4:4 8:8 9:8 12:8 13:8 16:10 18:12 24:16; do
   cores="${pair%%:*}"; want="${pair##*:}"
   out="$(run_with_cores "$cores")"; code=$?
-  case "$code:$out" in
-    0:*"against a budget of $want"*) check "$cores cores give a default budget of $want" ok ;;
-    *) check "$cores cores give a default budget of $want" "exit=$code out=$out" ;;
-  esac
+  said="$(budget_said "$out")"
+  if [ "$code" -eq 0 ] && [ "$said" = "$want" ]; then check "$cores cores give a default budget of $want" ok
+  else check "$cores cores give a default budget of $want" "exit=$code budget='$said' out=$out"; fi
 done
 
 # A budget set by hand still wins over the derived one.
 out="$(env -u HOOK_TESTS_JOBS HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 HOOK_TESTS_CORES=18 bash "$RUNNER" "$FX" 2>&1)"
-case "$out" in
-  *"against a budget of 4"*) check "HOOK_TESTS_BUDGET still overrides the derived budget" ok ;;
-  *) check "HOOK_TESTS_BUDGET still overrides the derived budget" "out=$out" ;;
-esac
+said="$(budget_said "$out")"
+[ "$said" = 4 ] && check "HOOK_TESTS_BUDGET still overrides the derived budget" ok \
+  || check "HOOK_TESTS_BUDGET still overrides the derived budget" "budget='$said' out=$out"
 
 # A core count nobody can read is refused and named, never guessed at: it decides how many
 # processes start (L50).
