@@ -5421,6 +5421,13 @@ of those steps discarded its errors, so a file whose hash failed matched nothing
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
 
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves every file holding the home path
+unknown, and is said as one line about all of them (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>

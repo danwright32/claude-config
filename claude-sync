@@ -13217,7 +13217,32 @@ mods_lag_records(){
   # hash an empty stream, whose hash is a real one that matches nothing.
   tokhashes=""
   if [ -d "$CLAUDE_HOME/mods" ]; then
-    local loop_input; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)" || true
+    # grep exits 1 for no match and 2 for a file it could not read, and exits 2 even when every
+    # other file matched, so the matches it printed are still used and each file it named in an
+    # error is recorded as not compared: with no placeholder hash it would read as this Mac's own
+    # work (#2688, the class #2673 fixed one step later). An error naming no file under mods leaves
+    # every tokenized file unknown, and is said as that.
+    local loop_input gerr gline gpath named=""
+    gerr="$(scratch_file 2>/dev/null)" || gerr=""
+    rc=0; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>"${gerr:-/dev/null}")" || rc=$?
+    if [ "$rc" -ge 2 ]; then
+      if [ -n "$gerr" ]; then
+        while IFS= read -r gline; do
+          case "$gline" in
+            *"$CLAUDE_HOME/mods/"*": "*)
+              gpath="${gline#*"$CLAUDE_HOME/mods/"}"
+              unread="${unread}unread	${gpath%: *}	searching it for this Mac's home path failed (grep exit $rc: ${gpath##*: })
+"
+              named=1 ;;
+          esac
+        done < "$gerr"
+      fi
+      if [ -z "$named" ]; then
+        unread="${unread}unread	every file holding this Mac's home path	the search for them in $CLAUDE_HOME/mods failed (grep exit $rc: $( [ -n "$gerr" ] && head -1 "$gerr" 2>/dev/null))
+"
+      fi
+    fi
+    [ -n "$gerr" ] && rm -f "$gerr"
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       rel="${f#"$CLAUDE_HOME/mods/"}"
@@ -13372,7 +13397,7 @@ report_mods_behind_main(){
   report_not_compared "mods not compared with the shared repo" \
     "in $CLAUDE_HOME/mods with origin/$(sync_branch), so it cannot say whether they are behind it, and counts them neither as behind nor as this Mac's own work" \
     "$(printf '%s\n' "$unread" | cut -f 2-)" \
-    "Run 'claude-sync status' again: a step that fails every time is git or perl failing on that file here, and is worth running by hand."
+    "Run 'claude-sync status' again: a step that fails every time is git, perl or grep failing on that file here, and is worth running by hand."
   return 0
 }
 

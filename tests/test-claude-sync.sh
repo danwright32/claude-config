@@ -24926,6 +24926,92 @@ check "#2682 and does not say the shared repo changed it" \
 check "#2682 and this Mac's copy did not go up over the repo's" \
   "[ \"\$(git -C '$CCB' show main:payload/hooks/demo.sh 2>/dev/null | grep -c 'version 2')\" = 1 ]"
 
+section "== status names a mod file its home path search could not read, rather than reading the failure as none (claude-config#2688) =="
+# The mods comparison finds the installed files holding this Mac's home path with grep, and read
+# grep's exit 2 (a file it could not read) as no match. A file the search missed got no hash with
+# the placeholder put back, so it matched no version the repo held and read as this Mac's own work,
+# dropped from the lag line with nothing said: the class #2673 fixed one step later. grep -r exits 2
+# when one file is unreadable and the rest matched, so a failed search is now named per file it
+# could not read, and the matches it did print are still used.
+MSB="$WORK/modsearch-bare.git"; git init -q --bare -b main "$MSB"
+MSS="$WORK/modsearch-sender"; git clone -q "$MSB" "$MSS" 2>/dev/null
+mscommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MSS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MSS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MSS/payload/mods/path-mod/hooks" "$MSS/payload/mods/lock-mod" "$MSS/payload/mods/plain-mod"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 1\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 1\n' > "$MSS/payload/mods/plain-mod/index.ts"
+printf '# rules\n' > "$MSS/payload/CLAUDE.md"
+git -C "$MSS" add -A; mscommit 864000 "mods v1"
+MSR="$WORK/modsearch-repo"; git clone -q "$MSB" "$MSR" 2>/dev/null
+MSH="$WORK/modsearch-home"; mkdir -p "$MSH"; echo '{"hooks":{}}' > "$MSH/settings.json"
+MSAG="$WORK/modsearch-agents"; mkdir -p "$MSAG"
+msenv(){ echo "CLAUDE_HOME=$MSH SYNC_REPO=$MSR SYNC_LAUNCHAGENTS=$MSAG SYNC_HOLD_FILE=$WORK/modsearch-hold SYNC_WATCH_PID_FILE=$WORK/modsearch-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(msenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2688 the fixture: path-mod is installed with this Mac's home path in it" \
+  "grep -qF '$MSH/hooks' '$MSH/mods/path-mod/hooks/paths.ts'"
+# The shared repo changes all three two days ago, and this Mac receives none of it.
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 2\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 2\n' > "$MSS/payload/mods/plain-mod/index.ts"
+git -C "$MSS" add -A; mscommit 172800 "mods v2"
+git -C "$MSR" fetch -q origin 2>/dev/null
+# THE CONTROL: nothing is unreadable, so all three are compared and named, and no search failed.
+rc_ms0=0; out_ms0="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms0=$?
+dbg "#2688 status with nothing unreadable: $out_ms0"
+check "#2688 with nothing unreadable, all three lagging files are compared and their mods named" \
+  "line_has \"\$out_ms0\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_ms0\""
+# ONE FILE UNREADABLE: grep exits 2 for it, and still prints path-mod, which it could read.
+chmod 000 "$MSH/mods/lock-mod/index.ts"
+rc_ms1=0; out_ms1="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms1=$?
+chmod 644 "$MSH/mods/lock-mod/index.ts"
+dbg "#2688 status with one mod file unreadable: $out_ms1"
+check "#2688 the file the search could not read is named, with the step and grep's exit status" \
+  "line_has \"\$out_ms1\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2'"
+check "#2688 and the match the search did print is still used: path-mod is still named as behind" \
+  "line_has \"\$out_ms1\" 'mods behind the shared repo: 2 file' 'path-mod' 'plain-mod'"
+check "#2688 and status exits as it does when nothing failed" \
+  "[ $rc_ms1 -eq $rc_ms0 ]"
+# THE HARM ITSELF: the search fails on the tokenized file, which every other step can read. A grep
+# standing in front of the real one runs the search and then drops path-mod from it with an error,
+# as an unreadable file does, so path-mod gets no hash with the placeholder put back.
+MSSHIM="$WORK/modsearch-shim"; mkdir -p "$MSSHIM/drop-bin" "$MSSHIM/none-bin"
+cat > "$MSSHIM/drop-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*)
+    "$(command -v grep)" "\$@" | "$(command -v grep)" -v 'path-mod/'
+    echo "grep: $MSH/mods/path-mod/hooks/paths.ts: Input/output error" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+cat > "$MSSHIM/none-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/drop-bin/grep" "$MSSHIM/none-bin/grep"
+out_ms2="$(env $(msenv) PATH="$MSSHIM/drop-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the search failing on the tokenized file: $out_ms2"
+check "#2688 a tokenized file the search failed on is named, with the reason grep gave" \
+  "line_has \"\$out_ms2\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' 'grep exit 2' 'Input/output error'"
+check "#2688 and it is not counted as behind, since it was never compared" \
+  "! line_has \"\$out_ms2\" 'mods behind the shared repo' 'path-mod'"
+check "#2688 while the files it could compare are still named as behind" \
+  "line_has \"\$out_ms2\" 'mods behind the shared repo: 2 file' 'lock-mod' 'plain-mod'"
+# A SEARCH THAT FAILED NAMING NO FILE: which files hold the home path is unknown, and said so.
+out_ms3="$(env $(msenv) PATH="$MSSHIM/none-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the search failing outright: $out_ms3"
+check "#2688 a search that failed naming no file is said, with grep's exit status and its words" \
+  "line_has \"\$out_ms3\" 'could not compare' 'home path' 'grep exit 2' 'something went wrong'"
+
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
 # for a sync that publishes a change and 162 for the pull receiving it, git being about half the
