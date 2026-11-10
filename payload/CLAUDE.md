@@ -38,7 +38,7 @@ the size. Past either banner every file still loads in full.
 
 ## General Behavior
 
-- When given a multi-part request, read and acknowledge the FULL request before starting work. Do not launch parallel agents or begin executing until the complete scope is understood. Always outline a numbered plan and wait for approval before starting, even when the steps are small.
+- When given a multi-part request, read and acknowledge the FULL request before starting work. Do not launch parallel agents or begin executing until the complete scope is understood. When the request will change something (files, settings, data, anything sent or published), outline a numbered plan and wait for approval before starting, even when the steps are small. Read-only work (an audit, a lookup, an investigation) starts straight away (Dan, 2026-11-10, claude-config#2646).
 - Whenever you ask what to do next, or offer a choice between options, present it as an AskUserQuestion clickable picker, not as a prose list. The user wants to answer by selecting.
 - Ask AskUserQuestion questions ONE at a time (one question per call). Multi-question calls have lost answers mid-selection.
 - Give every time of day to Dan in US Eastern time, never UTC (his words, 2026-10-03: "all times in et please, utc isn't useful to me"). Tools and logs report UTC, so convert before writing it, and label it ET.
