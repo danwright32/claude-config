@@ -416,9 +416,9 @@ refused "an import after a block comment that never closes"
 # one that is there is read and judged as any module is.
 mkdir -p "$T/imp/dts/tests"
 D2526="'../types/index.d.ts'"
-dts_case() { # dts_case <lines of the test file...>: judge `bun test` on a test holding them
+dts_case() { # dts_case <lines of the test file...>: judge a bun test run of a test holding them
   printf '%s\n' "$@" 'console.log(1);' > "$T/imp/dts/tests/a.test.ts"
-  run_bash "cd $T/imp/dts && bun test tests/a.test.ts"
+  run_bash "bun test $T/imp/dts/tests/a.test.ts"
 }
 dts_case "import type { ModKitBandRow } from $D2526"
 allowed "a test importing only types from a declaration file that is not there"
