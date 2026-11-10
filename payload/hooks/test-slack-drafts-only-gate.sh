@@ -1267,6 +1267,141 @@ PY
 )"
 check "the gate's own budget leaves at least 4 seconds of its registered timeout" "$room"
 
+echo "slack drafts only: a crash inside the walk of a script is no verdict (claude-config#2573)"
+
+# On 2026-11-09, while #2569 was being fixed, sh_binds briefly raised AttributeError, and with that
+# fault in place the gate allowed `bash lib/merge-when-ready.sh` in 0.24 s: the handler around a
+# script read as commands took the crash for a script that cannot be read, and such a script passes
+# when it names no endpoint itself, whatever it goes on to source. So a fault in the gate's own
+# walk read as a clean script. Here the real reader runs behind the real wrapper with that one
+# fault put back (CRASH_IN names the function, which raises the first time it is asked), over a
+# script that sets a variable in an if and then sources a helper: one that posts, and one that
+# does not, since a walk that crashed has judged neither.
+mkdir -p "$T/crash/hooks" "$T/crash/posts/lib" "$T/crash/quiet/lib"
+cp "$HOOK" "$T/crash/hooks/slack-drafts-only-gate.sh"
+ln -s "$DIR/lib" "$T/crash/hooks/lib"
+cat > "$T/crash/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("gate", os.environ["CRASH_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+name = os.environ.get("CRASH_IN", "")
+if name:
+    def crashing(*a, **k):
+        raise AttributeError("'NoneType' object has no attribute 'search'")
+    setattr(gate.Judge, name, staticmethod(crashing))
+gate.main()
+PY
+for tree in posts quiet; do
+  cp "$T/sv/$tree/lib/x.sh" "$T/crash/$tree/lib/x.sh"
+  printf '%s\n' '#!/bin/bash' 'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' 'MODE=one' \
+    'if [ -n "$1" ]; then' '  MODE=two' 'fi' '. "$ROOT/lib/x.sh"' > "$T/crash/$tree/run.sh"
+  printf '%s\n' '{"scripts": {"go": "MODE=one; if [ -n \"$1\" ]; then MODE=two; fi; . ./lib/x.sh"}}' > "$T/crash/$tree/package.json"
+done
+run_crash() { # run_crash <function to crash, or ""> <command>: run_bash through the faulted reader
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | CRASH_REAL_READER="$DIR/slack_drafts_only_gate.py" CRASH_IN="$1" bash "$T/crash/hooks/slack-drafts-only-gate.sh" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+# The control: with no fault the copy judges as the gate does, so what follows is the fault's doing.
+run_crash "" "bash $T/crash/posts/run.sh"
+refused "with no fault, the script sourcing a helper that posts is refused"
+says "and that refusal names the helper" "lib/x.sh"
+run_crash "" "bash $T/crash/quiet/run.sh"
+allowed "with no fault, the script sourcing a helper that does not post passes"
+run_crash "" "npm --prefix $T/crash/posts run go"
+refused "with no fault, the package script sourcing a helper that posts is refused"
+run_crash "" "npm --prefix $T/crash/quiet run go"
+allowed "with no fault, the package script sourcing a helper that does not post passes"
+# Each way a script's commands are reached: the file a shell is handed, a shell fed them on its
+# input, and a package script. sh_binds is asked inside the walk of the script's variables,
+# sh_source_word when the source command itself is judged.
+for fault in sh_binds sh_source_word; do
+  for tree in posts quiet; do
+    run_crash "$fault" "bash $T/crash/$tree/run.sh"
+    refused "a crash in $fault while walking a script that sources a helper ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+    lacks "and does not claim the command posts" "posts to Slack:"
+    run_crash "$fault" "cd $T/crash/$tree && bash <<'EOF'
+$(cat "$T/crash/$tree/run.sh")
+EOF"
+    refused "the same crash in commands a shell is fed on its input ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+    run_crash "$fault" "npm --prefix $T/crash/$tree run go"
+    refused "the same crash in a package script's commands ($tree) is refused"
+    says "and says the gate could not judge the call" "could not judge this call"
+  done
+done
+# A script the reader cannot read as commands at all is not a crash of the walk: it is judged as it
+# was, by what it names. The reader is made to fail on the script's own text, and on no other.
+cat > "$T/crash/hooks/slack_drafts_only_gate.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("gate", os.environ["CRASH_REAL_READER"])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+real_load = gate.load_reader
+def load():
+    sw = real_load()
+    real = sw.every_command
+    def every_command(s, *a, **k):
+        if "UNREADABLE-2573" in s and "\n" in s:
+            raise sw.Unreadable()
+        return real(s, *a, **k)
+    sw.every_command = every_command
+    return sw
+gate.load_reader = load
+gate.main()
+PY
+printf '%s\n' '#!/bin/bash' '# UNREADABLE-2573' 'echo hi' > "$T/crash/quiet/odd.sh"
+printf '%s\n' '#!/bin/bash' '# UNREADABLE-2573' "$(cat "$T/sv/posts/lib/x.sh")" > "$T/crash/posts/odd.sh"
+run_crash "" "bash $T/crash/quiet/odd.sh"
+allowed "a script the reader cannot read as commands, naming no endpoint, still passes"
+run_crash "" "bash $T/crash/posts/odd.sh"
+refused "a script the reader cannot read as commands, naming an endpoint, is still refused"
+says "and that refusal says it could not be read as commands" "could not be read as commands"
+# The same rule where the gate asks the reader for a text's commands (the line being judged, the
+# walk of its variables, the names a sourced file binds): the reader saying it cannot read the text
+# gives what it gave (nothing known, every name bound, no command's place), and any other error
+# from it is a fault that is not swallowed into one of those answers.
+cat > "$T/crash/parse.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+d = sys.argv[2]
+text = open(d + "/run.sh").read()
+def ask(make):
+    # The error is made from this judge's own copy of the reader: each load is a module of its own,
+    # so another copy's Unreadable is not the class this one catches.
+    judge = gate.Judge(gate.load_reader())
+    error = make(judge.sw)
+    def commands(*a, **k):
+        raise error
+    judge.sw.commands = commands
+    got = {}
+    for label, call in (("the walk of its variables", lambda: judge.sh_walk(text, d, "run.sh", True, 0)),
+                        ("the names a sourced file binds", lambda: judge.sh_bound_in(d + "/run.sh", {"MODE"}, d, True, "run.sh", 1, set())),
+                        ("the line being judged", lambda: judge.line("echo hi", d, 0, "echo hi"))):
+        try:
+            got[label] = ("gave", call())
+        except Exception as e:
+            got[label] = ("raised", type(e).__name__)
+    return got
+wrong = []
+for label, (how, what) in ask(lambda sw: AttributeError("a fault")).items():
+    if (how, what) != ("raised", "AttributeError"):
+        wrong.append("a fault in the reader, asked for %s, was taken as an answer: %r" % (label, what))
+unreadable = ask(lambda sw: sw.Unreadable())
+expect = {"the walk of its variables": ("gave", {"regions": {}, "top": 0, "lost": [], "bodies": []}),
+          "the names a sourced file binds": ("gave", {"MODE"}), "the line being judged": ("gave", None)}
+for label in expect:
+    if unreadable[label] != expect[label]:
+        wrong.append("a text the reader cannot read, asked for %s, %s %r" % ((label,) + unreadable[label]))
+print("; ".join(wrong) or "ok")
+PY
+parse="$(python3 "$T/crash/parse.py" "$DIR/slack_drafts_only_gate.py" "$T/crash/quiet" 2>&1)"
+check "a fault in the reader is not taken for a text it cannot read, in each place the gate asks it (#2573)" "$parse"
+
 echo "slack drafts only: it is wired"
 
 . "$DIR/lib/settings-file.sh"

@@ -56,6 +56,7 @@ import {
   wordingKey,
   wordingOf,
 } from './rules.ts'
+import { type Reading, type Traced, docstrings, jsSpans, moduleBindings, pySpans, readingOf, sentAt, trace, usedWhole } from './sends.ts'
 import { errorText } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 
@@ -103,7 +104,10 @@ const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeo
     // mod-kit's spans are already the text between the quotes, prefix letters and quotes left out.
     const spans = await $.modkit.pythonText({ code: text })
     const query = new Set(stringsOf(text, true).filter(s => s.query).map(s => s.start))
-    return spans.filter(s => (s.kind === 'string' || s.kind === 'formatted') && !query.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [], start: s.from }))
+    // A docstring documents the code and is sent nowhere (#2574).
+    const strings = spans.filter(s => s.kind === 'string' || s.kind === 'formatted')
+    const docs = docstrings(readingOf(text, true, pySpans(spans)), strings)
+    return strings.filter(s => !query.has(s.from) && !docs.has(s.from)).map(s => ({ text: text.slice(s.from, s.to), literal: [], start: s.from }))
   }
   // A CI workflow posts only what a Slack step carries, never its names, needs or commands (#2371).
   if (lang === 'yaml' && ciWorkflow(path)) return ciMessages(text, path).map(t => ({ text: t, literal: [], start: -1 }))
@@ -227,7 +231,18 @@ const pathspecGroups = (rels: string[]): string[][] => {
 // could not tell whether a file sends the template (more files to read than it reads, or a send
 // helper search that failed), so the edit is held for Dan to approve, never refused
 // with nothing he can answer (#2364).
-type Found = { sender: string } | { none: true } | { unchecked: string } | { posts: true } | { maybe: true }
+//
+// senders (#2570): every file found sending the template, at the nearest level that has one, or at
+// each level the caller's `settle` asks the search to go on past. complete: the search reached every
+// file that hands the template on; otherwise it stopped (too many files, too late, too deep) with
+// these found so far.
+/** A file that sends the template: the files it reaches the template through, nearest it first, the template left out, and for one sending through a send helper it imports, that helper. */
+type Sender = { rel: string; chain: string[]; helper?: string }
+type Senders = { senders: Sender[]; top: string; texts: Map<string, string>; complete: boolean }
+type Found = Senders | { none: true } | { unchecked: string } | { posts: true } | { maybe: true }
+/** Whether the senders found so far settle the question, so the search may stop (#2570). */
+type Settle = (senders: Sender[], top: string, texts: Map<string, string>, template: string) => Promise<boolean>
+const firstSender = (f: Senders): string => `${f.top}/${(f.senders[0] as Sender).rel}`
 const NONE = { none: true } as const
 const POSTS = { posts: true } as const
 const MAYBE = { maybe: true } as const
@@ -258,8 +273,13 @@ const end = (found: Found): never => {
  * it carries a Slack marker (#2287, #2361); so is a test (#2290). A file that does carry one (`marked`)
  * and is in a repository is posts, with no search.
  */
-const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false): Promise<Found> => {
+const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false, settle?: Settle): Promise<Found> => {
   const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
+  // The senders found so far, and what the search returns when it stops with them in hand.
+  const found: Sender[] = []
+  let top = ''
+  const texts = new Map<string, string>()
+  const withFound = (complete: boolean, otherwise: Found): Found => (found.length ? { senders: found, top, texts, complete } : otherwise)
   // Whole milliseconds, as process.run takes a timeout; under one left is none.
   const left = async () => Math.floor(deadline - (await $.clock.now()))
   try {
@@ -275,13 +295,14 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     // git prints the repository's top folder, then the folder searched from below it, ending in a
     // slash, or an empty line at the top. The top is git's own spelling, symlinks resolved, so the
     // template is placed by that prefix rather than by cutting the top off its path.
-    const [top = '', prefix = ''] = where.stdout.split('\n')
-    if (!top) return { unchecked: `git named no repository for ${path}` }
+    const [named = '', prefix = ''] = where.stdout.split('\n')
+    if (!named) return { unchecked: `git named no repository for ${path}` }
+    top = named
     const templateRel = `${prefix}${path.slice(dir === '/' ? 1 : dir.length + 1)}`
     // A test sends nothing (#2290); a file that posts by itself, once known to be in a repository,
     // needs no search for what sends it.
     if (testFile(templateRel)) return NONE
-    if (marked) return POSTS
+    if (marked && !settle) return POSTS
     // What git grep prints for `what`, case ignored; none is an empty string.
     const grep = async (what: string, args: string[]): Promise<string> => {
       const ms = await left()
@@ -355,8 +376,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       for (const group of pathspecGroups(listed)) await lines(group)
       return listed.filter(r => out.has(r))
     }
-    // Every file read in this search, so a file listed at two levels is read once and counted once.
-    const texts = new Map<string, string>()
+    // Every file read in this search (texts), so a file listed at two levels is read once and counted once.
     const budget = (rels: string[]) => {
       const reads = texts.size + rels.filter(r => !texts.has(r)).length
       if (reads > MOST_READ) end(MAYBE)
@@ -386,15 +406,16 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
      * fails, runs late, or would read more than MOST_READ files cannot tell, so it is maybe: held for
      * Dan to approve.
      */
-    const helperUser = async (users: { rel: string; text: string }[]): Promise<string | undefined> => {
+    const helperUser = async (users: { rel: string; text: string }[]): Promise<{ user: string; helper: string }[]> => {
       const specs = [...new Set(users.flatMap(u => importSpecs(u.text)))]
-      if (!specs.length) return undefined
+      if (!specs.length) return []
       const ms = await left()
       if (ms <= 0) end(MAYBE)
       const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '-E', '-e', SENDER_PREFILTER, '--', ...specs], { timeoutMs: ms })
-      if (hits.exitCode === 1) return undefined
+      if (hits.exitCode === 1) return []
       if (hits.exitCode !== 0 || hits.isStdoutTruncated) end(MAYBE)
       const helpers = candidates(hits.stdout.split('\u0000').filter(r => r && r !== templateRel))
+      const pairs: { user: string; helper: string }[] = []
       if (texts.size + helpers.filter(h => !texts.has(h)).length > MOST_READ) end(MAYBE)
       for (const h of helpers) {
         if ((await left()) <= 0) end(MAYBE)
@@ -408,26 +429,43 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
           texts.set(h, text as string)
         }
         if (!slackMarked(text as string)) continue
-        const user = users.find(u => refersTo(u.rel, u.text, h))
-        if (user !== undefined) return user.rel
+        for (const u of users) if (refersTo(u.rel, u.text, h)) pairs.push({ user: u.rel, helper: h })
       }
-      return undefined
+      return pairs
     }
     // The template, then each level of files handing the last level on, the template never again.
     const seen = new Set([templateRel])
     let level = [templateRel]
+    // Each file handing the template on, and the file of the level before it that it names, so a
+    // sender's way down to the template can be followed (#2570).
+    const parent = new Map<string, string>()
+    const chainOf = (rel: string): string[] => {
+      const out: string[] = []
+      for (let r: string | undefined = rel; r !== undefined && r !== templateRel; r = parent.get(r)) out.push(r)
+      return out
+    }
     for (let hop = 0; ; hop++) {
       // Only files naming the level in a form a reference takes, so a common short name lists no crowd (#2371).
       const named = await naming(level)
       const rels = named.filter(r => markable.has(r))
       budget(rels)
+      const atLevel: Sender[] = []
       for (const rel of rels) {
         // Only what a file runs can send: a comment naming the template beside a Slack webhook's name
         // posts nothing (Pivot, 2026-11-06, where it held ordinary code edits as alert wording).
         // refersTo leaves comments out itself.
         const text = await textOf(rel, sends)
-        if (slackMarked(codeOf(rel, text)) && level.some(t => refersTo(rel, text, t))) return { sender: `${top}/${rel}` }
+        const via = slackMarked(codeOf(rel, text)) ? level.find(t => refersTo(rel, text, t)) : undefined
+        if (via !== undefined) atLevel.push({ rel, chain: chainOf(via) })
       }
+      // Senders found: the search stops, unless the caller's trace of them settles nothing and asks
+      // it to go on (#2570).
+      const stops = async (more: Sender[]): Promise<boolean> => {
+        if (!more.length) return false
+        found.push(...more)
+        return !settle || (await settle(more, top, texts, templateRel))
+      }
+      if (await stops(atLevel)) return { senders: found, top, texts, complete: true }
       const links = named.filter(r => mayHandOn(r) && !seen.has(r))
       budget(links)
       const next: string[] = []
@@ -437,26 +475,28 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         // stops a file that does from being followed.
         const text = await textOf(rel, handsOnTo)
         const code = codeOf(rel, text)
-        if (slackMarked(code) || !level.some(t => refersTo(rel, text, t))) continue
+        const via = slackMarked(code) ? undefined : level.find(t => refersTo(rel, text, t))
+        if (via === undefined) continue
+        parent.set(rel, via)
         if (handsOn(rel, code)) next.push(rel)
         users.push({ rel, text })
       }
-      const user = await helperUser(users)
-      if (user !== undefined) return { sender: `${top}/${user}` }
+      const helped = (await helperUser(users)).map(p => ({ rel: p.user, chain: chainOf(parent.get(p.user) as string), helper: p.helper }))
+      if (await stops(helped)) return { senders: found, top, texts, complete: true }
       // A level handed on only to UI components settles here (Dan, 2026-11-09, #2519): a screen's
       // importers are other screens, and one that sent was found above. Any other file handing it
       // on means the whole level, components too, is followed as before.
-      if (next.every(r => uiComponent(r))) return NONE
+      if (next.every(r => uiComponent(r))) return withFound(true, NONE)
       if (hop === REEXPORT_HOPS)
-        return {
+        return withFound(false, {
           unchecked: `${path} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: ${next.map(r => `${top}/${r}`).join(', ')})`,
-        }
+        })
       for (const r of next) seen.add(r)
       level = next
     }
   } catch (err) {
-    if (err instanceof Ended) return err.found
-    return { unchecked: `the files that could send ${path} to Slack could not be searched: ${message(err)}` }
+    if (err instanceof Ended) return withFound(false, err.found)
+    return withFound(false, { unchecked: `the files that could send ${path} to Slack could not be searched: ${message(err)}` })
   }
 }
 
@@ -503,20 +543,102 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
     }
     const change = wordingChange(wording(beforeLits), wording(afterLits))
     if (!(await holdOf(change))) return PASS
-    // Wording Dan has not approved: held when its file is in a git repository and is no test, and
-    // either posts to Slack itself or another file in its repository sends it there.
     const deadline = (await $.clock.now()) + SCAN_MS
-    const found = await findSender($, path, deadline, marked)
+    // The hold for `part` of the change, of it only what Slack can be sent: text only a model reads
+    // is left out (#2475), so a model's instructions beside an alert are never held, nor shown to Dan
+    // as one.
+    type Part = { added: string[]; removed: string[] }
+    const holdFor = async (part: Part, sender?: string): Promise<Verdict> => {
+      const [beforeKept, afterKept] = text
+        ? [beforeLits, afterLits]
+        : await postable($, path, lang, [{ text: before, lits: beforeLits, changed: part.removed }, { text: after, lits: afterLits, changed: part.added }], deadline)
+      const kept = wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[]))
+      const hold = await holdOf({ added: kept.added.filter(s => part.added.includes(s)), removed: kept.removed.filter(s => part.removed.includes(s)) })
+      if (!hold) return PASS
+      return { hold: sender ? { ...hold, sender } : hold }
+    }
+    const python = lang === 'python'
+    // Wording Dan has not approved, in a file whose sends cannot be traced (a text template, a
+    // workflow, a shell script, an edit that does not apply): held when its file is in a git
+    // repository and is no test, and either posts to Slack itself or another file in its repository
+    // sends it there.
+    if (text || edited === undefined || !(python || (lang === 'c' && isJs(path)))) {
+      const found = await findSender($, path, deadline, marked)
+      if ('unchecked' in found) return found
+      if (!('posts' in found || 'maybe' in found || 'senders' in found)) return PASS
+      return holdFor(change, 'senders' in found ? firstSender(found) : undefined)
+    }
+    // Only wording a Slack send carries is held (#2570): each changed string is traced to the send it
+    // reaches, in this file, then from each file that sends this one.
+    const readOf = async (t: string, py: boolean): Promise<Reading> => readingOf(t, py, py ? pySpans(t ? await $.modkit.pythonText({ code: t }) : []) : jsSpans(t))
+    const [rBefore, rAfter] = [await readOf(before, python), await readOf(after, python)]
+    const sentIn = (tBefore: Traced, tAfter: Traced, part: Part): Part => ({
+      added: part.added.filter(s => afterLits.some(l => l.text === s && l.start >= 0 && sentAt(tAfter, l.start))),
+      removed: part.removed.filter(s => beforeLits.some(l => l.text === s && l.start >= 0 && sentAt(tBefore, l.start))),
+    })
+    const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
+    // A file that posts to Slack by a send the guard cannot find is held as before.
+    if (marked && !tBefore.sends.length && !tAfter.sends.length) {
+      const found = await findSender($, path, deadline, true)
+      if ('unchecked' in found) return found
+      return 'posts' in found ? holdFor(change) : PASS
+    }
+    const here = sentIn(tBefore, tAfter, change)
+    if (here.added.length || here.removed.length) {
+      // In a repository and no test, as a file posting by itself must be.
+      const found = await findSender($, path, deadline, true)
+      if ('unchecked' in found) return found
+      if (!('posts' in found)) return PASS
+      const held = await holdFor(here)
+      if (!('pass' in held)) return held
+    }
+    const rest: Part = { added: change.added.filter(s => !here.added.includes(s)), removed: change.removed.filter(s => !here.removed.includes(s)) }
+    if (!rest.added.length && !rest.removed.length) return PASS
+    // The rest of the change, judged by the files that send this one: each is traced, and the names
+    // it sends followed down through every file it reaches this one by. A sender, or a file on its way
+    // down, the guard cannot trace holds the change as before, naming it.
+    let verdict: { sent: Part; sender: string } | { untraced: string } | undefined
+    const settle: Settle = async (senders, top, texts, template) => {
+      const reading = async (rel: string): Promise<Reading | undefined> => {
+        const t = texts.get(rel)
+        const py = rel.endsWith('.py')
+        return t === undefined || !(py || isJs(rel)) ? undefined : readOf(t, py)
+      }
+      // Whether `upper` takes the file below it as a whole module and sends it whole (copy[key]), past
+      // what following names can see.
+      const whole = (upperRel: string, r: Reading, t: Traced, lowerRel: string) => moduleBindings(r).some(b => refersTo(upperRel, b.statement, lowerRel) && usedWhole(r, t, b.name))
+      for (const s of senders) {
+        const untraced = { untraced: `${top}/${s.rel}` }
+        const sr = await reading(s.rel)
+        const helper = s.helper === undefined ? undefined : await reading(s.helper)
+        if (!sr || (s.helper !== undefined && !helper)) return ((verdict = untraced), true)
+        const fns = helper ? trace(helper).fns : new Set<string>()
+        let upper = { rel: s.rel, r: sr, t: trace(sr, new Map(), fns) }
+        if (!upper.t.sends.length) return ((verdict = untraced), true)
+        let names = upper.t.names
+        for (const rel of [...s.chain, template]) {
+          if (whole(upper.rel, upper.r, upper.t, rel)) return ((verdict = untraced), true)
+          if (rel === template) break
+          const r = await reading(rel)
+          if (!r) return ((verdict = untraced), true)
+          const t = trace(r, names)
+          names = new Map([...t.names, ...names])
+          upper = { rel, r, t }
+        }
+        const sent = sentIn(trace(rBefore, names), trace(rAfter, names), rest)
+        if (sent.added.length || sent.removed.length) return ((verdict = { sent, sender: `${top}/${s.rel}` }), true)
+      }
+      return false
+    }
+    const found = await findSender($, path, deadline, false, settle)
+    if (verdict && 'untraced' in verdict) return holdFor(rest, verdict.untraced)
+    if (verdict) return holdFor(verdict.sent, verdict.sender)
     if ('unchecked' in found) return found
-    if (!('posts' in found || 'maybe' in found || 'sender' in found)) return PASS
-    // Of that wording, only what Slack can be sent: text only a model reads is left out (#2475), so a
-    // model's instructions beside an alert are never held, nor shown to Dan as one.
-    const [beforeKept, afterKept] = text
-      ? [beforeLits, afterLits]
-      : await postable($, path, lang, [{ text: before, lits: beforeLits, changed: change.removed }, { text: after, lits: afterLits, changed: change.added }], deadline)
-    const hold = await holdOf(wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[])))
-    if (!hold) return PASS
-    return 'sender' in found ? { hold: { ...hold, sender: found.sender } } : { hold }
+    // A search that stopped short (too many files, too late, too deep) cannot rule out a sender further
+    // on, so the rest is held as before.
+    if ('maybe' in found) return holdFor(rest)
+    if ('senders' in found && !found.complete) return holdFor(rest, firstSender(found))
+    return PASS
   } catch (err) {
     return { unchecked: message(err) }
   }
@@ -548,7 +670,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       const found = await findSender($, f.path, deadline, code && slackMarked(text))
       if ('unchecked' in found) return found
       if ('posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
-      if ('sender' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: found.sender } }
+      if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }
     }
     return PASS
   } catch (err) {
