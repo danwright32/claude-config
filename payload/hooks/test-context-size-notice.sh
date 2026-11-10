@@ -321,7 +321,7 @@ for m in d["hooks"].get("PostToolUse", []):
 check_eq "8 registered as a PostToolUse hook on every tool (no matcher)" "matcher=None" "$reg"
 
 # ---- 9. lib/context_size.py, the one sum tools/cache-usage.py also reports through ----
-out="$(python3 -c '
+out="$(python3 -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 import context_size as c
@@ -335,7 +335,7 @@ check_eq "9 context_size.py sums input, cache read and cache write, never output
 # in the orchestrate skill that explains it, so the two cannot drift apart (L83) ----
 SKILL="$DIR/../skills/orchestrate/SKILL.md"
 skill_text="$(cat "$SKILL" 2>/dev/null)"
-notice_text="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import context_size as c; print(c.WRITE_DOWN)' "$DIR/lib" 2>&1)"
+notice_text="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import context_size as c; print(c.WRITE_DOWN)' "$DIR/lib" 2>&1)"
 for item in "in Dan's words" "quoted with its date" "what was ruled out" "commit shas" "with their ids" "next step" "waiting on Dan"; do
   check "10 the notice's list carries: $item" "$item" "$notice_text"
   check "10 and so does the orchestrate skill: $item" "$item" "$skill_text"

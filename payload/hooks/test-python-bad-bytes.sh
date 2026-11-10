@@ -84,7 +84,7 @@ echo "git output holding a byte that is not UTF-8 is read, not raised on"
 git -C "$WORK" init -q repo && printf 'caf\377 line\nsecond\n' > "$WORK/repo/f.txt" \
   && git -C "$WORK/repo" add f.txt && git -C "$WORK/repo" -c user.name=t -c user.email=t@t commit -q -m one \
   || bad "could not build the git fixture"
-OUT="$(LC_ALL="$BAD_BYTE_LOCALE" python3 - "$DIR/lib/review-answered.py" "$WORK/repo" <<'PY' 2>&1
+OUT="$(LC_ALL="$BAD_BYTE_LOCALE" python3 -B - "$DIR/lib/review-answered.py" "$WORK/repo" <<'PY' 2>&1
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("review_answered", sys.argv[1])
 m = importlib.util.module_from_spec(spec)

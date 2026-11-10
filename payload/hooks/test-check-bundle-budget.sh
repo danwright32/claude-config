@@ -413,6 +413,21 @@ want_says ".githooks/bundle-budget.txt" "and the stand down names the record"
 want_says ".githooks/pre-push" "and names the file that reads it"
 [ "$(record_total "$W")" = "$before_rec" ] && ok || bad "standing down must not touch the global record"
 
+# --- #2600: the measurer leaves no bytecode in lib -------------------------------------------------
+# check-bundle-budget.sh runs it as plain python3, and its ratchet import left
+# lib/__pycache__/ratchet.cpython-*.pyc, which failed test-work-names.sh's #2444 check beside this
+# suite in CI. Run in a private copy of lib, never the shared one, with the environment's bytecode
+# switches cleared so only the measurer's own setting is measured (L322, L411).
+PYC="$WORKDIR/pyc2600"; mkdir -p "$PYC/lib" "$PYC/repo" "$PYC/state"
+python3 -B "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC/lib" bundle-budget.py ratchet.py \
+  || bad "#2600 the measurer and ratchet.py install into $PYC/lib"
+out="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX python3 "$PYC/lib/bundle-budget.py" --repo "$PYC/repo" \
+  --head-time 1 --remote r --state-dir "$PYC/state" 2>&1)"; rc=$?
+pyc="$(find "$PYC/lib" -name '*.pyc' 2>/dev/null | sed 's#.*/##' | tr '\n' ' ')"
+if [ "$rc" -ne 4 ]; then bad "#2600 control: the copied measurer ran and found no build (exit $rc: $out), so its bytecode was not measured"
+elif [ -n "$pyc" ]; then bad "#2600 the measurer leaves no bytecode in lib (it wrote [$pyc])"
+else ok; fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

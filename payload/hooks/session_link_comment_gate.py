@@ -26,6 +26,8 @@ import os
 import re
 import sys
 
+# No bytecode cache beside the hooks, from the scanner or what it loads from lib/ (#2600).
+sys.dont_write_bytecode = True
 _HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 _path = os.path.join(_HERE, "gh_issue_scan.py")
 _spec = importlib.util.spec_from_file_location("gh_issue_scan", _path)

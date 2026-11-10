@@ -6613,6 +6613,14 @@ KEEP
     # on (both held in the #638 section of tests/test-claude-sync.sh, #790).
     rsync -rlpgoDic --delete "${COMMON_EXCLUDES[@]}" ${kex[@]+"${kex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" | record_rsync "$d"
   done
+  # Each mod this pull wrote into, for the sessions that loaded it, which keep running the old code
+  # unless Claude Code reloads it (claude-config#2514); rule-files-changed.sh reads it per prompt.
+  if [ -f "$SYNC_SELF_PAYLOAD/hooks/lib/mods-replaced.sh" ] && . "$SYNC_SELF_PAYLOAD/hooks/lib/mods-replaced.sh"; then
+    mods_replaced_note "$CLAUDE_HOME" "$APPLIED_LOG" "$(date +%s).$$" \
+      || echo "claude-sync: $(mods_replaced_file "$CLAUDE_HOME") could not be written, so sessions running a mod this pull replaced are not told to reload it." >&2
+  elif grep -q "$(printf '\t')mods/" "$APPLIED_LOG" 2>/dev/null; then
+    echo "claude-sync: lib/mods-replaced.sh is missing beside claude-sync, so sessions running a mod this pull replaced are not told to reload it." >&2
+  fi
   # After the mirror, so the first pull after a retirement clears the folder the mirror just emptied
   # rather than leaving it to be reported until the next one (claude-config#968).
   clear_retired_skill_leftovers

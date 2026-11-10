@@ -67,6 +67,73 @@ want_clean() {  # want_clean <desc> <output>
   if [ -z "$2" ]; then check "$1" ok; else check "$1" "expected no finding, got: $2"; fi
 }
 
+# The real case: the README mods table rows that had to split the phrase across two lines to get
+# past this check (#2123). Each row's line is found by text it holds split or whole, and is judged
+# joined to the line after it, the shape a rejoin gives it, so these real words are held clean
+# before and after the README is rejoined (L48). A reworded row fails here rather than passing a
+# scan of nothing. The README is the repository's, so it is found through the checkout this copy
+# sits in, by the one shared test of that (lib/checkout-root.sh, #1567). The installed copy, which
+# the hook suite runs after every pull, is in none and has no README, so there the rows are reported
+# unmeasured rather than failing for a file it can never hold (claude-config#2620, L411).
+CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+README_NEEDLES=()
+if [ -n "$CHECKOUT" ]; then
+  README_FILE="$CHECKOUT/README.md"
+  README_NEEDLES=('not when it limits it ("for now",' '"stay read only", "read only for now",')
+else
+  echo "SUITE-PART-UNMEASURED the README mods table rows quoting a limit phrase: $DIR/.. is not the payload of a claude-config checkout, so there is no README.md to read"
+fi
+for needle in ${README_NEEDLES[@]+"${README_NEEDLES[@]}"}; do
+  n="$(grep -n -m 1 -F -- "$needle" "$README_FILE")"
+  n="${n%%:*}"
+  if [ -z "$n" ]; then
+    check "README still holds the row quoting the limit phrase: $needle" "line not found in README.md"
+    continue
+  fi
+  joined="$(sed -n "${n}p;$((n + 1))p" "$README_FILE")"
+  joined="${joined//$'\n'/ }"
+  case "$joined" in
+    *'"for now"'*|*'"read only for now"'*) ;;
+    *) check "README line $n joined to the next quotes the phrase whole" "it does not: $joined"; continue ;;
+  esac
+  out="$(detect_file README.md "$joined")"
+  want_clean "the real README line $n, joined to the next, quotes the phrase as a mention" "$out"
+done
+
+# DEFERRALS_README_ONLY=1 is this suite's own run of a copy of itself, placed as installed and as a
+# fixture checkout (below): only the README rows above, then the result.
+if [ -n "${DEFERRALS_README_ONLY:-}" ]; then
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+  exit
+fi
+
+# The README rows, judged from both places this suite runs (claude-config#2620). Installed, as the
+# hook suite after every pull runs it, there is no README, so they are reported unmeasured and the
+# suite passes (L411). In a checkout whose README has the row reworded, they still fail (L1).
+. "$DIR/lib/placement-copy.sh"
+PLACED=(hooks/test-check-deferrals.sh hooks/check-deferrals.sh hooks/deferral-edit-check.sh hooks/lib)
+placed_run() { DEFERRALS_README_ONLY=1 bash "$1/hooks/test-check-deferrals.sh" 2>&1; }
+if copy="$(placement_copy installed "$WORK/placed-installed" "$DIR/.." "${PLACED[@]}")"; then
+  out="$(placed_run "$copy")"; rc=$?
+  case "$out" in *"SUITE-PART-UNMEASURED"*README*) said=yes ;; *) said=no ;; esac
+  [ "$rc $said" = "0 yes" ] && check "#2620 installed, with no README, the README rows are reported unmeasured and the run passes" ok \
+    || check "#2620 installed, with no README, the README rows are reported unmeasured and the run passes" "exit $rc, said: $out"
+else
+  check "#2620 an installed copy of this suite could be placed" "placement_copy failed"
+fi
+if copy="$(placement_copy checkout "$WORK/placed-checkout" "$DIR/.." "${PLACED[@]}")"; then
+  printf '%s\n' '| mods | listens for its words, not when it limits it ("now and then",' 'and "stay read only") |' \
+    > "$WORK/placed-checkout/README.md"
+  out="$(placed_run "$copy")"; rc=$?
+  case "$out" in *"FAIL: README still holds the row"*) said=yes ;; *) said=no ;; esac
+  [ "$rc $said" = "1 yes" ] && check "#2620 in a checkout whose README row is reworded, the README check still fails" ok \
+    || check "#2620 in a checkout whose README row is reworded, the README check still fails" "exit $rc, said: $out"
+else
+  check "#2620 a checkout copy of this suite could be placed" "placement_copy failed"
+fi
+
 # The positive control, in the shape of the real Slate finding this guard exists for
 # (src/lib/security-headers.ts:13, whose nearest issue number sits four lines away).
 REAL_CASE='/**
@@ -157,28 +224,6 @@ out="$(detect_file docs/notes.md $'Keep the x"for now"y flag off.\n')"
 want_finding "a quote run into the words either side is not a mention" "$out" "docs/notes.md:1: for now:"
 out="$(detect_file docs/notes.md $'The mod listens for \'for now\' as a limit.\n')"
 want_finding "single quotes are not a quote here (apostrophes would pair), so the phrase is a finding" "$out" "docs/notes.md:1: for now:"
-# The real case: the README mods table rows that had to split the phrase across two lines to get
-# past this check (#2123). Each row's line is found by text it holds split or whole, and is judged
-# joined to the line after it, the shape a rejoin gives it, so these real words are held clean
-# before and after the README is rejoined (L48). A reworded row fails here rather than passing a
-# scan of nothing.
-README_FILE="$DIR/../../README.md"
-for needle in 'not when it limits it ("for now",' '"stay read only", "read only for now",'; do
-  n="$(grep -n -m 1 -F -- "$needle" "$README_FILE")"
-  n="${n%%:*}"
-  if [ -z "$n" ]; then
-    check "README still holds the row quoting the limit phrase: $needle" "line not found in README.md"
-    continue
-  fi
-  joined="$(sed -n "${n}p;$((n + 1))p" "$README_FILE")"
-  joined="${joined//$'\n'/ }"
-  case "$joined" in
-    *'"for now"'*|*'"read only for now"'*) ;;
-    *) check "README line $n joined to the next quotes the phrase whole" "it does not: $joined"; continue ;;
-  esac
-  out="$(detect_file README.md "$joined")"
-  want_clean "the real README line $n, joined to the next, quotes the phrase as a mention" "$out"
-done
 
 # Word boundaries and case.
 out="$(detect_file a.ts $'// todo: tidy this\n')"
