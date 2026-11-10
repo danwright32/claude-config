@@ -70,6 +70,7 @@ REFUSING=(
   no-verify-gate.sh
   amend-force-push-gate.sh
   temp-worktree-gate.sh
+  fresh-worktree-base-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
   check-wrapped-commands.sh
@@ -288,6 +289,7 @@ EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
 temp-worktree-gate.sh Bash,EnterWorktree
+fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
