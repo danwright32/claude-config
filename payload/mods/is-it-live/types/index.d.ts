@@ -65,7 +65,7 @@ declare module 'claude-code' {
       threads: IsItLiveThread[]
       /**
        * #2436: the order of this session's thread events, counted up by one for each merge learned
-       * of and each draft saved or skipped, so which came first never rests on two clock readings.
+       * of and each draft saved, so which came first never rests on two clock readings.
        */
       step: number
       /** #2436: the step at which this session last learned a merge of its own landed. */

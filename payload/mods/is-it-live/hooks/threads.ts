@@ -101,7 +101,7 @@ export const draftLetGoOf = (owed: SlackThread[]): string => `No Slack draft rep
 /** The step a thread's draft is owed from: the latest merge for it when pasted mid session (#2578), else the latest merge. */
 export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined): number | undefined => (t.mid ? t.related : landed)
 
-/** The threads owed a draft: those whose last draft or skip came before the latest merge they are owed for. */
+/** The threads owed a draft: those whose last draft came before the latest merge they are owed for. */
 export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined): IsItLiveThread[] =>
   threads.filter(t => {
     const from = draftOwedFrom(t, landed)
