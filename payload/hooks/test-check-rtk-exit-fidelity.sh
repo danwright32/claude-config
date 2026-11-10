@@ -56,6 +56,11 @@ fi
 lie_var="LIE_${sub}"
 if [ -n "${!lie_var:-}" ]; then exit "${!lie_var}"; fi
 shift
+# JSON_GH=1: ask gh for a field list, as the real rtk does for `gh pr status` (claude-config#2562).
+if [ "$sub" = "gh" ] && [ -n "${JSON_GH:-}" ]; then
+  command gh "$@" --json currentBranch >/dev/null 2>&1
+  exit $?
+fi
 command "$sub" "$@" >/dev/null 2>&1
 exit $?
 STUB
@@ -314,6 +319,66 @@ else
       || echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer fails gh pr status where gh succeeds, so the rtk gh refusal is not needed for this probe: $(grep 'gh-pr-status-passes' <<< "$real_out")"
   fi
 fi
+
+# ---- #2562: the gh stub must never run inside itself ----
+# The stub hands a `--json` call to "the real gh", found with `command -v gh`. In a Claude session
+# the first gh on PATH is a guard (hooks/bin/gh) that runs the first gh on PATH outside its own
+# folder, and the probe puts its stub first on PATH: so the guard ran the stub, the stub ran the
+# guard, and on 2026-11-09 a full run held 4,037 stub processes after eight minutes, on the way to
+# the account's process limit. Here a guard of the same shape is first on PATH, with a fake real gh
+# behind it. The guard carries a fuse: past twenty runs it stops, so a red run of this test ends in a
+# count, never in a runaway.
+LOOP="$TMPROOT/loop"; mkdir -p "$LOOP/guard" "$LOOP/real"
+cat > "$LOOP/guard/gh" <<'GUARD'
+#!/bin/sh
+n="$(cat "$FUSE" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$FUSE"
+[ "$n" -le 20 ] || { echo tripped > "$FUSE.tripped"; echo "fuse: the guard ran $n times" >&2; exit 99; }
+here="$(cd "$(dirname "$0")" && pwd)"
+IFS=:
+for d in $PATH; do
+  # Compared as resolved folders: a PATH entry can spell this folder with a doubled slash.
+  [ "$(cd "$d" 2>/dev/null && pwd)" != "$here" ] || continue
+  [ ! -x "$d/gh" ] || exec "$d/gh" "$@"
+done
+exit 127
+GUARD
+cat > "$LOOP/real/gh" <<'REALGH'
+#!/bin/sh
+echo reached >> "$REACHED"
+echo 'Unknown JSON field: "currentBranch"' >&2
+exit 1
+REALGH
+chmod +x "$LOOP/guard/gh" "$LOOP/real/gh"
+out="$(PATH="$LOOP/guard:$LOOP/real:$PATH" FUSE="$LOOP/fuse" REACHED="$LOOP/reached" JSON_GH=1 \
+  RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh" bash "$S" 2>&1)"; rc=$?
+ran="$(cat "$LOOP/fuse" 2>/dev/null || echo 0)"
+reached="$(cat "$LOOP/reached" 2>/dev/null | wc -l | tr -d ' ')"
+check "with a guard gh first on PATH, the stub's check of a field list never loops: the fuse is not reached (#2562)" \
+  "$([ ! -e "$LOOP/fuse.tripped" ] && [ "$ran" -ge 1 ] && echo ok || echo "the guard ran $ran times, exit $rc: $(grep -i 'gh-pr-status' <<< "$out" | head -n 2)")"
+check "and every run of the guard reaches the real gh behind it ($ran runs)" \
+  "$([ "$reached" = "$ran" ] && echo ok || echo "the guard ran $ran times and the real gh $reached")"
+
+# The refusal itself: a stub that finds itself already running stops with its own exit code. The
+# guard here ignores PATH and always runs the stub, the one shape the PATH fix cannot cover.
+mkdir -p "$LOOP/stubborn"
+cat > "$LOOP/stubborn/gh" <<'STUBBORN'
+#!/bin/sh
+n="$(cat "$FUSE" 2>/dev/null || echo 0)"; n=$((n + 1)); echo "$n" > "$FUSE"
+[ "$n" -le 20 ] || { echo tripped > "$FUSE.tripped"; echo "fuse: the guard ran $n times" >&2; exit 99; }
+# The newest probe folder is this run's: an older one can be left behind by a run that was killed.
+stub="$(ls -dt "${TMPDIR:-/tmp}"/claude-sync-work.fidelity-probe.*/ghstub/bin/gh 2>/dev/null | head -n 1)"
+[ -n "$stub" ] || exit 127
+"$stub" "$@"
+code=$?
+echo "$code" >> "$CODES"
+exit "$code"
+STUBBORN
+chmod +x "$LOOP/stubborn/gh"
+out="$(PATH="$LOOP/stubborn:$PATH" FUSE="$LOOP/fuse2" CODES="$LOOP/codes" JSON_GH=1 \
+  RTK_FIDELITY_RTK="$BIN/rtk" RTK_FIDELITY_HOOK="$BIN/hook.sh" bash "$S" 2>&1)"; rc=$?
+ran="$(cat "$LOOP/fuse2" 2>/dev/null || echo 0)"
+check "a gh that runs the stub whatever PATH says is refused by the stub, with its own exit code, and never loops (#2562)" \
+  "$([ ! -e "$LOOP/fuse2.tripped" ] && grep -q '^97$' "$LOOP/codes" 2>/dev/null && echo ok || echo "the guard ran $ran times, the stub's exit codes: $(tr '\n' ' ' < "$LOOP/codes" 2>/dev/null)")"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
