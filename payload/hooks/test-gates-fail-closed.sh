@@ -178,7 +178,10 @@ libs_of(){ # libs_of <gate file>
   grep -E "$SRC_RE" "$1" | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' \
     | grep -v -E '^[[:space:]]*\.[^|]*&&[^|]*$' | grep -o -E 'lib/[a-z-]+\.sh' | sort -u | while IFS= read -r l; do
     printf '%s\n' "${l#lib/}"
-    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
+    # The same optional shapes are left out one level down: lib/push-changes.sh loads
+    # lib/this-mac.sh with a stand in (`|| this_mac_name() {`), so its absence stops no gate (#2561).
+    [ -f "$DIR/$l" ] && grep -E '^[[:space:]]*(\{[[:space:]]*)?(\.|source)[[:space:]]+"\$[A-Za-z_]+/[a-z-]+\.sh"' "$DIR/$l" \
+      | grep -v -E '\|\|[[:space:]]*true' | grep -v -E '\|\|[[:space:]]*[a-z_]+\(\)' | grep -o -E '/[a-z-]+\.sh' | sed 's#^/##'
   done | sort -u
 }
 
@@ -194,6 +197,15 @@ for want in merge-target.sh push-scope.sh whole-number.sh; do
 done
 [ -z "$probe_missing" ] && ok \
   || bad "libs_of does not follow a library into the ones it loads as { . lib && declare -F f; } || return 1: it listed [$probe_libs] for a gate loading lib/merge-target.sh, without$probe_missing"
+# One level down, a library loaded with a stand in function is optional, as it is at the gate's own
+# level: a gate loading lib/push-changes.sh needs it, never the lib/this-mac.sh it loads with one.
+printf '%s\n' '. "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || { echo "missing push-changes.sh" >&2; exit 2; }' > "$WORK/probe-gate2"
+probe_libs="$(libs_of "$WORK/probe-gate2" | tr '\n' ' ')"
+case " $probe_libs" in
+  *" this-mac.sh "*) bad "libs_of takes lib/this-mac.sh away beneath lib/push-changes.sh, which loads it with a stand in: it listed [$probe_libs]" ;;
+  *" push-changes.sh "*) ok ;;
+  *) bad "libs_of did not list lib/push-changes.sh for a gate loading it: it listed [$probe_libs]" ;;
+esac
 
 # Each run is fed from a file rather than a pipe from python3, which a gate leaving early would
 # kill, and in a folder named by a number: a folder named after the gate or the library would put

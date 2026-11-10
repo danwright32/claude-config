@@ -76,11 +76,17 @@ out="$(judge bash -c '. "$1"; ar_host' _ "$DIR/lib/ai-review-common.sh" 2>&1)"
 check_eq "ai-review-common.sh's ar_host reads a several dot name as the work MacBook" "Dans-MacBook-Pro" "$out"
 out="$(AI_REVIEW_HOST=Daniels-MacBook-Pro-2.local judge bash -c '. "$1"; ar_host' _ "$DIR/lib/ai-review-common.sh" 2>&1)"
 check_eq "ar_host still judges as AI_REVIEW_HOST names" "Daniels-MacBook-Pro-2" "$out"
+# push-changes.sh sourced by a bare name, from its own folder: BASH_SOURCE holds no slash, so cutting
+# at the last one leaves the file name, and the helper must still be found beside it.
+out="$(cd "$DIR/lib" && judge bash -c '. push-changes.sh; out="$(this_mac_name)"; printf "%s %s" "$?" "$out"' 2>&1)"
+check_eq "push-changes.sh sourced by a bare file name still finds lib/this-mac.sh" "0 Dans-MacBook-Pro" "$out"
 
 # The helper missing beside a hook is said, never read as a Mac with no name (L11).
 mkdir -p "$TMPROOT/nolib/lib"
 cp "$DIR/agent-cap.sh" "$DIR/check-project-list.sh" "$TMPROOT/nolib/"
-cp "$DIR/lib/project-list.sh" "$TMPROOT/nolib/lib/"
+said="$(python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/nolib/lib" project-list.sh 2>&1)"; rc=$?
+check_eq "project-list.sh installs beside the hooks that lack lib/this-mac.sh, without bringing it" \
+  "0 absent" "$rc $([ -e "$TMPROOT/nolib/lib/this-mac.sh" ] && echo present || echo absent)${said:+ said: $said}"
 out="$(judge bash "$TMPROOT/nolib/agent-cap.sh" 2>&1)"
 case "$out" in *"lib/this-mac.sh is missing"*"default applies"*) check "agent-cap.sh without lib/this-mac.sh says it is missing and takes the default" ok ;; *) check "agent-cap.sh without lib/this-mac.sh says it is missing and takes the default" "$out" ;; esac
 printf '## Projects\n\nOn Dans-MacBook-Pro:\n- `~/x`\n' > "$TMPROOT/nolib/CLAUDE.md"
@@ -100,7 +106,8 @@ printf '#!/bin/bash\nhostname | cut -d. -f1\n' > "$T/payload/hooks/own-noext"
 # gethostname (another language), a suite, the helper itself, and a file outside the hooks.
 printf '#!/usr/bin/env bash\n# reads `hostname` by hand\necho "no readable hostname, so"\ngh auth token --hostname github.com\n' > "$T/payload/hooks/clean.sh"
 printf '#!/usr/bin/env bash\nh="$(hostname)"\n' > "$T/payload/hooks/test-clean.sh"
-cp "$HELPER" "$T/payload/hooks/lib/this-mac.sh"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$T/payload/hooks/lib" this-mac.sh >/dev/null \
+  || check "lib/this-mac.sh installs into the scan's tree" "install-hook-libs.py refused it"
 printf '#!/usr/bin/env bash\nh="$(hostname -s)"\n' > "$T/tools/clean.sh"
 LIST="payload/hooks/own-sub.sh
 payload/hooks/own-var.sh
