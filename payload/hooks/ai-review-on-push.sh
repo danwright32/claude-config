@@ -159,7 +159,7 @@ fi
 # claude-config#2561). AI_REVIEW_HOSTS is space separated; `*` means every computer.
 # AI_REVIEW_HOST judges as a named machine instead of this one, for the suite.
 review_hosts="${AI_REVIEW_HOSTS-Dans-MacBook-Pro}"
-declare -F this_mac_name >/dev/null \
+. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null \
   || did_not_run "could not load lib/this-mac.sh, so which computer this is could not be read (reinstall the hooks with claude-sync pull)"
 this_host="$(ar_host)"
 # Matched as text, never looped over unquoted: an unquoted `*` expands to the files in the working

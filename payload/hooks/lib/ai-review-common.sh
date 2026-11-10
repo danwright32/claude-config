@@ -730,11 +730,12 @@ AR_PR_LEDGER="$AR_STATE_DIR/pr-reviews.tsv"
 AR_PR_OPENED="$AR_STATE_DIR/pr-opened.tsv"
 
 # Which Mac this is, the one reading every hook makes (lib/this-mac.sh, claude-config#2561), or
-# AI_REVIEW_HOST's for the suites. Empty when no name can be read or the helper is missing; a caller
-# that decides something by it checks `declare -F this_mac_name` first (ai-review-on-push.sh).
-. "$AR_COMMON_DIR/this-mac.sh" 2>/dev/null
+# AI_REVIEW_HOST's for the suites. Loaded here only when first asked, so the hooks that source this
+# file and never ask go on without it. Empty when no name can be read or the helper is missing; a
+# caller that decides something by it loads lib/this-mac.sh itself first (ai-review-on-push.sh).
 ar_host() {
   local h=""
+  declare -F this_mac_name >/dev/null || . "$AR_COMMON_DIR/this-mac.sh" 2>/dev/null
   declare -F this_mac_name >/dev/null && h="$(this_mac_name ${AI_REVIEW_HOST:+"$AI_REVIEW_HOST"})"
   printf '%s' "$h"
 }

@@ -27,7 +27,7 @@
 
 # Which Mac a ledger line came from, the one reading every hook makes (claude-config#2561). Missing,
 # the line is written with no host rather than not at all, and the gate's verdict never changes.
-. "${BASH_SOURCE[0]%/*}/this-mac.sh" 2>/dev/null
+. "${BASH_SOURCE[0]%/*}/this-mac.sh" 2>/dev/null || this_mac_name() { return 1; }
 
 # Never shown to a judge: generated, locked, minified or binary content, which says nothing about
 # the change and spends the budget. One list for every gate (it was two copies).

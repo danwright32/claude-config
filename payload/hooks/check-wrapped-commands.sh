@@ -291,7 +291,7 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 # Which Mac a refusal is recorded from, the one reading every hook makes (claude-config#2561).
 # Missing, the refusal is recorded as from an unknown host, and refused all the same.
-. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null
+. "$HOOK_DIR/lib/this-mac.sh" 2>/dev/null || this_mac_name() { return 1; }
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948), for the
 # ledger's size, read before any refusal can be recorded. Missing, the ledger is kept at its default
 # size for this refusal, and the command is refused like any other this gate cannot judge with all
