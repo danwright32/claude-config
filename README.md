@@ -5378,6 +5378,15 @@ repo but not applied here (what a pull that stops before its apply leaves). The 
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
 
+A file status could not compare is said on its own, whatever the window, under `mods not compared
+with the shared repo`, one line per file naming the step that failed and its exit status: hashing
+it, putting the home path placeholder back, hashing it with the placeholder put back, or reading
+when the shared repo added it, changed it or removed it (#2673). Such a file is counted neither as
+behind nor as this Mac's own work, and status exits as it would otherwise. Before this, every one
+of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
+and read as unsent work here, dropping out of the lag line with nothing said; one failed
+placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>

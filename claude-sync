@@ -466,6 +466,12 @@ die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
 # and the report is worth having (claude-config#117). It also reads a value of nothing but newlines
 # as blank, which the old form did not, and which is what every caller meant.
 is_blank(){ case "${1-}" in *[![:space:]]*) return 1 ;; *) return 0 ;; esac; }
+# A git object id as hash-object prints one: 40 hex digits, or 64 in a SHA-256 repository. An empty
+# answer or an error text is not one, and neither may stand in for a hash (claude-config#2673).
+is_object_id(){
+  case "${1-}" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#1}" -eq 40 ] || [ "${#1}" -eq 64 ]
+}
 
 # ---------- an outage is judged by how LONG, not by what kind (#22) ----------
 # Losing the network for a moment and GitHub being down for a morning arrive on exactly the
@@ -12903,8 +12909,17 @@ HOLDROWS
 # process, 12.5 with this, and 10.8 with no comparison at all. So the listing,
 # the hashes and the three way split (same, differs, only on one side) are one process each, and
 # only a file that differs costs a walk of its own history.
+#
+# And one line per file it could NOT compare: "unread\t<path under mods/>\t<the step that failed>"
+# (claude-config#2673). Every hash and history read here used to discard its errors and carry on, so
+# one that failed left an empty or wrong value, the file then matched no version the repo had held,
+# and it read as this Mac's own unsent work: dropped from the lag line with nothing said. One failed
+# placeholder swap reproduces the unexplained #1535 suite failure of 2026-11-02 exactly (#2091). So
+# each step's exit status is read (L184), a file whose comparison could not be made is named with the
+# step, and it is counted neither as behind nor as level (L11).
 mods_lag_records(){
   local branch up tip installed hashes tokhashes split kind rel blob mine mine2 since line h ct seen prev f
+  local unread="" rc tmp batch
   have_git || return 0
   branch="$(sync_branch)" || return 0
   [ -n "$branch" ] || return 0
@@ -12926,49 +12941,105 @@ mods_lag_records(){
   fi
   hashes=""
   if [ -n "$installed" ]; then
-    # Absolute paths, because -C moves where a relative one would be read from.
-    hashes="$(paste <(printf '%s\n' "$installed" | while IFS= read -r f; do printf '%s/mods/%s\n' "$CLAUDE_HOME" "$f"; done \
-      | git -C "$SYNC_REPO" hash-object --stdin-paths 2>/dev/null) <(printf '%s\n' "$installed"))"
+    # Absolute paths, because -C moves where a relative one would be read from. One process for
+    # every file, used only when it answered for every file with an object id each: otherwise the
+    # pairing below would give one file another's hash, so each file is hashed on its own instead,
+    # which costs a process per file only on that failure, and names the files that still fail.
+    rc=0
+    batch="$(printf '%s\n' "$installed" | while IFS= read -r f; do printf '%s/mods/%s\n' "$CLAUDE_HOME" "$f"; done \
+      | git -C "$SYNC_REPO" hash-object --stdin-paths 2>/dev/null)" || rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s\n' "$batch" | awk -v n="$(printf '%s\n' "$installed" | awk 'END { print NR }')" '
+        !/^[0-9a-f]+$/ || (length($0) != 40 && length($0) != 64) { bad = 1 }
+        END { exit !(bad == 0 && NR == n) }'; then
+      hashes="$(paste <(printf '%s\n' "$batch") <(printf '%s\n' "$installed"))"
+    else
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        rc=0; h="$(git -C "$SYNC_REPO" hash-object -- "$CLAUDE_HOME/mods/$f" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          unread="${unread}unread	$f	hashing it failed (git hash-object exit $rc)
+"
+        elif ! is_object_id "$h"; then
+          unread="${unread}unread	$f	hashing it printed no hash (git hash-object)
+"
+        else
+          hashes="${hashes}$h	$f
+"
+        fi
+      done <<< "$installed"
+    fi
   fi
-  # The few files holding this Mac's home path, hashed again with the placeholder put back.
+  # The few files holding this Mac's home path, hashed again with the placeholder put back. Through
+  # a file, so the swap and the hash each answer for themselves: piped, a failed swap hands the
+  # hash an empty stream, whose hash is a real one that matches nothing.
   tokhashes=""
   if [ -d "$CLAUDE_HOME/mods" ]; then
     local loop_input; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)" || true
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      tokhashes="${tokhashes}$(tok < "$f" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)	${f#"$CLAUDE_HOME/mods/"}
+      rel="${f#"$CLAUDE_HOME/mods/"}"
+      if ! tmp="$(scratch_file 2>/dev/null)" || [ -z "$tmp" ]; then
+        unread="${unread}unread	$rel	putting the home path placeholder back failed (no scratch file could be made)
 "
+        continue
+      fi
+      rc=0; tok < "$f" > "$tmp" 2>/dev/null || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        unread="${unread}unread	$rel	putting the home path placeholder back failed (exit $rc)
+"
+      else
+        rc=0; h="$(git -C "$SYNC_REPO" hash-object --stdin < "$tmp" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          unread="${unread}unread	$rel	hashing it with the placeholder put back failed (git hash-object exit $rc)
+"
+        elif ! is_object_id "$h"; then
+          unread="${unread}unread	$rel	hashing it with the placeholder put back printed no hash (git hash-object)
+"
+        else
+          tokhashes="${tokhashes}$h	$rel
+"
+        fi
+      fi
+      rm -f "$tmp"
     done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
   fi
   # "<kind>\t<rel>\t<hash>\t<hash with the placeholder>": missing (on the tip only), differs, or
-  # local (installed only). A file the same on both sides is dropped here.
+  # local (installed only). A file the same on both sides is dropped here, and so is a file that
+  # could not be hashed, which is reported below instead: with no hash of its own it would read as
+  # missing, and with no placeholder hash as this Mac's own work.
   split="$(awk -F '\t' '
     FILENAME == ARGV[1] { if ($2 != "") tip[$2] = $1; next }
     FILENAME == ARGV[2] { if ($2 != "") mine[$2] = $1; next }
-    { if ($2 != "") tokd[$2] = $1 }
+    FILENAME == ARGV[3] { if ($2 != "") tokd[$2] = $1; next }
+    { if ($2 != "") skip[$2] = 1 }
     END {
       for (r in tip) {
+        if (r in skip) continue
         if (!(r in mine)) { print "missing\t" r "\t-\t-"; continue }
         t = (r in tokd) ? tokd[r] : mine[r]
         if (tip[r] != mine[r] && tip[r] != t) print "differs\t" r "\t" mine[r] "\t" t
       }
-      for (r in mine) if (!(r in tip)) print "local\t" r "\t" mine[r] "\t" ((r in tokd) ? tokd[r] : mine[r])
-    }' <(printf '%s\n' "$tip") <(printf '%s\n' "$hashes") <(printf '%s' "$tokhashes"))"
+      for (r in mine) if (!(r in tip) && !(r in skip)) print "local\t" r "\t" mine[r] "\t" ((r in tokd) ? tokd[r] : mine[r])
+    }' <(printf '%s\n' "$tip") <(printf '%s\n' "$hashes") <(printf '%s' "$tokhashes") <(printf '%s' "$unread"))"
+  printf '%s' "$unread"
   while IFS=$'\t' read -r kind rel mine mine2; do
     [ -n "$rel" ] || continue
     case "$kind" in
       missing)
         # Lagging since the shared repo last added it.
-        since="$(git -C "$SYNC_REPO" log -1 --format=%ct --diff-filter=A "$up" -- "payload/mods/$rel" 2>/dev/null)"
+        rc=0; since="$(git -C "$SYNC_REPO" log -1 --format=%ct --diff-filter=A "$up" -- "payload/mods/$rel" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then printf 'unread\t%s\t%s\n' "$rel" "reading when $up added it failed (git log exit $rc)"; continue; fi
         [ -n "$since" ] && printf '%s\t%s\n' "$since" "$rel" ;;
       differs)
         # Walk the tip's history of this file, newest first. The first version that matches what is
         # installed is the one this Mac has, and the change just after it is the oldest it lacks. No
         # match at all is a copy the repo never held: this Mac's own work, not a lag.
         since=""; seen=""; prev=""; ct=""
-        local loop_input; loop_input="$(git -C "$SYNC_REPO" log --format='C %ct' --raw --no-abbrev "$up" -- "payload/mods/$rel" 2>/dev/null)" || true
+        local loop_input; rc=0
+        loop_input="$(git -C "$SYNC_REPO" log --format='C %ct' --raw --no-abbrev "$up" -- "payload/mods/$rel" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then printf 'unread\t%s\t%s\n' "$rel" "reading its history on $up failed (git log exit $rc)"; continue; fi
         while IFS= read -r line; do
           case "$line" in
             'C '*) ct="${line#C }" ;;
@@ -12983,7 +13054,8 @@ LOOP_INPUT
         [ -n "$seen" ] && [ -n "$since" ] && printf '%s\t%s\n' "$since" "$rel" ;;
       local)
         # Lagging since the shared repo removed it, if what is installed is what it removed.
-        line="$(git -C "$SYNC_REPO" log -1 --format='%H %ct' --diff-filter=D "$up" -- "payload/mods/$rel" 2>/dev/null)"
+        rc=0; line="$(git -C "$SYNC_REPO" log -1 --format='%H %ct' --diff-filter=D "$up" -- "payload/mods/$rel" 2>/dev/null)" || rc=$?
+        if [ "$rc" -ne 0 ]; then printf 'unread\t%s\t%s\n' "$rel" "reading when $up removed it failed (git log exit $rc)"; continue; fi
         [ -n "$line" ] || continue
         h="$(git -C "$SYNC_REPO" rev-parse -q --verify "${line%% *}^:payload/mods/$rel" 2>/dev/null)"
         { [ "$h" = "$mine" ] || [ "$h" = "$mine2" ]; } && printf '%s\t%s\n' "${line##* }" "$rel" ;;
@@ -13038,7 +13110,7 @@ CAUSEEOF
 }
 
 report_mods_behind_main(){
-  local window recs now oldest age n mods branch causes
+  local window recs unread n kind rel why
   window="${SYNC_MODS_LAG_AFTER:-90000}"
   case "$window" in
     ''|*[!0-9]*)
@@ -13046,6 +13118,23 @@ report_mods_behind_main(){
       return 0 ;;
   esac
   recs="$(mods_lag_records)"
+  unread="$(printf '%s\n' "$recs" | awk -F '\t' '$1 == "unread"')"
+  report_mods_lag_line "$(printf '%s\n' "$recs" | awk -F '\t' 'NF && $1 != "unread"')" "$window"
+  # A file that could not be compared is said whatever the window, since it is no lag of any age:
+  # whether it is behind is unknown, and saying nothing would read as it being level (L98, L11).
+  [ -n "$unread" ] || return 0
+  n="$(printf '%s\n' "$unread" | awk 'END { print NR }')"
+  echo "mods not compared with the shared repo: status could not compare $n file(s) in $CLAUDE_HOME/mods with origin/$(sync_branch), so it cannot say whether they are behind it, and counts them neither as behind nor as this Mac's own work:"
+  while IFS=$'\t' read -r kind rel why; do
+    [ -n "$rel" ] && echo "  could not compare $rel: $why"
+  done <<< "$unread"
+  echo "  Run 'claude-sync status' again: a step that fails every time is git or perl failing on that file here, and is worth running by hand."
+  return 0
+}
+
+# The lag line itself, for the records that are lags ("<epoch>\t<path under mods/>").
+report_mods_lag_line(){   # $1 = the lag records  $2 = the window in seconds
+  local recs="$1" window="$2" now oldest age n mods branch causes
   [ -n "$recs" ] || return 0
   now="$(date +%s)"
   oldest="$(printf '%s\n' "$recs" | awk -F '\t' 'NR == 1 || $1 < m { m = $1 } END { print m }')"
