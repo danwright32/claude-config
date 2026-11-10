@@ -55,6 +55,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import signal
 import sys
 import time
@@ -577,6 +578,10 @@ class Judge:
         self.known_memo = {}
         self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
         self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
+        # Whether the command being judged is one sh_placed wrote out (claude-config#2678), and the
+        # script files found clean under such a command, each by the way it was run (script).
+        self.placing = False
+        self.clean = set()
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -675,21 +680,43 @@ class Judge:
             p = os.path.join(d or os.getcwd(), p)
         return p
 
-    def script(self, word, d, depth, shell_hint, lang=None):
+    def script(self, word, d, depth, shell_hint, lang=None, sourced=False):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
-        program running it, taken for a file with no extension of its own."""
+        program running it, taken for a file with no extension of its own. sourced is True for a
+        file a source or . command reads, whose exports reach the commands after it.
+
+        Under a command sh_placed wrote out (placing), a file found clean is not read again where it
+        is run the same way: a suite runs one hook by a variable hundreds of times, and each of those
+        is now a read of the hook and of everything it runs (claude-config#2678). The same way is the
+        file, the word and directory it is run by, the depth, the program, and where the Python it
+        starts looks for imports and what it is handed. Every reading under such a command is one
+        the gate did not make before, so nothing it used to refuse goes through this. A sourced file
+        is always read, since reading it is what carries its exports to the commands after it."""
         path = self.resolve(word, d)
         if not os.path.isfile(path):
             return None  # nothing there to run
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge:
             return None  # /nudge, the one exemption (Dan, 2026-11-05)
+        key = None
+        if self.placing and not sourced:
+            # A directory that is not there (a cd the reader kept as written, `cd "$WORK"`) is one
+            # directory to this: no relative path is found under any of them.
+            there = not d or os.path.isdir(d)
+            py = dict(self.py_cmd, cwd=self.py_cmd["cwd"] if there else None)
+            key = (real, word, d if there else None, depth, shell_hint, lang,
+                   self.sh_cwd(d) != SH_UNKNOWN_DIR, repr(sorted(py.items())), repr(self.exported))
+            if key in self.clean:
+                return None
         self.tick(path)
         walking, self.walking = self.walking, path
         try:
-            return self.script_body(word, path, real, d, depth, shell_hint, lang)
+            reason = self.script_body(word, path, real, d, depth, shell_hint, lang)
         finally:
             self.walking = walking  # once read, back to the commands of the file that ran it
+        if key and not reason:
+            self.clean.add(key)
+        return reason
 
     def script_body(self, word, path, real, d, depth, shell_hint, lang):
         """script() for a file that is there and is not /nudge."""
@@ -2348,7 +2375,63 @@ class Judge:
                 self.exported = saved_exported
 
     def judge(self, d, text, wrapper, why, depth, whole):
+        """The reason one command posts, or None: the command as it is written, and then, where a word
+        of it holds a variable or a substitution whose value is certain, the same command with those
+        words written out (sh_placed, claude-config#2678). `python3 "$ROOT/tools/post.py"` named no
+        file as written, so a script run through a variable was never read, where the same file run
+        by a literal path was. The second reading comes after the first and only where the first
+        found nothing, so it can refuse a command the first let through and never the reverse."""
+        reason = self.judge_written(d, text, wrapper, why, depth, whole)
+        if reason:
+            return reason
+        placed = self.sh_placed(text, d)
+        if not placed:
+            return None
+        was, self.placing = self.placing, True
+        try:
+            return self.judge_written(d, placed, wrapper, why, depth, whole, text)
+        finally:
+            self.placing = was
+
+    def sh_placed(self, text, d):
+        """One command's text with each word that holds a variable or a substitution written out,
+        where its value is certain (sh_word, as a sourced file's path is worked out); None where no
+        word is. A word whose value is not certain stays as written, so it names no file and is not
+        read, as before: refusing it is the half of claude-config#2678 kept off until what it would
+        refuse in this repository is measured. A source or . command has its own reading (judge)."""
+        rest, _ = self.sw.command_rest(text)
+        if not re.search(r"[$`]", rest):
+            return None
+        toks = self.sh_tokens(rest)
+        if not toks or toks[0][0] != "word" or toks[0][1] in ("source", "."):
+            return None
+        # Only a command judge_written reads files or addresses for: a program named through a
+        # variable or by a path, a shell, an interpreter, a launcher, a package manager or a sender.
+        # Every other command with a $ in it (echo, [, a suite's own check) is most of a script, and
+        # working its words out would be the larger part of reading it.
+        first = toks[0][1]
+        name = os.path.basename(first.strip("'\""))
+        if not (re.search(r"[$`/]", first) or name in SHELLS or name in LAUNCHERS or name in PACKAGERS
+                or name in SENDERS or name == "uv" or INTERPRETER.match(name)):
+            return None
+        wd, script = self.sh_cwd(d), self.shell["script"]
+        out, changed = [], False
+        for kind, raw in toks:
+            if kind == "op" and not SH_REDIRECT.fullmatch(raw):
+                break  # one command's words end at an operator that is not a redirection
+            if kind == "word" and re.search(r"[$`]", raw):
+                v, splits = self.sh_word(raw, wd, self.sh_source_var, script, False)
+                if v is not None and not splits and (wd != SH_UNKNOWN_DIR or os.path.isabs(os.path.expanduser(v))):
+                    raw, changed = shlex.quote(v), True
+            out.append(raw)
+        return " ".join(out) if changed else None
+
+    def judge_written(self, d, text, wrapper, why, depth, whole, fed_by=None):
+        """judge() for the command as text gives it. fed_by is the command as the script wrote it
+        where text is that command with its words written out (sh_placed): what feeds the command
+        its input (fed) is found in the script by the words the script wrote."""
         sw = self.sw
+        fed_by = fed_by or text
         rest, _ = sw.command_rest(text)
         words = sw.command_words(rest)
         if not words:
@@ -2384,7 +2467,7 @@ class Judge:
                 return reason
             if operand and operand != "-":
                 return None  # read above with every other word naming a file
-            fed, is_body = self.fed(text, whole)
+            fed, is_body = self.fed(fed_by, whole)
             if is_body and depth < MAX_DEPTH:
                 try:
                     inner = self.line(fed, d, depth + 1, fed)
@@ -2426,7 +2509,7 @@ class Judge:
             if operand and operand != "-":
                 return None  # read above with every other word naming a file
             if stdin:
-                fed = self.fed(text, whole)[0]
+                fed = self.fed(fed_by, whole)[0]
                 hit = MARKER.search(fed)
                 if hit:
                     return f"{name} runs a script from its input that names {hit.group(0)}"
@@ -2445,8 +2528,8 @@ class Judge:
             if bad:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
-                return self.script(words[1], d, depth, True) if raw and not re.search(r"[$`]", raw) else None
-            return self.script(v, d, depth, True) if v is not None else None
+                return self.script(words[1], d, depth, True, sourced=True) if raw and not re.search(r"[$`]", raw) else None
+            return self.script(v, d, depth, True, sourced=True) if v is not None else None
         if "/" in words[0]:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"

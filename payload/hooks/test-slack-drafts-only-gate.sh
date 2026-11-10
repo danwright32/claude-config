@@ -837,6 +837,64 @@ for sw_suite in hooks/test-context-size-notice.sh hooks/test-pr-review.sh hooks/
   fi
 done
 
+# A file a script runs by a path the gate can work out is read as one run by a literal path is
+# (claude-config#2678). Measured through this wrapper on 2026-11-10, in a script whose first lines
+# set ROOT from BASH_SOURCE: `python3 /the/tree/tools/lib/act.py` was refused where act.py posts,
+# and `python3 "$ROOT/tools/lib/act.py"` was allowed, as the same file was with python3 -B, bash,
+# sh and node, run by its own path, through $DIR/.., by a path spelt from BASH_SOURCE, and in a
+# command that sets the variable itself. A word holding a variable or a substitution was never
+# worked out where the program runs a file, so there was no file to read. Each shape in both trees:
+# allowed where the file only saves a draft, refused where it posts, naming the file.
+rv_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+rv_shapes=(
+  'py:python3 "$ROOT/tools/lib/act.py"'
+  'pyb:python3 -B "$ROOT/tools/lib/act.py" 2>&1'
+  'bash:bash "$ROOT/tools/lib/act.sh"'
+  'sh:sh "$ROOT/tools/lib/act.sh"'
+  'node:node "$ROOT/tools/lib/act.js"'
+  'own:"$ROOT/tools/lib/act.sh"'
+  'dir:python3 "$DIR/../tools/lib/act.py"'
+  'spelt:python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/lib/act.py"'
+)
+for tree in ok posts; do
+  mkdir -p "$T/rv/$tree/tests" "$T/rv/$tree/tools/lib"
+  printf '%s\n' 'wait_on(){ until eval "$1"; do sleep 1; done; }' > "$T/rv/$tree/tools/waits.sh"
+  for shape in "${rv_shapes[@]}"; do
+    printf '%s\n' '#!/bin/bash' "$rv_top" "${shape#*:}" > "$T/rv/$tree/tests/${shape%%:*}.sh"
+  done
+  printf '%s\n' '#!/bin/bash' "$rv_top" '. "$ROOT/tools/waits.sh"' 'python3 "$ROOT/tools/lib/act.py"' > "$T/rv/$tree/tests/waited.sh"
+  printf '%s\n' '#!/bin/bash' 'python3 "$NOT_SET_2678/tools/lib/act.py"' > "$T/rv/$tree/tests/unset.sh"
+done
+printf '%s\n' 'from pathlib import Path' 'Path("drafts/out.md").write_text("hi")' > "$T/rv/ok/tools/lib/act.py"
+printf '%s\n' "printf '%s\\n' hi > drafts/out.md" > "$T/rv/ok/tools/lib/act.sh"
+printf '%s\n' 'console.log("hi");' > "$T/rv/ok/tools/lib/act.js"
+printf '%s\n' 'import json, urllib.request' \
+  'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' > "$T/rv/posts/tools/lib/act.py"
+printf '%s\n' 'curl -s -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi' > "$T/rv/posts/tools/lib/act.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: JSON.stringify({ text: "hi" }) });' > "$T/rv/posts/tools/lib/act.js"
+for shape in "${rv_shapes[@]}"; do
+  run_bash "bash $T/rv/ok/tests/${shape%%:*}.sh"
+  allowed "a file run by a path the gate works out, where it only saves a draft: ${shape#*:}"
+  run_bash "bash $T/rv/posts/tests/${shape%%:*}.sh"
+  refused "the same where the file posts: ${shape#*:}"
+  says "that refusal names the file: ${shape#*:}" "/tools/lib/act."
+done
+run_bash "V=$T/rv/ok/tools/lib; python3 \"\$V/act.py\""
+allowed "a command that sets a variable and runs a file through it, where the file only saves a draft"
+run_bash "V=$T/rv/posts/tools/lib; python3 \"\$V/act.py\""
+refused "the same command where the file posts"
+says "that refusal names the file" "/tools/lib/act.py"
+# A path the gate cannot work out is not read, and NOT refused, as before this change: past a
+# sourced file whose function runs its argument by eval (the #2668 shape), and through a variable
+# the script never sets. Refusing those is the half of #2678 kept off until what it would refuse in
+# this repository is measured, in an issue of its own (Dan, 2026-11-10), as #2538 is for a sourced
+# file. Pinned here so that turning it on is a change somebody makes on purpose.
+run_bash "bash $T/rv/posts/tests/waited.sh"
+allowed "a posting file run through a variable the gate is no longer sure of is not read, as before"
+run_bash "bash $T/rv/posts/tests/unset.sh"
+allowed "a posting file run through a variable the script never sets is not read, as before"
+
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
 refused "python3 -c importing a helper that posts"
