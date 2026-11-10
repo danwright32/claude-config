@@ -59,7 +59,8 @@ declare module 'claude-code' {
       refused: { keys: string[]; told: string[] }
       /**
        * #2436: the Slack threads this session started from, oldest first: each one Dan pasted a
-       * link to, and the first one the main session read when it had none.
+       * link to, and the first one the main session read when it had none. Since #2578 also those
+       * recorded once the session was under way, marked `mid`.
        */
       threads: IsItLiveThread[]
       /**
@@ -71,6 +72,8 @@ declare module 'claude-code' {
       landed: number
       /** #2436: the draft holds already refused in this chain of turn ends, and those let go and said, as `refused`. */
       draftRefused: { keys: string[]; told: string[] }
+      /** #2578: how many prompts Dan has typed in this session, counted only as far as 2. */
+      prompts: number
     }
   }
 }
@@ -78,8 +81,9 @@ declare module 'claude-code' {
 /**
  * A Slack thread a session started from (#2436): its channel and its parent message's time, the
  * link Dan pasted when he pasted one, how it was found, when (ms since the epoch), and the step at
- * which its last draft reply was saved or Dan chose to skip one (`settled`). A merge landing at a
- * later step owes the thread a draft.
+ * which its last draft reply was saved or Dan chose to skip one (`settled`). For a thread the
+ * session started from, a merge landing at a later step owes it a draft; for one marked `mid`, only
+ * a merge for it, recorded in `related`, does (#2578).
  * Every draft saved to the thread settles it, whichever prompt led to it, so the card's own message
  * for a requester in that thread (#2435) settles it too, with no second record.
  */
@@ -90,6 +94,14 @@ export type IsItLiveThread = {
   from: 'link' | 'read'
   at: number
   settled?: number
+  /**
+   * #2578: recorded once the session was under way (after Dan's first prompt, or after a merge), so
+   * only a merge for it owes it a reply, never every merge of the session.
+   */
+  mid?: true
+  /** #2578: for a thread recorded mid session, the step of the latest merge for it, and those merges since its last draft or skip. */
+  related?: number
+  prs?: string[]
 }
 
 /**

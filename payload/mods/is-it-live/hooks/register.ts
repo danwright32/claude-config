@@ -1,11 +1,12 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { draftHold, markLanded, registerDrafts } from './drafts.ts'
+import { type Relation, draftHold, markLanded, pastedThreads, registerDrafts, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { linksThread, threadKey } from './threads.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -199,11 +200,46 @@ const mergesIn = async ($: EngineInterface, command: string, cwd: string): Promi
   return { calls: out, ...(skew === undefined ? {} : { skew }) }
 }
 
+// #2578: the text of a merged PR and of the issues it closes, each as gh gives it. A read GitHub
+// refuses throws gh's own words.
+const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<string[]> => {
+  type Text = { title?: string; body?: string; comments?: { body?: string }[] }
+  const read = async (args: string[]) => {
+    const r = await readGitHub($, args)
+    if ('error' in r) throw new Error(r.error)
+    return JSON.parse(r.out) as Text & { closingIssuesReferences?: { number: number; repository?: { name?: string; owner?: { login?: string } } }[] }
+  }
+  const all = (t: Text) => [t.title ?? '', t.body ?? '', ...(t.comments ?? []).map(c => c.body ?? '')]
+  const p = await read(['pr', 'view', String(pr), '--repo', repo, '--json', 'title,body,comments,closingIssuesReferences'])
+  const out = all(p)
+  for (const i of p.closingIssuesReferences ?? []) {
+    const at = i.repository?.owner?.login && i.repository.name ? `${i.repository.owner.login}/${i.repository.name}` : repo
+    out.push(...all(await read(['issue', 'view', String(i.number), '--repo', at, '--json', 'title,body,comments'])))
+  }
+  return out
+}
+
 // #2436: a merge landed. Said to Dan when it cannot be kept, since the draft reply it owes would
-// otherwise never be asked for.
-const landed = async ($: EngineInterface) => {
+// otherwise never be asked for. #2578: it is for a thread pasted mid session only when its PR, or an
+// issue it closes, links that thread. GitHub is asked only while such a thread is recorded; a read
+// it refuses is said once the landing is kept, and is for no thread, so no reply rests on a guess.
+const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[]) => {
   try {
-    await markLanded($)
+    const pasted = await pastedThreads($)
+    const related: Relation[] = []
+    let refused: unknown
+    for (const m of pasted.length ? merged : []) {
+      if (!m.repo) continue
+      let texts: string[] = []
+      try {
+        texts = await textsOf($, m.repo, m.pr)
+      } catch (err) {
+        refused = err
+      }
+      for (const t of pasted) if (linksThread(texts, t)) related.push({ key: threadKey(t), pr: `${m.repo}#${m.pr}` })
+    }
+    await markLanded($, related)
+    if (refused !== undefined) throw refused
   } catch (err) {
     $.ui.toast(`Is it live could not note a merge for the Slack thread's draft reply: ${msg(err)}`)
   }
@@ -249,7 +285,8 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
     await $.state.set(owedRef, [...(await owedOf($)).filter(o => !keys.has(o.key)), ...added])
   }
   // #2436: a merge GitHub confirmed owes the session's Slack thread its draft reply from here.
-  if (added.some(o => o.how === 'merged')) await landed($)
+  const done = added.filter(o => o.how === 'merged')
+  if (done.length) await landed($, done)
   return lines
 }
 
@@ -316,7 +353,7 @@ const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
       if (a.kind === 'closed' || a.kind === 'not a pr') continue
       if (a.kind === 'merged') {
         x = { key: `${fold(a.repo)}#${o.pr}`, how: 'merged', pr: o.pr, at: owedFrom(o.at, a), cwd: o.cwd, repo: a.repo }
-        await landed($)
+        await landed($, [x])
       }
     }
     if (kept.some(k => k.key === (x as IsItLiveOwed).key)) continue
@@ -533,7 +570,12 @@ export const register: Register = on => {
       notes.push(draftLineOf({ requester: kept.requester, message: kept.message, ...(kept.slack ? { slack: kept.slack } : {}), ...earlier }))
       if (key !== undefined) kept.draftAsked = key
     }
+    // A card asking for no draft (deploying, failed, sent) still replaces the PR's earlier card, so
+    // it keeps the record that a draft was asked for there: it is still in Slack (#2515).
+    if (kept.draftAsked === undefined && before?.draftAsked !== undefined) kept.draftAsked = before.draftAsked
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
+    // #2578: a card whose draft goes to a thread pasted mid session records its PR as one for it.
+    if (kept.slack?.channel_id && kept.slack.thread_ts) await relateCard($, { channel: kept.slack.channel_id, ts: kept.slack.thread_ts }, `${repo}#${input.pr}`)
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
     await $.state.set(verdictsRef, { ...verdicts, [verdictKey(repo, input.pr)]: { state, at: now } })
     // Taken out of the band when the card carries no message for it, or holds it until live (#1335).
