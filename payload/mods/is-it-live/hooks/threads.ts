@@ -34,6 +34,9 @@ export const threadsIn = (text: string): SlackThread[] => {
 
 export const threadKey = (t: Pick<SlackThread, 'channel' | 'ts'>) => `${t.channel}:${t.ts}`
 
+/** #2578: whether any of these texts (a pull request's, an issue's) links the thread. */
+export const linksThread = (texts: string[], t: Pick<SlackThread, 'channel' | 'ts'>): boolean => texts.some(x => threadsIn(x).some(o => threadKey(o) === threadKey(t)))
+
 /**
  * Whether a tool is the Slack tool `name` under any server: Claude Code calls it
  * mcp__<server>__<name>, and the server differs by connector (hooks/lib/slack-write-tools.txt).
@@ -78,20 +81,36 @@ const EXISTS = "If Slack answers attached_draft_exists, an earlier draft for tha
 /** What Dan choosing Save as a draft tells the session. */
 export const saveLine = (t: SlackThread) => `Dan chose ${SAVE}: save the exact text he saw with ${saveWith(t)}, then tell him it is a draft waiting in that thread and that nothing was sent. ${NEVER} ${EXISTS}`
 /** What Dan choosing Skip this time tells the session. */
-export const skipLine = (t: SlackThread) => `Dan chose ${SKIP}: no draft reply to ${nameOfThread(t)} for the merges so far. The next merge asks again.`
+export const skipLine = (t: Pasted) => `Dan chose ${SKIP}: no draft reply to ${nameOfThread(t)} for the merges so far. ${t.mid ? 'The next merge for it asks again; other merges ask nothing.' : 'The next merge asks again.'}`
+
+/** A thread as the hold names it: recorded mid session (#2578) with the merges for it since its last draft, or the one the session started from. */
+type Pasted = SlackThread & { mid?: true; prs?: string[] }
+
+// The opening of a hold: a thread the session started from is owed a reply after every merge, one
+// pasted once it was under way only after a merge for it, which is named so the reply covers only it.
+const owedOf = (t: Pasted) =>
+  t.mid
+    ? `A pull request for ${nameOfThread(t)}, pasted in this session, has merged since its last draft reply (${(t.prs ?? []).join(', ')}). Before ending the turn: write a short reply in Dan's voice saying what merged for it and is live, and nothing about other merges`
+    : `This session started from ${nameOfThread(t)}, and a pull request has merged since its last draft reply. Before ending the turn: write a short reply in Dan's voice saying what merged and is live`
 
 /** Why a turn end is held, naming every thread owed a draft reply. */
-export const draftHoldOf = (owed: SlackThread[]): string =>
+export const draftHoldOf = (owed: Pasted[]): string =>
   owed
     .map(
       t =>
-        `This session started from ${nameOfThread(t)}, and a pull request has merged since its last draft reply. Before ending the turn: write a short reply in Dan's voice saying what merged and is live, run /no-ai-tells on it, then ask Dan with AskUserQuestion, showing the reply in the question and passing metadata {"source": "${sourceOf(t)}"}; its answers are worded for you (${SAVE}, ${SKIP}). If he chooses ${SAVE}, save that exact text with ${saveWith(t)}. ${NEVER} ${EXISTS}`,
+        `${owedOf(t)}, run /no-ai-tells on it, then ask Dan with AskUserQuestion, showing the reply in the question and passing metadata {"source": "${sourceOf(t)}"}; its answers are worded for you (${SAVE}, ${SKIP}). If he chooses ${SAVE}, save that exact text with ${saveWith(t)}. ${NEVER} ${EXISTS}`,
     )
     .join('\n\n')
 
 /** What is said when a turn ends while a draft is still owed, the turn end having been held once in this chain. */
 export const draftLetGoOf = (owed: SlackThread[]): string => `No Slack draft reply saved to ${owed.map(nameOfThread).join(', ')}: the turn ended without one.`
 
-/** The threads owed a draft: those whose last draft or skip came before the latest merge landed. */
+/** The step a thread's draft is owed from: the latest merge for it when pasted mid session (#2578), else the latest merge. */
+export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined): number | undefined => (t.mid ? t.related : landed)
+
+/** The threads owed a draft: those whose last draft or skip came before the latest merge they are owed for. */
 export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined): IsItLiveThread[] =>
-  landed === undefined ? [] : threads.filter(t => (t.settled ?? -Infinity) < landed)
+  threads.filter(t => {
+    const from = draftOwedFrom(t, landed)
+    return from !== undefined && (t.settled ?? -Infinity) < from
+  })

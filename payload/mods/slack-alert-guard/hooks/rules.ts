@@ -20,6 +20,13 @@
 // scratchpad script is, has nothing that sends it. A module whose user also imports a Slack send
 // helper (a copy or notice builder) is held, which a marker or reference search alone misses. A
 // file a sender only names, never imports or reads, is not its template (refersTo, Dan's item 1).
+//
+// Narrowed to text a Slack send carries (#2570; Dan, 2026-11-09: "these aren't alerts that are going
+// to fire into Slack, right? If not, I don't need you to ask me for approval"): in a JavaScript,
+// TypeScript or python file, a changed string is held only when sends.ts traces it to a send call's
+// arguments, in its own file or from a file that sends it. A file whose send cannot be traced (any
+// other language, a text template, a send the reading cannot find, a module used whole) is held as
+// before. A python docstring is never message text (#2574).
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
@@ -592,12 +599,9 @@ const SCRIPT_LIST_KEY = /^(script|before_script|after_script|after-script)$/
 // The script lists that run in a shell of their own, apart from the job's other lists (#2416).
 const AFTER_KEY = /^after[-_]script$/
 
-/** A YAML scalar as the shell receives it: a quoted one with its quoting undone, a plain one as written. */
-const yamlScalar = (s: string): string => {
-  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) return s.slice(1, -1).replace(/''/g, "'")
-  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) return s.slice(1, -1).replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c === 't' ? '\t' : c))
-  return s
-}
+// A YAML scalar as the shell receives it, and a flow list's items, read by mod-kit's one reader of
+// quoted strings that are not shell (#2467).
+import { yamlFlowList, yamlScalar } from './mod-kit/quoted.ts'
 
 /**
  * The commands of a YAML list opening on the line after a key at `indent` (a GitLab `script:` list),
@@ -638,42 +642,10 @@ const listCommands = (lines: string[], from: number, indent: number): string[] =
 
 /**
  * The commands of a YAML flow list (`script: ["a", "b"]`) opening in `raw` on line `from`, read on
- * over the lines after it until the list closes: each item with its quoting undone (#2416). A quote
- * opens only at an item's start, as YAML reads one, so `echo don't` is a plain item. This reads
- * YAML's commas, brackets and quoting, not a shell command's, so mod-kit's command reader
- * ($.modkit.commands) is no use here: it glues a flow list's brackets and commas onto its words.
+ * over the lines after it until the list closes: each item with its quoting undone (#2416), read by
+ * mod-kit's yamlFlowList (#2467).
  */
-export const flowCommands = (lines: string[], from: number, raw: string): string[] => {
-  const text = [raw, ...lines.slice(from + 1)].join('\n')
-  const items: string[] = []
-  let cur = ''
-  let depth = 0
-  const read = () => [...items, cur].map(s => yamlScalar(s.trim())).filter(Boolean)
-  FLOW_TOKEN.lastIndex = 0
-  for (let m = FLOW_TOKEN.exec(text); m; m = FLOW_TOKEN.exec(text)) {
-    let t = m[0]
-    // A scalar's quote counts only at an item's start, and a comment's hash only after a space.
-    if ((/^["']/.test(t) && cur.trim()) || (t.startsWith('#') && !/\s/.test(text[m.index - 1] ?? ' '))) {
-      t = t.slice(0, 1)
-      FLOW_TOKEN.lastIndex = m.index + 1
-    } else if (t.startsWith('#')) continue
-    if (t === '[' || t === '{') {
-      if (++depth > 1) cur += t
-    } else if (t === ']' || t === '}') {
-      if (--depth === 0) return read()
-      cur += t
-    } else if (t === ',' && depth === 1) {
-      items.push(cur)
-      cur = ''
-    } else cur += t.replace(/\n/g, ' ')
-  }
-  return read()
-}
-
-// The pieces of a YAML flow list, in the file's token idiom (HASH_TOKENS): a quoted scalar read whole
-// with its escapes (\" in double quotes, '' in single), a comment, a bracket, brace or comma, a line
-// break, or a run of anything else.
-const FLOW_TOKEN = /"(?:\\[\s\S]|[^"\\])*"?|'(?:''|[^'])*'?|#[^\n]*|[[\]{},]|\n|[^[\]{},"'#\n]+/y
+export const flowCommands = (lines: string[], from: number, raw: string): string[] => yamlFlowList([raw, ...lines.slice(from + 1)].join('\n'))
 
 /**
  * The line that opens the mapping a key at line `i` and column `column` sits in: the key's own line

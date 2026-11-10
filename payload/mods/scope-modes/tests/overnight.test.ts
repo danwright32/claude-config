@@ -76,8 +76,15 @@ describe('ordinary overnight work is not on the list, so it goes ahead', () => {
 })
 
 describe('issue, label and milestone writes', () => {
-  test('every gh issue and gh label write is refused', async () => {
-    expect(await bash('gh issue create --title x --body y')).toBe('run gh issue create')
+  test('an issue is filed in this repository overnight, with only the flags filing needs (#2581)', async () => {
+    expect(await bash('gh issue create --title x --body y')).toBeUndefined()
+    expect(await bash('gh issue create -t x -F /tmp/b.md -m Ungrouped -l priority-p2 -l bug')).toBeUndefined()
+    expect(await bash('gh issue create --title x --body-file /tmp/b.md --milestone Ungrouped --label priority-p2')).toBeUndefined()
+    expect(await bash('gh issue create -R other/x --title x --body y')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash('gh issue create --title x --body y --assignee someone')).toBe('run gh issue create with --assignee')
+    expect(await bash('gh issue create --title x --web')).toBe('run gh issue create with --web')
+  })
+  test('every other gh issue and gh label write is refused', async () => {
     expect(await bash('gh issue edit 5 --add-label priority-p1')).toBe('run gh issue edit')
     expect(await bash('gh issue close 5')).toBe('run gh issue close')
     expect(await bash('gh issue delete 5 --yes')).toBe('run gh issue delete')
@@ -138,7 +145,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash('gh pr comment 5 -Rother/x -b hi')).toBe(other)
     expect(await bash('gh pr comment 5 --repo=other/x -b hi')).toBe(other)
     expect(await bash('gh pr comment 5 -R my.org/x -b hi')).toBe('write to my.org/x from a checkout of o/r')
-    expect(await bash('gh pr merge 5 -sd')).toBe('delete a branch')
+    expect(await bash('gh pr merge 5 -sd')).toBeUndefined()
     expect(await bash('gh pr close 5 -d')).toBe('delete a branch')
     // Global flags before the subcommand (#834 review of 8bbd403).
     expect(await bash('gh -R other/x pr merge 5')).toBe(other)
@@ -168,7 +175,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     // gh named only inside a message is no gh call.
     expect(await bash('git commit -m "read the gh reply"')).toBeUndefined()
   })
-  test('a merge may carry only its method, subject and --auto; --admin is refused (#834 review of 1b556d3)', async () => {
+  test('a merge may carry only its method, subject, --auto and --delete-branch (#2580); --admin is refused (#834 review of 1b556d3)', async () => {
     expect(await bash('gh pr merge 5 --squash --subject x --body y')).toBeUndefined()
     expect(await bash('gh pr merge 5 --squash --admin')).toBe('run gh pr merge with --admin')
     expect(await bash('gh pr merge 5 --auto --squash')).toBeUndefined()
@@ -199,9 +206,9 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await withJudge(`${c} --repo other/x`, undefined)).toBe('write to other/x from a checkout of o/r')
     expect(await withJudge(c, undefined, '/Users/x/nowhere')).toBe(unresolved)
     expect(asked.length).toBe(2)
-    // A flag the night bans outright is refused before any judge: deleting the branch.
-    expect(await withJudge(`${c} --delete-branch`, undefined)).toBe('delete a branch')
-    expect(asked.length).toBe(2)
+    // Deleting the merged branch goes with the merge (#2580), so it reaches the judge like the merge.
+    expect(await withJudge(`${c} --delete-branch`, undefined)).toBeUndefined()
+    expect(asked.length).toBe(3)
   })
   test('gh run by any wrapper the reader does not look past is refused (#834 review of 46f07ff)', async () => {
     expect(await bash('setsid gh issue comment 5 --body x')).toBe(unresolved)
@@ -231,14 +238,14 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await Promise.all(flagged.map(async c => ({ c, r: await bash(c) })))).toEqual(flagged.map(c => ({ c, r: unresolved })))
     // A real gh call the reader reads is judged wherever it sits in the line.
     const placed = [
-      'grep -n -e gh README.md | gh issue create --title x --body y',
-      'grep -n -e gh README.md && gh issue create --title x --body y',
-      'grep -n -e gh README.md; gh issue create --title x --body y',
-      'echo $(gh issue create --title x --body y)',
-      'grep -n -e gh README.md && env gh issue create --title x --body y',
-      'grep -n -e gh README.md && /opt/homebrew/bin/gh issue create --title x --body y',
+      'grep -n -e gh README.md | gh issue close 5',
+      'grep -n -e gh README.md && gh issue close 5',
+      'grep -n -e gh README.md; gh issue close 5',
+      'echo $(gh issue close 5)',
+      'grep -n -e gh README.md && env gh issue close 5',
+      'grep -n -e gh README.md && /opt/homebrew/bin/gh issue close 5',
     ]
-    expect(await Promise.all(placed.map(async c => ({ c, r: await bash(c) })))).toEqual(placed.map(c => ({ c, r: 'run gh issue create' })))
+    expect(await Promise.all(placed.map(async c => ({ c, r: await bash(c) })))).toEqual(placed.map(c => ({ c, r: 'run gh issue close' })))
   })
   test('code the reader cannot read, or that runs gh, git or a database itself, is refused (#834 review of 46f07ff)', async () => {
     expect(await bash(`python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`)).toBe('run code that runs gh, git or a database client, which cannot be judged')
@@ -591,9 +598,13 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'force push' })
     expect(await bash('git push --follow-tags origin x')).toBeUndefined()
   })
-  test('branch deletes, locally, on GitHub and through a merge', async () => {
-    for (const c of ['git push origin --delete x', 'git push origin :x', 'git push -d origin x', 'git branch -D x', 'git branch -d x', 'git branch --del x', 'git push origin --dele x', 'gh pr merge 5 --squash --delete-branch', 'gh pr merge 5 -sd', 'gh api -X DELETE repos/o/r/git/refs/heads/x', 'git update-ref -d refs/heads/x'])
+  test('branch deletes, locally, on GitHub and by closing a PR unmerged', async () => {
+    for (const c of ['git push origin --delete x', 'git push origin :x', 'git push -d origin x', 'git branch -D x', 'git branch -d x', 'git branch --del x', 'git push origin --dele x', 'gh pr close 5 --delete-branch', 'gh pr close 5 -d', 'gh api -X DELETE repos/o/r/git/refs/heads/x', 'git update-ref -d refs/heads/x'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'delete a branch' })
+    // A merge deletes the branch it merged, as Dan asked (#2580), wherever the merge itself may go.
+    for (const c of ['gh pr merge 5 --squash --delete-branch', 'gh pr merge 5 -sd', 'gh pr merge 5 -d --squash'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+    expect(await bash('gh pr merge https://github.com/other/x/pull/5 --squash --delete-branch')).toBe('write to other/x from a checkout of o/r')
     expect(await bash('gh api -X PATCH repos/o/r/git/refs/heads/x -F force=true -f sha=abc')).toBe('force push')
   })
   test('claude-sync send, sync, apply-only and install, by any path to it', async () => {

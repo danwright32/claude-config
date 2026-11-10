@@ -47,6 +47,7 @@ IMPORT = re.compile(r"^@(\S+)\s*$")
 # The context line and the long session nudge (claude-config#1960, #1940): their defaults and the
 # sum that measures a request's context come from the hook that enforces them, so this report
 # re-measures exactly what the hook judges (L83, L316).
+sys.dont_write_bytecode = True   # no cache left in the hooks lib (#2600)
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "payload", "hooks", "lib"))
 import context_size  # noqa: E402
 

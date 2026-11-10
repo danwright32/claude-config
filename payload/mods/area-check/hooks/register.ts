@@ -62,6 +62,7 @@ import {
   shellTargets,
   scriptProgram,
   scriptWrite,
+  trapTexts,
   unreadPart,
   questionKey,
   legacyQuestionKey,
@@ -654,19 +655,40 @@ type Unread = Extract<ShellTarget, { unread: string }>
 // Whether a script handed a folder can write there (#2407): its file read as mod-kit reads every file
 // a command names (currentText, which never opens a device or a fifo), fed to its interpreter as the
 // program it runs (scriptProgram), and read by mod-kit's one reader of what a command writes, run from
-// the folder the session is in. `writes: null` only when every step answered and the script writes
+// the folder the session is in (programWrites). `writes: null` only when every step answered and the script writes
 // nothing the area check could judge; anything that cannot be read, or any write, is why it may write
 // there, so the folder is judged as before (fail closed).
 const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writes: string | null }> => {
   if (!run.path) return { writes: `${run.what} is named by no path that can be read` }
   const cur = await currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, run.path)
   if (!('text' in cur)) return { writes: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
-  const prog = scriptProgram(run, cur.text)
-  if ('unread' in prog) return { writes: prog.unread }
   const [cwd, home] = await Promise.all([$.session.cwd(), homeOf($)])
-  const unread = unreadPart(await $.modkit.pipeline({ command: prog.command, cwd, home }), prog.delimiter)
-  if (unread) return { writes: unread }
-  return { writes: scriptWrite(await $.modkit.writes({ command: prog.command, cwd, home }), home) }
+  return { writes: await programWrites($, run, cur.text, { cwd, home }, 0) }
+}
+
+// How many traps deep a script's text is read (a trap whose text sets a trap, and so on); one set
+// deeper than that is not read, so the script is held.
+const TRAPS_DEEP = 3
+
+// Why a script's text may write, or null: the text fed to its interpreter and read by mod-kit's one
+// reader, then the text of each trap it sets read the same way (#2619), since the reader gives a
+// trap's text as a word, never as the commands it runs, and a write in one was read as no write.
+const programWrites = async ($: EngineInterface, run: ShellRun, text: string, at: { cwd: string; home: string }, depth: number): Promise<string | null> => {
+  const prog = scriptProgram(run, text)
+  if ('unread' in prog) return prog.unread
+  const read = { command: prog.command, cwd: at.cwd, home: at.home }
+  const commands = await $.modkit.pipeline(read)
+  const unread = unreadPart(commands, prog.delimiter, text)
+  if (unread) return unread
+  const wrote = scriptWrite(await $.modkit.writes(read), at.home)
+  if (wrote) return wrote
+  // A trap's text has no #! line, so it is fed to the interpreter the script's own text was.
+  const sameInterpreter: ShellRun = { what: `a ${prog.name} script file`, path: run.path }
+  for (const trap of trapTexts(commands)) {
+    const inTrap = depth < TRAPS_DEEP ? await programWrites($, sameInterpreter, trap, at, depth + 1) : 'it is set by more traps than are read'
+    if (inTrap) return `its trap runs ${trap}: ${inTrap}`
+  }
+  return null
 }
 
 // Whether every script a folder was handed to is read as writing nothing there (#2426 lessons review):

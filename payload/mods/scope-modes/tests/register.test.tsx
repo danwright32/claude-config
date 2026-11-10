@@ -383,6 +383,8 @@ type Opts = {
   editFails?: string
   /** gh issue view failing, with its stderr (#836). */
   issueViewFails?: string
+  /** gh issue view failing for one issue, with its stderr, by number (#2585). */
+  issueViewFailsOn?: Record<number, string>
   /** Each issue's comments as gh issue view gives them, oldest first, by number (#1812). */
   issueComments?: Record<number, string[]>
   /** gh issue comment failing on an issue, with its stderr (#836). */
@@ -477,6 +479,8 @@ const world = (on: On, o: Opts = {}) => {
     /** Every mv, ln and rm, in order, as the Mac saw them (#843). */
     fileOps: [] as string[][],
     asked: [] as string[],
+    /** The timeout each read of an issue's state was given, in order (#2585: /sleep reads while Dan waits). */
+    issueViewTimeouts: [] as (number | undefined)[],
     /** The choices each question offered, in the order asked (#836). */
     askedOptions: [] as string[][],
     /** Every comment posted on an issue (#836). */
@@ -920,7 +924,9 @@ const world = (on: On, o: Opts = {}) => {
         return other ? ok(JSON.stringify(other)) : fail(1, 'no pull requests found')
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
+      if (a[0] === 'issue' && a[1] === 'view' && a.includes('state,labels')) w.issueViewTimeouts.push(e.init?.timeoutMs)
       if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
+      if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFailsOn?.[Number(a[2])]) return fail(1, o.issueViewFailsOn[Number(a[2])] as string)
       if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone', comments: (o.issueComments?.[Number(a[2])] ?? []).map(body => ({ body })), url: `https://github.com/o/r/${o.pullNumbers?.includes(Number(a[2])) ? 'pull' : 'issues'}/${a[2]}` }))
       // An issue's body written whole (#1279), from standard input.
       if (a[0] === 'issue' && a[1] === 'edit') {
@@ -5629,9 +5635,9 @@ test('a question, the plan approval and what Dan bans are never approved, and a 
   expect(q.decision?.behavior).toBe('deny')
   expect(q.decision?.message).toMatch(/nothing is asked overnight/)
   expect((await permission($ as never, 'ExitPlanMode', {})).decision?.message).toMatch(/no plan is approved overnight/)
-  const banned = await permission($ as never, 'Bash', { command: 'gh issue create --title x --body y' })
+  const banned = await permission($ as never, 'Bash', { command: 'gh issue close 5' })
   expect(banned.decision?.behavior).toBe('deny')
-  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue create\./)
+  expect(banned.decision?.message).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run gh issue close\./)
   // Never an allow over a refusal beneath (Dan's own checks stay on).
   expect((await permission($ as never, 'Bash', PUSH)).decision).toEqual({ behavior: 'deny', message: 'a rule said no' })
 })
@@ -6638,6 +6644,27 @@ test('/sleep never asks or checks off a design round guard question, on the repa
   const said = 'Not asked, since only the design round guard\'s own question can settle them: o/r#7 "Skip design rounds for this issue?" and o/r#7 "Is this design settled?".'
   expect(r.text).toContain(said)
   expect((r.text ?? '').split(said).length).toBe(2)
+})
+
+// #2585: a held guard question whose issue is closed is left out and marked, so its issue is not
+// read again, with the notes it came from left as they were; one whose issue cannot be read is still
+// named, saying so (L215). Each read is bounded short, since /sleep reads while Dan waits.
+test('/sleep leaves out a held design round guard question on a closed issue, marks it, and names one it could not check (#2585)', withDeps, async ($, on) => {
+  const notes = [30, 31, 32].map(issue => noted({ kind: 'question', repo: 'o/r', issue, text: 'Is this design settled?' })).join('\n')
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: notes }, githubRepos: { default: ['o/r'] }, gh: { pr: null, issues: { 31: 'CLOSED' } }, issueViewFailsOn: { 32: 'HTTP 502' } })
+  await start($ as never, clock)
+  let r = await command($ as never, 'sleep')
+  expect(r.text).toContain('Not asked, since only the design round guard\'s own question can settle them: o/r#30 "Is this design settled?" and o/r#32 "Is this design settled?" (whether its issue is still open could not be checked: HTTP 502).')
+  expect(r.text).not.toContain('o/r#31')
+  expect(w.files[NOTES_OLD]).toBe(notes)
+  expect(JSON.parse(w.files[`${SLEEP}/closed-holds/${answerKey('o/r', 31, 'Is this design settled?')}.json`] as string)).toMatchObject({ repo: 'o/r', issue: 31, text: 'Is this design settled?', state: 'CLOSED' })
+  expect(w.issueViewTimeouts.length).toBeGreaterThan(0)
+  expect(w.issueViewTimeouts.filter(t => t === undefined || t > 8_000)).toEqual([])
+  await command($ as never, 'wake')
+  const before = w.runs.length
+  r = await command($ as never, 'sleep')
+  expect(w.runs.slice(before).filter(a => a.slice(0, 4).join(' ') === 'gh issue view 31')).toEqual([])
+  expect(r.text).not.toContain('o/r#31')
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {

@@ -1529,8 +1529,11 @@ TRPY
   check_eq "and all of it is the status line's one grey" "rgb(154, 154, 154)" "$(fact "$r" status-colours)"
   # The line it copies is the one the design record quotes, read from there, so the two cannot
   # drift. Only a checkout has that record; an installed copy says so rather than passing (L411).
-  DESIGN_DOC="$DIR/../../../docs/mods-design.md"
-  if [[ -f "$DESIGN_DOC" ]]; then
+  # The checkout is the one this copy's payload belongs to, asked of lib/checkout-root.sh (#1567),
+  # never counted folders up from here (#2623).
+  DESIGN_CHECKOUT="$(bash "$DIR/../../hooks/lib/checkout-root.sh" "$DIR/../.." 2>/dev/null || true)"
+  DESIGN_DOC="${DESIGN_CHECKOUT:+$DESIGN_CHECKOUT/docs/mods-design.md}"
+  if [[ -n "$DESIGN_DOC" && -f "$DESIGN_DOC" ]]; then
     # The record wraps the line across two lines of text, so the file is read as one line first,
     # and the line is cut out of that by the shell rather than a pipe a short read could kill.
     flat="$(tr '\n' ' ' < "$DESIGN_DOC" | sed -E 's/ +/ /g')"
@@ -1540,7 +1543,7 @@ TRPY
     esac
     check_eq "and it is the line docs/mods-design.md records" "$recorded" "$BUILT_STATUS"
   else
-    echo "SUITE-PART-UNMEASURED no docs/mods-design.md beside this skill, so the default status line was not compared with the design record"
+    echo "SUITE-PART-UNMEASURED this skill is in no claude-config checkout holding docs/mods-design.md, so the default status line was not compared with the design record"
   fi
   check_eq "transcript, band, prompt and status stack in that order" "transcript,band,prompt,status" "$(fact "$r" order)"
   check_eq "two options differing in one field are not reported as the same" "none" "$(fact "$r" strip)"

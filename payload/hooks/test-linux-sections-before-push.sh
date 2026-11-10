@@ -546,9 +546,12 @@ else
   echo "SUITE-PART-UNMEASURED the linux gate's budget against its declared timeout: no hooks block beside this copy of the hooks"
 fi
 
-# The runner names its container when asked to, so the gate has something to stop (#1899).
-_LIN="$DIR/../../tests/run-on-linux.sh"
-if [ -f "$_LIN" ]; then
+# The runner names its container when asked to, so the gate has something to stop (#1899). The
+# runner lives in the checkout's tests/, which is never installed, so it is found through the
+# checkout this copy sits in (lib/checkout-root.sh, #1567), never by counting folders up (#2623).
+_LIN_CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+_LIN="${_LIN_CHECKOUT:+$_LIN_CHECKOUT/tests/run-on-linux.sh}"
+if [ -n "$_LIN" ] && [ -f "$_LIN" ]; then
   : > "$DOCKLOG"
   LINUX_RUN_CONTAINER_NAME=probe-1899 SYNC_DOCKER="$TMPROOT/docker-stub" bash "$_LIN" >/dev/null 2>&1
   _runline="$(grep -E '^run ' "$DOCKLOG" 2>/dev/null)"
@@ -564,7 +567,7 @@ if [ -f "$_LIN" ]; then
     check "#1899 and names none when it was told none" "run line: ${_runline:-none}"
   fi
 else
-  echo "SUITE-PART-UNMEASURED run-on-linux.sh naming its container: tests/run-on-linux.sh is not beside this copy of the hooks"
+  echo "SUITE-PART-UNMEASURED run-on-linux.sh naming its container: this copy of the hooks is in no claude-config checkout holding tests/run-on-linux.sh"
 fi
 
 echo "passed: $pass, failed: $fail"

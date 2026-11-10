@@ -37,7 +37,9 @@ import re
 import subprocess
 import sys
 
-# The session registry's one reading, shared with the merge quiz's sweep of old holds (#1787).
+# The session registry's one reading, shared with the merge quiz's sweep of old holds (#1787). No
+# bytecode cache is left beside it in lib/__pycache__ (#2600).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from session_registry import Registry, num  # noqa: E402
 
