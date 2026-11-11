@@ -532,5 +532,35 @@ class Judging(Base):
         self.assertEqual(self.kinds(self.judge(body + "\n" + body)), ["screenshots-malformed"])
 
 
+class BadBytes(unittest.TestCase):
+    """A byte that is not UTF-8 in what gh prints is read, and one in the PR body is refused by name."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+
+    def test_gh_output_holding_a_byte_that_is_not_utf8_is_read_not_raised_on(self):
+        from unittest import mock
+        gh = os.path.join(self.tmp, "gh")
+        with open(gh, "w", errors="strict") as f:
+            f.write("#!/bin/sh\nprintf '{\"sha\":\"abc\",\"note\":\"\\377\"}'\nprintf 'warn \\377' >&2\n")
+        os.chmod(gh, 0o755)
+        with mock.patch.dict(os.environ, {"PATH": self.tmp + os.pathsep + os.environ.get("PATH", "")}):
+            rc, out, err = s._gh(["api", "x"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(s._json(out)["sha"], "abc")
+        self.assertIn("\ufffd", out + err)
+
+    def test_a_pr_body_holding_a_byte_that_is_not_utf8_is_refused_not_rewritten(self):
+        manifest = os.path.join(self.tmp, "m.json")
+        body = os.path.join(self.tmp, "body.md")
+        with open(manifest, "w", errors="strict") as f:
+            json.dump({}, f)
+        with open(body, "wb") as f:
+            f.write(b"before \xff after\n")
+        with self.assertRaises(UnicodeDecodeError):
+            s.main(["render", "--manifest", manifest, "--body", body])
+
+
 if __name__ == "__main__":
     unittest.main()
