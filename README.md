@@ -236,6 +236,13 @@ and its check of whether this Mac's skills folder holds anything to send, #2017)
 `hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
 A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
+A suite that scans the config it is installed in lists its files with `synced_files` from
+`payload/hooks/lib/synced-trees.sh`: the trees `claude-sync` mirrors (its `MIRROR_DIRS`, plus
+`skills/` less the entries above), never `state/`, `projects/` or another folder a Mac keeps for
+itself. Installed, the scanned tree is `~/.claude`, where agents keep copies of hooks in their
+session notes, and a whole tree walk failed the pull on those copies (#2750).
+`hooks/test-synced-trees.sh` fails when its list of trees and `MIRROR_DIRS` differ.
+
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
 reached it. The send names it, does not publish it, and removes the leftover here, saying which
