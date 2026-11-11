@@ -25258,19 +25258,33 @@ sw_arrive(){ printf '# marker %s\n' "$1" > "$SWR/payload/hooks/sw-marker.sh"; }
 # moment, which asks the lock question while the wait is actually happening. The pull's reads move
 # it only once the suite has started (the SW_HANG file exists), when the slot is no longer read.
 printf '1000000\n' > "$SWT/now"
+# The pull and the runner's slot wait are separate processes reading this one file while either may
+# be moving it on. A plain `> now` empties the file before it writes the number, and a read in that
+# gap got nothing: claude-sync then used the real clock, so the pull's deadline was long past and
+# the run was stopped and recorded incomplete, and a slot clock reading it empty set the time back
+# to 120 (claude-config#2765, which failed in CI at a load of 1.99 and in 2 of 9 runs here). So the
+# new number is written beside it and renamed over it, which a reader sees whole or not at all, and
+# any read that is still not a number is written to empty-reads for the check at the end.
+cat > "$SWT/clock-move" <<SWCLK
+#!/usr/bin/env bash
+printf '%s\n' "\$1" > "$SWT/now.\$\$" && mv -f "$SWT/now.\$\$" "$SWT/now"
+SWCLK
 cat > "$SWT/slot-clock" <<SWCLK
 #!/usr/bin/env bash
-n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+n="\$(cat "$SWT/now")"
+case "\$n" in ''|*[!0-9]*) echo "slot-clock read '\$n'" >> "$SWT/empty-reads" ;; esac
+"$SWT/clock-move" "\$(( n + 120 ))"
 if [ -d "$SWLOCK" ]; then echo held >> "$SWT/lock-log"; else echo free >> "$SWT/lock-log"; fi
 printf '%s\n' "\$n"
 SWCLK
 cat > "$SWT/pull-clock" <<SWCLK
 #!/usr/bin/env bash
 n="\$(cat "$SWT/now")"
-[ -f "$SWT/move" ] && printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+case "\$n" in ''|*[!0-9]*) echo "pull-clock read '\$n'" >> "$SWT/empty-reads" ;; esac
+[ -f "$SWT/move" ] && "$SWT/clock-move" "\$(( n + 120 ))"
 printf '%s\n' "\$n"
 SWCLK
-chmod +x "$SWT/slot-clock" "$SWT/pull-clock"
+chmod +x "$SWT/clock-move" "$SWT/slot-clock" "$SWT/pull-clock"
 # A process standing in for a builder's full run, detached so a dead one is gone rather than a
 # zombie, and its ticket written through the queue's own writer, holding the turn from the clock's
 # present.
@@ -25367,7 +25381,9 @@ cat "$SWT/now" > "$SWT/t0"
 # The holder ends once the clock passes ten minutes, so the run waits that long and then takes it.
 cat > "$SWT/slot-clock" <<SWCLK
 #!/usr/bin/env bash
-n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+n="\$(cat "$SWT/now")"
+case "\$n" in ''|*[!0-9]*) echo "slot-clock read '\$n'" >> "$SWT/empty-reads" ;; esac
+"$SWT/clock-move" "\$(( n + 120 ))"
 [ "\$n" -ge "\$(( \$(cat "$SWT/t0") + 600 ))" ] && kill "$SWHP2" 2>/dev/null
 printf '%s\n' "\$n"
 SWCLK
@@ -25378,6 +25394,10 @@ check "#2758 the fixture: the suite started once the holder ended" "[ -f '$SWT/m
 check "#2758 a suite stopped at the deadline after waiting for the slot says how long it waited" \
   "line_has \"\$out_sw4\" 'could NOT be completed here' 'still running after 1800s' 'waited' 'full suite slot'"
 kill "$SWHP2" 2>/dev/null || true
+# Every outcome above depends on the fixture's clock answering every read (claude-config#2765).
+dbg "#2765 clock reads that were not a number: $(cat "$SWT/empty-reads" 2>/dev/null)"
+check "#2765 (fixture) the shared clock answered every read with a number, so no pull fell back to the real clock" \
+  "[ ! -s '$SWT/empty-reads' ] && ! grep -q 'SYNC_TEST_SUITE_CLOCK .* not a whole number' <<< \"\$out_sw0\$out_sw1\$out_sw2w\$out_sw5\$out_sw6\$out_sw7\$out_sw2\$out_sw3\$out_sw4\""
 
 suite_profile
 echo ""

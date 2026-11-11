@@ -51,6 +51,14 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # it evaluates. A message whose closing quote is not on its line is read unchanged, so a sighting
 # there is reported rather than hidden: a wrong report is a loud failure, a hidden call is #413.
 # A message helper missing from the list is read as before, which errs the same loud way.
+#
+# The quoted arguments of a call to a JUDGING helper are blanked the same way (#2700). A function
+# the scanned file defines is a judging helper when every route its arguments take leaves them as
+# data (printed, tested, assigned and followed, handed to another judging helper, or read by a
+# single quoted inline program naming no way to run a command), so `run_bash "cd x && bun test"`
+# hands bun to a gate as text and is not a call. The set is worked out from each function's body,
+# never from a list; an unquoted call beside a judged one, and a substitution inside its argument,
+# are still read.
 # Prints "<tool>\t<file>:<line>" for the first sighting of each tool.
 MESSAGE_COMMANDS="echo check bad fail die say warn note section hook_allow_notice"
 invoked_tools(){   # $@ = files
@@ -93,20 +101,141 @@ invoked_tools(){   # $@ = files
         substr($out, $_, 1) = " " for grep { $_ < $k } @lit;
         pos($l) = $k + 1 }
       return $out }
+    # --- judging helpers (#2700): which functions this file defines never run their arguments.
+    # The length of the positional parameter, or tainted variable, reference at $k, or 0.
+    sub param_at { my ($s, $k, $tv) = @_; my $r = substr($s, $k + 1);
+      return 2 if $r =~ /^[1-9@*]/;
+      return 1 + length($1) if $r =~ /^(\{#?[1-9@*][^}]*\})/;
+      return 1 + length($1) if $r =~ /^(\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\})/ && $tv->{$2};
+      return 1 + length($1) if $r =~ /^([A-Za-z_][A-Za-z0-9_]*)/ && $tv->{$1};
+      return 0 }
+    # The simple commands of shell text from $k to $stop (")" or a backtick, or the end), each a
+    # list of words with whether the data reaches it: a word holding a positional parameter, a
+    # tainted variable or the output of a command given one, or a stdin piped from such a command.
+    # Returns (index after, any command tainted, bad, commands); bad is a positional parameter
+    # outside double quotes, a heredoc or a process substitution, or text this cannot follow.
+    sub walk { my ($s, $k, $stop, $tv) = @_;
+      my (@cmds, @w); my ($cur, $ct, $csq, $have, $pin, $taint, $bad, $depth) = ("", 0, 1, 0, 0, 0, 0, 0);
+      my $end_word = sub { push @w, { t => $cur, taint => $ct, sq => $csq } if $have; ($cur, $ct, $csq, $have) = ("", 0, 1, 0) };
+      my $end_cmd = sub { my ($pipe) = @_; $end_word->(); my $any = (grep { $_->{taint} } @w) || $pin;
+        push @cmds, { w => [@w], pin => $pin } if @w; $taint ||= $any; @w = (); $pin = $pipe && $any ? 1 : 0 };
+      my $inner = sub { my ($at, $close) = @_; my ($e, $t, $b, @sc) = walk($s, $at, $close, $tv);
+        return undef unless defined $e; push @cmds, @sc; $ct ||= $t; $bad ||= $b; ($csq, $have) = (0, 1); return $e };
+      while ($k < length $s) { my $c = substr($s, $k, 1);
+        if (defined $stop && $c eq $stop && ($stop ne ")" || $depth == 0)) { $end_cmd->(0); return ($k + 1, $taint, $bad, @cmds) }
+        if ($c eq "\\") { $cur .= substr($s, $k + 1, 1); ($csq, $have) = (0, 1); $k += 2; next }
+        if ($c eq "#" && !$have) { my $e = index($s, "\n", $k); $k = $e < 0 ? length $s : $e; next }
+        if ($c eq "\x27") { my $e = index($s, "\x27", $k + 1); return undef if $e < 0;
+          $cur .= substr($s, $k + 1, $e - $k - 1); $have = 1; $k = $e + 1; next }
+        if ($c eq "\"") { ($csq, $have) = (0, 1); $k++; my $closed = 0;
+          while ($k < length $s) { my $d = substr($s, $k, 1);
+            if ($d eq "\\") { $cur .= substr($s, $k, 2); $k += 2; next }
+            if ($d eq "\"") { $k++; $closed = 1; last }
+            if (substr($s, $k, 2) eq "\$(") { $k = $inner->($k + 2, ")"); return undef unless defined $k; next }
+            if ($d eq "`") { $k = $inner->($k + 1, "`"); return undef unless defined $k; next }
+            if ($d eq "\$" && (my $n = param_at($s, $k, $tv))) { $ct = 1; $cur .= substr($s, $k, $n); $k += $n; next }
+            $cur .= $d; $k++ }
+          return undef unless $closed; next }
+        if (substr($s, $k, 2) eq "\$(") { $k = $inner->($k + 2, ")"); return undef unless defined $k; next }
+        if ($c eq "`") { $k = $inner->($k + 1, "`"); return undef unless defined $k; next }
+        if ($c eq "\$" && (my $n = param_at($s, $k, $tv))) { ($bad, $ct, $csq, $have) = (1, 1, 0, 1); $cur .= substr($s, $k, $n); $k += $n; next }
+        if (substr($s, $k, 2) =~ /^(?:<<|<\(|>\()$/) { $bad = 1; $k += 2; next }
+        if ($c eq " " || $c eq "\t") { $end_word->(); $k++; next }
+        if ($c eq "\n" || $c eq ";") { $end_cmd->(0); $k++; next }
+        if ($c eq "&") { $end_cmd->(0); $k += substr($s, $k, 2) eq "&&" ? 2 : 1; next }
+        if ($c eq "|") { my $two = substr($s, $k, 2); $end_cmd->($two eq "||" ? 0 : 1); $k += ($two eq "||" || $two eq "|&") ? 2 : 1; next }
+        if ($c eq "(") { $depth++ if defined $stop && $stop eq ")"; $end_cmd->(0); $k++; next }
+        if ($c eq ")") { $depth-- if $depth; $end_cmd->(0); $k++; next }
+        $cur .= $c; ($csq, $have) = (0, 1); $k++ }
+      return undef if defined $stop;
+      $end_cmd->(0); return ($k, $taint, $bad, @cmds) }
+    # Whether a command the data reaches leaves it as data. A route that runs it, or one this does
+    # not know, says no, so the helper is not judged and its call sites are read as before.
+    sub route_ok { my ($cmd, $J, $tv) = @_; my @w = @{ $cmd->{w} };
+      shift @w while @w && $w[0]{t} =~ /^(?:if|then|do|else|elif|while|until|!|\{|\}|time)$/ && !$w[0]{taint};
+      shift @w while @w && $w[0]{t} =~ /^[A-Za-z_][A-Za-z0-9_]*=/;
+      return 1 unless @w;
+      my $name = $w[0]{t}; return 0 if $w[0]{taint};
+      my @args = @w[1 .. $#w];
+      if ($cmd->{pin}) {
+        return 0 unless $name =~ /^(?:bash|sh|zsh|dash|ksh)$/ && @args && $args[0]{t} !~ /^-/ && !grep { $_->{taint} } @args;
+        return 1 }
+      return 1 if $J->{$name} || $name =~ /^(?:printf|echo|\[|\[\[|test|case|local|declare|typeset|readonly|export)$/;
+      if ($name =~ /^(?:perl|python|python3|node|ruby)$/) { my $i = 0;
+        $i++ while $i < @args && $args[$i]{t} =~ /^-/ && $args[$i]{t} !~ /^-[ceE]$/ && !$args[$i]{taint};
+        return 0 unless $i + 1 < @args && $args[$i]{t} =~ /^-[ceE]$/;
+        my $prog = $args[$i + 1];
+        return 0 if $prog->{taint} || !$prog->{sq} || $prog->{t} =~ /system|exec|popen|spawn|subprocess|child_process|eval|`|qx|open\s*\(/;
+        return !grep { $_->{taint} } @args[0 .. $i + 1] }
+      return 0 }
+    # The judged set of one file: each function it defines once, whose body every route of the data
+    # leaves as data. Built up from nothing, so a cycle or a call to an unjudged helper is unjudged.
+    sub judged { my @L = @_; my (%body, %count);
+      for my $i (0 .. $#L) {
+        next unless $L[$i] =~ /^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{(.*)$/;
+        my ($ind, $n, $rest) = ($1, $2, $3); $count{$n}++;
+        if ($rest =~ /^(.*[;&])\s*\}\s*$/) { $body{$n} = $1; next }
+        my ($b, $closed) = ($rest, 0);
+        for my $j ($i + 1 .. $#L) { if ($L[$j] =~ /^\Q$ind\E\}\s*$/) { $closed = 1; last } $b .= "\n" . $L[$j] }
+        $body{$n} = $closed ? $b : undef }
+      my (%J, %parsed);
+      for my $n (keys %body) { next if $count{$n} > 1 || !defined $body{$n};
+        my %tv; my @r;
+        for (1 .. 5) { @r = walk($body{$n} . "\n", 0, undef, \%tv); last unless defined $r[0];
+          my $grew = 0;
+          for my $c (@r[3 .. $#r]) { for my $x (@{ $c->{w} }) {
+            next unless $x->{taint} && $x->{t} =~ /^([A-Za-z_][A-Za-z0-9_]*)=/ && !$tv{$1}; $tv{$1} = 1; $grew = 1 } }
+          last unless $grew }
+        next unless defined $r[0] && !$r[2];
+        $parsed{$n} = [ grep { $_->{pin} || grep { $_->{taint} } @{ $_->{w} } } @r[3 .. $#r] ] }
+      my $grew = 1;
+      while ($grew) { $grew = 0;
+        for my $n (keys %parsed) { next if $J{$n};
+          next if grep { !route_ok($_, \%J) } @{ $parsed{$n} };
+          $J{$n} = 1; $grew = 1 } }
+      return \%J }
+    # The line with the literal text of every quoted argument of each judged call turned to spaces.
+    # A substitution inside one still runs at the call and is kept; an argument whose closing quote
+    # is not on its line leaves the line as it was.
+    sub blank_judged { my ($l, $J) = @_; return $l unless %$J; my $out = $l;
+      my $names = join "|", map { quotemeta } sort keys %$J;
+      while ($l =~ /(?:^|[;&|({!]|\b(?:then|do|else|elif|if|while|until)\b)\s*(?:$names)(?=[ \t])/g) {
+        my $k = pos($l); my (@lit, $ok); $ok = 1;
+        while ($k < length $l) { my $c = substr($l, $k, 1);
+          last if $c =~ /[;&|)\n]/;
+          if ($c eq "\\") { $k += 2; next }
+          if ($c eq "#" && substr($l, $k - 1, 1) =~ /\s/) { last }
+          if ($c eq "\x27") { my $e = index($l, "\x27", $k + 1); if ($e < 0) { $ok = 0; last }
+            push @lit, $k + 1 .. $e - 1; $k = $e + 1; next }
+          if ($c eq "\"") { $k++; my $closed = 0;
+            while ($k < length $l) { my $ch = substr($l, $k, 1);
+              if ($ch eq "\\") { push @lit, $k, $k + 1; $k += 2; next }
+              if ($ch eq "\"") { $closed = 1; $k++; last }
+              if (substr($l, $k, 2) eq "\$(") { $k = past_sub($l, $k + 2); last unless defined $k; next }
+              if ($ch eq "`") { my $e = index($l, "`", $k + 1); last if $e < 0; $k = $e + 1; next }
+              push @lit, $k; $k++ }
+            unless ($closed && defined $k) { $ok = 0; last } next }
+          if (substr($l, $k, 2) eq "\$(") { $k = past_sub($l, $k + 2); unless (defined $k) { $ok = 0; last } next }
+          if ($c eq "`") { my $e = index($l, "`", $k + 1); if ($e < 0) { $ok = 0; last } $k = $e + 1; next }
+          $k++ }
+        substr($out, $_, 1) = " " for $ok ? @lit : ();
+        pos($l) = $k if $k > pos($l) }
+      return $out }
     my %seen;
     for my $f (@ARGV) {
       open(my $fh, "<", $f) or next;
-      while (my $raw = <$fh>) {
+      my @L = <$fh>; close $fh;
+      my $J = judged(@L);
+      for my $i (0 .. $#L) { my $raw = $L[$i];
         next if $raw =~ /^\s*#/;
-        my $l = blank_messages($raw);
+        my $l = blank_judged(blank_messages($raw), $J);
         for my $t (@t) {
           next if $seen{$t};
           if ($l =~ /(?:^\s*|[;&|(`]\s*|\$\(\s*|\b[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\x27[^\x27]*\x27|[^\s"\x27]*)\s+)\Q$t\E\s+(?!=)/) {
-            $seen{$t} = "$f:$.";
+            $seen{$t} = "$f:" . ($i + 1);
           }
         }
       }
-      close $fh;
     }
     print "$_\t$seen{$_}\n" for sort keys %seen;
   ' -- "$@"
@@ -227,6 +356,61 @@ SH
 o="$(unprobed "$FX" "$FX/open-message-python.sh")"
 case "$o" in python3*open-message-python.sh:2*) check "a message left open at the end of its line is read unchanged" ok ;;
   *) check "a message left open at the end of its line is read unchanged" "got: [$o]" ;; esac
+
+# --- a command handed as text to a judging helper is not a call (#2700). The Slack drafts gate
+#     suite judges `run_bash "cd <checkout> && bun test ..."`: the text goes through JSON to the
+#     hook on its stdin and is never run, and the `&& bun` inside it refused a correct push. The
+#     fixture calls name python3, which the fixture step stopped probing above and the real step
+#     probes, because the real tree scan below reads this file too (bun there would fail it); the
+#     helpers use perl, so a python3 sighting can only come from a call site. The helpers are the
+#     gate suite's own shape, a chain that only ever hands its argument on as data.
+cat > "$FX/judged-python.sh" <<'SH'
+#!/usr/bin/env bash
+bash_input() { perl -MJSON::PP -e 'print encode_json({command => $ARGV[0]})' "$1"; }
+run_raw() { # run_raw <stdin text>
+  local errf; errf="$(mktemp)"
+  OUT="$(printf '%s' "$1" | bash "$HOOK" 2>"$errf")"; RC=$?
+}
+run_bash() { run_raw "$(bash_input "$1")"; }
+run_bash "cd $T && python3 tools/area-check-replay.py"
+[ -d "$T" ] && run_bash 'cd x || python3 a.py'
+SH
+o="$(unprobed "$FX" "$FX/judged-python.sh")"
+case "$o" in *python3*) check "a tool named inside a quoted argument to a judging helper is not a call" "got: [$o]" ;;
+  *) check "a tool named inside a quoted argument to a judging helper is not a call" ok ;; esac
+# A real call still counts wherever it sits: unquoted after && beside a judged call, and inside a
+# substitution, which runs at the call even inside a judged argument.
+printf '%s\n' '#!/usr/bin/env bash' 'run_bash() { printf "%s" "$1" | bash "$HOOK"; }' \
+  'run_bash "cd x && perl a.pl"; cd "$T" && python3 x.py' > "$FX/after-judged-python.sh"
+o="$(unprobed "$FX" "$FX/after-judged-python.sh")"
+case "$o" in *python3*after-judged-python.sh:3*) check "an unquoted call after && beside a judged call is still found" ok ;;
+  *) check "an unquoted call after && beside a judged call is still found" "got: [$o]" ;; esac
+printf '%s\n' '#!/usr/bin/env bash' 'run_bash() { printf "%s" "$1" | bash "$HOOK"; }' \
+  'run_bash "cd x && $(python3 --version)"' > "$FX/subst-judged-python.sh"
+o="$(unprobed "$FX" "$FX/subst-judged-python.sh")"
+case "$o" in python3*subst-judged-python.sh:3*) check "a call in a substitution inside a judged argument is still found" ok ;;
+  *) check "a call in a substitution inside a judged argument is still found" "got: [$o]" ;; esac
+# A quoted string that IS run still counts: handed to eval or bash -c directly, to a helper that
+# evals it or runs it through bash -c or word splits it unquoted, to a helper whose only route is
+# one of those, and to a helper defined nowhere in the file, whose body cannot be read.
+evaluated=(
+  'eval "cd x && python3 a.py"'
+  'bash -c "cd x && python3 a.py"'
+  'try_it() { eval "$1"; }@@try_it "cd x && python3 a.py"'
+  'in_shell() { bash -c "cd /tmp && $1"; }@@in_shell "cd x && python3 a.py"'
+  'split_run() { $1; }@@split_run "cd x && python3 a.py"'
+  'try_it() { eval "$1"; }@@outer() { try_it "$1"; }@@outer "cd x && python3 a.py"'
+  'piped() { printf "%s" "$1" | bash; }@@piped "cd x && python3 a.py"'
+  'kept() { local c="$1"; eval "$c"; }@@kept "cd x && python3 a.py"'
+  'inline() { perl -e '"'"'system($ARGV[0])'"'"' "$1"; }@@inline "cd x && python3 a.py"'
+  'nowhere_defined "cd x && python3 a.py"'
+)
+for e in "${evaluated[@]}"; do
+  { printf '%s\n' '#!/usr/bin/env bash'; printf '%s\n' "${e//@@/$'\n'}"; } > "$FX/evaluated-python.sh"
+  o="$(unprobed "$FX" "$FX/evaluated-python.sh")"
+  case "$o" in *python3*evaluated-python.sh:*) check "a quoted string that is run is still read: ${e//@@/; }" ok ;;
+    *) check "a quoted string that is run is still read: ${e//@@/; }" "got: [$o]" ;; esac
+done
 
 # --- the real tree. claude-sync and every shell file, uncommitted ones included, through the shared
 #     lister, so a file being written is judged before it is committed.
