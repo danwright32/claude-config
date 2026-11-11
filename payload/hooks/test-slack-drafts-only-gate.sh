@@ -1372,14 +1372,54 @@ for tree in posts quiet; do
     '  if [ -f "$p" ] && . "$p" 2>/dev/null; then echo ok; fi' '}' 'load' > "$T/sv/$tree/local.sh"
   # A global read inside a function body, and ${X:-default} on a name the script set empty.
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'SUB=""' 'go() {' '  . "$ROOT/${SUB:-lib}/x.sh"' '}' 'go' > "$T/sv/$tree/default.sh"
+  # The disk-clean idiom (scan-lib.sh, disk-clean-harness.sh, disk-remove.sh; #2538): CDPATH cleared,
+  # cd -P and pwd -P for the folder's real path, cd's errors sent away, and an exit when it fails.
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"; [ "$D" != "${BASH_SOURCE[0]}" ] || D=.' \
+    'D="$(CDPATH= cd -P "${D:-/}" 2>/dev/null && pwd -P)" || { echo "no folder"; exit 2; }' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/realpath.sh"
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"' 'D="$(cd "$D" >/dev/null 2>&1 && pwd)"' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/cdquiet.sh"
+  # A group or an if opening on a subshell (ai-review-common.sh's secret maker; #2538): the walk goes on
+  # past it, rather than losing which block the group's closing brace closes.
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" 'mk() {' \
+    "  { ( umask 077 && printf '%s' 1 > \"\$1\" ) && chmod 600 \"\$1\"; } 2>/dev/null || { return 1; }" \
+    '  if ( true ); then :; fi' '}' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/groupsub.sh"
+  # A function whose body's closing brace shares a line with the fi before it (test-merged-prs.sh).
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" \
+    'ok(){ if [ "$1" = "$2" ]; then :; else echo no; fi }' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/fibrace.sh"
+  # The suites' way of calling a helper in a shell of its own: its path handed to `bash -c` as $1,
+  # after a sourced file that holds no shift, and after set -e (test-sleep-state.sh, test-this-mac.sh).
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'LIB="$ROOT/lib/x.sh"' \
+    "out=\"\$(env A=1 bash -c 'set -eu; . \"\$1\"; . \"\$2\"; echo ok' _ \"\$ROOT/lib/y.sh\" \"\$LIB\")\"" \
+    "sh -c '. \"\$0\"' \"\$LIB\"" > "$T/sv/$tree/dashc.sh"
+  printf '%s\n' 'Y=1' > "$T/sv/$tree/lib/y.sh"
 done
-for shape in hookdir twice local default; do
+for shape in hookdir twice local default realpath cdquiet groupsub fibrace dashc; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "that refusal names the sourced file" "lib/x.sh"
+  says "and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
   run_bash "bash $T/sv/quiet/$shape.sh"
   allowed "the same script sourcing a file that does not post: $shape.sh"
 done
+# A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
+# Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
+# shift, set --, a function's own $1) or is the outer shell's (the string in double quotes). Read
+# as the file that posts, each would be refused; it is a path the gate cannot work out, so, with
+# the refusal off, it is let through unread. Turning the refusal on turns each of these red.
+P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
+for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
+            "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c 'f() { . \"\$1\"; }; f $Q' _ $P"; do
+  run_bash "$form"
+  allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
+done
+run_bash "bash -c '. \"\$1\"' _ $P"
+refused "a bash -c string sourcing its argument, which posts, as a command typed"
+says "that refusal is the post it read" "REFUSED: this command posts to Slack"
+run_bash "env -u NOT_SET_2538 A=1 bash -c 'set -e; . \"\$1\"' _ $P"
+refused "the same behind env -u and an assignment, after set -e"
+run_bash "bash -c '. \"\$1\"' _ $Q"
+allowed "a bash -c string sourcing its argument, which does not post, as a command typed"
 # BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
 run_bash "cd $T/sv/posts && bash hookdir.sh"
 refused "the HOOK_DIR idiom run from the script's own folder, sourcing a file that posts"
