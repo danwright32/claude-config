@@ -647,11 +647,19 @@ SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf",
 SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*|[0-9]+)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
 
 
-def load_reader():
-    spec = importlib.util.spec_from_file_location("shell_words", os.path.join(HERE, "lib", "shell-words.py"))
+def load_lib(name, file):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, "lib", file))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def load_reader():
+    return load_lib("shell_words", "shell-words.py")
+
+
+# What a write to a path that cannot be worked out can name (claude-config#2785): Judge's base.
+WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
 
 
 def draft_advice(where):
@@ -708,7 +716,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge:
+class Judge(WrittenPaths):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -980,8 +988,8 @@ class Judge:
         here-string, and tee or cat fed by one of those through a pipe. Anything else, the output of
         any other program, a download, or a word built from a variable or a substitution the resolver
         cannot work out, is noted as unreadable, and a file that is run with an unreadable piece is
-        refused (script). A path that cannot be worked out is noted as a pattern (unknown_pattern), and
-        every file it can match is unreadable from there on.
+        refused (script). A path that cannot be worked out is noted as patterns (unknown_patterns, in
+        lib/written-paths.py), and every file they can match is unreadable from there on.
 
         Also keeps what this command prints, for a tee or cat the next command of a pipeline feeds
         (shell "last_out"), from the commands the line reads itself, not a wrapper's."""
@@ -1016,7 +1024,8 @@ class Judge:
                 # naming a file may be either, so each is unreadable from here on.
                 for a, v in zip(args[1:], vals[1:]):
                     if v is None or not v.startswith("-"):
-                        self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out")
+                        self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out",
+                                             copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
             out = []
@@ -1065,11 +1074,11 @@ class Judge:
         last = max((k for k, f in enumerate(files) if f[2]), default=None)
         for k, (target, v, takes, append) in enumerate(files):
             if k == last:
-                self.note_output(target, v, d, out, label, append)
+                self.note_output(target, v, d, out, label, append, redirect=True)
             elif takes:
-                self.note_output(target, v, d, [], label, append)
+                self.note_output(target, v, d, [], label, append, redirect=True)
             else:
-                self.note_unreadable(target, v, d, f"{label}'s errors")
+                self.note_unreadable(target, v, d, f"{label}'s errors", redirect=True)
         if last is not None:
             out = []
         if self.shell.get("outer", True):
@@ -1116,10 +1125,11 @@ class Judge:
                 stdin = None
         return stdin
 
-    def note_output(self, raw, value, d, pieces, label, append=False):
-        """A file written with pieces (None or an unreadable piece where the text is not known)."""
+    def note_output(self, raw, value, d, pieces, label, append=False, redirect=False):
+        """A file written with pieces (None or an unreadable piece where the text is not known);
+        redirect where raw is a redirection's target, which the shell does not split."""
         if value is None:
-            self.note_unreadable(raw, None, d, label)
+            self.note_unreadable(raw, None, d, label, redirect=redirect)
             return
         if value.startswith("/dev/") and value not in ("/dev/stdin",):
             return
@@ -1127,9 +1137,9 @@ class Judge:
             pieces = [("unknown", None, label)]
         self.note_file(value, d, list(pieces), append)
 
-    def note_unreadable(self, raw, value, d, label):
-        """A file whose text cannot be worked out: by its path, or by a pattern every path it can be
-        matches, where the path is not known either."""
+    def note_unreadable(self, raw, value, d, label, redirect=False, copier=False):
+        """A file whose text cannot be worked out: by its path, or by patterns every path it can be
+        matches, where the path is not known either (lib/written-paths.py)."""
         if value is not None:
             if not value.startswith("/dev/"):
                 self.note_file(value, d, [("unknown", None, label)], True)
@@ -1142,16 +1152,8 @@ class Judge:
         # assembled-from-pieces case the module docstring already puts outside what this gate answers.
         if self.shell.get("on_disk"):
             return
-        self.made_unknown.append((self.unknown_pattern(raw), label))
-
-    @staticmethod
-    def unknown_pattern(raw):
-        """A pattern for a path written as raw that cannot be worked out: any file with its last part's
-        name, where that part is plain text, else any file at all."""
-        base = raw.rstrip("/").rsplit("/", 1)[-1].strip("'\"")
-        if re.fullmatch(r"[A-Za-z0-9._+,%@=:-]+", base) and "/" in raw:
-            return "*/" + base
-        return "*"
+        for pat in self.unknown_patterns(raw, d, redirect, copier):
+            self.made_unknown.append((pat, label))
 
     @staticmethod
     def downloads(name, args, vals):
