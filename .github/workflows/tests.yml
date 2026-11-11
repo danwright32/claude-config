@@ -9,9 +9,10 @@ name: tests
 #
 # Pushes are watched on main only, with pull requests covering everything on its way there. That is
 # a filter on WHERE, not on WHAT, so it creates none of the blind spot above: every change still
-# gets a full unfiltered run, once. Watching every push as well ran the suite TWICE for every
-# commit on a branch with a PR open, since both triggers fire, and the second run tells you nothing
-# the first did not.
+# gets a full unfiltered run, once (a push to main whose exact tree a pull request run already
+# passed stands on that run, #2717, below at the deal job). Watching every push as well ran the
+# suite TWICE for every commit on a branch with a PR open, since both triggers fire, and the second
+# run tells you nothing the first did not.
 #
 # By hand too (claude-config#2463): `gh workflow run tests.yml --ref <branch>` runs a branch with
 # no pull request open, which is how a change to this workflow can be measured before anyone is

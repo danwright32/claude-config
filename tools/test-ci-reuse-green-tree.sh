@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# tools/ci-reuse-green-tree.sh decides whether a pull request run may stand on an earlier green run
-# of EXACTLY the same tree instead of running the suites again (claude-config#2690). It may only say
+# tools/ci-reuse-green-tree.sh decides whether a pull request run, or a push to main (which may stand
+# only on a pull request run, #2717), may stand on an earlier green run of EXACTLY the same tree
+# instead of running the suites again (claude-config#2690). It may only say
 # yes on proof (L312): an index artifact named for the tree, a completed green run of this
 # repository's own tests.yml that is not a fork's, and the commit that run tested, read by its own
 # sha from GitHub, holding exactly this tree and belonging to that run. Every other answer, an API

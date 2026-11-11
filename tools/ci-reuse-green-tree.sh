@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ci-reuse-green-tree.sh: may this pull request run stand on an earlier green run of EXACTLY the
-# same tree, rather than running every suite again? (claude-config#2690)
+# ci-reuse-green-tree.sh: may this pull request run, or this push to main, stand on an earlier green
+# run of EXACTLY the same tree, rather than running every suite again? (claude-config#2690, #2717)
 #
 # Dan's choice, 2026-11-10: keep the merge gate that refuses a head behind main (#766) exactly as it
 # is, and make the run that follows `gh pr update-branch` cheap instead, when the tree it produces has
