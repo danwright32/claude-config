@@ -1397,6 +1397,10 @@ for tree in posts quiet; do
   # A function whose body's closing brace shares a line with the fi before it (test-merged-prs.sh).
   printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" \
     'ok(){ if [ "$1" = "$2" ]; then :; else echo no; fi }' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/fibrace.sh"
+  # A function whose body is a group holding only a subshell, `f(){ (` ... `) }` (test-merge-when-ready.sh's
+  # fake sleep): its closing brace pairs with it, so the walk goes on past the function and its call.
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" 'nap(){ (' '  c=1' \
+    '  printf "%s\n" "$1"' ') }' 'nap 1' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/funcsub.sh"
   # The suites' way of calling a helper in a shell of its own: its path handed to `bash -c` as $1,
   # after a sourced file that holds no shift, and after set -e (test-sleep-state.sh, test-this-mac.sh).
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'LIB="$ROOT/lib/x.sh"' \
@@ -1404,7 +1408,7 @@ for tree in posts quiet; do
     "sh -c '. \"\$0\"' \"\$LIB\"" > "$T/sv/$tree/dashc.sh"
   printf '%s\n' 'Y=1' > "$T/sv/$tree/lib/y.sh"
 done
-for shape in hookdir twice local default realpath cdquiet groupsub fibrace dashc; do
+for shape in hookdir twice local default realpath cdquiet groupsub fibrace funcsub dashc; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "that refusal names the sourced file" "lib/x.sh"

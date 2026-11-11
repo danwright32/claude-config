@@ -1996,9 +1996,7 @@ class Judge:
             if blk["kind"] == "func":
                 o, c = blk["open"], blk["close"]
                 bodies.append((items[o][1]["start"], items[c][1]["end"]))
-                m = re.match(r"\s*(?:function\s+)?([A-Za-z_][\w:.-]*)", items[o][0][1])
-                if m:
-                    fbody.setdefault(m.group(1), []).append((o, c))
+                fbody.setdefault(blk["name"], []).append((o, c))
 
         def head_of(k):
             if rows and rows[k] is None:
@@ -2489,7 +2487,7 @@ class Judge:
         items, None for a subshell's or a substitution's command, else (the ids of the blocks it is
         inside, outermost first; its text with the keywords that open or carry on a block taken off),
         and each block {"kind": "func", "if", "loop", "case" or "group", "open" and "close": the indexes
-        of the commands opening and closing it}. None where the keywords do not pair up, or a function
+        of the commands opening and closing it, and a function's "name"}. None where the keywords do not pair up, or a function
         body is not a group."""
         rows, blocks, stack, brace, idx = [], [], [], False, 0
         entered, last_end = set(), 0
@@ -2509,6 +2507,15 @@ class Judge:
                         s[start - 2:start - 1] not in ("$", "<", ">", "="):
                     lead = re.split(r"[;&|\n]", s[last_end:start - 1])[-1].strip()
                     while lead:
+                        # A function whose body opens on the subshell, `f(){ (` (test-merge-when-ready.sh):
+                        # the block keeps its name, as no command of its own holds the header.
+                        m = re.match(r"(?:function\s+([^\s(){}]+)(?:\s*\(\s*\))?|([A-Za-z_][\w:.-]*)\s*\(\s*\))"
+                                     r"\s*\{(?=\s|$)\s*", lead)
+                        if m and not brace:
+                            push("func")
+                            blocks[-1]["name"] = m.group(1) or m.group(2)
+                            lead = lead[m.end():]
+                            continue
                         m = re.match(r"(then|else|do|elif|!|time|if|while|until|\{)(?=\s|$)\s*", lead)
                         if not m:
                             break  # anything else (a case pattern's `x)`) is left as it was read
@@ -2552,6 +2559,7 @@ class Judge:
                     if brace:
                         return None
                     push("func")
+                    blocks[-1]["name"] = re.match(r"(?:function\s+)?([^\s(){}]+)", head).group(1)
                     head = head[m.end():]
                     if not head:
                         brace = True
@@ -2559,6 +2567,14 @@ class Judge:
                     if not re.match(r"\{(?=\s|$)", head):
                         return None  # f() ( ... ) or another body form: not followed
                     head = head[1:].lstrip()
+                    continue
+                # A body that is one subshell, `f(){ (` ... `) }` (test-merge-when-ready.sh's fake
+                # sleep): the reader keeps it whole in this command, so the closing brace after it is
+                # this command's too (claude-config#2538).
+                m = re.match(r"\((?s:.*)\)(?=\s*(?:\}\s*)?$)", head) if stack and \
+                    blocks[stack[-1]]["kind"] in ("func", "group") and blocks[stack[-1]]["open"] == idx else None
+                if m:
+                    head = head[m.end():].lstrip()
                     continue
                 break
             if pending and brace:
@@ -2683,11 +2699,10 @@ class Judge:
         if not funcs:
             return None
         blk = max(funcs, key=lambda b: b["open"])
-        name = re.match(r"\s*(?:function\s+)?([A-Za-z_][\w:.-]*)", items[blk["open"]][0][1])
         body = text[items[blk["open"]][1]["start"]:items[blk["close"]][1]["end"]]
-        if not name or re.search(r"(?<![\w-])(?:shift|set)(?![\w-])", body):
+        if re.search(r"(?<![\w-])(?:shift|set)(?![\w-])", body):
             return None
-        return name.group(1), int(m.group(1) or m.group(2))
+        return blk["name"], int(m.group(1) or m.group(2))
 
     @staticmethod
     def sh_literal_word(raw):
