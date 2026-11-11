@@ -11,13 +11,49 @@ Anything that runs statements this file cannot find, or cannot read, is asked ab
 Since #2632 it also names the Supabase tools that change a database with no statement at all
 (SUPABASE_CHANGES), which the rules above could not see because there is nothing to judge.
 
+Since #2660 it names one kind of call that changes no database: a Supabase edge function deploy
+that turns JWT verification off, or that may, which publishes a function the platform lets anyone
+call without signing in.
+
   mcp_finding(tool, tool_input, judge)   one MCP call other than the two #2521 named
   supabase_change(tool, tool_input)      the sentence for a call in SUPABASE_CHANGES, or None
-  named_as_database_call(tool)           whether a tool's name alone says any of the above
+  supabase_open_deploy(tool, tool_input) the sentence for a deploy with JWT verification off, or None
+  named_as_database_call(tool)           whether a tool's name alone says it runs statements or
+                                         is one of SUPABASE_CHANGES
+  named_as_function_deploy(tool)         whether a tool's name alone says it deploys an edge function
   bash_findings(command, judge, sw)      one Bash command; sw is lib/shell-words.py, loaded
+  is_function_deploy(finding)            whether a finding is about a deploy and not a database
   asked_words()                          every word a call must hold for this file to ask about it
 
 Each finding is (why the call is asked about, the statement it is about or None).
+
+EDGE FUNCTION DEPLOYS WITH JWT VERIFICATION OFF (claude-config#2660). #2632 left every deploy
+unasked, as code and not a database. Since #2660 a deploy is asked about when it turns JWT
+verification off, or when this file cannot tell that it does not: with it off the platform checks
+no caller, so anyone holding the function's address can call it unless its own code checks them.
+  - deploy_edge_function on any server whose name holds supabase, when its verify_jwt is false (or
+    the text false, or a no_verify_jwt that is true), with the function and project its input
+    names. A verify_jwt that is neither true nor false (null, a number, the text true) is asked
+    about as one that could not be read, since what a server makes of it was not measured.
+    verify_jwt true is passed, and so is verify_jwt left out: the claude.ai connector's schema, read
+    on 2026-11-10, declares it a boolean whose default is true (and requires it). That default was
+    read from the schema and not measured on a deploy (L82), and another Supabase server's default
+    was not read at all.
+  - every `supabase functions deploy` in a shell, whatever its flags, with the functions it names
+    (or "all functions" when it names none) and its --project-ref or the linked project. In a
+    shell the setting can sit in the project's supabase/config.toml (`verify_jwt = false` under the
+    function), which a plain deploy applies with no flag in the command, and this file never reads
+    a file's text. So Dan decided on 2026-11-10, in a picker, relayed by the session that ran this
+    work: "Ask on every shell deploy". The question says JWT verification is off when a
+    --no-verify-jwt is given as anything but =false (`supabase functions deploy --help`, CLI
+    2.75.0) or the --verify-jwt=false an older CLI took is (2.75.0 refuses it as unknown), says it
+    could not be told when a flag's value is no boolean, and otherwise says where the setting is
+    kept. `functions serve --no-verify-jwt` runs on this Mac only and is passed, as are new, list,
+    delete and download.
+Measured on the personal MacBook on 2026-11-10, over all 8,368 transcripts: 3 Bash commands ran
+`supabase functions deploy`, none with --no-verify-jwt, and no session had called
+deploy_edge_function. So the shell rule would have asked 3 times in everything run there, and the
+connector rule never.
 
 SUPABASE TOOLS WITH NO STATEMENT (claude-config#2632), decided from the claude.ai connector's tool
 descriptions as read on 2026-11-10. None had been called on the personal MacBook by then, so the
@@ -31,10 +67,12 @@ name holds supabase, with the branch or project the input names:
   - pause_project (the database goes offline) and restore_project (a database somebody paused
     comes back into service and into the bill).
 Left unasked, since none changes a database: deploy_edge_function and create_edge_function_secret
-(code and configuration, as `supabase functions deploy` is unasked in a shell; the secret's value,
-by the tool's description, is typed in the Supabase dashboard and never passes through the
-session), create_notebook (saved without being run; run_notebook is asked about), delete_notebook,
-submit_feedback and delete_feedback.
+(code and configuration; the secret's value, by the tool's description, is typed in the Supabase
+dashboard and never passes through the session), create_notebook (saved without being run;
+run_notebook is asked about), delete_notebook, submit_feedback and delete_feedback. Since #2660 a
+deploy_edge_function that turns JWT verification off is asked about, and so is every `supabase
+functions deploy` in a shell, both in the section above; a deploy_edge_function that keeps
+verification on is still left unasked.
 
 MCP TOOLS, calibrated on every tool name on the personal MacBook on 2026-11-10 (settings,
 ~/.claude.json, and the 185 names in its transcripts). A tool is read as running statements when:
@@ -75,8 +113,12 @@ WHAT IT DOES NOT SEE: a script file's commands (`bash change.sh`), a client run 
 variable, a program that opens a database itself (python, node, an ORM's own CLI), and a carrier
 not on CARRIERS, which is a hand written list (L96). SUPABASE_CHANGES is one too: a tool Supabase
 adds later that changes a database with no statement, and any other host's tool of that kind (a
-Neon branch reset, say), is unasked until it is listed.
+Neon branch reset, say), is unasked until it is listed. Of a deploy with JWT verification off: a
+deploy through a Supabase server whose name does not hold supabase, and a call to Supabase's own
+API (curl, a script). The setting in supabase/config.toml is never read; the shell deploy that
+would apply it is asked about whatever its flags.
 """
+import json
 import re
 
 SUPABASE = "mcp__claude_ai_Supabase__"
@@ -103,6 +145,19 @@ SUPABASE_CHANGES = {
 SUPABASE_CHANGE_FIELDS = ("branch_id", "project_id", "name", "organization_id")
 # How much of a branch, project or organization name a question shows.
 TARGET_SHOWN = 80
+# The Supabase tool that deploys an edge function, and the input fields that say whether the
+# platform checks a caller's JWT before running it (claude-config#2660): verify_jwt is the
+# connector's, read 2026-11-10, and no_verify_jwt is the CLI's flag as a field, in case a server
+# names it so. Both are matched by their words, so verifyJwt is verify_jwt.
+SUPABASE_DEPLOY = "deploy_edge_function"
+VERIFY_JWT = "verify_jwt"
+NO_VERIFY_JWT = "no_verify_jwt"
+# What true and false look like written as text, in a tool's input or after a flag's = sign,
+# compared in lower case. They are the ones Go's strconv.ParseBool takes, which reads the CLI's.
+TRUE_WORDS = {"true", "t", "1"}
+FALSE_WORDS = {"false", "f", "0"}
+# How much of a verify_jwt value that is neither true nor false a question shows.
+VALUE_SHOWN = 40
 STATEMENT_KEYS = {"query", "queries", "statement", "statements"}
 # What may stand beside sql in a field's name for the field to hold a statement: sql_query, raw_sql.
 SQL_KEY_WORDS = {"query", "queries", "statement", "statements", "text", "string", "raw", "command",
@@ -147,16 +202,99 @@ def named_as_database_call(tool):
     return "sql" in nt or bool(nt & MIGRATION_WORDS and nt & RUN_WORDS)
 
 
-def _supabase_change_name(tool):
-    """The SUPABASE_CHANGES key an MCP tool answers to, or None. The server is everything before
-    the tool's last __, and any server whose name holds supabase counts (the claude.ai connector,
-    a project's own server, a plugin's), since each offers these same tools. The tool's words are
-    compared, so resetBranch is reset_branch. Another product's merge_branch is not one."""
+class FunctionDeploy(tuple):
+    """A finding, (why, None), about an edge function deploy. It is a finding like any other to
+    whoever unpacks it, and db-write-ask.sh words its question by the type, since this one is
+    not about a database."""
+    __slots__ = ()
+
+
+def is_function_deploy(finding):
+    """Whether one of bash_findings()'s findings is about an edge function deploy, and so not
+    about a database."""
+    return isinstance(finding, FunctionDeploy)
+
+
+def _open_to_all(several=False):
+    """What a deploy with JWT verification off means for whoever answers the question, said of
+    one function or of several."""
+    return ("so the platform lets anyone call " + ("them" if several else "it") + " without signing "
+            "in, unless " + ("their" if several else "its") + " own code checks the caller")
+
+
+def _words(name):
+    """A tool's or a field's name as its lower case words joined by _, so resetBranch is
+    reset_branch and verifyJwt is verify_jwt."""
+    return "_".join(t.lower() for t in NAME_WORD.findall(name))
+
+
+def _supabase_tool(tool):
+    """The name, as its words, of an MCP tool on a Supabase server, or None on any other. The
+    server is everything before the tool's last __, and any server whose name holds supabase
+    counts (the claude.ai connector, a project's own server, a plugin's), since each offers these
+    same tools. Another product's merge_branch is not one."""
     head, sep, name = tool.rpartition("__")
     if not sep or not head.startswith("mcp__") or "supabase" not in head.lower():
         return None
-    snake = "_".join(t.lower() for t in NAME_WORD.findall(name))
+    return _words(name)
+
+
+def _supabase_change_name(tool):
+    """The SUPABASE_CHANGES key an MCP tool answers to, or None."""
+    snake = _supabase_tool(tool)
     return snake if snake in SUPABASE_CHANGES else None
+
+
+def named_as_function_deploy(tool):
+    """Whether an MCP tool's NAME alone says it deploys a Supabase edge function: what is left to
+    go on when its payload, and so its verify_jwt, cannot be read."""
+    return _supabase_tool(tool) == SUPABASE_DEPLOY
+
+
+def _jwt_checked(field, value):
+    """What one field of a deploy says about JWT verification: "on", "off", or "unclear" for a
+    value that is neither true nor false. Text that reads as off is taken as off; text that reads
+    as on is unclear, since only a real true was read from the schema as keeping verification on."""
+    said = value if isinstance(value, bool) else None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        said = True if text in TRUE_WORDS else False if text in FALSE_WORDS else None
+    if said is None:
+        return "unclear"
+    if said != (field == VERIFY_JWT):
+        return "off"
+    return "on" if isinstance(value, bool) else "unclear"
+
+
+def supabase_open_deploy(tool, ti):
+    """None unless an MCP call deploys a Supabase edge function with JWT verification off, or with
+    a setting this cannot read; else the sentence the question shows: the tool, the function and
+    the project its input names, and what the setting was. A deploy that leaves verify_jwt out is
+    passed, since the schema's default is true (the header says where that was read)."""
+    if _supabase_tool(tool) != SUPABASE_DEPLOY:
+        return None
+    if not isinstance(ti, dict):
+        return (tool + " deploys an edge function and its input is not an object, so whether JWT "
+                "verification stays on could not be told")
+    what = "edge function " + _target(ti, "name") + " on project " + _target(ti, "project_id")
+    off, unclear = [], []
+    for key, value in ti.items():
+        field = _words(key) if isinstance(key, str) else ""
+        if field not in (VERIFY_JWT, NO_VERIFY_JWT):
+            continue
+        shown = json.dumps(value)
+        if len(shown) > VALUE_SHOWN:
+            shown = shown[:VALUE_SHOWN] + " ..."
+        state = _jwt_checked(field, value)
+        if state != "on":
+            (off if state == "off" else unclear).append(key + " is " + shown)
+    if off:
+        return (tool + " publishes " + what + " with JWT verification off (" + ", ".join(off) + "), "
+                + _open_to_all())
+    if unclear:
+        return (tool + " publishes " + what + ", and " + ", ".join(unclear) + ", not a plain true or "
+                "false, so whether JWT verification stays on could not be told")
+    return None
 
 
 def _target(ti, key):
@@ -348,6 +486,11 @@ SUPABASE_STATE_GROUPS = {
         "delete": "deletes a project and its database",
     }),
 }
+# `supabase functions deploy`'s own flags that take the next word, and the functions subcommands
+# that publish nothing (claude-config#2660). From `supabase functions deploy --help` and `supabase
+# functions --help`, CLI 2.75.0. serve takes --no-verify-jwt too, and runs on this Mac only.
+SUPABASE_DEPLOY_VALUED = {"--import-map", "-j", "--jobs"}
+SUPABASE_FUNCTIONS_OTHER = {"serve", "new", "list", "delete", "download"}
 REDIRECT = re.compile(r"&>>?|<<<|<<-?|<>|[<>]&|>>|>\||<|>")
 
 
@@ -506,13 +649,10 @@ def _shell_client(prog, words, judge):
     return _judged(prog, before + statements, judge, shell=True, psql=(prog == "psql"))
 
 
-def _supabase(words, judge):
-    """The findings for one run of the Supabase CLI: its db and migration subcommands, and the
-    branches and projects ones that change a database with no statement."""
-    path, flags, files = [], set(), []
-    # A dry run only while every --dry-run is bare or =true: --dry-run=false is a real push, and so
-    # is a dry run undone by a later false. Any value but true counts as not dry.
-    dry = None
+def _supabase_words(words, valued):
+    """One Supabase CLI run's words as (the words that are no flag, each flag as (name, whether it
+    was written with =, its value)). A flag in `valued` written without = takes the next word."""
+    path, flags = [], []
     i, n = 1, len(words)
     while i < n:
         w = words[i]
@@ -521,17 +661,76 @@ def _supabase(words, judge):
             path.append(w)
             continue
         name, eq, value = w.partition("=")
-        flags.add(name)
-        if name == "--dry-run":
-            dry = dry is not False and (not eq or value.lower() == "true")
-        if not eq and name in SUPABASE_VALUED and i < n:
+        if not eq and name in valued and i < n:
             value = words[i]
             i += 1
-        if name in ("-f", "--file"):
-            files.append(value)
-    if flags & {"--help", "-h"} or path[:1] == ["help"]:
+        flags.append((name, bool(eq), value))
+    return path, flags
+
+
+def _supabase(words, judge):
+    """The findings for one run of the Supabase CLI: its db and migration subcommands, the
+    branches and projects ones that change a database with no statement, and a functions deploy
+    that turns JWT verification off."""
+    path, flags = _supabase_words(words, SUPABASE_VALUED)
+    # A dry run only while every --dry-run is bare or =true: --dry-run=false is a real push, and so
+    # is a dry run undone by a later false. Any value but true counts as not dry.
+    dry = None
+    for name, eq, value in flags:
+        if name == "--dry-run":
+            dry = dry is not False and (not eq or value.lower() == "true")
+    files = [value for name, _, value in flags if name in ("-f", "--file")]
+    if {name for name, _, _ in flags} & {"--help", "-h"} or path[:1] == ["help"]:
         return []
-    return _supabase_state(path) + _supabase_db(path, files, dry, judge)
+    return _supabase_state(path) + _supabase_db(path, files, dry, judge) + _supabase_deploy(words)
+
+
+def _supabase_deploy(words):
+    """The finding for `supabase functions deploy` (claude-config#2660): every one, whatever its
+    flags, since the setting that turns JWT verification off can sit in the project's
+    supabase/config.toml, which no flag shows and this never reads. It is read on its own and
+    added to what the other rules find. The words are read again with deploy's own valued flags,
+    so `-j 2` is not taken for a function's name; the other rules keep their reading, which this
+    must not change."""
+    path, flags = _supabase_words(words, SUPABASE_VALUED | SUPABASE_DEPLOY_VALUED)
+    at = next((k for k, w in enumerate(path) if w == "functions"), None)
+    if at is None or path[at + 1:at + 2] == [] or path[at + 1] in SUPABASE_FUNCTIONS_OTHER:
+        return []
+    if "deploy" not in path[at + 1:]:
+        return []
+    # What each verification flag says: off, on, or a value that is no boolean. A bare boolean
+    # flag is true. The last one given wins in the CLI; the question says off if any one says off.
+    off, unclear, on = [], [], []
+    for name, eq, value in flags:
+        if name not in ("--no-verify-jwt", "--verify-jwt"):
+            continue
+        text = value.lower() if eq else "true"
+        shown = name + ("=" + value[:VALUE_SHOWN] if eq else "")
+        if text not in TRUE_WORDS | FALSE_WORDS:
+            unclear.append(shown)
+        elif (text in TRUE_WORDS) == (name == "--no-verify-jwt"):
+            off.append(shown)
+        else:
+            on.append(shown)
+    names = path[path.index("deploy", at + 1) + 1:]
+    listed = ", ".join(names)
+    if len(listed) > 2 * TARGET_SHOWN:
+        listed = listed[:2 * TARGET_SHOWN] + " ... (" + str(len(names)) + " named in all)"
+    project = next((value for name, _, value in reversed(flags) if name == "--project-ref" and value), None)
+    given = off or unclear or on
+    what = ("supabase functions deploy " + (" ".join(given) + " " if given else "") + "publishes "
+            + ("all functions in the project's functions folder" if not names
+               else ("edge function " if len(names) == 1 else "edge functions ") + listed)
+            + " on " + ("project " + project[:TARGET_SHOWN] if project else "the linked project"))
+    if off:
+        why = what + " with JWT verification off, " + _open_to_all(len(names) != 1)
+    elif unclear:
+        why = (what + ", and the flag's value is not a plain true or false, so whether JWT "
+               "verification stays on could not be told")
+    else:
+        why = (what + ". Whether the platform checks a caller's JWT can be set in the project's "
+               "supabase/config.toml, which this hook does not read")
+    return [FunctionDeploy((why, None))]
 
 
 def _supabase_state(path):

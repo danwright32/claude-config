@@ -1803,7 +1803,14 @@ included) as above, and never updates the same head twice; four minutes after th
 nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
 repository's settings, merges by the one method they allow, and when they allow more (claude-config
 and a work repository allow all three) stops at once naming them rather than at the merge after the wait.
-It does not guess squash from history, which GitHub does not record a method for. While it waits it
+It does not guess squash from history, which GitHub does not record a method for. It merges as an
+account that can merge, not the first that could read the pull request: at its first look it asks
+GitHub the permission (`viewerPermission`) of the account that read it, and when that is below
+WRITE asks each other account gh is signed in to, with a token scoped to each call and never
+`gh auth switch`. Every write in the run is made as the first with WRITE, MAINTAIN or ADMIN, and it
+says which and why; when none can, it stops before any update or wait, naming each account and its
+permission. On 2026-11-10 a read only active account waited 7m 30s and was then refused at the merge
+(claude-config#2629). While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
 one can be told apart (claude-config#1476). Its looks follow the one polling policy,
 `hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
@@ -3437,6 +3444,23 @@ The gate cannot trace which string reaches the sink (a variable, a function, ano
 any file reached names one, the walk starts again following every string, as before. Measured over
 1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
 
+A type only import statement of a declaration file that is not there is not followed either (#2526):
+`import type { A } from '../types/index.d.ts'`, `import type A from` and `import type * as ns from`,
+where the path as written ends `.d.ts`. The whole statement is erased before anything runs, so no
+module is loaded for it whatever a resolver would make of the path. Measured 2026-11-10 with bun
+1.3.11, node 22.22.2 and deno, with and without `verbatimModuleSyntax`: a module that prints when
+loaded printed under none of them, and a missing one stopped none of them. Before this, `bun test` on
+a mod's test was refused in every agent worktree, because the tests import the generated
+`.claude-plugin/types/mod-kit/index.d.ts` for its types and a worktree does not have it. Nothing
+wider passes. `import { type A } from` is still refused, because node only blanks the names and
+loads the module (measured the same day: the module printed), and so are a value import, a mixed
+one, a bare `import`, `require`, `import()`, `import type A = require()` and `export type ... from`
+of the same missing file, a type only import of a missing file that is not a `.d.ts`, and a default
+import that is merely named `type`. A declaration file that is there is read and judged like any
+module. Measured over the 469 scripts in this repository, run as `bun test <file>` in a worktree:
+52 went from refused to passing, every one refused before for that one generated file, and none
+went the other way.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
@@ -3617,13 +3641,33 @@ the statement and the project named) for:
   - the same through the Supabase CLI, so that one route is not the way round the other:
     `branches create`, `delete`, `pause`, `unpause` and `update`, and `projects create` and `delete`.
 
-  Left unasked, since none changes a database: `deploy_edge_function` and
-  `create_edge_function_secret` (code and configuration, as `supabase functions deploy` is in a
-  shell; the secret's value, by the tool's description, is typed in the Supabase dashboard),
+  Left unasked, since none changes a database: `deploy_edge_function` while it keeps JWT
+  verification on (the next rule asks about one that turns it off) and
+  `create_edge_function_secret` (code and configuration; the secret's value, by the tool's
+  description, is typed in the Supabase dashboard),
   `create_notebook` (saved without being run; `run_notebook` is asked about), `delete_notebook`,
   `submit_feedback` and `delete_feedback`. The list is `SUPABASE_CHANGES` in
   `lib/db-write-calls.py`, written by hand from the connector's tool descriptions as read on
   2026-11-10.
+- since #2660, one kind of call that changes no database: a Supabase edge function deploy that turns
+  JWT verification off, or may. With it off the platform checks no caller, so anyone holding the
+  function's address can call it without signing in, unless its own code checks them. The question
+  names the function and the project, and says "edge function deploy" where the others say
+  "database call":
+  - `deploy_edge_function` on any server whose name holds supabase, when `verify_jwt` is false (or
+    the text false, or a `no_verify_jwt` that is true). A `verify_jwt` that is neither true nor false
+    (null, a number, the text true) is asked about as one that could not be read. One that is true
+    is passed, and so is one left out, because the connector's schema (read 2026-11-10) declares it
+    a boolean whose default is true. That default was read from the schema and not measured on a
+    real deploy.
+  - every `supabase functions deploy` in a shell, whatever its flags, naming its functions or
+    saying "all functions" when it names none. In a shell the setting can sit in the project's
+    `supabase/config.toml` (`verify_jwt = false` under the function), which a plain deploy applies
+    with no flag in the command, and the hook never reads a file. Dan decided on 2026-11-10: "Ask on
+    every shell deploy". The question says verification is off when `--no-verify-jwt` is given as
+    anything but `=false` (or the `--verify-jwt=false` an older CLI took is), and otherwise says
+    where the setting is kept. `functions serve --no-verify-jwt` runs on this Mac only and is
+    passed, as are `new`, `list`, `delete` and `download`.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
   one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
   a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
@@ -3645,7 +3689,10 @@ store, most of them reads the rule cannot prove are reads (a dot command, two st
 it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
 does not take as proof. None of the tools or CLI subcommands #2632 added had been called in any
 transcript on the personal MacBook by 2026-11-10 (the connector's calls there were `list_projects`,
-`execute_sql` and `list_tables`), so they add no question to anything measured there.
+`execute_sql` and `list_tables`), so they add no question to anything measured there. #2660's rule
+would have asked 3 times in everything run there: over all 8,368 transcripts on 2026-11-10, 3 Bash
+commands ran `supabase functions deploy`, none with `--no-verify-jwt`, and no session had called
+`deploy_edge_function`.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3662,8 +3709,10 @@ connector whose SQL tool has neither sql in its name nor a field named for a sta
 Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
 `exec`, whose `execute-sql` runs HogQL, which only reads; a tool Supabase adds later that changes a
 database with no statement, and any other host's tool of that kind (a Neon branch reset, say), until
-it is listed; and a deploy of an edge function, which is code and not a database. The tool names
-were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
+code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
+server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
+names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
@@ -3909,13 +3958,17 @@ recomputes the median, lowest and highest per arm from that file and requires th
 columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
 back by NAME, so adding a column cannot silently re-aim the reader (#524).
 
-CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 40 runs
-of the tests workflow on main, read from their logs with gh on 2026-10-25 (#1667). They fall into
-two groups by runner speed, 885s to 1092s and 1192s to 1362s, and the budget's fraction was raised
-from 70% to 76% (1368s at CI's 1800s ceiling) so it sits above every one of them; at 70% it sat
-inside the slower group and turned runs red by chance. The sync suite fails while the budget at
-CI's ceiling, read from the workflow, is not above the highest recorded run, so a slower run
-appended there is a decision to make rather than a pull request gone red at random.
+CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 328
+runs of the tests workflow, 100 on main and 228 on pull requests, read from their logs with gh on
+2026-11-10 (#2614), each with its processor, region, core count, check count and runner group.
+They fall into two groups by runner speed with a gap between them, 834s to 1179s and 1201s to
+1393s. The budget's fraction is set from the slower group's spread: 80% (1440s at CI's 1800s
+ceiling) is above its mean plus four standard deviations and every recorded run, and under 15%
+over its median, so growth still fails. At 76% (1368s, set from 40 runs on 2026-10-25, #1667) it
+sat at that group's 97th percentile and turned 5 of the 328 runs red with every check passing. The
+sync suite recomputes both bounds from the record, read by column name, and fails while the budget
+at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
+make rather than a pull request gone red at random.
 
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
@@ -5402,6 +5455,15 @@ repo but not applied here (what a pull that stops before its apply leaves). The 
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
 
+A file status could not compare is said on its own, whatever the window, under `mods not compared
+with the shared repo`, one line per file naming the step that failed and its exit status: hashing
+it, putting the home path placeholder back, hashing it with the placeholder put back, or reading
+when the shared repo added it, changed it or removed it (#2673). Such a file is counted neither as
+behind nor as this Mac's own work, and status exits as it would otherwise. Before this, every one
+of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
+and read as unsent work here, dropping out of the lag line with nothing said; one failed
+placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
@@ -5694,7 +5756,17 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with.
+pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
+strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
+request it makes, a module it loads by a name given at run time) is read only through `fileReach`
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
+Slack alert guard kept its own lists of module names, and asks inside a search too short for an
+engine call per file). It counts a name only where the file imports or calls it, never in a string,
+a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
+`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
+The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
+inline code and counts a process word anywhere.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
@@ -7394,6 +7466,25 @@ trace that newly reads a text template, a template a sender newly reads by path 
 import, and a file that only hands names on newly exporting a local copy of an imported value.
 When the nearest sender's part of a change is already approved, the search goes on to the senders
 further along rather than passing the rest (#2637).
+A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
+2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
+prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
+that is a name (a webhook's host, the chat API's method, an SDK, a Slack setting) is only being
+matched when it is written as one alternative of a pattern, a bar beside it, or as the middle of a
+glob, a star at each side. Written any other way (in an address, read as a setting, called, a whole
+quoted string, a bare word) it is used, and a send helper called or imported always is. A file is
+no sender only when every marker in its code is matched that way, or sits in a comment, and the
+file makes no request and starts no program that could: curl, wget and the like or a command named
+for Slack in a shell script, a network or process module in python, fetch, an HTTP client or
+child_process in JavaScript. So a script that refuses and also posts, and one that matches an
+endpoint and then calls it, are held as before. Only shell, python, JavaScript and TypeScript are
+read this way: in any other language a marker anywhere makes a sender, as before. No file is named
+or exempted. Still held, since nothing tells them from a use: a sentence that spells an endpoint
+out, a list of bare endpoint names, a pattern in a regex literal. No longer held: a file that
+matches an endpoint and leaves the posting to another file whose code names nothing of Slack, and,
+as the file being edited, one whose only marker is in a comment and that makes no request.
+`tests/test-slack-alert-guard-real-gate.sh` holds the real drafts gate, and the guard's own source,
+to this.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
