@@ -15,6 +15,7 @@
 #   sc_hold_others     the short names of the other sessions holding the watcher
 #   sc_payload_session the session a hook payload names
 #   sc_is_own_worktree is this clone a linked worktree on its own branch, which nothing mirrors into
+#   sc_is_plain_copy   is this clone a copy of the tree with no repository around it, out of reach
 #
 # Env, honoured by every caller so a test can point all of them at a fixture:
 #   SYNC_WATCH_PID_FILE     the watcher's pid file (default ~/.claude-sync-watch.pid)
@@ -120,6 +121,39 @@ sc_is_own_worktree(){ # sc_is_own_worktree <clone root>
     else return 1; fi
   fi
   [ "$br" != "$def" ]
+}
+
+# Is this clone a plain COPY of the tree, with no repository around it (claude-config#2705)? What
+# the daemon overwrites in a development checkout it reaches through the repository: it mirrors
+# ~/.claude over payload/ in its own clone and pushes, and a checkout's work meets that on main. A
+# copy of the tree with no repository (one kept in a session notes folder to measure a change in)
+# has no route to main, so nothing the daemon does arrives there, and on 2026-11-10 an Edit to one
+# was refused all the same. Written as what the daemon can reach, a git work tree, never as a list
+# of folders a copy may sit in (L615, L96): a copy that is its own checkout, or one sitting inside
+# another work tree, is still at risk wherever it is kept.
+#
+# Yes needs TWO answers that do not share a source (L345). git, asked, must say in its own exit
+# code and its own words that there is no repository: a git that is missing, cannot start, or fails
+# for any other reason has said nothing, and that counts as at risk (L42). And no .git may be found
+# by looking, at the root or anywhere above it, because git says "no repository" of some places
+# that have one: below a ceiling or a filesystem boundary it stops at, and beside a .git naming a
+# repository that is gone.
+sc_is_plain_copy(){ # sc_is_plain_copy <clone root>
+  local d out rc
+  [ -n "${1:-}" ] || return 1
+  d="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  [ -n "$d" ] || return 1
+  # In the C locale, so the words matched are the ones git writes whatever language the Mac is in.
+  out="$(LC_ALL=C git -C "$d" rev-parse --is-inside-work-tree 2>&1)"; rc=$?
+  [ "$rc" -eq 128 ] || return 1
+  case "$out" in "fatal: not a git repository"*) ;; *) return 1 ;; esac
+  while :; do
+    # A .git that is a dangling link is still a .git somebody put there, so -L as well as -e.
+    if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then return 1; fi
+    [ "$d" != "/" ] || break
+    d="${d%/*}"; [ -n "$d" ] || d=/
+  done
+  return 0
 }
 
 # Is a hold in force that protects THIS session's writes? Read only, and expiry is the only thing

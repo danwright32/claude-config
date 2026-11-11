@@ -33,6 +33,14 @@
 # daemon never writes into it, and its work reaches main only by a reviewed merge. Both halves
 # below, the refusal before a call and the report after it, let it through.
 #
+# Nor is a plain copy of the tree with no repository around it (claude-config#2705), such as one
+# kept in a session notes folder to measure a change in: what the daemon overwrites it reaches
+# through the repository, and a copy with none has no route there. Both halves let it through, and
+# only on git's own word that there is no repository plus no .git found by looking, so a copy that
+# is its own checkout, one inside another work tree, and one git cannot answer for are refused as
+# before (lib/sync-clone.sh, sc_is_plain_copy). A call this gate cannot READ is refused there too:
+# where it writes is unknown, so the copy it was made from decides nothing.
+#
 # The questions come from lib/sync-clone.sh, shared with the warning hook, so the two cannot come
 # to two different answers about whether a hold is in force (L370).
 #
@@ -596,6 +604,7 @@ while IFS= read -r t; do
   [ -n "$wcmd" ] || continue                       # no watcher: nothing can revert anything
   sc_is_this_clone "$root" "$wcmd" && continue     # the watcher runs from HERE: this is its source
   sc_is_own_worktree "$root" && continue          # a linked worktree on its own branch (#800)
+  sc_is_plain_copy "$root" && continue            # a copy with no repository around it (#2705)
   sc_hold_covers "$sid" && continue                # held off by THIS session, or a terminal (#1886)
   refuse_root="$root"; refuse_path="$t"; break
 done <<TARGETS
@@ -620,6 +629,7 @@ note_payload_before(){
     [ -n "$root" ] || continue
     sc_is_this_clone "$root" "$wcmd" && continue
     sc_is_own_worktree "$root" && continue    # nothing mirrors into it, so nothing to report (#800)
+    sc_is_plain_copy "$root" && continue      # nor into a copy with no repository (#2705)
     case "
 $roots
 " in *"

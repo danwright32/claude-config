@@ -46,7 +46,7 @@ import {
   removalKey,
   renderedProblem,
   shellKey,
-  slackMarked,
+  isSender,
   stringsOf,
   templateLines,
   testFile,
@@ -423,7 +423,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
           }
           texts.set(h, text as string)
         }
-        if (!slackMarked(text as string)) continue
+        if (!isSender(h, text as string, true)) continue
         for (const u of users) if (refersTo(u.rel, u.text, h)) pairs.push({ user: u.rel, helper: h })
       }
       return pairs
@@ -451,7 +451,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     // file using a template does. It is read as that text from here on, never from the disk.
     if (self !== undefined) {
       texts.set(templateRel, self)
-      const own: Sender[] = slackMarked(codeOf(templateRel, self))
+      const own: Sender[] = isSender(templateRel, self)
         ? [{ rel: templateRel, chain: [] }]
         : (await helperUser([{ rel: templateRel, text: self }])).map(p => ({ rel: templateRel, chain: [], helper: p.helper }))
       if (await stops(own)) return { senders: found, top, texts, complete: true }
@@ -467,7 +467,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         // posts nothing (Pivot, 2026-11-06, where it held ordinary code edits as alert wording).
         // refersTo leaves comments out itself.
         const text = await textOf(rel, sends)
-        const via = slackMarked(codeOf(rel, text)) ? level.find(t => refersTo(rel, text, t)) : undefined
+        const via = isSender(rel, text) ? level.find(t => refersTo(rel, text, t)) : undefined
         if (via !== undefined) atLevel.push({ rel, chain: chainOf(via) })
       }
       if (await stops(atLevel)) return { senders: found, top, texts, complete: true }
@@ -480,7 +480,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         // stops a file that does from being followed.
         const text = await textOf(rel, handsOnTo)
         const code = codeOf(rel, text)
-        const via = slackMarked(code) ? undefined : level.find(t => refersTo(rel, text, t))
+        const via = isSender(rel, text) ? undefined : level.find(t => refersTo(rel, text, t))
         if (via === undefined) continue
         parent.set(rel, via)
         if (handsOn(rel, code)) next.push(rel)
@@ -715,7 +715,7 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
           }
           now = await side(after, rAfter)
           // Whether it was a sender before the edit: it carried a marker, or imported the helper.
-          if (s.helper === undefined ? slackMarked(codeOf(template, before)) : refersTo(template, before, s.helper)) was = await side(before, rBefore)
+          if (s.helper === undefined ? isSender(template, before) : refersTo(template, before, s.helper)) was = await side(before, rBefore)
         } else {
           const door = await sentInto($, s, texts, template)
           const side = async (text: string, r: Reading): Promise<Reached> => {
@@ -793,7 +793,7 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
 /** The verdict on the wording an edit changes in its own file. */
 type EditOf = { path: string; current: string; edited: string | undefined; before: string; after: string; code: boolean; text: boolean }
 const ownWording = async ($: EngineInterface, { path, current, edited, before, after, code, text }: EditOf): Promise<Verdict> => {
-  const marked = code && (slackMarked(current) || slackMarked(after))
+  const marked = code && (isSender(path, current, true) || isSender(path, after, true))
   try {
     const lang = languageOf(path, current || after)
     const read = async (t: string): Promise<Lit[]> => (text ? templateLines(t).map(l => ({ text: l, literal: [], start: -1 })) : await literals($, path, lang, t))
@@ -922,7 +922,7 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       const keys = await unapproved($, [key])
       if (!keys.length) return PASS
       deadline ??= (await $.clock.now()) + SCAN_MS
-      const found = await findSender($, f.path, deadline, code && slackMarked(text))
+      const found = await findSender($, f.path, deadline, code && isSender(f.path, text, true))
       if ('unchecked' in found) return found
       if ('posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
       if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }

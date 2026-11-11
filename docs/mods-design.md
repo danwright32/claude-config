@@ -3551,6 +3551,33 @@ adding a refusal Dan reads, so confidence comes from the guard's own reading, ne
   `/sleep`'s problems. The words test is `guardQuestion` in mod-kit's `hooks/designquestions.ts`,
   which `guardIgnores` now uses, copied byte for byte into picker manners, the guard and scope modes.
 
+### What #2704 changed, 2026-11-10
+
+Mid merge, the guard held `git checkout --conflict=diff3 -- <file>` on a mod's hook file as
+changing how the screen looks. A file a merge leaves unmerged has no copy in the index (stage 0),
+only the sides of the conflict, so #1158's read of `:<path>` failed (git: "is in the index, but
+not at stage 0", exit 128) and the file was judged whole. Measured with real git 2.51.1 first: a
+plain checkout or restore of such a file is refused by git and changes nothing, `--conflict` or
+`-m` writes the conflict markers again and leaves it unmerged, and `--ours` leaves it byte
+identical to the branch's own commit.
+
+- **An unmerged file is judged against this branch's side.** register.ts `putBackOrOurs`, used by
+  `changeOf` (React screen files) and `drawingChange` (a mod's hook files), reads `:2:<path>` when
+  the index has no copy. That stage existing is what says the file is unmerged, so git's words
+  are never parsed. The file on disk is then conflict marker text, no screen, so the change is
+  judged from this branch's side, never the disk. With no side named, git refuses or writes the
+  conflict again, so what it is judged as leaving is this branch's side too and the call passes;
+  `--ours` passes alike.
+- **Stricter in one place.** `--theirs` is judged from this branch's side to main's, so new words
+  for a message or a new look on main's side are asked about, even when the file on disk already
+  reads as main's side. A logic only difference passes.
+- **What git cannot give is still said.** With neither the index's copy nor this branch's side
+  readable (a file deleted on this branch and changed on main holds stages 1 and 3 only), the
+  file is judged whole as before, and the refusal names both reads and what git said of each.
+- Left as is: a settled design under docs/design keeps `putBack`; an Edit or Write resolving a
+  conflict, and `git checkout HEAD -- <file>` on an unmerged file, are still judged against the
+  disk; and `git merge` itself is not read by mod-kit's git reader.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
