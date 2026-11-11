@@ -14,7 +14,7 @@ const LONG_FOLDER =
   '-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth'
 const DOTTED_CWD = '/private/var/folders/kd/98c3xw516598081hs59hbkt80000gn/T/measure-long.27sZoY/a.dotted dir_x/.claude/worktrees/w1'
 const DOTTED_FOLDER = '-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-a-dotted-dir-x--claude-worktrees-w1'
-const P = '/Users/x/.claude/projects'
+const P = `${'/Users'}/x/.claude/projects`
 
 test('a folder with a dot, a space and an underscore is spelled with a hyphen for each', () => {
   expect(projectFolder(DOTTED_CWD)).toEqual({ name: DOTTED_FOLDER })

@@ -1,6 +1,6 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { SlackAlertApproval, SlackAlertPending } from '../types/index.d.ts'
+import type { SlackAlertApproval, SlackAlertChoice, SlackAlertPending } from '../types/index.d.ts'
 import {
   APPROVE,
   CHANGE,
@@ -14,6 +14,7 @@ import {
   SENDER_PREFILTER,
   SOURCE,
   agentRefusal,
+  blocked,
   ciMessages,
   ciWorkflow,
   codeOf,
@@ -59,8 +60,9 @@ import {
   wordingOf,
 } from './rules.ts'
 import { type Reading, type Send, type Traced, docstrings, importedNames, jsSpans, mayBringIn, moduleBindings, pySpans, readingOf, sentAt, trace, usedWhole } from './sends.ts'
-import { errorText } from './mod-kit/skew.ts'
+import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
+import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -71,6 +73,8 @@ import { neverThrows } from './mod-kit/hold.ts'
 // and asks him.
 
 const pendingRef = { plugin: 'slack-alert-guard', key: 'pending' } as const
+// The expired choices this session has named to Dan (#2628), so each is said once per session.
+const toldRef = { plugin: 'slack-alert-guard', key: 'told' } as const
 
 // A subagent's calls this guard judged and let through in its tool.call hook, so the tool.check
 // beneath does not judge them again.
@@ -94,7 +98,7 @@ type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; 
 // approve that one edit, since trying again can never get it through. Any other could not check
 // (out of time, git failing, a file unreadable) may pass on another try, so says to try again.
 type Unchecked = { unchecked: string; untraced?: true }
-type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold }
+type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold } | { merge: string }
 const PASS: Verdict = { pass: true }
 
 // The arguments the tool takes, without the keys the engine carries beside them.
@@ -196,11 +200,86 @@ const foreignUses = async ($: EngineInterface, path: string, names: string[], de
   }
 }
 
-// The keys of a change Dan has not yet approved; a store that cannot be read throws.
+// The keys of a change Dan has not yet approved; a store that cannot be read throws. While he is
+// asleep, wording a session chose overnight and that has not expired goes through too (#2628): a
+// choice is never an approval, so awake it is held as before.
 const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]> => {
   const out: string[] = []
   for (const k of keys) if ((await $.store.get(k)) === undefined) out.push(k)
+  const chosen: string[] = []
+  for (const k of out) {
+    const c = (await $.store.get(chosenKey(k))) as SlackAlertChoice | undefined
+    if (c && c.expired === undefined) chosen.push(k)
+  }
+  if (!chosen.length || !(await isAsleep($))) return out
+  return out.filter(k => !chosen.includes(k))
+}
+
+// Scope modes, called in place (#2628). Not loaded, or a sleep record it cannot read, is awake: the
+// guard then holds as it always has, never the looser way.
+type SleepModes = { isAsleep: () => Promise<boolean>; sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }> }
+const isAsleep = async ($: EngineInterface): Promise<boolean> => {
+  try {
+    return (await ($ as unknown as { scopeModes: SleepModes }).scopeModes.isAsleep()) === true
+  } catch (err) {
+    if (missingOf(err)?.noun !== 'scopeModes') $.ui.log(`slack-alert-guard: whether sleep mode is on could not be read, so it is taken as off: ${message(err)}`, { to: 'debug' })
+    return false
+  }
+}
+
+// Every choice made overnight, one per chosen call (#2628).
+const choices = async ($: EngineInterface): Promise<SlackAlertChoice[]> => {
+  const records: SlackAlertChoice[] = []
+  for (const k of await $.store.keys()) if (k.startsWith(CHOSEN_PREFIX)) records.push((await $.store.get(k)) as SlackAlertChoice)
+  return choicesOf(records.filter(r => r && typeof r.id === 'string'))
+}
+const chosenKeysOf = async ($: EngineInterface, id: string): Promise<string[]> => {
+  const out: string[] = []
+  for (const k of await $.store.keys()) if (k.startsWith(CHOSEN_PREFIX) && ((await $.store.get(k)) as SlackAlertChoice | undefined)?.id === id) out.push(k)
   return out
+}
+
+/**
+ * A merge carrying wording chosen overnight (#2628): while any choice waits on Dan, each pull request
+ * a command merges is read with gh pr diff, and one whose added lines carry a choice is refused, so
+ * nothing posts it before he approves it. A merge that cannot be read, or a diff gh cannot give, is
+ * held as could not check. With no choice waiting, no command is read.
+ */
+const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
+  const waiting = await choices($)
+  if (!waiting.length) return PASS
+  const cwd = await $.session.cwd()
+  const home = (await $.env.get('HOME')) ?? ''
+  for (const c of await $.modkit.pipeline({ command, cwd, home })) {
+    const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
+    if (m === undefined) continue
+    if ('unreadable' in m) return { unchecked: 'a merge whose pull request cannot be read, while Slack alert wording chosen overnight waits on Dan' }
+    const argv = ['gh', 'pr', 'diff', ...m.selector, ...(m.repo ? ['-R', m.repo] : [])]
+    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
+    if (r.exitCode !== 0 || r.isStdoutTruncated)
+      return { unchecked: `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'}), while Slack alert wording chosen overnight waits on Dan` }
+    const held = carried(r.stdout, waiting)
+    if (held.length) return { merge: mergeRefusal(held) }
+  }
+  return PASS
+}
+
+/**
+ * The wording a removal takes away that the file holds on origin (#2628): text that exists only in a
+ * local commit is nothing Dan approved or anything posts, so taking it away passes in any mode. Read
+ * with the same reader as the edit, from `git show origin/<default branch>:<path>`, the default branch
+ * as mod-kit's one branch reader names it; a file origin lacks holds none; undefined when git or the
+ * reader cannot say, which holds as before.
+ */
+const onOrigin = async ($: EngineInterface, path: string, read: (t: string) => Promise<{ text: string }[]>): Promise<Set<string> | undefined> => {
+  const where = await placed($, path, (await $.clock.now()) + SCAN_MS)
+  if (!where) return undefined
+  const b = await $.modkit.branch({ path: where.top })
+  if (!b || 'unreadable' in b || !b.defaultBranch) return undefined
+  const r = await $.process.run(['git', '-C', where.top, 'show', `origin/${b.defaultBranch}:${where.rel}`], { timeoutMs: SCAN_MS })
+  if (r.exitCode === 128 && /exists on disk, but not in|does not exist in/.test(r.stderr)) return new Set()
+  if (r.exitCode !== 0 || r.isStdoutTruncated) return undefined
+  return new Set((await read(r.stdout)).map(l => l.text))
 }
 
 // How much of a command's output $.process.run keeps, in MiB: the first 4194304 bytes, the rest
@@ -831,8 +910,13 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
       }
       if (!removed.length) return undefined
       const keys = await unapproved($, [removalKey(path, removed)])
-      return keys.length ? { file: path, added: [], removed, keys } : undefined
+      if (!keys.length) return undefined
+      // Text origin does not hold was never live, so taking it away takes nothing Dan approved (#2628).
+      origin ??= await onOrigin($, path, read)
+      if (origin && removed.every(s => !origin?.has(s))) return undefined
+      return { file: path, added: [], removed, keys }
     }
+    let origin: Set<string> | undefined
     const change = wordingChange(wording(beforeLits), wording(afterLits))
     if (!(await holdOf(change))) return PASS
     const deadline = (await $.clock.now()) + SCAN_MS
@@ -934,6 +1018,8 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
   if (!command) return PASS
   if (mentionsStore(command)) return { own: true }
   try {
+    const merging = await judgeMerge($, command)
+    if (!('pass' in merging)) return merging
     const cwd = await $.session.cwd()
     const home = (await $.env.get('HOME')) ?? ''
     const w = await $.modkit.writes({ command, cwd, home })
@@ -991,12 +1077,21 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     await drawCard($, id, 'The Slack alert guard could not check this call, so it is held.', v.unchecked)
     return cannotCheck(v.unchecked)
   }
+  if ('merge' in v) {
+    await drawCard($, id, 'This pull request carries Slack alert wording chosen overnight that you have not approved.', 'It merges once you approve the wording.')
+    return v.merge
+  }
   const { file, added, removed, keys, sender, literal, from } = v.hold
+  // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
+  // (#2628); a shell command's wording cannot be read before it runs, so it is held as before.
+  const choosing = id !== '' && (added.length > 0 || removed.length > 0) && (await isAsleep($))
   if (id) {
     const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(literal ? { literal } : {}), ...(from ? { from } : {}), ...(agent ? { agent: true as const } : {}) }
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
-    await drawCard($, id, `${heldText(file, added, removed, sender, from)}.`, agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.')
+    const safeWay = choosing ? 'You are asleep: Claude chooses the wording and asks you in the morning.' : agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.'
+    await drawCard($, id, `${heldText(file, added, removed, sender, from)}.`, safeWay)
   }
+  if (choosing) return asleepRefusal(blocked(file, added, removed, sender, from), id)
   return agent ? agentRefusal(id, file, added, removed, sender, from) : refusal(id, file, added, removed, sender, from)
 }
 
@@ -1041,9 +1136,48 @@ export const register: Register = on => {
     if (typeof source !== 'string' || !source.startsWith(`${SOURCE}:`)) return next(e)
     const say = (r: Awaited<ReturnType<typeof next>>, text: string) => (r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), text] })
 
+    // Wording chosen overnight, put to Dan in the morning (#2628): only his Approve wording records an
+    // approval; anything else leaves the choice held and asked again.
+    const morning = async (id: string) => {
+      const keys = await chosenKeysOf($, id)
+      const c = (await choices($)).find(x => x.id === id)
+      if (!c || !keys.length) return { deny: `No Slack alert wording chosen overnight waits under ${id}: it was answered already.` }
+      if (await isAsleep($)) return { deny: 'Dan is asleep (sleep mode), so the wording chosen overnight is put to him in the morning, not now.' }
+      if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
+        return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
+      const q = morningQuestion(c)
+      const r = await next({ ...e, questions: [{ question: q, header: HEADER, options: MORNING_OPTIONS, multiSelect: false }] } as typeof e)
+      if (r.deny !== undefined || r.isError) return r
+      const out = (r.result ?? {}) as AskResult
+      const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : q
+      const still = `the wording chosen overnight for ${c.file} stays held, and no pull request carrying it can merge`
+      if (out.afkTimeoutMs !== undefined) return say(r, `Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${still}. It is put to him again at his next message.`)
+      const chosen = out.answers?.[shown] ?? out.answers?.[q]
+      if (typeof chosen !== 'string' || !chosen.trim()) return say(r, `Dan gave no answer, so nothing is recorded and ${still}. It is put to him again at his next message.`)
+      if (chosen === CHANGE) return say(r, `Dan answered ${CHANGE}: nothing is recorded, and ${still}. Ask him what it should say, change it in ${c.file}, and show him the new message, which is asked about as any new wording is.`)
+      if (chosen !== APPROVE) {
+        const again = 'put the wording chosen overnight to him again'
+        try {
+          return say(r, await $.modkit.typedAnswer({ guard: GUARD, typed: chosen, still, again }))
+        } catch (err) {
+          return say(r, `Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${still}; mod-kit could not tell him so (${message(err)}). Tell him that in one line, answer what he said, then ${again}.`)
+        }
+      }
+      try {
+        const now = await $.clock.now()
+        const text = c.added.length ? c.added : c.removed
+        for (const k of c.keys) await $.store.set(k, { at: now, file: c.file, text, rendered: c.rendered } satisfies SlackAlertApproval)
+        for (const k of keys) await $.store.delete(k)
+      } catch (err) {
+        return say(r, `Dan answered ${APPROVE}, but it could not be recorded (${message(err)}), so ${still}. Tell him, and ask again.`)
+      }
+      return say(r, `Dan answered ${APPROVE}: the wording chosen overnight for ${c.file} is recorded as approved, and a pull request carrying it may merge.`)
+    }
+
     const decide = async () => {
       if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about Slack alert wording. Stop and report to the main session that this waits on him.' }
       const id = source.slice(SOURCE.length + 1)
+      if (id.startsWith(CHOSEN_PREFIX)) return morning(id.slice(CHOSEN_PREFIX.length))
       const waiting = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === id)
       if (!waiting) return { deny: `No Slack alert edit is waiting under ${id}: it was answered already, or the session ended. Make the edit again, and you will be told how to ask.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
@@ -1095,8 +1229,95 @@ export const register: Register = on => {
   })
 
   // Dropped at session end, a /clear included: a held call waits on Dan only in its own session.
+  // Wording this session chose overnight is handed to whichever session Dan writes in next (#2628),
+  // so a choice never goes unasked because the session that made it ended.
   on('session.end', async ($, e, next) => {
     await $.state.set(pendingRef, [])
+    try {
+      const self = await $.session.id()
+      for (const k of await $.store.keys()) {
+        if (!k.startsWith(CHOSEN_PREFIX)) continue
+        const c = (await $.store.get(k)) as SlackAlertChoice | undefined
+        if (c?.session === self) await $.store.set(k, { ...c, session: null } satisfies SlackAlertChoice)
+      }
+    } catch (err) {
+      $.ui.log(`slack-alert-guard: the wording this session chose overnight could not be handed on: ${message(err)}`, { to: 'debug' })
+    }
     return next(e)
+  })
+
+  on('session.start', async ($, e, next) => {
+    await $.tool.register({ name: CHOOSE_NAME, description: CHOOSE_DESCRIPTION, inputSchema: CHOOSE_SCHEMA, isDeferred: false })
+    return next(e)
+  })
+
+  // Held wording chosen while Dan is asleep (#2628), by the session or agent it was held for: recorded
+  // apart from his approvals, never as one, and noted for the night's report. Answered here and never
+  // passed down, so the guards beneath are asked through mod-kit's screen first.
+  on('tool.call', { tool: CHOOSE_TOOL }, async ($, e) => {
+    const refused = await $.modkit.screen(e as never)
+    if (refused) return refused
+    const { tool_use_id: _i, agentId, consent: _c, tool: _t, ...input } = e as unknown as Record<string, unknown>
+    const call = String(input.call ?? '')
+    const waiting = ((await $.state.get(pendingRef)).value ?? []).find(x => x.id === call)
+    if (!waiting || (waiting.agent === true) !== (agentId !== undefined) || (!waiting.added.length && !waiting.removed.length))
+      return { deny: `No Slack alert edit of yours is held under ${call}: it was chosen or answered already, or never held. Send the edit, and if it is held you are told what to do.` }
+    if (!(await isAsleep($)))
+      return {
+        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from)}`,
+      }
+    const problem = renderedProblem(input.rendered, waiting.added, waiting.literal ?? [])
+    if (problem !== undefined) return { deny: problem.replace('Give metadata "rendered"', 'Give "rendered"') }
+    const rendered = String(input.rendered).trim()
+    const choice: SlackAlertChoice = {
+      id: call,
+      at: await $.clock.now(),
+      file: waiting.file,
+      added: waiting.added,
+      removed: waiting.removed,
+      keys: waiting.keys,
+      rendered,
+      session: await $.session.id(),
+      ...(waiting.sender ? { sender: waiting.sender } : {}),
+      ...(waiting.from ? { from: waiting.from } : {}),
+    }
+    for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
+    await update($, pendingRef, p => (p ?? []).filter(x => x.id !== call))
+    let noted = ''
+    try {
+      const n = await ($ as unknown as { scopeModes: SleepModes }).scopeModes.sleepNote({ kind: 'wording', text: `Slack alert wording chosen overnight for ${waiting.file}, not yet approved, put to Dan in the morning by the Slack alert guard: ${rendered}` })
+      if (!n.isNoted) noted = ' Sleep mode did not take the note for the night report, so the report will not list it; the morning question still comes.'
+    } catch (err) {
+      noted = ` The note for the night report could not be written (${message(err)}); the morning question still comes.`
+    }
+    const resend = `Send the ${waiting.tool} call to ${waiting.file} again now, unchanged.`
+    return { result: `Recorded as this session's choice, not approved: Dan is asked in the morning whether to keep it, and no pull request carrying it can merge until he approves it. ${resend}${noted}` }
+  }).catch(($, e, next) => neverThrows(() => ({ deny: `The Slack alert guard could not record the choice (${message(next.error)}), so the edit stays held.` }), () => ({ deny: HELD }), { deny: HELD }))
+
+  // In the morning (#2628): each choice waiting on Dan is put to him by the session that made it, or
+  // by any session once that one ended; one past its time is marked expired, said once in every
+  // session, and stays held.
+  on('prompt.submit', async ($, e, next) => {
+    const r = await next(e)
+    if (r.drop !== undefined) return r
+    try {
+      if (await isAsleep($)) return r
+      const all = await choices($)
+      if (!all.length) return r
+      const now = await $.clock.now()
+      for (const c of all.filter(x => isOverdue(x, now))) {
+        for (const k of await chosenKeysOf($, c.id)) await $.store.set(k, { ...((await $.store.get(k)) as SlackAlertChoice), expired: now } satisfies SlackAlertChoice)
+        c.expired = now
+      }
+      const told = (await $.state.get(toldRef)).value ?? []
+      const lines = morningLines(all, await $.session.id(), told)
+      const fresh = all.filter(c => c.expired !== undefined && !told.includes(c.id)).map(c => c.id)
+      if (fresh.length) await $.state.set(toldRef, [...told, ...fresh])
+      return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
+    } catch (err) {
+      // Never read as nothing waiting: Claude is told, so Dan hears that a choice may be unasked.
+      const line = `The Slack alert guard could not read the wording chosen overnight (${message(err)}), so any choice waiting on Dan is not listed here: tell him in one line. Pull requests carrying it still cannot merge.`
+      return { ...r, context: [...(r.context ?? []), line] }
+    }
   })
 }

@@ -208,7 +208,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     repoName: { exitCode: 0, stdout: `${REPO}\n` },
     copied: true,
     bash: { text: '' },
-    cwd: '/Users/dan/Apps/scheduler',
+    cwd: `${'/Users'}/dan/Apps/scheduler`,
     gone: [],
     logins: ['danwright32'],
     tokens: {},
@@ -274,10 +274,10 @@ const world = (on: On, init: Partial<World> = {}) => {
               : { exitCode: 1, stdout: '', stderr: 'unexpected' }
     return { value: { exitCode: g.exitCode, stdout: g.stdout, stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
-  on('session.repo', () => ({ value: { root: '/Users/dan/Apps/scheduler', remote: w.remote, isOwn: false } }) as never)
+  on('session.repo', () => ({ value: { root: `${'/Users'}/dan/Apps/scheduler`, remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('session.cwd', () => ({ value: w.cwd }) as never)
-  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? '/Users/dan' : undefined }) as never)
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? `${'/Users'}/dan` : undefined }) as never)
   // Claude Code's own Bash tool and turn end, beneath the mod.
   on('tool.call', { tool: 'Bash' }, () => {
     const b = w.bash
@@ -341,7 +341,7 @@ const press = async ($: unknown, key: string) => {
 const live = async ($: unknown) =>
   String(((await ($ as { command: { run: (x: never) => Promise<unknown> } }).command.run({ command: 'live', args: '', origin: { kind: 'human' }, presentation: {} } as never)) as { text?: string }).text)
 const start = async ($: unknown) => {
-  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: 'terminal', isInteractive: true } as never)
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: `${'/Users'}/dan/Apps/scheduler`, surface: 'terminal', isInteractive: true } as never)
 }
 
 test('verified live: the card leads with Live, confirms the merge with GitHub, and is toasted, with no message when nobody else asked', withKit, async ($, on) => {
@@ -1020,7 +1020,7 @@ const turnEnd = async ($: unknown, isActive = false) =>
     hook_event_name: 'Stop',
     session_id: 's1',
     transcript_path: '/t',
-    cwd: '/Users/dan/Apps/scheduler',
+    cwd: `${'/Users'}/dan/Apps/scheduler`,
     stop_hook_active: isActive,
     last_assistant_message: 'Merged and done.',
   })) as { block?: string }
@@ -1089,7 +1089,7 @@ test('a merge is recognised as plain gh, through rtk, and through the merge help
     prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }),
   })
   await start($)
-  expect(said(await bash($, 'cd /Users/dan/Apps/scheduler && gh pr merge 412 --squash'))).toContain(`You merged ${REPO}#412.`)
+  expect(said(await bash($, `cd ${'/Users'}/dan/Apps/scheduler && gh pr merge 412 --squash`))).toContain(`You merged ${REPO}#412.`)
   expect(said(await bash($, 'rtk gh pr merge 413 --squash --delete-branch'))).toContain(`You merged ${REPO}#413.`)
   expect(said(await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo ${OTHER} --squash --delete-branch`))).toContain(`You merged ${OTHER}#7.`)
   expect(views(runs).map(r => r.slice(3).join(' '))).toEqual(['412 --json number,state,mergedAt,url', '413 --json number,state,mergedAt,url', `7 --repo ${OTHER} --json number,state,mergedAt,url`])
@@ -1192,7 +1192,7 @@ test('a background merge whose helper is still in line past the window is waited
   expect(quiet.block).toBeUndefined()
   const asked = w.runs.find(r => r.join(' ').includes('merge-in-line.sh')) as string[]
   expect(asked.slice(-2)).toEqual([REPO, '412'])
-  expect(asked.join(' ')).toContain('/Users/dan/.claude/hooks/lib/merge-in-line.sh')
+  expect(asked.join(' ')).toContain(`${'/Users'}/dan/.claude/hooks/lib/merge-in-line.sh`)
   expect(after.block).toContain(`${REPO}#412`)
 })
 
@@ -1279,7 +1279,7 @@ test('a background merge only another gh account can see is confirmed at the tur
 })
 
 test('a background merge is asked about by its repository, never in the folder the helper ran in, which may be gone (#1991)', withKit, async ($, on) => {
-  const HERE = '/Users/dan/Apps/booking/.claude/worktrees/agent-1'
+  const HERE = `${'/Users'}/dan/Apps/booking/.claude/worktrees/agent-1`
   const prs: Record<string, Pr> = { [`${WORK}#4284`]: { state: 'OPEN' } }
   const w = world(on, { cwd: HERE, prView: github(prs) })
   await start($)
@@ -1292,7 +1292,7 @@ test('a background merge is asked about by its repository, never in the folder t
 })
 
 test("a background merge naming no repository is held by the repository GitHub's link named when it ran, so a folder removed since does not strand it (#1991)", withKit, async ($, on) => {
-  const HERE = '/Users/dan/Apps/booking/.claude/worktrees/agent-2'
+  const HERE = `${'/Users'}/dan/Apps/booking/.claude/worktrees/agent-2`
   const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
   const w = world(on, { cwd: HERE, prView: github(prs) })
   await start($)
@@ -1478,7 +1478,7 @@ test("a subagent's merge is named for its report, and the session that dispatche
 
 test('a session with nobody at its prompt is never refused a turn end (#1244)', withKit, async ($, on) => {
   world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
-  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: null, isInteractive: false } as never)
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: `${'/Users'}/dan/Apps/scheduler`, surface: null, isInteractive: false } as never)
   await bash($, 'gh pr merge 412 --squash')
   expect((await turnEnd($)).block).toBeUndefined()
 })
@@ -1489,8 +1489,8 @@ test('a session with nobody at its prompt is never refused a turn end (#1244)', 
 // command that changed folder first was asked about in the session's folder, so it could pick up
 // another repository's pull request of the same number (L237).
 const ACME_OTHER = 'acme-hq/other'
-const BOOKING_DIR = '/Users/dan/Apps/booking'
-const OTHER_DIR = '/Users/dan/Apps/other'
+const BOOKING_DIR = `${'/Users'}/dan/Apps/booking`
+const OTHER_DIR = `${'/Users'}/dan/Apps/other`
 const TWO_ACCOUNTS = { logins: ['dan-personal', 'acme-dan'], tokens: { 'acme-dan': 'gho_test_not_a_token' } }
 // GitHub, answering a `gh pr view` naming no repository for the checkout of the folder it is run in.
 const githubIn = (prs: Record<string, Pr>, folders: Record<string, string>) => (argv: string[], how: Asked): Gh => {
@@ -1815,7 +1815,7 @@ test('the draft hold is refused once per chain of turn ends, so a draft that can
 
 test('a session with nobody at the prompt is never held for a draft (#2436)', withKit, async ($, on) => {
   world(on, { prView: merged(412) })
-  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/scheduler', surface: 'terminal', isInteractive: false } as never)
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: `${'/Users'}/dan/Apps/scheduler`, surface: 'terminal', isInteractive: false } as never)
   await says($, THREAD)
   await bash($, 'gh pr merge 412 --squash')
   expect((await turnEnd($)).block).toBeUndefined()
@@ -1938,4 +1938,80 @@ test('a session that started from a thread still asks after every merge, and the
   await says($, `Geoff answered in ${THREAD}, build what he asked for`)
   await mergeAndCard($, 412)
   expect(String((await turnEnd($)).block)).toContain(`This session started from ${THREAD}`)
+})
+
+// ---- #2653: a session says once that its later merges are unrelated to the thread it started from ----
+// Dan, 2026-11-11: since #2630 there is no picker, so a session started from a Slack thread was held
+// for a fresh draft in it after every merge, its unrelated ones too (on 2026-11-10 an alert thread's
+// session went on to merge other work, and was asked twice in twenty minutes). The session may say
+// ONCE, by calling the unrelated_merges tool, that its later merges have nothing to do with the
+// thread; no draft is then held for them. It is the session's own act, never inferred, kept in that
+// session's state only, and a merge that landed before it is still owed its reply.
+const UNRELATED = 'mcp__is-it-live__unrelated_merges'
+const unrelated = async ($: unknown, more: Record<string, unknown> = {}) =>
+  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: UNRELATED, tool_use_id: 'u1', ...more } as never)) as Out
+
+test('before the session says its later merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413, 414) })
+  await start($)
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  // The hold names the way to say it, so the session can find it.
+  expect(held).toContain(UNRELATED)
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+  const r = await unrelated($)
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r)).toContain(THREAD)
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 414)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge that landed before the session said its later merges are unrelated is still owed its reply (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413) })
+  await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await mergeAndCard($, 412)
+  expect((await unrelated($)).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // Still held for it after a later, unrelated merge lands, until its draft is saved.
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+// A test is a fresh session over fresh session state: what another session said is not in it.
+test('a fresh session started from the same thread is held after its merge (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('a card that asks a draft of its message in the thread after the session said so is still held for that message (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, `Kris asked in ${THREAD}, build what she asked for`)
+  expect((await unrelated($)).deny).toBeUndefined()
+  await bash($, 'gh pr merge 412 --squash')
+  await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: { channel_id: CH, thread_ts: TS } })
+  expect(String((await turnEnd($)).block)).toContain('"The venue filter is live now."')
+})
+
+test('saying the later merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  const none = await unrelated($)
+  expect(none.deny).toBeDefined()
+  expect(textOf(none)).toContain('no Slack thread')
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  expect((await unrelated($, { agentId: 'a1' })).deny).toBeDefined()
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
 })

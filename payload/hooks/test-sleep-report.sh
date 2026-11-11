@@ -201,14 +201,16 @@ has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (lef
 # render must never put back a report that is missing the second note. Each wait is on a marker
 # the render drops, with a deadline, never a fixed sleep.
 PAUSE="$WORK/pause"; MARKS="$WORK/marks"; mkdir -p "$PAUSE" "$MARKS"
-upto(){ hang_wait "$1" 0.05; }   # its 20 s ceiling was a setting a loaded Mac can reach (#1679)
+# Each wait below polls every 0.05 s (a setting, not a measurement) with the one hang ceiling (its old ceiling was a setting a loaded Mac
+# can reach, #1679). Each condition is written out at the call: one handed through a function of this
+# suite is a condition the Slack drafts gate cannot read (#2538).
 SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render A"}' >/dev/null 2>&1 &
 held=$!
-upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
+hang_wait 'ls "$MARKS"/paused.* >/dev/null 2>&1' 0.05 || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
 SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"b","text":"late note B"}' >/dev/null 2>&1 &
 late=$!
 # The late note either finishes its render, or waits for the held one's: either way it has acted.
-upto '! kill -0 "$late" 2>/dev/null || ls "$MARKS"/waiting.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the late note neither rendered nor waited"; }
+hang_wait '! kill -0 "$late" 2>/dev/null || ls "$MARKS"/waiting.* >/dev/null 2>&1' 0.05 || { fail=$((fail + 1)); echo "FAIL: the late note neither rendered nor waited"; }
 touch "$PAUSE/go"
 wait "$held" "$late"
 has "a render held after reading never replaces a newer one (#909)" "late note B" "$(report_of g5)"
@@ -219,7 +221,7 @@ has "and the held note is there too" "held render A" "$(report_of g5)"
 rm -f "$PAUSE/go" "$MARKS"/paused.* "$MARKS"/waiting.*
 SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render C"}' >/dev/null 2>&1 &
 held=$!
-upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
+hang_wait 'ls "$MARKS"/paused.* >/dev/null 2>&1' 0.05 || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }
 out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"b","text":"gave up note D"}' 2>&1)"
 has "the note behind the held render gave up its own render" "so this one gave up" "$out"
 touch "$PAUSE/go"
@@ -234,7 +236,7 @@ fcntl.flock(fd, fcntl.LOCK_EX)
 open(sys.argv[2], "w").close()
 time.sleep(60)' "$LOCKF" "$MARKS/holder" &
 holder=$!
-upto '[ -e "$MARKS/holder" ]' || { fail=$((fail + 1)); echo "FAIL: the stand in holder never took the lock"; }
+hang_wait '[ -e "$MARKS/holder" ]' 0.05 || { fail=$((fail + 1)); echo "FAIL: the stand in holder never took the lock"; }
 before="$(notes_of g5 | wc -l | tr -d ' ')"
 out="$(SLEEP_REPORT_LOCK_S=1 note '{"kind":"finding","by":"c","text":"behind a held lock"}' 2>&1)"; rc=$?
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null

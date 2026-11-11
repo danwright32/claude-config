@@ -69,16 +69,39 @@ _HD="$(cd "${_HD:-/}" && pwd)"
 ROOT="${1:-$(cd "$_HD/.." && pwd)}"
 [ -d "$ROOT" ] || { echo "check-home-paths: no such directory: $ROOT" >&2; exit 2; }
 
-# The synced set, as claude-sync carries it: its MIRROR_DIRS, plus skills, plus
-# the top level rule files. This is an INCLUDE list, so if that set ever grows a
-# new directory the consequence is that the new one is not scanned, never a false
-# alarm. Add it here in the same change (and see claude-sync's MIRROR_DIRS).
+# The synced set, as claude-sync carries it: every tree it mirrors, plus the top
+# level rule files. The trees are SYNCED_TREES from lib/synced-trees.sh, which
+# test-synced-trees.sh holds to claude-sync's MIRROR_DIRS plus skills, never a
+# list of this file's own (claude-config#2754). This file used to keep one, hooks
+# agents commands skills, and the sync had since grown audits and mods, so a home
+# path written in a mod reached the other Mac and this public repository unread.
+#
+# If that list cannot be read, every folder at the top of the root is scanned
+# instead, and the run says so whatever it concludes: the same direction the
+# skills list below takes, reporting too much rather than passing over a tree the
+# sync carries (L42, L98). With no list, nothing counts as mirrored either, so the
+# live config allowance further down excuses no line.
 #
 # settings.json is deliberately NOT scanned. Its hook commands are absolute by
 # necessity, and claude-sync already rewrites that one file's home path per Mac
 # on send and on apply, which is the mechanism this guard exists to cover the
 # gap in rather than to duplicate.
-SYNCED_DIRS=(hooks agents commands skills)
+TREES_LIB="$_HD/lib/synced-trees.sh"
+SYNCED_TREES=()
+# shellcheck source=payload/hooks/lib/synced-trees.sh
+[ -r "$TREES_LIB" ] && . "$TREES_LIB" 2>/dev/null
+MIRRORED_DIRS=(${SYNCED_TREES[@]+"${SYNCED_TREES[@]}"})   # what the live config allowance covers
+SCAN_DIRS=(${SYNCED_TREES[@]+"${SYNCED_TREES[@]}"})       # what is read
+trees_note=""
+if [ "${#SCAN_DIRS[@]}" -eq 0 ]; then
+  trees_note="check-home-paths: could not read the list of trees the sync mirrors ($TREES_LIB), so every folder under the root was scanned, including any the sync would leave behind."
+  _loop="$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d ! -name .git 2>/dev/null | sort)" || true
+  while IFS= read -r _d; do
+    [ -n "$_d" ] && SCAN_DIRS+=("${_d##*/}")
+  done <<LOOP_INPUT
+$_loop
+LOOP_INPUT
+fi
 
 # Inside skills/, only what the sync CARRIES (claude-config#415). The plugin managed skills and the
 # Claude app's own downloads (skills/synced/<bucket>/, fetched per account) never leave a Mac, so a
@@ -118,7 +141,7 @@ fi
 
 targets=()        # everything outside skills/, scanned whole
 skill_targets=()  # the top level entries of skills/ the sync carries
-for d in "${SYNCED_DIRS[@]}"; do
+for d in ${SCAN_DIRS[@]+"${SCAN_DIRS[@]}"}; do
   [ -d "$ROOT/$d" ] || continue
   if [ "$d" != skills ]; then targets+=("$ROOT/$d"); continue; fi
   loop_input="$(find "$ROOT/skills" -mindepth 1 -maxdepth 1 2>/dev/null | sort)" || true
@@ -150,10 +173,11 @@ for _n in ${skill_anywhere[@]+"${skill_anywhere[@]}"}; do
   skill_find_prune+=(-o -name "$_n")
 done
 
+[ -n "$trees_note" ] && echo "$trees_note" >&2
 [ -n "$list_note" ] && echo "$list_note" >&2
 
 if [ "$((${#targets[@]} + ${#skill_targets[@]}))" -eq 0 ]; then
-  echo "check-home-paths: found nothing to check under $ROOT (no hooks, agents, commands or skills directory, and no rule files). Refusing to report a clean scan of nothing." >&2
+  echo "check-home-paths: found nothing to check under $ROOT (none of ${SCAN_DIRS[*]:-the synced trees}, and no rule files). Refusing to report a clean scan of nothing." >&2
   exit 2
 fi
 
@@ -285,7 +309,7 @@ while IFS= read -r line; do
     if [ "$allow_self" -eq 1 ]; then
       rel="${line%%:*}"; rel="${rel#"$ROOT"/}"
       mirrored=0
-      for d in "${SYNCED_DIRS[@]}"; do
+      for d in ${MIRRORED_DIRS[@]+"${MIRRORED_DIRS[@]}"}; do
         case "$rel" in "$d"/*) mirrored=1; break ;; esac
       done
       if [ "$mirrored" -eq 1 ]; then

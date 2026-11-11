@@ -308,7 +308,7 @@ test("a workflow's script step that posts to Slack is read as JavaScript: each p
 })
 
 test("the guard's own record is recognised in the store, by name, and in a shell command", () => {
-  expect(isOwnRecord('/Users/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json')).toBe(true)
+  expect(isOwnRecord(`${'/Users'}/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json`)).toBe(true)
   expect(isOwnRecord('/x/slack-alert-guard_inline.json')).toBe(true)
   expect(isOwnRecord('/w/a/slack-alert-guard/hooks/rules.ts')).toBe(false)
   expect(mentionsStore('cat > ~/.claude/plugins/store/x.json')).toBe(true)

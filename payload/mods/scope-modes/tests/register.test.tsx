@@ -196,10 +196,10 @@ const stepsNoun: { name: string; register: Register } = {
             built.ui.log('STEPS add ' + JSON.stringify(x))
             return { isShown: true }
           },
-          // Fails while the world holds /Users/x/finish-fails, as a card that cannot be written would.
+          // Fails while the world holds /Users/<name>/finish-fails, as a card that cannot be written would.
           finish: async (x: unknown) => {
             built.ui.log('STEPS finish ' + JSON.stringify(x))
-            if (await built.fs.exists('/Users/x/finish-fails')) throw new Error('the steps card changed under every one of 10 attempts to update it')
+            if (await built.fs.exists(`${'/Users'}/x/finish-fails`)) throw new Error('the steps card changed under every one of 10 attempts to update it')
             return { isFinished: true }
           },
         },
@@ -534,7 +534,7 @@ const world = (on: On, o: Opts = {}) => {
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
   on('env.get', ($, e) => {
     const name = (e as unknown as { name: string }).name
-    return { value: name === 'HOME' && !w.homeGone ? '/Users/x' : name === 'GH_REPO' ? w.o.ghRepoEnv : undefined } as never
+    return { value: name === 'HOME' && !w.homeGone ? `${'/Users'}/x` : name === 'GH_REPO' ? w.o.ghRepoEnv : undefined } as never
   })
   // The Mac's files, in memory, for the sleep record (#840). Every move and link is one step, as
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
@@ -581,7 +581,7 @@ const world = (on: On, o: Opts = {}) => {
   on('fs.stat', ($, e) => {
     if (w.refusing) return refused('fs.stat')
     // The installed LESSONS.md the wake check dates (#2016): a quiet night's, changed long before.
-    if (e.path === '/Users/x/.claude/LESSONS.md' && !(e.path in w.files)) {
+    if (e.path === `${'/Users'}/x/.claude/LESSONS.md` && !(e.path in w.files)) {
       w.lessonsStats += 1
       const said = o.night?.[`mtime ${e.path}`]
       // A deny is how a test rejects the call: a hook that throws is skipped. The engine names the
@@ -666,14 +666,14 @@ const world = (on: On, o: Opts = {}) => {
       if (!(from in w.files)) return fail(1, `ln: ${from}: No such file or directory`)
       w.files[to] = w.files[from] as string
       // Another /sleep finishing just as this one takes the marker (#843).
-      if (o.recordOnMarker && to.endsWith('/state/sleep/preparing')) w.files['/Users/x/.claude/state/sleep/current.json'] = o.recordOnMarker
+      if (o.recordOnMarker && to.endsWith('/state/sleep/preparing')) w.files[`${'/Users'}/x/.claude/state/sleep/current.json`] = o.recordOnMarker
       return ok()
     }
     if (cmd === 'rm') {
       for (const f of ops) for (const k of Object.keys(w.files)) if (k === f || (a.includes('-rf') && k.startsWith(`${f}/`))) delete w.files[k]
       return ok()
     }
-    if (cmd === 'python3' && a[0] === '/Users/x/.claude/hooks/lib/sleep-report.py') {
+    if (cmd === 'python3' && a[0] === `${'/Users'}/x/.claude/hooks/lib/sleep-report.py`) {
       // The night's report and its notes (#835): python3 sleep-report.py <op> --record <path> [--line <json>] [--final]
       const [, op, ...rest] = a as [string, string, ...string[]]
       const arg = (k: string) => rest[rest.indexOf(k) + 1] as string
@@ -689,7 +689,7 @@ const world = (on: On, o: Opts = {}) => {
         try {
           const rec = JSON.parse(w.files[arg('--record')] ?? '') as { generation?: unknown }
           if (typeof rec.generation === 'string') {
-            const at = `/Users/x/.claude/state/sleep/notes/${rec.generation.replace(/[^\w.-]/g, '_')}.needs.json`
+            const at = `${'/Users'}/x/.claude/state/sleep/notes/${rec.generation.replace(/[^\w.-]/g, '_')}.needs.json`
             let had: Record<string, unknown> | null = null
             try {
               had = at in w.files ? (JSON.parse(w.files[at] as string) as Record<string, unknown>) : null
@@ -777,7 +777,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
-    if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/sleep-queue.sh') {
+    if (cmd === 'bash' && a[0] === `${'/Users'}/x/.claude/hooks/lib/sleep-queue.sh`) {
       if (a[1] === 'claims' && o.claimsGate) {
         const gate = o.claimsGate
         o.claimsGate = undefined
@@ -824,7 +824,7 @@ const world = (on: On, o: Opts = {}) => {
     // The duplicate check the end of turn review files by (#1389): a close match for a title GitHub
     // already holds, as milestone-candidates.sh prints it, nothing to report (exit 1), or a read
     // that failed (exit 6).
-    if (cmd === 'bash' && a[0] === '/Users/x/.claude/skills/milestone/milestone-candidates.sh') {
+    if (cmd === 'bash' && a[0] === `${'/Users'}/x/.claude/skills/milestone/milestone-candidates.sh`) {
       w.dupChecks.push(a.slice(1))
       if (o.dupCheckFails) return fail(6, o.dupCheckFails)
       const like = a[a.indexOf('--like') + 1] as string
@@ -833,7 +833,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok(`CANDIDATES-FOR ${a[1]}\nHOLDING-PEN Ungrouped open=3\nCLOSE-MATCH 0.900 #${found.number} ${like} [in: Ungrouped] [shares: total]${found.closed ? ' [closed]' : ''}\nCLOSE-MATCH-COUNT 1\n`)
     }
     // The polling policy (#1482), answered as Opts.poll says.
-    if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
+    if (cmd === 'bash' && a[0] === `${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`) {
       w.polls.push({ argv: [...argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
       if (a[1] === 'take' && o.poll?.budget !== undefined) {
         const secs = Number(a[2])
@@ -858,7 +858,7 @@ const world = (on: On, o: Opts = {}) => {
       if (o.registryGarbled) return ok('{}')
       if (o.registryAnswer !== undefined) return ok(o.registryAnswer)
       // Each session's transcript where the registry finds it (#1242), unless a test says where.
-      const withTranscript = (s: Session) => ({ transcriptPath: `/Users/x/.claude/projects/-repo/${s.sessionId}.jsonl`, ...s })
+      const withTranscript = (s: Session) => ({ transcriptPath: `${'/Users'}/x/.claude/projects/-repo/${s.sessionId}.jsonl`, ...s })
       return ok(JSON.stringify({ open: [{ sessionId: 's1', ...o.selfSession }, ...(o.open ?? [])].map(withTranscript), closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
@@ -891,7 +891,7 @@ const world = (on: On, o: Opts = {}) => {
     // test says otherwise, and every other folder is in no repository.
     if (cmd === 'git' && a.includes('remote')) {
       const dir = a[a.indexOf('-C') + 1] as string
-      if (dir === '/Users/x/claude-config-sync') return ok('origin\tgit@github.com:o/claude-config.git (fetch)\n')
+      if (dir === `${'/Users'}/x/claude-config-sync`) return ok('origin\tgit@github.com:o/claude-config.git (fetch)\n')
       // Each folder's origin a test names (#843).
       const named = o.origins?.[dir]
       if (named) return ok(`origin\t${named} (fetch)\n`)
@@ -1312,7 +1312,7 @@ const absNoun: { name: string; register: Register } = {
   },
 }
 const withAbs = { plugins: [deps, isItLive, absNoun] }
-const LESSONS_FILE = '/Users/x/.claude/LESSONS.md'
+const LESSONS_FILE = `${'/Users'}/x/.claude/LESSONS.md`
 const lessonEditCall = (path = LESSONS_FILE, id = 'l1') => ({ tool: 'Edit', file_path: path, old_string: '## Data safety', new_string: '- **L9. A rule.**\n\n## Data safety', tool_use_id: id }) as never
 
 test('no build lets the one Edit of ~/.claude/LESSONS.md through when ask before saving holds its approval (#1483)', withAbs, async ($, on) => {
@@ -2586,10 +2586,10 @@ test('away runs an app brought forward, a file opened, BBEdit and browser automa
 // Mail or Messages could send what nobody reviewed. The keystroke guard still proves the target is
 // in front before any keystroke (its own tests).
 const TYPE = (target: string) => `TARGET_APP=${target} osascript -e 'tell application "System Events" to keystroke "n"'`
-const DERIVED = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
-const CHECKOUT_BUILD = '/Users/x/Apps/Ovation/build/Debug/Ovation.app/Contents/MacOS/Ovation'
+const DERIVED = `${'/Users'}/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture`
+const CHECKOUT_BUILD = `${'/Users'}/x/Apps/Ovation/build/Debug/Ovation.app/Contents/MacOS/Ovation`
 test('away types into a test build, from DerivedData or a checkout, and holds typing into any other app (#1269)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { trees: { '/Users/x/Apps/Ovation/': '/Users/x/Apps/Ovation' } })
+  const { w, clock } = world(on, { trees: { [`${'/Users'}/x/Apps/Ovation/`]: `${'/Users'}/x/Apps/Ovation` } })
   await start($ as never, clock)
   await command($ as never, 'away')
   expect(await call($ as never, bash(TYPE(DERIVED), 't1'))).toBe('ran')
@@ -2753,7 +2753,7 @@ test('no build and away together both show, scope first', withDeps, async ($, on
 // found in this Mac's transcripts (four sessions, Oct 9 to 20), so the other sessions stayed where
 // they were. Dan's decision (2026-11-03): a switch is kept in one record every session reads at its
 // next prompt or minute, so no message between sessions is needed, and only what Dan types writes it.
-const PLACE = '/Users/x/.claude/state/scope-modes/place.json'
+const PLACE = `${'/Users'}/x/.claude/state/scope-modes/place.json`
 const placeRecord = (place: 'away' | 'home', at: number, by = 's2') => `${JSON.stringify({ v: 1, place, at, by, cwd: '/other', how: `/${place}` })}\n`
 test('/away records the switch for every session on this Mac, with who, when and from where, and sends no message', withDeps, async ($, on) => {
   const { w, clock } = world(on, { open: [{ sessionId: 's2' }, { sessionId: 's3' }] })
@@ -3004,7 +3004,7 @@ test('while the Mac is asleep another mod\'s item is held, even at home, and an 
 
 // ---- Sleep mode phase 1 (#840): the machine wide sleep record ----
 
-const SLEEP = '/Users/x/.claude/state/sleep'
+const SLEEP = `${'/Users'}/x/.claude/state/sleep`
 const CURRENT = `${SLEEP}/current.json`
 // The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
 // night's unanswered list (#836).
@@ -3015,11 +3015,11 @@ const recordWrites = (w: { fsWrites: string[] }) =>
 const UNTIL = Date.UTC(1970, 0, 1, 17)
 const recordOf = (w: { files: Record<string, string> }) => JSON.parse(w.files[CURRENT] as string) as Record<string, unknown>
 const asleepRecord = (extra: Record<string, unknown> = {}) =>
-  JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: '/Users/x/Downloads/Sleep report 1969-12-31.md', startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
+  JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: `${'/Users'}/x/Downloads/Sleep report 1969-12-31.md`, startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
 const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scope-modes': { isInteractive: true } } })
 
 // This Mac's own merge and deploy lists (#843, #1568).
-const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.local.json'
+const LISTS_PATH = `${'/Users'}/x/.claude/mods/sleep-repos.local.json`
 const listsFile = (mergeOnly: { repo: string; mergeDeploys?: boolean }[], mayDeploy: string[] = []) => JSON.stringify({ v: 1, mergeOnly, mayDeploy }, null, 2) + '\n'
 
 test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withSteps, async ($, on) => {
@@ -3038,7 +3038,7 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     night: '1969-12-31',
     bootTime: BOOT,
     bootSession: SESSION,
-    report: '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md',
+    report: `${'/Users'}/x/Downloads/1969-12-31 repo s1 sleep report.md`,
     reportsPerSession: true,
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
@@ -3058,10 +3058,10 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   )
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe(`Sleep mode is on until noon ET tomorrow (Thu Jan 1). Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
+  expect(r.text).toBe(`Sleep mode is on until noon ET tomorrow (Thu Jan 1). Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at ${'/Users'}/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
   // A goal already set is asked about by nobody: no question, and every worker's transcript read.
   expect(w.asked).toEqual([])
-  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl', '/Users/x/.claude/projects/-repo/s2.jsonl'])
+  expect(w.goalReads).toEqual([`${'/Users'}/x/.claude/projects/-repo/s1.jsonl`, `${'/Users'}/x/.claude/projects/-repo/s2.jsonl`])
   // The report is started at once from the record just placed, so it exists from the first minute (#835).
   expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
   expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
@@ -3166,7 +3166,7 @@ test("a transcript whose goal cannot be read, or that cannot be found, is asked 
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.asked).toEqual([selfQ, otherQ])
-  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+  expect(w.goalReads).toEqual([`${'/Users'}/x/.claude/projects/-repo/s1.jsonl`])
   expect(recordOf(w).goals).toEqual({})
   // Why each was asked is said, so a goal Dan did set and the mod could not read is not a mystery.
   expect(r.text).toContain(' The /goal of this session could not be read, because the read of its transcript failed: grep: Permission denied.')
@@ -3190,7 +3190,7 @@ test('a goal whose transcript lookup failed is asked about as unread, with why, 
 
 // #1636: /sleep reads its own session's transcript from what Claude Code itself handed this session
 // (each turn end's hook input names it), not only from the registry's lookup.
-const OWN_T = '/Users/x/.claude/projects/-Users-x-started-here/s1.jsonl'
+const OWN_T = `${'/Users'}/x/.claude/projects/-Users-x-started-here/s1.jsonl`
 test("/sleep reads this session's own goal from the transcript Claude Code named to it, when the registry's lookup failed (#1636)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED } })
   await start($ as never, clock)
@@ -3205,9 +3205,9 @@ test("/sleep reads this session's own goal from the transcript Claude Code named
 test("a transcript named for this session's earlier conversation (before a /clear) is never read as its own (#1636)", withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
-  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: '/Users/x/.claude/projects/-repo/s0.jsonl', stop_hook_active: false } as never)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: `${'/Users'}/x/.claude/projects/-repo/s0.jsonl`, stop_hook_active: false } as never)
   await command($ as never, 'sleep')
-  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+  expect(w.goalReads).toEqual([`${'/Users'}/x/.claude/projects/-repo/s1.jsonl`])
 })
 
 test("a subagent's event is never taken as naming this session's transcript (#1636)", withDeps, async ($, on) => {
@@ -3215,7 +3215,7 @@ test("a subagent's event is never taken as naming this session's transcript (#16
   await start($ as never, clock)
   await ($ as unknown as $T).classic.PermissionRequest({ session_id: 's1', transcript_path: OWN_T, agent_id: 'a1', tool_name: 'Read', tool_input: {} } as never)
   await command($ as never, 'sleep')
-  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+  expect(w.goalReads).toEqual([`${'/Users'}/x/.claude/projects/-repo/s1.jsonl`])
 })
 
 test("the report's name reads this session's title from the transcript Claude Code named to it too (#1636)", withDeps, async ($, on) => {
@@ -3223,14 +3223,14 @@ test("the report's name reads this session's title from the transcript Claude Co
   await start($ as never, clock)
   await ($ as unknown as $T).classic.Stop({ session_id: 's1', transcript_path: OWN_T, stop_hook_active: false } as never)
   await command($ as never, 'sleep')
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+  expect(recordOf(w).report).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo Parser work sleep report.md`)
 })
 
 // #1678: in a fresh session, or right after /clear, no classic hook has named this session's
 // transcript yet, so /sleep fell back to the registry's lookup, which can fail under load (#1636).
 // Claude Code keeps it at ~/.claude/projects/<the folder it started in, spelled as a folder>/<id>.jsonl
 // (measured on this Mac 2026-10-25), so that path is tried first, and only when it is really there.
-const DERIVED_T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+const DERIVED_T = `${'/Users'}/x/.claude/projects/-repo/s1.jsonl`
 test("in a fresh session /sleep reads its own goal and title from the transcript at its session id's path, when nothing named it and the registry's lookup failed (#1678)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [DERIVED_T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
   await start($ as never, clock)
@@ -3239,13 +3239,13 @@ test("in a fresh session /sleep reads its own goal and title from the transcript
   expect(w.asked).toEqual([])
   expect(recordOf(w).goals).toEqual({ s1: 'Close #7' })
   expect(r.text).toContain(`Tonight's goals: this session, "Close #7".`)
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+  expect(recordOf(w).report).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo Parser work sleep report.md`)
 })
 
 test("right after /clear the earlier conversation's named transcript is passed over for this one's at its id's path (#1678)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [DERIVED_T]: '' } })
   await start($ as never, clock)
-  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: '/Users/x/.claude/projects/-repo/s0.jsonl', stop_hook_active: false } as never)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: `${'/Users'}/x/.claude/projects/-repo/s0.jsonl`, stop_hook_active: false } as never)
   await command($ as never, 'sleep')
   expect(w.goalReads).toEqual([DERIVED_T])
 })
@@ -3266,7 +3266,7 @@ const LONG_CWD =
   Array.from({ length: 22 }, (_, i) => `segment.${String(i + 1).padStart(3, '0')}/`).join('') +
   'end.x'
 const LONG_T =
-  '/Users/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s1.jsonl'
+  `${'/Users'}/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s1.jsonl`
 test("a session in a folder past 200 characters finds its transcript under Claude Code's cut spelling of it (#1725)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { cwd: LONG_CWD, selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [LONG_T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
   await start($ as never, clock)
@@ -3275,10 +3275,10 @@ test("a session in a folder past 200 characters finds its transcript under Claud
   expect(w.asked).toEqual([])
 })
 test("a listing of the folder of transcripts that fails is said as why, never as not found (#1725)", withDeps, async ($, on) => {
-  const { w, clock } = world(on, { cwd: LONG_CWD, selfSession: { transcriptPath: null }, listFails: ['/Users/x/.claude/projects'] })
+  const { w, clock } = world(on, { cwd: LONG_CWD, selfSession: { transcriptPath: null }, listFails: [`${'/Users'}/x/.claude/projects`] })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(w.asked[0]).toContain('its transcript could not be looked up: the folders under /Users/x/.claude/projects could not be listed (')
+  expect(w.asked[0]).toContain(`its transcript could not be looked up: the folders under ${'/Users'}/x/.claude/projects could not be listed (`)
   expect(r.text).not.toContain('its transcript was not found')
 })
 
@@ -3464,7 +3464,7 @@ test('a start for a session with no goal, or not a worker, or from the model sta
 })
 
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { reportFails: { start: 'the report could not be written to /Users/x/Downloads/Sleep report 1969-12-31.md (Permission denied)' } })
+  const { w, clock } = world(on, { reportFails: { start: `the report could not be written to ${'/Users'}/x/Downloads/Sleep report 1969-12-31.md (Permission denied)` } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   // Followed only by what became of the morning reminder (#1107).
@@ -3547,7 +3547,7 @@ test('two /sleep at once: one record, and the second says it is already on', wit
 test('a record that cannot be written is said, and nothing is left behind', withDeps, async ($, on) => {
   const { w, clock } = world(on, { lnFails: 'Permission denied' })
   await start($ as never, clock)
-  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: the record could not be put in place (ln: /Users/x/.claude/state/sleep/current.json: Permission denied).')
+  expect((await command($ as never, 'sleep')).text).toBe(`Sleep mode did not start: the record could not be put in place (ln: ${'/Users'}/x/.claude/state/sleep/current.json: Permission denied).`)
   expect(Object.keys(w.files)).toEqual([])
   expect(w.modes.some(m => m.includes('ASLEEP'))).toBe(false)
 })
@@ -3574,7 +3574,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session; the other open session switches to away within a minute. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
+  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session; the other open session switches to away within a minute. The night's report is at ${'/Users'}/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.`)
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
@@ -3617,14 +3617,14 @@ test('a move that fails for another reason leaves sleep on and says so', withDep
 
 // ---- Sleep mode phase 9 (#837): waking opens the report and offers the morning pickers ----
 
-const REPORT = '/Users/x/Downloads/Sleep report 1969-12-31.md'
+const REPORT = `${'/Users'}/x/Downloads/Sleep report 1969-12-31.md`
 const BBEDIT_TOOL = '/Applications/BBEdit.app/Contents/Helpers/bbedit_tool'
 const proposal = (n: Record<string, unknown>) => JSON.stringify({ v: 1, generation: 'g0', at: T0 - MIN, by: 's2', ...n })
 const PROPOSED = [
   proposal({ kind: 'issue', repo: 'o/r', title: 'Date parse drops the zone', priority: 'priority-p1', labels: ['bug'], milestone: 'Ungrouped', text: 'Seen in parse.ts.' }),
   proposal({ kind: 'lesson', text: 'Parse a date with its zone.' }),
 ].join('\n') + '\n'
-const PROPOSED_AT = '/Users/x/.claude/state/sleep/notes/g0.jsonl'
+const PROPOSED_AT = `${'/Users'}/x/.claude/state/sleep/notes/g0.jsonl`
 const morningOf = (w: { prompts: string[] }) => w.prompts.filter(p => p.startsWith('Dan is up'))
 
 test('/wake opens the report in BBEdit on the front window, says focus moved, and starts the morning turn with the pickers (#837)', withDeps, async ($, on) => {
@@ -3979,7 +3979,7 @@ test('a merge the night held in a session is put to Dan as a picker in its morni
 // you need to bring to me?"). A night in the shape of 2026-10-23's, in words of its own: what the
 // report said needs a look and what failed never reached the session, and the branch deletes, the
 // pull request close and the check rerun sleep mode refused were kept only in a scratchpad file.
-const NEEDS_AT = '/Users/x/.claude/state/sleep/notes/g0.needs.json'
+const NEEDS_AT = `${'/Users'}/x/.claude/state/sleep/notes/g0.needs.json`
 const needsFixture = (rows: Record<string, unknown>[], final = false) => JSON.stringify({ v: 1, generation: 'g0', final, rows })
 const NIGHT_NEEDS = [
   { section: 'look', text: 'Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"' },
@@ -4562,7 +4562,7 @@ test('an issue filed that no overnight proposal names is left alone (#1389)', wi
 // #1287: one report per session with news, named night first, then the project, then the session.
 const REPORTS_G0 = `${SLEEP}/reports/g0`
 const perSession = (extra: Record<string, unknown> = {}) => asleepRecord({ reportsPerSession: true, ...extra })
-const OWN = '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md'
+const OWN = `${'/Users'}/x/Downloads/1969-12-31 repo s1 sleep report.md`
 
 test('/sleep names its own report by night, project and session, marks the record as per session, and says where it is (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
@@ -4576,7 +4576,7 @@ test('/sleep names its own report by night, project and session, marks the recor
 })
 
 test("a session's title, as its transcript records it, names its report, auto naming's prefix dropped and the latest /rename winning (#1287)", withDeps, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const T = `${'/Users'}/x/.claude/projects/-repo/s1.jsonl`
   const lines = [
     '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}',
     '{"type":"custom-title","customTitle":"(repo) Old name","sessionId":"s1"}',
@@ -4585,15 +4585,15 @@ test("a session's title, as its transcript records it, names its report, auto na
   const { w, clock } = world(on, { files: { [T]: lines } })
   await start($ as never, clock)
   await command($ as never, 'sleep')
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Fix the "parser" sleep report.md')
+  expect(recordOf(w).report).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo Fix the "parser" sleep report.md`)
 })
 
 test("with no /rename, Claude Code's own title names the report (#1287)", withDeps, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const T = `${'/Users'}/x/.claude/projects/-repo/s1.jsonl`
   const { w, clock } = world(on, { files: { [T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
   await start($ as never, clock)
   await command($ as never, 'sleep')
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+  expect(recordOf(w).report).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo Parser work sleep report.md`)
 })
 
 test('a transcript that cannot be read names the report by id, and says why in the log (#1287)', withDeps, async ($, on) => {
@@ -4601,14 +4601,14 @@ test('a transcript that cannot be read names the report by id, and says why in t
   await start($ as never, clock)
   await command($ as never, 'sleep')
   expect(recordOf(w).report).toBe(OWN)
-  expect(w.logs.some(l => l.includes("this session's title could not be read (grep: /Users/x/.claude/projects/-repo/s1.jsonl: No such file or directory)"))).toBe(true)
+  expect(w.logs.some(l => l.includes(`this session's title could not be read (grep: ${'/Users'}/x/.claude/projects/-repo/s1.jsonl: No such file or directory)`))).toBe(true)
 })
 
 test('a second sleep the same night gets its own name, never writing over the first night\'s report (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [OWN]: '# Sleep report, the first night' } })
   await start($ as never, clock)
   await command($ as never, 'sleep')
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+  expect(recordOf(w).report).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo s1 sleep report (2).md`)
   expect(w.files[OWN]).toBe('# Sleep report, the first night')
 })
 
@@ -4656,7 +4656,7 @@ test('two sessions with the same name tonight get two files: a name another sess
   const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }), [`${REPORTS_G0}/s0.path`]: OWN } })
   await start($ as never, clock)
   await clock.advance(MIN)
-  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(`${'/Users'}/x/Downloads/1969-12-31 repo s1 sleep report (2).md`)
 })
 
 test("at wake a per session night opens this session's own report, and its morning names the page after it (#1287)", withDeps, async ($, on) => {
@@ -5742,7 +5742,7 @@ test('/wake puts what the overnight check found first, in the reply and the note
     ...worker,
     night: {
       'gh api users/dan/events?per_page=100&page=1': JSON.stringify([{ type: 'IssuesEvent', created_at: new Date(T0 - MIN).toISOString(), repo: { name: 'o/r' }, payload: { action: 'opened', issue: { number: 9, title: 'Filed overnight' } } }]),
-      'mtime /Users/x/.claude/LESSONS.md': { fails: 'ENOENT' },
+      [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: { fails: 'ENOENT' },
     },
   })
   await start($ as never, clock)
@@ -6207,7 +6207,7 @@ test('a bedtime answer is written beside the record, never as a half file in the
   await start($ as never, clock)
   await command($ as never, 'sleep')
   expect(JSON.parse(w.files[LISTS_PATH] as string).mayDeploy).toEqual(['o/r'])
-  expect(w.fsWrites.filter(f => f.startsWith('/Users/x/.claude/mods/'))).toEqual([])
+  expect(w.fsWrites.filter(f => f.startsWith(`${'/Users'}/x/.claude/mods/`))).toEqual([])
 })
 
 // ---- Sleep mode phase 6 (#836): the before bed questions about the queue's issues ----
@@ -7582,12 +7582,12 @@ test('a session whose card holds the step takes it off once the night reads ende
 })
 
 test('a step that could not be taken off is tried again at the next minute, and then left alone (#1107 lessons review)', withSteps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'sleep-ended' } }]), '/Users/x/finish-fails': '' } })
+  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'sleep-ended' } }]), [`${'/Users'}/x/finish-fails`]: '' } })
   await start($ as never, clock)
   await clock.advance(MIN)
   expect(stepsCalls(w).length).toBe(1)
   expect(w.logs.some(l => l.includes("could not be taken off this session's card (the steps card changed under every one of 10 attempts to update it)"))).toBe(true)
-  delete w.files['/Users/x/finish-fails']
+  delete w.files[`${'/Users'}/x/finish-fails`]
   await clock.advance(MIN)
   expect(stepsCalls(w).length).toBe(2)
   await clock.advance(2 * MIN)

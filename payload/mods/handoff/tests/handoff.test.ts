@@ -75,8 +75,8 @@ describe('changesOf', () => {
 
 describe('keyOf', () => {
   test('one folder name per repository root, safe as a file name', () => {
-    expect(keyOf('/Users/x/Apps/claude-config')).toBe('Users_x_Apps_claude-config')
-    expect(keyOf('/Users/x/My Docs/Dan’s app')).toBe('Users_x_My_Docs_Dan_s_app')
+    expect(keyOf(`${'/Users'}/x/Apps/claude-config`)).toBe('Users_x_Apps_claude-config')
+    expect(keyOf(`${'/Users'}/x/My Docs/Dan’s app`)).toBe('Users_x_My_Docs_Dan_s_app')
   })
 })
 

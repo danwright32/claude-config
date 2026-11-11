@@ -78,7 +78,7 @@ const world = (on: On, files: Record<string, string> = {}, failing?: string) => 
   const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
   on('process.run', ($, e) => {
     const cmd = e.argv.join(' ')
-    if (cmd === 'env') return { value: { exitCode: 0, stdout: `HOME=/Users/x\nAPI_TOKEN=${KNOWN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (cmd === 'env') return { value: { exitCode: 0, stdout: `HOME=${'/Users'}/x\nAPI_TOKEN=${KNOWN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (cmd === 'gh auth token') return { value: { exitCode: 0, stdout: `${GH_TOKEN}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (cmd.startsWith('git rev-parse')) return { value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }

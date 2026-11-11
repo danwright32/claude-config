@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type Relation, draftHold, markLanded, noteCard, pastedThreads, registerDrafts, relateCard } from './drafts.ts'
+import { type Relation, draftHold, markLanded, noteCard, pastedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
@@ -448,6 +448,7 @@ export const register: Register = on => {
     // A turn end is refused for a missing card only where somebody is at the prompt to see it (#1244).
     await $.state.set(interactiveRef, e.isInteractive === true)
     await $.tool.register({ name: 'card', description: DESCRIPTION, inputSchema: SCHEMA })
+    await registerUnrelated($)
     await $.command.register({ name: 'live', description: "This project's recent change cards, and the messages not yet sent." })
     return next(e)
   })

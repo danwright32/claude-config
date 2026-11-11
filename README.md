@@ -236,6 +236,13 @@ and its check of whether this Mac's skills folder holds anything to send, #2017)
 `hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
 A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
+A suite that scans the config it is installed in lists its files with `synced_files` from
+`payload/hooks/lib/synced-trees.sh`: the trees `claude-sync` mirrors (its `MIRROR_DIRS`, plus
+`skills/` less the entries above), never `state/`, `projects/` or another folder a Mac keeps for
+itself. Installed, the scanned tree is `~/.claude`, where agents keep copies of hooks in their
+session notes, and a whole tree walk failed the pull on those copies (#2750).
+`hooks/test-synced-trees.sh` fails when its list of trees and `MIRROR_DIRS` differ.
+
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
 reached it. The send names it, does not publish it, and removes the leftover here, saying which
@@ -895,6 +902,15 @@ pulls constantly: a pull carrying a rule file has installed nothing this runner 
 bounds how long the pull will wait before stopping it and saying nothing was verified. The runner is
 told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
 a pull that runs the suite would otherwise recurse without end.
+
+The pull's run is a whole run, so it queues for this Mac's one full suite slot like any other
+(#2012), and it is told how long it may queue: `SYNC_HOOK_TESTS_SLOT_WAIT`, by default half of
+`SYNC_HOOK_TESTS_TIMEOUT`, and never as long as the deadline itself (#2758). A run still queued at
+that bound runs nothing, and the pull says so in those words, naming the run that held the slot,
+rather than reporting a suite "still running". It is recorded in `.hook-tests` as `slotwait`,
+`claude-sync status` reports it, and the next pull runs the suite again even when it carries no
+hook of its own; the change watcher does not, since every tick would queue behind the same run. A
+suite stopped at the deadline after waiting part of it for the slot says how long it waited.
 
 ### A send names what it keeps back
 
@@ -1836,7 +1852,14 @@ real engine by `tests/test-session-id-agreement.sh`, claude-config#1575). A rate
 answer to any read or update pauses every look in the session for GitHub's Retry-After, the reset
 time of an allowance it reports spent, or, for a burst limit naming no time, a minute doubling while
 it holds; the wait is said as a rate limit, with a heartbeat inside any wait longer than two
-minutes. It accepts only the merge
+minutes. A run waiting for its turn (below) leaves GitHub to the run holding it (claude-config#2715):
+on 2026-11-10 one session's 102 merge logs held 2,845 waits on that cap, 251 of them by the run
+holding the turn, with a median of 8 runs in line behind it. A run in line reads the turn, and the
+line moving, from the queue on this Mac, and reads GitHub only every ten minutes
+(`MWR_LINE_LOOK_SECONDS`) to see its pull request is still open, each time leaving one of the
+session's looks a minute free, so the run holding the turn looks at its own pace. A run not yet in
+line leaves that look free too whenever the queue shows another run holding the turn
+(claude-config#2749), since its first look comes before it learns it is in line. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
@@ -1867,7 +1890,16 @@ and log, and waited on like any other run. A run whose jobs ran and failed is ne
 already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
 left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
 gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
-has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+has to pass `block-red-merge.sh`. A job that waited for a runner is said (claude-config#2714): GitHub
+runs at most 20 jobs at once on the Free plan's hosted runners (docs.github.com/en/actions/reference/limits),
+and on 2026-11-10 that pool was full twice and 15 jobs waited over a minute, up to 6.6 minutes, which
+read in the merge logs as slow tests. Once every run of the head has finished, each run the helper
+saw a check of still open has its jobs read once, and a job that waited more than
+`MWR_POOL_WAIT_SECONDS` (60) to start is said with how long, and how many of this repository's jobs
+were running when it was queued (counted from the runs created up to `MWR_POOL_LOOKBACK_SECONDS`
+before it); the pool is called full only when that count reaches `MWR_POOL_LIMIT` (20). Only this
+repository's jobs can be counted, since GitHub gives no read of an account's running jobs. A run with
+no wait says nothing, and a failed read is said and changes nothing. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -3452,7 +3484,37 @@ imports followed, each module read once, so a cycle ends. So repo-digest's `npm 
 `src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
 `scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
 refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
-gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
+real script of ours reaches 11).
+
+Past 300 the gate reads on when the script is inside a repository and every module it reaches is
+too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
+repository was refused whole because its config's imports pass 300, though nothing in it posts, and
+builders linted file by file or went round the gate. A file is inside the repository when its real
+path is under the nearest folder at or above the script that holds `.git`, so an installed package
+under `node_modules` counts and a link leading out does not (Dan, 2026-11-10). Every module past 300
+is still read whole and judged by the endpoint it names, so one that posts is refused by name; a
+module outside the repository is refused, named, as a call the gate could not check. Nothing is
+allowed unread. What bounds the reading is the gate's one budget of 11 seconds for the whole call
+(Dan, 2026-11-10, rather than a second number), and running out of it refuses the call as not
+checked, saying how many modules it had read. Measured through the wrapper on the personal MacBook
+on 2026-11-10 (12 cores, load average 17 to 27 from other sessions' suites, several readings each):
+
+| Measured | What was judged | Modules | Readings | Least | Middle | Most | Verdict |
+|---|---|---|---|---|---|---|---|
+| 2026-11-10 | a made up lint script | 342 | 7 | 0.13 s | 0.14 s | 0.14 s | allowed |
+| 2026-11-10 | `node node_modules/eslint/bin/eslint.js .`, a real install | 339 to 397 | 7 | 0.37 s | 0.38 s | 0.47 s | allowed |
+| 2026-11-10 | a made up lint script | 5,315 | 5 | 0.95 s | 0.99 s | 1.00 s | allowed |
+| 2026-11-10 | a made up lint script | 42,502 | 5 | 7.60 s | 7.68 s | 7.81 s | allowed |
+| 2026-11-10 | a made up lint script | 95,627 | 3 | 11.11 s | 11.12 s | 11.13 s | refused, out of time |
+
+In those readings of 2026-11-10 the made up modules are about 270 bytes each and ESLint's own are
+larger: about 0.8 ms a module against 0.2 ms, once the 0.08 s the gate takes to start is taken
+off. So at that load the budget covers some ten thousand modules of real size. The cost of the
+change is the last row: a tree too large to read is now refused after 11 seconds, where the count
+refused it in a fraction of one. The work repository's own lint run is on the work MacBook and
+was not among these readings.
+
 A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
 names it and is refused like a script run directly would be; a helper that names none (one that
 saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
@@ -4299,6 +4361,14 @@ claude-sync's scratch sweep reclaims after four hours. Under the runner every on
 so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
+
+The same file turns Python's bytecode cache off for every suite, from the runner and from arming
+alike (`PYTHONDONTWRITEBYTECODE=1`, claude-config#2751). A part's suites run side by side, and three
+times a suite importing from `hooks/lib` with it on left `lib/__pycache__` for `test-work-names.sh`'s
+check to find on a pull request that touched neither (#2444, #2600, #2751). `python3 -I` and `-E`
+drop the variable, so `test-lib-bytecode-importers.sh` still asks for `-B` on any command loading
+from lib, following a shell variable to the path it was assigned. A suite whose check is about
+bytecode unsets it after arming, so the check can still see a writer.
 
 A record with no variable is not covered by the list, and this finds one:
 
@@ -7375,9 +7445,11 @@ checked again that session. A Bash command is judged by the files mod-kit's writ
 judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
 followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
-its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
-in no checkout, or where the repository has no fast growing file and no structural issue naming a
-file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
+its words do not name) is held saying it cannot be read, and may proceed, or fold into one of the
+repository's open structural issues naming a file, which the hold lists, the session's own included
+(#2706); a fold only records the issue, and the command runs as proceed would let it. It passes
+where it is in no checkout, or where the repository has no fast growing file and no structural issue
+naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 A folder a script is handed is judged as a write of every file under it (#2321), unless the
 script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
@@ -7616,10 +7688,30 @@ than 500 files to read (the largest real one read 213, #2510), or a send helper 
 fails, runs late or meets an unreadable helper, holds the call for Dan to approve like any other,
 naming no sender, rather than refusing it with nothing he can answer (#2364). A shell write to a
 path the write reader cannot name is outside it.
+In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
+choose the alert in sleep mode and put it to me in the morning to see if I want something else").
+While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
+before) is refused with an instruction to call `mcp__slack-alert-guard__choose` with the held call's
+id and the message as Slack will post it, checked as the question's `rendered` is. The choice is
+kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
+a `wording` note, and the call sent again goes through; a choice lets wording through only while
+sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
+merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
+chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
+not check.
+In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
+next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
+question, with the message chosen, and only Approve wording records the approval. Change wording, a
+dialog that closed by itself or no answer records nothing, and it is asked again. A choice
+unanswered for three days expires: said once in each session, still held from merging, and no longer
+letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
+overnight). In any mode, taking away wording that origin's copy of the file on its default branch
+(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
+live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628
 
 </td></tr>
 </tbody>

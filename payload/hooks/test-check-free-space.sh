@@ -1151,7 +1151,8 @@ PLIST
 # (L290), with lib/hang-wait.sh's ceiling, which only a sweep that never finishes reaches. It was 30
 # s, the ceiling that failed 16 of 16 loaded copies of test-derived-data-sweep.sh (#1577, on 2026-10-23; #1620).
 sweep_finished() {   # sweep_finished <state dir>
-  hang_wait "[ -f '$1/last-result' ] && [ ! -e '$1/in-progress' ]"
+  local _sf_dir="$1"   # read when the condition is evaluated: one built from a value is unreadable to the Slack drafts gate (#2538)
+  hang_wait '[ -f "$_sf_dir/last-result" ] && [ ! -e "$_sf_dir/in-progress" ]'
 }
 run_logs() { find "$1" -name 'run-*.log' 2>/dev/null | wc -l | tr -d ' '; }
 dd_nudge() {   # dd_nudge <session> <derived data root> <sweep state> [VAR=value...] -> prints all output

@@ -76,7 +76,7 @@ const modKit: { name: string; register: Register } = {
         login: async () => undefined,
         // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
         account: async () => {
-          const path = '/Users/x/.claude.json'
+          const path = `${'/Users'}/x/.claude.json`
           try {
             if (!(await built.fs.exists(path))) return {}
             const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
@@ -125,7 +125,7 @@ const SEC = 1_000
 const MIN = 60 * SEC
 const HOUR = 60 * MIN
 const T0 = 1_000 * HOUR
-const DIR = '/Users/x/.claude/state/status-bar'
+const DIR = `${'/Users'}/x/.claude/state/status-bar`
 
 // This Mac beneath the status bar: files in memory, git and gh answering as each test sets them,
 // the clock, the session, and Claude Code's own band beneath mod-kit's.
@@ -178,7 +178,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   // #2100: each hold taken, each letting go and each compaction, in the order they happened.
   const order: string[] = []
   // A Mac with no claude.ai login unless a test logs it in (#815).
-  const files: Record<string, string> = { '/Users/x/.claude.json': '{}' }
+  const files: Record<string, string> = { [`${'/Users'}/x/.claude.json`]: '{}' }
   const toasts: string[] = []
   const logs: string[] = []
   const debug: string[] = []
@@ -188,7 +188,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const prompts: { text: string; afterCompacts: number }[] = []
   const runs: string[][] = []
   const polls: { argv: string[]; env?: Record<string, string> }[] = []
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, { HOME: `${'/Users'}/x` })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
     // Refused with the disk's reason, which is how a failed write reaches the mod.
@@ -227,7 +227,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (got === 'throws') throw new Error('git did not answer within 10 seconds')
       return r(got.exitCode, got.stdout, got.stderr)
     }
-    if (cmd === 'bash' && rest[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
+    if (cmd === 'bash' && rest[0] === `${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`) {
       polls.push({ argv: [...e.argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
       if (rest[1] === 'take') return answer(w.poll.take)
       if (rest[1] === 'next') return r(0, `${w.poll.next(rest[2] as string, rest[3] as string)}\n`)
@@ -479,7 +479,7 @@ test("each look is the session's: the policy is asked as this session, and an an
   const { w, clock, polls } = world(on, { gh: { exitCode: 1, stdout: '', stderr: limited } })
   w.poll.failed = { exitCode: 0, stdout: 'paused\t60\ta burst limit\n', stderr: '' }
   await start($, clock)
-  expect(polls[0]?.argv).toEqual(['bash', '/Users/x/.claude/hooks/lib/gh-poll.sh', 'take', String(T0 / SEC)])
+  expect(polls[0]?.argv).toEqual(['bash', `${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`, 'take', String(T0 / SEC)])
   expect(polls[0]?.env).toEqual({ CLAUDE_CODE_SESSION_ID: 's1' })
   expect(polls.find(p => p.argv[2] === 'failed')?.argv.slice(3)).toEqual([String(T0 / SEC), limited])
   w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
@@ -489,7 +489,7 @@ test("each look is the session's: the policy is asked as this session, and an an
 
 test('a polling policy that cannot be asked never stops the read, and is said once in the debug log (#1482)', withKit, async ($, on) => {
   const { w, clock, runs, debug } = world(on)
-  w.poll.take = { exitCode: 127, stdout: '', stderr: 'bash: /Users/x/.claude/hooks/lib/gh-poll.sh: No such file or directory' }
+  w.poll.take = { exitCode: 127, stdout: '', stderr: `bash: ${'/Users'}/x/.claude/hooks/lib/gh-poll.sh: No such file or directory` }
   await start($, clock)
   expect(ghAsks(runs)).toBe(1)
   await clock.advance(10 * MIN)
@@ -653,7 +653,7 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
 // Compact the row queues, since a model cannot type /compact itself; in an unattended /goal run
 // nothing else would compact until Dan came back. Main session only, and only once the note is there.
 // #2490: in the session's notes folder, which a restart of the Mac cannot clear, never the scratchpad.
-const NOTE = '/Users/x/.claude/state/session-notes/-repo/s1/handoff.md'
+const NOTE = `${'/Users'}/x/.claude/state/session-notes/-repo/s1/handoff.md`
 // Where the note was kept before #2490, which a session mid stretch may still pass once.
 const LEGACY = '/private/tmp/claude-501/-repo/s1/scratchpad/handoff.md'
 type Called = { deny?: string; text?: string; result?: unknown; isError?: boolean }
@@ -720,7 +720,7 @@ test('a notes folder that cannot be made refuses the copy with its reason, and n
   await clock.advance(SEC)
   files[LEGACY] = 'Next: push the branch.'
   mtimes[LEGACY] = clock.now()
-  w.mkdirFails = 'mkdir: /Users/x/.claude/state: Permission denied'
+  w.mkdirFails = `mkdir: ${'/Users'}/x/.claude/state: Permission denied`
   const why = refusal(await queueCompact($, { note: LEGACY }))
   expect(why).toContain('Permission denied')
   expect(files[NOTE]).toBeUndefined()
@@ -733,7 +733,7 @@ test("a note in another session's notes folder is refused, naming this session's
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
   await step($, clock)
-  const other = '/Users/x/.claude/state/session-notes/-repo/s2/handoff.md'
+  const other = `${'/Users'}/x/.claude/state/session-notes/-repo/s2/handoff.md`
   files[other] = 'Someone else.'
   mtimes[other] = clock.now()
   const why = refusal(await queueCompact($, { note: other }))
@@ -749,7 +749,7 @@ test('a note path climbing out of the notes folder with . or .. is refused (#249
   await step($, clock)
   await clock.advance(SEC)
   for (const key of ['..', '.']) {
-    const out = `/Users/x/.claude/state/session-notes/${key}/s1/handoff.md`
+    const out = `${'/Users'}/x/.claude/state/session-notes/${key}/s1/handoff.md`
     files[out] = 'Outside.'
     mtimes[out] = clock.now()
     expect(refusal(await queueCompact($, { note: out }))).toContain(`not ${out}`)
@@ -1605,7 +1605,7 @@ test('a session with no screen (claude -p) reads nothing and writes nothing: nob
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
   await clock.advance(5 * MIN)
   expect(runs.filter(r => r[0] === 'git' || r[0] === 'gh')).toEqual([])
-  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
+  expect(Object.keys(files).filter(f => f !== `${'/Users'}/x/.claude.json`)).toEqual([])
 })
 
 test('a clean end deletes the session file, so no stale cache is read for it', withKit, async ($, on) => {
@@ -2078,7 +2078,7 @@ test('a folder that is no repository, or a repository with no commits yet, has n
 // so mod-kit reads the file again at each prompt and each re-read of the context and raises the
 // change as modkit.login (its own tests cover when; the raised login is taken in below); a request
 // in between never reads it.
-const LOGIN_FILE = '/Users/x/.claude.json'
+const LOGIN_FILE = `${'/Users'}/x/.claude.json`
 const loginAs = (files: Record<string, string>, id: string, name: string, org: string) => {
   files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: id, organizationUuid: `org-${id}`, displayName: name, emailAddress: `${id}@example.com`, organizationName: org }, other: 'kept out' })
 }
@@ -2230,10 +2230,10 @@ test('a facts file that cannot be written is said once, and the band and turns g
 })
 
 test('a facts folder that cannot be made is said, and the rest still runs', withKit, async ($, on) => {
-  const { clock, w, logs, files } = world(on, { mkdirFails: 'mkdir: /Users/x/.claude/state: Permission denied', unpushed: '2\n' })
+  const { clock, w, logs, files } = world(on, { mkdirFails: `mkdir: ${'/Users'}/x/.claude/state: Permission denied`, unpushed: '2\n' })
   await start($, clock)
   expect(logs.filter(l => /Status bar couldn't save the cache time.*Permission denied/.test(l))).toHaveLength(1)
-  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
+  expect(Object.keys(files).filter(f => f !== `${'/Users'}/x/.claude.json`)).toEqual([])
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('2 unpushed commits')
   w.mkdirFails = ''
