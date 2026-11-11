@@ -636,7 +636,9 @@ SH_UNKNOWN_DIR = "${unknown directory}"
 SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf", "return", "exit", "cd", "pwd"})
 # A parameter expansion the resolver works out: the name (BASH_SOURCE[0] too), then nothing, a
 # default (:- or -), or a pattern removed from either end (% %% # ##).
-SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
+# A positional parameter ($1, ${2}) is a name too: its value is known only inside a `bash -c` string
+# whose arguments are (sh_positional, claude-config#2538), and var says None everywhere else.
+SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*|[0-9]+)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
 
 
 def load_reader():
@@ -758,7 +760,7 @@ class Judge:
         file on disk rather than one this call wrote (on_disk)."""
         return {"text": text, "cwd": cwd, "script": script, "pending": {}, "exported": set(), "at": None,
                 "cwd_known": cwd_known, "known": None, "piped": False, "outer": True, "last_out": None,
-                "last_cmd": None, "on_disk": False}
+                "last_cmd": None, "on_disk": False, "positional": None}
 
     @staticmethod
     def py_path(value, d):
@@ -1786,8 +1788,91 @@ class Judge:
         return None
 
     def sh_source_var(self, name):
-        """sh_var for a sourced file's path, HOME taken from the session where the text never binds it."""
+        """sh_var for a sourced file's path, HOME taken from the session where the text never binds it,
+        and $0, $1... from the arguments of the `bash -c` string being read (sh_positional)."""
+        pos = self.shell.get("positional")
+        if pos is not None and name.isdigit():
+            return pos[int(name)] if int(name) < len(pos) else None
         return self.sh_home(name, self.shell["text"], self.sh_var(name))
+
+    # What may stand in front of the shell in a `bash -c` command whose arguments are worked out: a
+    # program that runs the shell with exactly the words after it. Anything else (xargs, find -exec,
+    # parallel) adds or replaces the string's arguments, so they are not known.
+    SH_POS_LAUNCHERS = {"env", "command", "exec", "nohup", "time"}
+
+    def sh_positional(self, text, d):
+        """The positional parameters ($0, $1, ...) the string of `bash -c '<string>' a0 a1 ...` sees,
+        each worked out from the command's own place (None where it cannot be); None for any other
+        form (claude-config#2538). The string must be single quoted, so its $1 is the string's own and
+        not the outer shell's, and hold no loop or function, in which $1 can mean another value; a
+        word that may split into several leaves it and every one after it unknown."""
+        toks, raw = self.sh_tokens(text.strip()), []
+        i = 0
+        while i < len(toks):
+            kind, t = toks[i]
+            if kind == "op":
+                if not SH_REDIRECT.fullmatch(t):
+                    break
+                i += 2
+                continue
+            raw.append(t)
+            i += 1
+        k, env = 0, False
+        while k < len(raw):
+            if raw[k] in self.SH_POS_LAUNCHERS:
+                env = raw[k] == "env"
+            elif env and raw[k] == "-u" and k + 1 < len(raw):
+                k += 1  # env -u NAME takes the name after it
+            elif not (re.match(r"[A-Za-z_]\w*=", raw[k]) or (env and raw[k] == "-i")):
+                break
+            k += 1
+        if k >= len(raw) or (raw[k] not in ('"$BASH"', "$BASH") and os.path.basename(raw[k].strip("'\"")) not in SHELLS):
+            return None
+        k += 1
+        while k < len(raw) and re.fullmatch(r"-[A-Za-z]+", raw[k]) and "c" not in raw[k]:
+            k += 1
+        if k >= len(raw) or not re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", raw[k]) or k + 1 >= len(raw):
+            return None
+        code = raw[k + 1]
+        if not (len(code) >= 2 and code[0] == code[-1] == "'" and "'" not in code[1:-1]):
+            return None
+        body = code[1:-1]
+        if re.search(r"(?<![\w-])(for|while|until|select|function)(?![\w-])|\(\s*\)", body):
+            return None
+        out = []
+        for w in raw[k + 2:]:
+            v, splits = self.sh_word(w, d, self.sh_var, self.shell["script"], False)
+            if v is None or splits:
+                out.append(None)
+                break
+            out.append(v)
+        return out
+
+    def sh_keeps_positional(self, text, d):
+        """Whether a command of a `bash -c` string certainly leaves its positional parameters as they
+        were: not shift or a set that can set them, and not a sourced file (which shares them, and
+        may do either) unless that file is one whose text holds neither."""
+        words = self.sw.command_words(self.sw.command_rest(text)[0])
+        if not words:
+            return True
+        if words[0] == "shift":
+            return False
+        if words[0] == "set":
+            # Only options (set -e, set -o pipefail) leave them; any operand or -- sets them.
+            return all(re.fullmatch(r"[-+][A-Za-z]+", w) or words[j - 1] in ("-o", "+o")
+                       for j, w in enumerate(words[1:], 1))
+        if words[0] not in (".", "source"):
+            return True
+        v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
+        if bad or v is None:
+            return False
+        try:
+            body = self.content(os.path.realpath(self.resolve(v, d))).decode("utf-8", "replace")
+        except OSError:
+            return False
+        body = re.sub(r"(?m)(^|\s)#.*$", r"\1", body)  # comments, which say "set" in prose
+        # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
+        return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
 
     def sh_home(self, name, text, v):
         """v, or for HOME unknown in a text that never binds it, the session's HOME: the command runs
@@ -1896,7 +1981,7 @@ class Judge:
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return {"regions": {}, "top": 0, "lost": [], "bodies": []}
         items = list(zip(cmds, parts))
-        struct = self.sh_struct(items)
+        struct = self.sh_struct(items, s)
         rows, blocks = struct if struct else (None, None)
         allnames = set(re.findall(r"(?<![\w$])([A-Za-z_]\w*)(?:\[[^\]\n]*\])?\+?=", s))
         funcs = self.sh_funcs(s)
@@ -1913,6 +1998,8 @@ class Judge:
                     fbody.setdefault(m.group(1), []).append((o, c))
 
         def head_of(k):
+            if rows and rows[k] is None:
+                return ""  # a subshell's or a substitution's command, which no block test reads
             return rows[k][1] if rows else items[k][0][1].strip()
 
         def where(d, at):
@@ -2374,7 +2461,7 @@ class Judge:
         return True
 
     @staticmethod
-    def sh_struct(items):
+    def sh_struct(items, s=None):
         """The compound commands around each command, for sh_locals: (rows, blocks), a row for each of
         items, None for a subshell's or a substitution's command, else (the ids of the blocks it is
         inside, outermost first; its text with the keywords that open or carry on a block taken off),
@@ -2382,6 +2469,7 @@ class Judge:
         of the commands opening and closing it}. None where the keywords do not pair up, or a function
         body is not a group."""
         rows, blocks, stack, brace, idx = [], [], [], False, 0
+        entered, last_end = set(), 0
 
         def push(kind):
             blocks.append({"kind": kind, "open": idx, "close": None})
@@ -2389,8 +2477,30 @@ class Judge:
 
         for idx, ((d, t), p) in enumerate(items):
             if len(p["scope"]) > 1:
+                # A subshell opened straight after a keyword (`{ ( ... ) && x; }`, `if ( ... ); then`):
+                # the reader keeps the keyword in no command, so it is taken here from the text between
+                # the last command and the subshell's (, or the group's closing brace pairs with
+                # nothing and the whole structure is lost (ai-review-common.sh; claude-config#2538).
+                sub, start = p["scope"][1], p["start"]
+                if s is not None and sub not in entered and s[start - 1:start] == "(" and \
+                        s[start - 2:start - 1] not in ("$", "<", ">", "="):
+                    lead = re.split(r"[;&|\n]", s[last_end:start - 1])[-1].strip()
+                    while lead:
+                        m = re.match(r"(then|else|do|elif|!|time|if|while|until|\{)(?=\s|$)\s*", lead)
+                        if not m:
+                            break  # anything else (a case pattern's `x)`) is left as it was read
+                        word, lead = m.group(1), lead[m.end():]
+                        if word in ("if", "while", "until"):
+                            push("if" if word == "if" else "loop")
+                        elif word == "{":
+                            if brace:
+                                brace = False
+                            else:
+                                push("group")
+                entered.add(sub)
                 rows.append(None)
                 continue
+            last_end = max(last_end, p["end"])
             head, pending = t.strip(), brace
             while head:
                 m = re.match(r"(?:then|else|do|elif|!|time)(?=[\s;&|()]|$)\s*", head)
@@ -2430,13 +2540,16 @@ class Judge:
                 break
             if pending and brace:
                 return None
+            # A closing keyword, and any that follow it in the same command: `f(){ if x; then y; fi }`
+            # closes the if and the function's body together (test-merged-prs.sh; claude-config#2538).
             m = re.match(r"(fi|done|esac|\})(?=[\s;&|<>)]|$)", head)
-            if m:
+            while m:
                 want = {"fi": ("if",), "done": ("loop",), "esac": ("case",), "}": ("group", "func")}[m.group(1)]
                 if not stack or blocks[stack[-1]]["kind"] not in want:
                     return None
                 blocks[stack.pop()]["close"] = idx
-                head = ""
+                head, rest = "", head[m.end():]
+                m = re.match(r"\s*(\})(?=[\s;&|<>)]|$)", rest) if m.group(1) != "}" else None
             rows.append((tuple(stack), head))
         return None if stack or brace else (rows, blocks)
 
@@ -2816,21 +2929,57 @@ class Judge:
 
     def sh_subst(self, body, d, var, script):
         """What $(body) prints, for $(pwd), $(dirname X) and $(cd X && pwd); None for anything else,
-        and where cd would fail."""
+        and where cd would fail. The cd may clear CDPATH in front of it, take -P or -L, and send its
+        own output anywhere (2>/dev/null, >/dev/null 2>&1), and pwd may send its errors away, which
+        changes nothing printed: the disk-clean helpers' `CDPATH= cd -P "$D" 2>/dev/null && pwd -P`
+        (claude-config#2538)."""
         if "\n" in body.strip():
             return None  # more than one line of commands: sh_tokens would read only the first
         toks = self.sh_tokens(body.strip())
-        if any(k == "op" and t != "&&" for k, t in toks):
-            return None
-        vals = []
-        for k, t in toks:
+        vals, redirects, cdpath = [], [], False
+        i = 0
+        while i < len(toks):
+            k, t = toks[i]
+            if k == "op" and SH_REDIRECT.fullmatch(t):
+                # A redirection, and the word it takes unless it is a duplication onto a number.
+                target = toks[i + 1][1] if i + 1 < len(toks) and toks[i + 1][0] == "word" else None
+                if target is None:
+                    return None
+                redirects.append((len([v for v in vals if v == "&&"]), t, target))
+                i += 2
+                continue
             if k == "op":
+                if t != "&&":
+                    return None
                 vals.append(t)
+                i += 1
+                continue
+            if not vals and re.fullmatch(r"CDPATH=(?:''|\"\")?", t):
+                cdpath = True  # CDPATH cleared for the cd, so a relative target is taken as written
+                i += 1
                 continue
             v, sp = self.sh_word(t, d, var, script, False)
             if v is None or sp:
                 return None
             vals.append(v)
+            i += 1
+        # A redirection on the cd (before the &&) only moves what cd says; on pwd, only its errors
+        # may go, as anything else changes or empties what it prints.
+        for seg, op, target in redirects:
+            if seg == 0 and vals[:1] == ["cd"]:
+                continue
+            if op in ("2>", "2>>"):
+                continue
+            return None
+        if cdpath and vals[:1] != ["cd"]:
+            return None
+        if vals[:1] == ["cd"] and vals[1:2] in (["-P"], ["-L"]):
+            physical = vals[1] == "-P"
+            vals = [vals[0]] + vals[2:]
+            if len(vals) in (4, 5) and vals[2:4] == ["&&", "pwd"] and vals[4:] in ([], ["-P"]):
+                vals = vals[:4] + (["-P"] if physical else vals[4:])
+            else:
+                return None
         # Where the directory it runs in is not certain (claude-config#2465), what pwd prints, and
         # where a relative cd goes, are not either.
         here = None if self.sh_dir(d) == SH_UNKNOWN_DIR else os.path.abspath(d or os.getcwd())
@@ -2845,7 +2994,8 @@ class Judge:
             return (p[:p.rfind("/")].rstrip("/") or "/") if "/" in p else "."
         if len(vals) in (4, 5) and vals[0] == "cd" and vals[2:4] == ["&&", "pwd"] and vals[4:] in ([], ["-P"]):
             target = vals[1]
-            if not target or target.startswith("-") or (os.environ.get("CDPATH") and not os.path.isabs(target)
+            if not target or target.startswith("-") or (os.environ.get("CDPATH") and not cdpath
+                                                         and not os.path.isabs(target)
                                                          and not target.startswith((".", "/"))):
                 return None
             target = os.path.expanduser(target) if target.startswith("~") else target
@@ -2931,10 +3081,16 @@ class Judge:
             except self.sw.Unreadable:
                 starts = []  # read by the crude cut, so no command's place is known
             k = 0
+            # The positional parameters a `bash -c '...' _ a b` string's own commands see, while they
+            # are being read (claude-config#2538): (the -c record's depth, its values), or None.
+            pos = None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
+                if pos and wdepth <= pos[0]:
+                    pos = None  # past the string's commands
+                self.shell["positional"] = pos[1] if pos and wdepth == pos[0] + 1 else None
                 # Whether this command's input is exactly what the command before it printed, for
                 # note_writes (claude-config#2721): True only where the text before it is that
                 # command, written whole, then a pipe. Anything else, a group, subshell, loop or if
@@ -2956,6 +3112,11 @@ class Judge:
                     return reason
                 if not wdepth:
                     self.shell["last_cmd"] = (at, text) if at is not None else None
+                if pos and wdepth == pos[0] + 1 and not self.sh_keeps_positional(text, d):
+                    pos = (pos[0], [])  # shifted, set, or a sourced file that may do either
+                if wrapper.endswith(" -c") and wrapper.split()[0] in SHELLS:
+                    values = self.sh_positional(text, d)
+                    pos = (wdepth, values) if values is not None else None
             return None
         finally:
             self.shell = saved
