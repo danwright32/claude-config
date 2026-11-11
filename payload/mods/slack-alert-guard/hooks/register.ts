@@ -745,15 +745,18 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
   // The search for senders stopped short (too many files, too late, too deep), so one further on
   // may send anything this file imports: every string of a newly imported file is held, as the rest
   // of an edit is when its own search stops short.
+  // A search that ran out of time says so (#2719): git given what was left of it, or none, was read
+  // as "git could not name the repository" and as git "aborted: still running after 12ms".
+  const lateNow = async (): Promise<Verdict | undefined> => ((await left()) <= 0 ? { unchecked: `what this edit to ${path} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds` } : undefined)
   try {
     const at = await placed($, path, deadline)
-    if (!at) return { unchecked: `git could not name the repository ${path} is in, so what this edit brings to a Slack send could not be told` }
+    if (!at) return (await lateNow()) ?? { unchecked: `git could not name the repository ${path} is in, so what this edit brings to a Slack send could not be told` }
     top = at.top
     const hold = await freshOf(await reach(at.rel, after, rAfter, undefined, new Map()), before ? await reach(at.rel, before, rBefore, undefined, new Map()) : undefined)
     if (!hold) return PASS
     return { hold: 'senders' in found ? { ...hold, sender: firstSender(found) } : hold }
   } catch (err) {
-    return failed(err)
+    return (err instanceof Ended ? undefined : await lateNow()) ?? failed(err)
   }
 }
 

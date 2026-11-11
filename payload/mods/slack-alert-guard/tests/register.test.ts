@@ -72,7 +72,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const store: Record<string, unknown> = {}
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
-  // gitSlow: the search answers, but only after the clock has moved past the scan's deadline.
+  // gitSlow: the search answers, but only after the clock has moved past the scan's deadline; with
+  // gitSlowWhen, only a git grep one of whose arguments holds it does (#2719).
   // readMs: each file the guard reads and checks moves the clock this far, standing in for reading
   // and checking a real file on a busy Mac (#2371); cwd: the folder the session is in.
   // regexMsPerKb: each git grep moves the clock this far for every kilobyte of regular expression it
@@ -83,7 +84,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
   // after #2481).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
@@ -141,7 +142,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         return { value: { exitCode: 0, stdout: listed.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: ctl.gitTruncated, isStderrTruncated: false } } as never
       }
       if (argv[3] === 'grep') {
-        if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
+        if (ctl.gitSlow && argv.some(a => a.includes(ctl.gitSlowWhen))) await clock.advance(ctl.gitSlow)
         // -F: every pattern a fixed string, and a line matching any of them is listed.
         const fixed = argv.includes('-F')
         const given = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [a] : []))
@@ -2037,4 +2038,17 @@ test('an 11,000 line route posting through a send helper named for nothing Slack
   expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
   expect(held).toContain(QUIET)
   expect(w.ran.length).toBe(1)
+})
+
+test('a search for what an edit brings to a send that runs out of time says so, never that git could not name the repository (#2719)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(quietPage('orders', 45))\n" }
+  // Only the search for the route's own send helper, by its imports, runs past the deadline: the
+  // place the 12 ms of git came from.
+  w.ctl.gitSlow = SCAN_MS + 1
+  w.ctl.gitSlowWhen = ':(glob,icase)'
+  const late = refusalOf(await call($, send))
+  expect(late).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
+  expect(late).not.toContain('could not name the repository')
+  expect(w.ran).toEqual([])
 })
