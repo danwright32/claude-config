@@ -216,6 +216,20 @@ export const decide = (q: { goal: ModKitGoal; input: BoxInput; shown: GoalBoxSho
   return met ? { show: { kind: 'goal', key: `goal:${met.id}`, goal: met.condition } } : { show: { kind: 'request', key: `request:${prompts}`, goal: input.goal } }
 }
 
+/**
+ * Whether is it live made a card since `since` (Dan's last message, ms): the one measured sign that
+ * work shipped in this request (#2523). The verdicts are already held to their contract's shape by
+ * mergeFactsOf; whether the deploy is settled is the holds' question, not this one.
+ */
+export const cardedSince = (verdicts: MergeFacts['verdicts'], since: number): boolean => Object.values(verdicts).some(v => v.at >= since)
+
+/**
+ * What the session is told, with no /goal, when work shipped since Dan's last message, nothing is in
+ * flight and no box was shown (#2523): the reflection's reminder can be folded away, this cannot.
+ */
+export const askDoneText = (): string =>
+  `GOAL ACCOMPLISHED? Since Dan's last message a pull request merged and its is it live card was made, nothing this session started is still in flight, and no Goal accomplished box was shown. If every part of what Dan asked for is finished, call ${TOOL} now with goal set to what he asked for and shipped listing what shipped, one short line each. If part of it is still to do, do not call it and say nothing of the box.`
+
 /** What the session is told when its /goal's check finds it met: call the tool now. */
 export const askText = (condition: string): string =>
   `GOAL ACCOMPLISHED. The /goal "${condition}" was judged met. Show Dan the Goal accomplished box now: call ${TOOL} with goal set to the goal and shipped listing what shipped, one short line each (issues closed, pull requests merged and live). If it refuses, settle what it names, then call it again.`
