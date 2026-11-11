@@ -431,8 +431,9 @@ AWKS = {"awk", "gawk", "mawk", "nawk"}
 # The programs whose writes a later command in the same line can run (claude-config#2525): the file
 # they make is read as its source, since it is not on disk yet when the gate reads the command. Each
 # with the options that take a value (BSD's, the ones on these Macs, and GNU's -t and -S, which name a
-# target directory and a suffix there), so an option's value is never read as a file.
-COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTtS", "ginstall": "gmoSt",
+# target directory and a suffix there), so an option's value is never read as a file. BSD install's
+# -S is a flag (flush to disk), so the word after it is a file there.
+COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTt", "ginstall": "gmoSt",
            "ln": "tS", "gln": "tS", "link": ""}
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
 # it is not here: the word after it is a file.
@@ -968,8 +969,8 @@ class Judge:
         if not self.is_file(path):
             return None  # nothing there to run
         real = os.path.realpath(path)
-        if self.nudge and real == self.nudge:
-            return None  # /nudge, the one exemption (Dan, 2026-11-05)
+        if self.nudge and real == self.nudge and not self.made_from(real):
+            return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
         self.tick(path)
         walking, self.walking = self.walking, path
         try:

@@ -1582,9 +1582,23 @@ allowed "a harmless heredoc written to a file and run passes"
 # copy fails, so judging only the new text would let a refused script through.
 run_cp "cp plain.txt old.sh; bash old.sh"
 refused "a posting script a harmless copy overwrites is still read"
+# BSD install's -S is a flag (flush to disk, man install on macOS), so the word after it is the
+# source; read as a value, post.txt was swallowed and run.sh never recorded (PR #2730 review).
+# GNU install's -S is still a suffix, so its value is not taken for the source.
+run_cp "install -S plain.txt run.sh && bash run.sh"
+allowed "install -S copying a harmless file passes"
+for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.txt run.sh && ./run.sh" \
+  "ginstall -S .bak post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
+done
 # The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
 run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
 refused "a copy of the nudge script made and run in the same command is refused"
+# And the nudge script's own path, overwritten earlier in the same command, is no longer the shipped
+# script, so the exemption does not cover it (PR #2730 review). Nothing here runs, so it is untouched.
+run_cp "cp post.txt.py $NUDGE && python3 $NUDGE 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "the nudge script's path overwritten and run in the same command is refused"
 
 echo "slack drafts only: /nudge is the one script let through"
 
