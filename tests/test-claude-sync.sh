@@ -2298,7 +2298,7 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 #
 # A FRACTION OF THE CEILING rather than a number of seconds, so a slower machine given a larger
 # SUITE_TIMEOUT is not judged against a threshold calibrated on a fast one (L376). At CI's ceiling
-# of 1800 the budget is 1368s (76%), and it speaks well before the wall clock guard, which needs
+# of 1800 the budget is 1440s (80%), and it speaks well before the wall clock guard, which needs
 # 1800s of section time to reach its 900s.
 #
 # CI's runners come in TWO speeds, and the budget runs out on the slower (claude-config#1494). Over
@@ -2320,16 +2320,32 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # which hardware sits behind each region cannot be read from it. A hosted runner cannot be chosen, so
 # the budget has to fit the slower group, and #2369 cut the three newest sections rather than move it.
 #
-# SET FROM THAT SPREAD, 2026-10-25 (claude-config#1667). The 40 runs of the tests workflow on main
-# from 2026-10-24 01:17 to 2026-10-25 04:24 UTC, read from their logs with gh, are in
-# tests/ci-section-time-readings.tsv: the same two groups, 885s to 1092s and 1192s to 1362s, the
-# slower one 1221s at its median. At 70% the budget was 1260s, inside the slower group, so it turned
-# runs red with nothing grown: two of those 40 on main (1280s and 1362s) and pull request #1656
-# (1268s). 76% is 1368s, above every recorded run, which still speaks at about 12% of growth on the
-# slower runners. The suite holds the budget above the highest recorded run, so a new reading past
-# it fails here rather than a pull request at random. The lever NOT pulled (L308): judging the work
-# against the runner's own speed, measured in the same run, which would let the faster group be held
-# as tightly as the slower; at 76% growth there is caught only past about 39%.
+# SET FROM THAT SPREAD, 2026-10-25 (claude-config#1667), from 40 runs on main: two groups, 885s to
+# 1092s and 1192s to 1362s. At 70% (1260s) the budget sat inside the slower group and turned runs
+# red with nothing grown, so it went to 76% (1368s), above every run then recorded.
+#
+# SET FROM THE SPREAD AGAIN, 2026-11-10 (claude-config#2614), after the suite was made cheaper
+# (#2627, #2658) and its watchdog stopped holding output open (#2638). The 328 runs of the tests
+# workflow from 2026-11-08 21:27 UTC (when #2471 merged) to 2026-11-10 20:55 UTC, 100 on main and
+# 228 on pull requests, read from their logs with gh, replace the record in
+# tests/ci-section-time-readings.tsv. Every runner had 4 cores. Still two groups with a gap between
+# them: 176 runs from 834s to 1179s (median 1072s), and 152 from 1201s to 1393s (median 1291s, mean
+# 1293s, standard deviation 35s). The slower group's median did not move across the two full days
+# (1293s on the 9th, 1290s on the 10th), so the spread is the runner rather than the work, and normalising by the check count
+# (3398 to 3467 over the record, 2%) would hide the very growth the budget exists to see (L323). 76%
+# sat at the slower group's 97th percentile, and 5 of the 328 runs (1369s to 1393s) went red on time
+# alone with every check passing. 80% is 1440s: above the slower group's mean plus four deviations
+# (1435s) and 47s above the highest run, and still under 15% over its median (1484s), so growth of
+# about 12% on the slower runners and 34% on the faster ones fails. The section beside the budget's
+# checks recomputes both bounds from the record, so a refresh whose spread no longer fits is a
+# refusal there. The four runs that include #2658 (1059s to 1281s) sit inside both groups; its
+# measured saving, about 7s, is a fifth of one deviation, so the fit does not wait on more of them.
+#
+# NOT per runner kind, which was looked at: the processor the log names does not decide the group.
+# Every AMD EPYC 7763 run was slower (135 of 135), but so were 15 of 89 on the AMD EPYC 9V74 and 2
+# of 15 on the Xeon 8370C, so a budget fitted to a processor's usual speed turns those red. The
+# lever NOT pulled (L308) is still judging the work against the runner's own speed measured in the
+# same run, which would let the faster group be held as tightly as the slower.
 #
 # MEASURED AGAINST THAT BUDGET 2026-09-20, with tools/measure-section-time.sh, which takes several
 # readings and records the machine state beside each one (claude-config#517). The two figures that
@@ -2342,7 +2358,8 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # this paragraph to it: the figures quoted here are recomputed from that record and compared, so a
 # new reading appended there fails the suite until this is updated to match (#520). Each percentage
 # is of the budget those readings were JUDGED against, the record's budget_seconds column: 2520s,
-# 70% of the local 3600s ceiling, until #1667 raised the fraction to 76% on 2026-10-25. Today's
+# 70% of the local 3600s ceiling, until #1667 raised the fraction to 76% on 2026-10-25 and #2614 to
+# 80% on 2026-11-10. Today's
 # budget is that fraction of the ceiling, set below, and is not restated here, so it cannot go stale.
 #
 #   As found, with another project's Xcode suite and a backup client running:
@@ -2368,7 +2385,7 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # A reading under a load this tool STARTS rather than one it found is MEASURE_LOAD_PROCS, and it
 # was not taken. Named here rather than left to be rediscovered (L308): the two arms above already
 # differ by roughly 2x in ambient CPU, which asks the same question of a real machine.
-SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-76}"
+SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-80}"
 # Every shard's SUITE-WORK line, added up. Prints NOTHING when any shard did not emit one, so a
 # shard that died takes the total with it rather than quietly shrinking it (claude-config#492).
 fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards to expect
@@ -17708,8 +17725,8 @@ section "== how much WORK this run is, against a budget that scales with its cei
 #
 # The budget is a FRACTION OF THE CEILING that machine is given rather than a number of seconds, so
 # a slower machine with a larger SUITE_TIMEOUT is not judged against a threshold calibrated on a
-# fast one (L376). At the CI ceiling of 1800 the budget is 1368s, set above CI's own run to run
-# spread (#1667, the paragraph above SUITE_WORK_BUDGET_PCT), and it speaks well before the wall
+# fast one (L376). At the CI ceiling of 1800 the budget is 1440s, set from CI's own run to run
+# spread (#1667, #2614, the paragraph above SUITE_WORK_BUDGET_PCT), and it speaks well before the wall
 # clock guard, which needs 1800s of section time to reach its 900s of wall.
 #
 # Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
@@ -17754,23 +17771,78 @@ _wb_pct="$(SUITE_WORK_BUDGET_PCT=10 _wb 500 3600)"; _wb_pct_rc=$?
 check "#492 the fraction can be set, and a tighter one refuses work that passed before" \
   "[ '$_wb_pct_rc' -eq 1 ]"
 
-# THE BUDGET AT CI'S CEILING SITS ABOVE CI'S OWN RUN TO RUN SPREAD (claude-config#1667). At 70% it
-# was 1260s, inside the spread of ordinary runs on CI's slower runners, so a pull request went red
-# by chance (#1656 at 1268s, on 2026-10-24) and so did two runs of main (1280s and 1362s, measured
-# from their logs on 2026-10-25) with nothing grown. The
-# runs the budget was set from are in tests/ci-section-time-readings.tsv, taken from the logs of the
-# tests workflow on main with gh, and the budget is held above the highest of them here, so a new
-# reading past it fails this suite until the budget is reconsidered rather than turning a pull
-# request red. The ceiling is read from the workflow that sets it, never restated (L41).
+# THE BUDGET AT CI'S CEILING IS SET FROM THE SPREAD OF CI'S OWN RUNS (claude-config#1667, #2614).
+# At 70% it was 1260s, inside the spread of ordinary runs on CI's slower runners, and #1667 raised it
+# to 76% (1368s), above every run it had. By 2026-11-10 the slower runners' median had grown to 1291s
+# and 76% sat at their 97th percentile, so 5 of 328 runs went red on time alone with every check
+# passing (#2614). The runs the budget is set from are in tests/ci-section-time-readings.tsv, read
+# from the logs of the tests workflow with gh, each carrying the runner it ran on and the group its
+# section time put it in. Every figure below is RECOMPUTED from that record, so the budget is held
+# to the spread rather than to a number somebody wrote down once (L172), and a refreshed record
+# whose spread no longer fits fails here, as a decision to make, rather than a pull request going
+# red at random. The ceiling is read from the workflow that sets it, never restated (L41).
+#
+# Two bounds, both from the SLOWER group, because that is where the budget runs out:
+#   quiet: at least its mean plus four standard deviations, and above every reading on record. The
+#     group sits close to a normal curve with a slightly heavy top (its 99th percentile is 2.45
+#     deviations up, against 2.33 for a normal one), so four leaves room past the tail rather than
+#     drawing the line through it. Three would sit 6s above the record's highest reading.
+#   still a guard: at most 15% above its median, so growth of that size on the slower runners still
+#     fails. #1667's budget caught about 12% when it was set; 15% is the most this lets it drift to.
 _ci_rec="$(dirname "$SCRIPT")/tests/ci-section-time-readings.tsv"
 _ci_ceiling="$(awk '/^[[:space:]]*SUITE_TIMEOUT:[[:space:]]*[0-9]+[[:space:]]*$/ { print $2; exit }' "$(dirname "$SCRIPT")/.github/workflows/tests.yml" 2>/dev/null)"
-_ci_runs="$(awk -F'\t' 'NR > 1 && $5 ~ /^[0-9]+$/ { n++ } END { print n + 0 }' "$_ci_rec" 2>/dev/null)"
-_ci_hi="$(awk -F'\t' 'NR > 1 && $5 ~ /^[0-9]+$/ && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }' "$_ci_rec" 2>/dev/null)"
-check "#1667 the CI readings the budget was set from are recorded, 30 runs or more ($_ci_runs)" "[ \"\${_ci_runs:-0}\" -ge 30 ]"
+# Read by column NAME from the record's own header, never by position (#524): a header missing
+# either name gives no figure at all, which every check below reads as missing rather than zero.
+_ci_stat(){   # $1 = runner_group, or all  $2 = n, lo, hi, median or quiet  [$3 = record]
+  awk -F'\t' -v grp="$1" -v want="$2" '
+    NR == 1 { for (i = 1; i <= NF; i++) c[$i] = i; s = c["section_seconds"]; g = c["runner_group"]; if (!s || !g) exit; next }
+    (grp == "all" || $g == grp) && $s ~ /^[0-9]+$/ { v[++n] = $s + 0; t += $s; tt += $s * $s }
+    END {
+      if (!n) { print ""; exit }
+      for (i = 2; i <= n; i++) { x = v[i]; for (j = i - 1; j >= 1 && v[j] > x; j--) v[j + 1] = v[j]; v[j + 1] = x }
+      if (want == "n") print n
+      else if (want == "lo") print v[1]
+      else if (want == "hi") print v[n]
+      else if (want == "median") print v[int((n + 1) / 2)]
+      else if (want == "quiet") { m = t / n; d = tt / n - m * m; q = m + 4 * sqrt(d > 0 ? d : 0); print (q == int(q) ? q : int(q) + 1) }
+    }' "${3:-$_ci_rec}" 2>/dev/null
+}
+_ci_runs="$(_ci_stat all n)"
+_ci_hi="$(_ci_stat all hi)"
+_ci_slow_n="$(_ci_stat slower n)"
+_ci_slow_lo="$(_ci_stat slower lo)"
+_ci_slow_med="$(_ci_stat slower median)"
+_ci_slow_quiet="$(_ci_stat slower quiet)"
+_ci_fast_hi="$(_ci_stat faster hi)"
+check "#1667 the CI readings the budget is set from are recorded, 100 runs or more ($_ci_runs)" "[ \"\${_ci_runs:-0}\" -ge 100 ]"
+check "#2614 and 30 or more of them on the slower runners ($_ci_slow_n)" "[ \"\${_ci_slow_n:-0}\" -ge 30 ]"
+# The group is written into the record, so it is checked against the numbers it was drawn from: a
+# reading put in the wrong group would move both bounds with nothing else saying so.
+check "#2614 the two groups do not overlap: the faster's highest (${_ci_fast_hi}s) is under the slower's lowest (${_ci_slow_lo}s)" \
+  "[ -n '$_ci_fast_hi' ] && [ -n '$_ci_slow_lo' ] && [ '${_ci_fast_hi:-0}' -lt '${_ci_slow_lo:-0}' ]"
+_CI_NOGROUP="$WORK/ci-section-time-readings-nogroup.tsv"
+sed '1s/runner_group/something_else/' "$_ci_rec" > "$_CI_NOGROUP"
+check "#2614 a record without a runner_group column yields no figure at all" \
+  "[ -n \"\$(_ci_stat slower median)\" ] && [ -z \"\$(_ci_stat slower median '$_CI_NOGROUP')\" ]"
 check "#1667 CI's ceiling is read from the workflow ($_ci_ceiling)" "[ -n '$_ci_ceiling' ]"
 _ci_budget=$(( ${_ci_ceiling:-0} * SUITE_WORK_BUDGET_PCT / 100 ))
 check "#1667 the budget at CI's ceiling (${_ci_budget}s) sits above the highest recorded CI run (${_ci_hi}s)" \
-  "[ '$_ci_budget' -gt '${_ci_hi:-0}' ]"
+  "[ -n '$_ci_hi' ] && [ '$_ci_budget' -gt '${_ci_hi:-0}' ]"
+check "#2614 and at or above the slower runners' mean plus four deviations (${_ci_slow_quiet}s)" \
+  "[ -n '$_ci_slow_quiet' ] && [ '$_ci_budget' -ge '${_ci_slow_quiet:-0}' ]"
+_ci_growth=$(( ${_ci_slow_med:-0} * 115 / 100 ))
+check "#2614 and at or below 15% over the slower runners' median (${_ci_growth}s), so growth still fails" \
+  "[ -n '$_ci_slow_med' ] && [ '$_ci_budget' -le '$_ci_growth' ]"
+# And through the guard itself rather than its arithmetic (L442): the highest run on record, at CI's
+# ceiling with the processor time saying it was all the suite's own, passes, and a run 15% over the
+# slower runners' median fails. Both on a quiet machine, set rather than measured (L290).
+_ci_in="$(_wb "${_ci_hi:-0}" "${_ci_ceiling:-0}" "${_ci_hi:-0}")"; _ci_in_rc=$?
+check "#2614 a reading inside the spread (${_ci_hi}s, the highest on record) passes at CI's ceiling" \
+  "[ -n '$_ci_hi' ] && [ '$_ci_in_rc' -eq 0 ] && [ -z \"\$_ci_in\" ]"
+_ci_past=$(( _ci_growth + 1 ))
+_ci_out="$(_wb "$_ci_past" "${_ci_ceiling:-0}" "$_ci_past")"; _ci_out_rc=$?
+check "#2614 a reading past it (${_ci_past}s) fails at CI's ceiling" \
+  "[ -n '$_ci_slow_med' ] && [ '$_ci_out_rc' -eq 1 ] && case \"\$_ci_out\" in FAIL:*) true ;; *) false ;; esac"
 
 # A sum it could NOT read must never be treated as zero: zero clears every budget there is, so a
 # broken reader would be indistinguishable from a suite that costs nothing (L90, L98). Said out
@@ -21629,7 +21701,10 @@ cat > "$NR_SHIM/rsync" <<NR_RSYNC_BREAK
 "$NR_REAL_RSYNC" "\$@"; rc=\$?
 dry=""; for a in "\$@"; do case "\$a" in --dry-run|-[!-]*n*) dry=1 ;; esac; done
 last="\${@: -1}"
-if [ -z "\$dry" ] && [ "\$last" = "\$NR_WATCH_HOME/hooks/" ]; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
+# The hooks mirror is one rsync into the home naming hooks among the mirrored trees (#2614), or, run
+# on its own, one into the home's hooks folder.
+hooks=""; for a in "\$@"; do case "\$a" in */hooks) hooks=1 ;; esac; done
+if [ -z "\$dry" ] && { [ "\$last" = "\$NR_WATCH_HOME/hooks/" ] || { [ "\$last" = "\$NR_WATCH_HOME/" ] && [ -n "\$hooks" ]; }; }; then printf 'broken by the test\n' > "\$NR_WATCH_HOME/settings.json"; printf 'broke\n' >> "$NR_OUT/shim-broke"; fi
 exit \$rc
 NR_RSYNC_BREAK
 chmod +x "$NR_SHIM/rsync"
@@ -24643,11 +24718,32 @@ check "#1535 a file installed with this Mac's home path in it is matched to the 
 # When it is not, what status said, the installed bytes and the history it was matched against are
 # the diagnosis, so they are printed (L177). This check failed once under load on 2026-11-02
 # (claude-config#2091) while the two above it passed, and the kept output held only the FAIL line.
+# It has not been reproduced since: on 2026-11-10, 0 misses in 416 pulls into a fresh home each
+# followed by a status read, at load 23 to 115 on 12 cores, some of it inside a load window. So
+# the print also answers the two questions the next look needs. Is the INSTALLED file a version the
+# repo held? Its hashes, raw and with the placeholder put back, are looked up in the history, and
+# its size says whether an install left it empty. Does the miss persist? A second status read, at
+# once, says whether the first one failed only that once.
 if ! line_has "$out_ml1" 'mods behind the shared repo' 'path-mod'; then
   printf '%s\n' "$out_ml1" | sed 's/^/    status said: /'
+  printf '    CLAUDE_HOME status was given: %s\n' "$MLH"
   sed 's/^/    installed paths.ts: /' "$MLH/mods/path-mod/hooks/paths.ts" 2>&1
-  git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1 \
-    | sed 's/^/    repo history: /'
+  _ml_raw="$(git hash-object "$MLH/mods/path-mod/hooks/paths.ts" 2>&1)"
+  _ml_tok="$(HT_FROM="$MLH" HT_TO='__CLAUDE_HOME__' perl -pe 's/\Q$ENV{HT_FROM}\E/$ENV{HT_TO}/g' < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | git hash-object --stdin 2>&1)"
+  printf '    installed paths.ts: %s bytes, blob %s, blob with the placeholder put back %s\n' \
+    "$(wc -c < "$MLH/mods/path-mod/hooks/paths.ts" 2>&1 | tr -d ' ')" "$_ml_raw" "$_ml_tok"
+  _ml_hist="$(git -C "$MLR" log --format='C %ct' --raw --no-abbrev origin/main -- payload/mods/path-mod/hooks/paths.ts 2>&1)"
+  printf '%s\n' "$_ml_hist" | sed 's/^/    repo history: /'
+  if grep -qF -e " $_ml_raw " -e " $_ml_tok " <<< "$_ml_hist"; then
+    echo "    the installed file is a version the repo held, so the pull installed it correctly and status failed to match it"
+  else
+    echo "    the installed file is no version the repo held, so the pull installed something wrong"
+  fi
+  if line_has "$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)" 'mods behind the shared repo' 'path-mod'; then
+    echo "    a second status read at once named path-mod, so the first read failed only that once"
+  else
+    echo "    a second status read at once missed path-mod too, so the miss persists"
+  fi
 fi
 check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
   "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
@@ -24694,6 +24790,136 @@ out_ml5="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
 dbg "#1535 status with a removal not received: $out_ml5"
 check "#1535 a mod the shared repo removed and this Mac still runs is named" \
   "line_has \"\$out_ml5\" 'mods behind the shared repo' 'side-mod'"
+
+section "== status names a mod file it could not compare, rather than counting it as unsent (claude-config#2673) =="
+# The comparison above hashed each installed mod file, and the files holding this Mac's home path
+# again with the placeholder put back, with every error discarded and no exit read. A hash that
+# failed left an empty or wrong value, so the file matched no version the repo held, read as this
+# Mac's own unsent work, and dropped out of the lag line with nothing said. One failed placeholder
+# swap reproduces the #1535 failure of 2026-11-02 exactly (Refs #2091): kit-mod and side-mod named,
+# path-mod silently missing. So a file status could not compare is now named, with the step that
+# failed, and counted neither as behind nor as level (L11, L184). The failures are made by a perl
+# and a git standing in front of the real ones on PATH, so the script under test is unchanged.
+MCB="$WORK/modcmp-bare.git"; git init -q --bare -b main "$MCB"
+MCS="$WORK/modcmp-sender"; git clone -q "$MCB" "$MCS" 2>/dev/null
+mccommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MCS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MCS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MCS/payload/mods/kit-mod/hooks" "$MCS/payload/mods/side-mod/.claude-plugin" "$MCS/payload/mods/path-mod/hooks" \
+  "$MCS/payload/mods/gone-mod" "$MCS/payload/mods/plain-mod"
+printf 'export const v = 1\n' > "$MCS/payload/mods/kit-mod/hooks/branch.ts"
+printf '{ "name": "side-mod" }\n' > "$MCS/payload/mods/side-mod/.claude-plugin/plugin.json"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MCS/payload/mods/path-mod/hooks/paths.ts"
+printf 'gone 1\n' > "$MCS/payload/mods/gone-mod/index.ts"
+printf 'plain 1\n' > "$MCS/payload/mods/plain-mod/index.ts"
+printf '# rules\n' > "$MCS/payload/CLAUDE.md"
+git -C "$MCS" add -A; mccommit 864000 "mods v1"
+MCR="$WORK/modcmp-repo"; git clone -q "$MCB" "$MCR" 2>/dev/null
+MCH="$WORK/modcmp-home"; mkdir -p "$MCH"; echo '{"hooks":{}}' > "$MCH/settings.json"
+MCAG="$WORK/modcmp-agents"; mkdir -p "$MCAG"
+mcenv(){ echo "CLAUDE_HOME=$MCH SYNC_REPO=$MCR SYNC_LAUNCHAGENTS=$MCAG SYNC_HOLD_FILE=$WORK/modcmp-hold SYNC_WATCH_PID_FILE=$WORK/modcmp-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(mcenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2673 the fixture: path-mod is installed with this Mac's home path in it" \
+  "grep -qF '$MCH/hooks' '$MCH/mods/path-mod/hooks/paths.ts'"
+# The shared repo moves on two days ago: four files change, one mod is removed and one added. This
+# Mac receives none of it, so all six are behind.
+printf 'export const v = 2\n' > "$MCS/payload/mods/kit-mod/hooks/branch.ts"
+printf '{ "name": "side-mod", "description": "two" }\n' > "$MCS/payload/mods/side-mod/.claude-plugin/plugin.json"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MCS/payload/mods/path-mod/hooks/paths.ts"
+printf 'plain 2\n' > "$MCS/payload/mods/plain-mod/index.ts"
+mkdir -p "$MCS/payload/mods/new-mod"; printf 'new 1\n' > "$MCS/payload/mods/new-mod/index.ts"
+git -C "$MCS" rm -q -r payload/mods/gone-mod
+git -C "$MCS" add -A; mccommit 172800 "mods v2"
+# THE NORMAL PATH, unchanged: every lagging file is compared and named, and nothing is called
+# uncomparable.
+rc_mc0=0; out_mc0="$(env $(mcenv) bash "$SCRIPT" status 2>&1)" || rc_mc0=$?
+dbg "#2673 status with nothing failing: $out_mc0"
+check "#2673 with nothing failing, all six lagging files are compared and their mods named" \
+  "line_has \"\$out_mc0\" 'mods behind the shared repo: 6 file' 'gone-mod' 'kit-mod' 'new-mod' 'path-mod' 'plain-mod' 'side-mod'"
+check "#2673 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_mc0\""
+# THE #2091 REPRODUCTION: the placeholder swap fails once, for the one tokenized file.
+MCSHIM="$WORK/modcmp-shim"; mkdir -p "$MCSHIM/perl-bin" "$MCSHIM/git-bin"
+cat > "$MCSHIM/perl-bin/perl" <<EOS
+#!/bin/sh
+# Fails the first swap TO the placeholder it is asked for (claude-sync's tok), then is the real perl.
+if [ "\${HT_TO:-}" = "__CLAUDE_HOME__" ] && [ ! -e "$MCSHIM/perl-failed" ]; then : > "$MCSHIM/perl-failed"; exit 2; fi
+exec "$(command -v perl)" "\$@"
+EOS
+chmod +x "$MCSHIM/perl-bin/perl"
+rc_mc1=0; out_mc1="$(env $(mcenv) PATH="$MCSHIM/perl-bin:$PATH" bash "$SCRIPT" status 2>&1)" || rc_mc1=$?
+dbg "#2673 status with the placeholder swap failing once: $out_mc1"
+check "#2673 the fixture: the stand in perl did fail a placeholder swap" \
+  "[ -e '$MCSHIM/perl-failed' ]"
+check "#2673 a file whose placeholder swap failed is named, with the step and its exit status" \
+  "line_has \"\$out_mc1\" 'could not compare path-mod/hooks/paths.ts' 'placeholder' 'exit 2'"
+check "#2673 under a heading saying how many files and that they are counted neither way" \
+  "line_has \"\$out_mc1\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind'"
+check "#2673 and it is not counted as behind, since it was never compared" \
+  "! line_has \"\$out_mc1\" 'mods behind the shared repo' 'path-mod'"
+check "#2673 while every file it could compare is still named as behind" \
+  "line_has \"\$out_mc1\" 'mods behind the shared repo: 5 file' 'kit-mod' 'side-mod' 'plain-mod'"
+check "#2673 and status exits as it does when nothing failed" \
+  "[ $rc_mc1 -eq $rc_mc0 ]"
+# EVERY OTHER STEP: the batch hash, one file's own hash, a hash that prints nothing, and each of the
+# three history reads. plain-mod is left alone, so it shows the rest are still compared.
+cat > "$MCSHIM/git-bin/git" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"hash-object --stdin-paths"*) exit 128 ;;
+  *"hash-object -- "*"/mods/kit-mod/hooks/branch.ts") exit 128 ;;
+  *"hash-object -- "*"/mods/path-mod/hooks/paths.ts") exit 128 ;;
+  *"hash-object --stdin") cat >/dev/null; exit 0 ;;
+  *" log "*"--raw"*"payload/mods/side-mod/"*) exit 128 ;;
+  *" log "*"--diff-filter=A"*"payload/mods/new-mod/"*) exit 128 ;;
+  *" log "*"--diff-filter=D"*"payload/mods/gone-mod/"*) exit 128 ;;
+esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$MCSHIM/git-bin/git"
+rc_mc2=0; out_mc2="$(env $(mcenv) PATH="$MCSHIM/git-bin:$PATH" bash "$SCRIPT" status 2>&1)" || rc_mc2=$?
+dbg "#2673 status with git failing at every step: $out_mc2"
+check "#2673 a file git could not hash is named, with git's exit status" \
+  "line_has \"\$out_mc2\" 'could not compare kit-mod/hooks/branch.ts' 'hashing it failed' 'exit 128'"
+check "#2673 a hash that printed nothing is named as that" \
+  "line_has \"\$out_mc2\" 'could not compare path-mod/hooks/paths.ts' 'printed no hash'"
+check "#2673 a changed file whose history could not be read is named" \
+  "line_has \"\$out_mc2\" 'could not compare side-mod/.claude-plugin/plugin.json' 'reading its history' 'exit 128'"
+check "#2673 a file this Mac lacks, when the repo's add could not be read, is named" \
+  "line_has \"\$out_mc2\" 'could not compare new-mod/index.ts' 'added it' 'exit 128'"
+check "#2673 a file the repo removed, when the removal could not be read, is named" \
+  "line_has \"\$out_mc2\" 'could not compare gone-mod/index.ts' 'removed it' 'exit 128'"
+# path-mod fails two steps (its own hash and the hash with the placeholder put back), so it has two
+# lines and is still one file.
+check "#2673 a file failing two steps has a line for each" \
+  "line_has \"\$out_mc2\" 'could not compare path-mod/hooks/paths.ts' 'hashing it failed' 'exit 128'"
+check "#2673 the heading counts all five files, not their lines" \
+  "line_has \"\$out_mc2\" 'mods not compared with the shared repo: status could not compare 5 file' 'neither as behind'"
+check "#2673 and the one file every step could read is still compared one by one and named as behind" \
+  "line_has \"\$out_mc2\" 'mods behind the shared repo: 1 file' 'plain-mod'"
+check "#2673 and none of the five is counted as behind" \
+  "! line_has \"\$out_mc2\" 'mods behind the shared repo' 'kit-mod|path-mod|side-mod|new-mod|gone-mod'"
+check "#2673 and status exits as it does when nothing failed, even then" \
+  "[ $rc_mc2 -eq $rc_mc0 ]"
+# THE REMOVED VERSION: the removal was read, but the version it removed could not be, so whether
+# this Mac still runs that version is unknown (found by the push's lessons review).
+mkdir -p "$MCSHIM/rp-bin"
+cat > "$MCSHIM/rp-bin/git" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"rev-parse -q --verify "*"^:payload/mods/gone-mod/"*) exit 128 ;;
+esac
+exec "$(command -v git)" "\$@"
+EOS
+chmod +x "$MCSHIM/rp-bin/git"
+out_mc3="$(env $(mcenv) PATH="$MCSHIM/rp-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2673 status with the removed version unreadable: $out_mc3"
+check "#2673 a removed file whose removed version could not be read is named" \
+  "line_has \"\$out_mc3\" 'could not compare gone-mod/index.ts' 'version origin/main removed' 'exit 128'"
+check "#2673 and the rest are still named as behind" \
+  "line_has \"\$out_mc3\" 'mods behind the shared repo: 5 file' 'kit-mod' 'path-mod'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266

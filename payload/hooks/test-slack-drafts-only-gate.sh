@@ -723,6 +723,120 @@ for why in "unset:a variable the script never sets" "twice:a variable set again 
   refused "an entry the gate cannot be sure of is placed nowhere and refused: ${why#*:}"
 done
 
+# A string the gate cannot read, run by eval in the script's own shell between where ROOT is set and
+# where python starts, can set ROOT again, so the entry is no longer certain (claude-config#2654).
+# tests/test-mods.sh ran a remedy its checker printed that way, 1,800 lines above its ts_source step,
+# and from #2539 on the gate refused the whole suite for it (measured through this wrapper as it
+# stood at each change, 2026-11-10: allowed up to #2522, refused from #2539). The gate was applying
+# its rule, so the suite changed and the gate did not: the remedy now runs in a subshell, which can
+# set nothing in the script. Both halves, each in both trees: the eval in the script's own shell is
+# refused whatever the helper does, and the one in a subshell is placed and its helper judged.
+ev_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+remedy="$(grep "differs" "$DIR/found.txt" | cut -d: -f2)"'
+for tree in ok posts; do
+  for how in 'evald:eval "$remedy"' 'subeval:( eval "$remedy" )'; do
+    printf '%s\n' '#!/bin/bash' "$ev_top" "[ -n \"\$remedy\" ] && ${how#*:}" \
+      'python3 - "$ROOT/tools/lib" <<'"'PY'" 'import sys' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' 'PY' > "$T/av/$tree/tests/${how%%:*}.sh"
+  done
+done
+run_bash "bash $T/av/ok/tests/evald.sh"
+refused "a string run by eval in the script's own shell leaves the entry uncertain, at a helper that only saves a draft"
+says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
+run_bash "bash $T/av/posts/tests/evald.sh"
+refused "the same eval at a helper that posts"
+run_bash "bash $T/av/ok/tests/subeval.sh"
+allowed "the same string run by eval in a subshell sets nothing in the script, so the entry is placed"
+run_bash "bash $T/av/posts/tests/subeval.sh"
+refused "and the helper placed past a subshell's eval is judged: one that posts"
+says "that refusal names the placed helper" "av_helper.py"
+# The suite itself, as a session runs it. The fixtures above are shaped like it; this is it, so the
+# next change to the walk that refuses it fails here rather than in a session (L48). The installed
+# copy of these hooks has no tests/ folder beside it, and says so rather than passing (L411).
+MODS_REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/tests/test-mods.sh" ] && [ -f "$MODS_REPO/tools/lib/ts_source.py" ]; then
+  run_bash "cd $MODS_REPO && bash tests/test-mods.sh"
+  allowed "the repository's own mods suite, bash tests/test-mods.sh, is not refused (claude-config#2654)"
+else
+  echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: $DIR is not in a claude-config checkout holding tests/test-mods.sh (the installed copy of the hooks is not), so the repository's mods suite was not judged here"
+fi
+
+# A file the script sources whose function runs its argument by eval in the caller's shell can set
+# any name each time it is called, so past that source line the gate is sure of no variable, and an
+# import placed by one is placed nowhere (claude-config#2668). lib/hang-wait.sh is such a file: its
+# two waits run their condition in the suite's own shell, and what the condition sets is kept
+# (test-hang-wait.sh pins that; a subshell there was tried in #2465 and lost what suites read
+# back). test-context-size-notice.sh, test-pr-review.sh and the design rounds' test-score-adapters.sh
+# each sourced it and then handed python a folder held in a variable. Measured through this wrapper
+# on 2026-11-10: each was allowed cut off before that source line and refused from it on, and the
+# same import with no such file sourced was allowed. The gate was applying its rule, so the suites
+# changed and the gate did not: each spells the folder from BASH_SOURCE where it hands it over,
+# which no variable carries. Both halves, each in both trees, and the control with nothing sourced.
+sw_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+sw_py="python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import av_helper'"
+for tree in ok posts; do
+  printf '%s\n' 'wait_on(){ until eval "$1"; do sleep 1; done; }' > "$T/av/$tree/tools/waits.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/nowait.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/waitvar.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' \
+    "$sw_py \"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")/..\" && pwd)/tools/lib\"" > "$T/av/$tree/tests/waitspelt.sh"
+done
+run_bash "bash $T/av/ok/tests/nowait.sh"
+allowed "an entry held in a variable is placed where the script sources nothing"
+run_bash "bash $T/av/ok/tests/waitvar.sh"
+refused "past a sourced file whose function runs its argument by eval, an entry held in a variable is uncertain, at a helper that only saves a draft"
+says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
+run_bash "bash $T/av/posts/tests/waitvar.sh"
+refused "the same entry at a helper that posts"
+run_bash "bash $T/av/ok/tests/waitspelt.sh"
+allowed "past the same sourced file, an entry spelt from BASH_SOURCE where it is handed over is placed"
+run_bash "bash $T/av/posts/tests/waitspelt.sh"
+refused "and the helper placed that way is judged: one that posts"
+says "that refusal names the placed helper" "av_helper.py"
+# A module the script copies somewhere and imports from there is not on disk when the gate reads the
+# script, so it is placed nowhere. test-shell-code-lines.sh did that to show its reader refusing
+# with no shell-words.py beside it: it copied the reader alone into a throwaway folder and imported
+# the copy (allowed cut off before that step, refused from it on). The suite now imports the
+# reader from lib/ and points the one load of shell-words.py at an empty folder, so everything that
+# runs is on disk for the gate to read. Both halves, each in both trees.
+for tree in ok posts; do
+  printf '%s\n' '#!/bin/bash' "$sw_top" 'W="$(mktemp -d)"' 'cp "$ROOT/tools/lib/av_helper.py" "$W/"' "$sw_py \"\$W\"" > "$T/av/$tree/tests/copied.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" 'W="$(mktemp -d)"' "python3 -c '" 'import importlib.util, os, sys' \
+    'found = importlib.util.spec_from_file_location' 'def elsewhere(name, location=None, *rest, **more):' \
+    '    return found(name, os.path.join(sys.argv[2], os.path.basename(str(location))), *rest, **more)' \
+    'importlib.util.spec_from_file_location = elsewhere' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' \
+    "' \"\$ROOT/tools/lib\" \"\$W\"" > "$T/av/$tree/tests/pointed.sh"
+done
+run_bash "bash $T/av/ok/tests/copied.sh"
+refused "a module the script copies into a throwaway folder and imports from there is placed nowhere, at a helper that only saves a draft"
+says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
+run_bash "bash $T/av/posts/tests/copied.sh"
+refused "the same copy of a helper that posts"
+run_bash "bash $T/av/ok/tests/pointed.sh"
+allowed "the helper imported from where it is kept, by code that points a later load by path at an empty folder, is placed"
+run_bash "bash $T/av/posts/tests/pointed.sh"
+refused "and the helper imported that way is judged: one that posts"
+says "that refusal names the placed helper" "av_helper.py"
+# The four suites themselves, as a session runs them. The fixtures above are shaped like them; these
+# are them, so the next change to the walk, or to a suite, that gets one refused fails here rather
+# than in a session (L48). All four are in the installed copy too, one folder shallower, and a copy
+# that lacks one says so rather than passing (L411).
+if [ -n "$MODS_REPO" ] && [ "$MODS_REPO/payload/hooks" -ef "$DIR" ]; then
+  sw_from="$MODS_REPO"; sw_pre="payload/"
+else
+  sw_from="$(cd "$DIR/.." && pwd)"; sw_pre=""
+fi
+for sw_suite in hooks/test-context-size-notice.sh hooks/test-pr-review.sh hooks/test-shell-code-lines.sh \
+  skills/design-rounds/score/test-score-adapters.sh; do
+  if [ -f "$sw_from/$sw_pre$sw_suite" ]; then
+    run_bash "cd $sw_from && bash $sw_pre$sw_suite"
+    allowed "a suite of this repository is not refused when a session runs it: bash $sw_pre$sw_suite (claude-config#2668)"
+  else
+    echo "SUITE-PART-UNMEASURED #2668 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that suite was not judged here"
+  fi
+done
+
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
 refused "python3 -c importing a helper that posts"
@@ -1029,6 +1143,59 @@ for acts in "zero.sh:(.)" "py-c.sh:subprocess" "node-e.sh:child_process" "ruby-e
   run_bash "cd $T/ip && bash ${acts%%:*} msg.json"
   refused "a shell script whose inline or piped code can act on what it is handed: ${acts%%:*}"
   says "that refusal says how ${acts%%:*} acts" "${acts#*:}"
+done
+# A heredoc the shell expands what the script was handed into is code it was handed, where a shell or
+# an interpreter reads it (doc-expands.sh above). In a script the reader can only cut crudely no
+# command has a place, so nothing says which heredoc feeds which command, and the heredoc's own
+# lines come back as commands of the script: `echo "$1"` reads as an echo, and an assignment as
+# nothing. Measured through this wrapper on 2026-11-10 (claude-config#2641): each script below was
+# refused as written and allowed with a quote left open after it. A place the reader cannot follow
+# is refused, so now both are.
+crude_doc() { # crude_doc <name> <lines...>: the script as written, and one only the crude cut reads
+  local n="$1"; shift
+  printf '%s\n' '#!/bin/bash' "$@" > "$T/ip/$n.sh"
+  printf '%s\n' '#!/bin/bash' "$@" "echo 'never closed" > "$T/ip/$n-crude.sh"
+}
+crude_doc cd-echo 'bash <<EOF' 'echo "$1"' 'EOF'
+crude_doc cd-sub 'bash <<EOF' 'echo $(cat "$1")' 'EOF'
+crude_doc cd-printf 'sh <<EOF' 'printf "%s" "$1"' 'EOF'
+crude_doc cd-colon 'bash <<EOF' ': $1' 'EOF'
+crude_doc cd-var 'f="$1"' 'bash <<EOF' 'echo $f' 'EOF'
+crude_doc cd-py 'python3 <<EOF' 'echo = 1' 'cat = open("$1").read()' 'EOF'
+crude_doc cd-dash 'bash -s <<-EOF' 'echo "$1"' 'EOF'
+crude_doc cd-assign 'python3 <<EOF' 'p="$1"' 'exec(open(p).read())' 'EOF'
+crude_doc cd-digit 'bash <<1' 'echo "$1"' '1'
+for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign cd-digit; do
+  run_bash "cd $T/ip && bash $s.sh msg.json"
+  refused "a heredoc that expands what the script is handed into code, as written: $s.sh"
+  says "that refusal says $s.sh runs code it is handed" "a heredoc that expands it"
+done
+for s in cd-echo cd-sub cd-printf cd-colon cd-var cd-py cd-dash cd-assign cd-digit; do
+  run_bash "cd $T/ip && bash $s-crude.sh msg.json"
+  refused "the same heredoc in a script the reader can only cut crudely: $s-crude.sh"
+  says "that refusal says $s-crude.sh could not be followed" "could not be read as commands to see what a heredoc expands its arguments into"
+done
+# What a heredoc's text goes on to, through a pipe, cannot be followed either.
+crude_doc cd-pipe 'cat <<EOF | ./helper.sh' 'p="$1"' 'EOF'
+run_bash "cd $T/ip && bash cd-pipe.sh msg.json"
+refused "a heredoc that expands what the script is handed, piped into a script that runs it, as written"
+run_bash "cd $T/ip && bash cd-pipe-crude.sh msg.json"
+refused "the same heredoc and pipe in a script the reader can only cut crudely"
+# The controls, each a script only the crude cut reads, handed the same file: one that opens no
+# heredoc, three whose heredoc marker is quoted (whole, by a backslash, or in part: any of them and
+# the shell expands nothing into it, as lib/shell-words.py's heredoc_opener measured), one whose
+# heredoc is expanded but which never uses its arguments, and a here string, which is a word and no
+# heredoc. So the refusal above is the heredoc that may expand the arguments, not every crudely cut
+# script.
+printf '%s\n' '#!/bin/bash' 'cat <<E"O"F' 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-part.sh"
+printf '%s\n' '#!/bin/bash' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-reads.sh"
+printf '%s\n' '#!/bin/bash' "cat <<'EOF'" 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-quoted.sh"
+printf '%s\n' '#!/bin/bash' 'cat <<\EOF' 'give one file' 'EOF' 'grep -c chat "$1"' "echo 'never closed" > "$T/ip/cc-escaped.sh"
+printf '%s\n' '#!/bin/bash' 'cat <<EOF' 'made in $HOME' 'EOF' 'grep -c chat msg.json' "echo 'never closed" > "$T/ip/cc-no-args.sh"
+printf '%s\n' '#!/bin/bash' 'grep -c chat <<< "$1"' "echo 'never closed" > "$T/ip/cc-here-string.sh"
+for s in cc-reads cc-quoted cc-escaped cc-part cc-no-args cc-here-string; do
+  run_bash "cd $T/ip && bash $s.sh msg.json"
+  allowed "a crudely cut script with no heredoc that can expand its arguments is still read as before: $s.sh"
 done
 # The controls: inline code that only reads or writes files, Python run from the environment that
 # the script wrote as a literal, and a pipe into programs that cannot act, are data read as data. A
