@@ -1,6 +1,9 @@
 .DS_Store
 *.syncbak
 *.log
+# Saved CI logs, trimmed to the lines tools/ci-section-time-readings.sh reads, that its test runs
+# against (claude-config#2692). Without this they are never committed and the test fails on CI.
+!tools/ci-section-time-sample/logs/*.log
 .last-applied
 # Python bytecode cache. claude-sync's rsync excludes already stop these from
 # being staged into payload/; this is the second line of defence, so one that

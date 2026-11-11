@@ -3980,6 +3980,28 @@ sync suite recomputes both bounds from the record, read by column name, and fail
 at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
 make rather than a pull request gone red at random.
 
+The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
+
+```bash
+bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
+```
+
+It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
+main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
+suite ran in: its section time and check count, and that runner's core count, processor and region.
+A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
+lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
+middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
+`--split` gives one. `--print` shows the result and changes nothing. A run it cannot read without
+guessing (no core count, no section time after the result, a suite reported in two parts, a new
+run whose log gh could not fetch) is named and nothing is written; a recorded run whose log gh
+could not fetch keeps its row and is named; a run that never reached the sync suite's result
+is named as skipped. The cache matters: on 2026-11-10 the window held about 400 runs, whose logs of
+half a megabyte each took several minutes to fetch, and a finished run's log never changes.
+`tools/test-ci-section-time-readings.sh` holds the tool to the committed record, from real logs
+saved in `tools/ci-section-time-sample/`. Finished runs are picked out by the tool rather than by
+`gh run list --status completed`, which on 2026-11-10 left out 3 of 290 finished runs.
+
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
 ```bash
