@@ -1,7 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { SlackAlertChoice } from '../types/index.d.ts'
-import { CHOICE_MS, carried, choicesOf, isOverdue, mergeOf, morningLines } from '../hooks/night.ts'
+import { CHOICE_MS, carried, choicesOf, isOverdue, mergeOf, morningLines, morningQuestion } from '../hooks/night.ts'
 
 // Wording chosen in sleep mode (#2628): the pure rules, apart from the session.
 
@@ -77,4 +77,11 @@ test('one choice per call, oldest first, and overdue only once its time has pass
   expect(isOverdue(choice({ at: 0 }), CHOICE_MS - 1)).toBe(false)
   expect(isOverdue(choice({ at: 0 }), CHOICE_MS)).toBe(true)
   expect(isOverdue(choice({ at: 0, expired: 1 }), CHOICE_MS * 2)).toBe(false)
+})
+
+test('the morning question names a copy module nothing sends yet as one, and nothing else (#2720)', () => {
+  const PHRASE = 'a module of message copy not yet wired to Slack'
+  expect(morningQuestion(choice({ unwired: true }))).toContain(`defined in /w/app/lib/alert.ts, ${PHRASE}.`)
+  expect(morningQuestion(choice())).not.toContain('not yet wired')
+  expect(morningQuestion(choice({ from: '/w/app/lib/feeds.ts', unwired: true }))).not.toContain('not yet wired')
 })
