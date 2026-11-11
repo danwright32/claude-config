@@ -113,11 +113,132 @@ const closeOf = (skel: string, at: number): number => {
   return skel.length
 }
 
-const lineOf = (text: string, at: number): number => {
-  let n = 1
-  for (let i = 0; i < at; i++) if (text[i] === '\n') n++
-  return n
+/** The first index of a sorted list whose value is at least `v` (the list's length when none is). */
+const atLeast = (sorted: readonly number[], v: number): number => {
+  let lo = 0
+  let hi = sorted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if ((sorted[mid] as number) < v) lo = mid + 1
+    else hi = mid
+  }
+  return lo
 }
+
+/**
+ * What a reading is searched by, worked out once for it (#2719): where each name stands as a whole
+ * word, where a line ends, and where a destructuring can start. On 2026-11-10 every edit to a 5,488
+ * line monitor route was held as not searched in time, because each name's declarations were found
+ * by searching the whole file once per name, so the time grew with the square of the file. A name's
+ * patterns are now tried only where the name stands, which finds exactly what the whole search did.
+ */
+type Index = {
+  /** Each identifier, with every place it starts that no word character comes right before, in order. */
+  words: Map<string, number[]>
+  /** Where each line of the text starts after the first, for the line a send is on. */
+  newlines: number[]
+  /** Where a destructuring can start, in order (const or let or var and a bracket; in python every line start), and the first place each one's pattern can no longer reach. */
+  starts: number[]
+  reach: number[]
+}
+const indexes = new WeakMap<Reading, Index>()
+const indexOf = (r: Reading): Index => {
+  const known = indexes.get(r)
+  if (known) return known
+  const words = new Map<string, number[]>()
+  for (const m of r.skel.matchAll(/[A-Za-z_$][\w$]*/g)) {
+    const at = m.index ?? 0
+    if (/[\w$]/.test(r.skel[at - 1] ?? '')) continue
+    const list = words.get(m[0])
+    if (list) list.push(at)
+    else words.set(m[0], [at])
+  }
+  const newlines: number[] = []
+  for (let i = r.text.indexOf('\n'); i >= 0; i = r.text.indexOf('\n', i + 1)) newlines.push(i)
+  const starts: number[] = []
+  const reach: number[] = []
+  if (r.python) {
+    // A line start, as the pattern's ^ reads one in multiline mode, and the end of the run of
+    // characters its target list can be written in, past which it needs an equals sign.
+    // A run that carries on over a line start ends where it ended for the line before.
+    const lines = [0, ...[...r.skel.matchAll(/[\n\r\u2028\u2029]/g)].map(m => (m.index ?? 0) + 1)]
+    let j = 0
+    for (const i of lines) {
+      if (j < i) j = i
+      while (j < r.skel.length && /[\w.\s,]/.test(r.skel[j] as string)) j++
+      starts.push(i)
+      reach.push(j)
+    }
+  } else {
+    // A pattern starting at a const, let or var reaches no further than the first = or ; after it.
+    for (const m of r.skel.matchAll(/\b(?=(?:const|let|var)\s*[{[])/g)) {
+      const at = m.index ?? 0
+      const eq = r.skel.indexOf('=', at)
+      const semi = r.skel.indexOf(';', at)
+      starts.push(at)
+      reach.push(Math.min(eq < 0 ? r.skel.length : eq, semi < 0 ? r.skel.length : semi))
+    }
+  }
+  const index = { words, newlines, starts, reach }
+  indexes.set(r, index)
+  return index
+}
+
+const lineOf = (ix: Index, at: number): number => atLeast(ix.newlines, at) + 1
+
+/**
+ * The matches a global search of `text` for `source` finds, as matchAll finds them, tried only at
+ * `starts` (ascending), every place one can begin: a match starting inside the one before it is
+ * passed over, as the global search passes it. With no starts the whole text is searched. Within
+ * `inside`, the search is of that part alone, as a search of its slice is: a match running past its
+ * end is tried again on the slice, which ends there.
+ *
+ * `tail`, for a pattern that is a whole word name then the rest: every start is already that name as
+ * a whole word (`skip` long), so only the rest is tried, after it, by one sticky pattern made once,
+ * rather than one pattern made for every name in the file.
+ */
+const matchesAt = (
+  text: string,
+  source: string,
+  flags: string,
+  starts: readonly number[] | undefined,
+  inside?: Range,
+  tail?: { re: RegExp; skip: number },
+): { at: number; end: number }[] => {
+  const base = inside?.from ?? 0
+  if (!starts) {
+    const part = inside ? text.slice(inside.from, inside.to) : text
+    return [...part.matchAll(new RegExp(source, `${flags}g`))].map(m => ({ at: base + (m.index ?? 0), end: base + (m.index ?? 0) + m[0].length }))
+  }
+  if (!starts.length) return []
+  const re = tail?.re ?? new RegExp(source, `${flags}y`)
+  const skip = tail?.skip ?? 0
+  const out: { at: number; end: number }[] = []
+  let part: string | undefined
+  let last = base
+  for (const s of starts) {
+    if (s < last) continue
+    re.lastIndex = s + skip
+    let end = re.exec(text) ? re.lastIndex : -1
+    // The slice also differs at its start, where nothing comes before a match (a tail's caller has
+    // already placed the name there as the slice reads it), and at its end, where nothing comes after
+    // one, so a lookahead past an = there passes on the slice alone.
+    if (inside && (end > inside.to || (!tail && s === inside.from) || text[inside.to - 1] === '=')) {
+      part ??= text.slice(inside.from, inside.to)
+      re.lastIndex = s + skip - inside.from
+      end = re.exec(part) ? inside.from + re.lastIndex : -1
+    }
+    if (end < 0) continue
+    out.push({ at: s, end })
+    last = end
+  }
+  return out
+}
+
+// A name can be found only where it stands, so an identifier's patterns are tried there alone; any
+// other name is searched for over the whole text, as before.
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+const wordsAt = (ix: Index, name: string): number[] | undefined => (IDENTIFIER.test(name) ? (ix.words.get(name) ?? []) : undefined)
 
 /** Where the value starting at `from` ends: a semicolon, a comma or a closing bracket at its own depth, or a line ending that does not carry on. */
 const valueEnd = (r: Reading, from: number): number => {
@@ -171,9 +292,14 @@ const blocksOf = (r: Reading): Blocks => {
   } else {
     for (let i = 0; i < r.skel.length; i++) if (r.skel[i] === '{') ranges.push({ from: i, to: closeOf(r.skel, i) + 1 })
   }
+  // Each place asked about is worked out once, since a file's declarations ask about many (#2719).
+  const seen = new Map<number, Range>()
   return at => {
+    const known = seen.get(at)
+    if (known) return known
     let best: Range = whole
     for (const b of ranges) if (at >= b.from && at < b.to && b.to - b.from < best.to - best.from) best = b
+    seen.set(at, best)
     return best
   }
 }
@@ -181,6 +307,7 @@ const blocksOf = (r: Reading): Blocks => {
 type Call = { callee: string; at: number; open: number; close: number }
 type Fn = { name: string; body: Range }
 const CALL = /(?<![\w$])([A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)\s*\(/g
+const METHOD_BODY = /\s*(?::\s*[^{;=\n]+)?\{/y
 
 /** Every call in a file, and every function written with a head that looks like one (def f(, function f(, a method's head), told apart. */
 const callsOf = (r: Reading): { calls: Call[]; fns: Fn[] } => {
@@ -208,8 +335,10 @@ const callsOf = (r: Reading): { calls: Call[]; fns: Fn[] } => {
         if (brace >= 0) fns.push({ name: callee, body: { from: brace, to: closeOf(r.skel, brace) + 1 } })
         continue
       }
-      // A method's head, as `async notify(text) {` is: a call's shape with a body after it.
-      const body = /^\s*(?::\s*[^{;=\n]+)?\{/.exec(r.skel.slice(close + 1))
+      // A method's head, as `async notify(text) {` is: a call's shape with a body after it. Read
+      // where it stands rather than from a copy of the rest of the file, once for every call (#2719).
+      METHOD_BODY.lastIndex = close + 1
+      const body = METHOD_BODY.exec(r.skel)
       if (body && !callee.includes('.')) {
         const brace = close + body[0].length
         fns.push({ name: callee, body: { from: brace, to: closeOf(r.skel, brace) + 1 } })
@@ -223,43 +352,66 @@ const callsOf = (r: Reading): { calls: Call[]; fns: Fn[] } => {
 
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const word = (name: string) => `(?<![\\w$])${escape(name)}(?![\\w$])`
+// What follows a name given a value (= += ||= and the like, never == => <= or !=), a name a method is
+// called on, and a name whose member is set; each also made once as a sticky pattern, tried after a
+// name already found standing as a whole word (matchesAt).
+const ASSIGNED = `\\s*(?::[^=\\n;,()]*)?(?:\\+|-|\\*|\\|\\||\\?\\?|&&)?=(?![=>])`
+const CALLED = `\\s*\\??\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(`
+const SET = `\\s*(?:\\.\\s*[\\w$]+|\\[[^\\]\\n]*\\])+\\s*(?:\\+|-|\\|\\||\\?\\?)?=(?![=>])`
+const ASSIGNED_TAIL = new RegExp(ASSIGNED, 'y')
+const CALLED_TAIL = new RegExp(CALLED, 'y')
+const SET_TAIL = new RegExp(SET, 'y')
 
 /** Where a name is given a value (a declaration, an assignment, a destructuring, a function), with the value's span and the block it is seen in. */
 type Def = { at: number; value: Range; scope: Range }
 const defsOf = (r: Reading, name: string, blocks: Blocks, fns: Fn[]): Def[] => {
   const out: Def[] = []
   const s = r.skel
+  const ix = indexOf(r)
+  const at = wordsAt(ix, name)
   const add = (at: number, from: number, to: number, scopeAt = at) => out.push({ at, value: { from, to }, scope: blocks(scopeAt) })
   // name = value, name += value, const name: T = value, self.name = value; never ==, =>, <= or !=.
-  for (const m of s.matchAll(new RegExp(`${word(name)}\\s*(?::[^=\\n;,()]*)?(?:\\+|-|\\*|\\|\\||\\?\\?|&&)?=(?![=>])`, 'g'))) {
-    const at = m.index ?? 0
-    add(at, at + m[0].length, valueEnd(r, at + m[0].length))
-  }
-  // const { a, name } = value, const [a, name] = value, python a, name = value.
+  for (const m of matchesAt(s, `${word(name)}${ASSIGNED}`, '', at, undefined, { re: ASSIGNED_TAIL, skip: name.length })) add(m.at, m.end, valueEnd(r, m.end))
+  // const { a, name } = value, const [a, name] = value, python a, name = value. One can start only
+  // where a destructuring can (indexOf) and still reach a place the name stands.
   const destructure = r.python
-    ? new RegExp(`^[ \\t]*(?:[\\w.]+\\s*,\\s*)+${escape(name)}\\s*(?:,\\s*[\\w.]+\\s*)*=(?!=)|^[ \\t]*${escape(name)}\\s*(?:,\\s*[\\w.]+\\s*)+=(?!=)`, 'gm')
-    : new RegExp(`\\b(?:const|let|var)\\s*[{[][^=;]*${word(name)}[^=;]*[}\\]]\\s*=(?![=>])`, 'g')
-  for (const m of s.matchAll(destructure)) {
-    const at = m.index ?? 0
-    add(at, at + m[0].length, valueEnd(r, at + m[0].length))
+    ? `^[ \\t]*(?:[\\w.]+\\s*,\\s*)+${escape(name)}\\s*(?:,\\s*[\\w.]+\\s*)*=(?!=)|^[ \\t]*${escape(name)}\\s*(?:,\\s*[\\w.]+\\s*)+=(?!=)`
+    : `\\b(?:const|let|var)\\s*[{[][^=;]*${word(name)}[^=;]*[}\\]]\\s*=(?![=>])`
+  let starts: number[] | undefined
+  if (at) {
+    const found = new Set<number>()
+    for (const q of at) {
+      // In python the name may open the line (start at most q); otherwise it follows the keyword.
+      for (let i = atLeast(ix.starts, r.python ? q + 1 : q) - 1; i >= 0 && (ix.reach[i] as number) > q; i--) found.add(ix.starts[i] as number)
+    }
+    starts = [...found].sort((a, b) => a - b)
   }
+  for (const m of matchesAt(s, destructure, r.python ? 'm' : '', starts)) add(m.at, m.end, valueEnd(r, m.end))
   // A function's body is its value, seen in the block around its head.
   for (const f of fns) if (f.name === name) add(f.body.from, f.body.from, f.body.to, Math.max(0, f.body.from - 1))
   return out
 }
 
 // Where a value is added to after it is made: name.push(...), name.append(...), name.x = ..., name[k] = ....
+// Searched within `within` alone, as a search of its slice is, so a name standing first in it counts
+// whatever comes before it in the file.
 const changesOf = (r: Reading, name: string, within: Range): Range[] => {
   const out: Range[] = []
-  const s = r.skel.slice(within.from, within.to)
-  for (const m of s.matchAll(new RegExp(`${word(name)}\\s*\\??\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(`, 'g'))) {
-    const open = within.from + (m.index ?? 0) + m[0].length - 1
+  const words = wordsAt(indexOf(r), name)
+  let at: number[] | undefined
+  if (words) {
+    at = words.slice(atLeast(words, within.from), atLeast(words, within.to))
+    // At the slice's start nothing comes before the name, so it stands there as a whole word
+    // whatever the file has before it, when no word character follows it inside the slice.
+    const after = within.from + name.length
+    if (at[0] !== within.from && after < within.to && r.skel.startsWith(name, within.from) && !/[\w$]/.test(r.skel[after] ?? '')) at.unshift(within.from)
+  }
+  const tail = (re: RegExp) => ({ re, skip: name.length })
+  for (const m of matchesAt(r.skel, `${word(name)}${CALLED}`, '', at, within, tail(CALLED_TAIL))) {
+    const open = m.end - 1
     out.push({ from: open + 1, to: closeOf(r.skel, open) })
   }
-  for (const m of s.matchAll(new RegExp(`${word(name)}\\s*(?:\\.\\s*[\\w$]+|\\[[^\\]\\n]*\\])+\\s*(?:\\+|-|\\|\\||\\?\\?)?=(?![=>])`, 'g'))) {
-    const from = within.from + (m.index ?? 0) + m[0].length
-    out.push({ from, to: valueEnd(r, from) })
-  }
+  for (const m of matchesAt(r.skel, `${word(name)}${SET}`, '', at, within, tail(SET_TAIL))) out.push({ from: m.end, to: valueEnd(r, m.end) })
   return out
 }
 
@@ -306,39 +458,13 @@ export type Traced = {
  * helper module.
  */
 export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported: Set<string> = new Set()): Traced => {
-  const { calls, fns } = callsOf(r)
-  const blocks = blocksOf(r)
-  const all = namesIn(r, { from: 0, to: r.skel.length })
-  const distinct = [...new Set(all.map(n => n.name))]
-  const defCache = new Map<string, Def[]>()
-  const defsFor = (name: string): Def[] => {
-    let d = defCache.get(name)
-    if (!d) defCache.set(name, (d = defsOf(r, name, blocks, fns)))
-    return d
-  }
-
-  // Names whose value is built from a Slack marker: a webhook address, a client made with the bot token.
-  const markers = markerPositions(r)
-  const marked = new Set<string>()
-  for (let grew = true; grew; ) {
-    grew = false
-    for (const name of distinct) {
-      if (marked.has(name)) continue
-      if (defsFor(name).some(d => markers.some(p => p >= d.value.from && p < d.value.to) || namesIn(r, d.value).some(u => marked.has(u.name)))) {
-        marked.add(name)
-        grew = true
-      }
-    }
-  }
+  const { calls, fns, distinct, defsFor, marked, isArrow, pointCalls, changesFor } = analysisOf(r)
 
   const sending = new Set<Call>()
   const sendFns = new Set(imported)
   const last = (callee: string) => callee.split(/\??\./).pop() as string
   const head = (callee: string) => callee.split(/\??\./)[0] as string
   const sendCallee = (callee: string) => MARKERS.some(m => m.test(`${callee}(`)) || sendFns.has(callee) || sendFns.has(last(callee)) || marked.has(head(callee))
-  // A marker, or a marked name used anywhere but where it is given its value.
-  const points = [...markers, ...all.filter(n => marked.has(n.name) && !defsFor(n.name).some(d => d.at === n.at)).map(n => n.at)]
-  const arrow = /^\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=]*)?=>|^\s*(?:async\s+)?function\b|^\s*lambda\b/
   for (let grew = true; grew; ) {
     grew = false
     for (const c of calls)
@@ -346,28 +472,29 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
         sending.add(c)
         grew = true
       }
-    for (const p of points) {
-      const c = nearestCall(r, calls, p)
+    for (const c of pointCalls) {
       if (c && !sending.has(c)) {
         sending.add(c)
         grew = true
       }
     }
     // A function whose own body sends is a send: written as a function, or as an arrow given to a name.
-    const holds = (b: Range) => [...sending].some(c => c.at >= b.from && c.at < b.to)
+    const sendAts = [...sending].map(c => c.at).sort((a, b) => a - b)
+    const holds = (b: Range) => (sendAts[atLeast(sendAts, b.from)] ?? Infinity) < b.to
     for (const f of fns)
       if (!sendFns.has(f.name) && holds(f.body)) {
         sendFns.add(f.name)
         grew = true
       }
     for (const name of distinct)
-      if (!sendFns.has(name) && defsFor(name).some(d => arrow.test(r.skel.slice(d.value.from, d.value.to)) && holds(d.value))) {
+      if (!sendFns.has(name) && defsFor(name).some(d => isArrow(d) && holds(d.value))) {
         sendFns.add(name)
         grew = true
       }
   }
 
-  const send = (c: Call): Send => ({ callee: c.callee, line: lineOf(r.text, c.at) })
+  const ix = indexOf(r)
+  const send = (c: Call): Send => ({ callee: c.callee, line: lineOf(ix, c.at) })
   const spans: Traced['spans'] = []
   const names = new Map<string, Send>()
   const done = new Set<string>()
@@ -382,14 +509,26 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
       if (done.has(key)) continue
       done.add(key)
       todo.push({ ...d.value, send: s })
-      for (const ch of changesOf(r, name, d.scope)) todo.push({ ...ch, send: s })
+      for (const ch of changesFor(name, d.scope)) todo.push({ ...ch, send: s })
     }
   }
   for (const [name, s] of seeds) follow(name, -1, s)
+  // Whether a stretch lies inside one already followed, asked of every stretch: the furthest end of
+  // any followed stretch starting at or before it, kept in a tree by where each starts (#2719).
+  const furthest = new Int32Array(r.skel.length + 3).fill(-1)
+  const covered = (s: Range) => {
+    let m = -1
+    for (let i = Math.min(s.from + 1, furthest.length - 1); i > 0; i -= i & -i) m = Math.max(m, furthest[i] as number)
+    return m >= s.to
+  }
+  const followed = (s: Range) => {
+    for (let i = s.from + 1; i < furthest.length; i += i & -i) furthest[i] = Math.max(furthest[i] as number, s.to)
+  }
   while (todo.length) {
     const span = todo.pop() as Range & { send: Send }
-    if (spans.some(v => v.from <= span.from && v.to >= span.to)) continue
+    if (covered(span)) continue
     spans.push(span)
+    followed(span)
     for (const u of namesIn(r, span)) follow(u.name, u.at, span.send)
   }
   // A name renamed on import or export (import { A as B }, export { A as B }, import a as b) is known
@@ -399,6 +538,97 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
     if (s && !names.has(m[1] as string)) names.set(m[1] as string, s)
   }
   return { sends: [...sending].map(send), spans, names, fns: sendFns }
+}
+
+/**
+ * Everything trace reads of a file that does not depend on what it is asked to follow, worked out
+ * once for each text (#2719): one edit's check traces the same file as it was and as it will be up to
+ * three times each, with and without a send helper's functions and a sender's names. Kept for the
+ * last ANALYSED texts, by the text and its reading, so it is only ever reused for the same file.
+ */
+type Analysis = {
+  calls: Call[]
+  fns: Fn[]
+  distinct: string[]
+  defsFor: (name: string) => Def[]
+  marked: Set<string>
+  isArrow: (d: Def) => boolean
+  pointCalls: (Call | undefined)[]
+  changesFor: (name: string, within: Range) => Range[]
+}
+const ANALYSED = 8
+const analyses = new Map<string, { r: Reading; a: Analysis }>()
+const analysisOf = (r: Reading): Analysis => {
+  const key = `${r.python ? 'p' : 'j'}${r.text}`
+  const known = analyses.get(key)
+  if (known && known.r.skel === r.skel && known.r.code === r.code) {
+    analyses.delete(key)
+    analyses.set(key, known)
+    return known.a
+  }
+  const a = analyse(r)
+  analyses.delete(key)
+  analyses.set(key, { r, a })
+  if (analyses.size > ANALYSED) analyses.delete(analyses.keys().next().value as string)
+  return a
+}
+
+const analyse = (r: Reading): Analysis => {
+  const { calls, fns } = callsOf(r)
+  const blocks = blocksOf(r)
+  const all = namesIn(r, { from: 0, to: r.skel.length })
+  const distinct = [...new Set(all.map(n => n.name))]
+  const defCache = new Map<string, Def[]>()
+  const defsFor = (name: string): Def[] => {
+    let d = defCache.get(name)
+    if (!d) defCache.set(name, (d = defsOf(r, name, blocks, fns)))
+    return d
+  }
+
+  // Names whose value is built from a Slack marker: a webhook address, a client made with the bot token.
+  // What each declaration's value holds is read once, however many times the names are gone over (#2719).
+  const markers = markerPositions(r)
+  const sortedMarkers = [...markers].sort((a, b) => a - b)
+  const holdsMarker = (v: Range) => (sortedMarkers[atLeast(sortedMarkers, v.from)] ?? Infinity) < v.to
+  const valueNames = new Map<Def, string[]>()
+  const namesOfValue = (d: Def): string[] => {
+    let n = valueNames.get(d)
+    if (!n) valueNames.set(d, (n = namesIn(r, d.value).map(u => u.name)))
+    return n
+  }
+  const marked = new Set<string>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const name of distinct) {
+      if (marked.has(name)) continue
+      if (defsFor(name).some(d => holdsMarker(d.value) || namesOfValue(d).some(u => marked.has(u)))) {
+        marked.add(name)
+        grew = true
+      }
+    }
+  }
+
+  // A marker, or a marked name used anywhere but where it is given its value.
+  const points = [...markers, ...all.filter(n => marked.has(n.name) && !defsFor(n.name).some(d => d.at === n.at)).map(n => n.at)]
+  const arrow = /^\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=]*)?=>|^\s*(?:async\s+)?function\b|^\s*lambda\b/
+  // Each declaration read once for whether its value is a function, and each point's call found once,
+  // since neither changes while sends are added (#2719).
+  const arrows = new Map<Def, boolean>()
+  const isArrow = (d: Def): boolean => {
+    let a = arrows.get(d)
+    if (a === undefined) arrows.set(d, (a = arrow.test(r.skel.slice(d.value.from, d.value.to))))
+    return a
+  }
+  const pointCalls = points.map(p => nearestCall(r, calls, p))
+  // Where each name is added to within a block, once for each name and block.
+  const changes = new Map<string, Range[]>()
+  const changesFor = (name: string, within: Range): Range[] => {
+    const key = `${name}@${within.from}:${within.to}`
+    let c = changes.get(key)
+    if (!c) changes.set(key, (c = changesOf(r, name, within)))
+    return c
+  }
+  return { calls, fns, distinct, defsFor, marked, isArrow, pointCalls, changesFor }
 }
 
 /**
