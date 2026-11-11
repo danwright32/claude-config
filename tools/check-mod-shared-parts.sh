@@ -36,7 +36,11 @@
 #   program-reader                                              use the language, program and verdict on each
 #             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
 #             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
-#             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
+#             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked);
+#                                                               a file's text by what it imports or calls:
+#                                                               fileReach from the copy of hooks/reaches.ts
+#                                                               kept at hooks/mod-kit/reaches.ts (#2710: the
+#                                                               Slack alert guard kept its own lists)
 #   remote-reader                                               use $.modkit.repo({ root, remote }), whose
 #             reading a git remote's address by hand (a         github and name are the two questions the
 #             pattern taking a trailing .git off, or matching   copies asked (#951: four copies drifted on
@@ -215,7 +219,7 @@ PARTS=(
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
-  "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
+  "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives, or for a file's text fileReach from the copy of hooks/reaches.ts kept at hooks/mod-kit/reaches.ts"
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name), or \$.modkit.ghRepo({ spelling }) for a repository as gh spells one"
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"

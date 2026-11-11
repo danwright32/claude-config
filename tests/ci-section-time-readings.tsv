@@ -1,41 +1,329 @@
-run_id	created_at	sha	conclusion	section_seconds
-40161738103	2026-10-25T04:24:01Z	c8b20de0	success	1037
-40124492476	2026-10-24T19:15:51Z	d89d2e31	success	986
-40122396691	2026-10-24T18:48:30Z	ce2225f3	success	1052
-40120694492	2026-10-24T18:26:16Z	000b8a45	success	1208
-40118858026	2026-10-24T18:02:23Z	e8fc78e7	success	1252
-40118837492	2026-10-24T18:02:08Z	731d6aa1	success	962
-40117323424	2026-10-24T17:42:17Z	80b69c57	success	935
-40115534089	2026-10-24T17:18:38Z	e81730a6	success	1005
-40113172051	2026-10-24T16:47:20Z	e2c6af34	success	1235
-40112723816	2026-10-24T16:41:28Z	a8ae6ddd	success	937
-40111074548	2026-10-24T16:20:08Z	1fc826a6	success	1255
-40109156731	2026-10-24T15:55:11Z	f230fab2	success	1240
-40107189563	2026-10-24T15:29:18Z	1a61e31f	success	1221
-40105199097	2026-10-24T15:03:00Z	3fa6a21e	failure	1280
-40095728295	2026-10-24T12:52:20Z	715c88b2	success	1216
-40093860379	2026-10-24T12:25:24Z	cf058496	success	1016
-40092193927	2026-10-24T12:01:00Z	3da612a5	success	984
-40090448820	2026-10-24T11:34:30Z	1983e49e	success	1218
-40088626880	2026-10-24T11:07:29Z	361830df	success	930
-40086513991	2026-10-24T10:35:23Z	e1e6e654	success	885
-40084334431	2026-10-24T10:02:35Z	6c353ff5	success	1214
-40082606128	2026-10-24T09:36:11Z	7da46f4a	success	1192
-40081017853	2026-10-24T09:12:10Z	c7f39277	success	980
-40079092952	2026-10-24T08:42:33Z	b43f061d	success	1230
-40076426587	2026-10-24T08:01:40Z	e0c54e2f	success	957
-40075279341	2026-10-24T07:43:44Z	6bce1a87	success	1204
-40073868386	2026-10-24T07:22:20Z	28635f95	success	990
-40072194965	2026-10-24T06:56:49Z	43fe65b2	success	1023
-40070150028	2026-10-24T06:25:28Z	b899b4a7	success	1220
-40068649925	2026-10-24T06:02:57Z	b6ff590a	success	987
-40065450927	2026-10-24T05:14:06Z	eabde23e	failure	1362
-40064723196	2026-10-24T05:02:51Z	4bf3ee1a	success	1241
-40063140075	2026-10-24T04:38:29Z	b2fdafad	success	1005
-40060421429	2026-10-24T03:57:38Z	0db12856	success	989
-40058486808	2026-10-24T03:29:11Z	428034fe	success	1222
-40055626145	2026-10-24T02:47:19Z	6493318a	success	1231
-40054115724	2026-10-24T02:25:40Z	274137fa	success	1092
-40052640871	2026-10-24T02:04:37Z	46e2d03b	success	1217
-40050914181	2026-10-24T01:41:11Z	5e31f43c	success	1209
-40049095237	2026-10-24T01:17:17Z	9de5623f	success	1205
+run_id	created_at	sha	event	conclusion	cores	processor	region	checks	section_seconds	runner_group
+42525286498	2026-11-08T21:27:23Z	37166a2b	push	success	4	unknown	eastus2	3398	1092	faster
+42525400694	2026-11-08T21:28:47Z	d9a90ce3	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3398	1328	slower
+42528922437	2026-11-08T22:10:49Z	a2464a99	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1304	slower
+42528983549	2026-11-08T22:11:31Z	3447497a	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	1021	faster
+42531581406	2026-11-08T22:42:40Z	4d6a5525	push	success	4	AMD EPYC 9V45 96-Core Processor	westus3	3398	938	faster
+42531630472	2026-11-08T22:43:16Z	82051b2c	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1274	slower
+42535053531	2026-11-08T23:24:50Z	4fc0f08e	push	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1151	faster
+42535347685	2026-11-08T23:28:42Z	5eccdc26	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3398	1057	faster
+42538090471	2026-11-09T00:03:07Z	b789ac8f	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1314	slower
+42538175585	2026-11-09T00:04:07Z	0b80fe8f	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	westus3	3398	997	faster
+42541301575	2026-11-09T00:38:39Z	f2da6772	push	success	4	AMD EPYC 7763 64-Core Processor	westus3	3398	1271	slower
+42541327753	2026-11-09T00:38:58Z	97d3f294	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1127	faster
+42544850557	2026-11-09T01:18:11Z	8aa3374c	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	eastus2	3398	1072	faster
+42546179170	2026-11-09T01:33:26Z	101932f6	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3398	1136	faster
+42548144033	2026-11-09T01:56:08Z	7df0fffc	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	westus3	3398	997	faster
+42549420996	2026-11-09T02:10:16Z	fc4aa0ac	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1277	slower
+42549499878	2026-11-09T02:11:06Z	06c83447	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus3	3398	1271	slower
+42549509143	2026-11-09T02:11:12Z	74546796	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1127	faster
+42552962077	2026-11-09T02:48:42Z	c0203f4e	push	success	4	AMD EPYC 9V74 80-Core Processor	southcentralus	3398	1069	faster
+42552986708	2026-11-09T02:48:59Z	17110bbc	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3398	957	faster
+42555856932	2026-11-09T03:20:26Z	cf07c8c8	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1152	faster
+42555941186	2026-11-09T03:21:20Z	e60ddd94	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1113	faster
+42559151277	2026-11-09T03:57:33Z	bab8ddae	push	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3398	1074	faster
+42559363328	2026-11-09T04:00:12Z	063db084	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus3	3398	974	faster
+42562609546	2026-11-09T04:34:50Z	f193d8a1	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3398	1290	slower
+42562613073	2026-11-09T04:34:52Z	bad23255	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus	3398	1273	slower
+42562623301	2026-11-09T04:34:59Z	1ea0bd69	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1310	slower
+42562878101	2026-11-09T04:37:43Z	71e71f25	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1170	faster
+42563514430	2026-11-09T04:45:11Z	aec5fe5d	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3398	1045	faster
+42564554916	2026-11-09T04:57:17Z	0542806d	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1291	slower
+42565227252	2026-11-09T05:04:54Z	c538c7e6	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3398	1307	slower
+42565263037	2026-11-09T05:05:15Z	135899b9	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus2	3398	1284	slower
+42566114994	2026-11-09T05:14:15Z	aa3740e1	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1284	slower
+42566609644	2026-11-09T05:19:13Z	fd063575	push	success	4	AMD EPYC 7763 64-Core Processor	centralus	3398	1276	slower
+42566634695	2026-11-09T05:19:28Z	20d59992	pull_request	failure	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3398	1046	faster
+42567527407	2026-11-09T05:28:35Z	af6dda59	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1308	slower
+42567555832	2026-11-09T05:28:55Z	f90495ee	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1271	slower
+42568005140	2026-11-09T05:33:35Z	2d960093	pull_request	success	4	AMD EPYC 7763 64-Core Processor	northcentralus	3398	1279	slower
+42568925072	2026-11-09T05:43:26Z	ad26974a	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	eastus2	3398	1094	faster
+42569656689	2026-11-09T05:51:19Z	bb18d898	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus2	3398	1274	slower
+42570327467	2026-11-09T05:58:50Z	92c4b591	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	993	faster
+42571753840	2026-11-09T06:13:42Z	5ea3316f	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1330	slower
+42571960349	2026-11-09T06:15:46Z	3b55da15	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	952	faster
+42572102944	2026-11-09T06:17:09Z	67fc6c6e	pull_request	failure	4	INTEL(R) XEON(R) PLATINUM 8573C	eastus2	3398	1096	faster
+42572677917	2026-11-09T06:22:55Z	3888e265	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	southcentralus	3398	1124	faster
+42573499892	2026-11-09T06:30:58Z	bd5c653a	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1063	faster
+42573509078	2026-11-09T06:31:03Z	0fb30ce4	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3398	1317	slower
+42573658713	2026-11-09T06:32:29Z	c00870fe	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1310	slower
+42574069895	2026-11-09T06:36:24Z	63f43f42	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3398	1014	faster
+42574792583	2026-11-09T06:43:21Z	988cc6a7	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	986	faster
+42578640435	2026-11-09T07:19:50Z	978922d2	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1289	slower
+42578730881	2026-11-09T07:20:37Z	b92c8689	pull_request	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3398	911	faster
+42583056899	2026-11-09T08:01:53Z	57f7d950	push	success	4	AMD EPYC 9V45 96-Core Processor	westus2	3398	970	faster
+42583953193	2026-11-09T08:09:50Z	ecc355c9	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1281	slower
+42589183843	2026-11-09T08:53:12Z	bd687346	push	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1304	slower
+42589586138	2026-11-09T08:56:29Z	80e2ccdf	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	northcentralus	3398	1308	slower
+42595628760	2026-11-09T09:43:53Z	fa9a6152	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1320	slower
+42601201877	2026-11-09T10:29:09Z	f6418650	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1321	slower
+42601416297	2026-11-09T10:30:57Z	df2a7e0f	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1309	slower
+42602867449	2026-11-09T10:42:07Z	bc650d4b	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	northcentralus	3398	1085	faster
+42606653618	2026-11-09T11:09:00Z	760cdace	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1326	slower
+42607490338	2026-11-09T11:14:58Z	c7189936	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1106	faster
+42612248871	2026-11-09T11:50:59Z	f5b3c506	push	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3398	1099	faster
+42612398666	2026-11-09T11:52:11Z	dbdac798	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	995	faster
+42616401149	2026-11-09T12:21:59Z	c8a31955	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1103	faster
+42616846899	2026-11-09T12:25:10Z	a455946d	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1122	faster
+42621753731	2026-11-09T13:00:52Z	3437de3a	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1288	slower
+42622787327	2026-11-09T13:08:03Z	8f3ca82e	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1338	slower
+42627693414	2026-11-09T13:41:33Z	bb5264cf	push	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1154	faster
+42627975785	2026-11-09T13:43:30Z	fe8cf0bf	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1257	slower
+42634120288	2026-11-09T14:22:59Z	6c4a1688	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1147	faster
+42634151878	2026-11-09T14:23:10Z	9333e894	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1310	slower
+42635044584	2026-11-09T14:28:37Z	4399db80	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1152	faster
+42640781950	2026-11-09T15:03:39Z	d396f029	push	success	4	AMD EPYC 7763 64-Core Processor	westus	3398	1293	slower
+42640842192	2026-11-09T15:04:00Z	14e91c4e	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3398	1290	slower
+42642467483	2026-11-09T15:13:27Z	8d22317c	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1286	slower
+42643503687	2026-11-09T15:19:31Z	8db1874e	pull_request	success	4	AMD EPYC 7763 64-Core Processor	centralus	3398	1345	slower
+42644432431	2026-11-09T15:24:57Z	f20e7b31	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1051	faster
+42649940539	2026-11-09T15:58:02Z	efc68b9f	push	success	4	AMD EPYC 9V74 80-Core Processor	centralus	3398	1099	faster
+42651613498	2026-11-09T16:07:53Z	aeb6acc6	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	southcentralus	3398	1173	faster
+42652575008	2026-11-09T16:13:32Z	26548c66	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3398	983	faster
+42656298657	2026-11-09T16:35:22Z	1ca264dc	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3398	1339	slower
+42657889961	2026-11-09T16:45:01Z	a247efa5	push	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3398	912	faster
+42659247015	2026-11-09T16:53:19Z	af792054	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1256	slower
+42659470489	2026-11-09T16:54:44Z	23f926c8	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1313	slower
+42659725673	2026-11-09T16:56:19Z	7162e8d1	pull_request	success	4	AMD EPYC 7763 64-Core Processor	southcentralus	3407	1286	slower
+42660290766	2026-11-09T16:59:53Z	929f525c	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1113	faster
+42660375478	2026-11-09T17:00:24Z	0d8df0e4	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3398	978	faster
+42662841208	2026-11-09T17:15:28Z	a26afc92	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1143	faster
+42665281353	2026-11-09T17:30:29Z	4116a182	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1122	faster
+42665643936	2026-11-09T17:32:41Z	3b7c4512	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3398	1124	faster
+42671429496	2026-11-09T18:09:01Z	49fa2a4f	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	northcentralus	3398	1099	faster
+42671807998	2026-11-09T18:11:22Z	545ee6e6	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3409	1074	faster
+42672427114	2026-11-09T18:15:23Z	7f85edb4	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1274	slower
+42672790510	2026-11-09T18:17:48Z	5ca9612b	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	988	faster
+42673142496	2026-11-09T18:20:16Z	d3ebd794	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	944	faster
+42674136503	2026-11-09T18:27:03Z	4a6bf546	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1284	slower
+42674827245	2026-11-09T18:31:54Z	a0171ebd	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	eastus2	3398	1333	slower
+42680148980	2026-11-09T19:06:29Z	75c4eef4	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1299	slower
+42682069407	2026-11-09T19:18:23Z	11b7eff9	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1294	slower
+42684433634	2026-11-09T19:33:12Z	bd38e039	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1301	slower
+42688859885	2026-11-09T20:01:01Z	12993ec9	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1300	slower
+42689098102	2026-11-09T20:02:29Z	589c18fa	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3398	1081	faster
+42690801632	2026-11-09T20:12:58Z	64ac21cf	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1262	slower
+42691429744	2026-11-09T20:16:46Z	5fbb8db7	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	westus3	3398	1098	faster
+42693855551	2026-11-09T20:32:00Z	eb6034f9	push	success	4	AMD EPYC 9V74 80-Core Processor	centralus	3398	1131	faster
+42694088396	2026-11-09T20:33:28Z	0e53435c	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3398	1275	slower
+42696470036	2026-11-09T20:48:31Z	df0fb47e	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1263	slower
+42696568184	2026-11-09T20:49:09Z	3db53e35	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1070	faster
+42698037477	2026-11-09T20:58:32Z	3609f8e7	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3398	1115	faster
+42698382513	2026-11-09T21:00:44Z	b5e47c78	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3398	981	faster
+42698457552	2026-11-09T21:01:11Z	90d5283f	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3398	1278	slower
+42700842376	2026-11-09T21:15:54Z	762e1d81	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3398	953	faster
+42700932411	2026-11-09T21:16:28Z	278dc0f5	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3398	1144	faster
+42701978275	2026-11-09T21:23:03Z	5044366d	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus3	3398	1284	slower
+42702686264	2026-11-09T21:27:34Z	9ea6186f	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3398	1123	faster
+42702747917	2026-11-09T21:27:58Z	49fe966d	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3398	1310	slower
+42704829492	2026-11-09T21:41:11Z	dc194c02	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	westus2	3398	931	faster
+42707212167	2026-11-09T21:56:27Z	66adc120	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	northcentralus	3407	1075	faster
+42709246358	2026-11-09T22:09:21Z	c0a53bcd	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus2	3407	1057	faster
+42709586665	2026-11-09T22:11:29Z	9f02d5e6	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	northcentralus	3418	1063	faster
+42711445662	2026-11-09T22:23:29Z	d4994da4	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus2	3407	1105	faster
+42711858984	2026-11-09T22:26:13Z	931b5d80	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3418	959	faster
+42712040821	2026-11-09T22:27:27Z	98b9d965	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3418	945	faster
+42714132214	2026-11-09T22:41:35Z	ac8ff68b	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3418	1056	faster
+42714277647	2026-11-09T22:42:36Z	573e1c56	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3418	1062	faster
+42716686703	2026-11-09T22:59:32Z	93d11e79	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3418	1239	slower
+42718805720	2026-11-09T23:14:24Z	c39f29ad	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3418	1089	faster
+42718881514	2026-11-09T23:14:57Z	450a2cde	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3418	1333	slower
+42720532983	2026-11-09T23:26:58Z	b65b39bf	pull_request	failure	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	westus3	3418	1074	faster
+42720588265	2026-11-09T23:27:23Z	f89f757d	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3418	909	faster
+42720622625	2026-11-09T23:27:39Z	28adaf00	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3418	944	faster
+42720873193	2026-11-09T23:29:34Z	2fb6b030	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3418	1071	faster
+42721867267	2026-11-09T23:36:44Z	4a13570b	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	northcentralus	3418	1267	slower
+42722042201	2026-11-09T23:38:04Z	8bf22fcf	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3418	1302	slower
+42722042892	2026-11-09T23:38:04Z	7d801b06	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3418	1393	slower
+42722101447	2026-11-09T23:38:31Z	e003050e	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3443	1334	slower
+42722150830	2026-11-09T23:38:55Z	a5083d66	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westus2	3418	1143	faster
+42722793711	2026-11-09T23:43:50Z	81708bd6	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3418	1309	slower
+42723378688	2026-11-09T23:48:15Z	c20eda18	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3418	997	faster
+42724653921	2026-11-09T23:58:13Z	91a89a16	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3418	931	faster
+42725348285	2026-11-10T00:03:37Z	da5b6521	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3418	1279	slower
+42725484036	2026-11-10T00:04:40Z	73fcac0b	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3418	1303	slower
+42725563945	2026-11-10T00:05:17Z	d0374e97	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3418	1253	slower
+42726881338	2026-11-10T00:15:18Z	493e3c03	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	southcentralus	3418	1343	slower
+42727089925	2026-11-10T00:16:54Z	4f4c6d54	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3418	1286	slower
+42727249227	2026-11-10T00:18:09Z	0a5993d7	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3418	1366	slower
+42729020502	2026-11-10T00:32:01Z	1c772358	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3443	974	faster
+42729400640	2026-11-10T00:35:00Z	42d9045a	pull_request	success	4	AMD EPYC 7763 64-Core Processor	centralus	3418	1223	slower
+42730974713	2026-11-10T00:47:25Z	4e201e1b	push	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3418	1268	slower
+42731006758	2026-11-10T00:47:40Z	7481d56d	pull_request	success	4	AMD EPYC 7763 64-Core Processor	centralus	3418	1233	slower
+42731043202	2026-11-10T00:47:58Z	2f0387bf	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3418	1292	slower
+42732599600	2026-11-10T01:00:39Z	2cceb2af	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3418	1233	slower
+42732705089	2026-11-10T01:01:28Z	d9182fbc	pull_request	success	4	AMD EPYC 7763 64-Core Processor	northcentralus	3418	1285	slower
+42733115142	2026-11-10T01:04:43Z	63312230	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3420	1272	slower
+42734301633	2026-11-10T01:14:04Z	f5f8b295	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3418	1098	faster
+42734344020	2026-11-10T01:14:24Z	0b695e53	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3445	1307	slower
+42734349358	2026-11-10T01:14:27Z	f7877dd1	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus	3418	1277	slower
+42735916983	2026-11-10T01:27:32Z	de16d50f	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3420	1254	slower
+42736455017	2026-11-10T01:32:06Z	c41a44a4	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	centralus	3421	940	faster
+42737045008	2026-11-10T01:37:04Z	84c538d3	pull_request	success	4	AMD EPYC 7763 64-Core Processor	centralus	3418	1293	slower
+42737378023	2026-11-10T01:39:54Z	653c759f	push	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3420	1273	slower
+42737411906	2026-11-10T01:40:10Z	a58589a1	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3447	1095	faster
+42738021323	2026-11-10T01:45:24Z	dc4e890e	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3423	1325	slower
+42738716402	2026-11-10T01:51:30Z	88e87d36	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3447	1241	slower
+42739519198	2026-11-10T01:58:45Z	504ebf97	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1033	faster
+42740924048	2026-11-10T02:10:41Z	70f941a5	pull_request	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3447	956	faster
+42741317678	2026-11-10T02:14:02Z	820133ce	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1279	slower
+42742018760	2026-11-10T02:20:01Z	605e4d35	push	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3447	927	faster
+42743690275	2026-11-10T02:34:23Z	c6d6cb70	pull_request	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3447	902	faster
+42745013016	2026-11-10T02:46:16Z	17eb8874	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3447	1149	faster
+42745095346	2026-11-10T02:47:01Z	08cfa77d	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1312	slower
+42746726380	2026-11-10T03:01:59Z	9034a515	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1265	slower
+42747461065	2026-11-10T03:08:27Z	a63b4d6b	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1313	slower
+42748951167	2026-11-10T03:21:55Z	d34397d2	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1295	slower
+42753238985	2026-11-10T04:02:12Z	b7e6805a	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	northcentralus	3450	1003	faster
+42754402355	2026-11-10T04:12:51Z	24eb8c72	push	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3450	1259	slower
+42755544035	2026-11-10T04:23:18Z	ce27643f	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1065	faster
+42756778056	2026-11-10T04:35:01Z	ab210c22	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1311	slower
+42756870159	2026-11-10T04:35:50Z	00383452	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1303	slower
+42757158213	2026-11-10T04:38:39Z	41ce4fc5	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus	3450	1391	slower
+42758244342	2026-11-10T04:49:14Z	970415c5	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3450	1290	slower
+42758276869	2026-11-10T04:49:35Z	800c866f	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3450	1123	faster
+42759427544	2026-11-10T05:00:59Z	2fec69ea	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1086	faster
+42759757424	2026-11-10T05:04:06Z	348add1c	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1282	slower
+42759795291	2026-11-10T05:04:28Z	732c34c9	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1284	slower
+42760038469	2026-11-10T05:06:43Z	2c1a7684	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	southcentralus	3450	1093	faster
+42761206632	2026-11-10T05:17:31Z	b9ff0bcf	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3450	1322	slower
+42761376768	2026-11-10T05:19:10Z	07f87bb4	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1135	faster
+42761435336	2026-11-10T05:19:43Z	56236a58	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1299	slower
+42761825774	2026-11-10T05:23:24Z	ff23dd2e	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus2	3450	1259	slower
+42762748620	2026-11-10T05:32:18Z	4a0c902c	push	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3450	1066	faster
+42762828065	2026-11-10T05:33:03Z	47aa3bf9	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1298	slower
+42762942915	2026-11-10T05:34:09Z	4d16101b	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westcentralus	3450	1071	faster
+42763730608	2026-11-10T05:41:49Z	329f884b	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1281	slower
+42764153566	2026-11-10T05:45:54Z	4f51e2cd	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1331	slower
+42764300440	2026-11-10T05:47:19Z	23ed5698	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	westus3	3450	986	faster
+42765502945	2026-11-10T05:59:17Z	e2257c1a	push	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1321	slower
+42765547703	2026-11-10T05:59:44Z	0b020400	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1304	slower
+42767051176	2026-11-10T06:13:23Z	b5456b91	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	912	faster
+42767141544	2026-11-10T06:14:10Z	216e52a7	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1274	slower
+42767176684	2026-11-10T06:14:29Z	0736b40e	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3450	1055	faster
+42767208396	2026-11-10T06:14:46Z	fd04931f	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	centralus	3450	1231	slower
+42767214877	2026-11-10T06:14:50Z	f89f56f8	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1097	faster
+42767231736	2026-11-10T06:15:00Z	92ff0b2c	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1015	faster
+42767240126	2026-11-10T06:15:04Z	b74078e7	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1249	slower
+42767554248	2026-11-10T06:17:50Z	5b7a2436	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	centralus	3450	1109	faster
+42768449076	2026-11-10T06:25:50Z	2e474991	push	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1070	faster
+42768527397	2026-11-10T06:26:31Z	7d7b2664	pull_request	failure	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	westus3	3450	1201	slower
+42768881438	2026-11-10T06:29:48Z	001499cb	pull_request	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3450	834	faster
+42769340231	2026-11-10T06:33:46Z	9e7cd0df	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1258	slower
+42769491097	2026-11-10T06:35:08Z	d8c44abd	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3450	1321	slower
+42770209715	2026-11-10T06:41:32Z	8a60da91	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus2	3450	1158	faster
+42770723061	2026-11-10T06:46:05Z	cd513048	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	978	faster
+42771188688	2026-11-10T06:50:19Z	b25edf64	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	centralus	3450	1115	faster
+42771889507	2026-11-10T06:56:51Z	f992e408	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1310	slower
+42772008573	2026-11-10T06:57:59Z	87632299	pull_request	success	4	AMD EPYC 7763 64-Core Processor	northcentralus	3450	1353	slower
+42772090351	2026-11-10T06:58:46Z	0bc2ad2f	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	centralus	3450	1337	slower
+42772125107	2026-11-10T06:59:06Z	97732426	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1036	faster
+42772297323	2026-11-10T07:00:37Z	89729bcb	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westus3	3449	1124	faster
+42773543573	2026-11-10T07:11:23Z	65b8e7f4	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus	3450	1238	slower
+42773992534	2026-11-10T07:15:15Z	071c3ea8	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1045	faster
+42774073575	2026-11-10T07:15:55Z	5523408d	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3450	1212	slower
+42774640673	2026-11-10T07:20:48Z	9e88322b	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	westus3	3450	1228	slower
+42776035790	2026-11-10T07:32:49Z	4de5cc72	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	eastus2	3450	1060	faster
+42776238150	2026-11-10T07:34:31Z	4f9fe3a2	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westcentralus	3450	1236	slower
+42777699599	2026-11-10T07:46:59Z	df13ccd8	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1141	faster
+42777927039	2026-11-10T07:48:56Z	8ba2cbd7	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1009	faster
+42779181900	2026-11-10T07:59:35Z	566c797f	push	failure	4	AMD EPYC 7763 64-Core Processor	westus	3450	1379	slower
+42779586032	2026-11-10T08:02:47Z	62764494	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1302	slower
+42782281729	2026-11-10T08:23:38Z	34fbecf7	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1292	slower
+42782455594	2026-11-10T08:24:59Z	059bcf0c	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1326	slower
+42782818593	2026-11-10T08:27:44Z	11692bcb	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	eastus2	3450	1126	faster
+42784549273	2026-11-10T08:41:01Z	9005c356	push	success	4	AMD EPYC 9V74 80-Core Processor	centralus	3450	1132	faster
+42784607356	2026-11-10T08:41:28Z	fa2c65d8	pull_request	failure	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3450	1176	faster
+42786626374	2026-11-10T08:56:58Z	71e4206f	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1113	faster
+42786927987	2026-11-10T08:59:19Z	483160d7	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	southcentralus	3450	1088	faster
+42788100736	2026-11-10T09:07:50Z	354941dd	push	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1331	slower
+42788261456	2026-11-10T09:08:59Z	020d55ff	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1109	faster
+42789937092	2026-11-10T09:20:50Z	2fdbd366	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1262	slower
+42790172123	2026-11-10T09:22:32Z	90372bcf	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1086	faster
+42791864188	2026-11-10T09:34:36Z	405ab58b	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1018	faster
+42791892038	2026-11-10T09:34:47Z	f394e6f6	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westus	3449	1072	faster
+42794252703	2026-11-10T09:51:49Z	2f3b3d55	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1296	slower
+42794482428	2026-11-10T09:53:29Z	82c55b6f	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1028	faster
+42796456021	2026-11-10T10:07:30Z	1039fa81	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1057	faster
+42796798429	2026-11-10T10:09:55Z	2f729b20	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	northcentralus	3450	922	faster
+42798547013	2026-11-10T10:22:11Z	5208b5ea	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1283	slower
+42798588776	2026-11-10T10:22:28Z	4f09175b	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3450	1111	faster
+42800378805	2026-11-10T10:35:02Z	81bfc50a	push	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1266	slower
+42800692342	2026-11-10T10:37:14Z	01531c0c	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3450	1142	faster
+42801692146	2026-11-10T10:44:30Z	149aabf4	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1075	faster
+42803407866	2026-11-10T10:57:01Z	aef18b2a	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westcentralus	3450	1105	faster
+42803595747	2026-11-10T10:58:27Z	2f012c70	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1368	slower
+42805471814	2026-11-10T11:11:51Z	031fe0ec	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1062	faster
+42805707616	2026-11-10T11:13:32Z	4b952a19	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus3	3450	976	faster
+42807151677	2026-11-10T11:24:02Z	818d501c	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1008	faster
+42807225126	2026-11-10T11:24:34Z	113ed067	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1304	slower
+42809062238	2026-11-10T11:38:01Z	1f8344d2	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1164	faster
+42809256979	2026-11-10T11:39:31Z	95eb1dd7	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1330	slower
+42809336483	2026-11-10T11:40:06Z	e5f8e7ce	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3450	1149	faster
+42811016935	2026-11-10T11:52:33Z	66bf3337	push	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3450	1149	faster
+42811187836	2026-11-10T11:53:48Z	8d5a05da	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1353	slower
+42812975044	2026-11-10T12:06:45Z	69e7a04f	push	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	1088	faster
+42813103750	2026-11-10T12:07:39Z	cb037ecb	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1112	faster
+42814884537	2026-11-10T12:20:17Z	4030b0b0	push	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1299	slower
+42814999898	2026-11-10T12:21:06Z	38561fb1	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus2	3450	1309	slower
+42815743538	2026-11-10T12:26:18Z	adf8cdfa	push	success	4	Intel(R) Xeon(R) 6973P-C	centralus	3450	885	faster
+42816924587	2026-11-10T12:34:33Z	ee49da98	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3450	1094	faster
+42818518241	2026-11-10T12:45:49Z	20686f11	push	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1369	slower
+42818674162	2026-11-10T12:46:56Z	1642363d	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1072	faster
+42820132537	2026-11-10T12:57:15Z	c7b20609	push	success	4	AMD EPYC 9V45 96-Core Processor	northcentralus	3450	958	faster
+42820160718	2026-11-10T12:57:27Z	1ebd7360	pull_request	failure	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1372	slower
+42830428483	2026-11-10T14:04:27Z	4e0a8065	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3450	1355	slower
+42832624841	2026-11-10T14:17:45Z	34e92fc3	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1025	faster
+42832730921	2026-11-10T14:18:22Z	48cfe9b6	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3450	1044	faster
+42834652577	2026-11-10T14:29:50Z	8ff19146	push	success	4	AMD EPYC 9V74 80-Core Processor	westcentralus	3450	1064	faster
+42834722386	2026-11-10T14:30:14Z	148d9468	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3450	1109	faster
+42836657734	2026-11-10T14:41:34Z	fc1e69f6	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3450	1044	faster
+42837842508	2026-11-10T14:48:29Z	47be1299	pull_request	failure	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1140	faster
+42840985231	2026-11-10T15:06:56Z	b5851e6a	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3450	1078	faster
+42842796804	2026-11-10T15:17:28Z	6974bb40	push	success	4	AMD EPYC 9V74 80-Core Processor	westus	3450	1075	faster
+42843594701	2026-11-10T15:22:09Z	cdd38a32	pull_request	failure	4	AMD EPYC 9V45 96-Core Processor	westus3	3450	969	faster
+42849308519	2026-11-10T15:54:44Z	032862f9	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1138	faster
+42851220543	2026-11-10T16:06:26Z	aaa56bce	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3450	1325	slower
+42851719804	2026-11-10T16:09:32Z	e2ed78d7	push	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus3	3450	1161	faster
+42853996479	2026-11-10T16:23:10Z	8b8c6c6b	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3452	1017	faster
+42854673428	2026-11-10T16:27:15Z	7edc522a	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	southcentralus	3450	970	faster
+42859403880	2026-11-10T16:54:43Z	fb932ead	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3450	1179	faster
+42861727657	2026-11-10T17:07:57Z	a4e261cb	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3450	1281	slower
+42861833682	2026-11-10T17:08:34Z	17fb5e61	pull_request	success	4	AMD EPYC 7763 64-Core Processor	centralus	3452	1257	slower
+42864032860	2026-11-10T17:21:00Z	3a2eecb5	push	success	4	AMD EPYC 7763 64-Core Processor	westus	3452	1289	slower
+42868661400	2026-11-10T17:48:14Z	28108fa3	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3452	1268	slower
+42871363911	2026-11-10T18:04:09Z	024a1669	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3467	1019	faster
+42873150589	2026-11-10T18:14:24Z	d9fdc130	push	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3467	865	faster
+42873296984	2026-11-10T18:15:14Z	19c07af2	pull_request	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	westus3	3467	1088	faster
+42875224437	2026-11-10T18:26:33Z	55847415	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	westus3	3467	1091	faster
+42877448181	2026-11-10T18:39:43Z	a356a9e2	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	southcentralus	3467	1066	faster
+42877456333	2026-11-10T18:39:46Z	00867647	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3467	1077	faster
+42877461500	2026-11-10T18:39:48Z	5e49e328	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3467	1030	faster
+42877469413	2026-11-10T18:39:50Z	b5231959	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3467	1281	slower
+42877479696	2026-11-10T18:39:54Z	52425f0a	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3467	1070	faster
+42877567710	2026-11-10T18:40:25Z	bbcff6ab	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3467	1225	slower
+42880241342	2026-11-10T18:56:30Z	0a0deca7	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3467	963	faster
+42880591377	2026-11-10T18:58:39Z	dc638268	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3467	1291	slower
+42880982793	2026-11-10T19:00:59Z	12355525	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3467	1111	faster
+42882329091	2026-11-10T19:08:53Z	d0bcc02d	push	success	4	Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	eastus2	3467	1102	faster
+42882467734	2026-11-10T19:09:44Z	ef35204a	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3467	1312	slower
+42884517037	2026-11-10T19:21:54Z	81c9fd0c	push	success	4	AMD EPYC 9V74 80-Core Processor	westus3	3467	1084	faster
+42884704341	2026-11-10T19:23:00Z	78a8eb4e	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3467	1074	faster
+42885399501	2026-11-10T19:27:10Z	eca7709a	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3467	1265	slower
+42886091832	2026-11-10T19:31:19Z	b2d25da6	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3467	1029	faster
+42886103215	2026-11-10T19:31:23Z	74eecfca	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	northcentralus	3467	1288	slower
+42887146532	2026-11-10T19:37:36Z	533d9efe	push	success	4	INTEL(R) XEON(R) PLATINUM 8573C	centralus	3467	912	faster
+42887208713	2026-11-10T19:38:00Z	8ca9653a	pull_request	success	4	INTEL(R) XEON(R) PLATINUM 8573C	southcentralus	3467	1132	faster
+42888188992	2026-11-10T19:43:56Z	efd44afa	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3467	1219	slower
+42892128289	2026-11-10T20:07:31Z	7db9edf1	push	success	4	AMD EPYC 7763 64-Core Processor	westcentralus	3467	1258	slower
+42892289970	2026-11-10T20:08:28Z	1ba242b1	pull_request	success	4	AMD EPYC 9V45 96-Core Processor	centralus	3467	942	faster
+42893786379	2026-11-10T20:17:15Z	59f7e0f9	pull_request	success	4	AMD EPYC 7763 64-Core Processor	eastus	3467	1290	slower
+42894404073	2026-11-10T20:20:59Z	58ac39c8	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus	3467	1291	slower
+42894845457	2026-11-10T20:23:41Z	881278eb	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3467	1310	slower
+42894971707	2026-11-10T20:24:26Z	c471035c	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3467	1241	slower
+42895665538	2026-11-10T20:28:45Z	b02cde0d	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus	3467	1135	faster
+42897282086	2026-11-10T20:38:30Z	7fdc3cd4	push	success	4	AMD EPYC 7763 64-Core Processor	eastus	3467	1303	slower
+42897439152	2026-11-10T20:39:30Z	4863778c	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	eastus2	3467	1065	faster
+42898307860	2026-11-10T20:44:58Z	420878e5	pull_request	success	4	AMD EPYC 7763 64-Core Processor	westus3	3467	1256	slower
+42899510601	2026-11-10T20:52:31Z	12de66e9	push	success	4	AMD EPYC 9V74 80-Core Processor	centralus	3467	1059	faster
+42899973519	2026-11-10T20:55:27Z	b35020c0	pull_request	success	4	AMD EPYC 9V74 80-Core Processor	westus2	3467	1095	faster

@@ -2,7 +2,8 @@
 #
 # db-write-ask.sh
 # Claude Code PreToolUse(Bash|mcp__.*)
-# hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536).
+# hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
+# and before an edge function deploy that turns JWT verification off, or may (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql, on both Macs, and
@@ -29,6 +30,15 @@
 #     names. The list, and why the connector's other tools are left out, is in
 #     lib/db-write-calls.py. The Supabase CLI's branches and projects subcommands that do the same
 #     in a shell (create, delete, pause, unpause, update) are asked about with them.
+#   - Since #2660, one kind of call that changes no database: a Supabase edge function deploy that
+#     turns JWT verification off, or may, which publishes a function the platform lets anyone call
+#     without signing in. deploy_edge_function with verify_jwt false on any Supabase server, with
+#     the function and the project named; a verify_jwt that is neither true nor false is asked
+#     about too, and one that is true or left out is passed, since the connector's schema gives
+#     true as its default. And every `supabase functions deploy` in a shell, whatever its flags
+#     (Dan, 2026-11-10: "Ask on every shell deploy"), since the setting can sit in the project's
+#     supabase/config.toml, which no flag shows and this hook never reads. lib/db-write-calls.py
+#     says where each of these was read, and what this cannot see.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
 #     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
@@ -170,8 +180,15 @@ def emit(decision_reason=None, message=None):
         sys.stdout.write("note\x1f" + plain(message))
     sys.exit()
 
-def ask(why, issue="2521"):
-    emit("db-write-ask.sh asks before this database call: " + why + " (claude-config#" + issue + ")", sf_notice())
+DATABASE_CALL = "database call"
+# The one kind of call asked about that changes no database: an edge function deploy that turns
+# JWT verification off, or may (claude-config#2660).
+DEPLOY = "edge function deploy"
+
+def ask(why, issue="2521", what=DATABASE_CALL):
+    """Ask, saying which kind of call it is and the issue that decided it; issue may name two,
+    for a command that holds both kinds."""
+    emit("db-write-ask.sh asks before this " + what + ": " + why + " (claude-config#" + issue + ")", sf_notice())
 
 # Which other calls reach a database, and which statements they carry (claude-config#2536).
 calls, calls_why = part("db_write_calls_shared", "db-write-calls.py")
@@ -186,6 +203,10 @@ if not isinstance(tool, str):
     named = [t for t in WATCHED if t in raw]
     m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\\\]*)\"", raw)
     said = m.group(1) if m else ""
+    if not named and said.startswith("mcp__") and calls is not None and calls.named_as_function_deploy(said):
+        # An edge function deploy whose verify_jwt cannot be read (claude-config#2660).
+        ask("the hook payload could not be read as a tool call, and its text names " + said
+            + ", so whether the deploy keeps JWT verification on could not be told", "2660", DEPLOY)
     if not named and said.startswith("mcp__") and (calls is None or calls.named_as_database_call(said)):
         named = [said]
     if not named and said == "Bash" and (calls is None or calls.CLIENT_WORD.search(raw)):
@@ -260,7 +281,13 @@ if tool == "Bash":
         sys.exit()
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)
-    ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""), "2536")
+    # An edge function deploy is not a database call, so the question says which of the two the
+    # command holds, or both, and names the issue behind each (claude-config#2660).
+    deploys = [f for f in found if calls.is_function_deploy(f)]
+    kinds = ([DATABASE_CALL] if len(deploys) < len(found) else []) + ([DEPLOY] if deploys else [])
+    issues = (["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
+    ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""),
+        ", claude-config#".join(issues), " and ".join(kinds))
 
 # A Supabase tool that changes a database with no statement to judge: a branch merge, reset, rebase
 # or delete, a new branch or project, a pause or a restore (claude-config#2632). The library builds
@@ -272,6 +299,18 @@ except Exception as e:
               "could not be told")
 if change is not None:
     ask(change, "2632")
+
+# A Supabase edge function deploy with JWT verification off, which publishes a function the
+# platform lets anyone call without signing in (claude-config#2660). It changes no database, and
+# is the one deploy asked about: one that keeps verification on is passed. The library builds the
+# sentence, with the function and the project the input names.
+try:
+    deploy = calls.supabase_open_deploy(tool, ti)
+except Exception as e:
+    deploy = (tool + " could not be read (" + type(e).__name__ + "), so whether the deploy keeps JWT "
+              "verification on could not be told")
+if deploy is not None:
+    ask(deploy, "2660", DEPLOY)
 
 try:
     found = calls.mcp_finding(tool, ti, judge)
