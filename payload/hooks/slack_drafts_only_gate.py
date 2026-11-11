@@ -41,8 +41,11 @@ through a path alias (`@/lib/x`), a Python module in the standard library or ins
 with `python3 -m`, and an import of another language's files are
 not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
 program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
-shell script's writes are not counted as acting on a data file; and deliberate obfuscation (an
-endpoint assembled from pieces, an import path built at run time) is not the threat this answers.
+shell script's writes are not counted as acting on a data file; a file written in the same command
+is followed only through the shell's own writes (a redirection, tee, a copy, a download), never one a
+program writes by name (python3 -c "open(...)", sed -i), and a write to a path in a variable inside a
+script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
+assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
@@ -438,10 +441,133 @@ COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlM
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
 # it is not here: the word after it is a file.
 COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group"}
-# A redirection of a command's output to a file, glued to its target or before it, appending or not.
-OUT_REDIRECT = re.compile(r"^(?:1|&)?(>>|>\||>)(.*)\Z", re.S)
-IN_REDIRECT = re.compile(r"^0?<(?![<>&])(.*)\Z", re.S)
 MADE_DEPTH = 8  # how many copied directories deep a lookup follows (made_from)
+# curl's options that write a file named by the next word (claude-config#2721), the long ones that
+# leave the name to the server or a config file, those of them taking a value, and the short options
+# that take one, so a value glued to a cluster (-sSo run.sh, -orun.sh) is read as curl reads it.
+CURL_WRITES_LONG = {"--output", "--cookie-jar", "--dump-header", "--trace", "--trace-ascii", "--libcurl",
+                    "--stderr", "--etag-save", "--hsts", "--alt-svc"}
+CURL_REMOTE_LONG = {"--remote-name", "--remote-name-all", "--remote-header-name", "--output-dir", "--config"}
+CURL_REMOTE_VALUED = {"--output-dir", "--config"}
+CURL_VALUED = "EKCbcdDFPHhmoUQreXYytzTuAwx"
+# One printf conversion the gate works out exactly (claude-config#2721): flags, a width and a precision
+# written as digits, and a string, %b, a character or an integer conversion.
+PRINTF_SPEC = re.compile(r"%([-+ #0]*)(\d*)(?:\.(\d*))?([sbcdiuxXo%])")
+# The escapes bash's, zsh's and sh's printf all read alike; \", \', \e and \x differ between them and
+# /usr/bin/printf, so a format using one is not worked out.
+PRINTF_ESCAPES = {"\\": "\\", "a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}
+
+
+def unescape(s, i, b_style):
+    """(the text the backslash escape at s[i] stands for, the index after it), or (None, i) for one
+    the gate does not work out (\\u, \\U, an unknown letter), and ("STOP", i) for %b's \\c. The format's
+    octal is \\NNN, one to three digits; %b's is \\0NNN, zero to three after the 0, as bash's printf
+    reads them (measured against bash's, zsh's and sh's printf, claude-config#2721)."""
+    if i + 1 >= len(s):
+        return "\\", i + 1
+    c = s[i + 1]
+    if c in PRINTF_ESCAPES:
+        return PRINTF_ESCAPES[c], i + 2
+    if b_style and c == "c":
+        return "STOP", i + 2
+    m = (re.compile(r"0([0-7]{0,3})") if b_style else re.compile(r"([0-7]{1,3})")).match(s, i + 1)
+    if m:
+        return chr(int(m.group(1) or "0", 8) & 0xFF), m.end()
+    return None, i
+
+
+def printf_text(words):
+    """printf_words, None where Python's own formatting refuses what it was given."""
+    try:
+        return printf_words(words)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def printf_words(words):
+    """What printf prints given words (its arguments as values), or None where the gate does not work it
+    out exactly: a word not known, an escape or conversion outside the ones read here. -v writes a
+    variable and prints nothing. The format is used again while arguments are left, as printf does."""
+    if any(w is None for w in words):
+        return None
+    words = list(words)
+    if words[:1] == ["-v"]:
+        return ""
+    if words[:1] == ["--"]:
+        words = words[1:]
+    if not words:
+        return None
+    fmt, args, out = words[0], words[1:], []
+    while True:
+        used, i = False, 0
+        while i < len(fmt):
+            c = fmt[i]
+            if c == "\\":
+                text, i2 = unescape(fmt, i, False)
+                if text is None or text == "STOP":
+                    return None
+                out.append(text)
+                i = i2
+                continue
+            if c != "%":
+                out.append(c)
+                i += 1
+                continue
+            m = PRINTF_SPEC.match(fmt, i)
+            if not m:
+                return None
+            flags, width, prec, conv = m.groups()
+            i = m.end()
+            if conv == "%":
+                out.append("%")
+                continue
+            used = True
+            a = args.pop(0) if args else None
+            if conv == "b":
+                if flags or width or prec is not None:
+                    return None
+                j, a = 0, a or ""
+                while j < len(a):
+                    if a[j] != "\\":
+                        out.append(a[j])
+                        j += 1
+                        continue
+                    text, j2 = unescape(a, j, True)
+                    if text is None:
+                        return None
+                    if text == "STOP":
+                        return "".join(out)
+                    out.append(text)
+                    j = j2
+                continue
+            spec = "%" + flags + width + ("." + prec if prec is not None else "")
+            if len(width + (prec or "")) > 4:
+                return None  # a width that pads past what the gate reads (MAX_FILE)
+            if conv == "s":
+                out.append((spec + "s") % (a or ""))
+            elif conv == "c":
+                out.append((spec + "s") % (a or "")[:1])
+            else:
+                if a is not None and not re.fullmatch(r"[+-]?\d+", a):
+                    return None
+                n = int(a or "0")
+                if conv in "xXo" and n < 0:
+                    return None
+                out.append((spec + ("d" if conv in "iu" else conv)) % n)
+        if not args or not used:
+            return "".join(out)
+
+
+def echo_text(words):
+    """What echo prints given words, or None where it depends on which echo runs: a backslash (bash's
+    builtin prints it, zsh's and sh's read it as an escape) or a first word starting with - (bash and
+    zsh read -n, -e and -E as options, sh prints them; zsh ends its options at a lone -). Measured on
+    this Mac's bash, zsh and sh, 2026-11-10."""
+    if any(w is None for w in words):
+        return None
+    if (words and words[0].startswith("-")) or any("\\" in w for w in words):
+        return None
+    return " ".join(words) + "\n"
 # The folders a program is taken from by the name it has there; anywhere else it is a script of its own.
 SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
@@ -599,6 +725,9 @@ class Judge:
         # it is, as its BASH_SOURCE names it, which script() hands to the line() it calls.
         self.shell = self.shell_scope("", "", None)
         self.next_script = None
+        # Whether the next text line() reads is a file on disk (a script, a package.json script)
+        # rather than text this call wrote itself (claude-config#2721; note_unreadable).
+        self.next_on_disk = False
         # Whether the directory the next text line() reads starts in is certain (claude-config#2465):
         # a script run or sourced from inside a function starts wherever that function was called.
         self.next_cwd_known = True
@@ -606,11 +735,15 @@ class Judge:
         self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
         self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
         # The files and directories an earlier command of this call writes (claude-config#2525), by
-        # real path: {file: [(kind, the path or the text, its name for a refusal)]}, kind "file" or
-        # "text", and {directory: (the directory it is copied from, its name)}. note_writes fills
+        # real path: {file: [(kind, the path or the text, its name for a refusal)]}, kind "file",
+        # "text" or "unknown" (text that cannot be worked out, claude-config#2721), and {directory:
+        # (the directory it is copied from, its name)}. note_writes fills
         # them in the order the commands run; made_from reads them.
         self.made = {}
         self.made_dirs = {}
+        # [(a pattern, what wrote it)] for files written where the path cannot be worked out
+        # (claude-config#2721): every path it matches is unreadable from then on.
+        self.made_unknown = []
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -619,7 +752,7 @@ class Judge:
         (at), whether the directory the text starts in is certain, and what sh_walk finds certain
         about its variables, worked out the first time one is asked for."""
         return {"text": text, "cwd": cwd, "script": script, "pending": {}, "exported": set(), "at": None,
-                "cwd_known": cwd_known, "known": None}
+                "cwd_known": cwd_known, "known": None, "piped": None, "outer": True, "last_out": None}
 
     @staticmethod
     def py_path(value, d):
@@ -712,7 +845,9 @@ class Judge:
     # A file a command writes is read as what it is written from (claude-config#2525). `cp post.txt
     # run.sh && bash run.sh` runs a file that is not on disk when the gate reads the command, so it was
     # nothing there to run, and the copy of a script that posts went through. Each command that copies,
-    # moves, links or installs a file, or writes one with cat or tee from files or a heredoc, is noted
+    # moves, links or installs a file, or writes one by a redirection, tee or a download, is noted
+    # (claude-config#2721 added every writer but the copiers, by the text written: printf, echo, a
+    # here-string, a pipe; text that cannot be worked out refuses the file when it runs, unread)
     # as it is passed (note_writes, from record), in the order the commands run, and every read of a
     # file after it (is_file, content) reads what it was made from. A file already on disk that a
     # write replaces is read as well, after the new text: the write can fail, and with `;` the old
@@ -723,9 +858,17 @@ class Judge:
         """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
         None when nothing did. A file under a directory copied earlier is the same file under the
         directory it was copied from, followed MADE_DEPTH copies deep."""
-        if not (self.made or self.made_dirs):
+        if not (self.made or self.made_dirs or self.made_unknown):
             return None
         real = os.path.realpath(path)
+        found = self.made_from_known(real, depth)
+        # A file written where the path could not be worked out may be this one (claude-config#2721).
+        guessed = [("unknown", None, label) for pat, label in self.made_unknown
+                   if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
+        return (list(found or []) + guessed) if guessed else found
+
+    def made_from_known(self, real, depth):
+        """made_from for a path written by name."""
         if real in self.made:
             return self.made[real]
         head = real
@@ -759,6 +902,8 @@ class Judge:
         real = os.path.realpath(path)
         made = []
         for kind, value, _ in pieces:
+            if kind == "unknown":
+                continue  # nothing to read: script() refuses a file holding one (unread)
             if kind == "text":
                 made.append(value.encode("utf-8", "replace"))
                 continue
@@ -776,11 +921,25 @@ class Judge:
                 pass
         return out[:limit]
 
+    def unread(self, path):
+        """For a file written earlier in this command with text that cannot be worked out
+        (claude-config#2721), why it cannot be judged; None for any other file."""
+        names = []
+        for kind, _, label in self.made_from(path) or ():
+            if kind == "unknown" and label not in names:
+                names.append(label)
+        if not names:
+            return None
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
+                f"whether it posts cannot be checked")
+
     def made_note(self, path, word):
         """For a refusal: which files (or heredoc) word was made from, or None when it was not made."""
         names = []
         for kind, _, label in self.made_from(path) or ():
-            label = "a heredoc" if kind == "text" else label
+            if kind == "unknown":
+                continue
             if label and label not in names:
                 names.append(label)
         if not names:
@@ -790,81 +949,239 @@ class Judge:
         return f"{word} is made from {listed} earlier in this command, and was judged by what {holds}"
 
     def note_writes(self, d, text, whole):
-        """Note the files this command writes, for a later command that runs one (claude-config#2525):
-        cp, mv, install, ln and link (COPIERS), and cat or tee writing files or a heredoc they are
-        given. Output a pipe feeds, and any other writer (printf, echo, curl -o), is not followed:
-        what it writes is not known here."""
+        """Note the files this command writes, for a later command that runs one: cp, mv, install, ln
+        and link (COPIERS) by their sources (claude-config#2525), and every file a redirection, tee or
+        a download writes by the text written into it (claude-config#2721). That text is worked out
+        where it can be exactly: printf and echo with literal words, cat of files, a heredoc or a
+        here-string, and tee or cat fed by one of those through a pipe. Anything else, the output of
+        any other program, a download, or a word built from a variable or a substitution the resolver
+        cannot work out, is noted as unreadable, and a file that is run with an unreadable piece is
+        refused (script). A path that cannot be worked out is noted as a pattern (unknown_pattern), and
+        every file it can match is unreadable from there on.
+
+        Also keeps what this command prints, for a tee or cat the next command of a pipeline feeds
+        (shell "last_out"), from the commands the line reads itself, not a wrapper's."""
         rest, _ = self.sw.command_rest(text)
-        words = self.sw.command_words(rest)
-        if not words:
-            return
-        name = os.path.basename(words[0])
-        if name not in COPIERS and name not in ("cat", "tee"):
-            return
-        plain, outs, infile, heredoc = [], [], None, False
-        k = 1
-        while k < len(words):
-            w = words[k]
-            nxt = words[k + 1] if k + 1 < len(words) else ""
-            if w.startswith("<<<") or re.match(r"\d+<<<", w):
-                return  # a here string: not followed
-            m = re.match(r"^\d*<<-?(.*)\Z", w, re.S)
-            if m:
-                heredoc = True
-                k += 1 if m.group(1) else 2
+        rest = self.sh_strip_openers(rest)
+        toks = self.sh_tokens(rest)
+        args, redirs, odd, k = [], [], False, 0
+        while k < len(toks):
+            kind, t = toks[k]
+            if kind == "op" and SH_REDIRECT.fullmatch(t):
+                target = toks[k + 1][1] if k + 1 < len(toks) and toks[k + 1][0] == "word" else None
+                redirs.append((t, target))
+                k += 2 if target is not None else 1
                 continue
-            m = OUT_REDIRECT.match(w)
-            if m:
-                target = m.group(2) or nxt
-                k += 1 if m.group(2) else 2
-                if target and not target.startswith("&"):
-                    outs.append((target, m.group(1) == ">>"))
-                continue
-            m = IN_REDIRECT.match(w)
-            if m:
-                infile = m.group(1) or nxt
-                k += 1 if m.group(1) else 2
-                continue
-            m = self.sw.REDIRECT_WORD.match(w)
-            if m:
-                k += 1 if m.group(1) else 2  # another descriptor's: nothing written that runs
-                continue
-            plain.append(w)
-            k += 1
-        if any("$" in w or "`" in w for w in plain + [t for t, _ in outs] + [infile or ""]):
-            return  # a path known only as it runs: not followed
-        if name in COPIERS:
-            self.note_copy(name, plain, d)
-            return
-        operands = [w for w in plain if w == "-" or not w.startswith("-")]
-        if heredoc:
-            body, is_body = self.fed(text, whole)
-            stdin = [("text", body + "\n", "a heredoc")] if is_body else None
-        elif infile:
-            stdin = self.pieces_of(infile, d)
-        else:
-            stdin = None  # a pipe, or the terminal: not known here
-        if name == "tee":
-            append = any(w.startswith("-") and not w.startswith("--") and "a" in w for w in plain) or "--append" in plain
-            targets = [(w, append) for w in operands if w != "-"] + outs
-            pieces = stdin
-        else:
-            targets = outs
-            if operands:
-                pieces = []
-                for w in operands:
-                    if w == "-":
-                        if stdin is None:
-                            return
-                        pieces += stdin
-                    else:
-                        pieces += self.pieces_of(w, d)
+            if kind == "op":
+                odd = True  # a process substitution or the like: what it prints is not worked out
             else:
-                pieces = stdin
-        if not pieces:
+                args.append(t)
+            k += 1
+        vals = [self.sh_value(a, d) for a in args]
+        name = os.path.basename(vals[0]) if vals and vals[0] is not None else None
+        while name in ("builtin", "command") and len(vals) > 1 and not (args[1].startswith("-")):
+            args, vals = args[1:], vals[1:]
+            name = os.path.basename(vals[0]) if vals[0] is not None else None
+        stdin = self.stdin_of(d, text, whole, redirs)
+        label = name or "a command"
+        if odd or name is None:
+            out = None
+        elif name in COPIERS:
+            if any(v is None for v in vals):
+                # Which word is the target, and what it is copied from, cannot be told: every word
+                # naming a file may be either, so each is unreadable from here on.
+                for a, v in zip(args[1:], vals[1:]):
+                    if v is None or not v.startswith("-"):
+                        self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out")
+            else:
+                self.note_copy(name, vals[1:], d)
+            out = []
+        elif name in ("printf", "gprintf"):
+            out = self.text_piece(printf_text(vals[1:]), "printf's text")
+        elif name in ("echo", "gecho"):
+            out = self.text_piece(echo_text(vals[1:]), "echo's text")
+        elif name in ("cat", "gcat"):
+            operands = [(a, v) for a, v in zip(args[1:], vals[1:]) if v is None or v == "-" or not v.startswith("-")]
+            out = []
+            for a, v in operands or [("-", "-")]:
+                if v == "-":
+                    if stdin is None:
+                        out = None
+                        break
+                    out += stdin
+                elif v is None:
+                    out = None
+                    break
+                else:
+                    out += self.pieces_of(v, d)
+        elif name in ("tee", "gtee"):
+            append = any(v and re.fullmatch(r"-[a-zA-Z]*a[a-zA-Z]*", v) for v in vals[1:]) or "--append" in vals[1:]
+            for a, v in zip(args[1:], vals[1:]):
+                if v is not None and (v == "-" or v.startswith("-")):
+                    continue
+                self.note_output(a, v, d, stdin, "tee", append)
+            out = stdin
+        else:
+            for a, v in self.downloads(name, args, vals):
+                self.note_unreadable(a, v, d, f"{name}, which downloads it")
+            out = None
+        if out is None:
+            out = [("unknown", None, label)]
+        for op, target in redirs:
+            m = re.fullmatch(r"(\d*|&)(>>|>\||>&|>)", op)
+            if not m or target is None:
+                continue
+            fd, kind = m.group(1), m.group(2)
+            if kind == ">&" and (fd not in ("", "1") or re.fullmatch(r"\d+|-", self.sh_value(target, d) or "")):
+                continue  # a descriptor copied (2>&1, >&2), not a file
+            v = self.sh_value(target, d)
+            if fd in ("", "1", "&") or kind == ">&":
+                self.note_output(target, v, d, out, label, kind == ">>")
+                out = []
+            else:
+                self.note_unreadable(target, v, d, f"{label}'s errors")
+        if self.shell.get("outer", True):
+            self.shell["last_out"] = out
+
+    def sh_value(self, raw, d):
+        """The value of one raw shell word as the command gets it, or None where it is not certain: a
+        leading ~ is the session's HOME, and the rest is sh_word's reading."""
+        if raw == "~" or raw.startswith("~/"):
+            home = os.environ.get("HOME")
+            if not home:
+                return None
+            raw = "'" + home.replace("'", "'\\''") + "'" + raw[1:]
+        if not re.search(r"[$`\\\"' \t*?\[\]{}~();&|<>]", raw):
+            return raw
+        v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, self.shell["script"], False)
+        return None if splits else v
+
+    @staticmethod
+    def text_piece(text, label):
+        return None if text is None else [("text", text, label)]
+
+    def stdin_of(self, d, text, whole, redirs):
+        """What this command reads on its input, as pieces, or None where that is not known: a heredoc,
+        a here-string or a file it is given, else what the command before it in a pipeline printed,
+        else nothing (a command the line reads itself runs with no input)."""
+        stdin = [] if self.shell.get("piped") is False else None
+        if self.shell.get("piped"):
+            stdin = self.shell.get("last_out")
+        for op, target in redirs:
+            kind = re.sub(r"^\d+", "", op)
+            if kind == "<<<":
+                v = self.sh_value(target, d) if target is not None else None
+                stdin = self.text_piece(None if v is None else v + "\n", "a here-string")
+            elif kind in ("<<", "<<-"):
+                body, is_body = self.fed(text, whole)
+                quoted = target is not None and re.search(r"['\"\\]", target)
+                if not is_body or (not quoted and re.search(r"[$`\\]", body)):
+                    stdin = None  # a body the shell expands: not worked out here
+                else:
+                    stdin = [("text", body + "\n", "a heredoc")]
+            elif kind in ("<", "<>"):
+                v = self.sh_value(target, d) if target is not None else None
+                stdin = None if v is None else self.pieces_of(v, d)
+            elif kind == "<&":
+                stdin = None
+        return stdin
+
+    def note_output(self, raw, value, d, pieces, label, append=False):
+        """A file written with pieces (None or an unreadable piece where the text is not known)."""
+        if value is None:
+            self.note_unreadable(raw, None, d, label)
             return
-        for target, append in targets:
-            self.note_file(target, d, list(pieces), append)
+        if value.startswith("/dev/") and value not in ("/dev/stdin",):
+            return
+        if pieces is None:
+            pieces = [("unknown", None, label)]
+        self.note_file(value, d, list(pieces), append)
+
+    def note_unreadable(self, raw, value, d, label):
+        """A file whose text cannot be worked out: by its path, or by a pattern every path it can be
+        matches, where the path is not known either."""
+        if value is not None:
+            if not value.startswith("/dev/"):
+                self.note_file(value, d, [("unknown", None, label)], True)
+            return
+        # Only in text this call wrote itself. A script on disk writing to a path in a variable and
+        # then running or sourcing another file is everyday code (lib/suite-deadline.sh writes its pid
+        # to "$pidfile", then sources recorded-pid.sh), and a pattern there refused every suite that
+        # sources it: 12 checks of the gate's own suite failed (measured 2026-11-10). A script on
+        # disk is read by the gate before it runs, so building a post in one is the
+        # assembled-from-pieces case the module docstring already puts outside what this gate answers.
+        if self.shell.get("on_disk"):
+            return
+        self.made_unknown.append((self.unknown_pattern(raw), label))
+
+    @staticmethod
+    def unknown_pattern(raw):
+        """A pattern for a path written as raw that cannot be worked out: any file with its last part's
+        name, where that part is plain text, else any file at all."""
+        base = raw.rstrip("/").rsplit("/", 1)[-1].strip("'\"")
+        if re.fullmatch(r"[A-Za-z0-9._+,%@=:-]+", base) and "/" in raw:
+            return "*/" + base
+        return "*"
+
+    @staticmethod
+    def downloads(name, args, vals):
+        """(raw, value) for each file a download program writes, value None where it cannot be told."""
+        out = []
+        if name in ("curl", "curlie"):
+            k, remote = 1, False
+            while k < len(vals):
+                v = vals[k] or ""
+                nxt = (args[k + 1], vals[k + 1]) if k + 1 < len(vals) else (None, None)
+                if v in CURL_WRITES_LONG:
+                    if nxt[0] is not None:
+                        out.append(nxt)
+                    k += 2
+                    continue
+                if v in CURL_REMOTE_LONG:
+                    remote = True
+                    k += 2 if v in CURL_REMOTE_VALUED else 1
+                    continue
+                elif re.fullmatch(r"-[A-Za-z0-9#:]+", v) and not v.startswith("--"):
+                    for j, c in enumerate(v[1:], 1):
+                        if c in "OJ":
+                            remote = True
+                        if c in CURL_VALUED:
+                            val = v[j + 1:]
+                            if c == "K":
+                                remote = True  # a config file can name the output
+                            elif c in "ocD":
+                                if val:
+                                    out.append((val, val))
+                                elif nxt[0] is not None:
+                                    out.append(nxt)
+                            if not val:
+                                k += 1
+                            break
+                k += 1
+            if remote:
+                out.append(("*", None))  # named by the server or the address: matched by any name
+        elif name in ("wget",):
+            named = False
+            for k, v in enumerate(vals[1:], 1):
+                v = v or ""
+                m = re.fullmatch(r"-O(.*)|--output-document(?:=(.*))?", v, re.S)
+                if not m:
+                    continue
+                named = True
+                val = m.group(1) if m.group(1) is not None else m.group(2)
+                if val:
+                    out.append((val, val) if val != "-" else (None, None))
+                elif k + 1 < len(vals) and vals[k + 1] != "-":
+                    out.append((args[k + 1], vals[k + 1]))
+            if not named:
+                out.append(("*", None))
+        elif name in SENDERS:
+            for k, v in enumerate(vals[1:], 1):
+                if v in ("-o", "--output") and k + 1 < len(vals):
+                    out.append((args[k + 1], vals[k + 1]))
+                elif v in ("-d", "--download"):
+                    out.append(("*", None))
+        return [(a, v) for a, v in out if a is not None]
 
     def pieces_of(self, word, d):
         """What a file named word holds, as made_from gives it: what an earlier command made it from,
@@ -968,6 +1285,9 @@ class Judge:
         path = self.resolve(word, d)
         if not self.is_file(path):
             return None  # nothing there to run
+        unread = self.unread(path)
+        if unread:
+            return f"the script {word} {unread}"
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge and not self.made_from(real):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
@@ -998,6 +1318,7 @@ class Judge:
             # naming no endpoint passed here whatever it went on to source).
             try:
                 self.next_script = word  # its BASH_SOURCE, as written in the command (claude-config#2449)
+                self.next_on_disk = True
                 self.next_cwd_known = self.sh_cwd(d) != SH_UNKNOWN_DIR
                 inner = self.line(body, d, depth + 1, body)
             except self.sw.Unreadable:
@@ -2587,7 +2908,8 @@ class Judge:
         """The reason a command line posts, or None. Its shell variables are its own: a script read
         here starts with none, and the caller's are back once it is read."""
         saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script, self.next_cwd_known)
-        self.next_script, self.next_cwd_known = None, True
+        self.shell["on_disk"] = self.next_on_disk
+        self.next_script, self.next_cwd_known, self.next_on_disk = None, True, False
         try:
             # Where in s each command is, for sh_var (claude-config#2465): a variable's value is known
             # only over part of the text. every_command gives s's own commands in commands() order,
@@ -2601,6 +2923,15 @@ class Judge:
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
+                # Whether a pipe feeds this command, for note_writes (claude-config#2721): read from
+                # the text before it, for a command of s's own; None, not known, for a wrapper's.
+                at = self.shell["at"] if not wdepth else None
+                if at is None:
+                    self.shell["piped"] = None
+                else:
+                    before = s[:at].rstrip()
+                    self.shell["piped"] = before.endswith(("|", "|&")) and not before.endswith("||")
+                self.shell["outer"] = not wdepth
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason
@@ -2646,7 +2977,7 @@ class Judge:
         try:
             reason = self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
-                self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525)
+                self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
             return reason
         finally:
             self.py_cmd = saved
@@ -2813,16 +3144,21 @@ class Judge:
             code.append((f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
         for w, path in data:
             self.tick(path)
-            try:
-                hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
-            except OSError:
-                continue  # unreadable to us is unreadable to the script that would read it
-            if not hit:
-                continue
+            unread = self.unread(path)
+            if unread:
+                what = f"{w}, which {unread}"
+            else:
+                try:
+                    hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
+                except OSError:
+                    continue  # unreadable to us is unreadable to the script that would read it
+                if not hit:
+                    continue
+                what = f"{w}, which names {hit.group(0)}"
             for script_label, script_acts in code:
                 acts = script_acts()
                 if acts:
-                    return f"{script_label} {acts}, and is handed {w}, which names {hit.group(0)}"
+                    return f"{script_label} {acts}, and is handed {what}"
             # Data every script beside it only reads; none sends or runs what it is handed.
         return None
 
@@ -3460,6 +3796,7 @@ class Judge:
             if not isinstance(cmd, str) or depth >= MAX_DEPTH:
                 continue
             try:
+                self.next_on_disk = True
                 inner = self.line(cmd, pkg_dir, depth + 1, cmd)
             except self.sw.Unreadable:  # as in script_body: any other error is a fault (#2573)
                 hit = MARKER.search(cmd)
