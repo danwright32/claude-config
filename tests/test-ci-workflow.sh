@@ -565,6 +565,7 @@ r="$(reuse_gated "$REAL")"
 deal_raw="$(code_of "$REAL" | awk '/^  deal:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }')"
 miss=""
 for want in 'bash tools/ci-reuse-green-tree\.sh' 'REUSE_EVENT:[[:space:]]*\$\{\{ github\.event_name \}\}' 'REUSE_REPO:[[:space:]]*\$\{\{ github\.repository \}\}' \
+  'REUSE_REF:[[:space:]]*\$\{\{ github\.ref \}\}' \
   'REUSE_RUN_ID:[[:space:]]*\$\{\{ github\.run_id \}\}' 'GH_TOKEN:[[:space:]]*\$\{\{ github\.token \}\}' 'reused-run:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.reused-run \}\}' \
   'tree:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.tree \}\}' 'actions:[[:space:]]*read'; do
   grep -qE -- "$want" <<< "$deal_raw" || miss="$miss [$want]"

@@ -4398,8 +4398,13 @@ named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` wh
 tree has such a record, and reuses it only on proof: that run completed green, is this repository's
 own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
 exactly this tree. Every job then still reports under its own name, skips its work, and says in its
-log which run and commit it stood on. Any doubt, an API failure included, is the full suite, and a
-push to main or a run by hand always runs in full.
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite.
+
+A push to main stands only on a pull request run of its exact tree, the run its merge followed, so
+a merge no longer runs the suites twice on the same files (claude-config#2717, Dan's choice on
+2026-11-10). Every tree on main still has a verdict of its own, which is what #594 kept every main
+run for: a sync push from a Mac, or any commit whose tree no pull request passed, runs in full, and
+so does a push to another branch or a run by hand.
 
 Run ONE section while iterating, which is the fast path:
 

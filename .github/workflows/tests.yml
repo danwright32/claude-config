@@ -104,7 +104,9 @@ jobs:
       # a fork's), the parts and the fan in still run and report under their own names (L305), but
       # skip their work and say in their logs which run and commit they stood on. Proof only, never
       # a path (L312); the helper says what the proof is, and ANY doubt, an API failure included, is
-      # the full suite. Pushes to main and runs by hand always run in full (#594). The tree is the
+      # the full suite. A push to main reuses only a PULL REQUEST run of its exact tree, the run its
+      # merge followed (Dan, 2026-11-10, #2717), so every tree on main still has a verdict of its own
+      # (#594); a sync push, a push elsewhere and a run by hand run in full. The tree is the
       # checkout's, so for a pull request it is GitHub's merge commit, the tree this run would test.
       # A helper that exits non zero is a full run too, whatever it printed before failing.
       - name: A green run of this exact tree
@@ -112,6 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REUSE_EVENT: ${{ github.event_name }}
+          REUSE_REF: ${{ github.ref }}
           REUSE_REPO: ${{ github.repository }}
           REUSE_RUN_ID: ${{ github.run_id }}
         run: |
