@@ -96,10 +96,26 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const cards: Record<string, unknown>[] = []
   const toasts: string[] = []
   const clock = mock.clock(on, { now: T0 })
+  // The wall (#2719): once started, every call the guard makes to the world first moves the test
+  // clock on by the real time spent since the last one, so the guard's own reading and tracing of a
+  // file is charged against its deadline as it is in a session, where git and reads cost little and
+  // the work between them is the time. Started just before the call it measures.
+  let wallAt: number | undefined
+  const wallStart = () => {
+    wallAt = performance.now()
+  }
+  const wall = async () => {
+    if (wallAt === undefined) return
+    const spent = Math.floor(performance.now() - wallAt)
+    if (spent < 1) return
+    wallAt += spent
+    await clock.advance(spent)
+  }
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: ctl.cwd }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('process.run', async ($, e) => {
+    await wall()
     const [cmd, method, raw] = e.argv.map(String)
     // git, standing in over the files above: one repository at /w/app, searched as git grep does.
     if (cmd === 'git') {
@@ -186,8 +202,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
   })
   // A folder exists while any file is in it.
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined || Object.keys(files).some(p => p.startsWith(`${e.path}/`)) }) as never)
+  on('fs.exists', async ($, e) => {
+    await wall()
+    return { value: files[e.path] !== undefined || Object.keys(files).some(p => p.startsWith(`${e.path}/`)) } as never
+  })
   on('fs.read', async ($, e) => {
+    await wall()
     if (ctl.unreadable === e.path) throw new Error(`EACCES: ${e.path}`)
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
@@ -195,7 +215,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (ctl.readMs) await clock.advance(ctl.readMs)
     return { value: t } as never
   })
-  on('store.get', ($, e) => {
+  on('store.get', async ($, e) => {
+    await wall()
     if (ctl.storeGetFails) throw new Error('the store could not be read')
     return { value: store[e.key] } as never
   })
@@ -230,7 +251,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, reads: () => reads }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, reads: () => reads, wallStart }
 }
 type W = ReturnType<typeof world>
 
@@ -1916,4 +1937,104 @@ test('the same script is still held when a file that really posts to Slack reads
   expect(why).toContain('Recorded the finding for the next issue review')
   expect(why).toContain(`which ${POSTER} sends to Slack`)
   expect(w.ran).toEqual([])
+})
+
+// claude-config#2719: on 2026-11-10, in a work repository, every Edit to a 5,488 line monitor route
+// that posts through a Slack send helper was held as "was not searched within 7 seconds" or
+// "$.process.run(git) aborted: still running after 12ms", a one line import among them, while every
+// smaller file went through. git and the reads were not the time: tracing the file's sends was,
+// and it grew with the square of the file, since each name's declarations were found by searching
+// the whole file once per name. A route of checks, each with its own names as a real one has, judged
+// on the wall (the test clock moved on by the real time the guard spends). This route is lighter
+// per line than the real one: at 5,500 lines the guard before the fix took 2.0 to 2.6 s an edit on
+// the personal MacBook at load 15 to 41, and at 11,000 lines 8.3 s, held as "git could not name the
+// repository", the third message the real file met. So it is judged at 11,000 lines, where the
+// guard before the fix fails here as it failed there.
+const BIG = '/w/app/src/app/api/monitor/feeds/route.ts'
+const BIG_LINES = 11_000
+const bigCheck = (i: number, helper: string) => `
+// Check ${i}: rows of kind ${i} that have not moved in a day.
+export async function check${i}(db: Db, now: Date): Promise<CheckResult> {
+  const since${i} = new Date(now.getTime() - 86_400_000).toISOString()
+  const rows${i} = await db.query(
+    \`select id, status, updated_at from items_${i} where status = 'pending' and updated_at < $1 order by updated_at limit 500\`,
+    [since${i}],
+  )
+  if (!rows${i}.length) return { name: 'check${i}', ok: true }
+  const ids${i} = rows${i}.map((r: Row) => r.id).slice(0, 10).join(', ')
+  const label${i} = rows${i}.length === 1 ? 'item' : 'items'
+  logger.info(\`check${i}: found \${rows${i}.length} \${label${i}}\`, { since: since${i} })
+  const summary${i} = \`\${rows${i}.length} \${label${i}} of kind ${i} have been pending since \${since${i}}: \${ids${i}}\`
+  const oldest${i} = rows${i}.reduce((a: Row, b: Row) => (a.updated_at < b.updated_at ? a : b))
+  const ageHours${i} = Math.round((now.getTime() - new Date(oldest${i}.updated_at).getTime()) / 3_600_000)
+  const owners${i} = new Set(rows${i}.map((r: Row) => r.owner_id))
+  const ownerList${i} = [...owners${i}].slice(0, 5).join(', ')
+  const severity${i} = ageHours${i} > 48 ? 'high' : ageHours${i} > 24 ? 'medium' : 'low'
+  const detail${i} = \`\${summary${i}} (oldest \${ageHours${i}} hours, owners \${ownerList${i}}, \${severity${i}})\`
+  if (rows${i}.length > ${(i % 7) + 3}) {
+    await ${helper}(\`Monitor ${i}: \${detail${i}}. Look at the queue before the next run.\`)
+  }
+  return { name: 'check${i}', ok: false, detail: detail${i} }
+}
+`
+const bigRoute = (lines: number, helper = 'postSlackAlert', from = '@/lib/notify/slack') => {
+  const head = `import { ${helper} } from '${from}'\nimport { getDb, type Db, type Row } from '@/lib/db'\nimport { logger } from '@/lib/logger'\n\ntype CheckResult = { name: string; ok: boolean; detail?: string }\n`
+  const body: string[] = []
+  let n = head.split('\n').length
+  let i = 0
+  while (n < lines - 12) {
+    const c = bigCheck(i++, helper)
+    body.push(c)
+    n += c.split('\n').length - 1
+  }
+  const calls = Array.from({ length: i }, (_, k) => `check${k}(db, now)`).join(', ')
+  return `${head}${body.join('')}\nexport async function GET() {\n  const db = await getDb()\n  const now = new Date()\n  const results = await Promise.all([${calls}])\n  return Response.json({ ok: results.every(r => r.ok) })\n}\n`
+}
+// One call judged on the wall, from just before it starts.
+const onWall = async ($: Caller, w: W, input: Record<string, unknown>) => {
+  w.wallStart()
+  return refusalOf(await call($, input))
+}
+// The route's one line import of the quiet feed copy, judged; then, as the world writes only a
+// Write, put in place as the Edit leaves it.
+const LOGGER_IMPORT = "import { logger } from '@/lib/logger'\n"
+const importBig = async ($: Caller, w: W, text: string) => {
+  const held = await onWall($, w, { tool: 'Edit', file_path: BIG, old_string: LOGGER_IMPORT, new_string: `${LOGGER_IMPORT}${QUIET_IMPORT}` })
+  w.files[BIG] = text.replace(LOGGER_IMPORT, `${LOGGER_IMPORT}${QUIET_IMPORT}`)
+  return held
+}
+// An edit sending the quiet feed page through the route's send helper.
+const sendQuiet = (helper: string) => ({ tool: 'Edit', file_path: BIG, old_string: '  if (!rows7.length) return', new_string: `  if (!rows7.length) await ${helper}(quietPage('orders', 45))\n  if (!rows7.length) return` })
+
+test('an 11,000 line route posting through a Slack send helper is judged inside the search time: an import passes, and an edit bringing new wording to its send, or rewording one, is still held (#2719)', withKit, async ($, on) => {
+  const text = bigRoute(BIG_LINES)
+  expect(text.split('\n').length).toBeGreaterThanOrEqual(BIG_LINES - 20)
+  const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
+  const w = world($, on, { files: { [SLACK_POST]: POST_TEXT.replace('postAlert', 'postSlackAlert'), [QUIET]: QUIET_TEXT, [BIG]: text } })
+  // The one line import that was held 14 times: it sends nothing of the module yet.
+  expect(await importBig($, w, text)).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Sending it brings the module's wording to the helper's send, so it is held for that wording.
+  const held = await onWall($, w, sendQuiet('postSlackAlert'))
+  expect(held).not.toContain('not searched within')
+  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
+  expect(held).toContain(QUIET)
+  // Rewording a message the route sends itself is held for the new wording.
+  const rewording = { tool: 'Edit', file_path: BIG, old_string: "Look at the queue before the next run.`)\n  }\n  return { name: 'check12'", new_string: "Somebody must clear the queue before the next run.`)\n  }\n  return { name: 'check12'" }
+  const reworded = await onWall($, w, rewording)
+  expect(reworded).not.toContain('not searched within')
+  expect(reworded).toContain('Somebody must clear the queue before the next run')
+  expect(w.ran.length).toBe(1)
+})
+
+test('an 11,000 line route posting through a send helper named for nothing Slack is judged inside the search time: its import passes and the send it adds is held (#2719)', withKit, async ($, on) => {
+  // The route posts through the helper's own sends, traced with them as the route's send functions.
+  const text = bigRoute(BIG_LINES, 'postAlert', '@/lib/notify/post')
+  const w = world($, on, { files: { [POST]: POST_TEXT, [QUIET]: QUIET_TEXT, [BIG]: text } })
+  expect(await importBig($, w, text)).toBe('')
+  const held = await onWall($, w, sendQuiet('postAlert'))
+  expect(held).not.toContain('not searched within')
+  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
+  expect(held).toContain(QUIET)
+  expect(w.ran.length).toBe(1)
 })
