@@ -1804,9 +1804,11 @@ class Judge:
         """The positional parameters ($0, $1, ...) the string of `bash -c '<string>' a0 a1 ...` sees,
         each worked out from the command's own place (None where it cannot be); None for any other
         form (claude-config#2538). The string must be single quoted, so its $1 is the string's own and
-        not the outer shell's, and hold no loop or function, in which $1 can mean another value; a
-        word that may split into several leaves it and every one after it unknown."""
-        toks, raw = self.sh_tokens(text.strip()), []
+        not the outer shell's, and hold no loop or function before its last use of a positional, as
+        inside one $1 can mean another value (one after every use changes none of them); a word that
+        may split into several leaves it and every one after it unknown. A backslash newline is gone
+        before the words are read (`bash -c \\` with the string on the next line)."""
+        toks, raw = self.sh_tokens(self.sw.join_continuations(text).strip()), []
         i = 0
         while i < len(toks):
             kind, t = toks[i]
@@ -1837,7 +1839,8 @@ class Judge:
         if not (len(code) >= 2 and code[0] == code[-1] == "'" and "'" not in code[1:-1]):
             return None
         body = code[1:-1]
-        if re.search(r"(?<![\w-])(for|while|until|select|function)(?![\w-])|\(\s*\)", body):
+        loop = re.search(r"(?<![\w-])(for|while|until|select|function)(?![\w-])|\(\s*\)", body)
+        if loop and re.search(r"\$(?:[0-9@*#]|\{[#!]?[0-9@*#])", body[loop.start():]):
             return None
         out = []
         for w in raw[k + 2:]:
@@ -2015,7 +2018,7 @@ class Judge:
                 regions.setdefault(n, []).append((since[n], at, env[n]))
             env[n], since[n] = (None if n in tainted else v), at
 
-        own, reached = {}, {}
+        own, reached, evals = {}, {}, {}
 
         # What the body of the function of s named name does by itself: (the names it can bind,
         # whether it sources a file or binds a name through a variable, the functions of s it
@@ -2031,10 +2034,15 @@ class Judge:
                             continue
                         h = head_of(k)
                         words = self.sw.command_words(self.sw.command_rest(h)[0])
-                        if self.sh_source_target(h) is not None or self.sh_indirect(h):
+                        if self.sh_source_target(h) is not None or self.sh_indirect(h) or \
+                                self.sh_eval_unsafe(h, evals, items[k][0][0]):
                             more = True
                         elif words and words[0] in fbody:
                             callees.append(words[0])
+                        for lit in self.sh_eval_call(h, evals) or ():
+                            callees += [w[0] for w in (self.sw.command_words(self.sw.command_rest(x)[0])
+                                                       for x in self.sh_lit_heads(lit, items[k][0][0]) or ())
+                                        if w and w[0] in fbody]
                 own[name] = (bound, more, callees)
             return own[name]
 
@@ -2073,6 +2081,16 @@ class Judge:
             words = self.sw.command_words(rest)
             if self.sh_indirect(head):
                 return "dead"
+            # A call to a function a sourced file defined to evaluate its argument here (hang_wait):
+            # what it evaluates is followed as though written in its place (claude-config#2538).
+            if self.sh_eval_unsafe(head, evals, d):
+                return "dead"
+            for lit in self.sh_eval_call(head, evals) or ():
+                for h in self.sh_lit_heads(lit, d):
+                    a = self.sh_assignment(h)
+                    res = setv(a[0], None, w) if a else effects(d, h, p, None, w)
+                    if res:
+                        return res
             wd = where(d, p["start"])
             v, bad = self.sh_source_word(head, wd, look, script)
             if bad:
@@ -2081,9 +2099,13 @@ class Judge:
                 path = self.resolve(v, d)
                 if not self.is_file(path):
                     return "dead"
-                for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, v, depth + 1, set()):
+                had = {f: set(ns) for f, ns in evals.items()}
+                for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, v, depth + 1, set(), evals):
                     tainted.add(n)
                     setv(n, None, w)
+                if evals != had:
+                    own.clear()  # what a function of s does depends on what it can call
+                    reached.clear()
                 return None
             named = [x for x in words if x in fbody] if words[:1] == ["trap"] else \
                 words[:1] if words and words[0] in fbody else []
@@ -2213,7 +2235,8 @@ class Judge:
         # commands set nothing here.
         unfollowed = [k for k in range(len(items)) if k not in handled and len(items[k][1]["scope"]) == 1]
         cand = set()
-        if whole and not any(self.sh_indirect(head_of(k)) for k in unfollowed):
+        if whole and not any(self.sh_indirect(head_of(k)) or self.sh_eval_unsafe(head_of(k), evals, items[k][0][0])
+                             for k in unfollowed):
             for n in final:
                 rest = s
                 for a, b in sorted(spans.get(n, ()), reverse=True):
@@ -2649,13 +2672,112 @@ class Judge:
                 return t
             t = t[m.end():].lstrip()
 
-    def sh_bound_in(self, path, names, cwd, cwd_known, word, depth, seen):
+    def sh_evaluator(self, text, items, struct, k):
+        """(name, n) where items[k] is `eval "$n"` directly in the body of the function name of text,
+        which never shifts or sets its positionals, so what it evaluates is the n-th argument of each
+        call (lib/hang-wait.sh's hang_wait and window_wait; claude-config#2538); else None."""
+        m = re.fullmatch(r"""eval\s+(?:"\$\{?([1-9])\}?"|\$\{?([1-9])\}?)""", self.sh_strip_openers(items[k][0][1]))
+        if not m or not struct:
+            return None
+        funcs = [b for b in struct[1] if b["kind"] == "func" and b["open"] <= k <= b["close"]]
+        if not funcs:
+            return None
+        blk = max(funcs, key=lambda b: b["open"])
+        name = re.match(r"\s*(?:function\s+)?([A-Za-z_][\w:.-]*)", items[blk["open"]][0][1])
+        body = text[items[blk["open"]][1]["start"]:items[blk["close"]][1]["end"]]
+        if not name or re.search(r"(?<![\w-])(?:shift|set)(?![\w-])", body):
+            return None
+        return name.group(1), int(m.group(1) or m.group(2))
+
+    @staticmethod
+    def sh_literal_word(raw):
+        """The text a word stands for where it is written out whole ('...', "..." with nothing
+        expanded in it, or a plain word), else None."""
+        m = re.fullmatch(r"'([^']*)'", raw) or re.fullmatch(r'"([^"$`\\]*)"', raw) or \
+            re.fullmatch(r"([^'\"$`\\\s*?\[{~]+)", raw)
+        return m.group(1) if m else None
+
+    def sh_eval_call(self, head, evals):
+        """For a command mentioning a function of evals (name: the positions of the arguments it
+        evaluates in the caller's shell): the texts it evaluates, where it is a plain call whose
+        evaluated arguments are written out; False where it is anything else (an argument built from
+        a variable, the name handed to trap or another command, or used any other way), as what it
+        then evaluates cannot be read. None where it mentions none of them."""
+        if not evals or not any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", head) for f in evals):
+            return None
+        toks = self.sh_tokens(self.sw.command_rest(self.sh_strip_openers(head))[0])
+        raws, k = [], 0
+        while k < len(toks):
+            kind, raw = toks[k]
+            if kind == "op":
+                k += 2 if SH_REDIRECT.fullmatch(raw) else 1
+                continue
+            raws.append(raw)
+            k += 1
+        if not raws or raws[0] not in evals:
+            return False
+        rest = " ".join(raws[1:])
+        if any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", rest) for f in evals):
+            return False
+        lits = []
+        for n in sorted(evals[raws[0]]):
+            if n < len(raws):
+                lit = self.sh_literal_word(raws[n])
+                if lit is None:
+                    return False
+                lits.append(lit)
+        return lits
+
+    def sh_lit_heads(self, lit, cwd):
+        """The commands a written out condition runs, each with its openers taken off, or None where
+        one of them does what the walk cannot follow when evaluated in the caller's shell: moves the
+        directory, sources a file, binds a name through a variable, defines a function, or changes the
+        positionals or the shell's options."""
+        try:
+            cmds, parts = self.parsed(lit, cwd)
+        except self.sw.Unreadable:
+            return None
+        heads = []
+        for (d, t), p in zip(cmds, parts):
+            if len(p["scope"]) > 1:
+                continue  # a subshell's or a substitution's: it binds nothing in the caller
+            h = self.sh_strip_openers(t)
+            words = self.sw.command_words(self.sw.command_rest(h)[0]) if h else []
+            if SH_FUNC_DEF.match(t.strip()) or re.match(r"\s*function\s", t) or \
+                    self.sw.cd_target(h) is not None or self.sh_source_target(h) is not None or \
+                    self.sh_indirect(h) or (words and words[0] in ("cd", "pushd", "popd", "set", "shift",
+                                                                   "shopt", "alias", "unalias", "exec")):
+                return None
+            if h:
+                heads.append(h)
+        return heads
+
+    def sh_eval_unsafe(self, head, evals, cwd):
+        """Whether a command calls a function of evals in a way the walk cannot follow (sh_eval_call),
+        or with a condition that does what sh_lit_heads refuses or itself calls one of them."""
+        lits = self.sh_eval_call(head, evals)
+        if lits is None:
+            return False
+        if lits is False:
+            return True
+        for lit in lits:
+            heads = self.sh_lit_heads(lit, cwd)
+            if heads is None or any(self.sh_eval_call(h, evals) is not None for h in heads):
+                return True
+        return False
+
+    def sh_bound_in(self, path, names, cwd, cwd_known, word, depth, seen, evals=None):
         """The names among names that a sourced file binds, anywhere in it (a function's body too, as
         it can be called later), or in a file it sources, whose path is worked out from the file's
         own variables (sh_known; word is its BASH_SOURCE, cwd the directory it runs in). All of them
         where it cannot be read, is past MAX_DEPTH, or binds a name through a variable (eval,
         read "$n"...). A file it sources whose path cannot be worked out is not followed: the gate
-        refuses that file when it reads it (claude-config#2465), so what it binds is never relied on."""
+        refuses that file when it reads it (claude-config#2465), so what it binds is never relied on.
+
+        Given evals (a dict the caller then polices calls with), a function whose body evaluates one
+        of its own arguments (sh_evaluator) binds nothing by being defined: it is added to evals, and
+        a call to it binds what the condition it is handed binds, so the caller judges each call
+        (sh_eval_call). This file's own calls to one are judged here (claude-config#2538)."""
         if not names:
             return set()
         real = os.path.realpath(path)
@@ -2682,12 +2804,20 @@ class Judge:
             cmds, parts = self.parsed(text, cwd)
         except self.sw.Unreadable:  # a text the reader cannot read; any other error is a fault (#2573)
             return set(names)
-        known = None
-        for (d, t), p in zip(cmds, parts):
+        known, items, struct = None, list(zip(cmds, parts)), None
+        for k, ((d, t), p) in enumerate(items):
             if len(p["scope"]) > 1:
                 continue  # a subshell's or a substitution's (h="$(eval ...)"): it binds nothing here
             if self.sh_indirect(self.sh_strip_openers(t)):
-                return set(names)
+                if evals is None:
+                    return set(names)
+                if struct is None:
+                    struct = self.sh_struct(items, text) or False
+                ev = self.sh_evaluator(text, items, struct, k)
+                if ev is None:
+                    return set(names)
+                evals.setdefault(ev[0], set()).add(ev[1])
+                continue
             if self.sh_source_target(t) is None:
                 continue
             if known is None:
@@ -2696,7 +2826,11 @@ class Judge:
             v, bad = self.sh_source_word(t, wd, lambda n, at=p["start"]: self.sh_home(
                 n, text, self.sh_at(known, n, at)), word)
             if v is not None and self.is_file(self.resolve(v, d)):
-                bound |= self.sh_bound_in(self.resolve(v, d), names, d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen)
+                bound |= self.sh_bound_in(self.resolve(v, d), names, d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen,
+                                          evals)
+        if evals and any(self.sh_eval_unsafe(self.sh_strip_openers(t), evals, d)
+                         for (d, t), p in items if len(p["scope"]) == 1):
+            return set(names)
         return bound
 
     def py_args(self, text, name, d):

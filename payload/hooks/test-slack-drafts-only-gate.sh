@@ -855,13 +855,18 @@ fi
 # same import with no such file sourced was allowed. The gate was applying its rule, so the suites
 # changed and the gate did not: each spells the folder from BASH_SOURCE where it hands it over,
 # which no variable carries. Both halves, each in both trees, and the control with nothing sourced.
+# Since #2538 the name is lost at the CALL, not the source: sourcing such a file binds nothing until
+# its function is called, and a call whose condition is written out binds only what that condition
+# binds. So waitvar.sh calls it with a condition held in a variable, and nocall.sh does not call it.
 sw_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"'
 sw_py="python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import av_helper'"
 for tree in ok posts; do
   printf '%s\n' 'wait_on(){ until eval "$1"; do sleep 1; done; }' > "$T/av/$tree/tools/waits.sh"
   printf '%s\n' '#!/bin/bash' "$sw_top" "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/nowait.sh"
-  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/waitvar.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' 'wait_on "$c"' "$sw_py \"\$ROOT/tools/lib\"" \
+    > "$T/av/$tree/tests/waitvar.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/nocall.sh"
   printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' \
     "$sw_py \"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")/..\" && pwd)/tools/lib\"" > "$T/av/$tree/tests/waitspelt.sh"
 done
@@ -872,6 +877,11 @@ refused "past a sourced file whose function runs its argument by eval, an entry 
 says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
 run_bash "bash $T/av/posts/tests/waitvar.sh"
 refused "the same entry at a helper that posts"
+run_bash "bash $T/av/ok/tests/nocall.sh"
+allowed "past the same sourced file with its function never called, an entry held in a variable is placed"
+run_bash "bash $T/av/posts/tests/nocall.sh"
+refused "and the helper placed that way is judged: one that posts"
+says "that refusal names the helper placed past the uncalled function" "av_helper.py"
 run_bash "bash $T/av/ok/tests/waitspelt.sh"
 allowed "past the same sourced file, an entry spelt from BASH_SOURCE where it is handed over is placed"
 run_bash "bash $T/av/posts/tests/waitspelt.sh"
@@ -1424,6 +1434,20 @@ run_bash "env -u NOT_SET_2538 A=1 bash -c 'set -e; . \"\$1\"' _ $P"
 refused "the same behind env -u and an assignment, after set -e"
 run_bash "bash -c '. \"\$1\"' _ $Q"
 allowed "a bash -c string sourcing its argument, which does not post, as a command typed"
+# A loop after every use of a positional cannot change one (test-fixture-runner-home.sh), and a
+# backslash newline before the string is gone before the words are read (test-full-run-slot.sh).
+run_bash "bash -c '. \"\$1\" || exit 9; for v in A B; do printf \"%s\" \"\$v\"; done' _ $P"
+refused "a bash -c string sourcing its argument, which posts, with a loop after it"
+says "that refusal is the post it read, past the loop" "REFUSED: this command posts to Slack"
+run_bash "r=\"\$(env -u X bash -c \\
+  '. \"\$1\"; printf \"%s|%s\" \"\$?\" x' _ $P 2>&1)\""
+refused "a bash -c string continued onto the next line, in a substitution, sourcing its argument, which posts"
+says "that refusal is the post it read, past the backslash newline" "REFUSED: this command posts to Slack"
+for form in "bash -c 'for f in \"\$@\"; do . \"\$1\"; shift; done' _ $Q $P" \
+            "bash -c 'f() { . \"\$1\"; }; f $Q' _ $P"; do
+  run_bash "$form"
+  allowed "the refusal is off: a positional used inside or after a loop or function is not worked out: $form"
+done
 # BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
 run_bash "cd $T/sv/posts && bash hookdir.sh"
 refused "the HOOK_DIR idiom run from the script's own folder, sourcing a file that posts"
@@ -1482,9 +1506,32 @@ for kind in outparam evals; do
   run_bash "bash $T/sv/posts/past-$kind.sh"
   allowed "a script sourcing a helper that binds a name through a variable ($kind) loses its variables after it"
 done
+# hang-wait.sh's waits evaluate a condition (their first or second argument) in the caller's shell on
+# purpose (#2538). Sourcing it binds nothing; a call binds what its condition binds, so the walk goes
+# on past a call whose condition is written out, and ends at one whose condition is not (a variable),
+# at a condition that sources, cds or evaluates, and at the name used any other way.
+for tree in posts quiet; do
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" 'f="$1"' \
+    "hang_wait '[ -s \"\$f\" ]' 0.01 || exit 1" "window_wait 1 \"[ -d /tmp ]\"; W=\$?" '. "$ROOT/lib/x.sh"' \
+    > "$T/sv/$tree/hw-literal.sh"
+done
+run_bash "bash $T/sv/quiet/hw-literal.sh"
+allowed "a script's variables are followed past lib/hang-wait.sh and its waits on written out conditions"
+run_bash "bash $T/sv/posts/hw-literal.sh"
+refused "and the file sourced after them is read: one that posts is refused"
+says "that refusal is the post it read" "REFUSED: this command posts to Slack"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" \
+  'wait_on() { hang_wait "[ -s x ]"; }' 'wait_on' '. "$ROOT/lib/x.sh"' > "$T/sv/posts/hw-infunc.sh"
+run_bash "bash $T/sv/posts/hw-infunc.sh"
+refused "a function of the script waiting on a written out condition is followed too"
+for form in 'hang_wait "$cond"' "hang_wait 'ROOT=/elsewhere'" "window_wait 1 'cd /'" "hang_wait '. ./y.sh'" \
+            "hang_wait 'eval \"\$c\"'" 'trap "hang_wait x" EXIT' 'w() { hang_wait "$@"; }; w x' 'declare -F hang_wait'; do
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" "$form" '. "$ROOT/lib/x.sh"' \
+    > "$T/sv/posts/hw-unknown.sh"
+  run_bash "bash $T/sv/posts/hw-unknown.sh"
+  allowed "the refusal is off: past a wait whose condition is not certain, the path is not worked out: $form"
+done
 # The real helpers: a script sourcing each, then a file through a variable path, is followed.
-# hang-wait.sh is not here: its waits evaluate a condition in the caller's shell on purpose, since
-# callers read what the condition sets, so the gate still loses a script's variables past it (#2538).
 for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh full-run-slot.sh \
               disk-clean-predicates.sh; do
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/$helper\"" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/real-$helper"
