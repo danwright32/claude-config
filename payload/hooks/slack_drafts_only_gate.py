@@ -414,6 +414,18 @@ GIT_INERT = frozenset({"rev-parse", "log", "show", "status", "diff", "ls-files",
 GIT_RUNS = ("-c", "--config-env", "--exec-path", "--output", "--ext-diff", "--textconv", "-O")
 # find, except with -exec and its kind, and awk, unless its program can run a command (awk_runs).
 AWKS = {"awk", "gawk", "mawk", "nawk"}
+
+# The programs whose writes a later command in the same line can run (claude-config#2525): the file
+# they make is read as its source, since it is not on disk yet when the gate reads the command. Each
+# with the options that take a value (BSD's, the ones on these Macs, and GNU's -t and -S, which name a
+# target directory and a suffix there), so an option's value is never read as a file.
+COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTtS", "ginstall": "gmoSt",
+           "ln": "tS", "gln": "tS", "link": ""}
+COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group", "--backup"}
+# A redirection of a command's output to a file, glued to its target or before it, appending or not.
+OUT_REDIRECT = re.compile(r"^(?:1|&)?(>>|>\||>)(.*)\Z", re.S)
+IN_REDIRECT = re.compile(r"^0?<(?![<>&])(.*)\Z", re.S)
+MADE_DEPTH = 8  # how many copied directories deep a lookup follows (made_from)
 # The folders a program is taken from by the name it has there; anywhere else it is a script of its own.
 SYSTEM_BIN = {"/bin", "/usr/bin", "/sbin", "/usr/sbin", "/usr/local/bin", "/opt/homebrew/bin"}
 # A shell expansion of the arguments a script was handed: $1 to $9, $@, $*, and their braced forms.
@@ -577,6 +589,12 @@ class Judge:
         self.known_memo = {}
         self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
         self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
+        # The files and directories an earlier command of this call writes (claude-config#2525), by
+        # real path: {file: [(kind, the path or the text, its name for a refusal)]}, kind "file" or
+        # "text", and {directory: (the directory it is copied from, its name)}. note_writes fills
+        # them in the order the commands run; made_from reads them.
+        self.made = {}
+        self.made_dirs = {}
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -675,11 +693,264 @@ class Judge:
             p = os.path.join(d or os.getcwd(), p)
         return p
 
+    # A file a command writes is read as what it is written from (claude-config#2525). `cp post.txt
+    # run.sh && bash run.sh` runs a file that is not on disk when the gate reads the command, so it was
+    # nothing there to run, and the copy of a script that posts went through. Each command that copies,
+    # moves, links or installs a file, or writes one with cat or tee from files or a heredoc, is noted
+    # as it is passed (note_writes, from record), in the order the commands run, and every read of a
+    # file after it (is_file, content) reads what it was made from. A file already on disk that a
+    # write replaces is read as well, after the new text: the write can fail, and with `;` the old
+    # file then runs, so reading only the new text would let a refused script through. The file keeps
+    # its own name, so its extension and #! still say how it runs.
+
+    def made_from(self, path, depth=0):
+        """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
+        None when nothing did. A file under a directory copied earlier is the same file under the
+        directory it was copied from, followed MADE_DEPTH copies deep."""
+        if not (self.made or self.made_dirs):
+            return None
+        real = os.path.realpath(path)
+        if real in self.made:
+            return self.made[real]
+        head = real
+        while self.made_dirs and depth < MADE_DEPTH:
+            parent = os.path.dirname(head)
+            if parent == head:
+                break
+            if parent in self.made_dirs:
+                src_dir, label = self.made_dirs[parent]
+                rel = os.path.relpath(real, parent)
+                src = os.path.join(src_dir, rel)
+                found = list(self.made_from(src, depth + 1) or [])
+                if os.path.isfile(src) and not any(p[1] == src for p in found):
+                    found.append(("file", src, os.path.join(label, rel)))
+                return found or None
+            head = parent
+        return None
+
+    def is_file(self, path):
+        """Whether path is a file to read: on disk, or made by an earlier command of this call."""
+        return os.path.isfile(path) or bool(self.made_from(path))
+
+    def content(self, path, limit=MAX_FILE):
+        """The bytes a read of path finds: what an earlier command of this call made it from, then the
+        file on disk, if there is one, that the write replaces; the file on disk alone otherwise.
+        Raises OSError as open() does for a file nothing made."""
+        pieces = self.made_from(path)
+        if not pieces:
+            with open(path, "rb") as f:
+                return f.read(limit)
+        real = os.path.realpath(path)
+        made = []
+        for kind, value, _ in pieces:
+            if kind == "text":
+                made.append(value.encode("utf-8", "replace"))
+                continue
+            try:
+                with open(value, "rb") as f:
+                    made.append(f.read(limit))
+            except OSError:
+                continue  # unreadable to us is unreadable to the copy that would read it
+        out = b"".join(made)
+        if os.path.isfile(real) and not any(p[0] == "file" and p[1] == real for p in pieces):
+            try:
+                with open(real, "rb") as f:
+                    out += b"\n" + f.read(limit)
+            except OSError:
+                pass
+        return out[:limit]
+
+    def made_note(self, path, word):
+        """For a refusal: which files (or heredoc) word was made from, or None when it was not made."""
+        names = []
+        for kind, _, label in self.made_from(path) or ():
+            label = "a heredoc" if kind == "text" else label
+            if label and label not in names:
+                names.append(label)
+        if not names:
+            return None
+        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        holds = "that holds" if len(names) == 1 else "those hold"
+        return f"{word} is made from {listed} earlier in this command, and was judged by what {holds}"
+
+    def note_writes(self, d, text, whole):
+        """Note the files this command writes, for a later command that runs one (claude-config#2525):
+        cp, mv, install, ln and link (COPIERS), and cat or tee writing files or a heredoc they are
+        given. Output a pipe feeds, and any other writer (printf, echo, curl -o), is not followed:
+        what it writes is not known here."""
+        rest, _ = self.sw.command_rest(text)
+        words = self.sw.command_words(rest)
+        if not words:
+            return
+        name = os.path.basename(words[0])
+        if name not in COPIERS and name not in ("cat", "tee"):
+            return
+        plain, outs, infile, heredoc = [], [], None, False
+        k = 1
+        while k < len(words):
+            w = words[k]
+            nxt = words[k + 1] if k + 1 < len(words) else ""
+            if w.startswith("<<<") or re.match(r"\d+<<<", w):
+                return  # a here string: not followed
+            m = re.match(r"^\d*<<-?(.*)\Z", w, re.S)
+            if m:
+                heredoc = True
+                k += 1 if m.group(1) else 2
+                continue
+            m = OUT_REDIRECT.match(w)
+            if m:
+                target = m.group(2) or nxt
+                k += 1 if m.group(2) else 2
+                if target and not target.startswith("&"):
+                    outs.append((target, m.group(1) == ">>"))
+                continue
+            m = IN_REDIRECT.match(w)
+            if m:
+                infile = m.group(1) or nxt
+                k += 1 if m.group(1) else 2
+                continue
+            m = self.sw.REDIRECT_WORD.match(w)
+            if m:
+                k += 1 if m.group(1) else 2  # another descriptor's: nothing written that runs
+                continue
+            plain.append(w)
+            k += 1
+        if any("$" in w or "`" in w for w in plain + [t for t, _ in outs] + [infile or ""]):
+            return  # a path known only as it runs: not followed
+        if name in COPIERS:
+            self.note_copy(name, plain, d)
+            return
+        operands = [w for w in plain if w == "-" or not w.startswith("-")]
+        if heredoc:
+            body, is_body = self.fed(text, whole)
+            stdin = [("text", body + "\n", "a heredoc")] if is_body else None
+        elif infile:
+            stdin = self.pieces_of(infile, d)
+        else:
+            stdin = None  # a pipe, or the terminal: not known here
+        if name == "tee":
+            append = any(w.startswith("-") and not w.startswith("--") and "a" in w for w in plain) or "--append" in plain
+            targets = [(w, append) for w in operands if w != "-"] + outs
+            pieces = stdin
+        else:
+            targets = outs
+            if operands:
+                pieces = []
+                for w in operands:
+                    if w == "-":
+                        if stdin is None:
+                            return
+                        pieces += stdin
+                    else:
+                        pieces += self.pieces_of(w, d)
+            else:
+                pieces = stdin
+        if not pieces:
+            return
+        for target, append in targets:
+            self.note_file(target, d, list(pieces), append)
+
+    def pieces_of(self, word, d):
+        """What a file named word holds, as made_from gives it: what an earlier command made it from,
+        then the file on disk."""
+        path = os.path.realpath(self.resolve(word, d))
+        made = list(self.made_from(path) or [])
+        if os.path.isfile(path) and not any(p[1] == path for p in made):
+            made.append(("file", path, word))
+        return made
+
+    def note_file(self, target, d, pieces, append=False):
+        real = os.path.realpath(self.resolve(target, d))
+        if append:
+            pieces = self.pieces_of(target, d) + pieces
+        self.made[real] = pieces
+
+    def is_dir(self, word, d):
+        real = os.path.realpath(self.resolve(word, d))
+        return os.path.isdir(real) or real in self.made_dirs
+
+    def note_copy(self, name, words, d):
+        """note_writes for cp, mv, install, ln or link with its words after the name."""
+        valued = COPIERS[name]
+        linker = name in ("ln", "gln", "link")
+        installer = name in ("install", "ginstall")
+        ops, flags, target_dir, destdir, ended, k = [], set(), None, None, False, 0
+        while k < len(words):
+            w = words[k]
+            nxt = words[k + 1] if k + 1 < len(words) else None
+            k += 1
+            if ended or w == "-" or not w.startswith("-"):
+                ops.append(w)
+                continue
+            if w == "--":
+                ended = True
+                continue
+            if w.startswith("--"):
+                key, eq, val = w.partition("=")
+                if key in COPIER_LONG_VALUED and not eq:
+                    val, k = nxt or "", k + 1
+                if key == "--target-directory":
+                    target_dir = val
+                flags.add({"--no-target-directory": "T", "--recursive": "R", "--archive": "R",
+                           "--symbolic": "s", "--relative": "r", "--directory": "d"}.get(key, ""))
+                continue
+            for j, c in enumerate(w[1:], 1):
+                if c in valued:
+                    val = w[j + 1:]
+                    if not val:
+                        val, k = nxt or "", k + 1
+                    if c == "t":
+                        target_dir = val
+                    elif c == "D" and name == "install":
+                        destdir = val
+                    break
+                flags.add(c)
+        if installer and "d" in flags:
+            return  # install -d makes directories, and copies nothing
+        recursive = not linker and bool(flags & {"R", "r", "a"})
+        relative = linker and "r" in flags
+        symbolic = "s" in flags
+        no_dir = "T" in flags and not installer
+        if target_dir is not None:
+            srcs, dest, into = ops, target_dir, True
+        elif len(ops) == 1 and linker:
+            srcs, dest, into = ops, ".", True
+        elif len(ops) < 2:
+            return
+        else:
+            srcs, dest = ops[:-1], ops[-1]
+            into = not no_dir and (len(srcs) > 1 or dest.endswith("/") or self.is_dir(dest, d))
+        if destdir:
+            dest = os.path.join(destdir, dest.lstrip("/"))
+        for src in srcs:
+            targets = [os.path.join(dest, os.path.basename(src.rstrip("/")) or src)] if into else [dest]
+            if into and recursive and src.endswith("/") and len(srcs) == 1:
+                targets.append(dest)  # BSD cp -R src/ copies what is in src; GNU copies src itself
+            for target in targets:
+                # A symbolic link's own text is read from the directory the link is in.
+                where = d
+                if linker and symbolic and not relative and not os.path.isabs(os.path.expanduser(src)):
+                    where = os.path.dirname(self.resolve(target, d))
+                self.note_one(src, where, target, d)
+
+    def note_one(self, src, where, target, d):
+        """One source copied to one target: a directory to every file under it, a file to its text."""
+        src_real = os.path.realpath(self.resolve(src, where))
+        real = os.path.realpath(self.resolve(target, d))
+        if src_real == real:
+            return
+        if os.path.isdir(src_real) or src_real in self.made_dirs:
+            self.made_dirs[real] = (src_real, src.rstrip("/") or src)
+            return
+        pieces = self.pieces_of(src, where)
+        if pieces:
+            self.made[real] = pieces
+
     def script(self, word, d, depth, shell_hint, lang=None):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
         program running it, taken for a file with no extension of its own."""
         path = self.resolve(word, d)
-        if not os.path.isfile(path):
+        if not self.is_file(path):
             return None  # nothing there to run
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge:
@@ -687,15 +958,16 @@ class Judge:
         self.tick(path)
         walking, self.walking = self.walking, path
         try:
-            return self.script_body(word, path, real, d, depth, shell_hint, lang)
+            reason = self.script_body(word, path, real, d, depth, shell_hint, lang)
         finally:
             self.walking = walking  # once read, back to the commands of the file that ran it
+        note = self.made_note(path, word) if reason else None
+        return f"{reason} ({note})" if note else reason
 
     def script_body(self, word, path, real, d, depth, shell_hint, lang):
         """script() for a file that is there and is not /nudge."""
         try:
-            with open(real, "rb") as f:
-                body = f.read(MAX_FILE).decode("utf-8", "replace")
+            body = self.content(real).decode("utf-8", "replace")
         except OSError:
             return None  # unreadable to us is unreadable to the shell that would run it
         hit = MARKER.search(body)
@@ -1355,7 +1627,7 @@ class Judge:
                 return "dead"
             if v is not None:
                 path = self.resolve(v, d)
-                if not os.path.isfile(path):
+                if not self.is_file(path):
                     return "dead"
                 for n in self.sh_bound_in(path, allnames, d, wd != SH_UNKNOWN_DIR, v, depth + 1, set()):
                     tainted.add(n)
@@ -1530,7 +1802,7 @@ class Judge:
                     n, s, self.sh_at(known, n, at)), script)
                 if v is None and not bad:
                     continue
-                if bad or not os.path.isfile(self.resolve(v, d)):
+                if bad or not self.is_file(self.resolve(v, d)):
                     bound = set(cand)
                     break
                 bound |= self.sh_bound_in(self.resolve(v, d), cand, d, False, v, depth + 1, set())
@@ -1916,8 +2188,7 @@ class Judge:
         seen.add(real)
         self.tick(path)
         try:
-            with open(real, "rb") as f:
-                text = f.read(MAX_FILE).decode("utf-8", "replace")
+            text = self.content(real).decode("utf-8", "replace")
         except OSError:
             return set(names)
         # One file is asked about by every script that sources it, and by each file between them,
@@ -1946,7 +2217,7 @@ class Judge:
             wd = self.sh_dir(d) if cwd_known and self.sh_cwd_at(known, p["start"]) else SH_UNKNOWN_DIR
             v, bad = self.sh_source_word(t, wd, lambda n, at=p["start"]: self.sh_home(
                 n, text, self.sh_at(known, n, at)), word)
-            if v is not None and os.path.isfile(self.resolve(v, d)):
+            if v is not None and self.is_file(self.resolve(v, d)):
                 bound |= self.sh_bound_in(self.resolve(v, d), names, d, wd != SH_UNKNOWN_DIR, v, depth + 1, seen)
         return bound
 
@@ -2341,7 +2612,10 @@ class Judge:
         sourced = bool(words) and words[0] in ("source", ".")
         saved_exported = self.exported
         try:
-            return self.judge(d, text, wrapper, why, depth, whole)
+            reason = self.judge(d, text, wrapper, why, depth, whole)
+            if not reason:
+                self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525)
+            return reason
         finally:
             self.py_cmd = saved
             if not sourced:
@@ -2458,8 +2732,7 @@ class Judge:
             # b3c887d): reading them would refuse it over any file naming an endpoint.
             path = self.resolve(words[0], d)
             try:
-                with open(path, "rb") as f:
-                    first = f.readline(512).decode("utf-8", "replace")
+                first = self.content(path, 512).split(b"\n", 1)[0].decode("utf-8", "replace")
             except OSError:
                 first = ""
             shell = path.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
@@ -2497,7 +2770,7 @@ class Judge:
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
                 continue
             path = self.resolve(w, d)
-            if not os.path.isfile(path):
+            if not self.is_file(path):
                 continue
             if code and self.data_shaped(path):
                 data.append((w, path))
@@ -2509,8 +2782,7 @@ class Judge:
         for w, path in data:
             self.tick(path)
             try:
-                with open(path, "rb") as f:
-                    hit = MARKER.search(f.read(MAX_FILE).decode("utf-8", "replace"))
+                hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
             except OSError:
                 continue  # unreadable to us is unreadable to the script that would read it
             if not hit:
@@ -2522,16 +2794,14 @@ class Judge:
             # Data every script beside it only reads; none sends or runs what it is handed.
         return None
 
-    @staticmethod
-    def data_shaped(path):
+    def data_shaped(self, path):
         """Whether a file is shaped like data rather than a script: an extension none of the programs
         this gate reads runs (CODE_EXT), and no #! line."""
         ext = os.path.splitext(path)[1].lower()
         if not ext or ext in CODE_EXT:
             return False
         try:
-            with open(path, "rb") as f:
-                return not f.read(2).startswith(b"#!")
+            return not self.content(path, 2).startswith(b"#!")
         except OSError:
             return True
 
@@ -2562,8 +2832,7 @@ class Judge:
         """acts() for a script at its real path, once the walk is known not to have come back to it."""
         self.tick(real)
         try:
-            with open(real, "rb") as f:
-                body = f.read(MAX_FILE).decode("utf-8", "replace")
+            body = self.content(real).decode("utf-8", "replace")
         except OSError:
             return "could not be read to see what it does with its arguments"
         first = body.split("\n", 1)[0]
@@ -3032,7 +3301,7 @@ class Judge:
                 return (f"hands its arguments to {name} running a script or module the gate cannot "
                         f"read ({operand or ' '.join(words[1:3])})")
             path = self.resolve(operand, d)
-            if not os.path.isfile(path):
+            if not self.is_file(path):
                 return f"hands its arguments to {name} running a script the gate cannot find ({operand})"
             kind = "js" if JS_RUNTIME.match(name) else "py" if re.match(r"(python|pypy)", name) else None
             inner = self.acts(path, d, name in SHELLS, kind)
@@ -3047,7 +3316,7 @@ class Judge:
                     f"({name} {' '.join(words[1:3])})")
         if not system and not re.search(r"[$`]", words[0]):
             path = self.resolve(words[0], d)
-            if os.path.isfile(path):
+            if self.is_file(path):
                 inner = self.acts(path, d, False, None)
                 if inner:
                     return f"hands its arguments to {words[0]}, which {inner}"
