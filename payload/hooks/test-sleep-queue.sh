@@ -378,16 +378,20 @@ done
 # barrier. A Mac's cp never opens that way, which is why it passed on every Mac. The overwrite below
 # is bash's own `>|`, which opens O_CREAT|O_TRUNC on every platform and so cannot refuse, and any
 # refusal it did make is recorded and named, so a short count says why instead of only how many.
-CTRL="$WORK/control"; mkdir -p "$CTRL"
+#
+# The swap is a function named ln, defined in the subshell the control runs in, over the library
+# this suite already sourced. The library links in one place and runs ln nowhere else, which the
+# first check below holds, so that function replaces exactly the link. It used to be an edited copy
+# of the library sourced from a folder made at run time, a path the Slack drafts gate cannot work
+# out (claude-config#2538).
 CTRL_REFUSALS="$WORK/control-refusals"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$CTRL" sleep.sh sleep-queue.py \
-  || check_eq "#2147 the hook helpers install into the control's folder" 0 1
-awk '{ if (index($0, "if err=\"$(ln \"$tmp\"")) sub("[(]ln ", "(_ctrl_overwrite "); print }' "$LIB" > "$CTRL/sleep-queue.sh"
-cat >> "$CTRL/sleep-queue.sh" <<'EOF'
-_ctrl_overwrite(){ local e; e="$( { cat "$1" >| "$2"; } 2>&1 )" && return 0; printf '%s\n' "${e:-the overwrite failed and said nothing}" >> "$CTRL_REFUSALS"; return 1; }
-EOF
-check_eq "the control swapped the link for an overwrite" 1 "$(grep -c 'if err="$(_ctrl_overwrite "$tmp"' "$CTRL/sleep-queue.sh" | tr -d ' ')"
-owners="$( . "$CTRL/sleep-queue.sh" && race 41 8 )"
+check_eq "the library runs ln in one place, the link the control swaps" \
+  "1 1" "$(grep -c 'if err="$(ln "$tmp"' "$LIB" | tr -d ' ') $(grep -v '^[[:space:]]*#' "$LIB" | grep -c -w 'ln' | tr -d ' ')"
+owners="$(
+  _ctrl_overwrite(){ local e; e="$( { cat "$1" >| "$2"; } 2>&1 )" && return 0; printf '%s\n' "${e:-the overwrite failed and said nothing}" >> "$CTRL_REFUSALS"; return 1; }
+  ln(){ _ctrl_overwrite "$@"; }
+  race 41 8
+)"
 check_eq "without the link, every one of eight claimers at once owns it" 8 "$owners"
 check_eq "the control's overwrite refused none of them" "" "$(cat "$CTRL_REFUSALS" 2>/dev/null)"
 check_eq "the control's claimers all met at the barrier too" "8 in-time" "$(met 41)"
