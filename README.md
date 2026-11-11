@@ -3427,7 +3427,36 @@ imports followed, each module read once, so a cycle ends. So repo-digest's `npm 
 `src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
 `scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
 refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
-gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
+real script of ours reaches 11).
+
+Past 300 the gate reads on when the script is inside a repository and every module it reaches is
+too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
+repository was refused whole because its config's imports pass 300, though nothing in it posts, and
+builders linted file by file or went round the gate. A file is inside the repository when its real
+path is under the nearest folder at or above the script that holds `.git`, so an installed package
+under `node_modules` counts and a link leading out does not (Dan, 2026-11-10). Every module past 300
+is still read whole and judged by the endpoint it names, so one that posts is refused by name; a
+module outside the repository is refused, named, as a call the gate could not check. Nothing is
+allowed unread. What bounds the reading is the gate's one budget of 11 seconds for the whole call
+(Dan, 2026-11-10, rather than a second number), and running out of it refuses the call as not
+checked, saying how many modules it had read. Measured through the wrapper on the personal MacBook
+on 2026-11-10 (12 cores, load average 17 to 27 from other sessions' suites, several readings each):
+
+| What was judged | Modules | Readings | Least | Middle | Most | Verdict |
+|---|---|---|---|---|---|---|
+| a made up lint script | 342 | 7 | 0.13 s | 0.14 s | 0.14 s | allowed |
+| `node node_modules/eslint/bin/eslint.js .`, a real install | 339 to 397 | 7 | 0.37 s | 0.38 s | 0.47 s | allowed |
+| a made up lint script | 5,315 | 5 | 0.95 s | 0.99 s | 1.00 s | allowed |
+| a made up lint script | 42,502 | 5 | 7.60 s | 7.68 s | 7.81 s | allowed |
+| a made up lint script | 95,627 | 3 | 11.11 s | 11.12 s | 11.13 s | refused, out of time |
+
+The made up modules are about 270 bytes each and ESLint's own are larger: about 0.8 ms a module
+against 0.2 ms, once the 0.08 s the gate takes to start is taken off. So at that load the budget
+covers some ten thousand modules of real size.
+The cost of the change is the last row: a tree too large to read is now refused after 11 seconds,
+where the count refused it in a fraction of one. The work repository's own lint run is on the work
+MacBook and was not among these readings.
 A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
 names it and is refused like a script run directly would be; a helper that names none (one that
 saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's

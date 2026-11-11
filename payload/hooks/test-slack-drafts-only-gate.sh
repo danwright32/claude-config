@@ -505,8 +505,9 @@ printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals
 run_bash "node $T/imp/str/evals-imported.ts"
 refused "a string from another module handed to eval in the script, importing a helper that posts"
 says "that refusal names the posting helper" "poster.js"
-# Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
-# lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Past the most modules it reads in no repository (IMPORT_MAX_FILES, 300; the largest real script
+# reaches 11), what lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Inside a repository it reads on (claude-config#2470, with the budget cases below).
 mkdir -p "$T/imp/chain" "$T/imp/short"
 for n in $(seq 0 305); do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/chain/m$n.ts"; done
 printf '%s\n' 'export {};' > "$T/imp/chain/m306.ts"
@@ -1645,31 +1646,35 @@ says "and says the command posts" "REFUSED: this command posts to Slack"
 lint_tree "$T/lint/out" 320 outside=305
 run_lint "$TICKS" "$T/lint/out"
 refused "a module outside the repository, reached past 300, is refused"
-says "that refusal names the module outside" "$T/lint/out-shared/helper.mjs"
-says "and says it is outside the repository" "outside the repository $T/lint/out"
+says "that refusal names the module outside" "/lint/out-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/out: the script ./tools/lint.mjs, which imports"
 says "and says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
-lacks "and does not claim the command posts" "this command posts to Slack:"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
 # ... among them (the walk passes 300 only when every module it has read is inside too) ...
 lint_tree "$T/lint/early" 320 config-outside
 run_lint "$TICKS" "$T/lint/early"
 refused "a module outside the repository among the first 300 is refused once the walk passes 300"
-says "that refusal names the module outside" "$T/lint/early-shared/helper.mjs"
-says "and says it is outside the repository" "outside the repository $T/lint/early"
+says "that refusal names the module outside" "/lint/early-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/early: the script ./tools/lint.mjs, which imports"
 # ... or is inside by its path and outside by where its link leads.
 lint_tree "$T/lint/link" 320 link=306
 run_lint "$TICKS" "$T/lint/link"
 refused "a module that is a link to a file outside the repository is refused"
-says "that refusal names the file the link leads to" "$T/lint/link-shared/linked.mjs"
-says "and says it is outside the repository" "outside the repository $T/lint/link"
-# A script in no repository is read no further than it ever was.
+says "that refusal names the file the link leads to" "/lint/link-shared/linked.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/link: the script ./tools/lint.mjs, which imports"
+# A script in no repository is read no further than it ever was. The throwaway folder has to be in
+# none itself for that to be measured, so that is checked first and said (L411).
+if (d="$(cd "$T" && pwd -P)"; while [ "$d" != "/" ] && [ ! -e "$d/.git" ]; do d="$(dirname "$d")"; done; [ -e "$d/.git" ]); then
+  check "the throwaway folder is in no repository, as the no repository cases need" "it is inside one: $T"
+else check "the throwaway folder is in no repository, as the no repository cases need" ok; fi
 lint_tree "$T/lint/plain" 320 no-repo
 run_lint "$TICKS" "$T/lint/plain"
 refused "a lint script reaching 342 modules in no repository is refused"
 says "that refusal says the imports go past what it reads" "more than 300 modules"
 says "and that the script is in no repository" "is not inside a repository"
-lacks "and does not claim the command posts" "this command posts to Slack:"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
 # The budget running out past 300 is refused as not checked, saying how far the reading got.
-run_lint 320 "$T/lint/clean"
+run_lint 330 "$T/lint/clean"
 refused "the budget running out while reading past 300 modules is refused, never allowed"
 says "that refusal says the gate ran out of time" "ran out of time"
 says "and that the command was not checked" "was not checked"
