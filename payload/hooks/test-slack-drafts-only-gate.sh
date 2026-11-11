@@ -1821,8 +1821,9 @@ run_df "python3 -I count.py calls.jsonl > rows.jsonl; wc -l rows.jsonl; python3 
 allowed "a data file written earlier and handed to a script on disk that only reads it passes"
 
 for runs in "python3 -I enrich.py calls.jsonl > rows.jsonl; wc -l rows.jsonl; python3 -I stats2.py rows.jsonl" \
-  "git ls-files > files.txt; python3 scan.py files.txt" "git ls-files > files.txt; python3 scan.py --root . --count files.txt" \
-  "gh issue list --json number,title > open-after.json; bun scan.ts open-after.json" \
+  "git diff --name-only > files.txt; python3 scan.py files.txt" \
+  "find . -name '*.sh' > files.txt; python3 scan.py --root . --count files.txt" \
+  "gh issue list --json number,title > open-after.json; node scan.ts open-after.json" \
   "git diff --name-only > changed.txt && python3 syntax.py . changed.txt" \
   "$GET; python3 -I -B gone.py rows.jsonl" "$GET; node gone.mjs rows.jsonl" "$GET; bash gone.sh rows.jsonl" \
   "bash gone.sh tests-before.txt" "sh ./gone.sh tests-before.txt other.txt" \
