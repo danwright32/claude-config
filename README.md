@@ -903,6 +903,15 @@ bounds how long the pull will wait before stopping it and saying nothing was ver
 told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
 a pull that runs the suite would otherwise recurse without end.
 
+The pull's run is a whole run, so it queues for this Mac's one full suite slot like any other
+(#2012), and it is told how long it may queue: `SYNC_HOOK_TESTS_SLOT_WAIT`, by default half of
+`SYNC_HOOK_TESTS_TIMEOUT`, and never as long as the deadline itself (#2758). A run still queued at
+that bound runs nothing, and the pull says so in those words, naming the run that held the slot,
+rather than reporting a suite "still running". It is recorded in `.hook-tests` as `slotwait`,
+`claude-sync status` reports it, and the next pull runs the suite again even when it carries no
+hook of its own; the change watcher does not, since every tick would queue behind the same run. A
+suite stopped at the deadline after waiting part of it for the slot says how long it waited.
+
 ### A send names what it keeps back
 
 A path the shared repo has changed since this Mac last applied is held back from the send, because
