@@ -8,7 +8,8 @@ covers a push, so db-write-ask.sh can let that push through instead of asking ag
 WHAT COVERS A PUSH. An AskUserQuestion picker in this session whose metadata names it:
 
     {"source": "db-apply", "migration": "<absolute path of the migration file>",
-     "sha256": "<the file's sha256>", "project_ref": "<the linked project's ref>"}
+     "sha256": "<the file's sha256>", "project_ref": "<the linked project's ref>",
+     "pending": ["<each migration the skill's dry run said the push would apply>"]}
 
 answered Apply by Dan. It covers a push when all of these hold, and each failure is said:
   - the picker was in the session making the push: its transcript entry carries the payload's
@@ -23,10 +24,16 @@ answered Apply by Dan. It covers a push when all of these hold, and each failure
   - the migration is that project's, unchanged: it sits in the working directory's
     supabase/migrations, and its sha256 now is the one the Apply named, so an edit after the Apply
     is asked about again.
-  - nothing else would go with it: the push applies every pending migration, and this cannot ask
-    the database which are pending, so the Apply covers the push only while its migration is the
-    newest file in the folder (migrations are named by a leading version, so the newest sorts
-    last). One written after it would be pushed with it, and is asked about.
+  - nothing else would go with it. The push applies every migration the database has not had,
+    and this cannot ask the database which those are, so it reads two things instead:
+      * "pending", the dry run's list the skill copied onto the picker and showed Dan, must be
+        exactly one entry, the applied migration (compared by file name, so a full path counts).
+        A missing, empty, longer or different list is asked about, and the question names the
+        other migrations listed (Dan held #2800 for this, 2026-11-11), so an older migration the
+        database never got cannot ride along on an Apply for a newer one.
+      * the migration is the newest file in the folder (migrations are named by a leading
+        version, so the newest sorts last). One written after the dry run would be pushed with it
+        and is not on its list, so it is asked about.
 
 THE AD HOC WRITE (Dan, 2026-11-11, folded into #2763). The skill's path 3, `supabase db query
 --linked --yes -f <file>` running a write, is covered by the same Apply when "migration" names that
@@ -40,8 +47,10 @@ That shape was read from this Mac's transcripts on 2026-11-11, metadata included
 writes a record of its own, so there is no record file a command could forge or leave behind; a
 transcript that cannot be read covers nothing.
 
-WHAT IT CANNOT SEE: which migrations the database has applied. An older migration still pending (one
-the database never got) would be pushed along with the newest one Dan applied.
+WHAT IT CANNOT SEE: the database itself. The pending list is what the dry run printed before the
+picker; a change on the database between that dry run and the push is not reflected in it, nor is
+a migration file added after the dry run under an older version than the applied one (a newer one
+is caught by the newest file rule).
 
   covered(workdir, flags, session_id, transcript_path, file=None)
       (True, the sentence naming the Apply) or (False, why no Apply covers the run); file is None
@@ -120,6 +129,26 @@ def applies(transcript_path, session_id):
     return found
 
 
+def _pending_why_not(pending, name):
+    """None when the dry run's list of pending migrations, recorded on the Apply, is exactly the one
+    migration named name, else why not. A push sends every migration the database has not had, so
+    an older one never applied would otherwise go with the one Dan applied (Dan, 2026-11-11, #2800)."""
+    if not isinstance(pending, list) or not all(isinstance(p, str) and p.strip() for p in pending):
+        return ("Dan's Apply recorded no list of the migrations the dry run would push, so what else this "
+                "push would send is unknown")
+    if not pending:
+        return "Dan's Apply recorded an empty list of the migrations the dry run would push"
+    names = [os.path.basename(p.strip()) for p in pending]
+    if len(names) > 1:
+        shown = ", ".join(n[:120] for n in names[:20]) + (", and more" if len(names) > 20 else "")
+        return ("the dry run Dan saw would push " + str(len(names)) + " migrations (" + shown
+                + "), and an Apply covers a push of the one he applied, " + name)
+    if names[0] != name:
+        return ("the dry run Dan saw would push " + names[0][:120] + ", not " + name
+                + ", the migration he applied")
+    return None
+
+
 def _why_not(meta, ref, folder, newest, file):
     """None when this Apply covers the run, else why not: for a push (file None) of folder's
     migrations, newest the last of them; for a `db query` write, of file. Both to project ref."""
@@ -138,6 +167,10 @@ def _why_not(meta, ref, folder, newest, file):
     elif name != newest:
         return ("Dan's Apply named " + name + ", and " + newest + " is a newer migration this push would "
                 "apply too")
+    else:
+        why = _pending_why_not(meta.get("pending"), name)
+        if why is not None:
+            return why
     try:
         now = _sha256(mig)
     except OSError as e:

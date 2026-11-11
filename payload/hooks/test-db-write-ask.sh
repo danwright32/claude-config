@@ -771,16 +771,23 @@ sha_of() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1
 # transcript <file> <session id> <migration> <sha256> <project ref> <answer> [prefilled]: a session
 # transcript holding one /db-apply picker and Dan's answer, in the shape Claude Code writes them
 # (read from this Mac's transcripts on 2026-11-11: the picker's input on an assistant entry, his
-# choice in toolUseResult.answers on the user entry that carries its tool_result).
+# choice in toolUseResult.answers on the user entry that carries its tool_result). The picker's
+# "pending" is the dry run's list of migrations it would push: by default the one migration named,
+# PENDING="a.sql,b.sql" sets another list, and PENDING=none leaves the key out.
 transcript() {
   python3 - "$@" <<'PY'
-import json, sys
+import json, os, sys
 path, sid, mig, sha, ref, answer = sys.argv[1:7]
 prefilled = len(sys.argv) > 7
 q = "Apply migration 002_note.sql to project " + ref + "?"
 ask = {"questions": [{"question": q, "header": "Migration", "multiSelect": False,
                       "options": [{"label": "Apply", "description": "Run it"}, {"label": "Cancel", "description": "Do not"}]}],
        "metadata": {"source": "db-apply", "migration": mig, "sha256": sha, "project_ref": ref}}
+pending = os.environ.get("PENDING")
+if pending is None:
+    ask["metadata"]["pending"] = [os.path.basename(mig)]
+elif pending != "none":
+    ask["metadata"]["pending"] = [p for p in pending.split(",") if p]
 if prefilled:
     ask["answers"] = {q: "Apply"}
 lines = [
@@ -856,6 +863,26 @@ both "a push from a directory held in a variable is asked about" none ask "$(app
 printf 'drop table a;\n' > "$PROJ/supabase/migrations/003_later.sql"
 both "a push with a migration newer than the applied one is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
 rm -f "$PROJ/supabase/migrations/003_later.sql"
+# A push sends every migration the database has not had, so the Apply records the dry run's list of
+# pending migrations, and covers the push only when that list is the one migration Dan applied
+# (Dan held #2800 for this, 2026-11-11). An older migration never applied would otherwise go with it.
+OLDER_T="$APPLY/older-pending.jsonl"
+PENDING="001_first.sql,002_note.sql" transcript "$OLDER_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose dry run also listed an older pending migration is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")")" reason)"
+case "$reason" in *001_first.sql*) check "the question names the other pending migration" ok ;; *) check "the question names the other pending migration" "reason: ${reason:0:400}" ;; esac
+NOLIST_T="$APPLY/no-pending.jsonl"
+PENDING=none transcript "$NOLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded no pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NOLIST_T")"
+EMPTYLIST_T="$APPLY/empty-pending.jsonl"
+PENDING="" transcript "$EMPTYLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded an empty pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$EMPTYLIST_T")"
+WRONGLIST_T="$APPLY/other-pending.jsonl"
+PENDING="001_first.sql" transcript "$WRONGLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose recorded pending migration is not the one applied is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$WRONGLIST_T")"
+PATHLIST_T="$APPLY/path-pending.jsonl"
+PENDING="$MIG" transcript "$PATHLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a pending list naming the applied migration by its full path covers the push" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$PATHLIST_T")"
 mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
 both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
 mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
@@ -897,6 +924,18 @@ for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --y
   if [ -z "$c" ]; then check "the skill documents a command matching $pat" "none found in SKILL.md"; continue; fi
   both "the skill's own [$c] after its Apply" "$ra" "$rb" "$(apply_payload "$c" "$PROJ" s1 "${!tv}")"
 done
+# The picker metadata the skill documents must carry every key the approval library reads, so a key
+# added there (such as "pending", #2800) cannot leave the skill writing pickers that cover nothing.
+skill_meta="$(grep -m 1 -E '^\{"source": "db-apply"' "$SKILL_MD")"
+lib_keys="$(grep -oE 'meta\.get\("[a-z_]+"\)' "$DIR/lib/db-apply-approval.py" | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u | tr '\n' ' ')"
+missing="$(python3 -c 'import json, sys
+try:
+    m = json.loads(sys.argv[1])
+except ValueError:
+    print("no metadata JSON line in SKILL.md"); sys.exit()
+print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys")"
+case "$lib_keys" in *pending*) check "the approval library reads the pending list" ok ;; *) check "the approval library reads the pending list" "keys read: $lib_keys" ;; esac
+[ -z "$missing" ] && check "the skill's documented picker metadata names every key the approval reads" ok || check "the skill's documented picker metadata names every key the approval reads" "missing: $missing"
 
 # A -f file that cannot be read is asked about, as is one the same command could write first.
 both "a -f file that does not exist is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/nosuch.sql" "$PROJ" s1 "$NONE_T")"

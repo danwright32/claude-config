@@ -3833,15 +3833,21 @@ One Apply covers one migration (#2763). Applying a migration through `/db-apply`
 and a read back, each asked about after Dan had answered the skill's own Apply or Cancel picker, so one
 decision reached him up to four times. Now a `supabase db push` that is the whole of its command (a
 `cd` before it aside) is let through, answered "allow", when Dan answered Apply in a picker carrying
-the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256 and the project
-ref) in the same session. `hooks/lib/db-apply-approval.py` reads his answer from the session
+the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256, the project
+ref, and `pending`, the list of migrations the skill's dry run said the push would apply) in the same
+session. `hooks/lib/db-apply-approval.py` reads his answer from the session
 transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
 to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
 `--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
 is asked about, the question saying why no Apply covers it. The skill's ad hoc write, `supabase db
 query --linked --yes -f <file>` alone in its command, is let through the same way when the Apply named
-that file and project and the file is unchanged (Dan, 2026-11-11). What it cannot see: which
-migrations the database already has, so an older one never applied would go with the newest.
+that file and project and the file is unchanged (Dan, 2026-11-11). A push sends every migration the
+database has not had, so the skill copies the dry run's list onto the picker and shows it in the
+question, and the push is let through only when that list is exactly the one migration Dan applied:
+a missing, empty or longer list, or one naming another file, is asked about, the question naming the
+other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
+What it cannot see: a change on the database between the dry run and the push, or a migration file
+added after the dry run under an older version than the applied one.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
