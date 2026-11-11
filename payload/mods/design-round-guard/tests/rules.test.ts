@@ -2484,12 +2484,12 @@ test('#2161: an index by a number or another quoted key is no read of a reason k
 // readMod and drawnOf scanned the whole file again once for each function, local and call in it.
 // Judged by growth between two sizes of the same code, never by a wall clock budget: four times the
 // file took about eleven times as long before the fix; in step with size it is about four.
-// The cost is judged by the LEAST ratio over several rounds, each timing the small and the large size
+// The cost is judged by the MEDIAN ratio over seven rounds, each timing the small and the large size
 // back to back (#2790). A starved Mac pauses a run in the middle of one size and not the other, and the
-// wall clock counts that wait as work (ratios of 7 to 14 on a loaded Mac, against about four), but it
-// cannot pause every round: the regression's ratio is about eleven in EVERY round, so its least ratio
-// stays far over six, and one delayed round no longer decides the verdict. The bound of six is not
-// loosened and no round is dropped by hand: the least is taken, never a round picked for its value.
+// wall clock counts that wait as work (ratios of 7 to 14 on a loaded Mac, against about four). A pause
+// in the large run raises one round's ratio and a pause in the small run lowers it, so the median, which
+// three rounds of either kind cannot move, is used rather than the least (a delayed small run would
+// let a real regression pass) or the greatest. The bound of six is not loosened.
 test('#2223: four times as much mod hook code takes under six times as long to read (it took about eleven)', () => {
   const chunk = (i: number) => [
     `const pick${i} = (rows: string[]) => rows.map(r => r.trim()).filter(r => r.split(',').length > 1 && r !== 'none')`,
@@ -2519,8 +2519,8 @@ test('#2223: four times as much mod hook code takes under six times as long to r
     expect(small).toBeGreaterThan(0)
     ratios.push(large / small)
   }
-  const least = Math.min(...ratios)
-  expect({ ratio: Math.round(least * 10) / 10, under: least < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+  const middle = [...ratios].sort((a, b) => a - b)[3]
+  expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
 })
 
 // #2726: Claude Code runs every mod in one hooks worker and replaces it when a heartbeat goes
