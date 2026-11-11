@@ -185,8 +185,28 @@ case "$noreader" in
   "imported|refused: "*"lib/shell-words.py could not be loaded"*"nolib/shell-words.py"*) eq "#2080 without shell-words.py the reader refuses, loudly" ok ok ;;
   *) eq "#2080 without shell-words.py the reader refuses, loudly" "imported|refused: ...lib/shell-words.py could not be loaded...nolib/shell-words.py..." "$noreader" ;;
 esac
-_pyc="$(ls "$LIB/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
-eq "#2080 loading the reader leaves no shell-words bytecode in lib/" 0 "$_pyc"
+
+# Loading the reader leaves no shell-words bytecode for a caller that writes bytecode (#2080). Every
+# load above runs with -B, so it could never see a writer: this one runs without it, as a scan that
+# imports the reader would. -I drops the PYTHONDONTWRITEBYTECODE the runner and arming hand every
+# suite (#2751), and the process reports its own flag, so bytecode switched off reads as a failure,
+# never as clean. -X pycache_prefix, which -I does not drop, sends whatever this one process writes
+# into $W and nowhere else, so the count is this suite's own writes. Counting lib/__pycache__ instead
+# failed on a file anything else had left there: a probe run by hand, another suite running at the
+# same moment, an older run (#2757). Its import of shell_code_lines lands there too, the control
+# that the writes went where they are counted (L322).
+mkdir -p "$W/pyc"
+_bc="$(python3 -I -X pycache_prefix="$W/pyc" -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import shell_code_lines
+print(sys.flags.dont_write_bytecode, shell_code_lines.READER_ERROR)
+' "$LIB" 2>&1 | paste -sd'|' -)"
+eq "#2751 the load below runs with bytecode on and loads the reader (flag, reader error)" "0 None" "$_bc"
+_own="$(find "$W/pyc" -name 'shell_code_lines.*.pyc' | wc -l | tr -d ' ')"
+eq "#2757 control: that load's own bytecode landed in its throwaway prefix" 1 "$_own"
+_pyc="$(find "$W/pyc" -name 'shell-words*' | sed 's#.*/##' | paste -sd' ' -)"
+eq "#2080 loading the reader leaves no shell-words bytecode (written by this load)" "" "$_pyc"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
