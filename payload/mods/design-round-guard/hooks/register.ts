@@ -709,10 +709,24 @@ const neverTracked = async ($: EngineInterface, path: string, tree: string): Pro
 // another index, repository or setting: a GIT_ variable set on the line (which the command reader
 // drops from a command's words), or any of git's own options before the subcommand but -C, whose
 // folder mod-kit already follows (lessons review).
-const restoreAlone = async ($: EngineInterface, command: string): Promise<string | undefined> => {
+// A `&` that runs what is before it in the background: not one of `&&`, nor a redirection's (`2>&1`,
+// `&>`, `|&`). One inside quotes reads as one too, so such a line is judged whole, as before.
+const BACKGROUND = /(^|[^&>|<])&(?![&>])/
+// With `first` (#2777), a restore that runs first on its line is measured too: nothing run after it
+// can change what it puts back. Only where it is the line's one git checkout or restore, so every
+// source a target names is that restore's, and runs neither in a pipe nor in the background, where
+// what follows it on the line may run beside it.
+const restoreAlone = async ($: EngineInterface, command: string, first = false): Promise<string | undefined> => {
   try {
-    const rest = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
-    const words = rest.length === 1 ? (rest[0]?.words ?? []) : []
+    const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
+    const restores = async () => {
+      let n = 0
+      for (const c of all) if (['checkout', 'restore'].includes((await $.modkit.git({ words: c.words }))?.sub ?? '')) n++
+      return n
+    }
+    const piped = all.some(c => c.pipedFrom !== undefined)
+    const alone = all.length === 1 || (first && !piped && !BACKGROUND.test(command) && (await restores()) === 1)
+    const words = alone ? (all[0]?.words ?? []) : []
     const g = words.length ? await $.modkit.git({ words }) : undefined
     if (!(g?.sub === 'checkout' || g?.sub === 'restore')) return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
     const before = words.slice(1, words.indexOf(g.sub, 1))
@@ -1098,8 +1112,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // Per checkout, what a refusal says of a git checkout or restore whose lines could not be read (#1158),
   // or of a shell write to a mod hook file, which cannot be read before it runs (#1341).
   const unreadIn = new Map<string, string[]>()
-  // restoreAlone's answer for this call once asked; null until then.
+  // restoreAlone's answer for this call once asked, strictly for a settled design record, whose
+  // refusal says a restore alone goes through, and with a restore run first on its line for a file
+  // judged by its lines (#2777); null until then.
   let notAlone: string | undefined | null = null
+  let notFirst: string | undefined | null = null
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
@@ -1263,9 +1280,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         unreadIn.set(tree, notes)
       }
     }
-    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+    // A restore whose lines are measured may run first on its line rather than alone (#2777).
+    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null) notFirst = await restoreAlone($, String(input.command ?? ''), true)
     if (modTs) {
-      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined, watch)
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch)
       if (drawn === 'pass') continue
       if (drawn !== 'held' && 'worded' in drawn) worded.push({ file: relTo(t.path, tree), words: drawn.worded })
       else if (drawn !== 'held') {
@@ -1284,7 +1302,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // restore putting back only such lines (#1158). One whose lines git could not give is judged
     // whole, and the refusal says why.
     // restoreAlone is asked above, once per call, and only of one that puts back a file judged by its lines.
-    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
+    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined)
     if (change && 'unread' in change) {
       const said = unreadPutBack(relTo(t.path, tree), change.unread)
       const notes = unreadIn.get(tree) ?? []
