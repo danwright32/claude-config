@@ -3554,8 +3554,9 @@ deletes it only after moving the pull requests stacked on it), to confirm the st
 `gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
 same merge seven times because the refusal named no other way. The reader prints a verdict of its
 own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
-is no merge gets none. Measured again on 2026-11-10 (12 cores): the helper's line takes 7,976 steps
-against the suite's ceiling of 12,000, up 76 from #2591, all of it the helper (125,803 to 128,049
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
 bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
 and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
 day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
