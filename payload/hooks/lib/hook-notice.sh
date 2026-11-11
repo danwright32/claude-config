@@ -54,6 +54,10 @@
 #       <text>) as hookSpecificOutput.additionalContext for that event.
 #   hook_allow_notice <text> [<event> [<context>]]
 #       the same, with <text> on stderr too for the debug log, then exit 0. The call goes ahead.
+#   hook_context_json <event> <context>
+#       print only hookSpecificOutput.additionalContext for <event>, with no systemMessage: for a
+#       context that has to be handed over again (after a compaction, to a subagent) while the
+#       person was already told once (checkout-behind-notice.sh, claude-config#2712).
 #   hook_ask_json <reason> [<notice>]
 #       print a PreToolUse ask: hookSpecificOutput with permissionDecision "ask" and <reason> as
 #       its permissionDecisionReason, which puts the call in front of the person, plus <notice> as
@@ -135,6 +139,17 @@ print(json.dumps(out))' 2>/dev/null && return 0
   else
     printf '{"systemMessage": "%s"}\n' "$(_hn_string "$text")"
   fi
+}
+
+hook_context_json() {
+  local event="$1" context="$2"
+  case "$event" in ''|*[!A-Za-z]*) return 1 ;; esac
+  if command -v python3 >/dev/null 2>&1; then
+    HN_CONTEXT="$context" HN_EVENT="$event" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
+print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["HN_EVENT"],
+                                         "additionalContext": cut(os.environb[b"HN_CONTEXT"])}}))' 2>/dev/null && return 0
+  fi
+  printf '{"hookSpecificOutput": {"hookEventName": "%s", "additionalContext": "%s"}}\n' "$event" "$(_hn_string "$context")"
 }
 
 hook_ask_json() {
