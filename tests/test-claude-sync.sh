@@ -25278,16 +25278,19 @@ sw_holder(){ ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$S
 sw_hold(){ ( . "$SWPAY/lib/merge-turn.sh"; TURN_PID="$1"; TURN_PID_START=""
   MWR_TURN_DIR="$SWSLOT" turn_open "full-run"; turn_join "/work/trees/a-builder" "$(cat "$SWT/now")" || exit 1
   turn_look "$(cat "$SWT/now")" 999999 ) >/dev/null 2>&1; }
-# HOOK_TESTS_SLOT=1 because this suite itself runs inside a full run, which the runner would
-# otherwise read as a fixture run and never queue; a pull from a terminal or launchd queues unasked.
-# The hold bound is lifted because the clock here only moves forward across pulls, and past its
+# Run as a pull from a terminal or launchd is: without the marks this suite inherits from a full run
+# around it (HOOK_TESTS_RUNNING and that run's deadline), under which the fixture runner refused a
+# whole run outright as recursion, and with no HOOK_TESTS_SLOT, so the runner decides for itself that
+# this is a whole run and queues. The hold bound is lifted because the clock here only moves forward across pulls, and past its
 # 2700 seconds (the library's default, set and not measured) the stand in would be passed over as
 # stuck, which is the slot working, not this case.
 sw_pull(){ # sw_pull [env assignments...] -> the pull's output
   env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SLEEP -u CI \
+    -u HOOK_TESTS_RUNNING -u HOOK_TESTS_ROOT -u HOOK_TESTS_SLOT -u HOOK_TESTS_DEADLINE \
+    -u HOOK_TESTS_DEADLINE_RESERVE -u HOOK_TESTS_JOB_STARTED -u HOOK_TESTS_NOW \
     CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_LOCK="$SWLOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
     SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=1800 SYNC_TEST_SUITE_CLOCK="$SWT/pull-clock" \
-    HOOK_TESTS_SLOT=1 HOOK_TESTS_SLOT_DIR="$SWSLOT" HOOK_TESTS_SLOT_NOW="$SWT/slot-clock" \
+    HOOK_TESTS_SLOT_DIR="$SWSLOT" HOOK_TESTS_SLOT_NOW="$SWT/slot-clock" \
     HOOK_TESTS_SLOT_POLL=0.2 HOOK_TESTS_SLOT_SAY_EVERY=600 HOOK_TESTS_SLOT_HOLD=999999 "$@" bash "$SCRIPT" pull 2>&1
 }
 # A first pull with the slot free installs the runner, its library and the suite, and passes.
