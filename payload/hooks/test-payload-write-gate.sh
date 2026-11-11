@@ -378,7 +378,7 @@ A
 b > $FIX/dev/payload/LESSONS.md
 B
 echo done" "$FIX/dev"
-refused "#2080 so is one in the second body"
+allowed "#2722 the second body is copied by cat into a named file, so it is text, and allowed"
 runbash "cat <<'EOF' > /dev/null
 a > b
 EOF
@@ -402,6 +402,87 @@ cd $FIX/elsewhere
 EOF
 cp /tmp/x payload/LESSONS.md" "$FIX/sp ace/dev"
 refused "#2080 and nor does one from a checkout whose path holds a space"
+# A heredoc whose consumer only copies its text into a file named on the command line (cat or tee)
+# is text: paths named in its body are not write targets, while where that command writes is still
+# judged (Dan, 2026-11-11, the middle path, claude-config#2722). Every other consumer, and one that
+# cannot be told, has its body read as before. On 2026-11-10 a cat append to a session notes file
+# was refused for the payload paths its text named in backticks.
+NOTE_BODY="- the gate read \`cp /tmp/x $FIX/dev/payload/LESSONS.md\` as a copy
+- and \`echo hi > $FIX/dev/payload/LESSONS.md\` and \`rm payload/hooks/x.sh\` as writes"
+runbash "cat >> $FIX/elsewhere/notes.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+allowed "#2722 a cat append to a notes file whose body names payload paths is allowed"
+runbash "tee -a $FIX/elsewhere/notes.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+allowed "#2722 so is a tee append with the same body"
+runbash "cat >> $FIX/elsewhere/notes.md <<EOF
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 with its end marker unquoted the shell runs the backticked commands, so they are judged, and refused"
+runbash "bash <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 the same body through bash is still read, and refused"
+runbash "sh -s <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 through sh -s too"
+runbash "python3 - <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 through python - too"
+runbash "mytool --flag <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 and through a command the gate does not recognise"
+runbash "cat <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 a cat writing to no named file is not judged a copy, so its body is read"
+runbash "cat <<'EOF' | bash
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 a cat piped into bash has its body read"
+runbash "tee -a $FIX/elsewhere/notes.md <<'EOF' | sh
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 so does a tee piped into sh"
+runbash "bash -c \"\$(cat <<'EOF'
+$NOTE_BODY
+EOF
+)\"" "$FIX/dev"
+refused "#2722 and a cat inside a substitution bash runs"
+runbash "cat > >(bash) <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 and a cat writing into a process substitution"
+runbash "cat(){ bash; }; cat >> $FIX/elsewhere/notes.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 and a cat this command defines as a function"
+runbash "cat > $FIX/elsewhere/s.sh <<'EOF'
+cp /tmp/x $FIX/dev/payload/LESSONS.md
+EOF
+bash $FIX/elsewhere/s.sh" "$FIX/dev"
+refused "#2722 a script cat writes and the command then runs has its body read"
+runbash "cat >> $FIX/elsewhere/notes.md <<EOF
+\$(cp /tmp/x $FIX/dev/payload/LESSONS.md)
+EOF" "$FIX/dev"
+refused "#2722 a substitution the shell runs in a cat append's unquoted body is still a write"
+runbash "cat >> $FIX/dev/payload/LESSONS.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2722 a cat append into payload is refused"
+runbash "cat > payload/LESSONS.md <<'EOF'
+text
+EOF" "$FIX/dev"
+refused "#2722 a relative cat write into payload is refused"
+runbash "tee $FIX/elsewhere/notes.md $FIX/dev/payload/LESSONS.md <<'EOF'
+text
+EOF" "$FIX/dev"
+refused "#2722 a tee writing into payload is refused"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
@@ -488,7 +569,7 @@ python3 - "$FIX/brokencommands/lib/shell-words.py" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-s = s.replace('def commands(s, cwd="", heredocs=None, parts=None):\n', 'def commands(s, cwd="", heredocs=None, parts=None):\n    raise RuntimeError("broken for the test")\n', 1)
+s = s.replace('def commands(s, cwd="", heredocs=None, parts=None, spans=None):\n', 'def commands(s, cwd="", heredocs=None, parts=None, spans=None):\n    raise RuntimeError("broken for the test")\n', 1)
 open(p, "w").write(s)
 PY
 grep -q 'broken for the test' "$FIX/brokencommands/lib/shell-words.py" && check "#2080 the broken commands reader is in place" ok || check "#2080 the broken commands reader is in place" "the replace matched nothing"

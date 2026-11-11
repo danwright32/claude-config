@@ -236,6 +236,22 @@ print(repr(m.WHY_FILE % "/x/file.sh"))' "$SW"))|'rtk\\x1dinit\\x1d\\x1d-g'" ] \
   && check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" ok \
   || check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" "got [$cont_readers]"
 
+# spans gives each body the reading skipped as text: where its << is (the opener parts gives the
+# command that opens it) and where the body is, so a caller can tell whose body it is (#2722).
+spans_read="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+cmd = "cat <<A; tee f <<'"'"'B'"'"'\na1\nA\nb1\nb2\nB\necho done"
+parts, spans, hd = [], [], []
+m.commands(cmd, heredocs=hd, parts=parts, spans=spans)
+for opener, start, end in spans:
+    owner = [cmd[p["start"]:p["end"]].strip() for p in parts if any(o[0] == opener for o in p["openers"])]
+    print(cmd[opener:opener + 2] + "|" + "/".join(owner) + "|" + cmd[start:end].replace("\n", "~"))
+print(len(spans) == len(hd))' "$SW" 2>&1 | paste -sd'^' -)"
+[ "$spans_read" = "<<|cat <<A|~a1^<<|tee f <<'B'|~b1~b2^True" ] \
+  && check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" ok \
+  || check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" "got [$spans_read]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
