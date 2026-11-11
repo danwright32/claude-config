@@ -8,6 +8,8 @@ import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { readsAsSend } from './send-wording.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
+import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 
 // The Slack alert guard (claude-config#2242) in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -30,7 +32,13 @@ const modKit: { name: string; register: Register } = {
       }
       // Only the members the guard calls are stood in; any other it ever reached would be undefined
       // and throw, which every test here would show as a refusal it did not expect.
-      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer'> = {
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper' | 'branch'> = {
+        screen: async () => null,
+        // The gh and command readers are byte for byte copies of mod-kit's own (#2628).
+        pipeline: async (input: { command: string; cwd?: string }) => ask('pipeline', input),
+        gh: async (input: { words: string[] }) => ask('gh', input),
+        mergeHelper: async c => ask('mergeHelper', c),
+        branch: async (input: { path: string }) => ask('branch', input),
         writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
         pythonText: async (input: { code: string }) => ask('pythonText', input),
         blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -53,6 +61,34 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit] }
+// Scope modes, standing in (#2628): whether sleep mode is on, and the notes it would take for the
+// night's report. Absent from withKit, as a Mac without scope modes is awake.
+const night: { asleep: boolean; notes: Record<string, unknown>[]; fails: boolean } = { asleep: false, notes: [], fails: false }
+const sleepKit: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      // Asked through the world (`__scope`), as a plugin's engine cannot reach the test's own objects.
+      const ask = async (what: string, input: unknown = null) => {
+        const r = await built.process.run(['__scope', what, JSON.stringify(input)])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return JSON.parse(r.stdout)
+      }
+      const scopeModes = {
+        isAsleep: async () => ask('isAsleep'),
+        sleepNote: async (note: Record<string, unknown>) => ask('sleepNote', note),
+      }
+      return { ...built, scopeModes }
+    })
+  },
+}
+const withNight = { plugins: [secDefault, modKit, sleepKit] }
+const nightFresh = (asleep: boolean) => {
+  night.asleep = asleep
+  night.notes = []
+  night.fails = false
+}
 
 const HOME = `${'/Users'}/dan`
 const T0 = Date.UTC(2026, 10, 4, 15, 0, 0)
@@ -85,6 +121,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
   // after #2481).
   const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
+  // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
+  // its path from the top (absent: not there upstream), and whether git show fails another way.
+  const night2 = { session: 's1', diffs: {} as Record<string, string>, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
+  const ghs: string[][] = []
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
@@ -114,10 +155,27 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   }
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
   on('session.cwd', () => ({ value: ctl.cwd }) as never)
-  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.id', () => ({ value: night2.session }) as never)
   on('process.run', async ($, e) => {
     await wall()
     const [cmd, method, raw] = e.argv.map(String)
+    if (cmd === '__scope') {
+      if (night.fails) return { value: { exitCode: 1, stdout: '', stderr: 'the sleep record could not be read', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (method === 'isAsleep') return ok(JSON.stringify(night.asleep))
+      if (!night.asleep) return ok(JSON.stringify({ isNoted: false }))
+      night.notes.push(JSON.parse(String(raw)))
+      return ok(JSON.stringify({ isNoted: true }))
+    }
+    if (cmd === 'gh') {
+      const argv = e.argv.map(String)
+      ghs.push(argv)
+      if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (argv[1] !== 'pr' || argv[2] !== 'diff') throw new Error(`unexpected gh command: ${argv.join(' ')}`)
+      const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
+      const d = night2.diffs[sel]
+      if (d === undefined) return { value: { exitCode: 1, stdout: '', stderr: `no pull requests found for ${sel || 'the current branch'}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      return ok(d)
+    }
     // git, standing in over the files above: one repository at /w/app, searched as git grep does.
     if (cmd === 'git') {
       const argv = e.argv.map(String)
@@ -189,6 +247,16 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return listing(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
       }
+      // git show origin/<default branch>:<path from the top>, as git answers it (#2628).
+      if (argv[3] === 'show') {
+        const spec = argv[4] ?? ''
+        night2.shownFrom.push(spec.slice(0, spec.indexOf(':')))
+        const rel = spec.slice(spec.indexOf(':') + 1)
+        if (night2.showFails) return { value: { exitCode: 128, stdout: '', stderr: "fatal: invalid object name 'origin/HEAD'.\n", isStdoutTruncated: false, isStderrTruncated: false } } as never
+        const t = night2.upstream === undefined ? files[`${REPO}/${rel}`] : night2.upstream[rel]
+        if (t === undefined) return { value: { exitCode: 128, stdout: '', stderr: `fatal: path '${rel}' exists on disk, but not in 'origin/HEAD'\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(t)
+      }
       throw new Error(`unexpected git command: ${argv.join(' ')}`)
     }
     if (cmd === '__modkit' && method === 'writes') {
@@ -196,6 +264,14 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
     }
     if (cmd === '__modkit' && method === 'pythonText') return ok(JSON.stringify(pythonText(JSON.parse(String(raw)).code)))
+    if (cmd === '__modkit' && method === 'pipeline') {
+      const input = JSON.parse(String(raw)) as { command: string; cwd?: string }
+      return ok(JSON.stringify(pipeline(input.command).map(c => ({ ...c, folder: input.cwd ?? null }))))
+    }
+    // undefined (no gh, no helper) travels as null and is read back as none.
+    if (cmd === '__modkit' && method === 'gh') return ok(JSON.stringify(ghArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
+    if (cmd === '__modkit' && method === 'mergeHelper') return ok(JSON.stringify(mergeHelperArgs(JSON.parse(String(raw))) ?? null))
+    if (cmd === '__modkit' && method === 'branch') return ok(JSON.stringify({ root: REPO, main: REPO, branch: '2628-sleep', defaultBranch: night2.defaultBranch, isDefault: false, issues: [2628] }))
     if (cmd === '__modkit' && method === 'typedAnswer') {
       const input = JSON.parse(String(raw)) as TypedAnswer
       return ok(JSON.stringify({ toast: typedToast(input.guard), text: typedAnswerText(input) }))
@@ -226,6 +302,14 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     store[e.key] = e.value
     return { value: undefined } as never
   })
+  on('store.keys', () => ({ value: Object.keys(store) }) as never)
+  on('store.delete', ($, e) => {
+    delete store[e.key]
+    return { value: undefined } as never
+  })
+  on('tool.register', ($, e) => ({ value: { tool: `mcp__slack-alert-guard__${e.name}` } }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
+  on('prompt.submit', ($, e) => ({ text: e.text, context: e.context ?? [] }) as never)
   on('ui.log', ($, e) => {
     const text = String((e as { text?: string }).text ?? '')
     if (text.startsWith('CARD ')) cards.push(JSON.parse(text.slice(5)))
@@ -252,7 +336,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, reads: () => reads, wallStart }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart }
 }
 type W = ReturnType<typeof world>
 
@@ -2033,6 +2117,237 @@ test('the same script is still held when a file that really posts to Slack reads
   expect(why).toContain('Recorded the finding for the next issue review')
   expect(why).toContain(`which ${POSTER} sends to Slack`)
   expect(w.ran).toEqual([])
+})
+
+// #2628: in sleep mode the session chooses held wording and keeps working; Dan is asked in the
+// morning, and nothing carrying the wording merges until he approves it. Dan, 2026-11-09: "You
+// should just choose the alert in sleep mode and put it to me in the morning to see if I want
+// something else."
+const CHOOSE = 'mcp__slack-alert-guard__choose'
+const REWORDED = 'Deploy ${id} failed on production'
+// The pull request carrying the reworded alert, as gh pr diff prints it.
+const DIFF = [
+  'diff --git a/lib/alert.ts b/lib/alert.ts',
+  '--- a/lib/alert.ts',
+  '+++ b/lib/alert.ts',
+  '@@ -1 +1 @@',
+  `-${ALERT_TEXT.trimEnd()}`,
+  `+${ALERT_TEXT.trimEnd().replace('Deploy ${id} failed', REWORDED)}`,
+  '',
+].join('\n')
+// The same pull request once the wording is changed again in the morning.
+const DIFF_CHANGED = DIFF.replace(REWORDED, 'Deploy ${id} did not finish')
+const said = (r: Result) => `${String((r as { result?: unknown }).result ?? '')}\n${r.text ?? ''}\n${contextOf(r)}`
+const choose = ($: Caller, id: string, rendered: unknown = SHOWN, extra: Record<string, unknown> = {}) => call($, { tool: CHOOSE, call: id, rendered, ...extra })
+const chosenIn = (w: W) => Object.keys(w.store).filter(k => k.startsWith('chosen:'))
+const promptLines = async ($: unknown) =>
+  (((await ($ as { prompt: { submit: (e: never) => Promise<{ context?: string[] }> } }).prompt.submit({ text: 'morning', origin: { kind: 'composer' }, wait: false } as never)).context ?? []) as string[]).join('\n')
+const morning = async ($: Caller, w: W, id: string, answer: string | undefined, afk = false) => {
+  w.dialog.answer = answer
+  w.dialog.afk = afk
+  return call($, {
+    tool: 'AskUserQuestion',
+    questions: [{ question: 'Keep this?', header: 'x', options: [{ label: 'Yes', description: 'y' }, { label: 'No', description: 'n' }], multiSelect: false }],
+    metadata: { source: `slack-alert-guard:chosen:${id}` },
+  })
+}
+const MERGE = { tool: 'Bash', command: 'gh pr merge 12 --squash' }
+// Asleep, the held reword chosen and the edit sent again: the call's id.
+const chooseReword = async ($: Caller, w: W, extra: Record<string, unknown> = {}) => {
+  const why = refusalOf(await call($, { ...REWORD, ...extra }))
+  const id = /"call": "(t\d+)"/.exec(why)?.[1]
+  if (!id) throw new Error(`no choose instruction in: ${why}`)
+  expect(refusalOf(await choose($, id, SHOWN, extra))).toBe('')
+  expect(refusalOf(await call($, { ...REWORD, ...extra }))).toBe('')
+  w.night.diffs['12'] = DIFF
+  return id
+}
+
+test('asleep, held wording is chosen by the session and recorded as its choice, never as approved, and the edit goes ahead (#2628)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const why = refusalOf(await call($, REWORD))
+  expect(why).toContain(CHOOSE)
+  expect(why).toContain('asleep')
+  expect(why).not.toContain('"source"')
+  expect(w.ran).toEqual([])
+  const id = /"call": "(t\d+)"/.exec(why)?.[1] as string
+  // The message chosen must be the message as Slack posts it: one leaving the new words out, or
+  // still carrying a placeholder, records nothing.
+  expect(refusalOf(await choose($, id, 'Deploy 4182 failed'))).toContain('leaves out')
+  expect(refusalOf(await choose($, id, 'Deploy ${id} failed on production'))).toContain('${id}')
+  expect(chosenIn(w)).toEqual([])
+  const c = await choose($, id)
+  expect(refusalOf(c)).toBe('')
+  expect(said(c)).toContain('not approved')
+  const k = wordingKey(REWORDED)
+  expect(w.store[k]).toBeUndefined()
+  expect(w.store[`chosen:${k}`]).toMatchObject({ id, file: ALERT, rendered: SHOWN, session: 's1', added: [REWORDED] })
+  // The night's report shows it (a kind of its own, so no second picker that records nothing).
+  expect(night.notes.map(n => n.kind)).toEqual(['wording'])
+  expect(String(night.notes[0]?.text)).toContain(SHOWN)
+  expect(refusalOf(await call($, REWORD))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Chosen once: the id waits on nothing now.
+  expect(refusalOf(await choose($, id))).toContain('No Slack alert edit')
+})
+
+test("asleep, a subagent chooses its own held wording, and nobody else's (#2628)", withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const why = refusalOf(await call($, { ...REWORD, agentId: 'a1' }))
+  expect(why).toContain(CHOOSE)
+  const id = /"call": "(t\d+)"/.exec(why)?.[1] as string
+  expect(refusalOf(await choose($, id))).toContain('No Slack alert edit')
+  expect(refusalOf(await choose($, id, SHOWN, { agentId: 'a1' }))).toBe('')
+  expect(refusalOf(await call($, { ...REWORD, agentId: 'a1' }))).toBe('')
+  expect(chosenIn(w).length).toBe(1)
+})
+
+test('in the morning the choice is put to Dan with the message filled in, and only his Approve wording releases it (#2628)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  // Nothing carrying the chosen wording merges, asleep or not, and nothing is asked while asleep.
+  const held = refusalOf(await call($, MERGE))
+  expect(held).toContain('chosen overnight')
+  expect(held).toContain(SHOWN)
+  expect(w.ghs[0]?.slice(0, 4)).toEqual(['gh', 'pr', 'diff', '12'])
+  expect(await promptLines($)).not.toContain('chosen:')
+  night.asleep = false
+  // Awake, a choice lets nothing through: the same wording is asked about as before.
+  expect(refusalOf(await call($, REWORD))).toContain('"source": "slack-alert-guard:')
+  const lines = await promptLines($)
+  expect(lines).toContain(`slack-alert-guard:chosen:${id}`)
+  expect(lines).toContain(ALERT)
+  const r = await morning($, w, id, APPROVE)
+  const q = w.asked.at(-1)?.questions[0]
+  expect(q?.question).toContain(SHOWN)
+  expect(q?.question).toContain('Overnight')
+  expect(q?.header).toBe(HEADER)
+  expect(q?.options.map(o => o.label)).toEqual([APPROVE, CHANGE])
+  expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  for (const o of q?.options ?? []) expect(readsAsSend(`${o.label} ${o.description ?? ''}`)).toBe(false)
+  expect(said(r)).toContain('approved')
+  expect(w.store[wordingKey(REWORDED)]).toMatchObject({ file: ALERT, rendered: SHOWN })
+  expect(chosenIn(w)).toEqual([])
+  expect(refusalOf(await call($, MERGE))).toBe('')
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  expect(refusalOf(await morning($, w, id, APPROVE))).toContain('answered already')
+})
+
+test("Dan's Change wording, a dialog closed by itself, or no answer records nothing and leaves the choice held (#2628)", withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  night.asleep = false
+  for (const [answer, afk, words] of [[CHANGE, false, 'what it should say'], [APPROVE, true, 'closed by itself'], [undefined, false, 'no answer']] as const) {
+    const r = await morning($, w, id, answer, afk)
+    expect(said(r)).toContain(words)
+    expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
+    expect(chosenIn(w).length).toBe(1)
+    expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+    expect(await promptLines($)).toContain(`chosen:${id}`)
+  }
+  // Changed in the morning, the pull request no longer carries the chosen wording, so it may merge.
+  w.night.diffs['12'] = DIFF_CHANGED
+  expect(refusalOf(await call($, MERGE))).toBe('')
+})
+
+test('outside sleep mode nothing changes: no choosing, no records, and no merge is read (#2628)', withNight, async ($, on) => {
+  nightFresh(false)
+  const w = world($, on)
+  const why = refusalOf(await call($, REWORD))
+  expect(why).toContain('"source": "slack-alert-guard:')
+  expect(why).not.toContain(CHOOSE)
+  const id = idIn(why) as string
+  expect(refusalOf(await choose($, id))).toContain('awake')
+  // A sleep record that cannot be read is awake too.
+  night.fails = true
+  expect(refusalOf(await call($, REWORD))).not.toContain(CHOOSE)
+  expect(refusalOf(await choose($, id))).toContain('awake')
+  expect(chosenIn(w)).toEqual([])
+  expect(night.notes).toEqual([])
+  w.night.diffs['12'] = DIFF
+  expect(refusalOf(await call($, MERGE))).toBe('')
+  expect(w.ghs).toEqual([])
+  expect(await promptLines($)).toBe('')
+})
+
+test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  expect(refusalOf(await call($, { tool: 'Bash', command: '~/.claude/hooks/lib/merge-when-ready.sh 12 --repo danwright32/app' }))).toContain('chosen overnight')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh api -X PUT repos/danwright32/app/pulls/12/merge' }))).toContain('chosen overnight')
+  w.night.ghFails = true
+  expect(refusalOf(await call($, MERGE))).toContain('could not check')
+  w.night.ghFails = false
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 -R "$REPO"' }))).toContain('could not check')
+  // A command that merges nothing is never read for a diff.
+  const before = w.ghs.length
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
+  expect(w.ghs.length).toBe(before)
+})
+
+test('a choice unanswered for three days expires, said once, and stays held; it is never approval (#2628)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  night.asleep = false
+  await w.clock.advance(3 * 24 * 60 * 60_000)
+  const lines = await promptLines($)
+  expect(lines).toContain('expired unanswered')
+  expect(lines).toContain(`chosen:${id}`)
+  expect(w.store[`chosen:${wordingKey(REWORDED)}`]).toMatchObject({ expired: expect.any(Number) })
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  expect(w.store[wordingKey(REWORDED)]).toBeUndefined()
+  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+  // Asleep again, an expired choice lets nothing through: it is held to be chosen again.
+  night.asleep = true
+  expect(refusalOf(await call($, REWORD))).toContain(CHOOSE)
+  night.asleep = false
+  await morning($, w, id, APPROVE)
+  expect(w.store[wordingKey(REWORDED)]).toBeDefined()
+  expect(refusalOf(await call($, MERGE))).toBe('')
+})
+
+test('a choice whose session ended is put to Dan by the next session he writes in (#2628)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  night.asleep = false
+  w.night.session = 's2'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.night.session = 's1'
+  await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
+  w.night.session = 's2'
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+})
+
+test('taking away unapproved wording that is not on origin passes in any mode; wording origin holds is still held (#2628)', withNight, async ($, on) => {
+  nightFresh(false)
+  const w = world($, on)
+  const DROP = { tool: 'Edit', file_path: ALERT, old_string: 'Deploy ${id} failed', new_string: '' }
+  // The file as origin has it without the message: it exists only in a local commit.
+  w.night.upstream = { 'lib/alert.ts': 'export const alert = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text: `` }) })\n' }
+  expect(refusalOf(await call($, DROP))).toBe('')
+  // Read from origin's default branch, as mod-kit's branch reader names it.
+  expect(w.night.shownFrom).toEqual(['origin/main'])
+  // A file origin does not have at all.
+  w.night.upstream = {}
+  expect(refusalOf(await call($, DROP))).toBe('')
+  // The live message, as origin has it, is still held when taken away.
+  w.night.upstream = { 'lib/alert.ts': ALERT_TEXT }
+  expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
+  // git failing to say, or no default branch to read, holds as before.
+  w.night.showFails = true
+  expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
+  w.night.showFails = false
+  w.night.upstream = {}
+  w.night.defaultBranch = null
+  expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
+  expect(w.ran.length).toBe(2)
 })
 
 // claude-config#2719: on 2026-11-10, in a work repository, every Edit to a 5,488 line monitor route

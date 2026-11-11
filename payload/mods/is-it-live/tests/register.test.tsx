@@ -1939,3 +1939,79 @@ test('a session that started from a thread still asks after every merge, and the
   await mergeAndCard($, 412)
   expect(String((await turnEnd($)).block)).toContain(`This session started from ${THREAD}`)
 })
+
+// ---- #2653: a session says once that its later merges are unrelated to the thread it started from ----
+// Dan, 2026-11-11: since #2630 there is no picker, so a session started from a Slack thread was held
+// for a fresh draft in it after every merge, its unrelated ones too (on 2026-11-10 an alert thread's
+// session went on to merge other work, and was asked twice in twenty minutes). The session may say
+// ONCE, by calling the unrelated_merges tool, that its later merges have nothing to do with the
+// thread; no draft is then held for them. It is the session's own act, never inferred, kept in that
+// session's state only, and a merge that landed before it is still owed its reply.
+const UNRELATED = 'mcp__is-it-live__unrelated_merges'
+const unrelated = async ($: unknown, more: Record<string, unknown> = {}) =>
+  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: UNRELATED, tool_use_id: 'u1', ...more } as never)) as Out
+
+test('before the session says its later merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413, 414) })
+  await start($)
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  // The hold names the way to say it, so the session can find it.
+  expect(held).toContain(UNRELATED)
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+  const r = await unrelated($)
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r)).toContain(THREAD)
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 414)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge that landed before the session said its later merges are unrelated is still owed its reply (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412, 413) })
+  await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await mergeAndCard($, 412)
+  expect((await unrelated($)).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  // Still held for it after a later, unrelated merge lands, until its draft is saved.
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  await draft($)
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+// A test is a fresh session over fresh session state: what another session said is not in it.
+test('a fresh session started from the same thread is held after its merge (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+test('a card that asks a draft of its message in the thread after the session said so is still held for that message (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, `Kris asked in ${THREAD}, build what she asked for`)
+  expect((await unrelated($)).deny).toBeUndefined()
+  await bash($, 'gh pr merge 412 --squash')
+  await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: { channel_id: CH, thread_ts: TS } })
+  expect(String((await turnEnd($)).block)).toContain('"The venue filter is live now."')
+})
+
+test('saying the later merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  const none = await unrelated($)
+  expect(none.deny).toBeDefined()
+  expect(textOf(none)).toContain('no Slack thread')
+  await says($, `The alert fired in ${THREAD}, look into it`)
+  expect((await unrelated($, { agentId: 'a1' })).deny).toBeDefined()
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+})

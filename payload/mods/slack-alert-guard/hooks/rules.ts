@@ -645,7 +645,7 @@ const FILLED_MARK = '\u0000'
 /** A string with each value filled in at run time made a mark, a ${...} read to its own closing brace however much code is inside it (#2371). */
 const markFilled = (s: string): string => s.replace(new RegExp(SUBST, 'g'), ` ${FILLED_MARK} `).replace(FILLED, ` ${FILLED_MARK} `)
 /** The fixed parts of a string: the words between the values filled in at run time, never the code that fills them. */
-const fixedParts = (s: string): string[] => markFilled(s).split(FILLED_MARK)
+export const fixedParts = (s: string): string[] => markFilled(s).split(FILLED_MARK)
 
 /** Whether a string reads as text a person reads: two words, or a word beside a filled in value; never a key, a path, a URL or a class list. */
 export const isProse = (s: string): boolean => {
@@ -1276,7 +1276,7 @@ export const heldText = (file: string, added: string[], removed: string[], sende
     ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : unwired ? `, ${UNWIRED},` : ''} ${changeText(added, removed)}`
     : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
-const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+export const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
   `Blocked: t${heldText(file, added, removed, sender, from, unwired).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
