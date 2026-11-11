@@ -123,6 +123,71 @@ check "no text tells a dispatched agent to merge its own pull request" "$([ -z "
 hits="$(rule_b "${b_files[@]}")"
 check "no agent instruction file names a merge step" "$([ -z "$hits" ] && echo ok || echo "$hits")"
 
+# ---- C. the files a brief names for an agent's detail are ones Claude Code lets it write (#2671) ----
+# On 2026-11-10 three read only agents on the work MacBook were refused writing `findings.md` in
+# their working folder with "Subagents should return findings as text, not write report files", and
+# each put its whole evidence into its report instead, the long report the 300 word rule exists to
+# prevent. The refusal is Claude Code's own Write tool (2.1.322): any call from a subagent whose file
+# name matches the pattern below is refused, whatever it holds (measured from a subagent the same
+# day: findings.md and Summary-2.md refused; my-findings.md, findings.txt and evidence.md written).
+# REFUSED_MD is the pattern exactly as the bundle carries it, its one home in this repository.
+REFUSED_MD='/^(REPORT|SUMMARY|FINDINGS|ANALYSIS).*\.md$/i'
+# Rule C, over any file: prints file:line:name for each .md file name, standing after a backtick, a
+# slash, a quote or white space, that the pattern refuses.
+rule_c() {
+  perl -ne '
+    while (/(?:^|[\s`\x27"\/(])((?:report|summary|findings|analysis)[\w.-]*\.md)(?![\w.-])/gi) {
+      print "$ARGV:$.:$1\n";
+    }
+    close ARGV if eof;
+  ' "$@"
+}
+printf '%s\n' '- Write your evidence to `<working folder>/findings.md` and hand back 300 words.' > "$FIX/findings.md.txt"
+printf '%s\n' 'Put the detail in REPORT-final.md and the summary in summary.md.' > "$FIX/report.md.txt"
+printf '%s\n' '- the full test output in `tests.txt`, the evidence in `evidence.md`, notes in `my-findings.md`.' > "$FIX/allowed.md.txt"
+for f in findings.md.txt report.md.txt; do
+  check "rule C fires on $f" "$([ -n "$(rule_c "$FIX/$f")" ] && echo ok || echo "rule C passed a file name Claude Code refuses a subagent")"
+done
+check "rule C passes allowed.md.txt" "$([ -z "$(rule_c "$FIX/allowed.md.txt")" ] && echo ok || echo "rule C fired on $(rule_c "$FIX/allowed.md.txt")")"
+hits="$(rule_c "${a_files[@]}")"
+check "no brief text names a file Claude Code refuses a subagent" "$([ -z "$hits" ] && echo ok || echo "$hits")"
+
+# Both places that tell an agent where its detail goes name the files to use and the refusal, in one
+# wording, so an orchestrator writing a brief by hand does not reach for findings.md again.
+REFUSAL_WORDING='a `.md` file whose name starts with findings, report, summary or analysis'
+for f in "$PAYLOAD/CLAUDE.md" "$PAYLOAD/skills/orchestrate/agent-rules.md"; do
+  check "$(basename "$f") names the refused file names in the shared wording" \
+    "$(grep -F -q -- "$REFUSAL_WORDING" "$f" && echo ok || echo "missing: $REFUSAL_WORDING")"
+  check "$(basename "$f") names evidence.md and tests.txt for the detail" \
+    "$(grep -F -q -- '`evidence.md`' "$f" && grep -F -q -- '`tests.txt`' "$f" && echo ok || echo 'missing `evidence.md` or `tests.txt`')"
+done
+
+# The wording states a fact about Claude Code, so it is checked against the installed bundle (L244):
+# a changed pattern fails here. With no bundle to read (CI, another layout) it is UNMEASURED, never a
+# pass. BUILDER_BRIEFS_CLAUDE_BIN points it at another file.
+cc_bin="${BUILDER_BRIEFS_CLAUDE_BIN:-}"
+if [ -z "$cc_bin" ] && command -v claude >/dev/null 2>&1; then
+  cc_bin="$(readlink -f "$(command -v claude)" 2>/dev/null)"
+fi
+check_refusal_pattern() { # check_refusal_pattern <bundle>: ok, or why the wording no longer holds
+  if LC_ALL=C grep -a -F -q -- "$REFUSED_MD" "$1"; then echo ok
+  elif LC_ALL=C grep -a -F -q -- 'tengu_subagent_md_report_blocked' "$1"; then
+    echo "Claude Code at $1 still refuses subagent report files but no longer with $REFUSED_MD: re-measure it and update REFUSED_MD, rule C and the wording in CLAUDE.md and agent-rules.md"
+  else
+    echo "Claude Code at $1 no longer carries the subagent report file refusal: re-measure, and if it is gone drop the wording from CLAUDE.md and agent-rules.md"
+  fi
+}
+printf '%s\n' 'if(s.agentId&&/^(REPORT|SUMMARY|FINDINGS|NOTES).*\.md$/i.test(x))l("tengu_subagent_md_report_blocked")' > "$FIX/changed-bundle.js"
+check "the bundle check fails on a changed pattern" \
+  "$([ "$(check_refusal_pattern "$FIX/changed-bundle.js")" != ok ] && echo ok || echo "passed a bundle whose pattern changed")"
+printf '%s\n' 'if(s.agentId&&/^(REPORT|SUMMARY|FINDINGS|ANALYSIS).*\.md$/i.test(x))l("tengu_subagent_md_report_blocked")' > "$FIX/same-bundle.js"
+check "the bundle check passes the pattern as measured" "$(check_refusal_pattern "$FIX/same-bundle.js")"
+if [ -n "$cc_bin" ] && [ -f "$cc_bin" ]; then
+  check "the installed Claude Code refuses exactly the names the rules give" "$(check_refusal_pattern "$cc_bin")"
+else
+  echo "SUITE-PART-UNMEASURED the refused file name pattern was not checked against Claude Code, because no installed bundle could be read"
+fi
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

@@ -158,21 +158,44 @@ MUTED_ERROR_REASONS="${CLAUDE_ISSUE_SPOOL_MUTED_REASONS:-the named agent transcr
 # every record already pending under the old name with nothing left that could find it (L92). Both
 # tools compute the same SHA-1, and the suite pins this against constants recorded while openssl
 # made the keys and against openssl itself where it is installed.
-issue_spool_sha12() { # sha12 <text> -> the first 12 hex characters of its SHA-1
-  local out hex
-  out="$(printf '%s' "$1" | shasum 2>/dev/null)"
+#
+# NO DIGEST, NO KEY, AND NOTHING READ OR WRITTEN (claude-config#2639). When shasum is not on PATH, or
+# runs and gives no digest, this used to print an EMPTY key, and every caller built its path from it:
+# a file named just `.jsonl` under the spool root, shared by every project, with nothing saying why.
+# Now it prints nothing, says on stderr which of three causes it was (not on PATH, an exit status, or
+# output that is not a digest), and returns
+# ISSUE_SPOOL_NO_KEY_RC, which every key, path and reader below passes on unchanged, so a caller can
+# tell a refusal from an empty spool (exit 1). The checks cost no process on the ordinary path:
+# `command -v` is asked only once the digest has already failed.
+ISSUE_SPOOL_NO_KEY_RC=4
+issue_spool_sha12() { # sha12 <text> -> the first 12 hex characters of its SHA-1, or exit 4
+  local out hex rc=0
+  out="$(printf '%s' "$1" | shasum 2>/dev/null)" || rc=$?
   hex="${out%% *}"
-  printf '%s' "${hex:0:12}"
+  if [ "$rc" -eq 0 ] && [ "${#hex}" -ge 12 ]; then
+    case "$hex" in
+      *[!0-9a-f]*) ;;
+      *) printf '%s' "${hex:0:12}"; return 0 ;;
+    esac
+  fi
+  if ! command -v shasum >/dev/null 2>&1; then
+    echo "issue-spool: refusing: no spool key can be made, because shasum, the program that makes the SHA-1 digest every key is cut from, is not on PATH. No spool file can be named without a key, so nothing was read or written. It ships with macOS at /usr/bin/shasum, so put /usr/bin back on PATH (claude-config#2639)." >&2
+  elif [ "$rc" -ne 0 ]; then
+    echo "issue-spool: refusing: no spool key can be made, because shasum failed (exit status $rc) and gave no digest. No spool file can be named without a key, so nothing was read or written (claude-config#2639)." >&2
+  else
+    echo "issue-spool: refusing: no spool key can be made, because shasum ran but printed no digest (it printed '${out:0:80}'). No spool file can be named without a key, so nothing was read or written (claude-config#2639)." >&2
+  fi
+  return "$ISSUE_SPOOL_NO_KEY_RC"
 }
 
-issue_spool_key() { # key <dir> [session-transcript]
+issue_spool_key() { # key <dir> [session-transcript] -> exit 4, printing nothing, when no digest answers
   local dir="${1:-$PWD}" transcript="${2:-}" common root
   if [ -n "$transcript" ]; then
     root="$(dirname "$transcript")"
     if [ -d "$root" ]; then
       root="$(cd "$root" 2>/dev/null && pwd -P || printf '%s' "$root")"
       issue_spool_sha12 "$root"
-      return 0
+      return
     fi
   fi
   # No transcript to key on (a direct `note`, a test, an older caller): fall back
@@ -187,8 +210,10 @@ issue_spool_key() { # key <dir> [session-transcript]
   issue_spool_sha12 "$root"
 }
 
-issue_spool_path()         { printf '%s/%s.jsonl' "$(issue_spool_root)" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
-issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$(issue_spool_key "${1:-$PWD}" "${2:-}")"; }
+# A path is named only from a key that was really made (claude-config#2639): a refused key passes its
+# exit on and prints no path, so nothing downstream can write to `<root>/.jsonl`.
+issue_spool_path()         { local k; k="$(issue_spool_key "${1:-$PWD}" "${2:-}")" || return; printf '%s/%s.jsonl' "$(issue_spool_root)" "$k"; }
+issue_spool_archive_path() { local k; k="$(issue_spool_key "${1:-$PWD}" "${2:-}")" || return; printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$k"; }
 
 # Every key a reader must consult: the session's, plus the directory's, so that
 # nothing already spooled the old way is stranded the moment this ships. The
@@ -203,8 +228,10 @@ issue_spool_archive_path() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$
 #
 # Deduplicated, because when no transcript is supplied the two are the same key
 # and reading it twice would double every count a person is shown.
-issue_spool_path_for_key()    { printf '%s/%s.jsonl' "$(issue_spool_root)" "$1"; }
-issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$1"; }
+# An empty key names no file (claude-config#2639). Every key these are handed comes from read-keys,
+# which refuses rather than print an empty one, so this is the backstop, and it prints nothing.
+issue_spool_path_for_key()    { [ -n "${1:-}" ] || return "$ISSUE_SPOOL_NO_KEY_RC"; printf '%s/%s.jsonl' "$(issue_spool_root)" "$1"; }
+issue_spool_archive_for_key() { [ -n "${1:-}" ] || return "$ISSUE_SPOOL_NO_KEY_RC"; printf '%s/%s.filed.jsonl' "$(issue_spool_root)" "$1"; }
 
 # The pending records a reader should see, from every key it must consult,
 # concatenated into one throwaway file. Every reader goes through this so that
@@ -228,8 +255,11 @@ issue_spool_archive_for_key() { printf '%s/%s.filed.jsonl' "$(issue_spool_root)"
 # Each file is SNAPSHOT before anything is counted or copied. Counting the live file and copying it
 # are two reads, and a record a finishing agent appends between them makes the count and the lines
 # disagree, which would shift every key after it in the ranges by one line.
-issue_spool_collect() { # collect <dir> [session-transcript]
-  local tmp key file n lines
+issue_spool_collect() { # collect <dir> [session-transcript] -> exit 4 when no key can be made
+  local tmp key file n lines keys
+  # The keys are read BEFORE the loop, into a variable, because a refusal inside the heredoc below
+  # would be lost and read as no keys at all, which is an empty spool (claude-config#2639).
+  keys="$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")" || return
   tmp="$(mktemp "${TMPDIR:-/tmp}/claude-spool-read.XXXXXX")" || return 1
   : > "$tmp.sources"
   : > "$tmp.ranges"
@@ -247,7 +277,7 @@ issue_spool_collect() { # collect <dir> [session-transcript]
     printf '%s (%s records)\n' "$(basename "$file")" "${n:-0}" >> "$tmp.sources"
     printf '%s %s\n' "$key" "${lines:-0}" >> "$tmp.ranges"
   done <<COLLECT_KEYS
-$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
+$keys
 COLLECT_KEYS
   rm -f "$tmp.snap"
   printf '%s' "$tmp"
@@ -608,10 +638,10 @@ PY
 
 issue_spool_read_keys() { # read-keys <dir> [session-transcript]
   local primary legacy
-  primary="$(issue_spool_key "${1:-$PWD}" "${2:-}")"
+  primary="$(issue_spool_key "${1:-$PWD}" "${2:-}")" || return
   printf '%s\n' "$primary"
   if [ -n "${2:-}" ]; then
-    legacy="$(issue_spool_key "${1:-$PWD}")"
+    legacy="$(issue_spool_key "${1:-$PWD}")" || return
     [ "$legacy" = "$primary" ] || printf '%s\n' "$legacy"
   fi
   # Every OTHER pending key whose records were written from this project.
@@ -637,7 +667,7 @@ issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
   local dir="${1:-$PWD}" root mine file key cwd named matched="" unstamped=()
   shift || true
   named=" $* "
-  mine="$(issue_spool_key "$dir")"
+  mine="$(issue_spool_key "$dir")" || return
   root="$(issue_spool_root)"
   [ -d "$root" ] || return 0
   for file in "$root"/*.jsonl; do
@@ -760,7 +790,7 @@ issue_spool_append() { # append <dir> <json-record>
     echo "issue-spool: refusing to write into the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID). Set CLAUDE_ISSUE_SPOOL_DIR to that suite's own throwaway directory before writing." >&2
     return 3
   fi
-  file="$(issue_spool_path "$1" "${3:-}")"; record="${2:-}"
+  file="$(issue_spool_path "$1" "${3:-}")" || return; record="${2:-}"
   [ -n "$record" ] || return 2
   case "$record" in *$'\n'*) return 2 ;; esac
   # STAMPED while a test run is in progress (claude-config#275). run-all-tests.sh brackets a run
@@ -797,7 +827,7 @@ issue_spool_append() { # append <dir> <json-record>
   # a record that does not parse fails here exactly as before.
   local _sp_sid _sp_proj
   _sp_sid="$(issue_spool_session_id "${3:-}")"
-  _sp_proj="$(issue_spool_key "${1:-$PWD}")"
+  _sp_proj="$(issue_spool_key "${1:-$PWD}")" || return
   record="$(printf '%s' "$record" | CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-}" \
       CLAUDE_SPOOL_SESSION="$_sp_sid" CLAUDE_SPOOL_PROJECT="$_sp_proj" python3 -c '
 import json, os, sys
@@ -1014,7 +1044,7 @@ issue_spool_mark_ended() { # mark-ended <session id>
 # harvest that could not run is not a project with no findings, and neither is a
 # reply nobody could parse.
 issue_spool_pending() { # pending <dir> [session-transcript] [stamp-out] [seen-ledger] -> exit 1 when there is nothing to show
-  local file rc stamp="${3:-}" ledger="${4:-}"; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  local file rc stamp="${3:-}" ledger="${4:-}"; file="$(issue_spool_collect "$1" "${2:-}")" || return
   # A stamp from an earlier render is never left standing beside this one: it would describe
   # records this render may not have read.
   [ -n "$stamp" ] && rm -f "$stamp" 2>/dev/null
@@ -1347,7 +1377,7 @@ issue_spool_reach_report() { # reach-report -> 0 when every pending key is reach
   for d in "${CLAUDE_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"/*; do
     [ -d "$d" ] || continue
     dirs=$(( dirs + 1 ))
-    printf '%s\n' "$(issue_spool_key "" "$d/x.jsonl")" >> "$reachable"
+    key="$(issue_spool_key "" "$d/x.jsonl")" || { rm -f "$reachable"; return "$ISSUE_SPOOL_NO_KEY_RC"; }; printf '%s\n' "$key" >> "$reachable"
   done
   # Reading NO transcript directory is not a clean answer: every key would read as unreachable and
   # the report would be a wall of false alarms (L98, L36).
@@ -1389,7 +1419,7 @@ issue_spool_reach_report() { # reach-report -> 0 when every pending key is reach
 # and fire with nothing in it. Judged by the same `seen_here` the render uses, so the two cannot
 # disagree about what this reader will be shown (L70).
 issue_spool_has_findings() { # has-findings <dir> [session-transcript] [seen-ledger] -> exit 0 when a finding is pending
-  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return
   if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
   CLAUDE_SPOOL_IDENTITY_PY="$ISSUE_SPOOL_IDENTITY_PY" CLAUDE_SPOOL_SEEN_PY="$ISSUE_SPOOL_SEEN_PY" \
     CLAUDE_SPOOL_LEDGER="${3:-}" CLAUDE_SPOOL_LEDGER_HEADER="$ISSUE_SPOOL_LEDGER_HEADER" \
@@ -1426,7 +1456,7 @@ PY_HF
 # Exits 1 when nothing is held back, so a caller can tell "still happening" from
 # "stopped" rather than printing a reassuring zero (L98).
 issue_spool_muted_summary() { # muted-summary <dir> [session-transcript] -> exit 1 when nothing is held back
-  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return 1
+  local file rc; file="$(issue_spool_collect "$1" "${2:-}")" || return
   if [ ! -s "$file" ]; then issue_spool_collect_done "$file"; return 1; fi
   CLAUDE_SPOOL_MUTED="$MUTED_ERROR_REASONS" python3 - "$file" <<'PY_MUTED'
 import json, os, sys
@@ -1515,7 +1545,10 @@ PY_MUTED
 # and the other session's records it could not mark in the spool are marked in the SEEN LEDGER
 # beside the stamp instead, which the next render for this session reads.
 issue_spool_clear() { # clear <dir> [session-transcript] [stamp] -> file the pending records
-  local key rc=0 total=0 left_total=0 later_total=0 n nleft nlater pair keys="" keys_sp=" " stamp="${3:-}" ledger="" failed=0 taken=0 unreached=""
+  local key rc=0 total=0 left_total=0 later_total=0 n nleft nlater pair keys="" keys_sp=" " stamp="${3:-}" ledger="" failed=0 taken=0 unreached="" read_keys
+  # Read before the loop, so a key that could not be made stops the clear with its own words rather
+  # than reading as no keys, which said "nothing was pending" (claude-config#2639).
+  read_keys="$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")" || return
   if [ -n "$stamp" ]; then
     if [ ! -r "$stamp" ] || [ "$(head -n 1 "$stamp" 2>/dev/null)" != "$ISSUE_SPOOL_STAMP_HEADER" ]; then
       echo "issue-spool: could not read $stamp, the record of which spool records the review that wrote this command had read, so NOTHING was filed. Filing without it would also file anything harvested after that review, unread (claude-config#381). The findings stay pending and come back at the next review, which writes a fresh record." >&2
@@ -1551,7 +1584,7 @@ CLEAR_PAIR
       rc=1
     fi
   done <<CLEAR_KEYS
-$(issue_spool_read_keys "${1:-$PWD}" "${2:-}")
+$read_keys
 CLEAR_KEYS
   # WHAT THE REVIEW READ UNDER A KEY THIS CLEAR NEVER LOOKED AT (#1011). The keys come from the
   # directory argument, so a line retyped with a different directory (a character in the path that did
@@ -1928,7 +1961,7 @@ issue_spool_file_muted() { # file-muted <dir> [session-transcript]
 # cleaner's reach and the review runs as a hook that can write it. Keyed on the project directory's
 # SHA-1, as the temp stamp was, so the week stays one per project.
 issue_spool_muted_stamp() { # muted-stamp <dir> -> where the review records when the count last went out
-  printf '%s/muted/%s.stamp' "$(issue_spool_root)" "$(issue_spool_sha12 "${1:-$PWD}")"
+  local k; k="$(issue_spool_sha12 "${1:-$PWD}")" || return; printf '%s/muted/%s.stamp' "$(issue_spool_root)" "$k"
 }
 
 # Record that the count went out now. Written beside and renamed into place, so a reader never sees a
@@ -1940,7 +1973,7 @@ issue_spool_muted_sent() { # muted-sent <dir>
     echo "issue-spool: refusing to write the held-back count's stamp into the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
     return 3
   fi
-  stamp="$(issue_spool_muted_stamp "${1:-$PWD}")"
+  stamp="$(issue_spool_muted_stamp "${1:-$PWD}")" || return
   if ! mkdir -p "${stamp%/*}" 2>/dev/null; then
     echo "issue-spool: could not make ${stamp%/*} for the held-back count's stamp." >&2
     return 1
@@ -1954,12 +1987,13 @@ issue_spool_muted_sent() { # muted-sent <dir>
 }
 
 issue_spool_file_subset() { # file-subset <dir> <errors|muted> [session-transcript]
-  local key rc=0
+  local key rc=0 read_keys
+  read_keys="$(issue_spool_read_keys "${1:-$PWD}" "${3:-}")" || return
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     issue_spool_file_subset_key "$key" "${2:-errors}" || rc=1
   done <<SUBSET_KEYS
-$(issue_spool_read_keys "${1:-$PWD}" "${3:-}")
+$read_keys
 SUBSET_KEYS
   return $rc
 }
@@ -2057,14 +2091,14 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     mark-ended)   issue_spool_mark_ended "${1:-}" ;;
-    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
+    raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     seen-ledger)  issue_spool_seen_ledger "${1:-}" ;;
     sweep-stamps) issue_spool_sweep_stamps "${1:-}" "${2:-}" ;;
     kept-ledger)  issue_spool_kept_ledger "${1:-}" ;;
     keep-ledgers) issue_spool_keep_ledgers "${1:-}" "${2:-}" ;;
-    archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
+    archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")" || exit; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
     file-muted)   issue_spool_file_muted "${1:-$PWD}" "${2:-}" ;;

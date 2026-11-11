@@ -3116,6 +3116,169 @@ contains "only the directory key holds" "$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/
   && check "#1011 and that record is still pending" ok \
   || check "#1011 and that record is still pending" "it is gone"
 
+# --- no digest program, so no key, so nothing read or written (claude-config#2639) ----------------
+# A key is the first 12 characters of a SHA-1 that shasum makes. When shasum is not there, or runs
+# and gives no digest, the key used to come back EMPTY and every caller built a path from it: a file
+# named `.jsonl` under the spool root, shared by every project, with nothing saying why. Now the
+# digest refuses, naming the program, every caller stops, and the harvest and the review say so.
+#
+# The fixture is a PATH holding every program this one does except shasum, so everything else the
+# library, the harvest and the review run is exactly what they run in production.
+NOSHA="$TMPROOT/nosha-bin"
+python3 - "$NOSHA" "$PATH" <<'PY'
+import os, sys
+dest, path = sys.argv[1], sys.argv[2]
+os.makedirs(dest, exist_ok=True)
+for d in path.split(os.pathsep):
+    if not d or not os.path.isdir(d):
+        continue
+    for name in os.listdir(d):
+        if name == "shasum":
+            continue
+        src, link = os.path.join(d, name), os.path.join(dest, name)
+        if os.path.lexists(link):
+            continue
+        if os.path.isfile(src) and os.access(src, os.X_OK):
+            os.symlink(src, link)
+PY
+# The fixture is only real if shasum really is out of reach on it (L1), and the rest is still there.
+if ( PATH="$NOSHA"; command -v shasum ) >/dev/null 2>&1; then
+  check "#2639 the fixture PATH holds no shasum" "shasum is still reachable on it"
+else
+  check "#2639 the fixture PATH holds no shasum" ok
+fi
+( PATH="$NOSHA"; command -v python3 && command -v git && command -v jq ) >/dev/null 2>&1 \
+  && check "#2639 and it still holds everything else" ok \
+  || check "#2639 and it still holds everything else" "python3, git or jq is missing from it"
+
+NS_SPOOL="$TMPROOT/nosha-spool"
+rm -rf "$NS_SPOOL"; mkdir -p "$NS_SPOOL"
+ns() { PATH="$NOSHA" CLAUDE_ISSUE_SPOOL_DIR="$NS_SPOOL" "$@"; }
+ns_files() { find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | grep -c . || true; }
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" key "$REPO" 2>/dev/null)" || ns_rc=$?
+ns_err="$(ns bash "$SPOOL_LIB" key "$REPO" 2>&1 >/dev/null)" || true
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a key with no shasum is refused with exit 4 and prints no key" ok \
+  || check "#2639 a key with no shasum is refused with exit 4 and prints no key" "exit $ns_rc out='$ns_out'"
+contains "shasum" "$ns_err" && contains "not on PATH" "$ns_err" \
+  && check "#2639 and the refusal names the missing program" ok \
+  || check "#2639 and the refusal names the missing program" "said=${ns_err:0:300}"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" key "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a key from a session transcript is refused the same way" ok \
+  || check "#2639 a key from a session transcript is refused the same way" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a spool path is never named from an empty key" ok \
+  || check "#2639 a spool path is never named from an empty key" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" muted-stamp "$REPO" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 nor the held-back count's stamp" ok \
+  || check "#2639 nor the held-back count's stamp" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" note "$REPO" "r2639 a finding with nowhere to go" tester "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a note with no key is refused and says why" ok \
+  || check "#2639 a note with no key is refused and says why" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" append "$REPO" '{"status":"found","agent":"tester","findings":["r2639 appended"]}' "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so is an append" ok \
+  || check "#2639 and so is an append" "exit $ns_rc said=${ns_err:0:300}"
+[ "$(ns_files)" = 0 ] \
+  && check "#2639 and no spool file was written anywhere" ok \
+  || check "#2639 and no spool file was written anywhere" "$(find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | tr '\n' ' ')"
+
+# The readers refuse too, with the same exit, rather than reporting an empty spool (exit 1), which is
+# what an unreadable spool and a clean one would otherwise both look like (L11, L98).
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a pending read with no key is a refusal, not an empty spool" ok \
+  || check "#2639 a pending read with no key is a refusal, not an empty spool" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" has-findings "$REPO" "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] \
+  && check "#2639 and so is has-findings" ok \
+  || check "#2639 and so is has-findings" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a clear with no key refuses and says why" ok \
+  || check "#2639 a clear with no key refuses and says why" "exit $ns_rc said=${ns_err:0:300}"
+contains "nothing was pending" "$ns_err" \
+  && check "#2639 and does not call the spool empty" "said=${ns_err:0:300}" \
+  || check "#2639 and does not call the spool empty" ok
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] \
+  && check "#2639 and so does filing the failures" ok \
+  || check "#2639 and so does filing the failures" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does a raw read" ok \
+  || check "#2639 and so does a raw read" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does reading the archive" ok \
+  || check "#2639 and so does reading the archive" "exit $ns_rc said=${ns_err:0:300}"
+mkdir -p "$CLAUDE_TRANSCRIPT_ROOT/r2639-project"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" reach-report 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does the reachability report" ok \
+  || check "#2639 and so does the reachability report" "exit $ns_rc said=${ns_err:0:300}"
+
+# A shasum that is there but gives no digest is a different cause, and gets its own words (L11).
+FAILSHA="$TMPROOT/failsha-bin"
+mkdir -p "$FAILSHA"
+printf '#!/bin/sh\ncat >/dev/null\nexit 3\n' > "$FAILSHA/shasum"
+chmod +x "$FAILSHA/shasum"
+ns_rc=0; ns_err="$(PATH="$FAILSHA:$PATH" bash "$SPOOL_LIB" key "$REPO" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" && contains "exit status 3" "$ns_err" \
+  && ! contains "not on PATH" "$ns_err" \
+  && check "#2639 a shasum that fails is refused in its own words" ok \
+  || check "#2639 a shasum that fails is refused in its own words" "exit $ns_rc said=${ns_err:0:300}"
+printf '#!/bin/sh\ncat >/dev/null\necho "not a digest  -"\n' > "$FAILSHA/shasum"
+ns_rc=0; ns_err="$(PATH="$FAILSHA:$PATH" bash "$SPOOL_LIB" sha12 "x" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "no digest" "$ns_err" \
+  && check "#2639 and so is one that prints something other than a digest" ok \
+  || check "#2639 and so is one that prints something other than a digest" "exit $ns_rc said=${ns_err:0:300}"
+
+# THE HARVEST says it: the record goes to the lost records file, as for any append that fails, and
+# the refusal's own words go into its log, so the reason is on disk beside the record it cost.
+rm -rf "$NS_SPOOL"; mkdir -p "$NS_SPOOL"
+rm -f "$LOST_RECORDS"
+stub 'echo "FINDING: r2639 a harvested finding with no key to file it under."'
+payload "$REPO" | ns bash "$HARVEST" >/dev/null 2>&1
+[ "$(ns_files)" = 0 ] \
+  && check "#2639 a harvest with no key writes no spool file" ok \
+  || check "#2639 a harvest with no key writes no spool file" "$(find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | tr '\n' ' ')"
+contains "r2639 a harvested finding" "$(cat "$LOST_RECORDS" 2>/dev/null)" \
+  && check "#2639 and keeps the record in the lost records file" ok \
+  || check "#2639 and keeps the record in the lost records file" "not there"
+ns_log="$(cat "$NS_SPOOL/harvest-unrecorded.log" 2>/dev/null)"
+contains "shasum" "$ns_log" && contains "not on PATH" "$ns_log" \
+  && check "#2639 and its log carries the refusal's own words" ok \
+  || check "#2639 and its log carries the refusal's own words" "log=${ns_log:0:300}"
+
+# THE REVIEW says it, and does not die on the way: under errexit and pipefail a digest that fails
+# used to kill the hook before it spoke, so a missing shasum silenced the review altogether.
+rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
+ns_rc=0; ns_review="$(printf '%s' "$review_payload" | ns bash "$REVIEW" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 0 ] && contains '"decision"' "$ns_review" \
+  && check "#2639 the review still speaks with no shasum" ok \
+  || check "#2639 the review still speaks with no shasum" "exit $ns_rc out=${ns_review:0:200}"
+ns_carried="$(carried "$ns_review")"
+contains "shasum" "$ns_carried" && contains "not on PATH" "$ns_carried" \
+  && check "#2639 and its reason carries the refusal" ok \
+  || check "#2639 and its reason carries the refusal" "carried=${ns_carried:0:400}"
+# And only then: an ordinary review with shasum in place says nothing of the kind.
+rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
+ok_review="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+ok_carried="$(carried "$ok_review")"
+contains "no spool key" "$ok_carried" \
+  && check "#2639 a review with shasum in place does not raise it" "carried=${ok_carried:0:300}" \
+  || check "#2639 a review with shasum in place does not raise it" ok
+
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
