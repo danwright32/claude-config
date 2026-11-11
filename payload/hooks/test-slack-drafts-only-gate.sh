@@ -1526,6 +1526,80 @@ for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c
   refused "a file whose role cannot be told is still read as code: $runs"
 done
 
+echo "slack drafts only: a file copied and run in the same command is judged by its source (claude-config#2525)"
+
+# The script a command runs may not exist yet when the gate reads the command: `cp post.txt run.sh &&
+# bash run.sh` makes it first. Measured on main on 2026-11-09 and again on 2026-11-10, every form below
+# passed, because run.sh was not on disk to read. Nothing here is run, so post.txt is still where it
+# was for the mv case, and run.sh never exists.
+mkdir -p "$T/cp/sub" "$T/cp/tools" "$T/cp/bin"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/post.txt"
+printf '%s\n' "echo hello" > "$T/cp/plain.txt"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/tools/post.sh"
+printf '%s\n' "import urllib.request" "urllib.request.urlopen('https://slack.com/api/chat.postMessage')" > "$T/cp/post.txt.py"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/old.sh"
+run_cp() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/cp")"; }
+
+# The controls first: the same commands with a harmless source pass, so a refusal below is the source
+# being read and not every copy and run being refused (L159).
+for runs in "cp plain.txt run.sh && bash run.sh" "cat plain.txt > run.sh && bash run.sh" \
+  "install -m 755 plain.txt run.sh && ./run.sh" "mv plain.txt run.sh; sh run.sh" "cp post.txt notes.txt" \
+  "cat post.txt > run.sh && grep -c chat run.sh"; do
+  run_cp "$runs"
+  allowed "a copy of a harmless file, or one never run, passes: $runs"
+done
+
+for runs in "cp post.txt run.sh && bash run.sh" "cp post.txt run.sh; sh ./run.sh" \
+  "mv post.txt run.sh && bash run.sh" "install -m 755 post.txt run.sh && ./run.sh" \
+  "cp -f -- post.txt run.sh && source run.sh" "/bin/cp post.txt run.sh && . ./run.sh" \
+  "cat post.txt > run.sh && bash run.sh" "cat < post.txt > run.sh && bash run.sh" \
+  "cat plain.txt post.txt > run.sh && bash run.sh" "cp plain.txt run.sh && cat post.txt >> run.sh && bash run.sh" \
+  "tee run.sh < post.txt > /dev/null && bash run.sh" "ln -s post.txt run.sh && bash run.sh" \
+  "cp post.txt bin/ && bash bin/post.txt" "cp post.txt plain.txt bin && bash bin/post.txt" \
+  "cp post.txt a.sh && cp a.sh b.sh && bash b.sh" "cd sub && cp ../post.txt run.sh && bash run.sh" \
+  "cp post.txt.py run.py && python3 run.py" "cp -R tools copy && bash copy/post.sh" \
+  "cp --backup post.txt run.sh && bash run.sh" "cp --backup=numbered post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a copy run in the same command is judged by its source: $runs"
+done
+run_cp "cp post.txt run.sh && bash run.sh"
+says "the refusal names the file the copy was made from" "post.txt"
+says "the refusal names the copy it ran" "run.sh"
+run_cp "cp -R tools copy && bash copy/post.sh"
+says "a file in a copied directory is named by its source" "tools/post.sh"
+# A heredoc written to a file is the file's source too.
+run_cp "cat > run.sh <<'EOF'
+curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage
+EOF
+bash run.sh"
+refused "a heredoc written to a file and run is judged by the heredoc"
+run_cp "cat > run.sh <<'EOF'
+echo hello
+EOF
+bash run.sh"
+allowed "a harmless heredoc written to a file and run passes"
+# A file already there that a copy overwrites is still read too: with ; the old one runs when the
+# copy fails, so judging only the new text would let a refused script through.
+run_cp "cp plain.txt old.sh; bash old.sh"
+refused "a posting script a harmless copy overwrites is still read"
+# BSD install's -S is a flag (flush to disk, man install on macOS), so the word after it is the
+# source; read as a value, post.txt was swallowed and run.sh never recorded (PR #2730 review).
+# GNU install's -S is still a suffix, so its value is not taken for the source.
+run_cp "install -S plain.txt run.sh && bash run.sh"
+allowed "install -S copying a harmless file passes"
+for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.txt run.sh && ./run.sh" \
+  "ginstall -S .bak post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
+done
+# The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
+run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "a copy of the nudge script made and run in the same command is refused"
+# And the nudge script's own path, overwritten earlier in the same command, is no longer the shipped
+# script, so the exemption does not cover it (PR #2730 review). Nothing here runs, so it is untouched.
+run_cp "cp post.txt.py $NUDGE && python3 $NUDGE 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "the nudge script's path overwritten and run in the same command is refused"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok

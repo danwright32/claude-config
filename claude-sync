@@ -13328,6 +13328,31 @@ mods_lag_records(){
 $loop_input
 LOOP_INPUT
   fi
+  # A FOLDER the search could not read is named by grep as the folder, never its files, and find,
+  # whose errors are discarded, lists none of them, so each file the shared repo holds there would
+  # read as missing here and be counted as behind (claude-config#2716). Each such file is recorded as
+  # not compared instead, with the folder as the reason, and the folder's own entry goes, since it
+  # is not a file and would be counted as one. A folder the shared repo holds nothing under keeps its
+  # entry, so what could not be read is still said.
+  if [ -n "$unread" ]; then
+    local folders_out="" ukind ufile ureason under
+    while IFS=$'\t' read -r ukind ufile ureason; do
+      [ -n "$ufile" ] || continue
+      if [ -d "$CLAUDE_HOME/mods/$ufile" ]; then
+        under="$(printf '%s\n' "$tip" | awk -F '\t' -v d="$ufile/" 'index($2, d) == 1 { print $2 }')"
+        if [ -n "$under" ]; then
+          while IFS= read -r f; do
+            folders_out="${folders_out}unread	$f	its folder $ufile could not be read (${ureason})
+"
+          done <<< "$under"
+          continue
+        fi
+      fi
+      folders_out="${folders_out}unread	$ufile	$ureason
+"
+    done <<< "$unread"
+    unread="$folders_out"
+  fi
   # "<kind>\t<rel>\t<hash>\t<hash with the placeholder>": missing (on the tip only), differs, or
   # local (installed only). A file the same on both sides is dropped here, and so is a file that
   # could not be hashed, which is reported below instead: with no hash of its own it would read as

@@ -82,6 +82,29 @@ check_eq "#1482 a loop in another session is not held by this one's looks" "took
 check_eq "#1482 once the first look is a minute old the session looks again" "took" "$(loop s1 'ghp_take 1060 && echo took')"
 check_eq "#1482 the cap counts only the last minute" "4" "$(wc -l < "$GH_POLL_STATE_DIR/s1/polls" | tr -d ' ')"
 
+# A look that leaves room for others (claude-config#2715): a merge helper only waiting for its turn
+# takes a look with one of the minute's looks left free, so the helper holding the turn is never
+# held back by the line behind it. Three looks in the minute: a waiter waits for the oldest to age
+# out, while a look leaving nothing free (the holder's) is still taken.
+rm -rf "$GH_POLL_STATE_DIR"
+for t in 1000 1010 1020; do loop s1 "ghp_take $t" >/dev/null; done
+out="$(loop s1 'ghp_take 1030 1 && echo took || echo "wait $GHP_WHY $GHP_WAIT $GHP_CAP $GHP_SEEN"')"
+check_eq "#2715 a look leaving one free waits with three of four taken, for the oldest to age out" "wait cap 30 3 3" "$out"
+check_eq "#2715 the refused look was not counted" "3" "$(wc -l < "$GH_POLL_STATE_DIR/s1/polls" | tr -d ' ')"
+check_eq "#2715 a look leaving none free is taken in the same second" "took" "$(loop s1 'ghp_take 1030 && echo took')"
+out="$(loop s1 'ghp_take 1035 1 && echo took || echo "wait $GHP_WHY $GHP_WAIT"')"
+check_eq "#2715 with four taken it waits until two have aged out, not one" "wait cap 35" "$out"
+check_eq "#2715 once enough have aged out it is taken" "took" "$(loop s1 'ghp_take 1080 1 && echo took')"
+# Control (L497): two of four taken, a look leaving one free is taken at once.
+rm -rf "$GH_POLL_STATE_DIR"
+for t in 1000 1010; do loop s1 "ghp_take $t" >/dev/null; done
+check_eq "#2715 control: with two of four taken a look leaving one free is taken" "took" "$(loop s1 'ghp_take 1020 1 && echo took')"
+# A cap of one leaves nothing to keep free: the look is still taken once a minute, never refused for ever.
+rm -rf "$GH_POLL_STATE_DIR"
+check_eq "#2715 with a cap of one, a look leaving one free is still taken" "took" "$(GH_POLL_PER_MINUTE=1 loop s1 'ghp_take 1000 1 && echo took')"
+check_eq "#2715 and the next waits for the minute, as any look would" "wait cap 60" "$(GH_POLL_PER_MINUTE=1 loop s1 'ghp_take 1000 1 && echo took || echo "wait $GHP_WHY $GHP_WAIT"')"
+rm -rf "$GH_POLL_STATE_DIR"
+
 # No session (a helper run by hand): its own key, never a crash, never another session's budget.
 out="$(env -u CLAUDE_CODE_SESSION_ID bash -c ". '$LIB'; ghp_session_key")"
 check_eq "#1482 with no session the key is no-session" "no-session" "$out"
