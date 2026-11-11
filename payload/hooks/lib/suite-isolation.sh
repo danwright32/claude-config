@@ -59,7 +59,9 @@ suite_isolation_seams(){
     'CLAUDE_SLEEP_RECORD sleep-record/current.json'
 }
 
-# Every variable this file sets, one per line: the seams, then the claude binary.
+# Every seam this file points somewhere, one per line: the seams, then the claude binary.
+# PYTHONDONTWRITEBYTECODE, set by suite_isolation_no_bytecode, is left out on purpose: it is a flag,
+# not a place, and arming sets it whatever came down rather than only when it is unset.
 suite_isolation_vars(){
   suite_isolation_seams | while read -r var _; do printf '%s\n' "$var"; done
   printf '%s\n' SYNC_CLAUDE_BIN
