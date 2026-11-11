@@ -75,6 +75,9 @@ import {
   namedByIssue,
   skipIssueProblem,
   notLookWhy,
+  passesByShape,
+  caughtCheck,
+  caughtCall,
 } from '../hooks/rules.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
@@ -2511,4 +2514,50 @@ test('#2223: four times as much mod hook code takes under six times as long to r
   const large = timed(400)
   expect(small).toBeGreaterThan(0)
   expect({ ratio: Math.round((large / small) * 10) / 10, under: large / small < 6 }).toEqual({ ratio: expect.any(Number), under: true })
+})
+
+// #2726: Claude Code runs every mod in one hooks worker and replaces it when a heartbeat goes
+// unanswered, failing every hook in flight at that moment, in every agent, with the words below. The
+// guard's catch then refused every such call, an AskUserQuestion picker or a read included, which the
+// guard itself passes on its tool and input alone. The catch now answers those as the hook would, and
+// still refuses every call the guard would have to read to judge.
+const WEDGED = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
+const HELD_WEDGED = `Blocked: the design round guard could not check this call (${WEDGED}), so it was stopped. Try again; if it keeps failing, tell Dan.`
+test('#2726: a call the guard passes on its tool and input alone is told apart from one it must read', () => {
+  expect(passesByShape('AskUserQuestion', { questions: [{ question: 'Which one?' }] })).toBe(true)
+  expect(passesByShape('Read', { file_path: '/w/slate/app/page.tsx' })).toBe(true)
+  expect(passesByShape('mcp__x__search', { query: 'page.tsx' })).toBe(true)
+  expect(passesByShape('Bash', { command: 'git commit -F msg.txt' })).toBe(false)
+  expect(passesByShape('Bash', {})).toBe(false)
+  expect(passesByShape('Write', { file_path: '/w/slate/app/page.tsx', content: 'x' })).toBe(false)
+  expect(passesByShape('Edit', { file_path: '/w/slate/app/globals.css', old_string: 'a', new_string: 'b' })).toBe(false)
+  expect(passesByShape('mcp__x__save', { path: '/w/slate/app/page.tsx' })).toBe(false)
+})
+test('#2726: a check whose hook the worker lost passes only what the guard passes unread, and refuses the rest naming the loss', async () => {
+  const passed: string[] = []
+  const pass = (tool: string) => () => {
+    passed.push(tool)
+    return { decision: 'allow' as const }
+  }
+  expect(await caughtCheck('AskUserQuestion', { questions: [] }, WEDGED, pass('AskUserQuestion'))).toEqual({ decision: 'allow' })
+  expect(await caughtCheck('Read', { file_path: '/w/slate/app/page.tsx' }, WEDGED, pass('Read'))).toEqual({ decision: 'allow' })
+  expect(await caughtCheck('Bash', { command: 'git commit -F msg.txt' }, WEDGED, pass('Bash'))).toEqual({ decision: 'deny', reason: HELD_WEDGED })
+  expect(await caughtCheck('Write', { file_path: '/w/slate/app/page.tsx', content: 'x' }, WEDGED, pass('Write'))).toEqual({ decision: 'deny', reason: HELD_WEDGED })
+  expect(passed).toEqual(['AskUserQuestion', 'Read'])
+})
+test("#2726: a call whose hook the worker lost is passed on as the hook would pass it, and a subagent's call the guard must read is refused", async () => {
+  const sent: string[] = []
+  const on = (what: string) => () => {
+    sent.push(what)
+    return { result: what }
+  }
+  // The main session's call: this hook only passes it on, to be judged at tool.check.
+  expect(await caughtCall({ tool: 'Write' }, { file_path: '/w/slate/app/page.tsx', content: 'x' }, WEDGED, on('main write'))).toEqual({ result: 'main write' })
+  // A subagent's question, or a call passing unread.
+  expect(await caughtCall({ tool: 'AskUserQuestion', agentId: 'a1' }, { questions: [] }, WEDGED, on('agent question'))).toEqual({ result: 'agent question' })
+  expect(await caughtCall({ tool: 'Grep', agentId: 'a1' }, { pattern: 'x', path: '/w/slate' }, WEDGED, on('agent grep'))).toEqual({ result: 'agent grep' })
+  // A subagent's shell command or file write is refused, never run.
+  expect(await caughtCall({ tool: 'Bash', agentId: 'a1' }, { command: 'git commit -F msg.txt' }, WEDGED, on('agent bash'))).toEqual({ deny: HELD_WEDGED })
+  expect(await caughtCall({ tool: 'Write', agentId: 'a1' }, { file_path: '/w/slate/app/page.tsx', content: 'x' }, WEDGED, on('agent write'))).toEqual({ deny: HELD_WEDGED })
+  expect(sent).toEqual(['main write', 'agent question', 'agent grep'])
 })
