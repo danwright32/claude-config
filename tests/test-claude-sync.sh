@@ -25129,6 +25129,19 @@ check "#2688 under a heading counting all three files" \
   "line_has \"\$out_ms_all\" 'mods not compared with the shared repo: status could not compare 3 file' 'neither as behind'"
 check "#2688 and none of them is in the lag line" \
   "! grep -q 'mods behind the shared repo' <<< \"\$out_ms_all\""
+# A WHOLE FOLDER UNREADABLE (#2716): grep names the folder, not its files, and find, whose errors
+# are discarded, lists none of them, so each file the shared repo holds there would read as missing
+# here and be counted as behind. Each is named as not compared, with the folder as the reason.
+chmod 000 "$MSH/mods/plain-mod"
+out_ms_dir="$(env $(msenv) bash "$SCRIPT" status 2>&1 || true)"
+chmod 755 "$MSH/mods/plain-mod"
+dbg "#2716 status with one mod folder unreadable: $out_ms_dir"
+check "#2716 a file the shared repo holds in an unreadable folder is named as not compared, with the folder as the reason" \
+  "line_has \"\$out_ms_dir\" 'could not compare plain-mod/index\.ts' 'plain-mod'"
+check "#2716 and it is not in the lag line, while the files status could read still are" \
+  "line_has \"\$out_ms_dir\" 'mods behind the shared repo: 2 file' 'lock-mod' 'path-mod' && ! line_has \"\$out_ms_dir\" 'mods behind the shared repo' 'plain-mod'"
+check "#2716 and the folder itself is not counted as a file" \
+  "line_has \"\$out_ms_dir\" 'mods not compared with the shared repo: status could not compare 1 file'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
