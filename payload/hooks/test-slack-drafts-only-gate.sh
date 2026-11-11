@@ -1602,6 +1602,10 @@ for runs in "install -D /elsewhere post.txt run.sh && bash run.sh" \
   run_cp "$runs"
   refused "install -D does not move the copy, so it is judged at the path it lands on: $runs"
 done
+# A guard, not a red case: it was refused before #2742 too. The -D joined record is kept so the change
+# only adds refusals and a run at that path is still judged by the copy's source.
+run_cp "install -D /elsewhere post.txt run.sh && bash /elsewhere/run.sh"
+refused "a copy run at the install -D joined path is still judged by its source"
 # The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
 run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
 refused "a copy of the nudge script made and run in the same command is refused"

@@ -436,8 +436,9 @@ AWKS = {"awk", "gawk", "mawk", "nawk"}
 # with the options that take a value (BSD's, the ones on these Macs, and GNU's -t and -S, which name a
 # target directory and a suffix there), so an option's value is never read as a file. BSD install's
 # -S is a flag (flush to disk), so the word after it is a file there. BSD install's -D destdir only
-# trims the names a -M metalog records and does not move the file (man install; measured 2026-11-11,
-# claude-config#2742), so a copy is recorded where its target names; GNU's -D is a flag.
+# trims the names a -M metalog records and does not move the file on macOS (man install; measured
+# 2026-11-11, claude-config#2742), so a copy is recorded where its target names. It is recorded under
+# the -D joined path too, only so that nothing the gate refused before #2742 passes. GNU's -D is a flag.
 COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTt", "ginstall": "gmoSt",
            "ln": "tS", "gln": "tS", "link": ""}
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
@@ -1209,7 +1210,7 @@ class Judge:
         valued = COPIERS[name]
         linker = name in ("ln", "gln", "link")
         installer = name in ("install", "ginstall")
-        ops, flags, target_dir, ended, k = [], set(), None, False, 0
+        ops, flags, target_dir, destdir, ended, k = [], set(), None, None, False, 0
         while k < len(words):
             w = words[k]
             nxt = words[k + 1] if k + 1 < len(words) else None
@@ -1236,6 +1237,8 @@ class Judge:
                         val, k = nxt or "", k + 1
                     if c == "t":
                         target_dir = val
+                    elif c == "D" and name == "install":
+                        destdir = val
                     break
                 flags.add(c)
         if installer and "d" in flags:
@@ -1257,6 +1260,8 @@ class Judge:
             targets = [os.path.join(dest, os.path.basename(src.rstrip("/")) or src)] if into else [dest]
             if into and recursive and src.endswith("/") and len(srcs) == 1:
                 targets.append(dest)  # BSD cp -R src/ copies what is in src; GNU copies src itself
+            if destdir:  # also where the gate recorded it before #2742, so nothing refused then passes
+                targets += [os.path.join(destdir, t.lstrip("/")) for t in targets]
             for target in targets:
                 # A symbolic link's own text is read from the directory the link is in.
                 where = d
