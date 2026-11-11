@@ -51,6 +51,14 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # it evaluates. A message whose closing quote is not on its line is read unchanged, so a sighting
 # there is reported rather than hidden: a wrong report is a loud failure, a hidden call is #413.
 # A message helper missing from the list is read as before, which errs the same loud way.
+#
+# The quoted arguments of a call to a JUDGING helper are blanked the same way (#2700). A function
+# the scanned file defines is a judging helper when every route its arguments take leaves them as
+# data (printed, tested, assigned and followed, handed to another judging helper, or read by a
+# single quoted inline program naming no way to run a command), so `run_bash "cd x && bun test"`
+# hands bun to a gate as text and is not a call. The set is worked out from each function's body,
+# never from a list; an unquoted call beside a judged one, and a substitution inside its argument,
+# are still read.
 # Prints "<tool>\t<file>:<line>" for the first sighting of each tool.
 MESSAGE_COMMANDS="echo check bad fail die say warn note section hook_allow_notice"
 invoked_tools(){   # $@ = files
