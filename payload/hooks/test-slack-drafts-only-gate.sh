@@ -761,6 +761,82 @@ else
   echo "SUITE-PART-UNMEASURED #2654 the gate allows bash tests/test-mods.sh: $DIR is not in a claude-config checkout holding tests/test-mods.sh (the installed copy of the hooks is not), so the repository's mods suite was not judged here"
 fi
 
+# A file the script sources whose function runs its argument by eval in the caller's shell can set
+# any name each time it is called, so past that source line the gate is sure of no variable, and an
+# import placed by one is placed nowhere (claude-config#2668). lib/hang-wait.sh is such a file: its
+# two waits run their condition in the suite's own shell, and what the condition sets is kept
+# (test-hang-wait.sh pins that; a subshell there was tried in #2465 and lost what suites read
+# back). test-context-size-notice.sh, test-pr-review.sh and the design rounds' test-score-adapters.sh
+# each sourced it and then handed python a folder held in a variable. Measured through this wrapper
+# on 2026-11-10: each was allowed cut off before that source line and refused from it on, and the
+# same import with no such file sourced was allowed. The gate was applying its rule, so the suites
+# changed and the gate did not: each spells the folder from BASH_SOURCE where it hands it over,
+# which no variable carries. Both halves, each in both trees, and the control with nothing sourced.
+sw_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+sw_py="python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import av_helper'"
+for tree in ok posts; do
+  printf '%s\n' 'wait_on(){ until eval "$1"; do sleep 1; done; }' > "$T/av/$tree/tools/waits.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/nowait.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' "$sw_py \"\$ROOT/tools/lib\"" > "$T/av/$tree/tests/waitvar.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" '. "$ROOT/tools/waits.sh"' \
+    "$sw_py \"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")/..\" && pwd)/tools/lib\"" > "$T/av/$tree/tests/waitspelt.sh"
+done
+run_bash "bash $T/av/ok/tests/nowait.sh"
+allowed "an entry held in a variable is placed where the script sources nothing"
+run_bash "bash $T/av/ok/tests/waitvar.sh"
+refused "past a sourced file whose function runs its argument by eval, an entry held in a variable is uncertain, at a helper that only saves a draft"
+says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
+run_bash "bash $T/av/posts/tests/waitvar.sh"
+refused "the same entry at a helper that posts"
+run_bash "bash $T/av/ok/tests/waitspelt.sh"
+allowed "past the same sourced file, an entry spelt from BASH_SOURCE where it is handed over is placed"
+run_bash "bash $T/av/posts/tests/waitspelt.sh"
+refused "and the helper placed that way is judged: one that posts"
+says "that refusal names the placed helper" "av_helper.py"
+# A module the script copies somewhere and imports from there is not on disk when the gate reads the
+# script, so it is placed nowhere. test-shell-code-lines.sh did that to show its reader refusing
+# with no shell-words.py beside it: it copied the reader alone into a throwaway folder and imported
+# the copy (allowed cut off before that step, refused from it on). The suite now imports the
+# reader from lib/ and points the one load of shell-words.py at an empty folder, so everything that
+# runs is on disk for the gate to read. Both halves, each in both trees.
+for tree in ok posts; do
+  printf '%s\n' '#!/bin/bash' "$sw_top" 'W="$(mktemp -d)"' 'cp "$ROOT/tools/lib/av_helper.py" "$W/"' "$sw_py \"\$W\"" > "$T/av/$tree/tests/copied.sh"
+  printf '%s\n' '#!/bin/bash' "$sw_top" 'W="$(mktemp -d)"' "python3 -c '" 'import importlib.util, os, sys' \
+    'found = importlib.util.spec_from_file_location' 'def elsewhere(name, location=None, *rest, **more):' \
+    '    return found(name, os.path.join(sys.argv[2], os.path.basename(str(location))), *rest, **more)' \
+    'importlib.util.spec_from_file_location = elsewhere' 'sys.path.insert(0, sys.argv[1])' 'import av_helper' \
+    "' \"\$ROOT/tools/lib\" \"\$W\"" > "$T/av/$tree/tests/pointed.sh"
+done
+run_bash "bash $T/av/ok/tests/copied.sh"
+refused "a module the script copies into a throwaway folder and imports from there is placed nowhere, at a helper that only saves a draft"
+says "that refusal is the import placed nowhere" "av_helper, a module the gate cannot find"
+run_bash "bash $T/av/posts/tests/copied.sh"
+refused "the same copy of a helper that posts"
+run_bash "bash $T/av/ok/tests/pointed.sh"
+allowed "the helper imported from where it is kept, by code that points a later load by path at an empty folder, is placed"
+run_bash "bash $T/av/posts/tests/pointed.sh"
+refused "and the helper imported that way is judged: one that posts"
+says "that refusal names the placed helper" "av_helper.py"
+# The four suites themselves, as a session runs them. The fixtures above are shaped like them; these
+# are them, so the next change to the walk, or to a suite, that gets one refused fails here rather
+# than in a session (L48). All four are in the installed copy too, one folder shallower, and a copy
+# that lacks one says so rather than passing (L411).
+if [ -n "$MODS_REPO" ] && [ "$MODS_REPO/payload/hooks" -ef "$DIR" ]; then
+  sw_from="$MODS_REPO"; sw_pre="payload/"
+else
+  sw_from="$(cd "$DIR/.." && pwd)"; sw_pre=""
+fi
+for sw_suite in hooks/test-context-size-notice.sh hooks/test-pr-review.sh hooks/test-shell-code-lines.sh \
+  skills/design-rounds/score/test-score-adapters.sh; do
+  if [ -f "$sw_from/$sw_pre$sw_suite" ]; then
+    run_bash "cd $sw_from && bash $sw_pre$sw_suite"
+    allowed "a suite of this repository is not refused when a session runs it: bash $sw_pre$sw_suite (claude-config#2668)"
+  else
+    echo "SUITE-PART-UNMEASURED #2668 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that suite was not judged here"
+  fi
+done
+
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
 refused "python3 -c importing a helper that posts"
