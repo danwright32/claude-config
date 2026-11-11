@@ -3078,19 +3078,20 @@ check_eq "#2351 control: behind a line standing still the count of looks still e
 check "#2351 control: said as the most looks it makes" "the most it makes (MWR_MAX_POLLS)" "$out"
 check_eq "#2351 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
-# The shared polling budget (L24): in line, GitHub is read on a wait that grows to its ceiling, while
-# the turn is read locally at every base look, so a turn passing mid wait is taken at once. #9 leaves
+# The shared polling budget (L24): in line, GitHub is read only every MWR_LINE_LOOK_SECONDS
+# (claude-config#2715), while the turn is read locally at every base look, so a turn passing mid
+# wait is taken at once. #9 leaves
 # after twelve minutes of one minute looks.
 fresh "$OLD" 0 "$GREEN"
 "$BIN/take-turn" acme/widget 9
 for _ in $(seq 1 11); do printf ':\n' >> "$ST/on-sleep"; done
 leave 9 >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
 out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 run 7 --squash)"; rc=$?
-check_eq "#1697 a run in line on a growing wait still merges" "0" "$rc"
-check "#1697 taking the turn the look after it passed, not at the end of a grown wait" "after waiting 12m 00s for it" "$out"
+check_eq "#1697 a run in line, reading GitHub every ten minutes, still merges" "0" "$rc"
+check "#1697 taking the turn the look after it passed, not at its next ten minute look at GitHub" "after waiting 12m 00s for it" "$out"
 check_eq "#1697 never sleeping longer than a base look in line" "60" "$(sort -n "$ST/sleeps" | tail -1)"
 reads_in_line="$(awk '$1 < 1000720' "$ST/view-times" | wc -l | tr -d ' ')"
-check_eq "#1697 reading GitHub fewer times than once a minute while in line (5 reads in its 12 minutes in line, not 12)" "5" "$reads_in_line"
+check_eq "#1697 reading GitHub fewer times than once a minute while in line (2 reads in its 12 minutes in line, at its first look and ten minutes later, claude-config#2715; 5 on the growing wait before it, 12 at one a minute)" "2" "$reads_in_line"
 
 # A long line that keeps moving, at the default settings (claude-config#2351): each of twenty pull
 # requests ahead holds the turn for a look of 30m and is passed over, ten hours in all, past the nine
@@ -3685,6 +3686,130 @@ check_eq "#2694 the two runs differ by 8 looks, one sleep each" "8" "$(( sl12 - 
 check_eq "#2694 the count saw the helper start programs at all" "yes" "$( [ "${pc4:-0}" -gt 50 ] && echo yes || echo no)"
 per_look=$(( (pc12 - pc4) / 8 ))
 check_eq "#2694 one look in a line of seven starts at most 40 programs (it started $per_look)" "yes" "$( [ "$per_look" -le 40 ] && echo yes || echo no)"
+
+# =================================================================================================
+# 30. A run waiting for its turn leaves GitHub to the run holding it (claude-config#2715). On
+#     2026-11-10 one session's 102 merge logs held 2,845 waits on the session's cap of looks a minute
+#     (GH_POLL_PER_MINUTE): 2,594 by helpers waiting in line, and 251 by the helper holding the turn,
+#     with a median of 8 helpers in line behind it, and the holder went a median of 120s between looks
+#     across those waits. A run in line learns its turn from the queue on this Mac, so it reads GitHub
+#     only every MWR_LINE_LOOK_SECONDS (600) to see its own pull request is still open, never because
+#     the line moved, and each of those looks leaves one of the minute's looks free for the holder.
+# =================================================================================================
+# One run behind three, each leaving in turn (at 5m, 15m and 30m): it says the line as it moves,
+# reads GitHub only at its first look and every ten minutes, and takes the turn the moment it is its.
+fresh "$OLD" 0 "$GREEN"
+for p in 9 10 11; do "$BIN/take-turn" acme/widget "$p"; done
+step="c=\$(cat \"\$ST/clock\"); [ \"\$c\" -lt 1000300 ] || { $(leave 9); }; [ \"\$c\" -lt 1000900 ] || { $(leave 10); }; [ \"\$c\" -lt 1001800 ] || { $(leave 11); }"
+for _ in $(seq 1 80); do printf '%s\n' "$step" >> "$ST/on-sleep"; done
+out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 MWR_LINE_SECONDS=3600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#2715 a run in a moving line still merges" "0" "$rc"
+check "#2715 taking the turn the moment it passes, from the queue on disk" "after waiting 30m 00s for it" "$out"
+check "#2715 saying the line as it moved, without reading GitHub for it" "which #10 holds (2 ahead of it in line)" "$out"
+check "#2715 and again when it moved on" "which #11 holds (1 ahead of it in line)" "$out"
+check_eq "#2715 reading GitHub in line only at its first look and every ten minutes" "1000000 1000600 1001200" "$(awk '$1 < 1001800' "$ST/view-times" | tr '\n' ' ' | sed 's/ $//')"
+check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+
+# Several helpers in line at once, each a real run of this helper, on one injected clock that moves
+# only once every run is asleep, to the earliest time any of them wakes: a run's work between its
+# sleeps takes no time on the clock, as it takes next to none on a real one. #7 holds the turn, its
+# checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
+# four looks a minute. The line moves twice, as the first two in line are stopped at 10 and 20
+# minutes. Fixture settings, not measured, but eight, the median of the 2026-11-10 logs.
+SIM_DIR="$WORKDIR/sim"; SIMBIN="$WORKDIR/simbin"; mkdir -p "$SIMBIN"
+cat > "$SIMBIN/gh" <<EOS
+#!/usr/bin/env bash
+case "\$*" in "pr view "*) c=""; read -r c < "\$ST/clock"; printf '%s %s\n' "\$c" "\$3" >> "\$ST/sim-views" ;; esac
+exec "$BIN/gh" "\$@"
+EOS
+chmod +x "$SIMBIN/gh"
+# The sleep each run in the simulation is given: it marks when it wakes and waits, in real time, for
+# the clock to reach it. A run told to quit, and every run once the simulation ends, is stopped as a
+# person would stop it.
+sim_sleep(){ (
+  set +e +u
+  { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+  c=""; read -r c < "$ST/clock"
+  printf '%s' "$(( c + $1 ))" > "$SIM_DIR/$SIM_ME.tmp" && mv -f "$SIM_DIR/$SIM_ME.tmp" "$SIM_DIR/$SIM_ME.wake"
+  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do
+    { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+    sleep 0.01
+  done
+) }
+export -f sim_sleep
+export SIM_DIR
+# Each run is given the defaults (a base look of 60s growing to 180s, four looks a minute: settings,
+# not measured), and a line budget the simulation never reaches, since its line stands still between
+# the two runs that leave it. The runs are this shell's children, kept in SIM_PIDS and reaped by
+# sim_run's wait once it has stopped them; nothing is printed between their start and that wait, so
+# whatever a run says goes to its own file, and what the simulation itself says to SIM_DIR/said.
+SIM_PIDS=""
+sim_start(){ # sim_start <pr>: starts a run, then waits until it first sleeps
+  ( export MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 GH_POLL_PER_MINUTE=4 MWR_LINE_SECONDS=100000
+    cd "$REPO" && SIM_ME="$1" MWR_SLEEP=sim_sleep PATH="$SIMBIN:$PATH" bash "$HELPER" "$1" --squash > "$SIM_DIR/$1.out" 2>&1
+    echo "$?" > "$SIM_DIR/$1.rc" ) &
+  SIM_PIDS="$SIM_PIDS $!"
+  hang_wait "[ -e '$SIM_DIR/$1.wake' ] || [ -e '$SIM_DIR/$1.rc' ]" 0.01 || echo "run $1 never slept" >> "$SIM_DIR/said"
+}
+# sim_asleep <pr>...: every run still going is asleep, and sim_min is the earliest any of them wakes
+# (empty once every run has ended).
+sim_asleep(){
+  local m w; sim_min=""
+  for m in "$@"; do
+    [ -e "$SIM_DIR/$m.rc" ] && continue
+    [ -e "$SIM_DIR/$m.wake" ] || return 1
+    w=""; read -r w < "$SIM_DIR/$m.wake"
+    { [ -z "$sim_min" ] || [ "$w" -lt "$sim_min" ]; } && sim_min="$w"
+  done
+  return 0
+}
+# sim_run <seconds> <pr>...: runs them all until the clock reaches the seconds given, then stops and
+# reaps them. SIM_QUIT lists <pr>@<seconds in>: that run is stopped once the clock would pass that
+# time, leaving the line.
+sim_run(){
+  local t0 end m w q quit p; t0="$(cat "$ST/clock")"; end=$(( t0 + $1 )); shift
+  while :; do
+    hang_wait "sim_asleep $*" 0.01 || { echo "the runs never all slept at $(cat "$ST/clock")" >> "$SIM_DIR/said"; break; }
+    [ -n "$sim_min" ] && [ "$sim_min" -lt "$end" ] || break
+    quit=""
+    for q in ${SIM_QUIT:-}; do
+      [ -e "$SIM_DIR/${q%@*}.quit" ] || [ "$sim_min" -lt $(( t0 + ${q#*@} )) ] || { quit="${q%@*}"; break; }
+    done
+    if [ -n "$quit" ]; then
+      : > "$SIM_DIR/$quit.quit"; rm -f "$SIM_DIR/$quit.wake"; continue
+    fi
+    printf '%s' "$sim_min" > "$ST/clock"
+    for m in "$@"; do
+      [ -e "$SIM_DIR/$m.wake" ] || continue
+      w=""; read -r w < "$SIM_DIR/$m.wake"
+      [ "$w" -gt "$sim_min" ] || rm -f "$SIM_DIR/$m.wake"
+    done
+  done
+  : > "$SIM_DIR/stop"; rm -f "$SIM_DIR"/*.wake
+  for p in $SIM_PIDS; do wait "$p"; done
+  SIM_PIDS=""
+}
+fresh "$OLD" 0 "$PENDING"; rm -rf "$SIM_DIR"; mkdir -p "$SIM_DIR"
+LINE_PRS="21 22 23 24 25 26 27 28"
+sim_start 7
+for p in $LINE_PRS; do sim_start "$p"; done
+SIM_QUIT="21@600 22@1200" sim_run 1800 7 $LINE_PRS
+sim_out="$(cat "$SIM_DIR/said" 2>/dev/null)"
+holder="$(cat "$SIM_DIR/7.out")"
+holder_looks="$(awk '$2 == 7 { print $1 }' "$ST/sim-views")"
+holder_gaps="$(printf '%s\n' "$holder_looks" | awk 'NR > 1 { print $1 - p } { p = $1 }' | sort -n | tr '\n' ' ' | sed 's/ $//')"
+line_looks="$(awk '$2 != 7' "$ST/sim-views" | wc -l | tr -d ' ')"
+echo "#2715 measured: the holder's gaps between looks (s): $holder_gaps; its waits on the session's cap: $(grep -c 'to look at GitHub again' <<<"$holder"); reads by the 8 in line: $line_looks"
+check_eq "#2715 the simulation ran its whole 30 minutes" "" "$sim_out"
+check "#2715 the holder held the turn" "Took the turn to merge in acme/widget" "$holder"
+check_eq "#2715 every run in line took a place behind it" "8" "$(grep -l 'waiting for its turn to merge in acme/widget, which #7 holds' "$SIM_DIR"/2?.out | wc -l | tr -d ' ')"
+check_not "#2715 the holder never waited on the session's cap with eight runs in line behind it" "to look at GitHub again" "$holder"
+check "#2715 while a run in line waited rather than take the last look of a minute" "a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one" "$(cat "$SIM_DIR"/2?.out)"
+check_eq "#2715 the holder looked the whole 30 minutes, at least once every three minutes" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | grep -c .)" -ge 10 ] && echo yes || echo no)"
+check_eq "#2715 the holder looked at its own pace, never more than its 180s ceiling apart" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | awk 'NR > 1 && $1 - p > 180 { bad = 1 } { p = $1 } END { print bad + 0 }')" = 0 ] && echo yes || echo no)"
+check_eq "#2715 the eight in line read GitHub at most once each every ten minutes (8 x 4 looks in 30 minutes)" "yes" "$( [ "$line_looks" -le 32 ] && echo yes || echo no)"
+check_eq "#2715 no run in line merged out of its turn" "0" "$(count gh-calls 'pr merge')"
+check_eq "#2715 every run in line was still waiting for its turn when the simulation ended" "" "$(for p in $LINE_PRS; do grep -q "It is #$p's turn\|Took the turn" "$SIM_DIR/$p.out" && printf '%s ' "$p"; done)"
 
 echo
 echo "passed: $pass, failed: $fail"

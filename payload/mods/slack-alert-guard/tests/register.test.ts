@@ -515,7 +515,7 @@ const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.
 const ROUTE = '/w/app/src/app/api/cron/route.ts'
 const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
 
-test('a node test script importing a copy builder and its Slack send helper is not a sender, so the copy passes; a route that does the same is (#2509)', withKit, async ($, on) => {
+test('a node test script importing a copy builder and its Slack send helper is not a sender, so it is never named as one; a route that does the same is (#2509, #2720)', withKit, async ($, on) => {
   const NODE_TEST = '/w/app/scripts/test-outage-copy.ts'
   const w = world($, on, {
     files: {
@@ -525,8 +525,13 @@ test('a node test script importing a copy builder and its Slack send helper is n
     },
   })
   const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
+  // Imported by nothing but a test, the copy module's new wording is held as copy no file uses yet
+  // (#2720), naming no sender: the test script is not one.
+  const unwired = refusalOf(await call($, edit))
+  expect(unwired).toContain('Booking ${id} is late again')
+  expect(unwired).not.toContain('sends to Slack')
+  expect(unwired).not.toContain(NODE_TEST)
+  expect(w.ran).toEqual([])
   // The same imports in a route make it the sender, so the guard is still deciding.
   w.files[ROUTE] = ROUTE_TEXT
   const why = refusalOf(await call($, edit))
@@ -1648,26 +1653,109 @@ const MONITOR_TEXT = [
 const QUIET_IMPORT = "import { quietPage, quietClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n"
 const listedFiles = (w: W, from = 0) => w.gits.slice(from).filter(g => g.argv[3] === 'ls-files').length
 
-test('a new copy module passes while nothing sends it; the edit that makes a route send it is held for the wording it brings in, then goes through once Dan approves (#2637)', withKit, async ($, on) => {
+// claude-config#2720: the same module, held as it is written. Nothing sends it yet, but it is a
+// module of message copy by its name and by its shape, so its wording is asked about then, in the
+// file that holds it, rather than later at an edit that carries no words of its own.
+const QUIET_SHOWN = [
+  'The orders feed has gone quiet: nothing has arrived for 45 minutes',
+  'The orders feed is still quiet, so somebody needs to look at it now',
+  'The orders feed is sending again',
+  'Every feed is sending again',
+  'Checked every feed for a quiet one',
+].join('\n')
+
+test('a new copy module is held as it is written, though nothing sends it yet, naming no sender; once Dan approves, the edits that make a route send it go through (#2720)', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
-  expect(refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))).toBe('')
-  // The import alone sends nothing of the module yet, so it passes: what is held is the send.
+  const write = { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }
+  const held = refusalOf(await call($, write))
+  expect(held).toContain(QUIET)
+  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
+  expect(held).toContain('Every feed is sending again')
+  // Nothing sends it, so no sender is named.
+  expect(held).not.toContain('sends to Slack')
+  expect(held).not.toContain(MONITOR)
+  expect(w.ran).toEqual([])
+  expect(w.cards.length).toBe(1)
+  await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
+  // The question names the file that holds the wording.
+  expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  // Approving posts nothing (#2284), so the question above the message never reads as a send.
+  expect(readsAsSend((w.asked[0]?.questions[0]?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  expect(refusalOf(await call($, write))).toBe('')
+  // The wording is approved, so the import and the send that bring it to Slack are not asked again.
   expect(refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: QUIET_IMPORT + MONITOR_TEXT }))).toBe('')
+  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(lateBooking('1'))\n  await postAlert(quietPage('orders', 45))\n" }
+  expect(refusalOf(await call($, send))).toBe('')
+  expect(w.ran.length).toBe(3)
+})
+
+test('a copy module nothing sends is held by its shape under any name, and by its name with one message; an ordinary module beside it is not (#2720)', withKit, async ($, on) => {
+  const w = world($, on)
+  // By shape: functions building message text, in a file whose name says nothing.
+  const SHAPED = '/w/app/src/lib/monitor/quiet.ts'
+  const shaped = refusalOf(await call($, { tool: 'Write', file_path: SHAPED, content: QUIET_TEXT }))
+  expect(shaped).toContain(SHAPED)
+  expect(shaped).toContain('The ${feed} feed is sending again')
+  // By name: one message in a file named as copy.
+  const NAMED = '/w/app/src/lib/ops/late-copy.ts'
+  const named = refusalOf(await call($, { tool: 'Write', file_path: NAMED, content: 'export const late = (id: string) => `Booking ${id} is running late`\n' }))
+  expect(named).toContain(NAMED)
+  expect(named).toContain('Booking ${id} is running late')
+  // By an edit to one already there, too.
+  w.files[NAMED] = 'export const late = (id: string) => `Booking ${id} is late`\n'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: NAMED, old_string: 'is late', new_string: 'is very late' }))).toContain('Booking ${id} is very late')
+  // An ordinary module with the same single message, and an edit to the copy module that adds no
+  // wording, both pass.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/app/src/lib/ops/late.ts', content: 'export const late = (id: string) => `Booking ${id} is running late`\n' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: NAMED, old_string: '(id: string)', new_string: '(id: number)' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test('a copy module in no repository, in a test, or already used by a screen or a route that sends nothing passes; one only a test imports is held (#2720)', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      '/w/app/src/lib/ui/banner-copy.ts': 'export const BANNER = 1\n',
+      '/w/app/src/components/Banner.tsx': "import { BANNER } from '../lib/ui/banner-copy'\nexport const Banner = () => <p>{BANNER}</p>\n",
+      '/w/app/src/lib/api/miss-copy.ts': 'export const BANNER = 1\n',
+      '/w/app/src/app/api/miss/route.ts': "import { BANNER } from '@/lib/api/miss-copy'\nexport const GET = () => new Response(String(BANNER))\n",
+      '/w/app/src/lib/ops/late-copy.ts': 'export const BANNER = 1\n',
+      '/w/app/src/lib/ops/late-copy.test.ts': "import { BANNER } from './late-copy'\nit('is one', () => expect(BANNER).toBe(1))\n",
+    },
+  })
+  const add = (file: string) => ({ tool: 'Write', file_path: file, content: 'export const BANNER = 1\nexport const late = (id: string) => `Booking ${id} is running late`\n' })
+  expect(refusalOf(await call($, add('/private/tmp/scratch/late-copy.ts')))).toBe('')
+  expect(refusalOf(await call($, add('/w/app/src/lib/__tests__/late-copy.ts')))).toBe('')
+  // Used already, by a screen (#2519) or a route answering with it: judged by what that use sends.
+  expect(refusalOf(await call($, add('/w/app/src/lib/ui/banner-copy.ts')))).toBe('')
+  expect(refusalOf(await call($, add('/w/app/src/lib/api/miss-copy.ts')))).toBe('')
+  expect(w.ran.length).toBe(4)
+  // A test using it is no use: what the module is for is still not wired.
+  expect(refusalOf(await call($, add('/w/app/src/lib/ops/late-copy.ts')))).toContain('Booking ${id} is running late')
+  expect(w.ran.length).toBe(4)
+})
+
+// The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
+// one message among other values, so only the send asks.
+const FEEDS = '/w/app/src/lib/monitor/feeds.ts'
+const FEEDS_TEXT = "export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`\nexport const CHECKED = 'Checked every feed for a quiet one'\nexport const LIMIT = 45\n"
+test('a new module that is no copy module passes while nothing sends it; the edit that makes a route send it is held for the wording it brings in, then goes through once Dan approves (#2637)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
+  expect(refusalOf(await call($, { tool: 'Write', file_path: FEEDS, content: FEEDS_TEXT }))).toBe('')
+  // The import alone sends nothing of the module yet, so it passes: what is held is the send.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: "import { quietPage, CHECKED } from '@/lib/monitor/feeds'\n" + MONITOR_TEXT }))).toBe('')
   expect(w.ran.length).toBe(2)
   const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(lateBooking('1'))\n  await postAlert(quietPage('orders', 45))\n  console.log(CHECKED)\n" }
   const held = refusalOf(await call($, send))
   expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
-  expect(held).toContain(QUIET)
+  expect(held).toContain(FEEDS)
   expect(held).toContain(MONITOR)
-  // Only what the send carries: never the line it logs, the all clear it imports and does not send,
-  // or the wording the route already sent before this edit.
+  // Only what the send carries: never the line it logs, or the wording the route already sent.
   expect(held).not.toContain('Checked every feed')
-  expect(held).not.toContain('sending again')
   expect(held).not.toContain('is late')
   expect(w.ran.length).toBe(2)
   expect(w.cards.length).toBe(1)
   await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
-  expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  expect(w.asked[0]?.questions[0]?.question).toContain(FEEDS)
   expect(refusalOf(await call($, send))).toBe('')
   expect(w.ran.length).toBe(3)
 })
