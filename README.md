@@ -7375,7 +7375,9 @@ checked again that session. A Bash command is judged by the files mod-kit's writ
 judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
 followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
-its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
+its words do not name) is held saying it cannot be read, and may proceed, or fold into one of the
+repository's open structural issues naming a file, which the hold lists, the session's own included
+(#2706); a fold only records the issue, and the command runs as proceed would let it. It passes where it is
 in no checkout, or where the repository has no fast growing file and no structural issue naming a
 file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.

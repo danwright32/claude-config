@@ -609,6 +609,34 @@ test('a shell command whose file cannot be read is held saying so, may only proc
   expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
 })
 
+test('a held command naming no file can be folded into an open structural issue the hold listed, recorded with its number, and never into one it did not list (#2706)', KIT, async ($, on) => {
+  // #41 is an open tech-debt issue naming src/lib/slack.ts; #42 names a file but is no structural issue.
+  const w = world($, on)
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('cannot be read')
+  expect(why).toContain('"decision": "fold", "issue": <one of #41>')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 42 }))).toContain('#41')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 99 }))).toContain('#41')
+  expect(w.records().filter(x => x.kind === 'decided')).toEqual([])
+  expect(refusal(await bash($ as never, w, BUILT, {}, 'b2'))).toContain('cannot be read')
+  const d = await decide($ as never, { call: 'b2', decision: 'fold', issue: 41 })
+  expect(said(d)).toContain('#41 is folded into this work')
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ v: 3, decision: 'fold', issue: 41, path: '$OUT/big.ts', call: 'b2' })
+  // The unchanged command then runs, as it would after proceed; another is judged on its own.
+  expect((await bash($ as never, w, BUILT, {}, 'b3')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b4'))).toContain('cannot be read')
+})
+
+test('a held command naming no file lists the session\'s own structural issue too, so its own restructure can be folded in (#2706)', KIT, async ($, on) => {
+  // The branch is #41's own, so #41 does not hold; the fast growing src/big.ts still holds the command.
+  const w = world($, on, { branch: '41-split-slack' })
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('<one of #41>')
+  await decide($ as never, { call: 'b1', decision: 'fold', issue: 41 })
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ decision: 'fold', issue: 41 })
+})
+
 test('a script handed a double quoted regex ending in a dollar sign the shell leaves as text runs unjudged; one handed a word the shell expands is held (#2320)', KIT, async ($, on) => {
   const w = world($, on)
   expect((await bash($ as never, w, 'python3 probe.py "^foo.*bar$"')).result).toBe('done')
