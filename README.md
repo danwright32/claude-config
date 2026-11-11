@@ -6310,7 +6310,9 @@ judged) or by Bash: every file mod-kit's `$.modkit.writes` names, a removal or e
 git itself changes (a checkout of a path, `git restore`, `git rm`, both names of a `git mv`, #1136;
 since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the lines it changes, read
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
-of changed lines at a time, so undoing an edit the guard let through passes; one git cannot read, or
+of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
+merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
+and judged against that side rather than the conflict on disk; one git cannot read, or
 one beside any other command on the line (a cd aside), which may change what it puts back first, is
 judged whole with the refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
