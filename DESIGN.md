@@ -2393,13 +2393,12 @@ fixed cost was most of the price: a sync started 16 rsync runs, about a third of
   itself, and onto a linked destination it would replace the link with a folder, so a tree that is a
   link at either end, or whose source is not a folder named after it, keeps its own call.
 - **The judging order is kept.** The copy and the apply still work out each tree's excludes in the
-  order they always did, and run the combined call when skills' turn comes; the mods placeholder and
-  each tree's applied records follow it in tree order. Nothing a tree's judgement reads is written by
-  another tree's copy.
-- **skills keeps its own rsync.** Its excludes include unanchored plugin names, which would have to
-  become `/skills/NAME` plus `/skills/**/NAME`, and its turn runs the unloadable skill checks with
-  side effects of their own. That is another call per step (about 35 ms, measured 2026-11-10) left
-  on the table on purpose: the biggest lever not pulled here, and the next one to measure.
+  order they always did, and run the combined call once the last (skills, since #2661) is judged; the
+  mods placeholder and each tree's applied records follow it in tree order. Nothing a tree's
+  judgement reads is written by another tree's copy.
+- **skills kept its own rsync at first, and joined in #2661** (below). Its excludes include
+  unanchored plugin names, which become `/skills/NAME` plus `/skills/**/NAME`, and its turn runs the
+  unloadable skill checks with side effects of their own.
 - **A failure still fails the step.** A failing combined call has already written whatever it could
   for every tree, where the per tree calls stopped at the first failing tree; the step then fails as
   it did, and the apply records what was written before it does.
@@ -2410,6 +2409,43 @@ itemizes the same lines per tree. The one line it does not reproduce is the `cre
 line a per tree dry run prints for a destination tree that does not exist yet, which only
 `past_release_paths` meets and nothing reads. It also counts the rsync calls of a real sync, so a
 caller that goes back to one call per tree fails it.
+
+## The expanded copy is built once per apply, and skills joins the one rsync (#2661)
+
+`apply_source_dir` hands the apply each payload tree as it should land on this Mac: the payload
+itself, or, when a file in it carries the home path placeholder, a scratch copy with this Mac's home
+put back. An apply asks for it once per step for each tree (the deletion dry run, the locally ahead
+dry run, the apply) and once per mod folder on this Mac, and every ask rebuilt the answer. On this
+repository's own payload (hooks and skills carry the placeholder, about 450 and 310 files) one
+apply copied each of them three times, at about 0.35 s a copy, and read the whole mods tree 26
+times looking for the placeholder, at about 0.08 s a read. The choices:
+
+- **The answer is remembered for the rest of that apply, on disk.** Every caller reads the function
+  through a command substitution, whose variables die with it, so the answer is a file beside the
+  copy (`<tree>.answer`: plain or expanded, the source, and which apply it belongs to). The apply
+  sets `APPLY_SOURCE_GEN`, so a second apply in one run starts afresh, and the whole folder is
+  removed on exit as before.
+- **It is believed only while the source is unchanged by CHANGE time.** `<tree>.stamp` is made
+  before the source is read, and a remembered answer stands only while `find -newercc` finds nothing
+  under the source newer than it. Not modification time: rsync -a and git set a file's (and with
+  rsync, its folder's) modification time back, but any write, deletion, rename or mode change moves
+  the change time forward. An edit landing while the copy is being made is newer than the stamp, so
+  the next ask rebuilds. The check costs one `find` (about 0.015 s on these trees) where the plain
+  case used to cost a full read for the placeholder.
+- **The mods lookup is asked once per apply**, not once per mod folder, since nothing in that loop
+  writes the payload.
+- **skills joins the combined rsync in every step that ran it alone** (the send side dry run, the
+  copy into the payload, both receive side dry runs and the apply). Its bare names (plugin skills,
+  `.trash`) become `/NAME` plus `/**/NAME` through `mirror_rsync_add_any_depth`, which match at every
+  depth of skills and nowhere else on both rsyncs a Mac can have; an unanchored pattern holding a
+  slash is still refused. In the apply and the copy, skills' checks (which prune empty entries from
+  the payload and report) now run before the one rsync rather than after the other trees were
+  written; they read only skills folders.
+
+`tests/test-apply-source-cache.sh` holds the reuse, every way the source can change (four mutants
+seen to fail it: no change check, a modification time check, a stamp made after the build, no
+apply key), and a real pull and sync building each copy once. `tests/test-mirror-rsync.sh` holds
+skills' excludes to the per tree call on every rsync. Measured before and after in the pull request.
 
 ## Things known to be wrong and left that way
 
