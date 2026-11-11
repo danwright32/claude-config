@@ -18,6 +18,11 @@ export type SlackAlertPending = {
   literal?: string[]
   /** For wording the edit adds none of and brings to a Slack send from the files it imports (#2637): those files, named on the card, refusal and question. */
   from?: string
+  /**
+   * For an edit the guard could not trace (#2709): why the trace stopped. Its `added` and `removed`
+   * are then the lines the edit adds and takes away, shown to Dan in place of a rendered message.
+   */
+  untraced?: string
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }
