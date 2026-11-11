@@ -532,18 +532,5 @@ class Judging(Base):
         self.assertEqual(self.kinds(self.judge(body + "\n" + body)), ["screenshots-malformed"])
 
 
-class ShootWeb(unittest.TestCase):
-    def test_the_reference_drive_helper_keeps_the_contract(self):
-        import shutil
-        import subprocess
-        node = shutil.which("node")
-        if node is None:
-            self.skipTest("unmeasured: node is not on PATH, so shoot_web.mjs's contract could not be run")
-        r = subprocess.run([node, "--test", os.path.join(HERE, "test_shoot_web.mjs")], capture_output=True, text=True,
-                           timeout=60)
-        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
-        self.assertIn("# pass 9", r.stdout)
-
-
 if __name__ == "__main__":
     unittest.main()

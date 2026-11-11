@@ -141,7 +141,7 @@ def shoot(receipt_id, side, areas, run=subprocess.run, home=None):
 
 
 def _gh(args, data=None):
-    r = subprocess.run(["gh"] + list(args), input=data, capture_output=True, text=True)
+    r = subprocess.run(["gh"] + list(args), input=data, capture_output=True, text=True, errors="replace")
     return r.returncode, r.stdout, r.stderr
 
 
@@ -173,7 +173,7 @@ def _upload(gh, slug, files, message):
     blobs = []
     for path, data in files:
         rc, out, err = _api(gh, "repos/%s/git/blobs" % slug, "POST",
-                            {"content": base64.b64encode(data).decode("ascii"), "encoding": "base64"})
+                            {"content": base64.b64encode(data).decode("ascii", errors="strict"), "encoding": "base64"})
         sha = (_json(out) or {}).get("sha") if rc == 0 else None
         if not sha:
             failed("uploading %s" % path, err)
@@ -393,7 +393,7 @@ def remember_block(receipt_id, text, home=None):
     path = _digest_path(receipt_id, home)
     line = json.dumps({"schema": DIGEST_SCHEMA, "digest": block_digest(text), "at": v.utc_now()}) + "\n"
     try:
-        with open(path, "a") as f:
+        with open(path, "a", errors="replace") as f:
             f.write(line)
     except OSError as e:
         v.fail("render-not-remembered", "the fingerprint of the screenshots block could not be written to %s (%s),"
@@ -583,9 +583,9 @@ def main(argv):
             m = publish(v.load_areas(a.areas_file), a.repo, a.pr, a.base_receipt, a.head_receipt, link=a.link)
             print(json.dumps(m, indent=1))
         else:
-            with open(a.manifest) as f:
+            with open(a.manifest, errors="strict") as f:
                 m = json.load(f)
-            with open(a.body) as f:
+            with open(a.body, errors="strict") as f:
                 body = f.read()
             sys.stdout.write(render_into_body(m, body))
         return 0

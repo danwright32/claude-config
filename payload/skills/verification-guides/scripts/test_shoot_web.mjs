@@ -1,5 +1,5 @@
 // node --test test_shoot_web.mjs: the drive helper contract of shoot_web.mjs (claude-config#2516).
-// Run by test_screenshots.py, so the suite that discovers Python tests runs this one too.
+// Run by test-shoot-web.sh beside it, through the TAP reporter so its counts read the same on every node.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseShot, shoot } from "./shoot_web.mjs";
