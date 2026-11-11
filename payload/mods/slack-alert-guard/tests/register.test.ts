@@ -32,12 +32,13 @@ const modKit: { name: string; register: Register } = {
       }
       // Only the members the guard calls are stood in; any other it ever reached would be undefined
       // and throw, which every test here would show as a refusal it did not expect.
-      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper'> = {
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper' | 'branch'> = {
         screen: async () => null,
         // The gh and command readers are byte for byte copies of mod-kit's own (#2628).
         pipeline: async (input: { command: string; cwd?: string }) => ask('pipeline', input),
         gh: async (input: { words: string[] }) => ask('gh', input),
         mergeHelper: async c => ask('mergeHelper', c),
+        branch: async (input: { path: string }) => ask('branch', input),
         writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
         pythonText: async (input: { code: string }) => ask('pythonText', input),
         blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -78,7 +79,7 @@ const sleepKit: { name: string; register: Register } = {
         isAsleep: async () => ask('isAsleep'),
         sleepNote: async (note: Record<string, unknown>) => ask('sleepNote', note),
       }
-      return { ...built, scopeModes } as never
+      return { ...built, scopeModes }
     })
   },
 }
@@ -122,7 +123,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin/HEAD holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
-  const night2 = { session: 's1', diffs: {} as Record<string, string>, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false }
+  const night2 = { session: 's1', diffs: {} as Record<string, string>, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
   const ghs: string[][] = []
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
@@ -232,6 +233,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       // git show origin/HEAD:<path from the top>, as git answers it (#2628).
       if (argv[3] === 'show') {
         const spec = argv[4] ?? ''
+        night2.shownFrom.push(spec.slice(0, spec.indexOf(':')))
         const rel = spec.slice(spec.indexOf(':') + 1)
         if (night2.showFails) return { value: { exitCode: 128, stdout: '', stderr: "fatal: invalid object name 'origin/HEAD'.\n", isStdoutTruncated: false, isStderrTruncated: false } } as never
         const t = night2.upstream === undefined ? files[`${REPO}/${rel}`] : night2.upstream[rel]
@@ -252,6 +254,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     // undefined (no gh, no helper) travels as null and is read back as none.
     if (cmd === '__modkit' && method === 'gh') return ok(JSON.stringify(ghArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
     if (cmd === '__modkit' && method === 'mergeHelper') return ok(JSON.stringify(mergeHelperArgs(JSON.parse(String(raw))) ?? null))
+    if (cmd === '__modkit' && method === 'branch') return ok(JSON.stringify({ root: REPO, main: REPO, branch: '2628-sleep', defaultBranch: night2.defaultBranch, isDefault: false, issues: [2628] }))
     if (cmd === '__modkit' && method === 'typedAnswer') {
       const input = JSON.parse(String(raw)) as TypedAnswer
       return ok(JSON.stringify({ toast: typedToast(input.guard), text: typedAnswerText(input) }))
@@ -2212,14 +2215,20 @@ test('taking away unapproved wording that is not on origin passes in any mode; w
   // The file as origin has it without the message: it exists only in a local commit.
   w.night.upstream = { 'lib/alert.ts': 'export const alert = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text: `` }) })\n' }
   expect(refusalOf(await call($, DROP))).toBe('')
+  // Read from origin's default branch, as mod-kit's branch reader names it.
+  expect(w.night.shownFrom).toEqual(['origin/main'])
   // A file origin does not have at all.
   w.night.upstream = {}
   expect(refusalOf(await call($, DROP))).toBe('')
   // The live message, as origin has it, is still held when taken away.
   w.night.upstream = { 'lib/alert.ts': ALERT_TEXT }
   expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
-  // git failing to say holds as before.
+  // git failing to say, or no default branch to read, holds as before.
   w.night.showFails = true
+  expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
+  w.night.showFails = false
+  w.night.upstream = {}
+  w.night.defaultBranch = null
   expect(refusalOf(await call($, DROP))).toContain('takes Slack message text away')
   expect(w.ran.length).toBe(2)
 })

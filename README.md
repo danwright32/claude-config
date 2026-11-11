@@ -7547,9 +7547,9 @@ question, with the message chosen, and only Approve wording records the approval
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
 unanswered for three days expires: said once in each session, still held from merging, and no longer
 letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
-overnight). In any mode, taking away wording that origin's copy of the file (`git show
-origin/HEAD:<path>`) does not hold passes, since it was never live; git failing to say holds as
-before.
+overnight). In any mode, taking away wording that origin's copy of the file on its default branch
+(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
+live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 

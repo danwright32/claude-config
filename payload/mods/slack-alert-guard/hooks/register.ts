@@ -259,13 +259,16 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
 /**
  * The wording a removal takes away that the file holds on origin (#2628): text that exists only in a
  * local commit is nothing Dan approved or anything posts, so taking it away passes in any mode. Read
- * with the same reader as the edit, from `git show origin/HEAD:<path>`; a file origin lacks holds
- * none; undefined when git cannot say, which holds as before.
+ * with the same reader as the edit, from `git show origin/<default branch>:<path>`, the default branch
+ * as mod-kit's one branch reader names it; a file origin lacks holds none; undefined when git or the
+ * reader cannot say, which holds as before.
  */
 const onOrigin = async ($: EngineInterface, path: string, read: (t: string) => Promise<{ text: string }[]>): Promise<Set<string> | undefined> => {
   const where = await placed($, path, (await $.clock.now()) + SCAN_MS)
   if (!where) return undefined
-  const r = await $.process.run(['git', '-C', where.top, 'show', `origin/HEAD:${where.rel}`], { timeoutMs: SCAN_MS })
+  const b = await $.modkit.branch({ path: where.top })
+  if (!b || 'unreadable' in b || !b.defaultBranch) return undefined
+  const r = await $.process.run(['git', '-C', where.top, 'show', `origin/${b.defaultBranch}:${where.rel}`], { timeoutMs: SCAN_MS })
   if (r.exitCode === 128 && /exists on disk, but not in|does not exist in/.test(r.stderr)) return new Set()
   if (r.exitCode !== 0 || r.isStdoutTruncated) return undefined
   return new Set((await read(r.stdout)).map(l => l.text))
