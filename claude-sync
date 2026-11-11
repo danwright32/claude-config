@@ -13298,8 +13298,8 @@ LOOP_INPUT
   # is not a file and would be counted as one. A folder the shared repo holds nothing under keeps its
   # entry, so what could not be read is still said.
   if [ -n "$unread" ]; then
-    local folders_out="" ufile ureason under
-    while IFS=$'\t' read -r _ ufile ureason; do
+    local folders_out="" ukind ufile ureason under
+    while IFS=$'\t' read -r ukind ufile ureason; do
       [ -n "$ufile" ] || continue
       if [ -d "$CLAUDE_HOME/mods/$ufile" ]; then
         under="$(printf '%s\n' "$tip" | awk -F '\t' -v d="$ufile/" 'index($2, d) == 1 { print $2 }')"

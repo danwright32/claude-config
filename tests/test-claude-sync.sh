@@ -25140,8 +25140,10 @@ check "#2716 a file the shared repo holds in an unreadable folder is named as no
   "line_has \"\$out_ms_dir\" 'could not compare plain-mod/index\.ts' 'plain-mod'"
 check "#2716 and it is not in the lag line, while the files status could read still are" \
   "line_has \"\$out_ms_dir\" 'mods behind the shared repo: 2 file' 'lock-mod' 'path-mod' && ! line_has \"\$out_ms_dir\" 'mods behind the shared repo' 'plain-mod'"
+# The count is what proves the folder's own entry went: the check above requires the file's entry, so
+# a folder entry kept beside it would make the count 2.
 check "#2716 and the folder itself is not counted as a file" \
-  "line_has \"\$out_ms_dir\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind' && ! grep -q 'could not compare plain-mod: ' <<< \"\$out_ms_dir\""
+  "line_has \"\$out_ms_dir\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
