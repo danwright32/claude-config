@@ -25281,7 +25281,8 @@ sw_hold(){ ( . "$SWPAY/lib/merge-turn.sh"; TURN_PID="$1"; TURN_PID_START=""
 # HOOK_TESTS_SLOT=1 because this suite itself runs inside a full run, which the runner would
 # otherwise read as a fixture run and never queue; a pull from a terminal or launchd queues unasked.
 # The hold bound is lifted because the clock here only moves forward across pulls, and past its
-# 2700 seconds the stand in would be passed over as stuck, which is the slot working, not this case.
+# 2700 seconds (the library's default, set and not measured) the stand in would be passed over as
+# stuck, which is the slot working, not this case.
 sw_pull(){ # sw_pull [env assignments...] -> the pull's output
   env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SLEEP -u CI \
     CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_LOCK="$SWLOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
