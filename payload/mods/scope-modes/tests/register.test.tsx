@@ -681,7 +681,8 @@ const world = (on: On, o: Opts = {}) => {
       if (op === 'note' && o.noteFails) return fail(1, o.noteFails)
       if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
       if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
-      if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
+      // After the night's end note, never the overnight check's line written before it (#2766).
+      if (op === 'note' && o.homeGoneAfterNote && /"kind":"(?:woke|limit)"/.test(arg('--line'))) w.homeGone = true
       // Every render writes what the report says needs Dan beside the notes (#1665), as the real
       // script does: a fixture given there stands for the rows the notes give, marked final by the
       // wake render; with none, the night had none.
@@ -910,6 +911,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok('dan\n')
     }
     if (cmd === 'gh' && a[0] === 'api' && /^(?:users\/dan\/events|repos\/[^/]+\/[^/]+\/(?:milestones|commits))/.test(a[1] ?? '')) return ok('[]')
+    if (cmd === 'gh' && a[0] === 'api' && /^repos\/[^/]+\/[^/]+\/actions\/runs\?/.test(a[1] ?? '')) return ok('{"total_count":0,"workflow_runs":[]}')
     if (cmd === 'gh' && (a[0] === 'search' || (a[0] === 'run' && a[1] === 'list'))) return ok('[]')
     if (cmd === 'gh') {
       const gh = o.gh ?? { pr: null, issues: {} }
@@ -3577,9 +3579,13 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session; the other open session switches to away within a minute. The night's report is at ${'/Users'}/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.`)
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
-  expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
-  expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
-  expect(w.reports[1]).toEqual({ op: 'render', record: moved, final: true })
+  // The overnight check's one line goes first, every night, so the report can tell it ran (#2766).
+  expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([
+    [moved, { kind: 'checked', at: T0, by: 's1', text: expect.stringMatching(/^The overnight check read /) }],
+    [moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }],
+  ])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'note', 'render'])
+  expect(w.reports[2]).toEqual({ op: 'render', record: moved, final: true })
   expect(w.files[CURRENT]).toBeUndefined()
   expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP)).sort()).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`, `${SLEEP}/notes/g0.needs.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
@@ -3634,7 +3640,7 @@ test('/wake opens the report in BBEdit on the front window, says focus moved, an
   expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session; the 2 other open sessions switch to home within a minute. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
   // Opened only after the final render, so BBEdit shows the finished report.
   expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', REPORT]])
-  expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'note', 'render'])
   // No session is sent a summary request any more (#1285): each puts its own morning at its minute.
   expect(w.sent.filter(x => x.text.startsWith('Dan is up'))).toEqual([])
   expect(JSON.parse(w.files[PLACE] as string)).toMatchObject({ place: 'home', how: 'wake' })
@@ -3997,7 +4003,7 @@ test('what the report says needs a look and what failed are put to Dan as picker
   const m = morningOf(w)[0] as string
   expect(m).toContain('7.1 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
   expect(m).toContain('7.2 Done overnight, check it: The installed LESSONS.md changed overnight, at 3:10 AM ET')
-  expect(m).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below: put each to Dan in its own AskUserQuestion picker/)
+  expect(m).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below with rows of one kind together: put each 7\.n to Dan in its own AskUserQuestion picker/)
   // Its own failure, and one of a session that has closed in its repository; never one of a session still open.
   expect(m).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
   expect(m).toContain('8.2 Parked o/r#30 (branch fix-30): two hours with no fix')
@@ -4812,11 +4818,13 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   expect(w.files[CURRENT]).toBeUndefined()
   expect(lastModes(w)).toEqual([])
   expect(w.notified).toEqual(['Sleep mode ended by itself at 12:00 PM ET on Thu Jan 1: it was past noon ET.'])
-  expect(w.appended.length).toBe(1)
+  // The overnight check's one line (#2766), then the end note.
+  expect(w.appended.length).toBe(2)
+  expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'checked' })
   // Noted on the record it moved aside (the writer adds the version and generation), and the report finished (#835).
   const moved = `${SLEEP}/ended/${tick}-limit-s1.json`
-  expect(w.appended[0]?.file).toBe(moved)
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+  expect(w.appended[1]?.file).toBe(moved)
+  expect(JSON.parse(w.appended[1]?.line as string)).toEqual({ kind: 'limit', reason: 'it was past noon ET', at: tick, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
   expect(w.reports.filter(x => x.op === 'render')).toEqual([{ op: 'render', record: moved, final: true }])
   // Every session put back where it was before sleep, through the record, with no message (#2099).
   expect(JSON.parse(w.files[PLACE] as string)).toEqual({ v: 1, place: 'home', at: tick, by: 's1', cwd: '/repo', how: 'sleep limit' })
@@ -4924,8 +4932,8 @@ test('a wake whose report cannot be finished says each thing that failed, and is
   // A usage hook that throws is skipped by the engine, so the read fails with the engine's own words.
   expect(r.text).toMatch(/^Sleep mode is off\. It began at 7:11 PM ET on Wed Dec 31\. Home is on in this session\. The night's report at \/Users\/x\/Downloads\/Sleep report 1969-12-31\.md is not complete: this session's usage could not be read \([^)]+\); the report could not be finished \(gh: not logged in\)\. It was not opened: there is no file there\./)
   expect(w.files[CURRENT]).toBeUndefined()
-  // The woke note is still written, without a usage reading it does not have.
-  expect(JSON.parse(w.appended[0]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
+  // The woke note is still written, without a usage reading it does not have, after the overnight check's line (#2766).
+  expect(JSON.parse(w.appended[1]?.line as string)).toEqual({ kind: 'woke', at: T0, by: 's1' })
 })
 
 test('a night that ends by itself and cannot note it says so in a toast (#835)', withDeps, async ($, on) => {
@@ -4940,7 +4948,7 @@ test('a final render whose own setup throws is said with the rest, never escapin
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
   expect(r.text).toMatch(/is not complete: the report could not be finished \(HOME is not set\)\. It was not opened: there is no file there\./)
-  expect(w.reports.map(x => x.op)).toEqual(['note'])
+  expect(w.reports.map(x => x.op)).toEqual(['note', 'note'])
   expect(w.files[CURRENT]).toBeUndefined()
 })
 
@@ -5710,7 +5718,7 @@ test('the wake check reads every repository the night notes named, private ones 
   await start($ as never, clock)
   await command($ as never, 'wake')
   expect(w.runs.some(r => r.join(' ') === 'gh api repos/o/private/milestones?state=all&per_page=100')).toBe(true)
-  expect(w.runs.some(r => r.join(' ') === 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100')).toBe(true)
+  expect(w.runs.some(r => r.join(' ').startsWith('gh api repos/o/private/actions/runs?per_page=100&created=>='))).toBe(true)
   // #2016: the installed LESSONS.md is dated through $.fs.stat, and no stat process runs at all.
   expect(w.lessonsStats).toBe(1)
   expect(w.runs.filter(r => r[0] === 'stat')).toEqual([])
@@ -5727,14 +5735,14 @@ for (const noted of [true, false])
       files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [`${SLEEP}/notes/g0.jsonl`]: notes },
       night: {
         'gh api repos/o/r/milestones?state=all&per_page=100': JSON.stringify([{ number: 2, title: 'Ungrouped', updated_at: when }]),
-        'gh api repos/o/r/issues/events?per_page=100&page=1': JSON.stringify([{ event: 'closed', created_at: when, actor: { login: 'dan' }, issue: { number: 7, milestone: { number: 2, title: 'Ungrouped' } } }]),
+        'gh api repos/o/r/issues/events?per_page=100&page=1': JSON.stringify([{ event: 'closed', created_at: when, actor: { login: 'eve' }, issue: { number: 7, milestone: { number: 2, title: 'Ungrouped' } } }]),
         [`gh issue list -R o/r --state closed --search closed:>=${new Date(T0 - 5 * MIN).toISOString().replace(/\.\d{3}Z$/, 'Z')} --json number,closedByPullRequestsReferences --limit 100`]: JSON.stringify([{ number: 7, closedByPullRequestsReferences: [] }]),
       },
     })
     await start($ as never, clock)
     await command($ as never, 'wake')
     const said = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string }).filter(n => n.kind === 'outward' && n.text.startsWith('Milestone touched overnight'))
-    expect(said.map(n => n.text)).toEqual(noted ? [] : ['Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #7 closed by dan'])
+    expect(said.map(n => n.text)).toEqual(noted ? [] : ['Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #7 closed by eve'])
   })
 
 test('/wake puts what the overnight check found first, in the reply and the notes', withDeps, async ($, on) => {
@@ -5750,7 +5758,9 @@ test('/wake puts what the overnight check found first, in the reply and the note
   expect(r.text).toMatch(/The overnight check found one thing to look at: Issue created overnight: o\/r#9 "Filed overnight"\. Not checked: the installed LESSONS\.md was not checked \(its last change could not be read: the file could not be looked up: there is no such file or folder( \([^)]*\))?\)\. The night's report is at /)
   const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
   // Written before the night's end note, so the final render puts them at the top of the report.
-  expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])
+  expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'checked', 'woke'])
+  // What it read and left out as healthy is said every time it runs (#2766).
+  expect(notes[2]?.text).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
   expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
   expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
 })

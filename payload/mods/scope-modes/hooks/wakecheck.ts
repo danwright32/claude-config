@@ -23,7 +23,15 @@ const READ_MS = 20_000
 /** GitHub keeps a user's newest 300 events: three pages of 100 (page 4 answers HTTP 422). */
 const EVENTS_PER_PAGE = 100
 const EVENT_PAGES = 3
-export type WakeFindings = { hits: string[]; unmeasured: string[] }
+/**
+ * `checked` is one line saying how many repositories were read and what was left out as healthy
+ * (#2766): it is written every time the check runs, so a quiet night reads differently from a check
+ * that never ran or stopped looking (Dan's alert rule: silence must still mean healthy).
+ */
+export type WakeFindings = { hits: string[]; unmeasured: string[]; checked: string }
+/** How a finished run ended, in the words the report uses; every conclusion but these is said as GitHub names it. */
+const ENDED: Record<string, string> = { success: 'passed', failure: 'failed', cancelled: 'cancelled', timed_out: 'timed out', skipped: 'skipped' }
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 /** The time now in ms: the engine's clock (`$.clock.now`), never Date.now, which no test can move. */
 export type Clock = () => number | Promise<number>
 
@@ -237,6 +245,27 @@ export const wakeCheck = async (
   // name. A change no issue event records is the milestone itself. What cannot be read is said as
   // not checked, never as explained (L460).
   const worked = new Set((o.worked ?? []).map(k => k.toLowerCase()))
+  // #2766: a change made from one of Dan's own accounts (other sessions of his, filing and closing
+  // issues) is counted and left out; one by anybody else is still listed. His accounts are every one
+  // gh is logged in to on this Mac, read once and only when a change would otherwise be listed; when
+  // that cannot be read only the gh login is his, so more is listed, never less.
+  const ownAccounts = new Set(me ? [me.toLowerCase()] : [])
+  let accountsRead = false
+  const own = async (login: string | undefined): Promise<boolean> => {
+    if (!login) return false
+    if (!ownAccounts.has(login.toLowerCase()) && !accountsRead) {
+      accountsRead = true
+      const r = await run(['gh', 'auth', 'status', '--json', 'hosts'])
+      try {
+        const hosts = r.exitCode === 0 ? (JSON.parse(r.stdout) as { hosts?: Record<string, { login?: unknown }[]> }).hosts : undefined
+        for (const a of hosts?.['github.com'] ?? []) if (typeof a?.login === 'string') ownAccounts.add(a.login.toLowerCase())
+      } catch {
+        // Not JSON: only the gh login is his, as when the read fails.
+      }
+    }
+    return ownAccounts.has(login.toLowerCase())
+  }
+  let ownChanges = 0
   const milestonesExplained = async (repo: string, touched: { number?: number; title?: string; updated_at?: string }[]) => {
     type IssueEv = {
       event?: string
@@ -332,6 +361,10 @@ export const wakeCheck = async (
         const n = e.issue?.number
         const what = `#${typeof n === 'number' ? n : '?'} ${MOVES[e.event ?? ''] ?? e.event}`
         if (typeof n === 'number' && (worked.has(`${repo}#${n}`) || issueKeys.has(`${repo}#${n}`))) continue
+        if (!Number.isNaN(t) && (await own(e.actor?.login ?? undefined))) {
+          ownChanges++
+          continue
+        }
         if (e.event === 'closed' && typeof n === 'number') {
           const c = await closersOf()
           if (c.why !== null) {
@@ -370,6 +403,8 @@ export const wakeCheck = async (
 
   // Milestones touched and deploy runs, in each repository.
   const deployHits: string[] = []
+  // What the runs left out as healthy (#2766), said in the one line the check always writes.
+  const left = { passed: 0, skipped: 0, running: 0, deploys: 0 }
   if (me) {
     for (const repo of repos) {
       type Ms = { number?: number; title?: string; updated_at?: string; created_at?: string }
@@ -386,22 +421,78 @@ export const wakeCheck = async (
       if (touched.length) await milestonesExplained(repo, touched)
     }
     for (const repo of repos) {
-      type RunRow = { workflowName?: string; event?: string; createdAt?: string; url?: string }
-      const runs = await json<RunRow[]>(['gh', 'run', 'list', '-R', repo, '--json', 'workflowName,event,createdAt,url', '--limit', '100'], `deploy runs in ${repo}`)
-      // Newest first: a full page whose oldest run is still overnight may leave runs out (L24), and
-      // what is left out is said by its two ends, as the events are (#1160).
-      if (runs && runs.length >= 100 && when(runs[runs.length - 1]?.createdAt) !== 'before') {
-        const times = runs.map(r => at(r.createdAt)).filter(t => !Number.isNaN(t))
-        const span = times.length ? `from ${etWhen(o.since)} to ${etWhen(Math.min(...times))}` : `since ${etWhen(o.since)}`
-        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (only the newest 100 were asked for)`)
+      // #2766: read through the REST API, which says who started each run and how it ended, created
+      // since sleep began. A run started by a schedule, or dispatched by a cron (a bot started it),
+      // that passed, was skipped or is still running needs nobody, so it is counted, never listed;
+      // one that failed, was cancelled or timed out is listed. A deploy that passed for a merge the
+      // night's notes account for is counted too; every other deploy or dispatch is listed, as before.
+      type Actor = { login?: string; type?: string } | null
+      type RunRow = { name?: string; event?: string; status?: string; conclusion?: string | null; created_at?: string; html_url?: string; head_sha?: string; triggering_actor?: Actor; actor?: Actor }
+      const page = await json<{ total_count?: number; workflow_runs?: RunRow[] }>(['gh', 'api', `repos/${repo}/actions/runs?per_page=100&created=>=${since}`], `deploy runs in ${repo}`)
+      const runs = Array.isArray(page?.workflow_runs) ? page.workflow_runs : page ? null : []
+      if (runs === null) {
+        unmeasured.push(`deploy runs in ${repo} were not checked (gh api: the answer held no list of runs)`)
+        continue
       }
-      for (const r of runs ?? []) {
-        if (!/deploy|release|publish/i.test(r.workflowName ?? '') && r.event !== 'workflow_dispatch') continue
-        const w = when(r.createdAt)
-        if (w === 'overnight') deployHits.push(`Deploy run overnight: ${repo} ${r.workflowName ?? ''} (${r.url ?? ''})`)
-        else if (w === 'unknown') unmeasured.push(`when the ${r.workflowName ?? ''} run in ${repo} ran ${NO_TIME}`)
+      // Newest first: more runs since sleep than were read leaves the oldest out (L24), and what is
+      // left out is said by its two ends, as the events are (#1160).
+      const total = typeof page?.total_count === 'number' ? page.total_count : runs.length
+      if (total > runs.length) {
+        const times = runs.map(r => at(r.created_at)).filter(t => !Number.isNaN(t))
+        const span = times.length ? `from ${etWhen(o.since)} to ${etWhen(Math.min(...times))}` : `since ${etWhen(o.since)}`
+        unmeasured.push(`the runs in ${repo} ${span} were not read for deploys (only the newest ${runs.length} of ${total} were asked for)`)
+      }
+      for (const r of runs) {
+        const name = r.name ?? ''
+        const starter = r.triggering_actor ?? r.actor
+        const cron = r.event === 'schedule' || ((r.event === 'workflow_dispatch' || r.event === 'repository_dispatch') && (starter?.type === 'Bot' || /\[bot\]$/i.test(starter?.login ?? '')))
+        if (!/deploy|release|publish/i.test(name) && r.event !== 'workflow_dispatch' && !cron) continue
+        const w = when(r.created_at)
+        if (w === 'unknown') {
+          unmeasured.push(`when the ${name} run in ${repo} ran ${NO_TIME}`)
+          continue
+        }
+        if (w !== 'overnight') continue
+        const done = r.status === undefined || r.status === 'completed'
+        const conclusion = typeof r.conclusion === 'string' ? r.conclusion : ''
+        if (cron) {
+          if (!done) left.running++
+          else if (conclusion === 'success') left.passed++
+          else if (conclusion === 'skipped') left.skipped++
+          if (!done || conclusion === 'success' || conclusion === 'skipped') continue
+        }
+        const outcome = !done ? ', still running' : conclusion ? `, ${ENDED[conclusion] ?? conclusion.replace(/_/g, ' ')}` : ''
+        let why = ''
+        if (!cron && done && conclusion === 'success' && typeof r.head_sha === 'string' && /^[0-9a-f]{7,40}$/i.test(r.head_sha)) {
+          // The pull requests whose merge commit started it: one the night's notes name accounts for it.
+          const p = await run(['gh', 'api', `repos/${repo}/commits/${r.head_sha}/pulls`])
+          let prs: unknown = null
+          if (p.exitCode === 0)
+            try {
+              prs = JSON.parse(p.stdout)
+            } catch {
+              // said below, as a list that could not be read
+            }
+          if (Array.isArray(prs)) {
+            if (prs.some(x => Number.isInteger(x?.number) && worked.has(`${repo}#${x.number}`))) {
+              left.deploys++
+              continue
+            }
+          } else if (p.exitCode !== SKIPPED) why = `; which merge started it could not be read (${p.exitCode !== 0 ? firstLine(p.stderr) || `exit ${p.exitCode}` : 'the answer was not JSON'})`
+        }
+        deployHits.push(`${cron ? 'Scheduled' : 'Deploy'} run overnight: ${repo} ${name}${outcome} (${r.html_url ?? ''})${why}`)
       }
     }
   }
-  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured }
+  // One line, every time the check runs (#2766): what it read and what it left out as healthy.
+  const counted = [
+    left.passed ? `${plural(left.passed, 'scheduled run', 'scheduled runs')} passed` : '',
+    left.skipped ? `${plural(left.skipped, 'scheduled run', 'scheduled runs')} skipped` : '',
+    left.running ? `${plural(left.running, 'scheduled run', 'scheduled runs')} still running` : '',
+    left.deploys ? `${plural(left.deploys, 'deploy run of a merge', 'deploy runs of merges')} the night accounts for passed` : '',
+    ownChanges ? `${plural(ownChanges, 'milestone change', 'milestone changes')} made from your own accounts` : '',
+  ].filter(Boolean)
+  const read = me ? repos.length : 0
+  const checked = `The overnight check read ${read ? plural(read, 'repository', 'repositories') : 'no repositories'} on GitHub${counted.length ? `; left out as healthy: ${counted.join(', ')}.` : ' and left nothing out.'}`
+  return { hits: [...hits, ...lessonHits, ...deployHits], unmeasured, checked }
 }

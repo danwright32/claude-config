@@ -76,6 +76,10 @@ report knows, and the fields each reads (every other field is kept, and shown no
   outward    text                           the overnight check (#834): something done overnight
                                             that the ban list exists to stop, read from GitHub
   unmeasured text                           the overnight check: a read it could not make
+  checked    text                           the overnight check: one line of what it read and left
+                                            out as healthy, written every time it runs (#2766), so
+                                            a final report with no note of the check at all says
+                                            the check did not run
 
 `by` is the session id that wrote it, stamped by the writer when the caller gave none from the
 local session id (CLAUDE_CODE_SESSION_ID), the id the record names its workers by (#1167). `link`, stamped by the writer when the caller gave none, is
@@ -138,7 +142,9 @@ def claim_branch(issue):
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "progress") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "checked", "progress") + ENDED
+# The notes the overnight check writes (#834, #2766): with none of them, a final report says it did not run.
+CHECK_KINDS = ("outward", "unmeasured", "checked")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -511,10 +517,18 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None, 
     # The overnight check (#834) leads: what a text match could not stop, read from the real state.
     look[:0] = ["Done overnight, check it: %s" % text_of(n) for n in notes if n["kind"] == "outward"] + \
                ["Not checked overnight: %s" % text_of(n) for n in notes if n["kind"] == "unmeasured"]
+    # #2766: the check writes a line every time it runs, so a wake with no note of it at all is a
+    # check that did not run, said as such, never read as a quiet night (L13).
+    if final and not any(n["kind"] in CHECK_KINDS for n in notes):
+        look.insert(0, "The overnight check left no record that it ran, so what was done on GitHub overnight was not read.")
     if bad:
         look.append("%d line%s of the notes could not be read." % (bad, "" if bad == 1 else "s"))
-    if final or look:
+    checked = [text_of(n) for n in notes if n["kind"] == "checked"]
+    if final or look or checked:
         section("Needs a look", look, "Nothing needs a look.")
+        # What the check read and left out as healthy (#2766): a sentence, never a row put to Dan.
+        if checked:
+            out.extend([checked[-1], ""])
     if needs is not None:
         needs.extend({"section": "look", "text": t} for t in look)
 
@@ -829,9 +843,14 @@ def confirm(repo, what, number, night, deadline, done, flags):
                 if at is not None and since <= at <= until:
                     done.append("%s %s #%s %s, %s %s (found by its number; GitHub's search had not listed it)" % (repo, label, number, j.get("title") or "", verb, et_time(at)))
                     return
+                # Merged at any time is merged (#2766): before sleep began (a merge under way at
+                # bedtime) or in the day, it is said under Done with when, never put to Dan as not
+                # done (L11), and never as the night's own work (#1167).
                 if at is not None and at > until:
-                    # Done, but in the day: never the night's, and never said as not done (L11).
-                    flags.append("%s %s #%s was noted done, but GitHub shows it %s %s, %s." % (repo, label, number, verb, et_time(at), past))
+                    done.append("%s %s #%s was noted done and %s %s, %s." % (repo, label, number, verb, et_time(at), past))
+                    return
+                if at is not None and at < since:
+                    done.append("%s %s #%s was noted done and %s %s, before sleep began." % (repo, label, number, verb, et_time(at)))
                     return
         except subprocess.TimeoutExpired:
             why = "gh did not answer within %d seconds" % min(GH_TIMEOUT_S, left)
@@ -840,7 +859,7 @@ def confirm(repo, what, number, night, deadline, done, flags):
     if why:
         flags.append("%s %s #%s was noted done, and GitHub could not confirm it: %s." % (repo, label, number, why))
     else:
-        flags.append("%s %s #%s was noted done, but GitHub does not show it %s since sleep began." % (repo, label, number, verb))
+        flags.append("%s %s #%s was noted done, but GitHub does not show it %s." % (repo, label, number, verb))
 
 
 def _mark(name):
@@ -950,7 +969,7 @@ def _render_locked(path, record, final, github):
 
 # The kinds every session's report carries whoever wrote them (#1287): how the night began and
 # ended, the overnight check, and the limits and usage, which are the whole Mac's, not one session's.
-MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "usage", "wait")
+MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "checked", "usage", "wait")
 
 
 def session_reports(notes_file, record):
