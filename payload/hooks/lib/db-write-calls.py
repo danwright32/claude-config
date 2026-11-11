@@ -829,7 +829,8 @@ def read_statement_file(here, name, flags):
     if len(data) > STATEMENT_FILE_MAX:
         return None, "it is larger than " + str(STATEMENT_FILE_MAX) + " bytes"
     try:
-        return data.decode("utf-8"), None
+        # A file that is not UTF-8 is asked about rather than judged: refusing is the decision.
+        return data.decode("utf-8", "strict"), None
     except UnicodeDecodeError:
         return None, "it is not UTF-8 text"
 

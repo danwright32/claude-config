@@ -54,6 +54,15 @@
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
+
+# It runs on every Bash call since #2763, and approves only a Supabase CLI read, so a Bash payload
+# that never names supabase leaves before anything is loaded. Matched under LC_ALL=C too, so a byte
+# that is not UTF-8 hides no word after it (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+if payload_match "$payload" '"tool_name"[[:space:]]*:[[:space:]]*"Bash"' && ! payload_match "$payload" 'supabase'; then
+  exit 0
+fi
+
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
@@ -61,12 +70,6 @@ HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
-
-# It runs on every Bash call since #2763, and approves only a Supabase CLI read, so a Bash payload
-# that never names supabase leaves before python3 starts.
-if [[ "$payload" =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"Bash\" ]] && [[ "$payload" != *supabase* ]]; then
-  exit 0
-fi
 
 # Cleaned by the shared reader before python3 parses it (claude-config#1944). Without the library
 # the payload is read as it came.

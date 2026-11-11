@@ -895,6 +895,13 @@ both "a read from a file with a redirection is read by neither hook, so it is as
 # With the predicate missing, a read from a file is asked about too.
 r="$(run "$WORK/nolib/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "ask rc=0" ] && check "with lib/sql-read-only.py missing, a select in a file is asked about" ok || check "with lib/sql-read-only.py missing, a select in a file is asked about" "$(decision "$r")"
+# Without lib/db-apply-approval.py beside it, an Applied push is asked about, naming the library.
+mkdir -p "$WORK/noapply/hooks/lib"
+cp "$HOOK" "$WORK/noapply/hooks/"
+for f in "$DIR"/lib/*; do case "$f" in */db-apply-approval.py) ;; *) cp -R "$f" "$WORK/noapply/hooks/lib/" ;; esac; done
+r="$(run "$WORK/noapply/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-apply-approval.py missing, an Applied push is asked about" ok || check "with lib/db-apply-approval.py missing, an Applied push is asked about" "$(decision "$r")"
+case "$(field "$r" reason)" in *db-apply-approval.py*) check "the question names the missing approval library" ok ;; *) check "the question names the missing approval library" "$(field "$r" reason)" ;; esac
 # apply_migration and the branch and project tools are still asked about, Apply or not (#2632).
 expect "apply_migration is still asked about" ask "$(payload "$MIG_TOOL" "alter table a add column note text")"
 expect "merge_branch is still asked about" ask "$(tool_payload "${SB}merge_branch" '{"branch_id": "b9"}')"

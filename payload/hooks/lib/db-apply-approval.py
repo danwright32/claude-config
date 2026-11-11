@@ -112,9 +112,9 @@ def applies(transcript_path, session_id):
                     meta = ask.get("metadata") if isinstance(ask, dict) else None
                     if (isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == SOURCE
                             and not ask.get("answers")):
-                        asked[uid.encode("utf-8")] = ask
+                        asked[uid.encode("utf-8", "surrogatepass")] = ask
                 elif item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
-                    ask = asked.pop(item["tool_use_id"].encode("utf-8"), None)
+                    ask = asked.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
                     if ask is not None and _answered_apply(ask, e.get("toolUseResult"), item.get("is_error")):
                         found.append(ask["metadata"])
     return found
@@ -166,7 +166,8 @@ def covered(workdir, flags, session_id, transcript_path, file=None):
         return False, "the call names no session transcript, where Dan's Apply would be"
     try:
         with open(os.path.join(workdir, "supabase", ".temp", "project-ref"), "rb") as f:
-            ref = f.read(200).decode("utf-8").strip()
+            # A ref that is not UTF-8 is no ref: refusing it is the decision.
+            ref = f.read(200).decode("utf-8", "strict").strip()
     except (OSError, UnicodeDecodeError) as e:
         return False, ("the project it is linked to could not be read from supabase/.temp/project-ref ("
                        + type(e).__name__ + ")")

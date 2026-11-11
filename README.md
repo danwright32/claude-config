@@ -2410,7 +2410,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2891,6 +2891,17 @@ anything
 2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
 average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
 before python3 starts
+
+</td></tr>
+<tr><td>
+
+`read-only-query-allow.sh` (#2763)
+
+</td><td>
+
+2026-11-11: 0.015 to 0.047 seconds, five readings of the hook alone on a plain `git push` at load
+averages of 24 to 28, so mostly the machine; it reads every Bash call since #2763, and one that never
+names supabase leaves after reading its input, before loading anything
 
 </td></tr>
 </tbody>
