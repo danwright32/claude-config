@@ -468,7 +468,7 @@ const CHANGERS: Record<string, { does: ModKitChange['does']; valued: ReadonlySet
 const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
 
 // A command run as a script file by its own name (#1586): one whose name ends in a script language's
-// extension (make-settled.py, /Users/dan/bin/gen.sh), or one named by a path from the folder it is in
+// extension (make-settled.py, /Users/<name>/bin/gen.sh), or one named by a path from the folder it is in
 // (./tools/fix). A system program named by its whole path (/usr/bin/grep) is neither.
 const SCRIPT_NAME = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|mts|cts|rb|pl)$/
 const runsDirectly = (w: string | undefined) => w !== undefined && (SCRIPT_NAME.test(w) || /^\.\.?\//.test(w))

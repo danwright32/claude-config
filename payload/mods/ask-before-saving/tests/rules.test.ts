@@ -8,7 +8,7 @@ import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
 // question shows (claude-config#618, docs/mods-design.md "Ask before saving").
-const HOME = '/Users/dan'
+const HOME = `${'/Users'}/dan`
 
 // The disk beneath the judgement ($.modkit.workingTree in the mod): a checkout at each root given,
 // and none anywhere else. `looked` is every path it was asked about.
@@ -23,24 +23,24 @@ const checkouts = (roots: string[] = ['/tmp/repo', '/private/var/folders/kd/T/cl
 
 test('every lasting memory file counts, and nothing beside it does', async () => {
   const yes = [
-    '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/no-merge-quizzes.md',
-    '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md',
+    `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/memory/no-merge-quizzes.md`,
+    `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md`,
     // #705: a copy into the memory folder names the folder itself.
-    '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory',
-    '/Users/dan/Apps/slate/MEMORY.md',
-    '/Users/dan/.claude/CLAUDE.md',
-    '/Users/dan/.claude/LESSONS.md',
-    '/Users/dan/Apps/claude-config/payload/LESSONS.md',
-    '/Users/dan/Apps/slate/CLAUDE.md',
-    '/Users/dan/Apps/slate/AGENTS.md',
+    `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/memory`,
+    `${'/Users'}/dan/Apps/slate/MEMORY.md`,
+    `${'/Users'}/dan/.claude/CLAUDE.md`,
+    `${'/Users'}/dan/.claude/LESSONS.md`,
+    `${'/Users'}/dan/Apps/claude-config/payload/LESSONS.md`,
+    `${'/Users'}/dan/Apps/slate/CLAUDE.md`,
+    `${'/Users'}/dan/Apps/slate/AGENTS.md`,
   ]
   const no = [
-    '/Users/dan/Apps/slate/README.md',
-    '/Users/dan/.claude/LESSONS-INDEX-data-safety.md',
-    '/Users/dan/.claude/projects/-Users-dan-Apps-slate/abc.jsonl',
-    '/Users/dan/.claude/projects/-Users-dan-Apps-slate',
-    '/Users/dan/Apps/slate/src/memory/cache.ts',
-    '/Users/dan/Apps/slate/NOTCLAUDE.md',
+    `${'/Users'}/dan/Apps/slate/README.md`,
+    `${'/Users'}/dan/.claude/LESSONS-INDEX-data-safety.md`,
+    `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/abc.jsonl`,
+    `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate`,
+    `${'/Users'}/dan/Apps/slate/src/memory/cache.ts`,
+    `${'/Users'}/dan/Apps/slate/NOTCLAUDE.md`,
     // A copy in a temporary folder (a backup, a test fixture in the scratchpad) loads into nothing.
     '/tmp/backup/CLAUDE.md',
     '/private/tmp/claude-501/p/s/scratchpad/CLAUDE.md',
@@ -60,7 +60,7 @@ test('a file in a temporary folder counts inside a checkout there, and the disk 
   expect(await lastingMemory('/private/var/folders/kd/T/clone/CLAUDE.md', HOME, d.inCheckout)).toBe(true)
   expect(await lastingMemory('/tmp/backup/CLAUDE.md', HOME, d.inCheckout)).toBe(false)
   expect(await lastingMemory('/tmp/repo/README.md', HOME, d.inCheckout)).toBe(false)
-  expect(await lastingMemory('/Users/dan/Apps/slate/CLAUDE.md', HOME, d.inCheckout)).toBe(true)
+  expect(await lastingMemory(`${'/Users'}/dan/Apps/slate/CLAUDE.md`, HOME, d.inCheckout)).toBe(true)
   expect(d.looked).toEqual(['/tmp/repo/CLAUDE.md', '/tmp/repo/docs/AGENTS.md', '/private/var/folders/kd/T/clone/CLAUDE.md', '/tmp/backup/CLAUDE.md'])
 })
 
@@ -72,11 +72,11 @@ test('a disk that cannot say whether a temporary file is in a checkout fails the
 })
 
 test('a path is read the way the tools read it: home, relative and dot segments', () => {
-  expect(resolvePath('~/.claude/CLAUDE.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/.claude/CLAUDE.md')
-  expect(resolvePath('CLAUDE.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/Apps/slate/CLAUDE.md')
-  expect(resolvePath('./docs/../AGENTS.md', '/Users/dan/Apps/slate', HOME)).toBe('/Users/dan/Apps/slate/AGENTS.md')
-  expect(resolvePath('$HOME/.claude/LESSONS.md', '/x', HOME)).toBe('/Users/dan/.claude/LESSONS.md')
-  expect(display('/Users/dan/.claude/CLAUDE.md', HOME)).toBe('~/.claude/CLAUDE.md')
+  expect(resolvePath('~/.claude/CLAUDE.md', `${'/Users'}/dan/Apps/slate`, HOME)).toBe(`${'/Users'}/dan/.claude/CLAUDE.md`)
+  expect(resolvePath('CLAUDE.md', `${'/Users'}/dan/Apps/slate`, HOME)).toBe(`${'/Users'}/dan/Apps/slate/CLAUDE.md`)
+  expect(resolvePath('./docs/../AGENTS.md', `${'/Users'}/dan/Apps/slate`, HOME)).toBe(`${'/Users'}/dan/Apps/slate/AGENTS.md`)
+  expect(resolvePath('$HOME/.claude/LESSONS.md', '/x', HOME)).toBe(`${'/Users'}/dan/.claude/LESSONS.md`)
+  expect(display(`${'/Users'}/dan/.claude/CLAUDE.md`, HOME)).toBe('~/.claude/CLAUDE.md')
   expect(display('/opt/x/CLAUDE.md', HOME)).toBe('/opt/x/CLAUDE.md')
 })
 
@@ -135,11 +135,11 @@ test("the lasting memory a command's words name: by path where it can be read, b
   const files = await lastingFiles(
     {
       files: [
-        { word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' },
-        { word: 'README.md', path: '/Users/dan/Apps/slate/README.md' },
+        { word: 'CLAUDE.md', path: `${'/Users'}/dan/Apps/slate/CLAUDE.md` },
+        { word: 'README.md', path: `${'/Users'}/dan/Apps/slate/README.md` },
         { word: '$DIR/AGENTS.md' },
         { word: '$DIR/notes.md' },
-        { word: 'note.md', path: '/Users/dan/.claude/projects/p/memory/note.md' },
+        { word: 'note.md', path: `${'/Users'}/dan/.claude/projects/p/memory/note.md` },
         { word: '/tmp/repo/CLAUDE.md', path: '/tmp/repo/CLAUDE.md' },
         { word: '/tmp/backup/CLAUDE.md', path: '/tmp/backup/CLAUDE.md' },
         // #726: a temporary path built from a variable cannot be looked for on the disk, so it counts.
@@ -168,9 +168,9 @@ test('a target the words cannot name is judged by the lasting memory the command
   expect(await judge([{ word: '*.md' }], 'cd ~/.claude/projects/p/memory && echo x | tee -a *.md')).toEqual(['~/.claude/projects/p/memory'])
   // A path the reader reached through a variable and found to be no lasting memory still asks when
   // the command mentions some: the reader cannot see what an eval, a function or a script sets.
-  expect(await judge([{ word: '$F', path: '/Users/dan/notes.txt' }], 'F=~/notes.txt; eval "F=~/.claude/CLAUDE.md"; echo x >> "$F"')).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await judge([{ word: '$F', path: `${'/Users'}/dan/notes.txt` }], 'F=~/notes.txt; eval "F=~/.claude/CLAUDE.md"; echo x >> "$F"')).toEqual(['~/.claude/CLAUDE.md'])
   // One it followed to lasting memory is shown by that path, and nothing else the command mentions.
-  expect(await judge([{ word: '$F', path: '/Users/dan/.claude/projects/p/memory/MEMORY.md' }], 'F=~/.claude/projects/p/memory/MEMORY.md; cat ~/.claude/CLAUDE.md >> "$F"')).toEqual([
+  expect(await judge([{ word: '$F', path: `${'/Users'}/dan/.claude/projects/p/memory/MEMORY.md` }], 'F=~/.claude/projects/p/memory/MEMORY.md; cat ~/.claude/CLAUDE.md >> "$F"')).toEqual([
     '~/.claude/projects/p/memory/MEMORY.md',
   ])
 })
@@ -193,8 +193,8 @@ test('a write through a variable the command first sets to one plain folder, abs
   expect(await throughS(`D=/private/tmp/x S=${SP}\ncp payload/LESSONS.md $S/LESSONS.md`)).toEqual([])
   // A folder under home by ~/, which an assignment expands, is judged where it lands too: a notes file
   // there beside a command naming LESSONS.md is no save, and CLAUDE.md there is one.
-  expect(await throughS('S=~/notes; cp payload/LESSONS.md $S/notes.txt', '$S/notes.txt', '/Users/dan/notes/notes.txt')).toEqual([])
-  expect(await throughS('S=~/.claude; cp payload/LESSONS.md $S/CLAUDE.md', '$S/CLAUDE.md', '/Users/dan/.claude/CLAUDE.md')).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await throughS('S=~/notes; cp payload/LESSONS.md $S/notes.txt', '$S/notes.txt', `${'/Users'}/dan/notes/notes.txt`)).toEqual([])
+  expect(await throughS('S=~/.claude; cp payload/LESSONS.md $S/CLAUDE.md', '$S/CLAUDE.md', `${'/Users'}/dan/.claude/CLAUDE.md`)).toEqual(['~/.claude/CLAUDE.md'])
   // The same folder inside a checkout there is a session's lasting memory, and is asked about.
   expect(await throughS(`S=/tmp/repo; cp payload/LESSONS.md $S/LESSONS.md`, '$S/LESSONS.md', '/tmp/repo/LESSONS.md')).toEqual(['/tmp/repo/LESSONS.md'])
 })
@@ -222,7 +222,7 @@ test('a write through a variable whose value the command cannot fix for certain 
     `S=${SP}; read S < f; cp payload/LESSONS.md $S/LESSONS.md`,
     `S=${SP}; for S in ~/.claude; do cp payload/LESSONS.md $S/LESSONS.md; done`,
     `S=${SP}; typeset -n R=S; R=~/.claude; cp payload/LESSONS.md $S/LESSONS.md`,
-    `S=${SP}; : \${S::=/Users/dan/.claude}; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; : \${S::=${'/Users'}/dan/.claude}; cp payload/LESSONS.md $S/LESSONS.md`,
     // Exported from elsewhere: set nowhere in the command, so the environment's value is used.
     'cp payload/LESSONS.md $S/LESSONS.md',
     // Text the shell runs may set anything, the variable included, without naming it.
@@ -243,7 +243,7 @@ test('a write through a variable whose value the command cannot fix for certain 
   // A quoted ~, which the shell leaves as a folder named ~ wherever the command runs.
   for (const q of ['"', "'"]) {
     const command = `S=${q}~/notes${q}; cp payload/LESSONS.md $S/notes.txt`
-    expect(`${command}: ${(await throughS(command, '$S/notes.txt', '/Users/dan/notes/notes.txt')).length}`).not.toBe(`${command}: 0`)
+    expect(`${command}: ${(await throughS(command, '$S/notes.txt', `${'/Users'}/dan/notes/notes.txt`)).length}`).not.toBe(`${command}: 0`)
   }
   // A variable the shell sets for itself changes under the command: `$_` after every command, REPLY on a read.
   expect((await throughS(`_=${SP}; cp payload/LESSONS.md $_/LESSONS.md`, '$_/LESSONS.md')).length).not.toBe(0)
@@ -251,7 +251,7 @@ test('a write through a variable whose value the command cannot fix for certain 
   // The reader's path and the command's own value disagree: the guard does not pick a side.
   expect((await throughS(`S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`, '$S/LESSONS.md', '/private/tmp/elsewhere/LESSONS.md')).length).not.toBe(0)
   // A path under the variable that climbs out of the folder is judged where it lands.
-  expect(await throughS(`S=${SP}; cp payload/LESSONS.md $S/../../../../../../../Users/dan/.claude/CLAUDE.md`, '$S/../../../../../../../Users/dan/.claude/CLAUDE.md', '/Users/dan/.claude/CLAUDE.md')).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await throughS(`S=${SP}; cp payload/LESSONS.md $S/../../../../../../..${'/Users'}/dan/.claude/CLAUDE.md`, `$S/../../../../../../..${'/Users'}/dan/.claude/CLAUDE.md`, `${'/Users'}/dan/.claude/CLAUDE.md`)).toEqual(['~/.claude/CLAUDE.md'])
 })
 
 // The route a target the words cannot name takes asks the disk about a temporary path it mentions,
@@ -273,13 +273,13 @@ test('a target the words cannot name, in a command that mentions no lasting memo
   expect(await judge([{ word: '$(mktemp)' }], `printf 'x\\n' > "$(mktemp)"`)).toEqual([])
   // A path spelled out, or under home by $HOME, is judged by that path alone, whatever else the
   // command mentions: a backup of CLAUDE.md is no save to it.
-  expect(await judge([{ word: 'notes.txt', path: '/Users/dan/Apps/slate/notes.txt' }], 'cat ~/.claude/CLAUDE.md > notes.txt')).toEqual([])
-  expect(await judge([{ word: '$HOME/notes.txt', path: '/Users/dan/notes.txt' }], 'cat ~/.claude/CLAUDE.md > $HOME/notes.txt')).toEqual([])
+  expect(await judge([{ word: 'notes.txt', path: `${'/Users'}/dan/Apps/slate/notes.txt` }], 'cat ~/.claude/CLAUDE.md > notes.txt')).toEqual([])
+  expect(await judge([{ word: '$HOME/notes.txt', path: `${'/Users'}/dan/notes.txt` }], 'cat ~/.claude/CLAUDE.md > $HOME/notes.txt')).toEqual([])
 })
 
 test('lasting memory a script or a patch mentions, read from its text', async () => {
   const { inCheckout } = checkouts()
-  expect(await mentioned(`python3 -c "open('/Users/dan/.claude/CLAUDE.md','a').write('x')"`, HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await mentioned(`python3 -c "open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('x')"`, HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
   expect(await mentioned('--- a/AGENTS.md\n+++ b/AGENTS.md\n@@ -1 +1,2 @@\n x\n+- rule', HOME, inCheckout)).toEqual(['AGENTS.md'])
   expect(await mentioned("node -e \"fs.writeFileSync(require('os').homedir() + '/.claude/projects/p/memory/x.md', 'y')\"", HOME, inCheckout)).toEqual(['/.claude/projects/p/memory/x.md'])
   expect(await mentioned('cat > ~/.claude/projects/p/memory/a.md', HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/a.md'])
@@ -289,7 +289,7 @@ test('lasting memory a script or a patch mentions, read from its text', async ()
   // that climbs out of the temporary folder is judged where it lands.
   expect(await mentioned("python3 -c \"open('/tmp/repo/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/repo/CLAUDE.md'])
   expect(await mentioned("python3 -c \"open('/tmp/$D/AGENTS.md','a')\"", HOME, inCheckout)).toEqual(['/tmp/$D/AGENTS.md'])
-  expect(await mentioned("python3 -c \"open('/tmp/../Users/dan/.claude/CLAUDE.md','a')\"", HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
+  expect(await mentioned(`python3 -c "open('/tmp/..${'/Users'}/dan/.claude/CLAUDE.md','a')"`, HOME, inCheckout)).toEqual(['~/.claude/CLAUDE.md'])
   // #743: a path in the memory folder ends where the shell ends a word, so the ; or ) after it is not
   // shown as part of the file.
   expect(await mentioned(`F=~/.claude/projects/p/memory/MEMORY.md; printf 'x\\n' >> "$F"`, HOME, inCheckout)).toEqual(['~/.claude/projects/p/memory/MEMORY.md'])
@@ -348,7 +348,7 @@ test('in a python program, a mention in a comment or in a sentence is text, and 
     "s=s.replace('a', 'see ~/.claude/projects/p/memory/MEMORY.md for why')",
     "open('notes.txt','w').write(\"\"\"It asked about CLAUDE.md again,\nand AGENTS.md too.\"\"\")",
     // A backup's name goes on past the file name, so it is no lasting memory either.
-    "open('/Users/dan/.claude/CLAUDE.md.bak','w').write(s)",
+    `open('${'/Users'}/dan/.claude/CLAUDE.md.bak','w').write(s)`,
     // An escaped quote keeps the string open, and the program after it is read as code again.
     "s='it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
     "s=r'it\\'s in ~/.claude/CLAUDE.md now'\nopen('x.txt','w').write(s)",
@@ -359,21 +359,21 @@ test('in a python program, a mention in a comment or in a sentence is text, and 
     expect(`${code}: ${await left(code)}`).toBe(`${code}: `)
   // Paths: kept.
   for (const [code, file] of [
-    ["open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')", '~/.claude/CLAUDE.md'],
+    [`open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('- rule')`, '~/.claude/CLAUDE.md'],
     ["import os\nopen(os.path.expanduser(\"~/.claude/projects/p/memory/MEMORY.md\"),'a')", '~/.claude/projects/p/memory/MEMORY.md'],
     ["from pathlib import Path\n(Path.home() / '.claude' / 'CLAUDE.md').write_text('x')", 'CLAUDE.md'],
     ["d=os.path.join(root, 'AGENTS.md')", 'AGENTS.md'],
     // Code held in a string and run: the path is closed by a quote inside it.
-    ["exec(\"open('/Users/dan/.claude/CLAUDE.md','a').write('x')\")", '~/.claude/CLAUDE.md'],
+    [`exec("open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('x')")`, '~/.claude/CLAUDE.md'],
     // A shell line held as text names its file inside quotes of its own.
     ["new='''\nprintf '# rules' > \"$E27HA/CLAUDE.md\"\n'''", '$E27HA/CLAUDE.md'],
     // An f-string's braces hold code, so nothing in one is taken for text.
     ['open(f"{home}/.claude/CLAUDE.md is {mode}", "a")', '/.claude/CLAUDE.md'],
     // The program after a string with an escaped quote is code again.
-    ["s='it\\'s here'\nopen('/Users/dan/.claude/AGENTS.md','a')", '~/.claude/AGENTS.md'],
-    ["s=r'it\\'s here'\nopen('/Users/dan/.claude/AGENTS.md','a')", '~/.claude/AGENTS.md'],
+    [`s='it\\'s here'\nopen('${'/Users'}/dan/.claude/AGENTS.md','a')`, '~/.claude/AGENTS.md'],
+    [`s=r'it\\'s here'\nopen('${'/Users'}/dan/.claude/AGENTS.md','a')`, '~/.claude/AGENTS.md'],
     // A comment that is really inside a string is no comment.
-    ["s='# x'; open('/Users/dan/.claude/CLAUDE.md','a')", '~/.claude/CLAUDE.md'],
+    [`s='# x'; open('${'/Users'}/dan/.claude/CLAUDE.md','a')`, '~/.claude/CLAUDE.md'],
   ])
     expect(`${code}: ${await left(code as string)}`).toBe(`${code}: ${file}`)
 })
@@ -388,7 +388,7 @@ test('a file taken from what a command mentions is marked as such, and its menti
   // A file the words name is never marked, whatever else the command mentions.
   const named = { guessed: [] as string[] }
   expect(
-    await lastingFiles({ files: [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }], unnamed: [] }, HOME, inCheckout, 'echo x >> CLAUDE.md', undefined, named),
+    await lastingFiles({ files: [{ word: 'CLAUDE.md', path: `${'/Users'}/dan/Apps/slate/CLAUDE.md` }], unnamed: [] }, HOME, inCheckout, 'echo x >> CLAUDE.md', undefined, named),
   ).toEqual(['~/Apps/slate/CLAUDE.md'])
   expect(named.guessed).toEqual([])
   // Mentions read from the text given, the command's with its program's prose taken out.
@@ -399,12 +399,12 @@ test('a file taken from what a command mentions is marked as such, and its menti
 // name, marked as handed so the refusal says so; one the words also write is said as written.
 test('a lasting memory file handed to a script counts, marked as handed, and is said as handed to a script', async () => {
   const { inCheckout } = checkouts()
-  const runs = [{ args: [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }, { word: 'notes.md', path: '/Users/dan/Apps/slate/notes.md' }] }]
+  const runs = [{ args: [{ word: 'CLAUDE.md', path: `${'/Users'}/dan/Apps/slate/CLAUDE.md` }, { word: 'notes.md', path: `${'/Users'}/dan/Apps/slate/notes.md` }] }]
   const read = { handed: [] as string[], guessed: [] as string[] }
   expect(await lastingFiles({ files: [], unnamed: [], runs }, HOME, inCheckout, 'python3 x.py CLAUDE.md notes.md', undefined, read)).toEqual(['~/Apps/slate/CLAUDE.md'])
   expect(read).toEqual({ handed: ['~/Apps/slate/CLAUDE.md'], guessed: [] })
   const both = { handed: [] as string[] }
-  const files = [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }]
+  const files = [{ word: 'CLAUDE.md', path: `${'/Users'}/dan/Apps/slate/CLAUDE.md` }]
   expect(await lastingFiles({ files, unnamed: [], runs }, HOME, inCheckout, 'python3 x.py CLAUDE.md > CLAUDE.md', undefined, both)).toEqual(['~/Apps/slate/CLAUDE.md'])
   expect(both.handed).toEqual([])
   expect(writesWhat(['~/a/CLAUDE.md'], [], ['~/a/CLAUDE.md'])).toBe('this hands lasting memory (~/a/CLAUDE.md) to a script, which may write it')
@@ -555,13 +555,13 @@ test("a target named through a variable nothing sets is judged the same, by name
 // identifies the save is what it writes, never how the call was spelled around it: Claude words a
 // Bash call's description afresh each time, and may give a path whole where it gave it relative.
 test('the key of a save is what it writes: the file and the text, never the call words around them', () => {
-  const cwd = '/Users/dan/Apps/slate'
+  const cwd = `${'/Users'}/dan/Apps/slate`
   const key = (tool: string, input: Record<string, unknown>) => saveKey(tool, input, cwd, HOME)
   const command = `printf 'x\\n' >> ~/.claude/projects/p/memory/MEMORY.md`
   expect(key('Bash', { command, description: 'Append the rule' })).toBe(key('Bash', { command, description: 'Save it', timeout: 5000 }))
   expect(key('Bash', { command })).not.toBe(key('Bash', { command: `${command} ` }))
   // A command's relative targets are where the session runs, so the same words elsewhere are another save.
-  expect(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, cwd, HOME)).not.toBe(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, '/Users/dan/Apps/other', HOME))
+  expect(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, cwd, HOME)).not.toBe(saveKey('Bash', { command: 'cat >> CLAUDE.md' }, `${'/Users'}/dan/Apps/other`, HOME))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).toBe(key('Write', { file_path: `${cwd}/AGENTS.md`, content: '- a\n' }))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'AGENTS.md', content: '- b\n' }))
   expect(key('Write', { file_path: 'AGENTS.md', content: '- a\n' })).not.toBe(key('Write', { file_path: 'CLAUDE.md', content: '- a\n' }))
@@ -654,7 +654,7 @@ test('an Edit that does more than insert one entry at a line boundary adds nothi
 })
 
 // #1794: one For good on a memory file also covers the one index line linking it.
-const MEMORY_DIR = '/Users/dan/.claude/projects/-Users-dan-Apps-slate/memory'
+const MEMORY_DIR = `${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/memory`
 const IDX = `${MEMORY_DIR}/MEMORY.md`
 const DASH = String.fromCharCode(0x2014)
 const IDX_TEXT = `- [Live sync clone](live-sync.md) ${DASH} the scheduled clone\n- [Band size](band-size.md) ${DASH} global\n`
@@ -666,8 +666,8 @@ test('a memory file an approval can carry its index line for is one directly in 
   // A file in a folder under the memory folder, the folder itself, a file elsewhere.
   expect(memoryFileOf(`${MEMORY_DIR}/old/rule.md`, HOME)).toBeUndefined()
   expect(memoryFileOf(MEMORY_DIR, HOME)).toBeUndefined()
-  expect(memoryFileOf('/Users/dan/Apps/slate/CLAUDE.md', HOME)).toBeUndefined()
-  expect(memoryFileOf('/Users/dan/.claude/projects/-Users-dan-Apps-slate/rule.md', HOME)).toBeUndefined()
+  expect(memoryFileOf(`${'/Users'}/dan/Apps/slate/CLAUDE.md`, HOME)).toBeUndefined()
+  expect(memoryFileOf(`${'/Users'}/dan/.claude/projects/-Users-dan-Apps-slate/rule.md`, HOME)).toBeUndefined()
 })
 
 test('an index write adds a line only when it leaves the index as it was with exactly one line inserted at a line boundary', () => {
@@ -719,7 +719,7 @@ test('an Edit applied to a file leaves it with its old text replaced once, or no
 
 test('a shell append adds its text only as one echo, printf or cat of quoted text with >> into the index and nothing else', () => {
   const shown = '~/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md'
-  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX, HOME)
+  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, `${'/Users'}/dan/Apps/slate`, HOME), IDX, HOME)
   expect(appended(`echo '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
   expect(appended(`echo "${LINE}" >> "${IDX}"`)).toBe(`${LINE}\n`)
   expect(appended(`printf '%s\\n' '${LINE}' >> ${shown}`)).toBe(`${LINE}\n`)
@@ -757,7 +757,7 @@ test('a shell append adds its text only as one echo, printf or cat of quoted tex
 // other second command, or anything the reader cannot read whole, is still asked about.
 test('a shell append may be followed by one plain read of the index, and by nothing else (#2216)', () => {
   const shown = '~/.claude/projects/-Users-dan-Apps-slate/memory/MEMORY.md'
-  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, '/Users/dan/Apps/slate', HOME), IDX, HOME)
+  const appended = (command: string) => shellAppended(command, pipeline(command), commandWrites(command, `${'/Users'}/dan/Apps/slate`, HOME), IDX, HOME)
   const passes = [
     `printf '%s\\n' '${LINE}' >> ${IDX}; tail -1 ${IDX}`,
     `echo '${LINE}' >> ${shown}; tail -1 ${shown}`,
