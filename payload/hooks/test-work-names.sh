@@ -44,6 +44,10 @@ SCAN="$HERE/lib/work-names.py"
   exit 1
 }
 suite_deadline_arm || exit $?
+# Arming and the runner turn bytecode off for every suite (#2751). This one's #2444 checks are about
+# whether its own programs write bytecode into lib/, so it runs them with it on, as a new caller of
+# the scanner would.
+unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX
 
 pass=0; fail=0
 check(){   # $1 = name  $2.. = a command that succeeds when the check holds
@@ -461,7 +465,11 @@ case "$cover_out" in
 esac
 
 # #2444: loading lib/work-names.py by path, as the budget checks above do, must never leave bytecode
-# in lib/ (the class that broke #2422's CI, #2080).
+# in lib/ (the class that broke #2422's CI, #2080). Only a check while this suite's own programs run
+# with bytecode on, as a new caller of the scanner would: the runner and arming turn it off for every
+# suite (#2751), which would pass a writer here unseen.
+bc_flag="$(python3 -c 'import sys; print(sys.flags.dont_write_bytecode)' 2>&1)"
+check "#2751 this suite's own programs run with bytecode on, so the checks below can see a writer in it (flag: $bc_flag)" [ "$bc_flag" = 0 ]
 wn_pyc="$(find "$HERE/lib/__pycache__" -name 'work-names*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
 check "#2444 nothing this suite runs leaves work-names bytecode in lib/ (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
 # And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py). Another

@@ -236,6 +236,13 @@ and its check of whether this Mac's skills folder holds anything to send, #2017)
 `hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
 A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
+A suite that scans the config it is installed in lists its files with `synced_files` from
+`payload/hooks/lib/synced-trees.sh`: the trees `claude-sync` mirrors (its `MIRROR_DIRS`, plus
+`skills/` less the entries above), never `state/`, `projects/` or another folder a Mac keeps for
+itself. Installed, the scanned tree is `~/.claude`, where agents keep copies of hooks in their
+session notes, and a whole tree walk failed the pull on those copies (#2750).
+`hooks/test-synced-trees.sh` fails when its list of trees and `MIRROR_DIRS` differ.
+
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
 reached it. The send names it, does not publish it, and removes the leftover here, saying which
@@ -1841,7 +1848,9 @@ on 2026-11-10 one session's 102 merge logs held 2,845 waits on that cap, 251 of 
 holding the turn, with a median of 8 runs in line behind it. A run in line reads the turn, and the
 line moving, from the queue on this Mac, and reads GitHub only every ten minutes
 (`MWR_LINE_LOOK_SECONDS`) to see its pull request is still open, each time leaving one of the
-session's looks a minute free, so the run holding the turn looks at its own pace. It accepts only the merge
+session's looks a minute free, so the run holding the turn looks at its own pace. A run not yet in
+line leaves that look free too whenever the queue shows another run holding the turn
+(claude-config#2749), since its first look comes before it learns it is in line. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
@@ -4313,6 +4322,14 @@ claude-sync's scratch sweep reclaims after four hours. Under the runner every on
 so no folder is made. A suite that names its own still wins. Arming refuses to run the suite when
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
+
+The same file turns Python's bytecode cache off for every suite, from the runner and from arming
+alike (`PYTHONDONTWRITEBYTECODE=1`, claude-config#2751). A part's suites run side by side, and three
+times a suite importing from `hooks/lib` with it on left `lib/__pycache__` for `test-work-names.sh`'s
+check to find on a pull request that touched neither (#2444, #2600, #2751). `python3 -I` and `-E`
+drop the variable, so `test-lib-bytecode-importers.sh` still asks for `-B` on any command loading
+from lib, following a shell variable to the path it was assigned. A suite whose check is about
+bytecode unsets it after arming, so the check can still see a writer.
 
 A record with no variable is not covered by the list, and this finds one:
 

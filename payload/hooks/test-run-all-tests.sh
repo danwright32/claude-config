@@ -3409,6 +3409,41 @@ printf '%s\n' "$out_lk3" | grep -E '^ +FAIL +test-locked\.sh.*suite lock' > /dev
   || check "#1083 and says it was the lock" "out=$out_lk3"
 
 # ---------------------------------------------------------------------------
+# NO SUITE THE RUNNER STARTS WRITES BYTECODE BESIDE WHAT IT IMPORTS (claude-config#2751).
+#
+# A part's suites run side by side, so one suite importing a module from lib/ with bytecode on left
+# lib/__pycache__/work-names.*.pyc for test-work-names.sh's #2444 check to find, on a pull request
+# that touched neither: the third such writer after #2444 and #2600. The runner hands every suite
+# PYTHONDONTWRITEBYTECODE=1 whatever it inherited, so the next importer nobody has found is covered
+# the day it lands. The fixture suite does not arm its deadline, so what it sees is the runner's, and
+# it records the flag Python itself reads, not only the variable (L322). That the flag stops an
+# import leaving bytecode is measured in test-lib-bytecode-importers.sh.
+# ---------------------------------------------------------------------------
+BC="$TMPROOT/dir-bytecode"
+mkdir -p "$BC"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'python3 -c "import sys; print(sys.flags.dont_write_bytecode)" > "$(dirname "$0")/bc.seen"\n'
+  printf 'printf "%s passed=1 failed=0\\n"\n' "$MARK"
+} > "$BC/test-bytecode.sh"
+chmod +x "$BC/test-bytecode.sh"
+bc_control="$(env -u PYTHONDONTWRITEBYTECODE python3 -c 'import sys; print(sys.flags.dont_write_bytecode)')"
+[ "$bc_control" = 0 ] \
+  && check "#2751 control: with nothing handed down, Python writes bytecode" ok \
+  || check "#2751 control: with nothing handed down, Python writes bytecode" "its flag read '$bc_control'"
+env -u PYTHONDONTWRITEBYTECODE HOOK_TESTS_TIMINGS= bash "$RUNNER" "$BC" > /dev/null 2>&1
+bc_seen="$(cat "$BC/bc.seen" 2>/dev/null)"
+[ "$bc_seen" = 1 ] \
+  && check "#2751 a suite the runner starts has bytecode off" ok \
+  || check "#2751 a suite the runner starts has bytecode off" "its Python's flag read '$bc_seen'"
+rm -f "$BC/bc.seen"
+env PYTHONDONTWRITEBYTECODE= HOOK_TESTS_TIMINGS= bash "$RUNNER" "$BC" > /dev/null 2>&1
+bc_seen="$(cat "$BC/bc.seen" 2>/dev/null)"
+[ "$bc_seen" = 1 ] \
+  && check "#2751 whatever the run inherited" ok \
+  || check "#2751 whatever the run inherited" "with it inherited empty, the suite's Python's flag read '$bc_seen'"
+
+# ---------------------------------------------------------------------------
 # A LOCAL RUN ASKS EACH SUITE TO WAIT A BOUNDED TIME FOR ITS LOCK (claude-config#1297).
 #
 # NOT RUN is honest, and on 2026-10-17 it was all four overlapping builders got for the sync suite:
