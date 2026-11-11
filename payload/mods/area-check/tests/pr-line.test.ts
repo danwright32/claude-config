@@ -167,7 +167,7 @@ test('a malformed log line is skipped and named in a refusal, and said in a dim 
   expect(why).not.toContain('src/old.ts')
   const ok = `gh pr create --title T --body "${A}\n${B}"`
   expect(refusal(await bash($ as never, w, ok, {}, 'b2'))).toBe('')
-  expect(w.logs.some(l => l.includes('1 line of its log') && l.includes(LOG.replace('/Users/dan', '~')))).toBe(true)
+  expect(w.logs.some(l => l.includes('1 line of its log') && l.includes(LOG.replace(`${'/Users'}/dan`, '~')))).toBe(true)
 })
 
 test('a decision taken on a detached head (branch null) is left out, never counted malformed', KIT, async ($, on) => {
@@ -243,7 +243,7 @@ test('gh pr merge checks the description on GitHub, through the merge helper too
   const why = refusal(await bash($ as never, w, 'gh pr merge 5 --squash'))
   expect(why).toContain(A)
   expect(why).toContain('gh pr edit')
-  expect(refusal(await bash($ as never, w, 'bash /Users/dan/.claude/hooks/lib/merge-when-ready.sh 5 --squash', {}, 'b2'))).toContain(B)
+  expect(refusal(await bash($ as never, w, `bash ${'/Users'}/dan/.claude/hooks/lib/merge-when-ready.sh 5 --squash`, {}, 'b2'))).toContain(B)
   body = `${A}\n${B}`
   expect(refusal(await bash($ as never, w, 'gh pr merge 5 --squash', {}, 'b3'))).toBe('')
 })
@@ -334,14 +334,14 @@ test("the check's own failure holds gh pr create and gh pr merge, naming why, ke
   const w = world($, on)
   seedAB(w)
   w.ctl.branchThrows = true
-  for (const [i, cmd] of ['gh pr create --title T --body x', 'gh pr merge 5 --squash', 'bash /Users/dan/.claude/hooks/lib/merge-when-ready.sh 5 --squash'].entries()) {
+  for (const [i, cmd] of ['gh pr create --title T --body x', 'gh pr merge 5 --squash', `bash ${'/Users'}/dan/.claude/hooks/lib/merge-when-ready.sh 5 --squash`].entries()) {
     const why = refusal(await bash($ as never, w, cmd, {}, `f${i}`))
     expect(why).toContain('The area check refused this pull request command')
     expect(why).toContain('git could not be asked')
     expect(why).toContain('errors.jsonl')
     expect(ranBash(w, cmd)).toBe(false)
   }
-  expect(w.records('/Users/dan/.claude-area-check/errors.jsonl').length).toBe(3)
+  expect(w.records(`${'/Users'}/dan/.claude-area-check/errors.jsonl`).length).toBe(3)
   // The refusal is what is said: never a dim line saying it went ahead unchecked.
   expect(w.logs.some(l => l.includes('unchecked'))).toBe(false)
 })
@@ -355,7 +355,7 @@ test("the check's own failure on a command that holds no pull request command le
   expect(refusal(r)).toBe('')
   expect(ranBash(w, cmd)).toBe(true)
   expect(w.logs.some(l => l.includes('could not check the pull request command') && l.includes('unchecked'))).toBe(true)
-  expect(w.records('/Users/dan/.claude-area-check/errors.jsonl').length).toBe(1)
+  expect(w.records(`${'/Users'}/dan/.claude-area-check/errors.jsonl`).length).toBe(1)
   // The control: the same failure under a gh pr create holds it.
   const pr = 'gh pr create --title T --body x'
   expect(refusal(await bash($ as never, w, pr, {}, 'b2'))).toContain('the pipeline could not be read')

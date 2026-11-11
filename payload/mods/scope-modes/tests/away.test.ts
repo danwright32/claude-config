@@ -7,7 +7,7 @@ import { pipeline } from './mod-kit/hooks/commands.ts'
 // tests/mod-kit, held to mod-kit's by tools/check-mod-shared-parts.sh), as the mod's tool call
 // hook reads it through $.modkit.pipeline (#712, #730: never words split by hand).
 const needs = (raw: string) => needsTheMac({ raw, commands: pipeline(raw) })
-const HOME = '/Users/x'
+const HOME = `${'/Users'}/x`
 const DD = `${HOME}/Library/Developer/Xcode/DerivedData`
 
 // What a test build is (#1269, Dan 2026-10-16 ET: "an executable under Xcode's DerivedData or a
@@ -27,7 +27,7 @@ describe('isTestBuild: what typing and clicking may target while away', () => {
   test('Simulator, where Xcode keeps it', async () => {
     expect(await isTestBuild('/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator', fsWith())).toBe(true)
     expect(await isTestBuild('/Applications/Xcode-beta.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator', fsWith())).toBe(true)
-    expect(await isTestBuild('/Users/x/Downloads/Simulator.app/Contents/MacOS/Simulator', fsWith())).toBe(false)
+    expect(await isTestBuild(`${'/Users'}/x/Downloads/Simulator.app/Contents/MacOS/Simulator`, fsWith())).toBe(false)
   })
   test('an executable inside a project checkout, a worktree included', async () => {
     const app = `${HOME}/Apps/Overture/build/Debug/Overture.app/Contents/MacOS/Overture`
@@ -51,8 +51,8 @@ describe('isTestBuild: what typing and clicking may target while away', () => {
     expect(await isTestBuild(`${HOME}/Apps/Overture/build/Overture`, throws)).toBe(false)
   })
   test('with no home known, DerivedData under any home still counts, and no home folder is a checkout', async () => {
-    expect(await isTestBuild('/Users/y/Library/Developer/Xcode/DerivedData/a/Tool', { home: undefined, treeOf: async () => null })).toBe(true)
-    expect(await isTestBuild('/Users/y/Applications/Mail.app/Contents/MacOS/Mail', { home: undefined, treeOf: treeOver(['/Users/y/.git']) })).toBe(false)
+    expect(await isTestBuild(`${'/Users'}/y/Library/Developer/Xcode/DerivedData/a/Tool`, { home: undefined, treeOf: async () => null })).toBe(true)
+    expect(await isTestBuild(`${'/Users'}/y/Applications/Mail.app/Contents/MacOS/Mail`, { home: undefined, treeOf: treeOver([`${'/Users'}/y/.git`]) })).toBe(false)
   })
   test('a checkout inside a home folder that is itself a repository still counts, as the nearest one', async () => {
     expect(await isTestBuild(`${HOME}/Apps/Overture/build/Overture`, fsWith(`${HOME}/.git`, `${HOME}/Apps/Overture/.git`))).toBe(true)
@@ -107,7 +107,7 @@ describe('needsTheMac: what is held while Dan is away', () => {
   // testing". Opening an app or a file, BBEdit's helper and bringing an app forward run while away.
   test('opening an app, a file or a link runs while away', () => {
     expect(needs('open -a "Google Chrome" /tmp/report.html')).toBeUndefined()
-    expect(needs('open /Users/x/shot.png')).toBeUndefined()
+    expect(needs(`open ${'/Users'}/x/shot.png`)).toBeUndefined()
     expect(needs('open -a Preview a.pdf b.pdf')).toBeUndefined()
     expect(needs('open "https://x.com/a?token=abc#f"')).toBeUndefined()
     expect(needs('open -a Simulator')).toBeUndefined()

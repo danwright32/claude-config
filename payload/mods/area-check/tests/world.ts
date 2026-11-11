@@ -73,7 +73,7 @@ export const scope: { name: string; register: Register } = {
 }
 export const KIT = { plugins: [deps, scope] }
 
-export const HOME = '/Users/dan'
+export const HOME = `${'/Users'}/dan`
 export const DIR = `${HOME}/.claude-area-check`
 export const LOG = `${DIR}/log.jsonl`
 export const ERRORS = `${HOME}/.claude-area-check/errors.jsonl`

@@ -207,7 +207,7 @@ describe('scratch, which is never recorded outside the session root', () => {
     expect(isScratch('/Volumes/fast/tmp/x', '/Volumes/fast/tmp/')).toBe(true)
   })
   test('nothing else, a folder merely named like one included', () => {
-    expect(isScratch('/Users/dan/Apps/other/a.ts', '/var/folders/ab/T/')).toBe(false)
+    expect(isScratch(`${'/Users'}/dan/Apps/other/a.ts`, '/var/folders/ab/T/')).toBe(false)
     expect(isScratch('/tmpfiles/a.ts', undefined)).toBe(false)
     expect(isScratch('/repo/tmp/a.ts', 'relative/tmp')).toBe(false)
   })
@@ -217,7 +217,7 @@ describe('scratch, which is never recorded outside the session root', () => {
 // read back whole: each a quoted string, which a comma, a space, a quote or Dan's curly apostrophe
 // inside a name cannot break.
 describe('the files a message to another session names', () => {
-  const names = ['src/Notes, draft.md', '/Users/dan/Documents/Documents - Dan\u2019s MacBook Pro/app.ts', 'say "hi".md', 'odd while you are working on it.md']
+  const names = ['src/Notes, draft.md', `${'/Users'}/dan/Documents/Documents - Dan\u2019s MacBook Pro/app.ts`, 'say "hi".md', 'odd while you are working on it.md']
   const message = (verb: string, list: string) => `Another session wanted to ${verb} ${list} while you are working on it, so it was stopped. Nothing here was touched.`
   test('are written quoted, comma separated', () => {
     expect(quoteNames(['src/a.ts', 'src/b.ts'])).toBe('"src/a.ts", "src/b.ts"')

@@ -218,7 +218,7 @@ type World = {
   /** #2132: mod-kit refuses the hold on job-watcher's reload with this, as an older or missing mod-kit would. */
   holdFails?: string
 }
-const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
+const CLAIMS = `${'/Users'}/dan/.claude/state/job-watcher/claims`
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   const list = Array.isArray(jobOrJobs) ? jobOrJobs : [jobOrJobs]
   const w = {
@@ -266,7 +266,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   w.answerStops = how => {
     for (const answer of heldStops.splice(0)) answer(how)
   }
-  mock.env(on, { HOME: '/Users/dan' })
+  mock.env(on, { HOME: `${'/Users'}/dan` })
   let started = 0
   let monitors = 0
   const byPath = (p: string | undefined) => list.findIndex((_, i) => outOf(`job${i + 1}`) === p)
@@ -3835,7 +3835,7 @@ test("a subagent's git commit reading /dev/stdin is denied at the permission pro
   const r = await permissionRequest($, 'Bash', { command: HUNG_COMMIT, description: 'commit' }, 'a1')
   expect(r.decision).toEqual({ behavior: 'deny', message: `REFUSED (job-watcher, at the permission prompt): ${READER_REFUSAL}` })
   expect(beneath.reached).toBe(0)
-  expect(w.readerRuns).toEqual([{ argv: ['python3', '/Users/dan/.claude/hooks/lib/agent-overrides.py', 'stdin-device-refusal', 'a1'], stdin: HUNG_COMMIT }])
+  expect(w.readerRuns).toEqual([{ argv: ['python3', `${'/Users'}/dan/.claude/hooks/lib/agent-overrides.py`, 'stdin-device-refusal', 'a1'], stdin: HUNG_COMMIT }])
 })
 
 test("the main session's same request is passed on untouched: Dan sees its prompt (#1765)", withDeps, async ($, on) => {

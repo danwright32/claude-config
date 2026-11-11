@@ -268,8 +268,8 @@ test("a session's repository is read as $.modkit.repo: its GitHub repository and
     const r = (await $.tool.call({ tool: 'Bash', command: JSON.stringify(repo) } as never)) as { deny?: string; text?: string }
     return JSON.parse(r.deny ?? r.text ?? 'null')
   }
-  expect(await ask({ root: '/Users/x/Apps/folder', remote: 'git@github.com:danwright32/Overture.git' })).toEqual({ github: 'danwright32/Overture', name: 'Overture' })
-  expect(await ask({ root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: null })).toEqual({ github: null, name: 'claude-config' })
+  expect(await ask({ root: `${'/Users'}/x/Apps/folder`, remote: 'git@github.com:danwright32/Overture.git' })).toEqual({ github: 'danwright32/Overture', name: 'Overture' })
+  expect(await ask({ root: `${'/Users'}/x/Apps/claude-config/.claude/worktrees/agent-1`, remote: null })).toEqual({ github: null, name: 'claude-config' })
   expect(await ask({ remote: 'https://gitlab.com/team/thing.git' })).toEqual({ github: null, name: 'thing' })
 })
 

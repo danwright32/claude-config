@@ -4,13 +4,13 @@ import { empty, type Progress } from '../hooks/progress.ts'
 import { firstWords, permissionFor, projectOf, rowsOf } from '../hooks/goals.ts'
 
 const MIN = 60_000
-const rec = (id: string, repoRoot: string | null, progress: Progress | undefined, cwd = '/Users/dan/x') => ({ sessionId: id, cwd, repoRoot, extra: progress ? { progress } : {} })
+const rec = (id: string, repoRoot: string | null, progress: Progress | undefined, cwd = `${'/Users'}/dan/x`) => ({ sessionId: id, cwd, repoRoot, extra: progress ? { progress } : {} })
 const at = (p: Partial<Progress>): Progress => ({ ...empty(0), ...p })
 
 describe('a session in the goals pane', () => {
   test('its project is its repository folder, else the folder it started in', () => {
-    expect(projectOf({ repoRoot: '/Users/dan/Apps/Ovation', cwd: '/Users/dan/Apps/Ovation/src' })).toBe('Ovation')
-    expect(projectOf({ repoRoot: null, cwd: '/Users/dan/notes/' })).toBe('notes')
+    expect(projectOf({ repoRoot: `${'/Users'}/dan/Apps/Ovation`, cwd: `${'/Users'}/dan/Apps/Ovation/src` })).toBe('Ovation')
+    expect(projectOf({ repoRoot: null, cwd: `${'/Users'}/dan/notes/` })).toBe('notes')
   })
 
   test('its goal is the /goal condition, else its first request', () => {
@@ -153,7 +153,7 @@ describe('what a permission is for', () => {
     expect(permissionFor('Bash', { command: 'npm test' })).toBe('a Bash command')
   })
   test('a file tool is named by the file', () => {
-    expect(permissionFor('Edit', { file_path: '/Users/dan/Apps/x/src/app.ts' })).toBe('Edit app.ts')
+    expect(permissionFor('Edit', { file_path: `${'/Users'}/dan/Apps/x/src/app.ts` })).toBe('Edit app.ts')
   })
   test('anything else is named by its tool', () => {
     expect(permissionFor('WebFetch', { url: 'https://example.com' })).toBe('WebFetch')

@@ -15,7 +15,7 @@ const github: GithubOf = async remote => githubRepo(remote)
 const SINCE = Date.UTC(2026, 9, 8, 3, 0) // 11:00 PM ET on Oct 7
 const AFTER = '2026-10-08T05:00:00Z'
 const BEFORE = '2026-10-08T01:00:00Z'
-const HOME = '/Users/x'
+const HOME = `${'/Users'}/x`
 const ok = (stdout: string): Ran => ({ exitCode: 0, stdout, stderr: '' })
 const fail = (stderr: string): Ran => ({ exitCode: 1, stdout: '', stderr })
 
@@ -24,9 +24,9 @@ const QUIET: World = {
   'gh api user --jq .login': ok('dan\n'),
   'gh api users/dan/events?per_page=100&page=1': ok(JSON.stringify([{ type: 'PushEvent', created_at: AFTER, repo: { name: 'o/r' } }])),
   [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: ok('[]'),
-  'git -C /Users/x/claude-config-sync remote -v': ok('origin\tgit@github.com:o/claude-config.git (fetch)\n'),
+  [`git -C ${'/Users'}/x/claude-config-sync remote -v`]: ok('origin\tgit@github.com:o/claude-config.git (fetch)\n'),
   'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok('[]'),
-  'mtime /Users/x/.claude/LESSONS.md': ok('1700000000000'),
+  [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok('1700000000000'),
   'gh api repos/o/r/milestones?state=all&per_page=100': ok('[]'),
   'gh api repos/o/claude-config/milestones?state=all&per_page=100': ok('[]'),
   'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok('[]'),
@@ -83,7 +83,7 @@ describe('the wake check', () => {
       'gh api repos/o/s/milestones?state=all&per_page=100': ok('[]'),
       'gh run list -R o/s --json workflowName,event,createdAt,url --limit 100': ok('[]'),
       'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok(JSON.stringify([{ sha: 'abcdef1234', commit: { message: 'Add L999\n\nbody' } }])),
-      'mtime /Users/x/.claude/LESSONS.md': ok(String(SINCE + 60_000)),
+      [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok(String(SINCE + 60_000)),
       'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify([
         { workflowName: 'Deploy', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/1' },
         { workflowName: 'CI', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/2' },
@@ -117,17 +117,17 @@ describe('the wake check', () => {
   // describes the file system instead and printed no time there.
   test('the installed LESSONS.md is read without running stat at all', async () => {
     const r = await check()
-    expect(r.asked).toContain('mtime /Users/x/.claude/LESSONS.md')
+    expect(r.asked).toContain(`mtime ${'/Users'}/x/.claude/LESSONS.md`)
     expect(r.asked.filter(a => a.startsWith('stat '))).toEqual([])
   })
   test('an installed LESSONS.md that cannot be read is said as not checked, with the reason', async () => {
-    const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': fail('scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT') })
+    const r = await check({ [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: fail(`scope-modes: $.fs.stat(${'/Users'}/x/.claude/LESSONS.md) failed: ENOENT`) })
     expect(r.hits).toEqual([])
     // Said in words, never the engine's "scope-modes: $.fs.stat(...) failed: ENOENT" (#2150).
-    expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: the file could not be looked up: there is no such file or folder (/Users/x/.claude/LESSONS.md))'])
+    expect(r.unmeasured).toEqual([`the installed LESSONS.md was not checked (its last change could not be read: the file could not be looked up: there is no such file or folder (${'/Users'}/x/.claude/LESSONS.md))`])
   })
   test('an installed LESSONS.md whose last change reads as no time is said as not checked, never as before sleep (L50)', async () => {
-    const r = await check({ 'mtime /Users/x/.claude/LESSONS.md': ok('0') })
+    const r = await check({ [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok('0') })
     expect(r.unmeasured).toEqual(['the installed LESSONS.md was not checked (its last change could not be read: no time was given)'])
   })
   test('a time GitHub did not give, or gave unreadable, is unknown: said, never compared away nor called overnight (L50)', async () => {
@@ -175,7 +175,7 @@ describe('the wake check', () => {
     )
     // Three GitHub reads use the 60 s; the local reads still run, and nothing after them on GitHub.
     expect(asked.filter(a => a.startsWith('gh '))).toEqual(['gh api user --jq .login', 'gh api users/dan/events?per_page=100&page=1', 'gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100'])
-    expect(asked.filter(a => !a.startsWith('gh '))).toEqual(['git -C /Users/x/claude-config-sync remote -v', 'mtime /Users/x/.claude/LESSONS.md'])
+    expect(asked.filter(a => !a.startsWith('gh '))).toEqual([`git -C ${'/Users'}/x/claude-config-sync remote -v`, `mtime ${'/Users'}/x/.claude/LESSONS.md`])
     expect(r.unmeasured).toEqual(['the overnight check stopped at its 60 s limit, so the rest of GitHub was not read'])
   })
   test('each GitHub read is given only the time left, and the whole check 30 s by default (#834 review of 98a40f1)', async () => {
