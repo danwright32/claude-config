@@ -304,6 +304,12 @@ PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\
 # the 139 scripts in repo-digest's src/ and NurseDex's scripts/ and the 110 Python files in this
 # payload: the largest reaches 11 (repo-digest's src/manage-repos.ts; src/digest.ts reaches 8,
 # NurseDex's largest 5), and none imports a local file that could not be found.
+# Past it the reading goes on only for a script inside a repository, while every module it reaches
+# is inside that repository too (Judge.beyond, claude-config#2470): a lint run in a work repository
+# reaches more, through its config and through the linter's own files under node_modules, and was
+# refused whole though nothing in it posts. Each module past the limit is still read and judged as
+# those before it are, and what bounds that reading is BUDGET_SECONDS, the one budget the whole call
+# is held to (Dan, 2026-11-10); the readings behind that are in README "Slack: drafts only".
 IMPORT_MAX_FILES = 300
 # A file handed to a script is DATA, not code it runs, when it is shaped like data: an extension none
 # of these interpreters runs, and no #! (claude-config#2362). A file with no extension is read as
@@ -716,6 +722,9 @@ class Judge:
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
         self.unfollowed = None  # the last import modules() could not follow (unfollow)
+        # (the script, how many of its modules are read) while walk() is reading past
+        # IMPORT_MAX_FILES, for late() to say how far it got (claude-config#2470); else None.
+        self.past = None
         # Where the Python a command starts looks for an absolute import beyond the script's folder
         # (claude-config#2358): the command's PYTHONPATH (its own assignment, one exported earlier in
         # the line, or the session's), its directory, and the interpreter it names. record() sets it
@@ -786,12 +795,19 @@ class Judge:
         self.late(reading)
 
     # What tick raises once the budget has passed: OutOfTime, saying what the walk was doing.
+    # Where the walk was reading a script's modules past IMPORT_MAX_FILES (self.past), it adds how
+    # many it had read, so a lint run too large to read in time is told from a busy Mac.
     def late(self, reading=None):
+        far = ""
+        if self.past:
+            start, count = self.past
+            far = (f", having read {count} of the modules {start} imports (past {IMPORT_MAX_FILES} the gate "
+                   f"reads on, inside a repository, for as long as its time lasts, claude-config#2470)")
         if reading is not None:
-            raise OutOfTime(f"about to read {self.sized(reading)}")
+            raise OutOfTime(f"about to read {self.sized(reading)}{far}")
         if self.walking is not None:
-            raise OutOfTime(f"judging the commands in {self.sized(self.walking)}")
-        raise OutOfTime("judging the command line itself")
+            raise OutOfTime(f"judging the commands in {self.sized(self.walking)}{far}")
+        raise OutOfTime(f"judging the command line itself{far}")
 
     # On the real clock, have the budget interrupt the walk wherever it is (claude-config#2571).
     # tick looks at the clock only between commands and before each file, so the work inside one
@@ -1368,7 +1384,8 @@ class Judge:
         names a local file the gate cannot find or read is refused, and so is a Python import placed
         nowhere (resolve_py, claude-config#2358),
         because node or Python may still find it (package.json exports, a path alias, a loader) and
-        run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules. An
+        run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules, unless
+        it and every module it reaches are inside one repository, where they are all read (beyond). An
         import whose path is assembled at run time (a template holding ${...}, importlib) is not
         followed: no file is named to read. Nor is a type only import statement of a declaration
         file that is not there, which loads nothing whatever resolves it (erased_import, #2526)."""
@@ -1409,7 +1426,16 @@ class Judge:
     def walk(self, start, origin, root, body, kind, strings):
         """modules() with import text inside JavaScript strings followed or not (strings); not
         following them, it gives SINK, and stops, on reaching a file that can run a string as code."""
-        seen = {origin} if origin else set()
+        try:
+            yield from self.walk_modules(start, origin, root, body, kind, strings)
+        finally:
+            self.past = None  # late() has already said how far the reading got, where it ran out
+
+    def walk_modules(self, start, origin, root, body, kind, strings):
+        """walk()'s reading. Each module reached is kept with how it was reached (seen), so that past
+        IMPORT_MAX_FILES the one found outside the repository can be named (beyond)."""
+        seen = {origin: start} if origin else {}
+        repo = None  # the script's repository, looked for on first passing the limit; False for none
         queue = [(origin, root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
         while queue:
@@ -1431,11 +1457,21 @@ class Judge:
                     target = os.path.realpath(target)
                     if target in seen:
                         continue
-                    seen.add(target)
+                    seen[target] = via
                     if len(seen) > IMPORT_MAX_FILES:
-                        yield self.unfollow(f"{start} imports more than {IMPORT_MAX_FILES} modules, past what "
-                                            "the gate reads, so it cannot see what they run"), None, None, None
-                        return
+                        # Past the limit the walk reads on only inside the script's repository
+                        # (claude-config#2470): on first passing it, every module reached so far is
+                        # asked where it is, and after that each new one.
+                        if repo is None:
+                            repo = self.repository(origin or root) or False
+                            asked = list(seen.items())
+                        else:
+                            asked = [(target, via)]
+                        why = self.beyond(start, repo, asked)
+                        if why:
+                            yield self.unfollow(why), None, None, None
+                            return
+                        self.past = (start, len(seen) - (2 if origin else 1))
                     self.tick(target)
                     try:
                         with open(target, "rb") as f:
@@ -1446,6 +1482,53 @@ class Judge:
                         return
                     yield None, via, target, found
                     queue.append((target, os.path.dirname(target), found, f"{via} ({os.path.basename(target)})"))
+
+    @staticmethod
+    def repository(path):
+        """The real path of the repository a file or folder is in: the nearest folder at or above its
+        real path holding .git, as a folder with a HEAD or as the one line file git writes in a
+        worktree or a submodule. None when it is in none."""
+        cur = os.path.realpath(path)
+        if not os.path.isdir(cur):
+            cur = os.path.dirname(cur)
+        while True:
+            mark = os.path.join(cur, ".git")
+            if os.path.isfile(os.path.join(mark, "HEAD")):
+                return cur
+            if os.path.isfile(mark):
+                try:
+                    with open(mark, "rb") as f:
+                        if f.read(8) == b"gitdir: ":
+                            return cur
+                except OSError:
+                    pass
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                return None
+            cur = parent
+
+    @staticmethod
+    def beyond(start, repo, asked):
+        """Why a script's modules are read no further than IMPORT_MAX_FILES, or None when they are
+        (claude-config#2470; Dan, 2026-11-09: "Time budget past 300, repository files only").
+
+        Past the limit the walk reads on, each module still read whole and judged by the endpoint it
+        names, while every module is inside the repository the script is in (repo, False for a
+        script in none), by its real path, so a link leading out of the repository is outside it
+        and an installed package under its node_modules is inside (Dan, 2026-11-10). asked is the
+        modules to place, each with how it was reached; the first outside is named. What bounds the
+        reading past the limit is the walk's one budget (BUDGET_SECONDS), which refuses the call as
+        not checked when it runs out."""
+        lead = f"{start} imports more than {IMPORT_MAX_FILES} modules"
+        if not repo:
+            return (f"{lead} and is not inside a repository, the one place the gate reads past that many, so "
+                    "it cannot see what the rest run")
+        for target, via in asked:
+            if target != repo and not target.startswith(repo.rstrip(os.sep) + os.sep):
+                return (f"{lead}, and past that many the gate reads on only while every module is inside the "
+                        f"repository at {repo}: {via} ({target}) is outside the repository, so the gate read "
+                        "no further and cannot see what the rest run")
+        return None
 
     def unfollow(self, why):
         """Record why that an import could not be followed, for main() to say the check could not be
