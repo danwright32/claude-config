@@ -3651,6 +3651,13 @@ the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 onc
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
+What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
+commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
+refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
+that have since been deleted, and the gate lets a missing script through. The work MacBook has not
+been replayed. The gate on main that day refused 187 more commands and timed out on 48 more than the
+gate at #2640, which #2784, #2785 and #2786 follow up.
+
 When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
 to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
 with `gh pr merge` directly once every check is green, without deleting the branch (the helper
