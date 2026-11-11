@@ -751,13 +751,14 @@ class Judge:
         text and directory), the names exported, the offset in the text of the command being read
         (at), whether the directory the text starts in is certain, and what sh_walk finds certain
         about its variables, worked out the first time one is asked for. For note_writes
-        (claude-config#2721), which line() sets per command: whether a pipe feeds the command being
-        read (piped, None where not known), whether it is one of the text's own rather than a
-        wrapper's (outer), and what the last such command printed (last_out); and, set once by line(),
-        whether the text is a file on disk rather than one this call wrote (on_disk)."""
+        (claude-config#2721), which line() sets per command: whether the command being read is fed,
+        through a pipe, exactly the output of the one before it (piped), whether it is one of the
+        text's own rather than a wrapper's (outer), the last such command as (its offset, its text)
+        (last_cmd) and what it printed (last_out); and, set once by line(), whether the text is a
+        file on disk rather than one this call wrote (on_disk)."""
         return {"text": text, "cwd": cwd, "script": script, "pending": {}, "exported": set(), "at": None,
-                "cwd_known": cwd_known, "known": None, "piped": None, "outer": True, "last_out": None,
-                "on_disk": False}
+                "cwd_known": cwd_known, "known": None, "piped": False, "outer": True, "last_out": None,
+                "last_cmd": None, "on_disk": False}
 
     @staticmethod
     def py_path(value, d):
@@ -1075,11 +1076,9 @@ class Judge:
 
     def stdin_of(self, d, text, whole, redirs):
         """What this command reads on its input, as pieces, or None where that is not known: a heredoc,
-        a here-string or a file it is given, else what the command before it in a pipeline printed,
-        else nothing (a command the line reads itself runs with no input)."""
-        stdin = [] if self.shell.get("piped") is False else None
-        if self.shell.get("piped"):
-            stdin = self.shell.get("last_out")
+        a here-string or a file it is given, else what the command before it in a pipeline printed
+        where line() found that certain (piped), else not known."""
+        stdin = self.shell.get("last_out") if self.shell.get("piped") else None
         for op, target in redirs:
             kind = re.sub(r"^\d+", "", op)
             if kind == "<<<":
@@ -2936,23 +2935,27 @@ class Judge:
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
-                # Whether a pipe feeds this command, for note_writes (claude-config#2721): read from
-                # the text before it, for a command of s's own; None, not known, for a wrapper's, or
-                # where a group, subshell, loop or if feeds the pipe: that prints what every command
-                # in it prints, and last_out holds only its last (lessons review at 8fe178b).
+                # Whether this command's input is exactly what the command before it printed, for
+                # note_writes (claude-config#2721): True only where the text before it is that
+                # command, written whole, then a pipe. Anything else, a group, subshell, loop or if
+                # feeding the pipe, a pipe into a group, a substitution, a wrapper's command, no pipe
+                # seen at all, is False, and its input is not known: three lessons reviews (8fe178b,
+                # 4949370, cfe5824) each found a reading of the pipe that guessed a known input.
                 at = self.shell["at"] if not wdepth else None
-                if at is None:
-                    self.shell["piped"] = None
-                else:
+                prev = self.shell.get("last_cmd")
+                fed = False
+                if at is not None and prev is not None:
                     before = s[:at].rstrip()
-                    piped = before.endswith(("|", "|&")) and not before.endswith("||")
-                    feeder = before.rstrip("&").rstrip("|").rstrip()
-                    compound = feeder.endswith((")", "}")) or bool(re.search(r"(?:^|[\s;&|])(?:done|fi|esac)\Z", feeder))
-                    self.shell["piped"] = None if piped and compound else piped
+                    if before.endswith(("|", "|&")) and not before.endswith("||"):
+                        feeder = before[:-2 if before.endswith("|&") else -1]
+                        fed = prev[0] < at and feeder[prev[0]:].strip() == prev[1].strip()
+                self.shell["piped"] = fed
                 self.shell["outer"] = not wdepth
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
                     return reason
+                if not wdepth:
+                    self.shell["last_cmd"] = (at, text) if at is not None else None
             return None
         finally:
             self.shell = saved

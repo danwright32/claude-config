@@ -1665,7 +1665,9 @@ says "the refusal names the download" "curl"
 # A group, subshell or loop feeding a pipe prints what every command in it prints, not only its last
 # (lessons review at 8fe178b): read as its last command, the post written first went through.
 for runs in "{ echo '$POST'; echo hi; } | tee run.sh && bash run.sh" "( printf '$POST\n'; echo hi ) | tee run.sh && bash run.sh" \
-  "for x in a; do echo '$POST'; done | tee run.sh && bash run.sh" "if true; then echo '$POST'; fi | cat > run.sh && bash run.sh"; do
+  "for x in a; do echo '$POST'; done | tee run.sh && bash run.sh" "if true; then echo '$POST'; fi | cat > run.sh && bash run.sh" \
+  "echo '$POST' | (tee run.sh) && bash run.sh" "echo '$POST' | { tee run.sh; } && bash run.sh" \
+  "echo '$POST' | while read l; do echo \"\$l\"; done > run.sh && bash run.sh"; do
   run_cp "$runs"
   refused "a compound command piped into a write is not read as its last command: $runs"
 done
