@@ -1442,11 +1442,21 @@ nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on, $3 = a 
 # a rate limit pause is in force or while the session's loops have used their looks for this minute,
 # each said as what it is (claude-config#1482). A run waiting for its turn leaves one of the minute's
 # looks free, so the run holding the turn never waits on the line behind it (claude-config#2715); the
-# look that finds the turn is now its own (turn_moved saw it) leaves none.
+# look that finds the turn is now its own (turn_moved saw it) leaves none. So does a run not yet in
+# line while another run on this Mac holds the turn (claude-config#2749), read from the queue here,
+# never GitHub: its first look comes before it learns it is in line, and on 2026-11-11 four such
+# first looks due with the holder's took the whole minute and made the holder wait. The minute's
+# looks still go to whoever comes first otherwise, so no run looks more, and none takes the turn.
 take_a_look(){
-  local key line still free
+  local key line still free holder
   while :; do
-    free=""; [ "$turn_state" = waiting ] && [ "${TURN_MINE:-}" != 1 ] && free=1
+    free=""; holder=""
+    if [ "$turn_state" = waiting ] && [ "${TURN_MINE:-}" != 1 ]; then
+      free=1
+    elif [ -z "$turn_state" ] && [ -z "$TURN_TICKET" ]; then
+      turn_open "$slug"; turn_look "$(now)" "$TURN_HOLD"; turn_say_passed
+      [ -n "$TURN_HEAD_PR" ] && { free=1; holder="$TURN_HEAD_PR"; }
+    fi
     ghp_take "$(now)" $free && break
     budget_left
     [ "$BUDGET_LEFT" -gt 0 ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s), at the end of $BUDGET_SAID. Nothing was merged; run the same command again to resume."
@@ -1455,7 +1465,9 @@ take_a_look(){
       line="Paused for GitHub's rate limit (${GHP_SAID:-it refused a read}): this session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
     else
       key="cap"; still="Still waiting for this session's next look at GitHub"
-      if [ -n "$free" ]; then
+      if [ -n "$holder" ]; then
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub: this session's loops have looked $GHP_SEEN times in the last minute, and #$holder holds the turn to merge in $slug, so a run not yet in line behind it leaves it the last of the minute's looks (GH_POLL_PER_MINUTE)."
+      elif [ -n "$free" ]; then
         line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_SEEN times in the last minute, and a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one."
       else
         line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
