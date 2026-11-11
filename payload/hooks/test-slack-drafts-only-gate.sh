@@ -1404,12 +1404,14 @@ for shape in hookdir twice local default realpath cdquiet groupsub fibrace dashc
 done
 # A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
 # Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
-# shift, set --, a function's own $1) or is the outer shell's (the string in double quotes). Read
-# as the file that posts, each would be refused; it is a path the gate cannot work out, so, with
-# the refusal off, it is let through unread. Turning the refusal on turns each of these red.
+# shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
+# posts, each would be refused; it is a path the gate cannot work out, so, with the refusal off, it
+# is let through unread. Turning the refusal on turns each of these red. (A loop or a function in
+# the string also leaves $1 unknown; with the refusal off no fixture can tell that apart, as any
+# loop that changes $1 really does source the other file.)
 P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
 for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
-            "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c 'f() { . \"\$1\"; }; f $Q' _ $P"; do
+            "bash -c \". \\\"\$1\\\"\" _ $P"; do
   run_bash "$form"
   allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
 done
