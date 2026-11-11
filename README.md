@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
@@ -2351,6 +2361,21 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
   cannot read is let through with a notice.
 
+Reading an old checkout is the other half, and that one is said rather than refused:
+
+- `checkout-behind-notice.sh` (SessionStart and SubagentStart) tells a session, and every subagent
+  it starts, when the checkout it is in lacks commits that `origin`'s default branch has
+  (claude-config#2712). On 2026-11-10 a session on the work MacBook read a primary checkout on a
+  detached HEAD 279 commits behind main as current and told Dan twice that a shipped feature did not
+  exist. It speaks on a detached HEAD at any distance, or when the oldest missing commit is 8 hours
+  old, or 50 commits are missing (`CHECKOUT_BEHIND_HOURS`, `CHECKOUT_BEHIND_COMMITS`; measured on the
+  personal MacBook's checkouts, where worktrees in use lacked at most 5 hours of work and stale ones
+  at least 16). The session is told to read the current code with `git show origin/main:<path>` and
+  `git grep <pattern> origin/main`, since a shared checkout must not be switched; the hook itself
+  only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
+  says the checkout could not be checked, never that it is level. The person is told once per
+  session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+
 ### What a push actually waits on
 
 Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
@@ -3444,6 +3469,23 @@ The gate cannot trace which string reaches the sink (a variable, a function, ano
 any file reached names one, the walk starts again following every string, as before. Measured over
 1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
 
+A type only import statement of a declaration file that is not there is not followed either (#2526):
+`import type { A } from '../types/index.d.ts'`, `import type A from` and `import type * as ns from`,
+where the path as written ends `.d.ts`. The whole statement is erased before anything runs, so no
+module is loaded for it whatever a resolver would make of the path. Measured 2026-11-10 with bun
+1.3.11, node 22.22.2 and deno, with and without `verbatimModuleSyntax`: a module that prints when
+loaded printed under none of them, and a missing one stopped none of them. Before this, `bun test` on
+a mod's test was refused in every agent worktree, because the tests import the generated
+`.claude-plugin/types/mod-kit/index.d.ts` for its types and a worktree does not have it. Nothing
+wider passes. `import { type A } from` is still refused, because node only blanks the names and
+loads the module (measured the same day: the module printed), and so are a value import, a mixed
+one, a bare `import`, `require`, `import()`, `import type A = require()` and `export type ... from`
+of the same missing file, a type only import of a missing file that is not a `.d.ts`, and a default
+import that is merely named `type`. A declaration file that is there is read and judged like any
+module. Measured over the 469 scripts in this repository, run as `bun test <file>` in a worktree:
+52 went from refused to passing, every one refused before for that one generated file, and none
+went the other way.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
@@ -3547,6 +3589,23 @@ the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 onc
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
+When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
+to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
+with `gh pr merge` directly once every check is green, without deleting the branch (the helper
+deletes it only after moving the pull requests stacked on it), to confirm the state with
+`gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
+same merge seven times because the refusal named no other way. The reader prints a verdict of its
+own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
+bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
+refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
+for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
+seconds) is inferred, not measured.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
@@ -3624,13 +3683,33 @@ the statement and the project named) for:
   - the same through the Supabase CLI, so that one route is not the way round the other:
     `branches create`, `delete`, `pause`, `unpause` and `update`, and `projects create` and `delete`.
 
-  Left unasked, since none changes a database: `deploy_edge_function` and
-  `create_edge_function_secret` (code and configuration, as `supabase functions deploy` is in a
-  shell; the secret's value, by the tool's description, is typed in the Supabase dashboard),
+  Left unasked, since none changes a database: `deploy_edge_function` while it keeps JWT
+  verification on (the next rule asks about one that turns it off) and
+  `create_edge_function_secret` (code and configuration; the secret's value, by the tool's
+  description, is typed in the Supabase dashboard),
   `create_notebook` (saved without being run; `run_notebook` is asked about), `delete_notebook`,
   `submit_feedback` and `delete_feedback`. The list is `SUPABASE_CHANGES` in
   `lib/db-write-calls.py`, written by hand from the connector's tool descriptions as read on
   2026-11-10.
+- since #2660, one kind of call that changes no database: a Supabase edge function deploy that turns
+  JWT verification off, or may. With it off the platform checks no caller, so anyone holding the
+  function's address can call it without signing in, unless its own code checks them. The question
+  names the function and the project, and says "edge function deploy" where the others say
+  "database call":
+  - `deploy_edge_function` on any server whose name holds supabase, when `verify_jwt` is false (or
+    the text false, or a `no_verify_jwt` that is true). A `verify_jwt` that is neither true nor false
+    (null, a number, the text true) is asked about as one that could not be read. One that is true
+    is passed, and so is one left out, because the connector's schema (read 2026-11-10) declares it
+    a boolean whose default is true. That default was read from the schema and not measured on a
+    real deploy.
+  - every `supabase functions deploy` in a shell, whatever its flags, naming its functions or
+    saying "all functions" when it names none. In a shell the setting can sit in the project's
+    `supabase/config.toml` (`verify_jwt = false` under the function), which a plain deploy applies
+    with no flag in the command, and the hook never reads a file. Dan decided on 2026-11-10: "Ask on
+    every shell deploy". The question says verification is off when `--no-verify-jwt` is given as
+    anything but `=false` (or the `--verify-jwt=false` an older CLI took is), and otherwise says
+    where the setting is kept. `functions serve --no-verify-jwt` runs on this Mac only and is
+    passed, as are `new`, `list`, `delete` and `download`.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
   one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
   a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
@@ -3652,7 +3731,10 @@ store, most of them reads the rule cannot prove are reads (a dot command, two st
 it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
 does not take as proof. None of the tools or CLI subcommands #2632 added had been called in any
 transcript on the personal MacBook by 2026-11-10 (the connector's calls there were `list_projects`,
-`execute_sql` and `list_tables`), so they add no question to anything measured there.
+`execute_sql` and `list_tables`), so they add no question to anything measured there. #2660's rule
+would have asked 3 times in everything run there: over all 8,368 transcripts on 2026-11-10, 3 Bash
+commands ran `supabase functions deploy`, none with `--no-verify-jwt`, and no session had called
+`deploy_edge_function`.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3669,8 +3751,10 @@ connector whose SQL tool has neither sql in its name nor a field named for a sta
 Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
 `exec`, whose `execute-sql` runs HogQL, which only reads; a tool Supabase adds later that changes a
 database with no statement, and any other host's tool of that kind (a Neon branch reset, say), until
-it is listed; and a deploy of an edge function, which is code and not a database. The tool names
-were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
+code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
+server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
+names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
@@ -3916,13 +4000,39 @@ recomputes the median, lowest and highest per arm from that file and requires th
 columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
 back by NAME, so adding a column cannot silently re-aim the reader (#524).
 
-CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 40 runs
-of the tests workflow on main, read from their logs with gh on 2026-10-25 (#1667). They fall into
-two groups by runner speed, 885s to 1092s and 1192s to 1362s, and the budget's fraction was raised
-from 70% to 76% (1368s at CI's 1800s ceiling) so it sits above every one of them; at 70% it sat
-inside the slower group and turned runs red by chance. The sync suite fails while the budget at
-CI's ceiling, read from the workflow, is not above the highest recorded run, so a slower run
-appended there is a decision to make rather than a pull request gone red at random.
+CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 328
+runs of the tests workflow, 100 on main and 228 on pull requests, read from their logs with gh on
+2026-11-10 (#2614), each with its processor, region, core count, check count and runner group.
+They fall into two groups by runner speed with a gap between them, 834s to 1179s and 1201s to
+1393s. The budget's fraction is set from the slower group's spread: 80% (1440s at CI's 1800s
+ceiling) is above its mean plus four standard deviations and every recorded run, and under 15%
+over its median, so growth still fails. At 76% (1368s, set from 40 runs on 2026-10-25, #1667) it
+sat at that group's 97th percentile and turned 5 of the 328 runs red with every check passing. The
+sync suite recomputes both bounds from the record, read by column name, and fails while the budget
+at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
+make rather than a pull request gone red at random.
+
+The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
+
+```bash
+bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
+```
+
+It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
+main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
+suite ran in: its section time and check count, and that runner's core count, processor and region.
+A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
+lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
+middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
+`--split` gives one. `--print` shows the result and changes nothing. A run it cannot read without
+guessing (no core count, no section time after the result, a suite reported in two parts, a new
+run whose log gh could not fetch) is named and nothing is written; a recorded run whose log gh
+could not fetch keeps its row and is named; a run that never reached the sync suite's result
+is named as skipped. The cache matters: on 2026-11-10 the window held about 400 runs, whose logs of
+half a megabyte each took several minutes to fetch, and a finished run's log never changes.
+`tools/test-ci-section-time-readings.sh` holds the tool to the committed record, from real logs
+saved in `tools/ci-section-time-sample/`. Finished runs are picked out by the tool rather than by
+`gh run list --status completed`, which on 2026-11-10 left out 3 of 290 finished runs.
 
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
@@ -4323,6 +4433,20 @@ each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TES
 each part's timings into the cache the next deal reads. A part refuses outright when the deal does
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
+
+A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
+the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
+named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
+tree has such a record, and reuses it only on proof: that run completed green, is this repository's
+own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
+exactly this tree. Every job then still reports under its own name, skips its work, and says in its
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite.
+
+A push to main stands only on a pull request run of its exact tree, the run its merge followed, so
+a merge no longer runs the suites twice on the same files (claude-config#2717, Dan's choice on
+2026-11-10). Every tree on main still has a verdict of its own, which is what #594 kept every main
+run for: a sync push from a Mac, or any commit whose tree no pull request passed, runs in full, and
+so does a push to another branch or a run by hand.
 
 Run ONE section while iterating, which is the fast path:
 
@@ -5418,6 +5542,15 @@ of those steps discarded its errors, so a file whose hash failed matched nothing
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
 
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
@@ -6264,7 +6397,9 @@ judged) or by Bash: every file mod-kit's `$.modkit.writes` names, a removal or e
 git itself changes (a checkout of a path, `git restore`, `git rm`, both names of a `git mv`, #1136;
 since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the lines it changes, read
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
-of changed lines at a time, so undoing an edit the guard let through passes; one git cannot read, or
+of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
+merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
+and judged against that side rather than the conflict on disk; one git cannot read, or
 one beside any other command on the line (a cd aside), which may change what it puts back first, is
 judged whole with the refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be

@@ -1,0 +1,33 @@
+deal	Set up job	2026-11-10T20:38:33.3506193Z Region: eastus
+suites part 2	Set up job	2026-11-10T20:38:42.7955016Z Region: westus2
+suites part 2	Record the environment the suite is judged in	2026-11-10T20:38:48.7627395Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	Record the environment the suite is judged in	2026-11-10T20:38:48.7629349Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	Record the environment the suite is judged in	2026-11-10T20:38:49.0707238Z cores: 4
+suites part 2	Record the environment the suite is judged in	2026-11-10T20:38:49.0733025Z processor: AMD EPYC 9V74 80-Core Processor
+suites part 2	Every suite of this part	2026-11-10T20:38:54.8164082Z   DEALT: 1	tests/test-claude-sync.sh	664	measured
+suites part 2	The measured timings were actually used	2026-11-10T20:47:27.4942465Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 4	Set up job	2026-11-10T20:38:42.9807668Z Region: westus2
+suites part 4	Record the environment the suite is judged in	2026-11-10T20:38:49.1858400Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	Record the environment the suite is judged in	2026-11-10T20:38:49.1861069Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	Record the environment the suite is judged in	2026-11-10T20:38:49.5240655Z cores: 4
+suites part 4	Record the environment the suite is judged in	2026-11-10T20:38:49.5268863Z processor: AMD EPYC 7763 64-Core Processor
+suites part 4	Every suite of this part	2026-11-10T20:38:54.7991014Z   DEALT: 1	tests/test-claude-sync.sh	664	measured
+suites part 4	The measured timings were actually used	2026-11-10T20:48:28.5007781Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 1	Set up job	2026-11-10T20:38:42.2554348Z Region: eastus
+suites part 1	Record the environment the suite is judged in	2026-11-10T20:38:47.4644380Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	Record the environment the suite is judged in	2026-11-10T20:38:47.4646958Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	Record the environment the suite is judged in	2026-11-10T20:38:47.8096266Z cores: 4
+suites part 1	Record the environment the suite is judged in	2026-11-10T20:38:47.8125657Z processor: AMD EPYC 7763 64-Core Processor
+suites part 1	Every suite of this part	2026-11-10T20:38:51.1639576Z   DEALT: 1	tests/test-claude-sync.sh	664	measured
+suites part 1	Every suite of this part	2026-11-10T20:50:05.4991557Z   ok    test-claude-sync.sh                    3467 passed, 0 failed      (665s)
+suites part 1	Every suite of this part	2026-11-10T20:50:05.5258295Z           note: 1303s of section time against a 1368s budget
+suites part 1	The measured timings were actually used	2026-11-10T20:50:07.2147607Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 1	The measured timings were actually used	2026-11-10T20:50:07.2415405Z Shards dealt from measured section time for 218 of 218 section(s).
+suites part 3	Set up job	2026-11-10T20:38:42.3256945Z Region: eastus
+suites part 3	Record the environment the suite is judged in	2026-11-10T20:38:47.6170291Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	Record the environment the suite is judged in	2026-11-10T20:38:47.6172968Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	Record the environment the suite is judged in	2026-11-10T20:38:47.9890486Z cores: 4
+suites part 3	Record the environment the suite is judged in	2026-11-10T20:38:47.9920046Z processor: AMD EPYC 7763 64-Core Processor
+suites part 3	Every suite of this part	2026-11-10T20:38:51.3566518Z   DEALT: 1	tests/test-claude-sync.sh	664	measured
+suites part 3	The measured timings were actually used	2026-11-10T20:48:52.0797462Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suite	Set up job	2026-11-10T20:50:13.7285867Z Region: eastus2

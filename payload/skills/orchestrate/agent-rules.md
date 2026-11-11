@@ -38,7 +38,7 @@ Delete or drop data, apply migrations to a shared database, send anything to peo
 
 ## Your report
 
-Hand back one report of at most 300 words, in this order. Detail goes in files in your working folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`.
+Hand back one report of at most 300 words, in this order. Detail goes in files in your working folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`. Never write a `.md` file whose name starts with findings, report, summary or analysis (any case): Claude Code's Write tool refuses that name from a subagent whatever the file holds (claude-config#2671), so use the names given here.
 
 1. Outcome in one sentence.
 2. Cause, with the evidence that settles it (counts, times in ET, the change responsible). Say plainly what you could not access.

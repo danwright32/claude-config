@@ -1,0 +1,10 @@
+suite	UNKNOWN STEP	2026-11-08T21:27:26.3488796Z Region: eastus2
+suite	UNKNOWN STEP	2026-11-08T21:27:30.7724981Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suite	UNKNOWN STEP	2026-11-08T21:27:31.0332272Z cores: 4
+suite	UNKNOWN STEP	2026-11-08T22:01:15.7550760Z   ok    test-claude-sync.sh                    3398 passed, 0 failed      (558s)
+suite	UNKNOWN STEP	2026-11-08T22:01:15.7762730Z           note: 1092s of section time against a 1368s budget
+suite	UNKNOWN STEP	2026-11-08T22:01:18.5259426Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suite	UNKNOWN STEP	2026-11-08T22:04:55.0098533Z audit-changed-sections: running only == the shards are dealt by measured section time, not by counting them (#203) ==
+suite	UNKNOWN STEP	2026-11-08T22:04:58.1228032Z == the shards are dealt by measured section time, not by counting them (#203) ==
+suite	UNKNOWN STEP	2026-11-08T22:05:06.8467977Z   8s == the shards are dealt by measured section time, not by counting them (#203) ==
+suite	UNKNOWN STEP	2026-11-08T22:05:06.8541380Z PASS=66 FAIL=0 (SECTION_ONLY resolved to == the shards are dealt by measured section time, not by counting them (#203) ==, NOT a full run)

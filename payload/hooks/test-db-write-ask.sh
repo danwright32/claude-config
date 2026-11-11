@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # send-gate: scans settings.hooks.json
 # Tests for the hook that asks Dan before any database SQL call that is not read only
-# (claude-config#2521), and before a Supabase tool that changes a database with no SQL (#2632).
+# (claude-config#2521), before a Supabase tool that changes a database with no SQL (#2632), and
+# before an edge function deploy that turns JWT verification off (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql on both Macs, and auto
@@ -406,7 +407,85 @@ expect_bash "supabase projects list only reads" none 'supabase projects list'
 expect_bash "supabase projects api-keys only reads" none 'supabase projects api-keys --project-ref abcdefgh'
 expect_bash "supabase projects --help runs nothing" none 'supabase projects --help'
 expect_bash "supabase branches delete --help runs nothing" none 'supabase branches delete --help'
-expect_bash "supabase functions deploy changes no database" none 'supabase functions deploy hello'
+# A deploy with JWT verification off publishes a function the platform lets anyone call without
+# signing in, which is not a change to a database and is asked about all the same
+# (claude-config#2660). In a shell the setting can sit in the project's supabase/config.toml, where
+# no flag shows it and the hook never reads, so Dan decided on 2026-11-10 ("Ask on every shell
+# deploy") that every `supabase functions deploy` is asked about, whatever its flags. That reverses
+# #2632's "supabase functions deploy changes no database", which this check held as a pass. The
+# flag and the subcommands are from `supabase functions deploy --help` and `supabase functions
+# --help`, CLI 2.75.0.
+expect_bash "a plain function deploy, naming no function" ask 'supabase functions deploy'
+expect_bash "a function deploy naming its function" ask 'supabase functions deploy hello'
+expect_bash "a function deploy with --no-verify-jwt" ask 'supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt before the function's name" ask 'supabase functions deploy --no-verify-jwt hello'
+expect_bash "--no-verify-jwt with no function named, which deploys them all" ask 'supabase functions deploy --no-verify-jwt'
+expect_bash "--no-verify-jwt=true" ask 'supabase functions deploy hello --no-verify-jwt=true'
+expect_bash "--no-verify-jwt behind a project ref" ask 'supabase --project-ref abcdefgh functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt behind a deploy flag that takes a value" ask 'supabase functions -j 2 deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt through npx" ask 'npx supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt in the second command of a line" ask 'cd app && supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt set to false and then given bare" ask 'supabase functions deploy hello --no-verify-jwt=false --no-verify-jwt'
+expect_bash "--no-verify-jwt with a value that is neither true nor false" ask 'supabase functions deploy hello --no-verify-jwt=maybe'
+expect_bash "an older CLI's --verify-jwt=false" ask 'supabase functions deploy hello --verify-jwt=false'
+expect_bash "a deploy with --no-verify-jwt=false is asked about as any deploy is" ask 'supabase functions deploy hello --no-verify-jwt=false'
+expect_bash "a deploy with --verify-jwt=true is asked about as any deploy is" ask 'supabase functions deploy hello --verify-jwt=true'
+expect_bash "a deploy with its other flags" ask 'supabase functions deploy hello --project-ref abcdefgh --use-api -j 4 --import-map ./import_map.json'
+expect_bash "a plain deploy through npx" ask 'npx supabase functions deploy hello'
+expect_bash "a plain deploy behind a workdir" ask 'supabase --workdir app functions deploy hello'
+expect_bash "a deploy --no-verify-jwt --help runs nothing" none 'supabase functions deploy --no-verify-jwt --help'
+expect_bash "a deploy --help runs nothing" none 'supabase functions deploy --help'
+expect_bash "a mention of a deploy runs nothing" none 'echo "then run supabase functions deploy hello"'
+expect_bash "supabase functions new only writes a file here" none 'supabase functions new hello'
+expect_bash "supabase functions download" none 'supabase functions download hello'
+expect_bash "supabase functions serve --no-verify-jwt runs on this Mac only" none 'supabase functions serve --no-verify-jwt'
+expect_bash "supabase functions serve of a function named deploy" none 'supabase functions serve deploy --no-verify-jwt'
+expect_bash "supabase functions list" none 'supabase functions list --project-ref abcdefgh'
+expect_bash "a db reset is still asked about with the flag beside it" ask 'supabase db reset --no-verify-jwt'
+OPEN_DEPLOY='supabase functions deploy hello --no-verify-jwt --project-ref abcdefgh'
+reason="$(reason_of "$(bash_payload "$OPEN_DEPLOY")")"
+case "$reason" in
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"JWT verification off"*"without signing in"*"claude-config#2660"*) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" ok ;;
+  *) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a --no-verify-jwt deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a --no-verify-jwt deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy --no-verify-jwt')")"
+case "$reason" in
+  *"all functions"*"the linked project"*"JWT verification off"*) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" ok ;;
+  *) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" "reason: ${reason:0:400}" ;;
+esac
+# A deploy whose flags do not turn verification off says where the setting it cannot see is kept,
+# and never says verification is off or on.
+reason="$(reason_of "$(bash_payload 'supabase functions deploy')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming no function says all functions and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"supabase functions deploy publishes all functions"*"the linked project"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming no function says all functions and where the setting is kept" ok ;;
+  *) check "a plain deploy naming no function says all functions and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --project-ref abcdefgh')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming its function names it, the project and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming its function names it, the project and where the setting is kept" ok ;;
+  *) check "a plain deploy naming its function names it, the project and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a plain deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a plain deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --no-verify-jwt=false')")"
+case "$reason" in
+  *"JWT verification off"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "it says verification is off: ${reason:0:400}" ;;
+  *"--no-verify-jwt=false"*"edge function hello"*"config.toml"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" ok ;;
+  *) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello world -j 2 --no-verify-jwt')")"
+case "$reason" in
+  *"edge functions hello, world "*) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" ok ;;
+  *) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" "reason: ${reason:0:400}" ;;
+esac
+# One command line holding a database write and an open deploy is one question about both.
+reason="$(reason_of "$(bash_payload 'supabase db reset && supabase functions deploy hello --no-verify-jwt')")"
+case "$reason" in
+  *"database call and edge function deploy"*"supabase db reset"*"JWT verification off"*"claude-config#2536"*"claude-config#2660"*) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" ok ;;
+  *) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" "reason: ${reason:0:400}" ;;
+esac
 # The branch and project rule is added to the db and migration one, never read in its place, so no
 # command asked about before #2632 lost its question to a branches or projects word beside it.
 expect_bash "a db reset is asked about whatever stands before it" ask 'supabase projects list db reset'
@@ -532,10 +611,72 @@ for t in $change_tools; do
     *) check "$t from the library's table is asked about, its sentence filled in" "$(decision "$r") ${reason:0:240}" ;;
   esac
 done
+
+# --- an edge function deploy with JWT verification off (claude-config#2660) ---------------------
+# deploy_edge_function with verify_jwt false publishes a function the platform lets anyone call
+# without signing in. #2632 left every deploy unasked, as code and not a database; this one case is
+# asked about, naming the function and the project. The payloads are in the shape the connector's
+# schema declares (read 2026-11-10): project_id, name, entrypoint_path, verify_jwt and files, all
+# required, verify_jwt a boolean whose default is true. Every id is invented.
+DEPLOY="${SB}deploy_edge_function"
+BODY='"entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]'
+deploy_payload() {  # deploy_payload <tool> <the fields before the entrypoint and files>
+  tool_payload "$1" "{$2, $BODY}"
+}
+expect_change "a deploy with verify_jwt false is asked about, naming the function and the project" "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')" "asks before this edge function deploy" "$DEPLOY" "edge function hello" "project exampleprodproject" "JWT verification off" "without signing in" "claude-config#2660"
+reason="$(reason_of "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')")"
+case "$reason" in *"database call"*) check "the question about an open deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about an open deploy does not call it a database call" ok ;; esac
+expect_change "the project level Supabase server's deploy with verify_jwt false" "$(deploy_payload mcp__supabase__deploy_edge_function '"project_id": "p", "name": "hello", "verify_jwt": false')" "mcp__supabase__deploy_edge_function" "edge function hello" "JWT verification off"
+expect_change "a camel case deployEdgeFunction with verifyJwt false" "$(deploy_payload mcp__supabase__deployEdgeFunction '"project_id": "p", "name": "hello", "verifyJwt": false')" "edge function hello" "JWT verification off"
+expect_change "a deploy with no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "no_verify_jwt": true')" "JWT verification off"
+expect_change "a deploy whose verify_jwt is the text false" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "false"')" "JWT verification off"
+expect_change "a deploy with verify_jwt true and no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": true, "no_verify_jwt": true')" "JWT verification off"
+# A value that is neither true nor false is asked about as one that could not be read, never
+# passed: what the server makes of it was not measured.
+expect_change "a deploy whose verify_jwt is null" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": null')" "edge function hello" "could not be told"
+expect_change "a deploy whose verify_jwt is 0" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": 0')" "could not be told"
+expect_change "a deploy whose verify_jwt is the text true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "true"')" "could not be told"
+expect_change "a deploy whose verify_jwt is a list" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": [false]')" "could not be told"
+expect_change "a deploy whose input is not an object" "$(tool_payload "$DEPLOY" 'null')" "$DEPLOY" "could not be told" "claude-config#2660"
+expect_change "an open deploy naming no function or project says none is named" "$(tool_payload "$DEPLOY" '{"verify_jwt": false}')" "edge function (none named)" "project (none named)"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" "\"project_id\": \"p\", \"name\": \"$long_id\", \"verify_jwt\": false")")"
+reason="$(field "$r" reason)"
+case "$(decision "$r")|$reason" in
+  *"$long_id"*) check "a very long function name is cut in the question, with its length said" "the whole 300 characters are in the question" ;;
+  "ask rc=0|"*"300 characters in all"*) check "a very long function name is cut in the question, with its length said" ok ;;
+  *) check "a very long function name is cut in the question, with its length said" "$(decision "$r") ${reason:0:240}" ;;
+esac
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__claude_ai_Supabase__deploy_edge_function", "tool_input": {"name": "hello", "verify_jwt": fal' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*deploy_edge_function*"JWT verification"*"claude-config#2660"*) check "a cut short payload naming deploy_edge_function is asked about, naming it" ok ;;
+  *) check "a cut short payload naming deploy_edge_function is asked about, naming it" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# A deploy that keeps verification on is passed, as before #2660: verify_jwt true, and verify_jwt
+# left out, since the schema's default is true. So is one whose own code mentions the setting, a
+# tool that only reads a function, and the same tool name on a server that is not Supabase's.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t keeping JWT verification on is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deployEdgeFunction	{"project_id": "p", "name": "hello", "verifyJwt": true, "noVerifyJwt": false}
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "config.toml", "content": "[functions.hello]\nverify_jwt = false"}, {"name": "index.ts", "content": "// \"verify_jwt\": false\nDeno.serve(() => new Response(1))"}]}
+mcp__claude_ai_Supabase__get_edge_function	{"project_id": "p", "function_slug": "hello"}
+mcp__claude_ai_Supabase__list_edge_functions	{"project_id": "p"}
+mcp__acme_hosting__deploy_edge_function	{"name": "hello", "verify_jwt": false, "note": "moved from supabase"}
+TOOLS
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-write-calls.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-write-calls.py missing, an open deploy is asked about" ok || check "with lib/db-write-calls.py missing, an open deploy is asked about" "$(decision "$r")"
+rm -rf "$WORK/part"
+
 # Decided in #2632 as no change to a database, so none of them may be asked about: an edge function
-# deploy and its secret change code and configuration, a notebook is saved without being run
-# (run_notebook is asked about, always), feedback goes to Supabase, and the rest only read. And the
-# same tool names on a server that is not Supabase's are another product's branches.
+# deploy that keeps JWT verification on (one that turns it off is asked about, above) and its
+# secret change code and configuration, a notebook is saved without being run (run_notebook is
+# asked about, always), feedback goes to Supabase, and the rest only read. And the same tool names
+# on a server that is not Supabase's are another product's branches.
 while IFS=$'\t' read -r t input; do
   [ -n "$t" ] || continue
   expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
@@ -553,7 +694,7 @@ mcp__github__merge_branch	{"owner": "o", "repo": "supabase-app", "base": "main",
 mcp__linear__delete_branch	{"note": "the supabase reset_branch tool"}
 TOOLS
 # The read hook never approves any of these, so the two hooks still cannot disagree about one.
-for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')"; do
+for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')"; do
   a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$p")")"
   [ "$a" = "none rc=0" ] && check "the read hook gives no decision on a call outside its own tools" ok || check "the read hook gives no decision on a call outside its own tools" "$a"
 done
@@ -624,7 +765,9 @@ want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_
         "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs",
         # Since #2632: the Supabase tools that change a database with no statement.
         "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
-        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch"]
+        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch",
+        # Since #2660: an edge function deploy, asked about when it turns JWT verification off.
+        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction"]
 never = ["Edit", "Write", "Read", "Monitor", "Agent"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":
