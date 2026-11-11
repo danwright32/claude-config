@@ -1945,7 +1945,8 @@ echo "slack drafts only: the merge helper's own line is judged inside the gate's
 # to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
 # half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
 # the ceiling raised on a new measurement. Measured again on 2026-11-10: 7,975 steps, 12 files read
-# 35 times, the 76 more all from the helper (one more sourced file), none from the gate.
+# 35 times, the 76 more all from the helper (one more sourced file), none from the gate; and 8,132
+# later that day, once the helper had grown again.
 MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
 MWR_STEPS=12000
 run_budget "$MWR_STEPS" "$MWR"

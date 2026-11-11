@@ -3557,7 +3557,8 @@ own for this (`outoftime`), refused exactly as before, and the wrapper adds the 
 is no merge gets none. Measured again on 2026-11-10 (12 cores): the helper's line takes 7,976 steps
 against the suite's ceiling of 12,000, up 76 from #2591, all of it the helper (125,803 to 128,049
 bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
-and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. So the one
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
 refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
 for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
 seconds) is inferred, not measured.
