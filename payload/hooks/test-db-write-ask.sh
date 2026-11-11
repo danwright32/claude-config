@@ -885,6 +885,19 @@ both "an ad hoc write from a file edited since the Apply is asked about" none as
 reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
 case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
 
+# The commands the skill itself tells a session to run, read from its text, so the skill cannot
+# drift into a shape the hooks never let through (L562).
+SKILL_MD="$DIR/../skills/db-apply/SKILL.md"
+skill_cmd() { grep -m 1 -E "^[[:space:]]*$1\$" "$SKILL_MD" | sed 's/^[[:space:]]*//'; }
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --yes|none|allow|GOOD_T' 'supabase db query --linked --yes -f change\.sql|none|allow|CHANGE_T'; do
+  IFS='|' read -r pat ra rb tv <<< "$want"
+  c="$(skill_cmd "$pat")"
+  if [ -z "$c" ]; then check "the skill documents a command matching $pat" "none found in SKILL.md"; continue; fi
+  both "the skill's own [$c] after its Apply" "$ra" "$rb" "$(apply_payload "$c" "$PROJ" s1 "${!tv}")"
+done
+
 # A -f file that cannot be read is asked about, as is one the same command could write first.
 both "a -f file that does not exist is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/nosuch.sql" "$PROJ" s1 "$NONE_T")"
 mkdir -p "$APPLY/a-folder.sql"
