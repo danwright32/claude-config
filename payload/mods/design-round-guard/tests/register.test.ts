@@ -33,8 +33,19 @@ const modKit: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout)
       }
+      // #2726: the first N reads of what a command writes fail as every hook in flight does when Claude
+      // Code replaces its hooks worker after a missed heartbeat, in the engine's own words, N named by
+      // a plugin in the fold, kit-stalls-<N>. A stand-in for one of the engine's own nouns that throws
+      // never reaches the hook as written, so the failure is thrown here.
+      let stalls = Number(e.plugins.map(p => /^kit-stalls-(\d+)$/.exec(p)?.[1]).find(n => n !== undefined) ?? 0)
       const modkit = {
-        writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
+        writes: async (input: { command: string; cwd: string; home: string }) => {
+          if (stalls > 0) {
+            stalls--
+            throw new Error('no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)')
+          }
+          return ask('writes', input)
+        },
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
@@ -96,6 +107,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit] }
+// #2726: the same, with the first n reads of what a command writes failing as a lost hooks worker fails a hook.
+const withStalls = (n: number) => ({ plugins: [secDefault, modKit, { name: `kit-stalls-${n}`, register: (() => undefined) as Register }] })
 // #1299: the same, with a mod-kit loaded before it had typedAnswer.
 const withOldKit = { plugins: [secDefault, modKit, { name: 'kit-lacks-typed-answer', register: (() => undefined) as Register }] }
 
@@ -3686,4 +3699,22 @@ test('#1593: a seal check that cannot run after the script, or a page unreadable
   expect(before).toContain(SKIP_QUESTION)
   expect(before).toContain('could not read docs/design/slack-channel-picker.html before the command ran')
   expect(w.ran.length).toBe(1)
+})
+
+// #2726: a hook Claude Code's lost hooks worker failed still holds a shell command, the main
+// session's and a subagent's, naming the loss, and never runs it; the same command, sent again once
+// the worker answers, is judged and runs as ever. Nothing about a missed heartbeat lets a call through
+// that the guard would have had to read.
+const WEDGED_WORDS = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
+test('#2726: a shell command a lost hooks worker left unjudged is held naming the loss, and runs once it is judged', withStalls(2), async ($, on) => {
+  const w = world($, on)
+  const command = "echo 'x' > /w/slate/app/__tests__/Header.tsx"
+  for (const extra of [{}, { agentId: 'agent-a1' }]) {
+    const r = refusalOf(await call($, { tool: 'Bash', command, ...extra }))
+    expect(r).toContain('could not check this call')
+    expect(r).toContain(WEDGED_WORDS)
+  }
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command, agentId: 'agent-a1' }))).toBe('')
+  expect(w.ran.map(x => x.input.command)).toEqual([command])
 })

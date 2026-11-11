@@ -3371,6 +3371,33 @@ export const stale = (file: string): string =>
 export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
 
 /**
+ * A call the guard passes on its tool and input alone, before reading anything (#2726): not the
+ * shell, and either a tool known only to read or one carrying no file path, so it can change no file.
+ * The one test judged makes first, and the one a catch answers by, so the two cannot disagree.
+ */
+export const passesByShape = (tool: string, input: Record<string, unknown>): boolean => tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)
+
+/**
+ * The tool.check hook's catch, when its hook failed (#2726): most often Claude Code replacing its
+ * one hooks worker after a missed heartbeat, which fails every hook in flight at once, in every
+ * agent. A call the guard passes by its shape is answered as the hook answers it, by `pass` (the
+ * verdicts beneath, read and nothing run); every other call is refused naming why, as before, since
+ * the guard would have had to read it. Nothing is judged again here: a rerun of the guard's reading
+ * could outlast the catch's 1,000 ms, and a catch cut there lets the call run (hold.ts).
+ */
+export const caughtCheck = <R>(tool: string, input: Record<string, unknown>, why: string, pass: () => R): R | { decision: 'deny'; reason: string } =>
+  passesByShape(tool, input) ? pass() : { decision: 'deny', reason: cannotCheck(why) }
+
+/**
+ * The tool.call hook's catch, when its hook failed before passing the call on (#2726). That hook
+ * judges a subagent's call alone: the main session's, and any AskUserQuestion, it passes straight
+ * on to be judged at tool.check, so those are passed on here too (`pass`), as is a subagent's call
+ * the guard passes by its shape. A subagent's call the guard must read is refused naming why.
+ */
+export const caughtCall = <R>(call: { tool: string; agentId?: string }, input: Record<string, unknown>, why: string, pass: () => R): R | { deny: string } =>
+  call.agentId === undefined || call.tool === 'AskUserQuestion' || passesByShape(call.tool, input) ? pass() : { deny: cannotCheck(why) }
+
+/**
  * What became of a shell write the guard judged once it ran (#1296): a change to a mod's .ts hook file
  * that made it draw, or since #1859 that changed only a message's words, put back with what the
  * command wrote kept first (`undone`, where it is kept), or not put back, and why: no copy could be
