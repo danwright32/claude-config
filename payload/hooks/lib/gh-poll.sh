@@ -147,7 +147,8 @@ ghp__write_pause(){   # $1 = the session folder, $2 = until, $3 = strikes, $4 = 
 # set), GHP_CAP (the looks a minute this look was allowed) and GHP_SEEN (the looks already taken in it).
 #
 # $2, when given, is how many of the minute's looks this one leaves free for others (claude-config#2715):
-# a merge helper only waiting for its turn passes 1, so it looks only while the helper holding the
+# a merge helper only waiting for its turn, or not yet in line while another holds it (#2749), passes
+# 1, so it looks only while the helper holding the
 # turn would still find a look free, and the holder's reads come first. On 2026-11-10 one session's 102
 # merge logs held 2,845 waits on this cap: 2,594 by helpers waiting in line, and 251 by the helper
 # holding the turn, with a median of 8 helpers in line behind it. A look never leaves the whole
