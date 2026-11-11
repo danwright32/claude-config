@@ -3443,20 +3443,21 @@ allowed unread. What bounds the reading is the gate's one budget of 11 seconds f
 checked, saying how many modules it had read. Measured through the wrapper on the personal MacBook
 on 2026-11-10 (12 cores, load average 17 to 27 from other sessions' suites, several readings each):
 
-| What was judged | Modules | Readings | Least | Middle | Most | Verdict |
-|---|---|---|---|---|---|---|
-| a made up lint script | 342 | 7 | 0.13 s | 0.14 s | 0.14 s | allowed |
-| `node node_modules/eslint/bin/eslint.js .`, a real install | 339 to 397 | 7 | 0.37 s | 0.38 s | 0.47 s | allowed |
-| a made up lint script | 5,315 | 5 | 0.95 s | 0.99 s | 1.00 s | allowed |
-| a made up lint script | 42,502 | 5 | 7.60 s | 7.68 s | 7.81 s | allowed |
-| a made up lint script | 95,627 | 3 | 11.11 s | 11.12 s | 11.13 s | refused, out of time |
+| Measured | What was judged | Modules | Readings | Least | Middle | Most | Verdict |
+|---|---|---|---|---|---|---|---|
+| 2026-11-10 | a made up lint script | 342 | 7 | 0.13 s | 0.14 s | 0.14 s | allowed |
+| 2026-11-10 | `node node_modules/eslint/bin/eslint.js .`, a real install | 339 to 397 | 7 | 0.37 s | 0.38 s | 0.47 s | allowed |
+| 2026-11-10 | a made up lint script | 5,315 | 5 | 0.95 s | 0.99 s | 1.00 s | allowed |
+| 2026-11-10 | a made up lint script | 42,502 | 5 | 7.60 s | 7.68 s | 7.81 s | allowed |
+| 2026-11-10 | a made up lint script | 95,627 | 3 | 11.11 s | 11.12 s | 11.13 s | refused, out of time |
 
-The made up modules are about 270 bytes each and ESLint's own are larger: about 0.8 ms a module
-against 0.2 ms, once the 0.08 s the gate takes to start is taken off. So at that load the budget
-covers some ten thousand modules of real size.
-The cost of the change is the last row: a tree too large to read is now refused after 11 seconds,
-where the count refused it in a fraction of one. The work repository's own lint run is on the work
-MacBook and was not among these readings.
+In those readings of 2026-11-10 the made up modules are about 270 bytes each and ESLint's own are
+larger: about 0.8 ms a module against 0.2 ms, once the 0.08 s the gate takes to start is taken
+off. So at that load the budget covers some ten thousand modules of real size. The cost of the
+change is the last row: a tree too large to read is now refused after 11 seconds, where the count
+refused it in a fraction of one. The work repository's own lint run is on the work MacBook and
+was not among these readings.
+
 A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
 names it and is refused like a script run directly would be; a helper that names none (one that
 saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
