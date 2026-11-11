@@ -2274,6 +2274,21 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
   expect(await promptLines($)).toBe('')
 })
 
+test('a copy module nothing sends yet is named as one asleep, and by the awake refusal a choice gets (#2720, #2628)', withNight, async ($, on) => {
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  nightFresh(true)
+  world($, on)
+  const asleep = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(asleep).toContain(CHOOSE)
+  expect(asleep).toContain(UNWIRED)
+  nightFresh(false)
+  const awake = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(awake).toContain(UNWIRED)
+  const chosen = refusalOf(await choose($, idIn(awake) as string))
+  expect(chosen).toContain('awake')
+  expect(chosen).toContain(UNWIRED)
+})
+
 test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {
   nightFresh(true)
   const w = world($, on)

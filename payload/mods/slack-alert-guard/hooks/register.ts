@@ -1256,7 +1256,7 @@ export const register: Register = on => {
       return { deny: `No Slack alert edit of yours is held under ${call}: it was chosen or answered already, or never held. Send the edit, and if it is held you are told what to do.` }
     if (!(await isAsleep($)))
       return {
-        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from)}`,
+        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from, waiting.unwired) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from, waiting.unwired)}`,
       }
     const problem = renderedProblem(input.rendered, waiting.added, waiting.literal ?? [])
     if (problem !== undefined) return { deny: problem.replace('Give metadata "rendered"', 'Give "rendered"') }
