@@ -3736,6 +3736,17 @@ check "#2714 under the limit it still says the wait" "job deal waited 6m 34s" "$
 check "#2714 and says the count was under the limit" "under the 40" "$out"
 check_not "#2714 and never that the pool was full" "the runner pool was full" "$out"
 
+# Two runs waited on for one head, the first under the limit: each is judged on its own count, so
+# the second, at 20, is still called a full pool. Run 1001 is made up for this, not recorded: one job
+# that waited 2 minutes at a time no recorded run overlaps, so it counts 0 running.
+pw_fresh "$PW_RUN"
+jq -nc '[{__typename:"CheckRun",name:"lint",workflowName:"lint",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/1001/job/1"},{__typename:"CheckRun",name:"deal",workflowName:"tests",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/42877567710/job/130044844243"}]' > "$ST/rollup"
+printf '%s\n' '{"total_count":1,"jobs":[{"id":1,"run_id":1001,"name":"lint","status":"completed","conclusion":"success","created_at":"2026-11-10T20:00:00Z","started_at":"2026-11-10T20:02:00Z","completed_at":"2026-11-10T20:03:00Z"}]}' > "$ST/jobsjson-1001"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 two waited runs merge" "0" "$rc"
+check "#2714 the first run is said under the limit" "job lint waited 2m 00s, and 0 of this repository's jobs" "$out"
+check "#2714 the second run is still called a full pool" "job deal waited 6m 34s, and 20 of this repository's jobs were running when it was queued. GitHub runs at most 20 jobs at once" "$out"
+
 # A clean run says nothing, and reads nothing past its own jobs.
 pw_fresh 42877448181
 out="$(run 7 --squash)"; rc=$?

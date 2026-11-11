@@ -776,7 +776,7 @@ POOL_COUNT_JQ='[.[][]] as $all | $waited[] | . as $j
       and ((.completed_at | type) != "string" or (.completed_at | fromdateiso8601) > $j.at))] | length
   | [$j.name, $j.d, .] | @tsv'
 pool_note(){
-  local id waited range runs out rc rid fin all counts name d n items full=0 under=0 least=""
+  local id waited range runs out rc rid fin all counts name d n items under least
   [ "$pool_head" = "$head" ] || return 0
   for id in $pool_open; do
     case " $pool_done " in *" $id "*) continue ;; esac
@@ -787,7 +787,8 @@ pool_note(){
     fi
     waited="$(printf '%s' "$pool_got" | jq -c --argjson w "$POOL_WAIT" "$POOL_WAITED_JQ" 2>/dev/null)"
     case "$waited" in ''|'[]') continue ;; esac
-    all="$pool_got"; counts=""; pool_err=""
+    # Each run is judged on its own counts: nothing carries over from the run before (#2714).
+    all="$pool_got"; counts=""; pool_err=""; under=0; least=""
     range="$(printf '%s' "$waited" | jq -r --argjson b "$POOL_LOOKBACK" '"\((map(.at) | min) - $b | todate)..\(map(.at) | max | todate)"' 2>/dev/null)"
     out="$(gh_as api "repos/$slug/actions/runs?created=$range&per_page=100" 2>&1 </dev/null)"; rc=$?
     if [ "$rc" -ne 0 ] || ! runs="$(printf '%s' "$out" | jq -r --argjson waited "$waited" --arg own "$id" '
@@ -811,7 +812,7 @@ pool_note(){
     if [ -n "$counts" ]; then
       while IFS=$'\t' read -r name d n; do
         items="${items:+$items; }job $name waited $(dur "$d"), and $least$n of this repository's jobs were running when it was queued"
-        if [ "$n" -ge "$POOL_LIMIT" ]; then full=$((full + 1)); else under=$((under + 1)); fi
+        [ "$n" -ge "$POOL_LIMIT" ] || under=$((under + 1))
       done <<< "$counts"
       if [ "$under" -eq 0 ]; then
         say "Workflow run $id waited for a runner: $items. GitHub runs at most $POOL_LIMIT jobs at once for the account's plan (MWR_POOL_LIMIT), so the runner pool was full, and that time was GitHub's queue, not the tests."
