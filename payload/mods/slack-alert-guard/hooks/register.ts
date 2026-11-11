@@ -17,6 +17,7 @@ import {
   ciMessages,
   ciWorkflow,
   codeOf,
+  copyModule,
   type Decl,
   type Foreign,
   type ModelReading,
@@ -230,7 +231,10 @@ const pathspecGroups = (rels: string[]): string[][] => {
 /** A file that sends the template: the files it reaches the template through, nearest it first, the template left out, and for one sending through a send helper it imports, that helper. */
 type Sender = { rel: string; chain: string[]; helper?: string }
 type Senders = { senders: Sender[]; top: string; texts: Map<string, string>; complete: boolean }
-type Found = Senders | { none: true } | { unchecked: string } | { posts: true } | { maybe: true }
+// none: nothing sends the file. With `rel` (#2720), the file is in a repository and no test, its
+// path below the top is `rel`, and the search found no sender; `unused` when no file but a test
+// imports it at all, so whether anything will send it cannot be told yet.
+type Found = Senders | { none: true; rel?: string; unused?: boolean } | { unchecked: string } | { posts: true } | { maybe: true }
 /** Whether the senders found so far settle the question, so the search may stop (#2570). */
 type Settle = (senders: Sender[], top: string, texts: Map<string, string>, template: string) => Promise<boolean>
 const firstSender = (f: Senders): string => `${f.top}/${(f.senders[0] as Sender).rel}`
@@ -491,7 +495,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       // A level handed on only to UI components settles here (Dan, 2026-11-09, #2519): a screen's
       // importers are other screens, and one that sent was found above. Any other file handing it
       // on means the whole level, components too, is followed as before.
-      if (next.every(r => uiComponent(r))) return withFound(true, NONE)
+      if (next.every(r => uiComponent(r))) return withFound(true, { none: true, rel: templateRel, unused: hop === 0 && !users.length })
       if (hop === REEXPORT_HOPS)
         return withFound(false, {
           unchecked: `${path} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: ${next.map(r => `${top}/${r}`).join(', ')})`,
@@ -559,7 +563,8 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
  * a new copy module of four alert messages was written while nothing sent it, so it passed; the
  * edits that made a monitor route import it and post it added no text of their own, so they passed
  * too. A new file nothing sends still passes, since nothing can post it and most new files never
- * will be posted. The edit that makes a send reach it is what is judged, whenever it comes: once
+ * will be posted, unless it is a module of message copy, whose wording is held as it is written
+ * (#2720, ownWording). The edit that makes a send reach it is what is judged, whenever it comes: once
  * the edit's own wording has passed, each sender through the edited file (the file itself when it
  * posts or uses a send helper, then every file that sends it) is traced as the edit leaves the file
  * and as it was, down through the files it imports, and wording a send reaches only afterwards,
@@ -835,14 +840,26 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
       return { hold: sender ? { ...hold, sender } : hold }
     }
     const python = lang === 'python'
+    // Wording added to a module of message copy that no file uses yet (#2720): held as it is
+    // written, since it is there to be sent, rather than only once a later edit wires it to a send
+    // and is blamed for it. Only where the file is in a repository and no test and no file but a
+    // test imports it, so its sends cannot be traced yet. A module something already uses is judged
+    // by what that use sends, as before: a sender's by what it sends (#2570), a screen's or a route
+    // that posts nothing by nothing (#2519). Text taken away from a file nothing uses changes no
+    // message.
+    const copyHold = async (found: Found, added: string[]): Promise<Verdict> => {
+      if (!('none' in found) || !found.unused || found.rel === undefined || !added.length) return PASS
+      if (!copyModule(found.rel, after)) return PASS
+      return holdFor({ added, removed: [] })
+    }
     // Wording Dan has not approved, in a file whose sends cannot be traced (a text template, a
     // workflow, a shell script, an edit that does not apply): held when its file is in a git
     // repository and is no test, and either posts to Slack itself or another file in its repository
-    // sends it there.
+    // sends it there, or it is a module of message copy no file uses yet (#2720).
     if (text || edited === undefined || !(python || (lang === 'c' && isJs(path)))) {
       const found = await findSender($, path, deadline, marked)
       if ('unchecked' in found) return found
-      if (!('posts' in found || 'maybe' in found || 'senders' in found)) return PASS
+      if (!('posts' in found || 'maybe' in found || 'senders' in found)) return copyHold(found, change.added)
       return holdFor(change, 'senders' in found ? firstSender(found) : undefined)
     }
     // Only wording a Slack send carries is held (#2570): each changed string is traced to the send it
@@ -896,7 +913,7 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // on, so the rest is held as before.
     if ('maybe' in found) return holdFor(rest)
     if ('senders' in found && !found.complete) return holdFor(rest, firstSender(found))
-    return PASS
+    return copyHold(found, rest.added)
   } catch (err) {
     return { unchecked: message(err) }
   }
