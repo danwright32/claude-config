@@ -1867,9 +1867,14 @@ test('a new copy module is held as it is written, though nothing sends it yet, n
   expect(held).not.toContain(MONITOR)
   expect(w.ran).toEqual([])
   expect(w.cards.length).toBe(1)
+  // The refusal, the card and the question say it is copy nothing sends yet, not a live send.
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  expect(held).toContain(UNWIRED)
+  expect(String(w.cards[0]?.reason)).toContain(UNWIRED)
   await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
   // The question names the file that holds the wording.
   expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  expect(w.asked[0]?.questions[0]?.question).toContain(`defined in ${QUIET}, a module of message copy not yet wired to Slack?`)
   // Approving posts nothing (#2284), so the question above the message never reads as a send.
   expect(readsAsSend((w.asked[0]?.questions[0]?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
   expect(refusalOf(await call($, write))).toBe('')
@@ -1947,6 +1952,8 @@ test('a new module that is no copy module passes while nothing sends it; the edi
   expect(w.cards.length).toBe(1)
   await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
   expect(w.asked[0]?.questions[0]?.question).toContain(FEEDS)
+  // A send that is wired is never named as copy not yet wired (#2720).
+  for (const t of [held, String(w.cards[0]?.reason), w.asked[0]?.questions[0]?.question ?? '']) expect(t).not.toContain('not yet wired')
   expect(refusalOf(await call($, send))).toBe('')
   expect(w.ran.length).toBe(3)
 })
@@ -2372,6 +2379,26 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
   expect(refusalOf(await call($, MERGE))).toBe('')
   expect(w.ghs).toEqual([])
   expect(await promptLines($)).toBe('')
+})
+
+test('a copy module nothing sends yet is named as one asleep, and by the awake refusal a choice gets (#2720, #2628)', withNight, async ($, on) => {
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  nightFresh(true)
+  const w = world($, on)
+  const asleep = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(asleep).toContain(CHOOSE)
+  expect(asleep).toContain(UNWIRED)
+  // The choice keeps it, so the morning question names it too.
+  expect(refusalOf(await choose($, /"call": "(t\d+)"/.exec(asleep)?.[1] ?? '', QUIET_SHOWN))).toBe('')
+  const kept = chosenIn(w).map(k => w.store[k] as { unwired?: boolean })
+  expect(kept.length).toBeGreaterThan(0)
+  for (const c of kept) expect(c.unwired).toBe(true)
+  nightFresh(false)
+  const awake = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(awake).toContain(UNWIRED)
+  const chosen = refusalOf(await choose($, idIn(awake) as string))
+  expect(chosen).toContain('awake')
+  expect(chosen).toContain(UNWIRED)
 })
 
 test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {
