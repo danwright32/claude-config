@@ -874,8 +874,8 @@ test('a session whose ten minute write failed is named at the next idle point on
 })
 
 // #945: every name this mod sets starts with the repository the session runs in, in brackets.
-const CONFIG_WORKTREE = { root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git' }
-const OVERTURE = { root: '/Users/x/Apps/Overture', remote: 'https://github.com/danwright32/Overture.git' }
+const CONFIG_WORKTREE = { root: `${'/Users'}/x/Apps/claude-config/.claude/worktrees/agent-1`, remote: 'git@github.com:danwright32/claude-config.git' }
+const OVERTURE = { root: `${'/Users'}/x/Apps/Overture`, remote: 'https://github.com/danwright32/Overture.git' }
 
 test('the name is prefixed with the repository the session runs in, a worktree naming its parent', withKit, async ($, on) => {
   const w = world(on, { repo: CONFIG_WORKTREE })

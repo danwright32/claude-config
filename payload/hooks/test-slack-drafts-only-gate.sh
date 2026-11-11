@@ -588,8 +588,9 @@ printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals
 run_bash "node $T/imp/str/evals-imported.ts"
 refused "a string from another module handed to eval in the script, importing a helper that posts"
 says "that refusal names the posting helper" "poster.js"
-# Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
-# lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Past the most modules it reads in no repository (IMPORT_MAX_FILES, 300; the largest real script
+# reaches 11), what lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Inside a repository it reads on (claude-config#2470, with the budget cases below).
 mkdir -p "$T/imp/chain" "$T/imp/short"
 for n in $(seq 0 305); do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/chain/m$n.ts"; done
 printf '%s\n' 'export {};' > "$T/imp/chain/m306.ts"
@@ -1372,14 +1373,58 @@ for tree in posts quiet; do
     '  if [ -f "$p" ] && . "$p" 2>/dev/null; then echo ok; fi' '}' 'load' > "$T/sv/$tree/local.sh"
   # A global read inside a function body, and ${X:-default} on a name the script set empty.
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'SUB=""' 'go() {' '  . "$ROOT/${SUB:-lib}/x.sh"' '}' 'go' > "$T/sv/$tree/default.sh"
+  # The disk-clean idiom (scan-lib.sh, disk-clean-harness.sh, disk-remove.sh; #2538): CDPATH cleared,
+  # cd -P and pwd -P for the folder's real path, cd's errors sent away, and an exit when it fails.
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"; [ "$D" != "${BASH_SOURCE[0]}" ] || D=.' \
+    'D="$(CDPATH= cd -P "${D:-/}" 2>/dev/null && pwd -P)" || { echo "no folder"; exit 2; }' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/realpath.sh"
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"' 'D="$(cd "$D" >/dev/null 2>&1 && pwd)"' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/cdquiet.sh"
+  # A group or an if opening on a subshell (ai-review-common.sh's secret maker; #2538): the walk goes on
+  # past it, rather than losing which block the group's closing brace closes.
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" 'mk() {' \
+    "  { ( umask 077 && printf '%s' 1 > \"\$1\" ) && chmod 600 \"\$1\"; } 2>/dev/null || { return 1; }" \
+    '  if ( true ); then :; fi' '}' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/groupsub.sh"
+  # A function whose body's closing brace shares a line with the fi before it (test-merged-prs.sh).
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" \
+    'ok(){ if [ "$1" = "$2" ]; then :; else echo no; fi }' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/fibrace.sh"
+  # The suites' way of calling a helper in a shell of its own: its path handed to `bash -c` as $1,
+  # after a sourced file that holds no shift, and after set -e (test-sleep-state.sh, test-this-mac.sh).
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'LIB="$ROOT/lib/x.sh"' \
+    "out=\"\$(env A=1 bash -c 'set -eu; . \"\$1\"; . \"\$2\"; echo ok' _ \"\$ROOT/lib/y.sh\" \"\$LIB\")\"" \
+    "sh -c '. \"\$0\"' \"\$LIB\"" > "$T/sv/$tree/dashc.sh"
+  printf '%s\n' 'Y=1' > "$T/sv/$tree/lib/y.sh"
 done
-for shape in hookdir twice local default; do
+for shape in hookdir twice local default realpath cdquiet groupsub fibrace dashc; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "that refusal names the sourced file" "lib/x.sh"
+  says "and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
   run_bash "bash $T/sv/quiet/$shape.sh"
   allowed "the same script sourcing a file that does not post: $shape.sh"
 done
+# A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
+# Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
+# shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
+# posts, each would be refused; it is a path the gate cannot work out, so, with the refusal off, it
+# is let through unread. Turning the refusal on turns each of these red. (A loop or a function in
+# the string also leaves $1 unknown; with the refusal off no fixture can tell that apart, as any
+# loop that changes $1 really does source the other file.)
+P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
+# A sourced file shares the string's positionals, so one that sets them after an option changes $2.
+printf '%s\n' '# sets its caller'"'"'s positionals' "set -e -- $Q" > "$T/sv/quiet/lib/resets.sh"
+for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
+            "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c '. \"\$1\"; . \"\$2\"' _ $T/sv/quiet/lib/resets.sh $P"; do
+  run_bash "$form"
+  allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
+done
+run_bash "bash -c '. \"\$1\"' _ $P"
+refused "a bash -c string sourcing its argument, which posts, as a command typed"
+says "that refusal is the post it read" "REFUSED: this command posts to Slack"
+run_bash "env -u NOT_SET_2538 A=1 bash -c 'set -e; . \"\$1\"' _ $P"
+refused "the same behind env -u and an assignment, after set -e"
+run_bash "bash -c '. \"\$1\"' _ $Q"
+allowed "a bash -c string sourcing its argument, which does not post, as a command typed"
 # BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
 run_bash "cd $T/sv/posts && bash hookdir.sh"
 refused "the HOOK_DIR idiom run from the script's own folder, sourcing a file that posts"
@@ -1526,6 +1571,165 @@ for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c
   refused "a file whose role cannot be told is still read as code: $runs"
 done
 
+echo "slack drafts only: a file copied and run in the same command is judged by its source (claude-config#2525)"
+
+# The script a command runs may not exist yet when the gate reads the command: `cp post.txt run.sh &&
+# bash run.sh` makes it first. Measured on main on 2026-11-09 and again on 2026-11-10, every form below
+# passed, because run.sh was not on disk to read. Nothing here is run, so post.txt is still where it
+# was for the mv case, and run.sh never exists.
+mkdir -p "$T/cp/sub" "$T/cp/tools" "$T/cp/bin"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/post.txt"
+printf '%s\n' "echo hello" > "$T/cp/plain.txt"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/tools/post.sh"
+printf '%s\n' "import urllib.request" "urllib.request.urlopen('https://slack.com/api/chat.postMessage')" > "$T/cp/post.txt.py"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/old.sh"
+run_cp() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/cp")"; }
+
+# The controls first: the same commands with a harmless source pass, so a refusal below is the source
+# being read and not every copy and run being refused (L159).
+for runs in "cp plain.txt run.sh && bash run.sh" "cat plain.txt > run.sh && bash run.sh" \
+  "install -m 755 plain.txt run.sh && ./run.sh" "mv plain.txt run.sh; sh run.sh" "cp post.txt notes.txt" \
+  "cat post.txt > run.sh && grep -c chat run.sh"; do
+  run_cp "$runs"
+  allowed "a copy of a harmless file, or one never run, passes: $runs"
+done
+
+for runs in "cp post.txt run.sh && bash run.sh" "cp post.txt run.sh; sh ./run.sh" \
+  "mv post.txt run.sh && bash run.sh" "install -m 755 post.txt run.sh && ./run.sh" \
+  "cp -f -- post.txt run.sh && source run.sh" "/bin/cp post.txt run.sh && . ./run.sh" \
+  "cat post.txt > run.sh && bash run.sh" "cat < post.txt > run.sh && bash run.sh" \
+  "cat plain.txt post.txt > run.sh && bash run.sh" "cp plain.txt run.sh && cat post.txt >> run.sh && bash run.sh" \
+  "tee run.sh < post.txt > /dev/null && bash run.sh" "ln -s post.txt run.sh && bash run.sh" \
+  "cp post.txt bin/ && bash bin/post.txt" "cp post.txt plain.txt bin && bash bin/post.txt" \
+  "cp post.txt a.sh && cp a.sh b.sh && bash b.sh" "cd sub && cp ../post.txt run.sh && bash run.sh" \
+  "cp post.txt.py run.py && python3 run.py" "cp -R tools copy && bash copy/post.sh" \
+  "cp --backup post.txt run.sh && bash run.sh" "cp --backup=numbered post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a copy run in the same command is judged by its source: $runs"
+done
+run_cp "cp post.txt run.sh && bash run.sh"
+says "the refusal names the file the copy was made from" "post.txt"
+says "the refusal names the copy it ran" "run.sh"
+run_cp "cp -R tools copy && bash copy/post.sh"
+says "a file in a copied directory is named by its source" "tools/post.sh"
+# A heredoc written to a file is the file's source too.
+run_cp "cat > run.sh <<'EOF'
+curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage
+EOF
+bash run.sh"
+refused "a heredoc written to a file and run is judged by the heredoc"
+run_cp "cat > run.sh <<'EOF'
+echo hello
+EOF
+bash run.sh"
+allowed "a harmless heredoc written to a file and run passes"
+# A file already there that a copy overwrites is still read too: with ; the old one runs when the
+# copy fails, so judging only the new text would let a refused script through.
+run_cp "cp plain.txt old.sh; bash old.sh"
+refused "a posting script a harmless copy overwrites is still read"
+# BSD install's -S is a flag (flush to disk, man install on macOS), so the word after it is the
+# source; read as a value, post.txt was swallowed and run.sh never recorded (PR #2730 review).
+# GNU install's -S is still a suffix, so its value is not taken for the source.
+run_cp "install -S plain.txt run.sh && bash run.sh"
+allowed "install -S copying a harmless file passes"
+for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.txt run.sh && ./run.sh" \
+  "ginstall -S .bak post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
+done
+# The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
+run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "a copy of the nudge script made and run in the same command is refused"
+# And the nudge script's own path, overwritten earlier in the same command, is no longer the shipped
+# script, so the exemption does not cover it (PR #2730 review). Nothing here runs, so it is untouched.
+run_cp "cp post.txt.py $NUDGE && python3 $NUDGE 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "the nudge script's path overwritten and run in the same command is refused"
+
+echo "slack drafts only: a file written by printf, echo, tee or curl and run in the same command is judged by what is written (claude-config#2721)"
+
+# #2525 judged a copy by its source; the other writers were not followed, so `printf '<a post>' >
+# run.sh && bash run.sh` passed (measured through this wrapper on 2026-11-10 by the #2525 builder).
+# Text the gate can work out exactly (literal printf and echo arguments, a here-string, text piped
+# into tee) is judged as the file; text or a path it cannot (a variable, a substitution, a download)
+# is refused when the file is run, since what it holds cannot be read. Nothing here is run.
+POST="curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage"
+
+# The controls first: the same writers with harmless text, or with a post written to a file that is
+# never run, pass, so a refusal below is the written text being read (L159).
+for runs in "printf 'echo hello\n' > run.sh && bash run.sh" "printf '%s\n' 'echo hello' > run.sh && bash run.sh" \
+  "echo 'echo hello' > run.sh && bash run.sh" "echo echo hello > run.sh; sh run.sh" \
+  "printf 'echo hello\n' | tee run.sh && bash run.sh" "echo 'echo hello' | tee -a run.sh > /dev/null && bash run.sh" \
+  "cat plain.txt | tee run.sh && bash run.sh" "cat <<< 'echo hello' > run.sh && bash run.sh" \
+  "tee run.sh <<< 'echo hello' && bash run.sh" "printf 'echo hello'>run.sh&&bash run.sh" \
+  "F=run.sh; printf 'echo hello\n' > \"\$F\" && bash run.sh" \
+  "printf '$POST\n' > notes.txt && bash plain.txt" "echo '$POST' | tee notes.txt && bash plain.txt" \
+  "curl -s -o page.html https://example.com/ && bash plain.txt" "date > out.txt; bash plain.txt" \
+  "echo \"\$UNSET_2721\" > out.txt && bash plain.txt" "printf x > \"\$UNSET_2721/out.txt\" && bash plain.txt" \
+  "printf 'echo %s\n' hello > run.sh && bash run.sh" "echo hello 2>/dev/null > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  allowed "a harmless write, or a post written and never run, passes: $runs"
+done
+
+for runs in "printf '$POST\n' > run.sh && bash run.sh" "printf '%s\n' '$POST' > run.sh; sh ./run.sh" \
+  "printf 'curl https://slack.com/api/chat.p\157stMessage\n' > run.sh && bash run.sh" \
+  "printf 'curl https://slack.com/api/chat.p\x6fstMessage\n' > run.sh && bash run.sh" \
+  "printf 'curl https://slack.com/api/chat.post%s\n' Message > run.sh && bash run.sh" \
+  "printf '%b' 'curl https://slack.com/api/chat.p\0157stMessage\n' > run.sh && bash run.sh" \
+  "echo '$POST' > run.sh && bash run.sh" "echo $POST >> run.sh && source run.sh" \
+  "printf 'echo hello\n' > run.sh && echo '$POST' >> run.sh && bash run.sh" \
+  "printf '$POST\n' | tee run.sh > /dev/null && bash run.sh" "echo '$POST' | tee -a run.sh && bash run.sh" \
+  "cat post.txt | tee run.sh && bash run.sh" "echo '$POST' | cat > run.sh && bash run.sh" \
+  "cat <<< '$POST' > run.sh && bash run.sh" "tee run.sh <<< '$POST' > /dev/null && bash run.sh" \
+  "printf '$POST'>run.sh&&bash run.sh" "F=run.sh; printf '$POST\n' > \"\$F\" && bash run.sh" \
+  "printf '$POST\n' > run.sh && chmod +x run.sh && ./run.sh" \
+  "printf 'import urllib.request\nurllib.request.urlopen(\"https://slack.com/api/chat.postMessage\")\n' > run.py && python3 run.py"; do
+  run_cp "$runs"
+  refused "a file written and run in the same command is judged by the text written: $runs"
+done
+run_cp "printf '$POST\n' > run.sh && bash run.sh"
+says "the refusal names what wrote the file" "printf"
+says "the refusal names the file it ran" "run.sh"
+
+# What cannot be worked out is refused when the file is run: text or a path from a variable or a
+# substitution, the output of another program, and a download.
+for runs in "printf \"\$MSG\" > run.sh && bash run.sh" "echo \"\$(cat plain.txt)\" > run.sh && bash run.sh" \
+  "printf 'echo hello\n' > \"\$OUT_2721/run.sh\" && bash \"\$OUT_2721/run.sh\"" \
+  "printf 'echo hello\n' > \"\$F_2721\" && bash run.sh" "echo 'echo hello' | tee \"\$F_2721\" && bash run.sh" \
+  "curl -s -o run.sh https://example.com/x.sh && bash run.sh" "curl -sO https://example.com/run.sh && bash run.sh" \
+  "curl -s https://example.com/x.sh > run.sh && bash run.sh" "curl -s https://example.com/x.sh | tee run.sh && bash run.sh" \
+  "wget -q -O run.sh https://example.com/x.sh && bash run.sh" "python3 -c 'print(1)' > run.sh && bash run.sh" \
+  "printf 'echo \x68i\u0068' > run.sh && bash run.sh" "echo 'echo a\nb' > run.sh && bash run.sh" \
+  "printf '%q' x > run.sh && bash run.sh" "printf 'echo hello\n' > run.sh; date >> run.sh; bash run.sh" \
+  "echo -n echo hello > run.sh; sh run.sh" "printf 'echo \\\"hi\\\"' > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a file run after a write whose text or path cannot be read is refused: $runs"
+done
+run_cp "curl -s -o run.sh https://example.com/x.sh && bash run.sh"
+says "the refusal says the written text cannot be read" "cannot be read"
+says "the refusal names the download" "curl"
+# A group, subshell or loop feeding a pipe prints what every command in it prints, not only its last
+# (lessons review at 8fe178b): read as its last command, the post written first went through.
+for runs in "{ echo '$POST'; echo hi; } | tee run.sh && bash run.sh" "( printf '$POST\n'; echo hi ) | tee run.sh && bash run.sh" \
+  "for x in a; do echo '$POST'; done | tee run.sh && bash run.sh" "if true; then echo '$POST'; fi | cat > run.sh && bash run.sh" \
+  "echo '$POST' | (tee run.sh) && bash run.sh" "echo '$POST' | { tee run.sh; } && bash run.sh" \
+  "echo '$POST' | while read l; do echo \"\$l\"; done > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a compound command piped into a write is not read as its last command: $runs"
+done
+# Of several output redirections the shell writes to the last, and only empties the others (lessons
+# review at 4949370): the post lands in run.sh, not decoy.txt.
+run_cp "printf '$POST\n' > decoy.txt > run.sh && bash run.sh"
+refused "the text goes to the last of several output redirections"
+run_cp "printf '$POST\n' > run.sh > decoy.txt && bash run.sh"
+allowed "an earlier output redirection is only emptied, so running it runs nothing"
+# A data file is read when the script it is handed can act on it (claude-config#2362): one downloaded
+# in the same command cannot be read, so it is refused there, and passes where its text is known.
+printf '%s\n' "import sys, urllib.request" "urllib.request.urlopen(open(sys.argv[1]).read().strip())" > "$T/cp/send.py"
+run_cp "printf 'https://example.com/\n' > target.txt && python3 send.py target.txt"
+allowed "a data file written with known harmless text and handed to a script that sends passes"
+run_cp "curl -s -o target.txt https://example.com/t && python3 send.py target.txt"
+refused "a data file downloaded in the same command and handed to a script that sends is refused"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
@@ -1637,6 +1841,131 @@ OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj
   | env -u HOOK_TESTS_RUNNING SLACK_GATE_TICK_BUDGET=1 bash "$HOOK" 2>"$errf")"; RC=$?
 ERR="$(cat "$errf")"; rm -f "$errf"
 allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
+
+# A lint run whose config imports more modules than IMPORT_MAX_FILES (claude-config#2470). In a work
+# repository `pnpm run lint` was refused outright because the lint config's local imports pass 300,
+# though nothing in it touches Slack, and builders went round the gate to lint at all. Dan,
+# 2026-11-09: "Time budget past 300, repository files only". So past 300 the gate reads on, inside
+# the budget above, while every module is inside the repository the script is in, each one still
+# judged by the endpoint it names. A module outside that repository, a script in no repository and
+# the budget running out are each refused as not checked, never allowed.
+lint_tree() { # lint_tree <folder> <rule modules> [poster=N|outside=N|link=N|config-outside|no-repo|worktree]
+  python3 - "$@" <<'PY'
+# <folder> becomes a made up repository: package.json's lint script runs tools/lint.mjs, which imports
+# eslint.config.mjs, which imports lint/groups/group-NN.mjs, each importing 16 of
+# lint/rules/rule-NNNN.mjs. Read breadth first, rule N is module 2 + groups + N + 1.
+#   poster=N        rule N also names a posting endpoint (put together here, so this suite names none)
+#   outside=N       rule N also imports <folder>-shared/helper.mjs, outside the repository
+#   link=N          rule N is a link to <folder>-shared/linked.mjs, outside the repository
+#   config-outside  eslint.config.mjs itself imports <folder>-shared/helper.mjs, among the first 300
+#   no-repo         the same tree in a plain folder
+#   worktree        .git is the file git writes in a worktree, not a folder
+import os, subprocess, sys
+root, count, opts = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+num = {o.split("=")[0]: int(o.split("=")[1]) for o in opts if "=" in o}
+shared, name = root + "-shared", os.path.basename(root)
+for d in ("tools", "lint/groups", "lint/rules"):
+    os.makedirs(os.path.join(root, d), exist_ok=True)
+os.makedirs(shared, exist_ok=True)
+if "worktree" in opts:
+    with open(os.path.join(root, ".git"), "w") as f:
+        f.write("gitdir: %s/.git/worktrees/%s\n" % (shared, name))
+elif "no-repo" not in opts:
+    subprocess.run(["git", "init", "-q", root], check=True)
+with open(os.path.join(root, "package.json"), "w") as f:
+    f.write('{"name": "%s", "private": true, "scripts": {"lint": "node ./tools/lint.mjs ."}}\n' % name)
+with open(os.path.join(root, "tools", "lint.mjs"), "w") as f:
+    f.write('import config from "../eslint.config.mjs";\nconsole.log(config.length);\n')
+groups = (count + 15) // 16
+with open(os.path.join(root, "eslint.config.mjs"), "w") as f:
+    if "config-outside" in opts:
+        f.write('import { helper } from "../%s-shared/helper.mjs";\n' % name)
+    for g in range(groups):
+        f.write('import group%02d from "./lint/groups/group-%02d.mjs";\n' % (g, g))
+    f.write("export default [%s];\n" % ", ".join("group%02d" % g for g in range(groups)))
+for g in range(groups):
+    rules = range(g * 16, min(count, g * 16 + 16))
+    with open(os.path.join(root, "lint", "groups", "group-%02d.mjs" % g), "w") as f:
+        for r in rules:
+            f.write('import rule%04d from "../rules/rule-%04d.mjs";\n' % (r, r))
+        f.write("export default { rules: { %s } };\n" % ", ".join('"made-up/rule-%04d": rule%04d' % (r, r) for r in rules))
+endpoint = "chat." + "post" + "Message"
+for r in range(count):
+    path = os.path.join(root, "lint", "rules", "rule-%04d.mjs" % r)
+    if num.get("link") == r:
+        os.symlink(os.path.join(shared, "linked.mjs"), path)
+        continue
+    with open(path, "w") as f:
+        if num.get("outside") == r:
+            f.write('import { helper } from "../../../%s-shared/helper.mjs";\n' % name)
+        f.write('export default { meta: { type: "problem" }, create(context) { return { Identifier(node) {\n')
+        f.write('  if (node.name === "forbidden%d") context.report({ node, message: "no forbidden%d" });\n' % (r, r))
+        if num.get("poster") == r:
+            f.write('  fetch("https://slack.com/api/%s", { method: "POST", body: node.name });\n' % endpoint)
+        f.write("} }; } };\n")
+for helper in ("helper.mjs", "linked.mjs"):
+    with open(os.path.join(shared, helper), "w") as f:
+        f.write("export const helper = (name) => name.toLowerCase();\nexport default {};\n")
+PY
+}
+run_lint() { # run_lint <tick budget> <folder>: `pnpm run lint` as a session calls it in that folder
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "pnpm run lint")" "$2" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+mkdir -p "$T/lint"
+# 320 rules, so the lint script reaches 342 modules: itself, the config, 20 groups and the rules.
+lint_tree "$T/lint/clean" 320
+run_lint "$TICKS" "$T/lint/clean"
+allowed "a lint script reaching 342 modules, all in its repository and none posting, is allowed"
+lint_tree "$T/lint/wt" 320 worktree
+run_lint "$TICKS" "$T/lint/wt"
+allowed "and so is one in a worktree, whose .git is a file"
+# The control: one module past the first 300 that posts is still read, and refused by name.
+lint_tree "$T/lint/poster" 320 poster=310
+run_lint "$TICKS" "$T/lint/poster"
+refused "one posting module among 342, read after the first 300, is refused"
+says "that refusal names the posting module" "rule-0310.mjs"
+says "and the endpoint it names" "which posts to Slack (it names chat.postMessage)"
+says "and says the command posts" "REFUSED: this command posts to Slack"
+# A module outside the repository ends the reading: whether it comes after the first 300 ...
+lint_tree "$T/lint/out" 320 outside=305
+run_lint "$TICKS" "$T/lint/out"
+refused "a module outside the repository, reached past 300, is refused"
+says "that refusal names the module outside" "/lint/out-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/out: the script ./tools/lint.mjs, which imports"
+says "and says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
+# ... among them (the walk passes 300 only when every module it has read is inside too) ...
+lint_tree "$T/lint/early" 320 config-outside
+run_lint "$TICKS" "$T/lint/early"
+refused "a module outside the repository among the first 300 is refused once the walk passes 300"
+says "that refusal names the module outside" "/lint/early-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/early: the script ./tools/lint.mjs, which imports"
+# ... or is inside by its path and outside by where its link leads.
+lint_tree "$T/lint/link" 320 link=306
+run_lint "$TICKS" "$T/lint/link"
+refused "a module that is a link to a file outside the repository is refused"
+says "that refusal names the file the link leads to" "/lint/link-shared/linked.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/link: the script ./tools/lint.mjs, which imports"
+# A script in no repository is read no further than it ever was. The throwaway folder has to be in
+# none itself for that to be measured, so that is checked first and said (L411).
+if (d="$(cd "$T" && pwd -P)"; while [ "$d" != "/" ] && [ ! -e "$d/.git" ]; do d="$(dirname "$d")"; done; [ -e "$d/.git" ]); then
+  check "the throwaway folder is in no repository, as the no repository cases need" "it is inside one: $T"
+else check "the throwaway folder is in no repository, as the no repository cases need" ok; fi
+lint_tree "$T/lint/plain" 320 no-repo
+run_lint "$TICKS" "$T/lint/plain"
+refused "a lint script reaching 342 modules in no repository is refused"
+says "that refusal says the imports go past what it reads" "more than 300 modules"
+says "and that the script is in no repository" "is not inside a repository"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
+# The budget running out past 300 is refused as not checked, saying how far the reading got.
+run_lint 330 "$T/lint/clean"
+refused "the budget running out while reading past 300 modules is refused, never allowed"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and that the command was not checked" "was not checked"
+says "and how far past 300 the reading got" "of the modules the script ./tools/lint.mjs imports (past 300"
+lacks "and does not claim the command posts" "posts to Slack:"
 
 # The budget was looked at only between commands and before each file, so work inside one file's
 # walk was never timed (claude-config#2571): on 2026-11-09 the walk of one script took 41 s of
@@ -2027,7 +2356,9 @@ echo "slack drafts only: the merge helper's own line is judged inside the gate's
 # time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
 # to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
 # half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
-# the ceiling raised on a new measurement.
+# the ceiling raised on a new measurement. Measured again on 2026-11-10: 7,975 steps, 12 files read
+# 35 times, the 76 more all from the helper (one more sourced file), none from the gate; and 8,132
+# later that day, once the helper had grown again.
 MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
 MWR_STEPS=12000
 run_budget "$MWR_STEPS" "$MWR"
@@ -2037,6 +2368,17 @@ allowed "the real merge helper, with everything it sources, is judged within $MW
 run_budget 2000 "$MWR"
 refused "the merge helper's line under a budget its walk passes is refused"
 says "that refusal says the gate ran out of time" "ran out of time"
+says "and says how to merge without the helper" "gh pr merge"
+says "and to leave the branch for the helper" "--delete-branch"
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a call that is no merge still runs out of its budget"
+lacks "a call that is no merge gets no merge advice" "gh pr merge"
+# The advice belongs to running out of time only: a line the gate did judge, and refused for
+# posting, says nothing of merging however it names the helper.
+run_bash "curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi; echo merge-when-ready.sh"
+refused "a line that posts and names the merge helper is refused for the post"
+says "and that refusal is for the post" "posts to Slack:"
+lacks "and carries no merge advice" "gh pr merge"
 
 # A function of the script that calls others was followed once per path to it, so a chain of
 # functions each calling the next twice cost two to the power of its length: 16,383 walks for 14

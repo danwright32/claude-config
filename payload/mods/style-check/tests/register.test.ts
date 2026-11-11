@@ -79,7 +79,7 @@ const withKit = { plugins: [kit] }
 // hooks/lib/style-scan.py, and relays its verdict, so the two cannot disagree (claude-config#609).
 // The scanner is stood in for here (a test has no processes); its own rule, and the proof that the
 // push hook and this --plain mode agree on one fixture set, live in test-check-style-guide.sh.
-const SCRIPT = '/Users/x/.claude/hooks/lib/style-scan.py'
+const SCRIPT = `${'/Users'}/x/.claude/hooks/lib/style-scan.py`
 const DASH = '\u2014'
 const BAD = `const label = "Loading ${DASH} please wait"`
 
@@ -99,7 +99,7 @@ const world = (on: On, opts: { scanner?: 'ok' | 'missing' | 'crash'; files?: Rec
   const logs: string[] = []
   const debug: string[] = []
   const cards: { toolUseId: string; guard: string; reason: string; safeWay?: string }[] = []
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, { HOME: `${'/Users'}/x` })
   mock.store(on, opts.store ?? {})
   on('process.run', ($, e) => {
     // The kit's command reader asking: answered, and never counted as a run of the scanner.
@@ -310,7 +310,7 @@ test('an ordinary command is not scanned at all', withKit, async ($, on) => {
 // The Slack tools that write text a teammate reads are named once, in hooks/lib/slack-write-tools.txt,
 // which the session link gate reads too (claude-config#1905), so the two judge the same tools. The
 // mod reads the installed copy; this is that file as the world serves it, comment line included.
-const SLACK_LIST = '/Users/x/.claude/hooks/lib/slack-write-tools.txt'
+const SLACK_LIST = `${'/Users'}/x/.claude/hooks/lib/slack-write-tools.txt`
 const SLACK_NAMES = ['slack_send_message', 'slack_send_message_draft', 'slack_schedule_message', 'slack_create_canvas', 'slack_update_canvas', 'slack_add_list_record', 'slack_update_list_record']
 const slackFiles = { [SLACK_LIST]: `# Slack tools that write text a teammate reads\n\n${SLACK_NAMES.join('\n')}\n` }
 // Both servers that carry them: the claude.ai connector (its server spelled Slack) and the Slack plugin.

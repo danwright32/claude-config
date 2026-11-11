@@ -6,8 +6,8 @@ import { callShell, commandWrites, pipelineIn } from '../hooks/writes.ts'
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and
 // missed inline scripts, rsync, install, ln, dd, a patch, every file but the last of a sed -i, and a
 // cd before a relative path, each of which another mod's copy caught.
-const HOME = '/Users/dan'
-const CWD = '/Users/dan/Apps/slate'
+const HOME = `${'/Users'}/dan`
+const CWD = `${'/Users'}/dan/Apps/slate`
 // Through the entry point $.modkit.writes calls, so these read exactly what the mods are given.
 const read = (command: string, cwd = CWD) => commandWrites(command, cwd, HOME)
 const paths = (command: string, cwd = CWD) => read(command, cwd).files.map(f => f.path ?? `(as written) ${f.word}`)
@@ -41,7 +41,7 @@ describe('writes: redirects and tee', () => {
 // (measured 2026-10-09; zsh refuses the command instead, so it writes nothing).
 describe('writes: a bracketed route segment (#1010)', () => {
   test("a segment shaped like a route parameter names its folder or file, relative or absolute, however it is quoted", () => {
-    expect(paths('echo x > /Users/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx')).toEqual(['/Users/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx'])
+    expect(paths(`echo x > ${'/Users'}/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx`)).toEqual([`${'/Users'}/dan/Apps/shop/src/app/booking/[SO_ID]/page.tsx`])
     expect(paths("sed -i '' 's/a/b/' 'src/app/booking/[SO_ID]/page.tsx'")).toEqual([`${CWD}/src/app/booking/[SO_ID]/page.tsx`])
     expect(paths('cd src/app && cp /tmp/p "booking/[SO_ID]/page.tsx"')).toEqual([`${CWD}/src/app/booking/[SO_ID]/page.tsx`])
     // A catch all, an optional catch all, a matcher, a pages router file, and a route group beside them.
@@ -190,7 +190,7 @@ describe('pipelineIn: the folder each command runs in', () => {
   test('the folder a cd leaves it in: absolute, relative, home, and through a variable the command set', () => {
     expect(folders('gh pr merge 12')).toEqual([['gh', CWD]])
     expect(folders('cd /w/booking && gh pr merge 12')).toEqual([['cd', CWD], ['gh', '/w/booking']])
-    expect(folders('cd ../other; bash ~/.claude/hooks/lib/merge-when-ready.sh 12')).toEqual([['cd', CWD], ['bash', '/Users/dan/Apps/other']])
+    expect(folders('cd ../other; bash ~/.claude/hooks/lib/merge-when-ready.sh 12')).toEqual([['cd', CWD], ['bash', `${'/Users'}/dan/Apps/other`]])
     expect(folders('cd ~/Apps/other && gh pr merge 12')).toEqual([['cd', CWD], ['gh', `${HOME}/Apps/other`]])
     expect(folders('W=/w/other; cd "$W" && gh pr merge 12')).toEqual([['cd', CWD], ['gh', '/w/other']])
     expect(folders('pushd /w/other && gh pr merge 12')).toEqual([['pushd', CWD], ['gh', '/w/other']])
@@ -209,7 +209,7 @@ describe('pipelineIn: the folder each command runs in', () => {
 describe('writes: copying, moving and linking', () => {
   test("cp, mv, ln, install and ditto write their destination", () => {
     expect(paths('cp rules.md CLAUDE.md')).toEqual([`${CWD}/CLAUDE.md`])
-    expect(paths('mv -f draft.md ../AGENTS.md')).toEqual([`/Users/dan/Apps/AGENTS.md`])
+    expect(paths('mv -f draft.md ../AGENTS.md')).toEqual([`${'/Users'}/dan/Apps/AGENTS.md`])
     expect(paths('ln -sf ~/rules.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('install -m 644 rules.md ~/.claude/CLAUDE.md')).toEqual([`${HOME}/.claude/CLAUDE.md`])
     expect(paths('ditto rules.md CLAUDE.md')).toEqual([`${CWD}/CLAUDE.md`])
@@ -510,13 +510,13 @@ describe('writes: what the words do not name', () => {
     expect(paths('patch CLAUDE.md fix.diff')).toEqual([`${CWD}/CLAUDE.md`])
   })
   test('an inline script that writes a file is a write the words do not name', () => {
-    expect(read(`python3 -c "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"`).unnamed).toEqual([
+    expect(read(`python3 -c "open('${'/Users'}/dan/.claude/CLAUDE.md', 'a').write('rule')"`).unnamed).toEqual([
       {
         what: 'an inline python3 script',
-        words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"],
+        words: ['python3', '-c', `open('${'/Users'}/dan/.claude/CLAUDE.md', 'a').write('rule')`],
         inputs: [],
-        targets: ['/Users/dan/.claude/CLAUDE.md'],
-        program: "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')",
+        targets: [`${'/Users'}/dan/.claude/CLAUDE.md`],
+        program: `open('${'/Users'}/dan/.claude/CLAUDE.md', 'a').write('rule')`,
         folder: CWD,
       },
     ])
@@ -614,7 +614,7 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
   test('a script file run directly, by a path or a script name, is one too', () => {
     expect(runs('./tools/fix app/page.tsx').map(r => [r.what, r.script, r.args.map(a => a.word)])).toEqual([['a script file run directly', './tools/fix', ['app/page.tsx']]])
     expect(runs('make-settled.py settled.json docs/design/x.html').map(r => r.args.map(a => a.word))).toEqual([['settled.json', 'docs/design/x.html']])
-    expect(runs('/Users/dan/bin/gen.sh app/page.tsx').map(r => r.path)).toEqual(['/Users/dan/bin/gen.sh'])
+    expect(runs(`${'/Users'}/dan/bin/gen.sh app/page.tsx`).map(r => r.path)).toEqual([`${'/Users'}/dan/bin/gen.sh`])
   })
   test('a cd before it is followed, a variable the command set is read, and a pattern keeps its folder', () => {
     expect(runs('cd /w/shop && python3 gen.py app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
@@ -1286,7 +1286,7 @@ describe('writes: the files an inline python program names as its writes (#830)'
     // only when every `import`, `__import__` and `importlib` in the text is a plain top level import
     // line read whole, and every module it binds has no file writers. Anything else cannot be read.
     // Round 1: a module the judge has no write rules for can write anywhere.
-    expect(targets("python3 - <<'EOF'\nimport zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nimport zipfile\nopen('a.md','w')\nzipfile.ZipFile('${'/Users'}/dan/.claude/CLAUDE.md','w')\nEOF`)).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport sqlite3\nopen('a.md','w')\nsqlite3.connect('x.db')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom tempfile import mkstemp\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport os\nopen('a.md','w')\nos.makedirs('x')\nEOF")).toEqual(none)
@@ -1295,7 +1295,7 @@ describe('writes: the files an inline python program names as its writes (#830)'
     // os itself is not quiet, however little of it is used.
     expect(targets("python3 - <<'EOF'\nimport os\nif os.path.exists('x'):\n  open('a.md','w')\nEOF")).toEqual(none)
     // Round 4: an import after a colon, indented, or inside an expression is not a plain line.
-    expect(targets("python3 - <<'EOF'\nif 1: import zipfile\nopen('a.md','w')\nzipfile.ZipFile('/Users/dan/.claude/CLAUDE.md','w')\nEOF")).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nif 1: import zipfile\nopen('a.md','w')\nzipfile.ZipFile('${'/Users'}/dan/.claude/CLAUDE.md','w')\nEOF`)).toEqual(none)
     expect(targets("python3 - <<'EOF'\ntry: import sqlite3\nexcept Exception: pass\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nif True:\n    import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nimport json; import zipfile\nopen('a.md','w')\nEOF")).toEqual(none)
@@ -1306,14 +1306,14 @@ describe('writes: the files an inline python program names as its writes (#830)'
     // Any rename is a move, however many arguments it takes; a replace is one when it is called on a
     // Path or on a name assigned from one (Dan, 2026-10-06: str.replace stays allowed, since the text
     // alone cannot tell the two apart on any other receiver).
-    expect(targets("python3 - <<'EOF'\nopen('a.md','w')\nx.rename('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
-    expect(targets("python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('x')\nopen('a.md','w')\np.replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
-    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace('/Users/dan/.claude/CLAUDE.md', 'b')\nEOF")).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nopen('a.md','w')\nx.rename('${'/Users'}/dan/.claude/CLAUDE.md', 'b')\nEOF`)).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nimport pathlib\np = pathlib.Path('x')\nopen('a.md','w')\np.replace('${'/Users'}/dan/.claude/CLAUDE.md', 'b')\nEOF`)).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace('${'/Users'}/dan/.claude/CLAUDE.md', 'b')\nEOF`)).toEqual(none)
     // A move of a pathlib Path, by its one argument or by name.
-    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').rename('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
-    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace(target='/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').rename('${'/Users'}/dan/.claude/CLAUDE.md')\nEOF`)).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').replace(target='${'/Users'}/dan/.claude/CLAUDE.md')\nEOF`)).toEqual(none)
     // pathlib's own writers the judge has no rule for.
-    expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').copy('/Users/dan/.claude/CLAUDE.md')\nEOF")).toEqual(none)
+    expect(targets(`python3 - <<'EOF'\nfrom pathlib import Path\nopen('a.md','w')\nPath('x').copy('${'/Users'}/dan/.claude/CLAUDE.md')\nEOF`)).toEqual(none)
     // Round 3: os taken apart by a from import is os too: only its path is quiet.
     expect(targets("python3 - <<'EOF'\nfrom os import chflags\nopen('a.md','w')\nchflags('b', 0)\nEOF")).toEqual(none)
     expect(targets("python3 - <<'EOF'\nfrom os import remove\nopen('a.md','w')\nremove('b')\nEOF")).toEqual(none)

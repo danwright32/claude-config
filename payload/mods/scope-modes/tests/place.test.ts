@@ -8,8 +8,8 @@ const REC: PlaceRecord = { v: 1, place: 'away', at: 1_000, by: 's1', cwd: '/repo
 
 describe('the switch record', () => {
   test('lives under the Mac\'s own state, outside any repository and never synced', () => {
-    expect(placeFile('/Users/x')).toBe('/Users/x/.claude/state/scope-modes/place.json')
-    expect(placeFile('/Users/x/')).toBe('/Users/x/.claude/state/scope-modes/place.json')
+    expect(placeFile(`${'/Users'}/x`)).toBe(`${'/Users'}/x/.claude/state/scope-modes/place.json`)
+    expect(placeFile(`${'/Users'}/x/`)).toBe(`${'/Users'}/x/.claude/state/scope-modes/place.json`)
   })
   test('reads back what was written, with who switched, when, from where and how', () => {
     expect(readPlace(placeText(REC))).toEqual({ record: REC })

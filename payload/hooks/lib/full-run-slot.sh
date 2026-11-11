@@ -28,8 +28,11 @@
 # still alive and failed are three different things on screen. The wait is bounded by
 # HOOK_TESTS_SLOT_WAIT (3600 seconds, more than one hold bound, so the run first in line is never
 # refused while the holder is inside its own), and ends in a refusal, exit 75, naming who still
-# holds it. claude-sync's pull stops its own run of the suite at 1800 seconds and records that as a
-# run it stopped waiting for, which is what such a run is.
+# holds it. claude-sync's pull hands its own run a shorter bound, half of its 1800 second deadline,
+# so a run the slot keeps waiting refuses here inside that deadline, and the pull says the suite
+# waited for the slot and ran nothing, records it, and runs it again on the next pull
+# (claude-config#2758). With the runner's 3600 here instead, the pull stopped the run while it was
+# still queued and reported it as a suite "still running".
 #
 # WHAT STAYS OUTSIDE. Only a WHOLE run takes the slot: one naming no directories, of the real
 # repository (no HOOK_TESTS_ROOT), started from a fresh shell (not inside another run) and not

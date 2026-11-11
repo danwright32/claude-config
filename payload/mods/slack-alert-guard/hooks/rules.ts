@@ -716,6 +716,84 @@ export const sqlText = (s: string): boolean => SQL_SHAPES.some(r => r.test(s))
 /** Whether a string is message text: prose, and neither a select list, code, nor SQL. */
 export const isMessage = (s: string): boolean => isProse(s) && !selectList(s) && !codeText(s) && !sqlText(s)
 
+// claude-config#2720. On 2026-11-10 four alert messages were written into a new copy module that no
+// file sent yet, so the guard, which held wording by whether a Slack send reaches it, let them in
+// unasked; they were held only later, at the edit importing the module, which the question then
+// blamed. A module of message copy is now known by what it is, by its path or by its shape, and its
+// new wording held when it is written, even while nothing sends it. Only where nothing sends it:
+// a module a sender imports is still judged by what that sender sends (#2570).
+
+// The words of a path part: split at anything but a letter or digit, and where a lower case letter
+// or digit meets a capital, so quietFeedCopy is quiet, feed, copy.
+const wordsOf = (s: string): string[] =>
+  s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+// A name ending in one of these is copy: outage-copy, quietFeedCopy, wording. Starting with one is
+// a verb (copy-assets, copyFiles), which is not.
+const COPY_WORDS = new Set(['copy', 'copies', 'wording', 'wordings'])
+// Words naming an alert, and words naming a message, which together name a module of alert copy
+// (slack-messages, alertText, alerts/templates). Either alone names many other things: a Slack gate,
+// a list of alerts, an error module.
+const ALERT_WORDS = new Set(['slack', 'alert', 'alerts', 'alarm', 'alarms', 'notify', 'notifier'])
+const MESSAGE_WORDS = new Set(['message', 'messages', 'msg', 'msgs', 'text', 'texts', 'template', 'templates', 'notice', 'notices', 'blocks'])
+
+/** Whether a repository path names a module of message copy (#2720): a name ending in copy or wording, a copy folder, or alert and message words together. */
+const copyByPath = (rel: string): boolean => {
+  const segs = rel.split('/')
+  const dirs = segs.slice(0, -1)
+  const stem = wordsOf(stemOf(segs[segs.length - 1] ?? ''))
+  if (COPY_WORDS.has(stem[stem.length - 1] ?? '') || dirs.some(d => COPY_WORDS.has(d.toLowerCase()))) return true
+  const words = [...dirs.flatMap(wordsOf), ...stem]
+  return words.some(w => ALERT_WORDS.has(w)) && words.some(w => MESSAGE_WORDS.has(w))
+}
+
+// Slack's own formatting in a string: a link with its label (<https://x|label>, <${url}|label>), a
+// mention of a channel or group (<!here>, <!channel>, <!subteam^ID>), or a Block Kit text type. Only
+// a Slack message is written this way.
+const SLACK_LINK = /<(?:https?:\/\/|mailto:|\$\{|\{|#|@)[^<>|\s]*\|[^<>\n]+>/
+const SLACK_MENTION = /<!(?:here|channel|everyone|subteam\^)[^<>\s]*>/
+
+// A top level declaration that only builds a string: a function returning one string or template
+// straight away, as a copy builder does (`(feed) => \`The ${feed} feed...\``, `return f"..."`). A
+// function that does other work and prints or throws a message on the way is not one: measured on
+// this repository on 2026-11-10, counting those (and shell scripts) read 16 of its 665 code files as
+// copy modules, scripts and mods among them; this reads 1, mod-kit's typed answer wording (#2720).
+const JS_BUILDER =
+  /^(?:export\s+)?(?:(?:async\s+)?function\s*[\w$]+\s*\([^)]*\)\s*(?::[^{]*)?\{\s*return\s*\(?\s*[`'"]|(?:const|let|var)\s+[\w$]+\s*(?::[^=\n]*)?=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=\n]*)?=>\s*\(?\s*[`'"])/
+const PY_BUILDER = /^(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->[^:]*)?:\s*(?:\n\s+(?:"""[\s\S]*?"""|'''[\s\S]*?'''))?\s*\n\s+return\s+[rRbBuUfF]*["']/
+
+// A shell script is a program, never a module of copy another file imports.
+const SHELL_SCRIPT = new Set(['sh', 'bash', 'zsh'])
+
+/**
+ * Whether a file is a module of message copy (#2720), by its repository path or by its shape: Slack
+ * formatting in any of its strings, or, in JavaScript, TypeScript or python, mostly functions that
+ * only build message text with values filled in (two or more, and at least half its top level
+ * declarations). A test, a prose file, a shell script and a UI component never are: a test sends
+ * nothing (#2290), and a screen's text is not posted (#2519).
+ */
+export const copyModule = (rel: string, text: string): boolean => {
+  const ext = extOf(rel)
+  if (testFile(rel) || isProseFile(rel) || uiComponent(rel) || ext === undefined || SHELL_SCRIPT.has(ext)) return false
+  if (copyByPath(rel)) return true
+  const lang = languageOf(rel, text)
+  const strings = stringsOf(text, lang !== 'c', lang === 'c' && isJs(rel)).filter(s => !s.query)
+  // Block Kit's text type, as a pattern so this file holds no such string and is not read as copy.
+  if (strings.some(s => /^mrkdwn$/.test(s.text) || (isMessage(s.text) && (SLACK_LINK.test(s.text) || SLACK_MENTION.test(s.text))))) return true
+  const python = lang === 'python'
+  if (!python && !(lang === 'c' && isJs(rel))) return false
+  const r = modelReading(text, python, tokenRanges(text, python))
+  const builders = r.decls.filter(d => {
+    // The file's own text, where a python docstring is a string the pattern steps over.
+    if (!(python ? PY_BUILDER : JS_BUILDER).test(text.slice(d.from, d.to))) return false
+    return strings.some(s => s.start >= d.from && s.start < d.to && isMessage(s.text) && fixedParts(s.text).length > 1)
+  })
+  return builders.length >= 2 && builders.length * 2 >= r.decls.length
+}
+
 /** Whether a file is a CI workflow, whose names, needs, descriptions and commands a pipeline runs rather than posts. */
 export const ciWorkflow = (path: string): boolean =>
   /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/.test(path) || /(^|\/)\.gitlab-ci\.ya?ml$/.test(path) || /(^|\/)\.circleci\/config\.ya?ml$/.test(path) || /(^|\/)bitbucket-pipelines\.ya?ml$/.test(path)

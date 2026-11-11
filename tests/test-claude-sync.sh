@@ -25129,6 +25129,21 @@ check "#2688 under a heading counting all three files" \
   "line_has \"\$out_ms_all\" 'mods not compared with the shared repo: status could not compare 3 file' 'neither as behind'"
 check "#2688 and none of them is in the lag line" \
   "! grep -q 'mods behind the shared repo' <<< \"\$out_ms_all\""
+# A WHOLE FOLDER UNREADABLE (#2716): grep names the folder, not its files, and find, whose errors
+# are discarded, lists none of them, so each file the shared repo holds there would read as missing
+# here and be counted as behind. Each is named as not compared, with the folder as the reason.
+chmod 000 "$MSH/mods/plain-mod"
+out_ms_dir="$(env $(msenv) bash "$SCRIPT" status 2>&1 || true)"
+chmod 755 "$MSH/mods/plain-mod"
+dbg "#2716 status with one mod folder unreadable: $out_ms_dir"
+check "#2716 a file the shared repo holds in an unreadable folder is named as not compared, with the folder as the reason" \
+  "line_has \"\$out_ms_dir\" 'could not compare plain-mod/index\.ts' 'plain-mod'"
+check "#2716 and it is not in the lag line, while the files status could read still are" \
+  "line_has \"\$out_ms_dir\" 'mods behind the shared repo: 2 file' 'lock-mod' 'path-mod' && ! line_has \"\$out_ms_dir\" 'mods behind the shared repo' 'plain-mod'"
+# The count is what proves the folder's own entry went: the check above requires the file's entry, so
+# a folder entry kept beside it would make the count 2.
+check "#2716 and the folder itself is not counted as a file" \
+  "line_has \"\$out_ms_dir\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind'"
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
@@ -25203,6 +25218,166 @@ check "#2472 an entry for a folder no longer refused is still cleared from the r
   "! grep -q 'ghost' '$FPREC'"
 check "#2472 and another notice's entry is still kept" \
   "grep -q 'some other notice' '$FPREC'"
+
+section "== a pull's hook suite waits for the full suite slot only as long as its deadline allows, and says so (claude-config#2758) =="
+# The pull runs the whole hook suite after hooks land, under SYNC_HOOK_TESTS_TIMEOUT (1800s). That
+# run is a whole run, so it queues for this Mac's one full suite slot (#2012), whose wait was sized
+# for a person's run: HOOK_TESTS_SLOT_WAIT, 3600s. Builders' full runs waited 18 to 45 minutes for
+# the slot on 2026-11-10 and 11, so the pull could spend its whole deadline in the queue, run
+# nothing, and be reported as "still running after 1800s and was stopped": 17 of the 34 pulls that
+# landed hooks in one session ended that way.
+#
+# The REAL runner and the REAL slot library are installed by the pull, and a stand in holder keeps
+# the slot. Time is one clock both sides read: the runner's slot wait moves it on 120 seconds a
+# look, and the pull only reads it, so both judge their bounds against the same seconds however
+# loaded this Mac is, and the order in which the two bounds are reached is set here, not raced
+# (L290, L524). The slot wait looks every fifth of a real second, so the runner's own 3600 second
+# bound, were it in force, would arrive three real seconds after the pull's 1800 had.
+SWH="$WORK/slotwait-home"; mkdir -p "$SWH/hooks"; echo '{"hooks":{}}' > "$SWH/settings.json"
+SWR="$WORK/slotwait-repo"; mkdir -p "$SWR/payload/hooks"
+SWLOCK="$WORK/slotwait-lock"
+SWSLOT="$WORK/slotwait-slot"
+SWT="$WORK/slotwait-t"; mkdir -p "$SWT"
+SWPAY="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
+cp "$SWPAY/run-all-tests.sh" "$SWR/payload/hooks/run-all-tests.sh"
+cp -R "$SWPAY/lib" "$SWR/payload/hooks/lib"
+# One suite. It marks that it ran, and when SW_HANG names a file it marks that it started and then
+# never ends, which is a suite still running at the pull's deadline.
+cat > "$SWR/payload/hooks/test-sw-a.sh" <<'SWSUITE'
+#!/usr/bin/env bash
+[ -n "${SW_RAN:-}" ] && : > "$SW_RAN"
+if [ -n "${SW_HANG:-}" ]; then
+  : > "$SW_HANG"
+  while :; do sleep 3600 & wait "$!" || true; done
+fi
+echo "SUITE-RESULT passed=1 failed=0"
+SWSUITE
+chmod +x "$SWR/payload/hooks/test-sw-a.sh"
+sw_arrive(){ printf '# marker %s\n' "$1" > "$SWR/payload/hooks/sw-marker.sh"; }
+# The shared clock. The runner's reads move it on, and log whether the sync lock is held at that
+# moment, which asks the lock question while the wait is actually happening. The pull's reads move
+# it only once the suite has started (the SW_HANG file exists), when the slot is no longer read.
+printf '1000000\n' > "$SWT/now"
+cat > "$SWT/slot-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+if [ -d "$SWLOCK" ]; then echo held >> "$SWT/lock-log"; else echo free >> "$SWT/lock-log"; fi
+printf '%s\n' "\$n"
+SWCLK
+cat > "$SWT/pull-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"
+[ -f "$SWT/move" ] && printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+printf '%s\n' "\$n"
+SWCLK
+chmod +x "$SWT/slot-clock" "$SWT/pull-clock"
+# A process standing in for a builder's full run, detached so a dead one is gone rather than a
+# zombie, and its ticket written through the queue's own writer, holding the turn from the clock's
+# present.
+sw_holder(){ ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$SWT/holder" ) </dev/null >/dev/null 2>&1; cat "$SWT/holder"; }
+sw_hold(){ ( . "$SWPAY/lib/merge-turn.sh"; TURN_PID="$1"; TURN_PID_START=""
+  MWR_TURN_DIR="$SWSLOT" turn_open "full-run"; turn_join "/work/trees/a-builder" "$(cat "$SWT/now")" || exit 1
+  turn_look "$(cat "$SWT/now")" 999999 ) >/dev/null 2>&1; }
+# Run as a pull from a terminal or launchd is: without the marks this suite inherits from a full run
+# around it (HOOK_TESTS_RUNNING and that run's deadline), under which the fixture runner refused a
+# whole run outright as recursion, and with no HOOK_TESTS_SLOT, so the runner decides for itself that
+# this is a whole run and queues. The hold bound is lifted because the clock here only moves forward across pulls, and past its
+# 2700 seconds (the library's default, set and not measured) the stand in would be passed over as
+# stuck, which is the slot working, not this case.
+sw_pull(){ # sw_pull [env assignments...] -> the pull's output
+  env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SLEEP -u CI \
+    -u HOOK_TESTS_RUNNING -u HOOK_TESTS_ROOT -u HOOK_TESTS_SLOT -u HOOK_TESTS_DEADLINE \
+    -u HOOK_TESTS_DEADLINE_RESERVE -u HOOK_TESTS_JOB_STARTED -u HOOK_TESTS_NOW \
+    CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_LOCK="$SWLOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=1800 SYNC_TEST_SUITE_CLOCK="$SWT/pull-clock" \
+    HOOK_TESTS_SLOT_DIR="$SWSLOT" HOOK_TESTS_SLOT_NOW="$SWT/slot-clock" \
+    HOOK_TESTS_SLOT_POLL=0.2 HOOK_TESTS_SLOT_SAY_EVERY=600 HOOK_TESTS_SLOT_HOLD=999999 "$@" bash "$SCRIPT" pull 2>&1
+}
+# A first pull with the slot free installs the runner, its library and the suite, and passes.
+sw_arrive one
+out_sw0="$(sw_pull SW_RAN="$SWT/ran0")"
+dbg "#2758 first pull: $out_sw0"
+check "#2758 the fixture: with the slot free the real runner ran the suite and the pull passed" \
+  "[ -f '$SWT/ran0' ] && grep -q '^outcome=passed' '$SWR/.hook-tests'"
+
+# ---- the slot held for the whole deadline: the pull's run waits, runs nothing, and says so ----
+SWHP="$(sw_holder)"; sw_hold "$SWHP"
+check "#2758 the fixture: the stand in holder's ticket is in the queue" \
+  "ls '$SWSLOT/full-run' 2>/dev/null | grep -q -E '^[0-9]+\$'"
+sw_arrive two; rm -f "$SWT/lock-log" "$SWT/move"
+out_sw1="$(sw_pull SW_RAN="$SWT/ran1")"
+sw_end1="$(cat "$SWT/now")"
+dbg "#2758 a pull with the slot held: $out_sw1"
+check "#2758 the fixture: the suite did not run while the slot was held" "[ ! -f '$SWT/ran1' ]"
+check "#2758 a pull whose suite only waited for the slot is not reported as a suite still running" \
+  "! grep -q 'still running after' <<< \"\$out_sw1\""
+check "#2758 it says in its own words that the suite waited for the full suite slot and ran nothing" \
+  "line_has \"\$out_sw1\" 'hook suite did NOT run here' 'full suite slot' 'ran nothing'"
+check "#2758 and it names the run holding the slot" \
+  "line_has \"\$out_sw1\" 'hook suite did NOT run here' \"pid $SWHP\""
+check "#2758 the wait ended inside the pull's deadline (clock at $sw_end1, deadline at 1001800)" \
+  "[ '$sw_end1' -lt 1001800 ]"
+check "#2758 it is recorded as a run that waited for the slot, not as one that was stopped" \
+  "grep -q '^outcome=slotwait' '$SWR/.hook-tests'"
+check "#2758 the sync lock was looked at during the wait, and never held while the suite waited" \
+  "[ -s '$SWT/lock-log' ] && ! grep -q held '$SWT/lock-log'"
+out_sw1s="$(CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#2758 status after the wait: $out_sw1s"
+check "#2758 status says the landed hooks are unverified because the suite waited for the slot" \
+  "line_has \"\$out_sw1s\" 'did NOT run' 'full suite slot' 'Nothing that landed has been verified'"
+
+# ---- the change watcher does not rerun it: every tick would block behind the same queue ----
+out_sw2w="$(sw_pull SYNC_IN_WATCH=1 SW_RAN="$SWT/ran2w")"
+check "#2758 a receive in the change watcher that landed no hook leaves the record for a pull" \
+  "[ ! -f '$SWT/ran2w' ] && grep -q '^outcome=slotwait' '$SWR/.hook-tests'"
+
+# ---- the slot wait setting: honoured below the deadline, said and replaced at or above it ----
+# These pulls land no hook: the slotwait record alone is what makes them run the suite.
+out_sw5="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=300 SW_RAN="$SWT/ran5")"
+dbg "#2758 a 300s slot wait: $out_sw5"
+check "#2758 a pull owed a run by the last slot wait runs it, and a slot wait set below the deadline is the one used" \
+  "line_has \"\$out_sw5\" 'hook suite did NOT run here' 'waited 6m for' 'the most this pull allows'"
+out_sw6="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=1800 SW_RAN="$SWT/ran6")"
+dbg "#2758 a slot wait as long as the deadline: $out_sw6"
+check "#2758 a slot wait as long as the deadline is named as refused, and half the deadline used instead" \
+  "line_has \"\$out_sw6\" \"SYNC_HOOK_TESTS_SLOT_WAIT='1800'\" 'not shorter than the 1800s deadline' 'at most 900s'"
+check "#2758 and that run still ended inside its deadline, saying it waited for the slot" \
+  "line_has \"\$out_sw6\" 'hook suite did NOT run here' 'waited 16m for'"
+out_sw7="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=soon SW_RAN="$SWT/ran7")"
+check "#2758 a slot wait that is not a number is named, and half the deadline used instead" \
+  "line_has \"\$out_sw7\" \"SYNC_HOOK_TESTS_SLOT_WAIT='soon'\" 'not a whole number' 'at most 900s'"
+check "#2758 (fixture) none of those runs reached the suite while the slot was held" \
+  "[ ! -f '$SWT/ran5' ] && [ ! -f '$SWT/ran6' ] && [ ! -f '$SWT/ran7' ]"
+
+# ---- the next pull reruns it although no hook arrived, and the record is replaced ----
+kill "$SWHP" 2>/dev/null || true
+out_sw2="$(sw_pull SW_RAN="$SWT/ran2")"
+dbg "#2758 the next pull, no hook landing, slot free: $out_sw2"
+check "#2758 the next pull reruns the suite a slot wait left unrun, though no hook arrived with it" \
+  "[ -f '$SWT/ran2' ] && grep -q '^outcome=passed' '$SWR/.hook-tests'"
+check "#2758 and its closing line says the suite passed" \
+  "line_has \"\$out_sw2\" 'hook suite passed here' 'all 1 of its suites'"
+# The control: with the record passed, a pull landing nothing runs nothing, as before (L1).
+out_sw3="$(sw_pull SW_RAN="$SWT/ran3")"
+check "#2758 (control) a pull landing no hook after a pass runs no suite" "[ ! -f '$SWT/ran3' ]"
+
+# ---- the slot frees partway, then the suite outruns the deadline: the wait is named ----
+SWHP2="$(sw_holder)"; sw_hold "$SWHP2"
+cat "$SWT/now" > "$SWT/t0"
+# The holder ends once the clock passes ten minutes, so the run waits that long and then takes it.
+cat > "$SWT/slot-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+[ "\$n" -ge "\$(( \$(cat "$SWT/t0") + 600 ))" ] && kill "$SWHP2" 2>/dev/null
+printf '%s\n' "\$n"
+SWCLK
+sw_arrive three; rm -f "$SWT/move"
+out_sw4="$(sw_pull SW_HANG="$SWT/move")"
+dbg "#2758 the slot freed after ten minutes, then a suite that never ends: $out_sw4"
+check "#2758 the fixture: the suite started once the holder ended" "[ -f '$SWT/move' ]"
+check "#2758 a suite stopped at the deadline after waiting for the slot says how long it waited" \
+  "line_has \"\$out_sw4\" 'could NOT be completed here' 'still running after 1800s' 'waited' 'full suite slot'"
+kill "$SWHP2" 2>/dev/null || true
 
 suite_profile
 echo ""

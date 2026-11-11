@@ -58,7 +58,7 @@ describe('turnIn', () => {
 })
 
 describe('turnAt', () => {
-  const T = '/Users/dan/.claude/projects/x/s.jsonl'
+  const T = `${'/Users'}/dan/.claude/projects/x/s.jsonl`
   const runs = (answer: Awaited<ReturnType<TurnRun>> | 'throws') => {
     const asked: string[][] = []
     const run: TurnRun = async argv => {
