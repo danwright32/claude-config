@@ -2549,13 +2549,16 @@ echo "slack drafts only: a claude-sync line is judged in about the time it took 
 # 2026-11-11 that reading took 0.3 seconds, so one lesson line came to about 6 readings with the fix
 # and 27 on main, and three lesson lines to 11 with the fix, while main ran out of its 11 seconds.
 # The ceilings sit at about twice the fix.
+# The checkout's own claude-sync, found by the one shared test (lib/checkout-root.sh, #1663); installed
+# in ~/.claude there is no checkout, and the clone the sync runs from is read instead.
 CS=""
-for c in "$DIR/../../claude-sync" "$HOME/claude-config-sync/claude-sync"; do
-  if [ -f "$c" ]; then CS="$(cd "$(dirname "$c")" && pwd)/claude-sync"; break; fi
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+for c in "${REPO:+$REPO/claude-sync}" "$HOME/claude-config-sync/claude-sync"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then CS="$c"; break; fi
 done
 if [ -z "$CS" ]; then
   # L411: with no claude-sync on this Mac there is nothing to measure, and a red would read as the gate.
-  echo "UNMEASURED: no claude-sync beside this repository or at ~/claude-config-sync, so the #2784 checks did not run"
+  echo "SUITE-PART-UNMEASURED #2784: no claude-sync in this checkout or at ~/claude-config-sync, so the time to judge a claude-sync line was not measured"
 else
   cat > "$T/work.py" <<'PY'
 import importlib.util, os, re, sys
