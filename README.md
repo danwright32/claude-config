@@ -7688,10 +7688,30 @@ than 500 files to read (the largest real one read 213, #2510), or a send helper 
 fails, runs late or meets an unreadable helper, holds the call for Dan to approve like any other,
 naming no sender, rather than refusing it with nothing he can answer (#2364). A shell write to a
 path the write reader cannot name is outside it.
+In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
+choose the alert in sleep mode and put it to me in the morning to see if I want something else").
+While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
+before) is refused with an instruction to call `mcp__slack-alert-guard__choose` with the held call's
+id and the message as Slack will post it, checked as the question's `rendered` is. The choice is
+kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
+a `wording` note, and the call sent again goes through; a choice lets wording through only while
+sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
+merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
+chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
+not check.
+In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
+next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
+question, with the message chosen, and only Approve wording records the approval. Change wording, a
+dialog that closed by itself or no answer records nothing, and it is asked again. A choice
+unanswered for three days expires: said once in each session, still held from merging, and no longer
+letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
+overnight). In any mode, taking away wording that origin's copy of the file on its default branch
+(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
+live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628
 
 </td></tr>
 </tbody>
