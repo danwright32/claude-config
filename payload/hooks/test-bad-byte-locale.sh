@@ -18,8 +18,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The checkout, as lib/checkout-root.sh finds it (#1663); installed in ~/.claude there is none, and
-# the scan below reads the payload it sits in instead.
-ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null)" || ROOT="$(cd "$DIR/.." && pwd)"
+# the scan below reads the config it sits in instead, only what the sync carries (#2750).
+ROOT_KIND=checkout
+ROOT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null)" || { ROOT="$(cd "$DIR/.." && pwd)"; ROOT_KIND=config; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/bbl.XXXXXXXX")" || exit 1
 case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$WORK'" >&2; exit 2 ;; esac
 trap 'rm -rf "$WORK"' EXIT
@@ -162,8 +163,25 @@ echo "every suite with bad byte cases runs them under the helper's locale, and m
 # Suites anywhere in the repository, and their helpers, minus this suite and the helper itself.
 # Each list is read into a variable first, never through process substitution, whose child bash 3.2
 # never waits for and whose exit can cut short what this suite prints next (L1035, #1989).
+# A checkout is read whole, its tests/ and tools/ included. Anywhere else the tree is a config root,
+# ~/.claude when installed, and only what the sync carries is read: lib/synced-trees.sh is the one
+# list of that, and leaves out state/, projects/, plugins/ and the skills it never carries (#2750).
+. "$DIR/lib/synced-trees.sh" && declare -F synced_files >/dev/null || {
+  bad "lib/synced-trees.sh is missing or holds no synced_files, so the scan cannot tell a suite the sync carries from a copy a Mac keeps for itself"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  exit 1
+}
+suite_files(){ # suite_files <checkout|config> <root> -> every suite and suite helper under <root>
+  local listed
+  if [ "$1" = checkout ]; then
+    find "$2" \( -name .git -o -name worktrees -o -name node_modules \) -prune -o -type f \( -name 'test-*.sh' -o -name 'test_*.py' \) -print | sort
+  else
+    listed="$(synced_files "$2")" || return 1
+    printf '%s\n' "$listed" | grep -E '/(test-[^/]*\.sh|test_[^/]*\.py)$' | sort
+  fi
+}
 suites=()
-suite_list="$(find "$ROOT" \( -name .git -o -name worktrees -o -name node_modules \) -prune -o -type f \( -name 'test-*.sh' -o -name 'test_*.py' \) -print | sort)"
+suite_list="$(suite_files "$ROOT_KIND" "$ROOT")"
 while IFS= read -r f; do [ -n "$f" ] && suites+=("$f"); done <<SUITE_LIST
 $suite_list
 SUITE_LIST
@@ -219,6 +237,27 @@ printf '%s\n' "UTF8_1880=\"\$(locale -a 2>/dev/null | grep -i -m1 -E '^(en_US|C)
 [ -n "$(pinned "$WORK/probe-own")" ] && ok || bad "the scan does not fire on a suite picking its own locale from locale -a"
 [ -n "$(pinned "$WORK/probe-pinned")" ] && ok || bad "the scan does not fire on a case pinned to en_US.UTF-8"
 [ -z "$(pinned "$WORK/probe-helper")" ] && ok || bad "the scan fires on a case using the helper's locale"
+
+# Installed, the tree is ~/.claude, which also holds what a Mac keeps for itself. On 2026-11-11 the
+# scan read an older copy of this suite that a builder kept in its session notes, under
+# state/session-notes/<project>/<session>/2721/base/hooks/, and failed the pull that had just
+# installed the config (claude-config#2750). A tree laid out like ~/.claude, with the pinned form in
+# each such place: the scan reads none of them, and still fires on the same form in a real suite.
+FX="$WORK/installed/.claude"
+for f in hooks/test-clean.sh state/session-notes/p/s/2721/base/hooks/test-held.sh \
+  projects/p/test-held.sh plugins/cache/x/test-held.sh skills/.trash/1-a/s/test-held.sh \
+  skills/synced/acct/s/test-held.sh; do
+  mkdir -p "$FX/$(dirname "$f")"
+  cp "$WORK/probe-pinned" "$FX/$f"
+done
+cp "$WORK/probe-helper" "$FX/hooks/test-clean.sh"
+fx_list="$(suite_files config "$FX")"
+[ "$(printf '%s\n' "$fx_list" | sed "s#^$FX/##")" = "hooks/test-clean.sh" ] && ok \
+  || bad "#2750 the installed scan should read only hooks/test-clean.sh, read: $(printf '%s\n' "$fx_list" | sed "s#^$FX/##" | tr '\n' ' ')"
+cp "$WORK/probe-pinned" "$FX/hooks/test-pinned.sh"
+fx_hits="$(pinned $(suite_files config "$FX") | sed "s#^$FX/##")"
+[ "$fx_hits" = "hooks/test-pinned.sh:1:out=\"\$(LC_ALL=en_US.UTF-8 run \"\$T_BYTE\")\"" ] && ok \
+  || bad "#2750 the installed scan should still fire on a pinned suite in hooks/, reported: ${fx_hits:-nothing}"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
