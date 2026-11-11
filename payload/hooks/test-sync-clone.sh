@@ -228,9 +228,14 @@ python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader" sync-clone.sh
   || check "#2204 sync-clone.sh could be installed with what it sources" "the install refused"
 rm -f "$FIX/noreader/hold-record.sh"   # the copy without the hold reader, on purpose
 printf '%s %s host session=unknown from a terminal\n' "$(( now + 3600 ))" "$now" > "$SYNC_HOLD_FILE"
-nr_out="$(bash -c '. "$1" || { echo NOT-LOADED; exit 0; }
-  if sc_hold_covers "$2"; then echo COVERED; else echo NOT-COVERED; fi
-  sc_hold_others_sentence "$2"' _ "$FIX/noreader/sync-clone.sh" "$ME" 2>&1)"
+# Driven by a script written beside the copy and run as a process of its own, which sources the
+# copy from its own directory. Sourcing the copy from here names a path made at run time, which the
+# Slack drafts gate cannot work out (claude-config#2538).
+printf '%s\n' \
+  '. "${BASH_SOURCE[0]%/*}/sync-clone.sh" || { echo NOT-LOADED; exit 0; }' \
+  'if sc_hold_covers "$1"; then echo COVERED; else echo NOT-COVERED; fi' \
+  'sc_hold_others_sentence "$1"' > "$FIX/noreader/drive-noreader.sh"
+nr_out="$(bash "$FIX/noreader/drive-noreader.sh" "$ME" 2>&1)"
 case "$nr_out" in *NOT-LOADED*) check "it still loads without hold-record.sh" "it failed to load" ;; *) check "it still loads without hold-record.sh" ok ;; esac
 case "$nr_out" in *NOT-COVERED*) check "and no hold covers anyone, a terminal's included" ok ;; *) check "and no hold covers anyone, a terminal's included" "got: $nr_out" ;; esac
 case "$nr_out" in *"git checkout -- payload/hooks/lib/hold-record.sh"*) check "and the sentence a refusal carries says the reader is missing and how to restore it" ok ;; *) check "and the sentence a refusal carries says the reader is missing and how to restore it" "got: $nr_out" ;; esac
