@@ -21,7 +21,8 @@
 # that goes on falling is not the same answer as one that has stopped, and going quiet about it
 # would leave the most urgent case saying least (L152). So it is quiet while nothing changes, and
 # speaks again for every further 5 GB lost. A new session hears it too: that session has been told
-# nothing and loaded nothing.
+# nothing and loaded nothing. And a session that saw the disk or swap recover hears the warning
+# again if it comes back (claude-config#2635): the healthy answer clears what it was last told.
 #
 # It NEVER blocks the prompt. A UserPromptSubmit hook exiting non-zero stops the turn, and a
 # filling disk is something to mention, not a reason to refuse to work (L54). Every path exits 0.
@@ -50,8 +51,24 @@ CHECK="$DIR/check-free-space.sh"
 # never by a line of the output (L184).
 answer="$(bash "$CHECK" 2>&1)"; verdict=$?
 
-# 0 is measured, and there is room. Nothing to say.
-[ "$verdict" -eq 0 ] && exit 0
+STATE_DIR="${FREE_SPACE_NUDGE_STATE_DIR:-${TMPDIR:-/tmp}/claude-free-space-nudge}"
+
+# 0 is measured, and there is room. Nothing to say, but the recovery is remembered: a warning is
+# said once each time the state changes, so swap or the disk that recovers and then fills again is
+# said again in the same session (claude-config#2635, as #2559 asked). Forgetting what this session
+# was last told is what makes the next warning new. This runs on every prompt, so it stays in bash:
+# the session id is matched from the payload here rather than parsed by python as below, and a
+# payload this cannot match changes nothing, which is only the old behaviour of staying quiet. The
+# match is asked again under LC_ALL=C when it fails, since in the session locale a byte that is not
+# UTF-8 hides every word after it (claude-config#1885); the same line as every other hook's copy.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+if [ "$verdict" -eq 0 ]; then
+  if payload_match "$input" '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'; then
+    healthy_session="${BASH_REMATCH[1]//[^A-Za-z0-9]/_}"
+    [ -f "$STATE_DIR/$healthy_session" ] && rm -f "$STATE_DIR/$healthy_session" 2>/dev/null
+  fi
+  exit 0
+fi
 
 session="$(printf '%s' "$input" | python3 -c '
 import json, sys
@@ -65,7 +82,6 @@ print(d.get("session_id") or d.get("transcript_path") or "")
 [ -n "$session" ] || session="no-session"
 session="$(printf '%s' "$session" | tr -c 'A-Za-z0-9' '_')"
 
-STATE_DIR="${FREE_SPACE_NUDGE_STATE_DIR:-${TMPDIR:-/tmp}/claude-free-space-nudge}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE="$STATE_DIR/$session"
 
