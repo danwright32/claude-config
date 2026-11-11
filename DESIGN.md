@@ -2415,8 +2415,8 @@ caller that goes back to one call per tree fails it.
 `apply_source_dir` hands the apply each payload tree as it should land on this Mac: the payload
 itself, or, when a file in it carries the home path placeholder, a scratch copy with this Mac's home
 put back. An apply asks for it once per step for each tree (the deletion dry run, the locally ahead
-dry run, the apply) and once per mod folder on this Mac, and every ask rebuilt the answer. On this
-repository's own payload (hooks and skills carry the placeholder, about 450 and 310 files) one
+dry run, the apply) and once per mod folder on this Mac, and every ask rebuilt the answer. Measured
+2026-11-10 on this repository's own payload (hooks and skills carry the placeholder, about 450 and 310 files) one
 apply copied each of them three times, at about 0.35 s a copy, and read the whole mods tree 26
 times looking for the placeholder, at about 0.08 s a read. The choices:
 
