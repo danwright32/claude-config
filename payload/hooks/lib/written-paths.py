@@ -111,6 +111,10 @@ def make(param_re, unknown_dir):
                         extend([[ANY]])  # a sequence, {1..9}
                         i = j + 1
                         continue
+                    # Any other list ({"a",b}, {$X,b}, a nested one) becomes words this does not
+                    # follow, so the write can be any file (lessons review at 80e51f5).
+                    if "," in raw[i:] and "}" in raw[i:]:
+                        return None
                 if not dq and c == "~" and (i == 0 or raw[i - 1] == ":"):
                     home = os.environ.get("HOME")
                     if re.match(r"~(/|:|$)", raw[i:]) and home:
