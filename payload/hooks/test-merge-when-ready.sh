@@ -3712,7 +3712,10 @@ check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$ou
 
 # Several helpers in line at once, each a real run of this helper, on one injected clock that moves
 # only once every run is asleep, to the earliest time any of them wakes: a run's work between its
-# sleeps takes no time on the clock, as it takes next to none on a real one. #7 holds the turn, its
+# sleeps takes no time on the clock, as it takes next to none on a real one. Only one run is ever
+# awake at a time, and runs due at the same moment wake in the order listed, the holder first, so
+# what the runs do depends on the clock alone and never on how the machine schedules them
+# (claude-config#2745, L290). #7 holds the turn, its
 # checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
 # four looks a minute. The line moves twice, as the first two in line are stopped at 10 and 20
 # minutes. Fixture settings, not measured, but eight, the median of the 2026-11-10 logs.
@@ -3725,16 +3728,20 @@ EOS
 chmod +x "$SIMBIN/gh"
 # The sleep each run in the simulation is given: it marks when it wakes and waits, in real time, for
 # the clock to reach it. A run told to quit, and every run once the simulation ends, is stopped as a
-# person would stop it.
+# person would stop it. Whether it was woken or stopped is read only AFTER its mark is gone
+# (claude-config#2745): the simulation writes the stop before it takes the mark away, so that read
+# always sees it. Read before, as it was, a run that looked for the stop just before it was written
+# and for its mark just after it went took the stop for a wake, and went on at the last time on the
+# clock while the others were being stopped: in CI on 2026-11-11, and in 7 of 10 copies run at once
+# here, a run in line then found the holder's place gone and took the turn.
 sim_sleep(){ (
   set +e +u
   { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
   c=""; read -r c < "$ST/clock"
   printf '%s' "$(( c + $1 ))" > "$SIM_DIR/$SIM_ME.tmp" && mv -f "$SIM_DIR/$SIM_ME.tmp" "$SIM_DIR/$SIM_ME.wake"
-  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do
-    { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
-    sleep 0.01
-  done
+  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do sleep 0.01; done
+  { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+  exit 0
 ) }
 export -f sim_sleep
 export SIM_DIR
@@ -3779,10 +3786,19 @@ sim_run(){
       : > "$SIM_DIR/$quit.quit"; rm -f "$SIM_DIR/$quit.wake"; continue
     fi
     printf '%s' "$sim_min" > "$ST/clock"
+    # The runs due now wake ONE at a time, in the order they are listed, each left to run until it
+    # sleeps again or ends before the next is woken (claude-config#2745). Woken together, as they
+    # were, the order they reached the session's looks and the queue was the machine's scheduling,
+    # not the clock: at a minute where the holder and runs not yet in line all woke, whichever ran
+    # first took the minute's looks. The order is the holder first. Woken last instead, it waits on
+    # the cap once, at 60s, behind runs whose first look comes before they know they are in line
+    # (a first look leaves no look free): a gap in the helper, not here, recorded for its own issue.
     for m in "$@"; do
       [ -e "$SIM_DIR/$m.wake" ] || continue
       w=""; read -r w < "$SIM_DIR/$m.wake"
-      [ "$w" -gt "$sim_min" ] || rm -f "$SIM_DIR/$m.wake"
+      [ "$w" -gt "$sim_min" ] && continue
+      rm -f "$SIM_DIR/$m.wake"
+      hang_wait "[ -e '$SIM_DIR/$m.wake' ] || [ -e '$SIM_DIR/$m.rc' ]" 0.01 || { echo "run $m never slept again at $sim_min" >> "$SIM_DIR/said"; break 2; }
     done
   done
   : > "$SIM_DIR/stop"; rm -f "$SIM_DIR"/*.wake
