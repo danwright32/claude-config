@@ -159,6 +159,9 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
     echo "$_suite_deadline_label: lib/suite-isolation.sh is missing, so this suite would write into the real records. Refusing to run." >&2
     return 2
   }
+  # Bytecode off for whatever the suite runs, as the runner does (claude-config#2751); a suite whose
+  # check is about bytecode unsets it after arming.
+  suite_isolation_no_bytecode
   if ! suite_isolation_complete; then
     local isolated
     isolated="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-suite-work.isolated.XXXXXXXX" 2>/dev/null)" || isolated=""

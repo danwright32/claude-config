@@ -4323,6 +4323,14 @@ so no folder is made. A suite that names its own still wins. Arming refuses to r
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
 
+The same file turns Python's bytecode cache off for every suite, from the runner and from arming
+alike (`PYTHONDONTWRITEBYTECODE=1`, claude-config#2751). A part's suites run side by side, and three
+times a suite importing from `hooks/lib` with it on left `lib/__pycache__` for `test-work-names.sh`'s
+check to find on a pull request that touched neither (#2444, #2600, #2751). `python3 -I` and `-E`
+drop the variable, so `test-lib-bytecode-importers.sh` still asks for `-B` on any command loading
+from lib, following a shell variable to the path it was assigned. A suite whose check is about
+bytecode unsets it after arming, so the check can still see a writer.
+
 A record with no variable is not covered by the list, and this finds one:
 
 ```bash
