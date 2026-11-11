@@ -44,6 +44,7 @@ import {
   sweepKeys,
   type Held,
   couldHold,
+  repoIssues,
   heldUnder,
   shellKey,
   shellTargets,
@@ -627,7 +628,7 @@ test("a held Bash command is named as a command that writes the file, and is sen
   expect(r).not.toContain('Before editing it')
 })
 
-test('a command whose file cannot be read is held saying so, and can only proceed: there is no file to fold into or restructure', () => {
+test('a command whose file cannot be read is held saying so, and with no issue listed can only proceed: there is no file to fold into or restructure', () => {
   const card = holdCard(UNREAD)
   expect(card.reason).toContain('cannot be read')
   expect(card.reason).toContain('$OUT')
@@ -640,6 +641,41 @@ test('a command whose file cannot be read is held saying so, and can only procee
   expect(decideProblem({ decision: 'restructure' }, UNREAD)).toContain('Edit or Write')
   expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
   expect(decideProblem({ decision: 'proceed', reason: 'This command only regenerates the build log, which no issue names.' }, UNREAD)).toBeUndefined()
+})
+
+// #2706: a command whose files cannot be named lists the repository's open structural issues that
+// name files, and may be decided as a fold into one of them; any other issue is refused.
+const LISTED: Held = { ...UNREAD, shown: [{ n: 41, how: 'repo', structural: ['tech-debt'], priority: 'p2' }, { n: 57, how: 'repo', structural: ['refactor'], priority: 'p3' }] }
+
+test('a command whose file cannot be read may fold into an open structural issue the hold listed, and into no other (#2706)', () => {
+  expect(decideProblem({ decision: 'fold', issue: 41 }, LISTED)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 57 }, LISTED)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 42 }, LISTED)).toContain('#41, #57')
+  expect(decideProblem({ decision: 'fold', issue: '41' }, LISTED)).toContain('as a number')
+  // Still no file to restructure, and nothing listed means nothing to fold into.
+  expect(decideProblem({ decision: 'restructure' }, LISTED)).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
+  const r = holdRefusal(LISTED)
+  expect(r).toContain('"decision": "fold", "issue": <one of #41, #57>')
+  expect(r).toContain('"decision": "proceed"')
+  expect(r).not.toContain('"decision": "restructure"')
+  expect(r).toContain('Edit or Write')
+  expect(r).toContain('Then send the Bash command again, unchanged.')
+  // The card Dan reads keeps its words.
+  expect(holdCard(LISTED)).toEqual(holdCard(UNREAD))
+})
+
+test('the issues a command whose files cannot be named may fold into are the open structural ones naming a file, the session\'s own included (#2706)', () => {
+  const issues: CachedIssue[] = [
+    { n: 57, structural: ['refactor'], priority: 'p4', refs: ['src/a.ts'] },
+    { n: 41, structural: ['tech-debt'], priority: 'p2', refs: ['src/lib/slack.ts'] },
+    { n: 42, structural: [], priority: 'p2', refs: ['src/stripe.ts'] },
+    { n: 60, structural: ['tech-debt'], priority: 'p1', refs: [] },
+  ]
+  expect(repoIssues(issues)).toEqual([
+    { n: 41, how: 'repo', structural: ['tech-debt'], priority: 'p2' },
+    { n: 57, how: 'repo', structural: ['refactor'], priority: 'p4' },
+  ])
 })
 
 // #2407: a folder handed to a script is judged only when the script's own text can write there.
