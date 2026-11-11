@@ -56,8 +56,15 @@ alive(){ kill -0 "$1" 2>/dev/null; }
 # These were 30, 10 and 5 seconds counted in tenths, the shape a loaded Mac reaches with nothing
 # broken (claude-config#1620; settings, not measurements).
 . "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
-wait_gone(){ hang_wait "! alive $1"; }   # wait_gone <pid>
-wait_file(){ hang_wait "[ -s '$1' ]"; }  # wait_file <path>
+# Each condition is written out in single quotes, its values read from a local when it is evaluated,
+# never pasted into it: the Slack drafts gate cannot read a condition built from a value, so it stops
+# following this suite's variables at the first one (#2538).
+wait_gone(){ local _wg_pid="$1"; hang_wait '! alive "$_wg_pid"'; }    # wait_gone <pid>
+wait_file(){ local _wf_path="$1"; hang_wait '[ -s "$_wf_path" ]'; }   # wait_file <path>
+# seen_by_watchdog <pid> <seen file> [blank]: the watchdog recorded pid (with no command line, if blank).
+seen_by_watchdog(){
+  awk -F'\t' -v p="$1" -v blank="${3:-}" '$1 == p && (blank == "" || $2 == "") { f = 1 } END { exit !f }' "$2" 2>/dev/null
+}
 
 # A child that blocks for as long as THIS suite is alive and no longer, so nothing here can outlive
 # a run of it however the run ends. That bound is the fix this issue is about, applied to its own
@@ -409,7 +416,7 @@ stop_and_check(){
   ALL_PIDS="$ALL_PIDS $child"
   # Stopped only once the watchdog has SEEN the child, which it records beside its pidfile. Stopping
   # sooner would test the gap the helper states it has, a child started within the last poll.
-  hang_wait "awk -F'\t' -v p='$child' '\$1 == p { f = 1 } END { exit !f }' '$TMPROOT/$name.wd.seen' 2>/dev/null"
+  hang_wait 'seen_by_watchdog "$child" "$TMPROOT/$name.wd.seen"'
   kill -"$sig" "$pid" 2>/dev/null
   if wait_gone "$pid"; then wait "$pid"; rc=$?; else rc="still running"; fi
   [ "$rc" = "$want" ] \
@@ -455,7 +462,7 @@ wait_file "$TMPROOT/blank.child" && bl_child="$(cat "$TMPROOT/blank.child")" || 
 ALL_PIDS="$ALL_PIDS $bl_child"
 # Stopped only once the watchdog has seen the child WITH NO COMMAND LINE, so what is judged is the
 # instant this case is about rather than a look that happened to read it whole.
-if hang_wait "awk -F'\t' -v p='$bl_child' '\$1 == p && \$2 == \"\" { f = 1 } END { exit !f }' '$TMPROOT/blank.wd.seen' 2>/dev/null"; then
+if hang_wait 'seen_by_watchdog "$bl_child" "$TMPROOT/blank.wd.seen" blank'; then
   kill -TERM "$bl_pid" 2>/dev/null
   # Reaped here, before either check below is printed (L1035, #2040): the stand in suite is this
   # suite's own child, and one that exited while a line was being written would cut it short.

@@ -2235,8 +2235,8 @@ class Judge:
         # commands set nothing here.
         unfollowed = [k for k in range(len(items)) if k not in handled and len(items[k][1]["scope"]) == 1]
         cand = set()
-        if whole and not any(self.sh_indirect(head_of(k)) or self.sh_eval_unsafe(head_of(k), evals, items[k][0][0])
-                             for k in unfollowed):
+        if whole and not any(self.sh_indirect(head_of(k)) or
+                             self.sh_eval_unsafe(head_of(k), evals, items[k][0][0]) for k in unfollowed):
             for n in final:
                 rest = s
                 for a, b in sorted(spans.get(n, ()), reverse=True):
@@ -2701,8 +2701,9 @@ class Judge:
         """For a command mentioning a function of evals (name: the positions of the arguments it
         evaluates in the caller's shell): the texts it evaluates, where it is a plain call whose
         evaluated arguments are written out; False where it is anything else (an argument built from
-        a variable, the name handed to trap or another command, or used any other way), as what it
-        then evaluates cannot be read. None where it mentions none of them."""
+        a variable, the name in a trap, or a word of its own handed to another command), as what it
+        then evaluates cannot be read. None where it mentions none of them, or names one only inside
+        a longer string another command is handed (a message, text printf writes to a file)."""
         if not evals or not any(re.search(r"(?<![\w.:-])" + re.escape(f) + r"(?![\w.:-])", head) for f in evals):
             return None
         toks = self.sh_tokens(self.sw.command_rest(self.sh_strip_openers(head))[0])
@@ -2714,6 +2715,11 @@ class Judge:
                 continue
             raws.append(raw)
             k += 1
+        if raws and raws[0] not in evals and raws[0] != "trap" and \
+                not any(re.sub(r"""['"]""", "", w) in evals for w in raws):
+            # Named only inside a longer string (a message, text printf writes to a file), which runs
+            # nothing here: only trap runs a string in this shell without an eval of its own.
+            return None
         if not raws or raws[0] not in evals:
             return False
         rest = " ".join(raws[1:])

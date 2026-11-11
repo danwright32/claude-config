@@ -1524,6 +1524,14 @@ printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" \
   'wait_on() { hang_wait "[ -s x ]"; }' 'wait_on' '. "$ROOT/lib/x.sh"' > "$T/sv/posts/hw-infunc.sh"
 run_bash "bash $T/sv/posts/hw-infunc.sh"
 refused "a function of the script waiting on a written out condition is followed too"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" \
+  "printf '. %q\\n hang_wait %q\\n' \"\$ROOT/x\" \"\$c\" > \"\$ROOT/env\"" '. "$ROOT/lib/x.sh"' > "$T/sv/posts/hw-printed.sh"
+run_bash "bash $T/sv/posts/hw-printed.sh"
+refused "a wait's name printed into a file runs nothing, so the walk goes on past it"
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" 'check() { :; }' \
+  'check "#1 window_wait ended ${w:-early}" "$r"' '. "$ROOT/lib/x.sh"' > "$T/sv/posts/hw-message.sh"
+run_bash "bash $T/sv/posts/hw-message.sh"
+refused "nor does its name inside a message handed to a function"
 for form in 'hang_wait "$cond"' "hang_wait 'ROOT=/elsewhere'" "window_wait 1 'cd /'" "hang_wait '. ./y.sh'" \
             "hang_wait 'eval \"\$c\"'" 'trap "hang_wait x" EXIT' 'w() { hang_wait "$@"; }; w x' 'declare -F hang_wait'; do
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/hang-wait.sh\"" "$form" '. "$ROOT/lib/x.sh"' \
@@ -1531,12 +1539,18 @@ for form in 'hang_wait "$cond"' "hang_wait 'ROOT=/elsewhere'" "window_wait 1 'cd
   run_bash "bash $T/sv/posts/hw-unknown.sh"
   allowed "the refusal is off: past a wait whose condition is not certain, the path is not worked out: $form"
 done
-# The real helpers: a script sourcing each, then a file through a variable path, is followed.
+# The real helpers: a script sourcing each, then a file through a variable path, is followed. In the
+# tree whose lib/x.sh posts that file is read and refused, which with the refusal off is the only
+# sign it was followed (a path not worked out is let through unread).
 for helper in whole-number.sh disk-clean-units.sh suite-isolation.sh push-scope.sh full-run-slot.sh \
-              disk-clean-predicates.sh; do
-  printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/$helper\"" '. "$ROOT/lib/x.sh"' > "$T/sv/quiet/real-$helper"
+              disk-clean-predicates.sh mods-replaced.sh hang-wait.sh; do
+  for tree in posts quiet; do
+    printf '%s\n' '#!/bin/bash' "$SV_ROOT" ". \"$DIR/lib/$helper\"" '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/real-$helper"
+  done
   run_bash "bash $T/sv/quiet/real-$helper"
   allowed "a script's variables are followed past the real lib/$helper"
+  run_bash "bash $T/sv/posts/real-$helper"
+  refused "and the file sourced after lib/$helper is read: one that posts is refused"
 done
 printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.py"
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
