@@ -4383,6 +4383,15 @@ each part's timings into the cache the next deal reads. A part refuses outright 
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
 
+A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
+the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
+named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
+tree has such a record, and reuses it only on proof: that run completed green, is this repository's
+own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
+exactly this tree. Every job then still reports under its own name, skips its work, and says in its
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite, and a
+push to main or a run by hand always runs in full.
+
 Run ONE section while iterating, which is the fast path:
 
 ```bash
@@ -6323,7 +6332,9 @@ judged) or by Bash: every file mod-kit's `$.modkit.writes` names, a removal or e
 git itself changes (a checkout of a path, `git restore`, `git rm`, both names of a `git mv`, #1136;
 since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the lines it changes, read
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
-of changed lines at a time, so undoing an edit the guard let through passes; one git cannot read, or
+of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
+merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
+and judged against that side rather than the conflict on disk; one git cannot read, or
 one beside any other command on the line (a cd aside), which may change what it puts back first, is
 judged whole with the refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be

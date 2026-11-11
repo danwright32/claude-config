@@ -2051,6 +2051,17 @@ remedy is itself a command (L362). A notice on the prompt arrives before any edi
 `ps` and two small file reads, and addresses what was actually lost, which was a day of work rather
 than one edit.
 
+**Which trees the daemon can reach (#2705).** The warning, and `payload-write-gate.sh`, which
+refuses the write itself, find a clone by a folder holding `claude-sync` and `payload/`, then ask
+whether the daemon can reach it. The revert above arrived through the repository: the work was
+pushed, and the daemon's send overwrote it on main. So a linked worktree on a branch other than the
+default is out of reach, and so is a plain copy of the tree with no repository around it, such as
+one a session keeps in its notes folder to measure a change in. A plain copy is recognised only
+when git, asked, says in its own exit code and words that there is no repository, and no `.git` is
+found at the copy's root or above it. A copy that is its own git checkout, a copy inside another
+work tree, and anything git cannot answer for are judged as a checkout, and there is no list of
+exempt folders. Both hooks ask through `sc_is_plain_copy` in `hooks/lib/sync-clone.sh`.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
