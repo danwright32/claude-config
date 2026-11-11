@@ -39,11 +39,22 @@ test('the merge a gh command makes is read from gh pr merge and gh api, and anyt
   expect(mergeOf(pr(['12'], null))).toEqual({ unreadable: true })
   expect(mergeOf(pr(['12'], undefined, true))).toEqual({ unreadable: true })
   expect(mergeOf({ sub: 'pr', act: 'view', positionals: ['12'], unreadable: false })).toBeUndefined()
-  const api = (endpoint: string | undefined, method = 'PUT', repo: string | null | undefined = 'o/r') => ({ sub: 'api', act: '', positionals: [], unreadable: false, api: { method, endpoint, repo } })
+  const api = (endpoint: string | undefined, method = 'PUT', repo: string | null | undefined = 'o/r', query: string | null = null) => ({ sub: 'api', act: '', positionals: [], unreadable: false, api: { method, endpoint, repo, query } })
   expect(mergeOf(api('repos/o/r/pulls/7/merge'))).toEqual({ selector: ['7'], repo: 'o/r' })
+  // Written as a whole address, or with a query after it, it is the same merge.
+  expect(mergeOf(api('https://api.github.com/repos/o/r/pulls/7/merge'))).toEqual({ selector: ['7'], repo: 'o/r' })
+  expect(mergeOf(api('repos/o/r/pulls/7/merge?x=1'))).toEqual({ selector: ['7'], repo: 'o/r' })
+  // One whose repository the reader leaves unnamed cannot be read for its diff.
+  expect(mergeOf({ sub: 'api', act: '', positionals: [], unreadable: false, api: { method: 'PUT', endpoint: 'https://api.github.com/repos/o/r/pulls/7/merge', query: null } })).toEqual({ unreadable: true })
+  // A GET there only asks whether it merged.
+  expect(mergeOf(api('repos/o/r/pulls/7/merge', 'GET'))).toBeUndefined()
   expect(mergeOf(api('repos/o/r/pulls/7'))).toBeUndefined()
   expect(mergeOf(api(undefined))).toEqual({ unreadable: true })
   expect(mergeOf(api(undefined, 'GET'))).toBeUndefined()
+  // GraphQL: a mergePullRequest mutation, or a document that cannot be read, is held; a query is not.
+  expect(mergeOf(api('graphql', 'POST', undefined, 'mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'))).toEqual({ unreadable: true })
+  expect(mergeOf(api('graphql', 'POST', undefined, null))).toEqual({ unreadable: true })
+  expect(mergeOf(api('graphql', 'POST', undefined, 'query { viewer { login } }'))).toBeUndefined()
 })
 
 test('the morning lines ask this session its own choices and an ended session\'s, and name an expired one once', () => {

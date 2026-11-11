@@ -121,7 +121,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // after #2481).
   const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
-  // given ('' for the current branch's), and whether gh fails; each file as origin/HEAD holds it, by
+  // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
   const night2 = { session: 's1', diffs: {} as Record<string, string>, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
   const ghs: string[][] = []
@@ -230,7 +230,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         if (!hits.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
         return listing(hits.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''))
       }
-      // git show origin/HEAD:<path from the top>, as git answers it (#2628).
+      // git show origin/<default branch>:<path from the top>, as git answers it (#2628).
       if (argv[3] === 'show') {
         const spec = argv[4] ?? ''
         night2.shownFrom.push(spec.slice(0, spec.indexOf(':')))

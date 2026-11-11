@@ -88,13 +88,20 @@ export const morningLines = (choices: readonly SlackAlertChoice[], session: stri
 
 /** The pull request a gh command merges, as `gh pr diff` takes it, or why it cannot be read. */
 export type MergeOf = { selector: string[]; repo: string | null | undefined } | { unreadable: true } | undefined
-type GhRead = { sub: string; act: string; positionals: string[]; named?: string | null; unreadable: boolean; api?: { method: string; endpoint: string | undefined; repo?: string | null } }
-const API_MERGE = /^\/?repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/merge$/
+type GhRead = { sub: string; act: string; positionals: string[]; named?: string | null; unreadable: boolean; api?: { method: string; endpoint: string | undefined; repo?: string | null; query?: string | null } }
+// The REST merge endpoint, written bare or as a whole address, a query after it or not.
+const API_MERGE = /^(?:https?:\/\/[^/]+(?:\/api\/v3)?)?\/?repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/merge\/?(?:[?#].*)?$/
+const GRAPHQL = /^(?:https?:\/\/[^/]+(?:\/api)?)?\/?graphql\/?(?:[?#].*)?$/
 export const mergeOf = (g: GhRead | undefined): MergeOf => {
   if (!g) return undefined
   if (g.sub === 'api' && g.api) {
-    const m = g.api.endpoint === undefined ? null : API_MERGE.exec(g.api.endpoint)
-    if (!m) return g.api.endpoint === undefined && g.api.method !== 'GET' ? { unreadable: true } : undefined
+    const { endpoint, method } = g.api
+    // A GraphQL call merges when its document asks to, or when no document can be read.
+    if (endpoint !== undefined && GRAPHQL.test(endpoint)) return g.api.query === null || /\bmergePullRequest\b/.test(g.api.query ?? '') ? { unreadable: true } : undefined
+    const m = endpoint === undefined ? null : API_MERGE.exec(endpoint)
+    if (!m) return endpoint === undefined && method !== 'GET' ? { unreadable: true } : undefined
+    // A GET there only asks whether the pull request is merged.
+    if (method === 'GET') return undefined
     return g.api.repo ? { selector: [m[1] as string], repo: g.api.repo } : { unreadable: true }
   }
   if (g.sub !== 'pr' || g.act !== 'merge') return undefined
