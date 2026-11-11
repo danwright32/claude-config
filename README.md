@@ -2361,6 +2361,21 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
   cannot read is let through with a notice.
 
+Reading an old checkout is the other half, and that one is said rather than refused:
+
+- `checkout-behind-notice.sh` (SessionStart and SubagentStart) tells a session, and every subagent
+  it starts, when the checkout it is in lacks commits that `origin`'s default branch has
+  (claude-config#2712). On 2026-11-10 a session on the work MacBook read a primary checkout on a
+  detached HEAD 279 commits behind main as current and told Dan twice that a shipped feature did not
+  exist. It speaks on a detached HEAD at any distance, or when the oldest missing commit is 8 hours
+  old, or 50 commits are missing (`CHECKOUT_BEHIND_HOURS`, `CHECKOUT_BEHIND_COMMITS`; measured on the
+  personal MacBook's checkouts, where worktrees in use lacked at most 5 hours of work and stale ones
+  at least 16). The session is told to read the current code with `git show origin/main:<path>` and
+  `git grep <pattern> origin/main`, since a shared checkout must not be switched; the hook itself
+  only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
+  says the checkout could not be checked, never that it is level. The person is told once per
+  session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+
 ### What a push actually waits on
 
 Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
@@ -3574,6 +3589,23 @@ the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 onc
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
 
+When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
+to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
+with `gh pr merge` directly once every check is green, without deleting the branch (the helper
+deletes it only after moving the pull requests stacked on it), to confirm the state with
+`gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
+same merge seven times because the refusal named no other way. The reader prints a verdict of its
+own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
+bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
+refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
+for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
+seconds) is inferred, not measured.
+
 ## Read only queries are approved without asking
 
 Auto mode's classifier refused a plain select against a production database on 2026-11-05 ("[Production
@@ -4408,8 +4440,13 @@ named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` wh
 tree has such a record, and reuses it only on proof: that run completed green, is this repository's
 own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
 exactly this tree. Every job then still reports under its own name, skips its work, and says in its
-log which run and commit it stood on. Any doubt, an API failure included, is the full suite, and a
-push to main or a run by hand always runs in full.
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite.
+
+A push to main stands only on a pull request run of its exact tree, the run its merge followed, so
+a merge no longer runs the suites twice on the same files (claude-config#2717, Dan's choice on
+2026-11-10). Every tree on main still has a verdict of its own, which is what #594 kept every main
+run for: a sync push from a Mac, or any commit whose tree no pull request passed, runs in full, and
+so does a push to another branch or a run by hand.
 
 Run ONE section while iterating, which is the fast path:
 
