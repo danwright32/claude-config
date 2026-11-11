@@ -421,7 +421,9 @@ AWKS = {"awk", "gawk", "mawk", "nawk"}
 # target directory and a suffix there), so an option's value is never read as a file.
 COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTtS", "ginstall": "gmoSt",
            "ln": "tS", "gln": "tS", "link": ""}
-COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group", "--backup"}
+# Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
+# it is not here: the word after it is a file.
+COPIER_LONG_VALUED = {"--target-directory", "--suffix", "--mode", "--owner", "--group"}
 # A redirection of a command's output to a file, glued to its target or before it, appending or not.
 OUT_REDIRECT = re.compile(r"^(?:1|&)?(>>|>\||>)(.*)\Z", re.S)
 IN_REDIRECT = re.compile(r"^0?<(?![<>&])(.*)\Z", re.S)

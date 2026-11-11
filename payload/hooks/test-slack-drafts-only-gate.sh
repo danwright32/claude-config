@@ -1474,7 +1474,8 @@ for runs in "cp post.txt run.sh && bash run.sh" "cp post.txt run.sh; sh ./run.sh
   "tee run.sh < post.txt > /dev/null && bash run.sh" "ln -s post.txt run.sh && bash run.sh" \
   "cp post.txt bin/ && bash bin/post.txt" "cp post.txt plain.txt bin && bash bin/post.txt" \
   "cp post.txt a.sh && cp a.sh b.sh && bash b.sh" "cd sub && cp ../post.txt run.sh && bash run.sh" \
-  "cp post.txt.py run.py && python3 run.py" "cp -R tools copy && bash copy/post.sh"; do
+  "cp post.txt.py run.py && python3 run.py" "cp -R tools copy && bash copy/post.sh" \
+  "cp --backup post.txt run.sh && bash run.sh" "cp --backup=numbered post.txt run.sh && bash run.sh"; do
   run_cp "$runs"
   refused "a copy run in the same command is judged by its source: $runs"
 done
