@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
@@ -3970,6 +3980,28 @@ sync suite recomputes both bounds from the record, read by column name, and fail
 at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
 make rather than a pull request gone red at random.
 
+The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
+
+```bash
+bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
+```
+
+It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
+main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
+suite ran in: its section time and check count, and that runner's core count, processor and region.
+A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
+lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
+middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
+`--split` gives one. `--print` shows the result and changes nothing. A run it cannot read without
+guessing (no core count, no section time after the result, a suite reported in two parts, a new
+run whose log gh could not fetch) is named and nothing is written; a recorded run whose log gh
+could not fetch keeps its row and is named; a run that never reached the sync suite's result
+is named as skipped. The cache matters: on 2026-11-10 the window held about 400 runs, whose logs of
+half a megabyte each took several minutes to fetch, and a finished run's log never changes.
+`tools/test-ci-section-time-readings.sh` holds the tool to the committed record, from real logs
+saved in `tools/ci-section-time-sample/`. Finished runs are picked out by the tool rather than by
+`gh run list --status completed`, which on 2026-11-10 left out 3 of 290 finished runs.
+
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
 ```bash
@@ -5472,6 +5504,15 @@ behind nor as this Mac's own work, and status exits as it would otherwise. Befor
 of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
 
 <table>
 <thead>
