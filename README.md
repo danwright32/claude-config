@@ -2351,6 +2351,21 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
   cannot read is let through with a notice.
 
+Reading an old checkout is the other half, and that one is said rather than refused:
+
+- `checkout-behind-notice.sh` (SessionStart and SubagentStart) tells a session, and every subagent
+  it starts, when the checkout it is in lacks commits that `origin`'s default branch has
+  (claude-config#2712). On 2026-11-10 a session on the work MacBook read a primary checkout on a
+  detached HEAD 279 commits behind main as current and told Dan twice that a shipped feature did not
+  exist. It speaks on a detached HEAD at any distance, or when the oldest missing commit is 8 hours
+  old, or 50 commits are missing (`CHECKOUT_BEHIND_HOURS`, `CHECKOUT_BEHIND_COMMITS`; measured on the
+  personal MacBook's checkouts, where worktrees in use lacked at most 5 hours of work and stale ones
+  at least 16). The session is told to read the current code with `git show origin/main:<path>` and
+  `git grep <pattern> origin/main`, since a shared checkout must not be switched; the hook itself
+  only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
+  says the checkout could not be checked, never that it is level. The person is told once per
+  session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+
 ### What a push actually waits on
 
 Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,

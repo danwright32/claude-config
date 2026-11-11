@@ -190,7 +190,7 @@ if [ -n "$fetched_at" ]; then
     exit 0
   fi
   if [ "$fetched_at" = "$now" ]; then when="fetched just now"; else when="fetched $(ago $((now - fetched_at)))"; fi
-  text="CHECKOUT BEHIND ORIGIN: $where, $(commits_word "$behind") behind $base, missing work from as long as $(ago "$age") ($base $when). Files read from this checkout are that older code, so something that shipped since will look missing. $remedy"
+  lead="CHECKOUT BEHIND ORIGIN: $where, $(commits_word "$behind") behind $base, missing work from as long as $(ago "$age") ($base $when). Files read from this checkout are that older code, so something that shipped since will look missing."
   key="behind|$top|$head|$origin_sha"
 else
   if [ -z "$origin_sha" ]; then
@@ -209,9 +209,12 @@ else
       local_sentence="$copy is all there is to compare with, so how far behind origin it is now is not known."
     fi
   fi
-  text="CHECKOUT NOT CHECKED: whether $where is behind $base could not be checked, because the fetch of origin $dbranch $why. $local_sentence Until it is checked, do not take these files as the current code. $remedy"
+  lead="CHECKOUT NOT CHECKED: whether $where is behind $base could not be checked, because the fetch of origin $dbranch $why. $local_sentence Until it is checked, do not take these files as the current code."
   key="unchecked|$top|$head"
 fi
+# The session gets the commands; the person gets the fact and what the session was told to do.
+text="$lead $remedy"
+person="$lead The session was told to read the current code from $base (git show, git grep) and not to switch this checkout."
 
 # --- once per answer -------------------------------------------------------------------------------
 said_file=""
@@ -227,4 +230,4 @@ if [ "$said" = 1 ]; then
   exit 0
 fi
 [ -n "$said_file" ] && printf '%s\n' "$key" >> "$said_file" 2>/dev/null
-hook_allow_notice "$text" "$event" "$text"
+hook_allow_notice "$person" "$event" "$text"

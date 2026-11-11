@@ -148,6 +148,8 @@ has "old: says how old the missing work is" "$MSG" "10 hours"
 has "old: tells the session to read files from the remote branch" "$CTX" "git -C '$R' show origin/main:"
 has "old: tells the session to search the remote branch" "$CTX" "git -C '$R' grep"
 has "old: says the checkout must not be switched" "$CTX" "must not be switched"
+has "old: the person is told what the session was told to do" "$MSG" "not to switch this checkout"
+hasnt "old: the person's line carries no commands" "$MSG" "grep -n"
 check "old: the session gets it as SessionStart context" "$([ "$EV" = SessionStart ] && echo ok || echo "event '$EV'")"
 hasnt "old: offers no pull" "$OUT" "pull --"
 hasnt "old: offers no checkout" "$OUT" "checkout --"
@@ -280,7 +282,8 @@ fixture nolib
 advance 3 $((10 * HOUR))
 mkdir -p "$WORK/bare-hooks/lib"
 cp "$HOOK" "$WORK/bare-hooks/"
-cp "$DIR/lib/hook-notice.sh" "$WORK/bare-hooks/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORK/bare-hooks/lib" hook-notice.sh >/dev/null 2>&1
+check "no bounded-run.sh: the fixture really lacks it" "$([ ! -e "$WORK/bare-hooks/lib/bounded-run.sh" ] && [ -f "$WORK/bare-hooks/lib/hook-notice.sh" ] && echo ok || echo 'the scratch lib is not as intended')"
 OUT="$(printf '{"hook_event_name":"SessionStart","session_id":"n1","cwd":"%s","source":"startup"}' "$R" | bash "$WORK/bare-hooks/checkout-behind-notice.sh" 2>/dev/null)"
 has "no bounded-run.sh: says it could not check" "$OUT" "could not be checked"
 has "no bounded-run.sh: names the missing file" "$OUT" "bounded-run.sh"

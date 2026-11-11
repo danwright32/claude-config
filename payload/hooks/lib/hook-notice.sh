@@ -145,11 +145,14 @@ hook_context_json() {
   local event="$1" context="$2"
   case "$event" in ''|*[!A-Za-z]*) return 1 ;; esac
   if command -v python3 >/dev/null 2>&1; then
-    HN_CONTEXT="$context" HN_EVENT="$event" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
-print(json.dumps({"hookSpecificOutput": {"hookEventName": os.environ["HN_EVENT"],
-                                         "additionalContext": cut(os.environb[b"HN_CONTEXT"])}}))' 2>/dev/null && return 0
+    HN_CTX="$context" HN_EVENT="$event" HN_MAX="$HN_MAX" python3 -c "$_HN_PY_CUT"'
+out = {}
+out["hookSpecificOutput"] = {"hookEventName": os.environ["HN_EVENT"], "additionalContext": cut(os.environb[b"HN_CTX"])}
+print(json.dumps(out))' 2>/dev/null && return 0
   fi
-  printf '{"hookSpecificOutput": {"hookEventName": "%s", "additionalContext": "%s"}}\n' "$event" "$(_hn_string "$context")"
+  local inside
+  inside="$(_hn_string "$context")"
+  printf '{"hookSpecificOutput": {"hookEventName": "%s", "additionalContext": "%s"}}\n' "$event" "$inside"
 }
 
 hook_ask_json() {
