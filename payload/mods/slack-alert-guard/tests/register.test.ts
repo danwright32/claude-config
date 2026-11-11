@@ -2277,10 +2277,15 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
 test('a copy module nothing sends yet is named as one asleep, and by the awake refusal a choice gets (#2720, #2628)', withNight, async ($, on) => {
   const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
   nightFresh(true)
-  world($, on)
+  const w = world($, on)
   const asleep = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
   expect(asleep).toContain(CHOOSE)
   expect(asleep).toContain(UNWIRED)
+  // The choice keeps it, so the morning question names it too.
+  expect(refusalOf(await choose($, /"call": "(t\d+)"/.exec(asleep)?.[1] ?? '', QUIET_SHOWN))).toBe('')
+  const kept = chosenIn(w).map(k => w.store[k] as { unwired?: boolean })
+  expect(kept.length).toBeGreaterThan(0)
+  for (const c of kept) expect(c.unwired).toBe(true)
   nightFresh(false)
   const awake = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
   expect(awake).toContain(UNWIRED)

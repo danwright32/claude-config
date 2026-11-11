@@ -1255,7 +1255,7 @@ export const mentionsStore = (text: string): boolean => /plugins\/store/.test(te
 const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 
 /** What a held module of message copy that no file uses yet is called on the card, refusals and question (#2720). */
-const UNWIRED = 'a module of message copy not yet wired to Slack'
+export const UNWIRED = 'a module of message copy not yet wired to Slack'
 
 /** What changes, in the words the refusal and card name it by. */
 export const changeText = (added: string[], removed: string[]): string =>

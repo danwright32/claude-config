@@ -46,6 +46,8 @@ export type SlackAlertChoice = {
   session: string | null
   sender?: string
   from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one in the morning question. */
+  unwired?: true
   /** When it expired unanswered: still held, said once in every session. */
   expired?: number
 }

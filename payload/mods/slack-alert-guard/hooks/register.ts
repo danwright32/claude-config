@@ -1272,6 +1272,7 @@ export const register: Register = on => {
       session: await $.session.id(),
       ...(waiting.sender ? { sender: waiting.sender } : {}),
       ...(waiting.from ? { from: waiting.from } : {}),
+      ...(waiting.unwired ? { unwired: waiting.unwired } : {}),
     }
     for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
     await update($, pendingRef, p => (p ?? []).filter(x => x.id !== call))
