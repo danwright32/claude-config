@@ -7682,12 +7682,16 @@ re-export the template up to 3 deep (#2286). A file handed on only to UI compone
 `.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
 so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
 component that itself sends, or imports a send helper, is still its sender, and a file with any
-other importer is followed as before. A search that fails, runs out of time, meets an
-unreadable file, or would follow further holds the call as could not check. One that finds more
-than 500 files to read (the largest real one read 213, #2510), or a send helper search that
-fails, runs late or meets an unreadable helper, holds the call for Dan to approve like any other,
-naming no sender, rather than refusing it with nothing he can answer (#2364). A shell write to a
-path the write reader cannot name is outside it.
+other importer is followed as before. A search that fails, runs out of time or meets an
+unreadable file holds the call as could not check, which trying again may get past. One that would
+follow further than 3 files stops there on every try, so it holds the edit for Dan to approve: the
+picker shows the exact lines it adds and takes away and says the guard could not trace whether they
+reach Slack, and his approval, kept by the file and the edit's whole text, lets that one edit
+through and no other; a shell write stopped the same way is held as any shell write is (#2709).
+One that finds more than 500 files to read (the largest real one read 213, #2510), or a send
+helper search that fails, runs late or meets an unreadable helper, holds the call for Dan to
+approve like any other, naming no sender, rather than refusing it with nothing he can answer
+(#2364). A shell write to a path the write reader cannot name is outside it.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
@@ -7711,7 +7715,7 @@ live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709
 
 </td></tr>
 </tbody>

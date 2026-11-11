@@ -20,6 +20,11 @@ export type SlackAlertPending = {
   from?: string
   /** For a module of message copy no file uses yet (#2720): named as one on the card, refusal and question. */
   unwired?: true
+  /**
+   * For an edit the guard could not trace (#2709): why the trace stopped. Its `added` and `removed`
+   * are then the lines the edit adds and takes away, shown to Dan in place of a rendered message.
+   */
+  untraced?: string
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }
