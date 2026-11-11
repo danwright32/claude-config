@@ -98,7 +98,8 @@ const HELD = cannotCheck('unknown failure')
 // from (#2637): for wording the edit adds none of and brings to a send, the files that hold it.
 // untraced (#2709): for an edit the trace stopped short of at one of its limits, why it stopped; its
 // added and removed are then the lines the edit adds and takes away, not message text.
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; untraced?: string }
+// unwired (#2720): a module of message copy no file uses yet, named as one to Dan.
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; untraced?: string; unwired?: true }
 // Could not check, and with `untraced` (#2709), because the trace met one of its own limits (more
 // files handed on than it follows), which it meets the same way on every try: held for Dan to
 // approve that one edit, since trying again can never get it through. Any other could not check
@@ -964,7 +965,9 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const copyHold = async (found: Found, added: string[]): Promise<Verdict> => {
       if (!('none' in found) || !found.unused || found.rel === undefined || !added.length) return PASS
       if (!copyModule(found.rel, after)) return PASS
-      return holdFor({ added, removed: [] })
+      // Named as copy nothing sends yet, so Dan can tell it from a live send (2026-11-11).
+      const held = await holdFor({ added, removed: [] })
+      return 'hold' in held ? { hold: { ...held.hold, unwired: true } } : held
     }
     // Wording Dan has not approved, in a file whose sends cannot be traced (a text template, a
     // workflow, a shell script, an edit that does not apply): held when its file is in a git
@@ -1114,18 +1117,18 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     }
     return agent ? untracedAgentRefusal(id, file, added, removed, untraced) : untracedRefusal(id, file, added, removed, untraced)
   }
-  const { file, added, removed, keys, sender, literal, from } = v.hold
+  const { file, added, removed, keys, sender, literal, from, unwired } = v.hold
   // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
   // (#2628); a shell command's wording cannot be read before it runs, so it is held as before.
   const choosing = id !== '' && (added.length > 0 || removed.length > 0) && (await isAsleep($))
   if (id) {
-    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(literal ? { literal } : {}), ...(from ? { from } : {}), ...(agent ? { agent: true as const } : {}) }
+    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(literal ? { literal } : {}), ...(from ? { from } : {}), ...(unwired ? { unwired } : {}), ...(agent ? { agent: true as const } : {}) }
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
     const safeWay = choosing ? 'You are asleep: Claude chooses the wording and asks you in the morning.' : agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.'
-    await drawCard($, id, `${heldText(file, added, removed, sender, from)}.`, safeWay)
+    await drawCard($, id, `${heldText(file, added, removed, sender, from, unwired)}.`, safeWay)
   }
-  if (choosing) return asleepRefusal(blocked(file, added, removed, sender, from), id)
-  return agent ? agentRefusal(id, file, added, removed, sender, from) : refusal(id, file, added, removed, sender, from)
+  if (choosing) return asleepRefusal(blocked(file, added, removed, sender, from, unwired), id)
+  return agent ? agentRefusal(id, file, added, removed, sender, from, unwired) : refusal(id, file, added, removed, sender, from, unwired)
 }
 
 type AskInput = { questions?: unknown[]; answers?: unknown; metadata?: Record<string, unknown> }
@@ -1226,7 +1229,7 @@ export const register: Register = on => {
         const problem = renderedProblem(ask.metadata?.rendered, waiting.added, waiting.literal ?? [])
         if (problem !== undefined) return { deny: problem }
         rendered = String(ask.metadata?.rendered).trim()
-        q = question(waiting.file, rendered, waiting.from)
+        q = question(waiting.file, rendered, waiting.from, waiting.unwired)
       }
       const options = [
         { label: APPROVE, description: 'The wording is right. Only the edit to the file goes ahead.' },
@@ -1306,7 +1309,7 @@ export const register: Register = on => {
       return { deny: `No Slack alert edit of yours is held under ${call}: it was chosen or answered already, or never held. Send the edit, and if it is held you are told what to do.` }
     if (!(await isAsleep($)))
       return {
-        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from)}`,
+        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from, waiting.unwired) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.sender, waiting.from, waiting.unwired)}`,
       }
     const problem = renderedProblem(input.rendered, waiting.added, waiting.literal ?? [])
     if (problem !== undefined) return { deny: problem.replace('Give metadata "rendered"', 'Give "rendered"') }
@@ -1322,6 +1325,7 @@ export const register: Register = on => {
       session: await $.session.id(),
       ...(waiting.sender ? { sender: waiting.sender } : {}),
       ...(waiting.from ? { from: waiting.from } : {}),
+      ...(waiting.unwired ? { unwired: waiting.unwired } : {}),
     }
     for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
     await update($, pendingRef, p => (p ?? []).filter(x => x.id !== call))

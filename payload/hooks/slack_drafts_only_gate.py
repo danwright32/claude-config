@@ -441,7 +441,10 @@ AWKS = {"awk", "gawk", "mawk", "nawk"}
 # they make is read as its source, since it is not on disk yet when the gate reads the command. Each
 # with the options that take a value (BSD's, the ones on these Macs, and GNU's -t and -S, which name a
 # target directory and a suffix there), so an option's value is never read as a file. BSD install's
-# -S is a flag (flush to disk), so the word after it is a file there.
+# -S is a flag (flush to disk), so the word after it is a file there. BSD install's -D destdir only
+# trims the names a -M metalog records and does not move the file on macOS (man install; measured
+# 2026-11-11, claude-config#2742), so a copy is recorded where its target names. It is recorded under
+# the -D joined path too, only so that nothing the gate refused before #2742 passes. GNU's -D is a flag.
 COPIERS = {"cp": "tS", "gcp": "tS", "mv": "tS", "gmv": "tS", "install": "BDfghlMmoTt", "ginstall": "gmoSt",
            "ln": "tS", "gln": "tS", "link": ""}
 # Long options whose value may be the next word. GNU's --backup takes one only as --backup=CONTROL, so
@@ -1285,12 +1288,12 @@ class Judge(WrittenPaths):
         else:
             srcs, dest = ops[:-1], ops[-1]
             into = not no_dir and (len(srcs) > 1 or dest.endswith("/") or self.is_dir(dest, d))
-        if destdir:
-            dest = os.path.join(destdir, dest.lstrip("/"))
         for src in srcs:
             targets = [os.path.join(dest, os.path.basename(src.rstrip("/")) or src)] if into else [dest]
             if into and recursive and src.endswith("/") and len(srcs) == 1:
                 targets.append(dest)  # BSD cp -R src/ copies what is in src; GNU copies src itself
+            if destdir:  # also where the gate recorded it before #2742, so nothing refused then passes
+                targets += [os.path.join(destdir, t.lstrip("/")) for t in targets]
             for target in targets:
                 # A symbolic link's own text is read from the directory the link is in.
                 where = d
