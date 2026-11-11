@@ -74,6 +74,12 @@ declare module 'claude-code' {
       draftRefused: { keys: string[]; told: string[] }
       /** #2578: how many prompts Dan has typed in this session, counted only as far as 2. */
       prompts: number
+      /**
+       * #2653: the session said, by calling the unrelated_merges tool, that its later merges have
+       * nothing to do with the thread it started from; `landed` is the landed step when it did,
+       * absent when no merge had landed. Merges after it owe that thread no draft.
+       */
+      unrelated: { landed?: number }
     }
   }
 }
