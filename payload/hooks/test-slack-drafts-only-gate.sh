@@ -588,8 +588,9 @@ printf '%s\n' 'import { src } from "./src.ts";' 'eval(src);' > "$T/imp/str/evals
 run_bash "node $T/imp/str/evals-imported.ts"
 refused "a string from another module handed to eval in the script, importing a helper that posts"
 says "that refusal names the posting helper" "poster.js"
-# Past the most modules it reads (IMPORT_MAX_FILES, 300; the largest real script reaches 11), what
-# lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Past the most modules it reads in no repository (IMPORT_MAX_FILES, 300; the largest real script
+# reaches 11), what lies beyond is unseen, so it is refused; a short chain of the same shape passes.
+# Inside a repository it reads on (claude-config#2470, with the budget cases below).
 mkdir -p "$T/imp/chain" "$T/imp/short"
 for n in $(seq 0 305); do printf 'import "./m%s";\n' "$((n + 1))" > "$T/imp/chain/m$n.ts"; done
 printf '%s\n' 'export {};' > "$T/imp/chain/m306.ts"
@@ -1840,6 +1841,131 @@ OUT="$(payload Bash "$(bash_input "bash $DIR/lib/issue-spool.sh clear $T/ds/proj
   | env -u HOOK_TESTS_RUNNING SLACK_GATE_TICK_BUDGET=1 bash "$HOOK" 2>"$errf")"; RC=$?
 ERR="$(cat "$errf")"; rm -f "$errf"
 allowed "SLACK_GATE_TICK_BUDGET is ignored outside a test run"
+
+# A lint run whose config imports more modules than IMPORT_MAX_FILES (claude-config#2470). In a work
+# repository `pnpm run lint` was refused outright because the lint config's local imports pass 300,
+# though nothing in it touches Slack, and builders went round the gate to lint at all. Dan,
+# 2026-11-09: "Time budget past 300, repository files only". So past 300 the gate reads on, inside
+# the budget above, while every module is inside the repository the script is in, each one still
+# judged by the endpoint it names. A module outside that repository, a script in no repository and
+# the budget running out are each refused as not checked, never allowed.
+lint_tree() { # lint_tree <folder> <rule modules> [poster=N|outside=N|link=N|config-outside|no-repo|worktree]
+  python3 - "$@" <<'PY'
+# <folder> becomes a made up repository: package.json's lint script runs tools/lint.mjs, which imports
+# eslint.config.mjs, which imports lint/groups/group-NN.mjs, each importing 16 of
+# lint/rules/rule-NNNN.mjs. Read breadth first, rule N is module 2 + groups + N + 1.
+#   poster=N        rule N also names a posting endpoint (put together here, so this suite names none)
+#   outside=N       rule N also imports <folder>-shared/helper.mjs, outside the repository
+#   link=N          rule N is a link to <folder>-shared/linked.mjs, outside the repository
+#   config-outside  eslint.config.mjs itself imports <folder>-shared/helper.mjs, among the first 300
+#   no-repo         the same tree in a plain folder
+#   worktree        .git is the file git writes in a worktree, not a folder
+import os, subprocess, sys
+root, count, opts = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
+num = {o.split("=")[0]: int(o.split("=")[1]) for o in opts if "=" in o}
+shared, name = root + "-shared", os.path.basename(root)
+for d in ("tools", "lint/groups", "lint/rules"):
+    os.makedirs(os.path.join(root, d), exist_ok=True)
+os.makedirs(shared, exist_ok=True)
+if "worktree" in opts:
+    with open(os.path.join(root, ".git"), "w") as f:
+        f.write("gitdir: %s/.git/worktrees/%s\n" % (shared, name))
+elif "no-repo" not in opts:
+    subprocess.run(["git", "init", "-q", root], check=True)
+with open(os.path.join(root, "package.json"), "w") as f:
+    f.write('{"name": "%s", "private": true, "scripts": {"lint": "node ./tools/lint.mjs ."}}\n' % name)
+with open(os.path.join(root, "tools", "lint.mjs"), "w") as f:
+    f.write('import config from "../eslint.config.mjs";\nconsole.log(config.length);\n')
+groups = (count + 15) // 16
+with open(os.path.join(root, "eslint.config.mjs"), "w") as f:
+    if "config-outside" in opts:
+        f.write('import { helper } from "../%s-shared/helper.mjs";\n' % name)
+    for g in range(groups):
+        f.write('import group%02d from "./lint/groups/group-%02d.mjs";\n' % (g, g))
+    f.write("export default [%s];\n" % ", ".join("group%02d" % g for g in range(groups)))
+for g in range(groups):
+    rules = range(g * 16, min(count, g * 16 + 16))
+    with open(os.path.join(root, "lint", "groups", "group-%02d.mjs" % g), "w") as f:
+        for r in rules:
+            f.write('import rule%04d from "../rules/rule-%04d.mjs";\n' % (r, r))
+        f.write("export default { rules: { %s } };\n" % ", ".join('"made-up/rule-%04d": rule%04d' % (r, r) for r in rules))
+endpoint = "chat." + "post" + "Message"
+for r in range(count):
+    path = os.path.join(root, "lint", "rules", "rule-%04d.mjs" % r)
+    if num.get("link") == r:
+        os.symlink(os.path.join(shared, "linked.mjs"), path)
+        continue
+    with open(path, "w") as f:
+        if num.get("outside") == r:
+            f.write('import { helper } from "../../../%s-shared/helper.mjs";\n' % name)
+        f.write('export default { meta: { type: "problem" }, create(context) { return { Identifier(node) {\n')
+        f.write('  if (node.name === "forbidden%d") context.report({ node, message: "no forbidden%d" });\n' % (r, r))
+        if num.get("poster") == r:
+            f.write('  fetch("https://slack.com/api/%s", { method: "POST", body: node.name });\n' % endpoint)
+        f.write("} }; } };\n")
+for helper in ("helper.mjs", "linked.mjs"):
+    with open(os.path.join(shared, helper), "w") as f:
+        f.write("export const helper = (name) => name.toLowerCase();\nexport default {};\n")
+PY
+}
+run_lint() { # run_lint <tick budget> <folder>: `pnpm run lint` as a session calls it in that folder
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "pnpm run lint")" "$2" | HOOK_TESTS_RUNNING=1 SLACK_GATE_TICK_BUDGET="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+mkdir -p "$T/lint"
+# 320 rules, so the lint script reaches 342 modules: itself, the config, 20 groups and the rules.
+lint_tree "$T/lint/clean" 320
+run_lint "$TICKS" "$T/lint/clean"
+allowed "a lint script reaching 342 modules, all in its repository and none posting, is allowed"
+lint_tree "$T/lint/wt" 320 worktree
+run_lint "$TICKS" "$T/lint/wt"
+allowed "and so is one in a worktree, whose .git is a file"
+# The control: one module past the first 300 that posts is still read, and refused by name.
+lint_tree "$T/lint/poster" 320 poster=310
+run_lint "$TICKS" "$T/lint/poster"
+refused "one posting module among 342, read after the first 300, is refused"
+says "that refusal names the posting module" "rule-0310.mjs"
+says "and the endpoint it names" "which posts to Slack (it names chat.postMessage)"
+says "and says the command posts" "REFUSED: this command posts to Slack"
+# A module outside the repository ends the reading: whether it comes after the first 300 ...
+lint_tree "$T/lint/out" 320 outside=305
+run_lint "$TICKS" "$T/lint/out"
+refused "a module outside the repository, reached past 300, is refused"
+says "that refusal names the module outside" "/lint/out-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/out: the script ./tools/lint.mjs, which imports"
+says "and says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
+# ... among them (the walk passes 300 only when every module it has read is inside too) ...
+lint_tree "$T/lint/early" 320 config-outside
+run_lint "$TICKS" "$T/lint/early"
+refused "a module outside the repository among the first 300 is refused once the walk passes 300"
+says "that refusal names the module outside" "/lint/early-shared/helper.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/early: the script ./tools/lint.mjs, which imports"
+# ... or is inside by its path and outside by where its link leads.
+lint_tree "$T/lint/link" 320 link=306
+run_lint "$TICKS" "$T/lint/link"
+refused "a module that is a link to a file outside the repository is refused"
+says "that refusal names the file the link leads to" "/lint/link-shared/linked.mjs) is outside the repository"
+says "and the repository it is outside" "/lint/link: the script ./tools/lint.mjs, which imports"
+# A script in no repository is read no further than it ever was. The throwaway folder has to be in
+# none itself for that to be measured, so that is checked first and said (L411).
+if (d="$(cd "$T" && pwd -P)"; while [ "$d" != "/" ] && [ ! -e "$d/.git" ]; do d="$(dirname "$d")"; done; [ -e "$d/.git" ]); then
+  check "the throwaway folder is in no repository, as the no repository cases need" "it is inside one: $T"
+else check "the throwaway folder is in no repository, as the no repository cases need" ok; fi
+lint_tree "$T/lint/plain" 320 no-repo
+run_lint "$TICKS" "$T/lint/plain"
+refused "a lint script reaching 342 modules in no repository is refused"
+says "that refusal says the imports go past what it reads" "more than 300 modules"
+says "and that the script is in no repository" "is not inside a repository"
+lacks "and does not claim the command posts" "REFUSED: this command posts to Slack"
+# The budget running out past 300 is refused as not checked, saying how far the reading got.
+run_lint 330 "$T/lint/clean"
+refused "the budget running out while reading past 300 modules is refused, never allowed"
+says "that refusal says the gate ran out of time" "ran out of time"
+says "and that the command was not checked" "was not checked"
+says "and how far past 300 the reading got" "of the modules the script ./tools/lint.mjs imports (past 300"
+lacks "and does not claim the command posts" "posts to Slack:"
 
 # The budget was looked at only between commands and before each file, so work inside one file's
 # walk was never timed (claude-config#2571): on 2026-11-09 the walk of one script took 41 s of
