@@ -78,13 +78,13 @@ Try in order, and record which one works in the project's memory so future sessi
 
 Before any data-modifying statement (INSERT, UPDATE, DELETE, ALTER, migration) against a real database, show the exact SQL, the target project and tables, and the expected effect, then confirm via AskUserQuestion (Apply / Cancel). Exception: a step Dan already approved in a plan this session does not need a second confirmation.
 
-For a migration on path 1, the picker is one question whose options are labelled exactly `Apply` and `Cancel`, and it carries this metadata, filled in from the files themselves just before asking (never typed from memory):
+For a migration on path 1, or a change file on path 3, the picker is one question whose options are labelled exactly `Apply` and `Cancel`, and it carries this metadata, filled in from the files themselves just before asking (never typed from memory):
 
 ```json
-{"source": "db-apply", "migration": "<absolute path of the migration file>", "sha256": "<its sha256>", "project_ref": "<the linked project ref>"}
+{"source": "db-apply", "migration": "<absolute path of the migration or change file>", "sha256": "<its sha256>", "project_ref": "<the linked project ref>"}
 ```
 
-The sha256 is the first word `shasum -a 256 <file>` prints, and the project ref is the text of `supabase/.temp/project-ref` in the project directory. Never fill in `answers` yourself. `hooks/db-write-ask.sh` lets the push through on that answer while the migration is the newest file in `supabase/migrations` and unchanged, and the push goes to that project, in this session (`hooks/lib/db-apply-approval.py`); anything else is asked about, saying why.
+The sha256 is the first word `shasum -a 256 <file>` prints, and the project ref is the text of `supabase/.temp/project-ref` in the project directory. Never fill in `answers` yourself. `hooks/db-write-ask.sh` lets the push (path 1) or the `supabase db query --linked --yes -f <file>` run (path 3) through on that answer, in this session, while the file is unchanged and the run goes to that project; a push also needs the migration to be the newest file in `supabase/migrations` (`hooks/lib/db-apply-approval.py`). Run it as a command of its own, with only a `cd` to the project directory before it. Anything else is asked about, saying why.
 
 ## 4. Row counts, always
 

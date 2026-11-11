@@ -28,6 +28,11 @@ answered Apply by Dan. It covers a push when all of these hold, and each failure
     newest file in the folder (migrations are named by a leading version, so the newest sorts
     last). One written after it would be pushed with it, and is asked about.
 
+THE AD HOC WRITE (Dan, 2026-11-11, folded into #2763). The skill's path 3, `supabase db query
+--linked --yes -f <file>` running a write, is covered by the same Apply when "migration" names that
+file: same session, same project, the file unchanged. No newest-migration rule applies to it, since
+it runs that one file and nothing else.
+
 WHERE DAN'S ANSWER IS READ. From the session transcript Claude Code writes (transcript_path in the
 hook payload): the picker's input on the assistant entry holding its tool_use, and his choice in
 toolUseResult.answers on the user entry carrying its tool_result, keyed by the question's text.
@@ -38,8 +43,9 @@ transcript that cannot be read covers nothing.
 WHAT IT CANNOT SEE: which migrations the database has applied. An older migration still pending (one
 the database never got) would be pushed along with the newest one Dan applied.
 
-  covered(workdir, flags, session_id, transcript_path)  (True, the sentence naming the Apply) or
-                                                         (False, why no Apply covers the push)
+  covered(workdir, flags, session_id, transcript_path, file=None)
+      (True, the sentence naming the Apply) or (False, why no Apply covers the run); file is None
+      for a push, else the absolute path of the -f file a `db query` runs
 """
 import hashlib
 import json
@@ -51,6 +57,9 @@ APPLY = "Apply"
 # The push's own flags an Apply covers: a push of the linked project and nothing more. Any other
 # (--db-url, --local, --include-seed, --include-roles, --include-all, --password) is asked about.
 PUSH_FLAGS = {"--linked", "--yes", "--workdir", "--debug"}
+# The same for the skill's ad hoc write, `supabase db query --linked --yes -f <file>`: the file and
+# how the result is printed besides. --remote is --linked's name from CLI 3.0.0 on.
+QUERY_FLAGS = {"--linked", "--remote", "--yes", "--workdir", "--debug", "-f", "--file", "-o", "--output"}
 TRUE_WORDS = {"true", "1", "t"}
 REF = re.compile(r"[A-Za-z0-9_-]{1,64}")
 SHA = re.compile(r"[0-9a-f]{64}")
@@ -111,18 +120,22 @@ def applies(transcript_path, session_id):
     return found
 
 
-def _why_not(meta, ref, folder, newest):
-    """None when this Apply covers a push of folder's migrations to project ref, else why not."""
+def _why_not(meta, ref, folder, newest, file):
+    """None when this Apply covers the run, else why not: for a push (file None) of folder's
+    migrations, newest the last of them; for a `db query` write, of file. Both to project ref."""
     mig, sha, aref = meta.get("migration"), meta.get("sha256"), meta.get("project_ref")
     if not (isinstance(mig, str) and os.path.isabs(mig) and isinstance(sha, str) and SHA.fullmatch(sha.lower())
             and isinstance(aref, str) and aref):
-        return "Dan's Apply does not name a migration by its absolute path, its sha256 and a project ref"
+        return "Dan's Apply does not name a file by its absolute path, its sha256 and a project ref"
     name = os.path.basename(mig)
     if aref != ref:
-        return "Dan's Apply named project " + aref[:64] + ", and this pushes to project " + ref
-    if os.path.realpath(os.path.dirname(mig)) != os.path.realpath(folder):
+        return "Dan's Apply named project " + aref[:64] + ", and this goes to project " + ref
+    if file is not None:
+        if os.path.realpath(mig) != os.path.realpath(file):
+            return "Dan's Apply named " + mig[:300] + ", not " + file[:300]
+    elif os.path.realpath(os.path.dirname(mig)) != os.path.realpath(folder):
         return "Dan's Apply named " + mig[:300] + ", which is not in this project's supabase/migrations"
-    if name != newest:
+    elif name != newest:
         return ("Dan's Apply named " + name + ", and " + newest + " is a newer migration this push would "
                 "apply too")
     try:
@@ -134,16 +147,19 @@ def _why_not(meta, ref, folder, newest):
     return None
 
 
-def covered(workdir, flags, session_id, transcript_path):
-    """(True, the sentence naming the Apply) when Dan's Apply in this session covers a push run in
-    workdir with flags [(name, written with =, value)]; else (False, why not)."""
-    extra = sorted({name for name, _, _ in flags} - PUSH_FLAGS)
+def covered(workdir, flags, session_id, transcript_path, file=None):
+    """(True, the sentence naming the Apply) when Dan's Apply in this session covers a run in
+    workdir with flags [(name, written with =, value)]: a `db push` when file is None, else a
+    `db query` running the statements of file, an absolute path. Else (False, why not)."""
+    allowed, what = (PUSH_FLAGS, "a push") if file is None else (QUERY_FLAGS, "a run")
+    extra = sorted({name for name, _, _ in flags} - allowed)
     if extra:
-        return False, ("it carries " + ", ".join(extra) + ", and an Apply covers only a push of the "
-                       "linked project")
+        return False, ("it carries " + ", ".join(extra) + ", and an Apply covers only " + what
+                       + " to the linked project")
     for name, eq, value in flags:
         if name == "--linked" and eq and value.lower() not in TRUE_WORDS:
-            return False, "it carries " + name + "=" + value[:20] + ", and an Apply covers only a push of the linked project"
+            return False, ("it carries " + name + "=" + value[:20] + ", and an Apply covers only " + what
+                           + " to the linked project")
     if not isinstance(session_id, str) or not session_id:
         return False, "the call names no session, so no Apply in it could be found"
     if not isinstance(transcript_path, str) or not transcript_path:
@@ -156,13 +172,14 @@ def covered(workdir, flags, session_id, transcript_path):
                        + type(e).__name__ + ")")
     if not REF.fullmatch(ref):
         return False, "supabase/.temp/project-ref does not hold a project ref"
-    folder = os.path.join(workdir, "supabase", "migrations")
-    try:
-        names = sorted(n for n in os.listdir(folder) if n.endswith(".sql"))
-    except OSError as e:
-        return False, "its supabase/migrations folder could not be read (" + type(e).__name__ + ")"
-    if not names:
-        return False, "its supabase/migrations folder holds no migration"
+    folder, names = os.path.join(workdir, "supabase", "migrations"), [None]
+    if file is None:
+        try:
+            names = sorted(n for n in os.listdir(folder) if n.endswith(".sql"))
+        except OSError as e:
+            return False, "its supabase/migrations folder could not be read (" + type(e).__name__ + ")"
+        if not names:
+            return False, "its supabase/migrations folder holds no migration"
     try:
         given = applies(transcript_path, session_id)
     except OSError as e:
@@ -172,8 +189,9 @@ def covered(workdir, flags, session_id, transcript_path):
         return False, "Dan has answered no /db-apply Apply in this session"
     why = None
     for meta in reversed(given):
-        why = _why_not(meta, ref, folder, names[-1])
+        why = _why_not(meta, ref, folder, names[-1], file)
         if why is None:
-            return True, ("Dan answered Apply for migration " + names[-1] + " on project " + ref
+            what = "migration " + names[-1] if file is None else os.path.basename(file)
+            return True, ("Dan answered Apply for " + what + " on project " + ref
                           + " in this session, and the file is unchanged since")
     return False, why

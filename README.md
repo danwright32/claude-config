@@ -3820,8 +3820,10 @@ ref) in the same session. `hooks/lib/db-apply-approval.py` reads his answer from
 transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
 to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
 `--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
-is asked about, the question saying why no Apply covers it. What it cannot see: which migrations the
-database already has, so an older one never applied would go with the newest.
+is asked about, the question saying why no Apply covers it. The skill's ad hoc write, `supabase db
+query --linked --yes -f <file>` alone in its command, is let through the same way when the Apply named
+that file and project and the file is unchanged (Dan, 2026-11-11). What it cannot see: which
+migrations the database already has, so an older one never applied would go with the newest.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

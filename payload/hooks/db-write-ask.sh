@@ -52,7 +52,9 @@
 # already answered Apply for in the /db-apply skill's picker, in this session, for that migration
 # file unchanged and that project (lib/db-apply-approval.py says exactly when), in a command that
 # is that push and nothing else but cd. One decision, apply this migration, had been put to him up
-# to four times. Every other push is asked about, the question saying why no Apply covers it. In
+# to four times. The skill's ad hoc write, a `supabase db query -f <file>` that writes, is let
+# through the same way when his Apply named that file and project (Dan, 2026-11-11). Every other
+# push or write is asked about, the question saying why no Apply covers it. In
 # the same kind of command a `db query -f` file is read and judged by the one predicate, so a
 # read back from a file is not asked about either (lib/db-write-calls.py, "ONE SUPABASE RUN").
 #
@@ -293,23 +295,24 @@ if tool == "Bash":
             + "), so the call could not be classified as read only", "2536")
     if not found:
         sys.exit()
-    # A `supabase db push` that is the whole of its command is let through when the Apply Dan
-    # answered in the /db-apply picker in this session covers it, and asked about, saying why, when none does
-    # (claude-config#2763). A push is a MigrationPush only in a command that holds nothing else
-    # but cd, so letting it through lets nothing else through with it.
-    pushes = [f for f in found if calls.is_migration_push(f)]
+    # A `supabase db push`, or a `supabase db query` write from a -f file, that is the whole of its
+    # command is let through when the Apply Dan answered in the /db-apply picker in this session
+    # covers it, and asked about, saying why, when none does (claude-config#2763). A finding is
+    # Applicable only in a command that holds nothing else but cd, so letting it through lets
+    # nothing else through with it.
+    pushes = [f for f in found if calls.is_applicable(f)]
     if pushes:
         ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
         kept, released = [], []
         for f in found:
-            if not calls.is_migration_push(f):
+            if not calls.is_applicable(f):
                 kept.append(f)
                 continue
             if ap is None:
                 ok, why = False, ap_why
             else:
                 try:
-                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"))
+                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), f.file)
                 except Exception as e:
                     ok, why = False, "whether Dan applied it could not be checked (" + type(e).__name__ + ")"
             if ok:
@@ -317,7 +320,7 @@ if tool == "Bash":
             else:
                 kept.append((f[0] + ", and no /db-apply Apply covers it: " + why, f[1]))
         if not kept:
-            release("db-write-ask.sh lets this push through: " + "; ".join(released) + " (claude-config#2763)")
+            release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
         found = kept
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)

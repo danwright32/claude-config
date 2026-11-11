@@ -24,9 +24,10 @@ call without signing in.
   bash_findings(command, judge, sw, cwd) one Bash command; sw is lib/shell-words.py, loaded; cwd
                                          the session's directory, from the hook payload
   is_function_deploy(finding)            whether a finding is about a deploy and not a database
-  is_migration_push(finding)             whether a finding is a `supabase db push` an Apply can
-                                         cover (claude-config#2763); it carries .workdir and .flags
-                                         for lib/db-apply-approval.py
+  is_applicable(finding)                 whether a finding is one Dan's /db-apply Apply can cover
+                                         (claude-config#2763): a `db push`, or a `db query` write
+                                         from a -f file; it carries .workdir, .flags and .file for
+                                         lib/db-apply-approval.py
   cli_read_approval(command, cwd, judge, sw)
                                          (True, why) when a Bash command is one Supabase CLI read,
                                          for read-only-query-allow.sh; else (False, why not)
@@ -118,8 +119,9 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
     that run reads it, so its `db query -f` file IS read and each statement judged, the same as
     execute_sql; L64 is why a file is read in no other command. A file that cannot be read
     (missing, a folder, not a regular file, not UTF-8, too large, named relative to a --workdir)
-    is asked about. Such a `db push` is a MigrationPush, which db-write-ask.sh lets through when
-    Dan's /db-apply Apply covers it (lib/db-apply-approval.py). cli_read_approval() is what
+    is asked about. Such a `db push`, and such a `db query` write from a file it read, is
+    Applicable, which db-write-ask.sh lets through when Dan's /db-apply Apply covers it
+    (lib/db-apply-approval.py). cli_read_approval() is what
     read-only-query-allow.sh approves a CLI call by: a `db query` whose every statement judge()
     shows to be read only, or a `db push --dry-run`.
   - a client run through CARRIERS (docker exec, ssh, npx, a secret runner) is read from the
@@ -236,20 +238,21 @@ def is_function_deploy(finding):
     return isinstance(finding, FunctionDeploy)
 
 
-class MigrationPush(tuple):
-    """A finding, (why, None), about a `supabase db push` that is the whole of its command
-    (claude-config#2763). It carries the directory the push runs in (.workdir) and its flags
-    (.flags), so db-write-ask.sh can ask lib/db-apply-approval.py whether Dan's Apply covers it."""
+class Applicable(tuple):
+    """A finding about a Supabase CLI run that is the whole of its command (claude-config#2763),
+    which Dan's /db-apply Apply can cover: a `db push` (.file None) or a `db query` running the
+    statements of one -f file (.file its absolute path). It carries the directory the run works in
+    (.workdir) and its flags (.flags), so db-write-ask.sh can ask lib/db-apply-approval.py."""
 
-    def __new__(cls, finding, workdir, flags):
+    def __new__(cls, finding, workdir, flags, file=None):
         self = tuple.__new__(cls, finding)
-        self.workdir, self.flags = workdir, list(flags)
+        self.workdir, self.flags, self.file = workdir, list(flags), file
         return self
 
 
-def is_migration_push(finding):
-    """Whether one of bash_findings()'s findings is a push an Apply can cover."""
-    return isinstance(finding, MigrationPush)
+def is_applicable(finding):
+    """Whether one of bash_findings()'s findings is one an Apply can cover."""
+    return isinstance(finding, Applicable)
 
 
 def _open_to_all(several=False):
@@ -845,7 +848,11 @@ def _file_statements(name, files, here, flags, judge):
             out.append((name + " runs the statements in a file (" + f + "), which " + why
                         + ", so the call could not be classified as read only", None))
         else:
-            out.extend(_judged(name + " -f " + f, [text], judge))
+            # A write from a file Dan's Apply can cover, the skill's ad hoc write path (#2763).
+            workdir = _workdir(here, flags)
+            full = os.path.normpath(f if os.path.isabs(f) else os.path.join(here, f))
+            out.extend(x if workdir is None else Applicable(x, workdir, flags, full)
+                       for x in _judged(name + " -f " + f, [text], judge))
     return out
 
 
@@ -872,7 +879,7 @@ def _supabase_db(path, files, dry, judge, here=None, flags=()):
         finding = (name + " applies the pending migrations to the database", None)
         workdir = None if here is None else _workdir(here, flags)
         # Only a push that is the whole of its command can be covered by an Apply (#2763).
-        return [finding if workdir is None else MigrationPush(finding, workdir, flags)]
+        return [finding if workdir is None else Applicable(finding, workdir, flags)]
     if sub == "reset":
         return [(name + " drops the database and builds it again from the migrations", None)]
     if sub != "query":

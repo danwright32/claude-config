@@ -860,6 +860,31 @@ mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
 both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
 mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
 
+# The skill's ad hoc write path (`supabase db query --linked --yes -f change.sql`) is covered by
+# the same Apply, keyed the same way: the session, the file by path and sha256, and the project
+# (Dan, 2026-11-11, folded into #2763).
+CHANGE="$PROJ/change.sql"
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+CHANGE_T="$APPLY/change.jsonl"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+WRITE_Q='supabase db query --linked --yes -f change.sql'
+both "an ad hoc write from the file Dan applied, to his project, is let through" none allow "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+both "the same write named by its full path after a cd is let through" none allow "$(apply_payload "cd $PROJ && supabase db query --linked --yes -f $CHANGE" "$APPLY/elsewhere" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *change.sql*exampleprojectref000*) check "the release of a write names the file and the project" ok ;; *) check "the release of a write names the file and the project" "reason: ${reason:0:300}" ;; esac
+both "an ad hoc write with no Apply on record is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$NONE_T")"
+both "an ad hoc write after an Apply for the migration, not this file, is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$GOOD_T")"
+CHANGE_PROJ_T="$APPLY/change-other-project.jsonl"
+transcript "$CHANGE_PROJ_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" otherprojectref00000 Apply
+both "an ad hoc write to a different project than the Apply named is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_PROJ_T")"
+both "an ad hoc write from another session (lapsed) is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s2 "$CHANGE_T")"
+both "an ad hoc write with --db-url is asked about" none ask "$(apply_payload "supabase db query --yes --db-url postgresql://x -f change.sql" "$PROJ" s1 "$CHANGE_T")"
+both "an ad hoc write with a statement beside the file is asked about" none ask "$(apply_payload "$WRITE_Q 'delete from a'" "$PROJ" s1 "$CHANGE_T")"
+printf 'do $$ begin delete from a; end $$;\n' > "$CHANGE"
+both "an ad hoc write from a file edited since the Apply is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
+
 # A -f file that cannot be read is asked about, as is one the same command could write first.
 both "a -f file that does not exist is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/nosuch.sql" "$PROJ" s1 "$NONE_T")"
 mkdir -p "$APPLY/a-folder.sql"
