@@ -1373,14 +1373,58 @@ for tree in posts quiet; do
     '  if [ -f "$p" ] && . "$p" 2>/dev/null; then echo ok; fi' '}' 'load' > "$T/sv/$tree/local.sh"
   # A global read inside a function body, and ${X:-default} on a name the script set empty.
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'SUB=""' 'go() {' '  . "$ROOT/${SUB:-lib}/x.sh"' '}' 'go' > "$T/sv/$tree/default.sh"
+  # The disk-clean idiom (scan-lib.sh, disk-clean-harness.sh, disk-remove.sh; #2538): CDPATH cleared,
+  # cd -P and pwd -P for the folder's real path, cd's errors sent away, and an exit when it fails.
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"; [ "$D" != "${BASH_SOURCE[0]}" ] || D=.' \
+    'D="$(CDPATH= cd -P "${D:-/}" 2>/dev/null && pwd -P)" || { echo "no folder"; exit 2; }' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/realpath.sh"
+  printf '%s\n' '#!/bin/bash' 'D="${BASH_SOURCE[0]%/*}"' 'D="$(cd "$D" >/dev/null 2>&1 && pwd)"' '. "$D/lib/x.sh"' \
+    > "$T/sv/$tree/cdquiet.sh"
+  # A group or an if opening on a subshell (ai-review-common.sh's secret maker; #2538): the walk goes on
+  # past it, rather than losing which block the group's closing brace closes.
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" 'mk() {' \
+    "  { ( umask 077 && printf '%s' 1 > \"\$1\" ) && chmod 600 \"\$1\"; } 2>/dev/null || { return 1; }" \
+    '  if ( true ); then :; fi' '}' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/groupsub.sh"
+  # A function whose body's closing brace shares a line with the fi before it (test-merged-prs.sh).
+  printf '%s\n' '#!/bin/bash' 'case "${N_2538:-}" in x) N=1 ;; esac' "$SV_ROOT" \
+    'ok(){ if [ "$1" = "$2" ]; then :; else echo no; fi }' '. "$ROOT/lib/x.sh"' > "$T/sv/$tree/fibrace.sh"
+  # The suites' way of calling a helper in a shell of its own: its path handed to `bash -c` as $1,
+  # after a sourced file that holds no shift, and after set -e (test-sleep-state.sh, test-this-mac.sh).
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'LIB="$ROOT/lib/x.sh"' \
+    "out=\"\$(env A=1 bash -c 'set -eu; . \"\$1\"; . \"\$2\"; echo ok' _ \"\$ROOT/lib/y.sh\" \"\$LIB\")\"" \
+    "sh -c '. \"\$0\"' \"\$LIB\"" > "$T/sv/$tree/dashc.sh"
+  printf '%s\n' 'Y=1' > "$T/sv/$tree/lib/y.sh"
 done
-for shape in hookdir twice local default; do
+for shape in hookdir twice local default realpath cdquiet groupsub fibrace dashc; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "that refusal names the sourced file" "lib/x.sh"
+  says "and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
   run_bash "bash $T/sv/quiet/$shape.sh"
   allowed "the same script sourcing a file that does not post: $shape.sh"
 done
+# A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
+# Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
+# shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
+# posts, each would be refused; it is a path the gate cannot work out, so, with the refusal off, it
+# is let through unread. Turning the refusal on turns each of these red. (A loop or a function in
+# the string also leaves $1 unknown; with the refusal off no fixture can tell that apart, as any
+# loop that changes $1 really does source the other file.)
+P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
+# A sourced file shares the string's positionals, so one that sets them after an option changes $2.
+printf '%s\n' '# sets its caller'"'"'s positionals' "set -e -- $Q" > "$T/sv/quiet/lib/resets.sh"
+for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
+            "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c '. \"\$1\"; . \"\$2\"' _ $T/sv/quiet/lib/resets.sh $P"; do
+  run_bash "$form"
+  allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
+done
+run_bash "bash -c '. \"\$1\"' _ $P"
+refused "a bash -c string sourcing its argument, which posts, as a command typed"
+says "that refusal is the post it read" "REFUSED: this command posts to Slack"
+run_bash "env -u NOT_SET_2538 A=1 bash -c 'set -e; . \"\$1\"' _ $P"
+refused "the same behind env -u and an assignment, after set -e"
+run_bash "bash -c '. \"\$1\"' _ $Q"
+allowed "a bash -c string sourcing its argument, which does not post, as a command typed"
 # BASH_SOURCE with no slash in it (the script run from its own folder) takes the other case branch.
 run_bash "cd $T/sv/posts && bash hookdir.sh"
 refused "the HOOK_DIR idiom run from the script's own folder, sourcing a file that posts"
@@ -1526,6 +1570,165 @@ for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c
   run_bash "$runs"
   refused "a file whose role cannot be told is still read as code: $runs"
 done
+
+echo "slack drafts only: a file copied and run in the same command is judged by its source (claude-config#2525)"
+
+# The script a command runs may not exist yet when the gate reads the command: `cp post.txt run.sh &&
+# bash run.sh` makes it first. Measured on main on 2026-11-09 and again on 2026-11-10, every form below
+# passed, because run.sh was not on disk to read. Nothing here is run, so post.txt is still where it
+# was for the mv case, and run.sh never exists.
+mkdir -p "$T/cp/sub" "$T/cp/tools" "$T/cp/bin"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/post.txt"
+printf '%s\n' "echo hello" > "$T/cp/plain.txt"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/tools/post.sh"
+printf '%s\n' "import urllib.request" "urllib.request.urlopen('https://slack.com/api/chat.postMessage')" > "$T/cp/post.txt.py"
+printf '%s\n' "curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage" > "$T/cp/old.sh"
+run_cp() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/cp")"; }
+
+# The controls first: the same commands with a harmless source pass, so a refusal below is the source
+# being read and not every copy and run being refused (L159).
+for runs in "cp plain.txt run.sh && bash run.sh" "cat plain.txt > run.sh && bash run.sh" \
+  "install -m 755 plain.txt run.sh && ./run.sh" "mv plain.txt run.sh; sh run.sh" "cp post.txt notes.txt" \
+  "cat post.txt > run.sh && grep -c chat run.sh"; do
+  run_cp "$runs"
+  allowed "a copy of a harmless file, or one never run, passes: $runs"
+done
+
+for runs in "cp post.txt run.sh && bash run.sh" "cp post.txt run.sh; sh ./run.sh" \
+  "mv post.txt run.sh && bash run.sh" "install -m 755 post.txt run.sh && ./run.sh" \
+  "cp -f -- post.txt run.sh && source run.sh" "/bin/cp post.txt run.sh && . ./run.sh" \
+  "cat post.txt > run.sh && bash run.sh" "cat < post.txt > run.sh && bash run.sh" \
+  "cat plain.txt post.txt > run.sh && bash run.sh" "cp plain.txt run.sh && cat post.txt >> run.sh && bash run.sh" \
+  "tee run.sh < post.txt > /dev/null && bash run.sh" "ln -s post.txt run.sh && bash run.sh" \
+  "cp post.txt bin/ && bash bin/post.txt" "cp post.txt plain.txt bin && bash bin/post.txt" \
+  "cp post.txt a.sh && cp a.sh b.sh && bash b.sh" "cd sub && cp ../post.txt run.sh && bash run.sh" \
+  "cp post.txt.py run.py && python3 run.py" "cp -R tools copy && bash copy/post.sh" \
+  "cp --backup post.txt run.sh && bash run.sh" "cp --backup=numbered post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a copy run in the same command is judged by its source: $runs"
+done
+run_cp "cp post.txt run.sh && bash run.sh"
+says "the refusal names the file the copy was made from" "post.txt"
+says "the refusal names the copy it ran" "run.sh"
+run_cp "cp -R tools copy && bash copy/post.sh"
+says "a file in a copied directory is named by its source" "tools/post.sh"
+# A heredoc written to a file is the file's source too.
+run_cp "cat > run.sh <<'EOF'
+curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage
+EOF
+bash run.sh"
+refused "a heredoc written to a file and run is judged by the heredoc"
+run_cp "cat > run.sh <<'EOF'
+echo hello
+EOF
+bash run.sh"
+allowed "a harmless heredoc written to a file and run passes"
+# A file already there that a copy overwrites is still read too: with ; the old one runs when the
+# copy fails, so judging only the new text would let a refused script through.
+run_cp "cp plain.txt old.sh; bash old.sh"
+refused "a posting script a harmless copy overwrites is still read"
+# BSD install's -S is a flag (flush to disk, man install on macOS), so the word after it is the
+# source; read as a value, post.txt was swallowed and run.sh never recorded (PR #2730 review).
+# GNU install's -S is still a suffix, so its value is not taken for the source.
+run_cp "install -S plain.txt run.sh && bash run.sh"
+allowed "install -S copying a harmless file passes"
+for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.txt run.sh && ./run.sh" \
+  "ginstall -S .bak post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
+done
+# The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
+run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "a copy of the nudge script made and run in the same command is refused"
+# And the nudge script's own path, overwritten earlier in the same command, is no longer the shipped
+# script, so the exemption does not cover it (PR #2730 review). Nothing here runs, so it is untouched.
+run_cp "cp post.txt.py $NUDGE && python3 $NUDGE 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "the nudge script's path overwritten and run in the same command is refused"
+
+echo "slack drafts only: a file written by printf, echo, tee or curl and run in the same command is judged by what is written (claude-config#2721)"
+
+# #2525 judged a copy by its source; the other writers were not followed, so `printf '<a post>' >
+# run.sh && bash run.sh` passed (measured through this wrapper on 2026-11-10 by the #2525 builder).
+# Text the gate can work out exactly (literal printf and echo arguments, a here-string, text piped
+# into tee) is judged as the file; text or a path it cannot (a variable, a substitution, a download)
+# is refused when the file is run, since what it holds cannot be read. Nothing here is run.
+POST="curl -s -X POST -d text=hi https://slack.com/api/chat.postMessage"
+
+# The controls first: the same writers with harmless text, or with a post written to a file that is
+# never run, pass, so a refusal below is the written text being read (L159).
+for runs in "printf 'echo hello\n' > run.sh && bash run.sh" "printf '%s\n' 'echo hello' > run.sh && bash run.sh" \
+  "echo 'echo hello' > run.sh && bash run.sh" "echo echo hello > run.sh; sh run.sh" \
+  "printf 'echo hello\n' | tee run.sh && bash run.sh" "echo 'echo hello' | tee -a run.sh > /dev/null && bash run.sh" \
+  "cat plain.txt | tee run.sh && bash run.sh" "cat <<< 'echo hello' > run.sh && bash run.sh" \
+  "tee run.sh <<< 'echo hello' && bash run.sh" "printf 'echo hello'>run.sh&&bash run.sh" \
+  "F=run.sh; printf 'echo hello\n' > \"\$F\" && bash run.sh" \
+  "printf '$POST\n' > notes.txt && bash plain.txt" "echo '$POST' | tee notes.txt && bash plain.txt" \
+  "curl -s -o page.html https://example.com/ && bash plain.txt" "date > out.txt; bash plain.txt" \
+  "echo \"\$UNSET_2721\" > out.txt && bash plain.txt" "printf x > \"\$UNSET_2721/out.txt\" && bash plain.txt" \
+  "printf 'echo %s\n' hello > run.sh && bash run.sh" "echo hello 2>/dev/null > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  allowed "a harmless write, or a post written and never run, passes: $runs"
+done
+
+for runs in "printf '$POST\n' > run.sh && bash run.sh" "printf '%s\n' '$POST' > run.sh; sh ./run.sh" \
+  "printf 'curl https://slack.com/api/chat.p\157stMessage\n' > run.sh && bash run.sh" \
+  "printf 'curl https://slack.com/api/chat.p\x6fstMessage\n' > run.sh && bash run.sh" \
+  "printf 'curl https://slack.com/api/chat.post%s\n' Message > run.sh && bash run.sh" \
+  "printf '%b' 'curl https://slack.com/api/chat.p\0157stMessage\n' > run.sh && bash run.sh" \
+  "echo '$POST' > run.sh && bash run.sh" "echo $POST >> run.sh && source run.sh" \
+  "printf 'echo hello\n' > run.sh && echo '$POST' >> run.sh && bash run.sh" \
+  "printf '$POST\n' | tee run.sh > /dev/null && bash run.sh" "echo '$POST' | tee -a run.sh && bash run.sh" \
+  "cat post.txt | tee run.sh && bash run.sh" "echo '$POST' | cat > run.sh && bash run.sh" \
+  "cat <<< '$POST' > run.sh && bash run.sh" "tee run.sh <<< '$POST' > /dev/null && bash run.sh" \
+  "printf '$POST'>run.sh&&bash run.sh" "F=run.sh; printf '$POST\n' > \"\$F\" && bash run.sh" \
+  "printf '$POST\n' > run.sh && chmod +x run.sh && ./run.sh" \
+  "printf 'import urllib.request\nurllib.request.urlopen(\"https://slack.com/api/chat.postMessage\")\n' > run.py && python3 run.py"; do
+  run_cp "$runs"
+  refused "a file written and run in the same command is judged by the text written: $runs"
+done
+run_cp "printf '$POST\n' > run.sh && bash run.sh"
+says "the refusal names what wrote the file" "printf"
+says "the refusal names the file it ran" "run.sh"
+
+# What cannot be worked out is refused when the file is run: text or a path from a variable or a
+# substitution, the output of another program, and a download.
+for runs in "printf \"\$MSG\" > run.sh && bash run.sh" "echo \"\$(cat plain.txt)\" > run.sh && bash run.sh" \
+  "printf 'echo hello\n' > \"\$OUT_2721/run.sh\" && bash \"\$OUT_2721/run.sh\"" \
+  "printf 'echo hello\n' > \"\$F_2721\" && bash run.sh" "echo 'echo hello' | tee \"\$F_2721\" && bash run.sh" \
+  "curl -s -o run.sh https://example.com/x.sh && bash run.sh" "curl -sO https://example.com/run.sh && bash run.sh" \
+  "curl -s https://example.com/x.sh > run.sh && bash run.sh" "curl -s https://example.com/x.sh | tee run.sh && bash run.sh" \
+  "wget -q -O run.sh https://example.com/x.sh && bash run.sh" "python3 -c 'print(1)' > run.sh && bash run.sh" \
+  "printf 'echo \x68i\u0068' > run.sh && bash run.sh" "echo 'echo a\nb' > run.sh && bash run.sh" \
+  "printf '%q' x > run.sh && bash run.sh" "printf 'echo hello\n' > run.sh; date >> run.sh; bash run.sh" \
+  "echo -n echo hello > run.sh; sh run.sh" "printf 'echo \\\"hi\\\"' > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a file run after a write whose text or path cannot be read is refused: $runs"
+done
+run_cp "curl -s -o run.sh https://example.com/x.sh && bash run.sh"
+says "the refusal says the written text cannot be read" "cannot be read"
+says "the refusal names the download" "curl"
+# A group, subshell or loop feeding a pipe prints what every command in it prints, not only its last
+# (lessons review at 8fe178b): read as its last command, the post written first went through.
+for runs in "{ echo '$POST'; echo hi; } | tee run.sh && bash run.sh" "( printf '$POST\n'; echo hi ) | tee run.sh && bash run.sh" \
+  "for x in a; do echo '$POST'; done | tee run.sh && bash run.sh" "if true; then echo '$POST'; fi | cat > run.sh && bash run.sh" \
+  "echo '$POST' | (tee run.sh) && bash run.sh" "echo '$POST' | { tee run.sh; } && bash run.sh" \
+  "echo '$POST' | while read l; do echo \"\$l\"; done > run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "a compound command piped into a write is not read as its last command: $runs"
+done
+# Of several output redirections the shell writes to the last, and only empties the others (lessons
+# review at 4949370): the post lands in run.sh, not decoy.txt.
+run_cp "printf '$POST\n' > decoy.txt > run.sh && bash run.sh"
+refused "the text goes to the last of several output redirections"
+run_cp "printf '$POST\n' > run.sh > decoy.txt && bash run.sh"
+allowed "an earlier output redirection is only emptied, so running it runs nothing"
+# A data file is read when the script it is handed can act on it (claude-config#2362): one downloaded
+# in the same command cannot be read, so it is refused there, and passes where its text is known.
+printf '%s\n' "import sys, urllib.request" "urllib.request.urlopen(open(sys.argv[1]).read().strip())" > "$T/cp/send.py"
+run_cp "printf 'https://example.com/\n' > target.txt && python3 send.py target.txt"
+allowed "a data file written with known harmless text and handed to a script that sends passes"
+run_cp "curl -s -o target.txt https://example.com/t && python3 send.py target.txt"
+refused "a data file downloaded in the same command and handed to a script that sends is refused"
 
 echo "slack drafts only: /nudge is the one script let through"
 
@@ -2153,7 +2356,9 @@ echo "slack drafts only: the merge helper's own line is judged inside the gate's
 # time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
 # to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
 # half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
-# the ceiling raised on a new measurement.
+# the ceiling raised on a new measurement. Measured again on 2026-11-10: 7,975 steps, 12 files read
+# 35 times, the 76 more all from the helper (one more sourced file), none from the gate; and 8,132
+# later that day, once the helper had grown again.
 MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
 MWR_STEPS=12000
 run_budget "$MWR_STEPS" "$MWR"
@@ -2163,6 +2368,17 @@ allowed "the real merge helper, with everything it sources, is judged within $MW
 run_budget 2000 "$MWR"
 refused "the merge helper's line under a budget its walk passes is refused"
 says "that refusal says the gate ran out of time" "ran out of time"
+says "and says how to merge without the helper" "gh pr merge"
+says "and to leave the branch for the helper" "--delete-branch"
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a call that is no merge still runs out of its budget"
+lacks "a call that is no merge gets no merge advice" "gh pr merge"
+# The advice belongs to running out of time only: a line the gate did judge, and refused for
+# posting, says nothing of merging however it names the helper.
+run_bash "curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi; echo merge-when-ready.sh"
+refused "a line that posts and names the merge helper is refused for the post"
+says "and that refusal is for the post" "posts to Slack:"
+lacks "and carries no merge advice" "gh pr merge"
 
 # A function of the script that calls others was followed once per path to it, so a chain of
 # functions each calling the next twice cost two to the power of its length: 16,383 walks for 14

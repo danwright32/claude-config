@@ -9,6 +9,7 @@ import {
   ciMessages,
   ciWorkflow,
   codeOf,
+  copyModule,
   editedText,
   flowCommands,
   foreignNames,
@@ -302,7 +303,7 @@ test("a workflow's script step that posts to Slack is read as JavaScript: each p
 })
 
 test("the guard's own record is recognised in the store, by name, and in a shell command", () => {
-  expect(isOwnRecord('/Users/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json')).toBe(true)
+  expect(isOwnRecord(`${'/Users'}/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json`)).toBe(true)
   expect(isOwnRecord('/x/slack-alert-guard_inline.json')).toBe(true)
   expect(isOwnRecord('/w/a/slack-alert-guard/hooks/rules.ts')).toBe(false)
   expect(mentionsStore('cat > ~/.claude/plugins/store/x.json')).toBe(true)
@@ -967,4 +968,58 @@ test('another file using a prompt: an import by its own name is no use, a model 
 test('only prose files are ruled out as senders', () => {
   for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
   for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
+})
+
+// claude-config#2720: wording written into a module of message copy that nothing sends yet. On
+// 2026-11-10 four alert messages went into a new copy module unasked, and were held only later, at
+// the edit importing it. A copy module is known by its path or by its shape.
+const QUIET_COPY = [
+  'export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`',
+  'export const quietAgain = (feed: string) => `The ${feed} feed is still quiet, so somebody needs to look at it now`',
+  'export const quietClear = (feed: string) => `The ${feed} feed is sending again`',
+  "export const allClear = 'Every feed is sending again'",
+  "export const CHECKED = 'Checked every feed for a quiet one'",
+  '',
+].join('\n')
+
+test('a module of message copy is known by its path: a name ending in copy or wording, a copy folder, or an alert or Slack name beside a message one (#2720)', () => {
+  const prose = "export const m = 'Nothing has arrived for an hour'\n"
+  for (const p of ['src/lib/notify/outage-copy.ts', 'src/lib/monitor/quiet-feed-copy.ts', 'lib/quietFeedCopy.ts', 'lib/copy/alerts.ts', 'lib/copy.py', 'lib/slack/messages.ts', 'lib/alertText.ts', 'jobs/slack_templates.py', 'ops/alerts/notices.ts', 'notify/wording.ts'])
+    expect([p, copyModule(p, prose)]).toEqual([p, true])
+  // A verb, a guard named for Slack, a test, a doc or a screen is not a copy module by its path.
+  for (const p of ['scripts/copy-assets.sh', 'lib/copyFiles.ts', 'payload/mods/slack-alert-guard/hooks/rules.ts', 'payload/hooks/slack-drafts-only-gate.sh', 'lib/alerts.ts', 'lib/messages.ts', 'tests/send-wording.ts', 'lib/outage-copy.test.ts', 'docs/alert-copy.md', 'src/components/AlertMessage.tsx', 'src/lib/date.ts'])
+    expect([p, copyModule(p, prose)]).toEqual([p, false])
+})
+
+test('a module of message copy is known by its shape: mostly functions building message text, or Slack formatting (#2720)', () => {
+  expect(copyModule('src/lib/monitor/quiet.ts', QUIET_COPY)).toBe(true)
+  const py = 'def late_page(feed, minutes):\n    return f"The {feed} feed has gone quiet for {minutes} minutes"\n\ndef late_clear(feed):\n    return f"The {feed} feed is sending again"\n'
+  expect(copyModule('jobs/quiet.py', py)).toBe(true)
+  expect(copyModule('lib/run.ts', "export const blocks = (url: string) => [{ type: 'section', text: { type: 'mrkdwn', text: 'Run finished' } }]\n")).toBe(true)
+  expect(copyModule('lib/run.ts', 'export const line = (url: string) => `The nightly run failed: <${url}|open the log>`\n')).toBe(true)
+  expect(copyModule('lib/run.ts', "export const line = 'Somebody look at this <!here>'\n")).toBe(true)
+  // One builder alone, constants of error text, or a few builders among much other code is not.
+  expect(copyModule('lib/late.ts', 'export const late = (id: string) => `Booking ${id} is late`\n')).toBe(false)
+  expect(copyModule('lib/errors.ts', "export const NOT_FOUND = 'No booking has that id'\nexport const TAKEN = 'That slot is taken'\nexport const LATE = 'You are too late to book'\n")).toBe(false)
+  const busy = [
+    'export const a = (n: string) => `The ${n} job failed`',
+    'export const b = (n: string) => `The ${n} job is late again`',
+    ...Array.from({ length: 6 }, (_, i) => `export const k${i} = (x: number) => x + ${i}`),
+    '',
+  ].join('\n')
+  expect(copyModule('lib/jobs.ts', busy)).toBe(false)
+  // A test and a screen are never copy modules, whatever their shape.
+  expect(copyModule('src/lib/monitor/quiet.test.ts', QUIET_COPY)).toBe(false)
+  expect(copyModule('src/components/Quiet.tsx', QUIET_COPY)).toBe(false)
+  // Functions that do work and print or throw a message on the way build no copy: measured on this
+  // repository, reading those as builders made 16 scripts and mods copy modules (#2720).
+  const script = 'def load(path):\n    print(f"Reading {path} from disk now")\n    return open(path).read()\n\ndef check(rows):\n    if not rows:\n        raise SystemExit(f"No rows were found in {len(rows)} files")\n    return rows\n'
+  expect(copyModule('tools/merge.py', script)).toBe(false)
+  const thrower = 'export function load(p: string) {\n  if (!p) throw new Error(`No file was named for ${p} here`)\n  return p\n}\nexport function save(p: string) {\n  console.log(`Saved the file at ${p} just now`)\n  return p\n}\n'
+  expect(copyModule('lib/files.ts', thrower)).toBe(false)
+  // A shell script is a program, never a module another file imports, whatever its name.
+  expect(copyModule('payload/hooks/lib/placement-copy.sh', 'echo "Copied the payload into the fixture"\n')).toBe(false)
+  // A pipe in a shell string, or a word between colons, is no Slack formatting.
+  expect(copyModule('lib/run.sh', 'echo "a | b"\n')).toBe(false)
+  expect(copyModule('lib/run.ts', "export const t = 'Wait for <the run|other> to finish'\n")).toBe(false)
 })

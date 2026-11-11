@@ -421,6 +421,98 @@ grep -q "unmanaged-skills.sh" <<< "$out_badlib" \
   || check "#415 a list file that defines nothing is reported as unreadable too" "out=$out_badlib"
 
 # ---------------------------------------------------------------------------
+# Every tree the sync mirrors is read, and the list of them is the sync's own
+# (claude-config#2754). The guard used to keep its own list, hooks agents commands
+# skills, while claude-sync also mirrors audits/ and mods/, so a home path written
+# in a mod reached the other Mac and this public repository with nothing reading
+# it. The list now comes from lib/synced-trees.sh, which test-synced-trees.sh holds
+# to claude-sync's MIRROR_DIRS. Asked per tree from that same list, so a tree added
+# there and missed here fails below, and asked of a tree the sync does NOT mirror,
+# so the guard reading more than the sync carries fails too: the two lists must be
+# the same set, not merely overlap.
+# ---------------------------------------------------------------------------
+TREES_LIB="$DIR/lib/synced-trees.sh"
+TREES="$(bash -c '. "$1" && printf "%s\n" "${SYNCED_TREES[@]}"' _ "$TREES_LIB" 2>/dev/null)"
+[ -n "$TREES" ] \
+  && check "#2754 the sync's list of mirrored trees can be read" ok \
+  || check "#2754 the sync's list of mirrored trees can be read" "lib=$TREES_LIB"
+grep -qx mods <<< "$TREES" && grep -qx audits <<< "$TREES" \
+  && check "#2754 that list names mods and audits" ok \
+  || check "#2754 that list names mods and audits" "trees=$TREES"
+
+MODTREE="$(tree mod)"
+mkdir -p "$MODTREE/mods/demo/hooks"
+printf 'const p = "%s/.claude/mods/demo/state.json"\n' "$BADHOME" > "$MODTREE/mods/demo/hooks/register.ts"
+out_mod="$(bash "$CHECK" "$MODTREE" 2>&1)"
+code_mod=$?
+[ "$code_mod" -eq 1 ] \
+  && check "#2754 a home path in a mod is refused" ok \
+  || check "#2754 a home path in a mod is refused" "exit=$code_mod out=$out_mod"
+grep -q "mods/demo/hooks/register.ts:" <<< "$out_mod" \
+  && check "#2754 and the refusal names the mod file" ok \
+  || check "#2754 and the refusal names the mod file" "out=$out_mod"
+
+AUDTREE="$(tree audit)"
+mkdir -p "$AUDTREE/audits/2026-01-01-demo"
+printf 'evidence copied from %s/.claude/state/x.json\n' "$BADHOME" > "$AUDTREE/audits/2026-01-01-demo/notes.md"
+out_aud="$(bash "$CHECK" "$AUDTREE" 2>&1)"
+code_aud=$?
+[ "$code_aud" -eq 1 ] \
+  && check "#2754 a home path in an audit is refused" ok \
+  || check "#2754 a home path in an audit is refused" "exit=$code_aud out=$out_aud"
+grep -q "audits/2026-01-01-demo/notes.md:" <<< "$out_aud" \
+  && check "#2754 and the refusal names the audit file" ok \
+  || check "#2754 and the refusal names the audit file" "out=$out_aud"
+
+# One planted path per tree the sync mirrors, each in a tree holding nothing else, so a tree the
+# guard does not read is a pass here and a failure of this check.
+unread_trees=""
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  one="$TMPROOT/each-$t"; mkdir -p "$one/$t/demo"
+  printf 'bash %s/.claude/x.sh\n' "$BADHOME" > "$one/$t/demo/file.md"
+  out_one="$(bash "$CHECK" "$one" 2>&1)"; code_one=$?
+  { [ "$code_one" -eq 1 ] && grep -q "$t/demo/file.md:" <<< "$out_one"; } || unread_trees="$unread_trees $t(exit=$code_one)"
+done <<< "$TREES"
+[ -n "$TREES" ] && [ -z "$unread_trees" ] \
+  && check "#2754 every tree the sync mirrors is read by the guard" ok \
+  || check "#2754 every tree the sync mirrors is read by the guard" "not read:${unread_trees:- (no list)}"
+
+# And the other direction: a tree the sync never mirrors is not the guard's to judge. state/ holds
+# each Mac's session notes and never leaves it, so a home path there must not fail the scan.
+NOTSYNC="$(tree notsynced)"
+mkdir -p "$NOTSYNC/state/notes"
+printf 'cd %s/work\n' "$BADHOME" > "$NOTSYNC/state/notes/handoff.md"
+out_ns="$(bash "$CHECK" "$NOTSYNC" 2>&1)"
+code_ns=$?
+[ "$code_ns" -eq 0 ] \
+  && check "#2754 a tree the sync does not mirror is not read" ok \
+  || check "#2754 a tree the sync does not mirror is not read" "exit=$code_ns out=$out_ns"
+
+# The guard keeps no list of its own beside the sync's: a second copy is how mods and audits went
+# unread for as long as they did (L41, L96).
+grep -nE '^[[:space:]]*SYNCED_DIRS=\(' "$CHECK" >/dev/null \
+  && check "#2754 the guard keeps no tree list of its own" "$(grep -nE '^[[:space:]]*SYNCED_DIRS=\(' "$CHECK")" \
+  || check "#2754 the guard keeps no tree list of its own" ok
+
+# With no list to read, the guard leaves NOTHING out and says so, the same direction it takes for
+# the skills list above: a mod and a folder it has never heard of are both reported (L42, L98).
+NOTREES="$TMPROOT/notrees-hooks"; mkdir -p "$NOTREES"
+cp "$CHECK" "$NOTREES/check-home-paths.sh"
+WIDE="$(tree wide)"
+mkdir -p "$WIDE/mods/demo" "$WIDE/brand-new-tree"
+printf 'x %s/.claude/a\n' "$BADHOME" > "$WIDE/mods/demo/a.ts"
+printf 'y %s/.claude/b\n' "$BADHOME" > "$WIDE/brand-new-tree/b.md"
+out_wide="$(bash "$NOTREES/check-home-paths.sh" "$WIDE" 2>&1)"
+code_wide=$?
+[ "$code_wide" -eq 1 ] && grep -q "mods/demo/a.ts:" <<< "$out_wide" && grep -q "brand-new-tree/b.md:" <<< "$out_wide" \
+  && check "#2754 with no tree list, every folder is read" ok \
+  || check "#2754 with no tree list, every folder is read" "exit=$code_wide out=$out_wide"
+grep -q "synced-trees.sh" <<< "$out_wide" \
+  && check "#2754 and the run names the list it could not read" ok \
+  || check "#2754 and the run names the list it could not read" "out=$out_wide"
+
+# ---------------------------------------------------------------------------
 # The real tree this file lives in, which is the whole point. It runs LAST, so
 # by the time it reports clean the scanner has been watched failing four ways.
 # ---------------------------------------------------------------------------
@@ -449,7 +541,10 @@ if [ -n "$CO" ]; then
   [ "$code_co" -eq 0 ] \
     && check "#1734 the checkout's synced files name no machine's home, this one's included" ok \
     || check "#1734 the checkout's synced files name no machine's home, this one's included" "exit=$code_co out=$out_co"
-  if co_files="$(bash "$DIR/lib/repo-files.sh" "$CO" payload/hooks payload/agents payload/commands payload/skills ':(glob)payload/*.md')"; then
+  # The folders are the sync's own list (#2754), so a tree added to it is counted here too.
+  co_specs=()
+  while IFS= read -r t; do [ -n "$t" ] && co_specs+=("payload/$t"); done <<< "$TREES"
+  if [ "${#co_specs[@]}" -gt 0 ] && co_files="$(bash "$DIR/lib/repo-files.sh" "$CO" "${co_specs[@]}" ':(glob)payload/*.md')"; then
     co_n="$(printf '%s\n' "$co_files" | grep -c . || true)"
     read_n="$(sed -n 's/^check-home-paths: \([0-9][0-9]*\) file(s) under .*/\1/p' <<< "$out_co")"
     [ "$co_n" -gt 0 ] && [ -n "$read_n" ] && [ "$read_n" -ge "$co_n" ] \

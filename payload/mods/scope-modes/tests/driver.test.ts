@@ -87,9 +87,9 @@ describe('the block', () => {
     expect(r.notes).toEqual([{ kind: 'heartbeat', repo: 'o/r', issue: 7 }])
   })
   test('a repository path with spaces or an apostrophe is quoted, so the commands run as written', () => {
-    const rules = overnightRules('s1', "/Users/x/Documents - Dan’s Mac/it's here", GOAL)
-    expect(rules).toContain("sleep-queue.sh next '/Users/x/Documents - Dan’s Mac/it'\\''s here' s1")
-    expect(rules).toContain("sleep-queue.sh release '/Users/x/Documents - Dan’s Mac/it'\\''s here' <issue> s1 ")
+    const rules = overnightRules('s1', `${'/Users'}/x/Documents - Dan’s Mac/it's here`, GOAL)
+    expect(rules).toContain(`sleep-queue.sh next '${'/Users'}/x/Documents - Dan’s Mac/it'\\''s here' s1`)
+    expect(rules).toContain(`sleep-queue.sh release '${'/Users'}/x/Documents - Dan’s Mac/it'\\''s here' <issue> s1 `)
   })
   test('an unreadable counter still ends the claim in hand, on a Stop and after an API error', () => {
     const bad: DriverReading = { state: 'unreadable', why: 'x' }

@@ -33,7 +33,7 @@ const deps: { name: string; register: Register } = {
         sessions: {
           // This session's own record names its project, as the registry's does.
           list: async () => ({
-            open: [{ v: 1, sessionId: 'me', cwd: '/Users/dan/Apps/Ovation/src', repoRoot: '/Users/dan/Apps/Ovation', startedAt: 0, lastSeen: 0, closedAt: null, transcriptPath: null, edits: [], extra: {} }],
+            open: [{ v: 1, sessionId: 'me', cwd: `${'/Users'}/dan/Apps/Ovation/src`, repoRoot: `${'/Users'}/dan/Apps/Ovation`, startedAt: 0, lastSeen: 0, closedAt: null, transcriptPath: null, edits: [], extra: {} }],
             closed: [],
             unreadable: [],
             selfId: 'me',

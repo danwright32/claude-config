@@ -3872,8 +3872,9 @@ CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "
 check "#2004 the pull writes the synced folder inside the real skill" "[ -f '$SEH/skills/real-skill/synced/kept.md' ]"
 check "#2004 and never the .trash folder inside it, as the check judged" "[ ! -e '$SEH/skills/real-skill/.trash' ]"
 # THE FAILURE PATH. The filter's empty answer means "left out", so a filter that FAILS (the list
-# unreadable, so the tool's stand in runs and exits) must answer "not applied", or a broken reader
-# would read every skills path as excluded and wave it through. Called directly: every run that
+# unreadable, so the tool's stand in runs and exits) must never answer "applied", or a broken reader
+# would read every skills path as excluded and wave it through. Since #2682 it answers "could not
+# compare" (2), which every caller that acts treats as it treated "not applied" (1). Called directly: every run that
 # reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
 SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
 sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
@@ -3886,8 +3887,8 @@ se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/no
 dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
 check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
 check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
-check "#2004 with the list unreadable, it answers not applied rather than left out, and says why" \
-  "[ \"\$se_rc_bad\" -eq 1 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
+check "#2004 with the list unreadable, it answers could not compare rather than left out, and says why" \
+  "[ \"\$se_rc_bad\" -eq 2 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
 
 section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
 # On 2026-10-12 a session backed up the tracker's token file as
@@ -24921,6 +24922,229 @@ check "#2673 a removed file whose removed version could not be read is named" \
 check "#2673 and the rest are still named as behind" \
   "line_has \"\$out_mc3\" 'mods behind the shared repo: 5 file' 'kit-mod' 'path-mod'"
 
+section "== status names config it could not compare, rather than saying the shared repo changed it (claude-config#2682) =="
+# Whether this Mac has applied a path the repo changed was a yes or a no, so a step that failed while
+# asking (putting this Mac's home path into the repo's settings.hooks.json, the jq comparing its
+# hooks block, the copy of a tokenized file as this Mac should hold it) answered no, and status
+# listed the file as one "the shared repo changed and this Mac has not applied", which nothing had
+# measured (L11). It now says it could not compare the file and which step failed, in the same
+# words the mods comparison uses (#2673). The failures are made by a perl standing in front of the
+# real one on PATH, failing only the home path swap of the content it is told to, so the script
+# under test is unchanged.
+CCB="$WORK/cfgcmp-bare.git"; git init -q --bare -b main "$CCB"
+CCS="$WORK/cfgcmp-sender"; git clone -q "$CCB" "$CCS" 2>/dev/null
+mkdir -p "$CCS/payload/hooks"
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/demo.sh"}]}]}}\n' > "$CCS/payload/settings.hooks.json"
+printf '#!/bin/sh\n# lives at __CLAUDE_HOME__/hooks, version 1\n' > "$CCS/payload/hooks/demo.sh"
+printf '# rules\n' > "$CCS/payload/CLAUDE.md"
+git -C "$CCS" add -A; git -C "$CCS" -c user.name=t -c user.email=t@t commit -q -m "config v1"; git -C "$CCS" push -q origin HEAD:main 2>/dev/null
+CCR="$WORK/cfgcmp-repo"; git clone -q "$CCB" "$CCR" 2>/dev/null
+CCH="$WORK/cfgcmp-home"; mkdir -p "$CCH"; echo '{"hooks":{}}' > "$CCH/settings.json"
+CCAG="$WORK/cfgcmp-agents"; mkdir -p "$CCAG"
+ccenv(){ echo "CLAUDE_HOME=$CCH SYNC_REPO=$CCR SYNC_LAUNCHAGENTS=$CCAG SYNC_HOLD_FILE=$WORK/cfgcmp-hold SYNC_WATCH_PID_FILE=$WORK/cfgcmp-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_HOSTNAME=MacCfgCmp"; }
+env $(ccenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2682 the fixture: the pull applied the hooks block with this Mac's home path in it" \
+  "grep -qF '$CCH/hooks/demo.sh' '$CCH/settings.json'"
+check "#2682 the fixture: and the tokenized hook with this Mac's home path in it" \
+  "grep -qF '$CCH/hooks, version 1' '$CCH/hooks/demo.sh'"
+# The shared repo changes both, and this clone fetches that with plain git and never applies it.
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/demo.sh --two"}]}]}}\n' > "$CCS/payload/settings.hooks.json"
+printf '#!/bin/sh\n# lives at __CLAUDE_HOME__/hooks, version 2\n' > "$CCS/payload/hooks/demo.sh"
+git -C "$CCS" add -A; git -C "$CCS" -c user.name=t -c user.email=t@t commit -q -m "config v2"; git -C "$CCS" push -q origin HEAD:main 2>/dev/null
+git -C "$CCR" pull -q --ff-only >/dev/null 2>&1
+check "#2682 the fixture: this clone holds the change and has not applied it" \
+  "grep -q -- '--two' '$CCR/payload/settings.hooks.json' && ! grep -q -- '--two' '$CCH/settings.json'"
+# THE NORMAL PATH, unchanged: both files really were compared, and both are said to be unapplied.
+rc_cc0=0; out_cc0="$(env $(ccenv) bash "$SCRIPT" status 2>&1)" || rc_cc0=$?
+dbg "#2682 status with nothing failing: $out_cc0"
+check "#2682 with nothing failing, settings.hooks.json is compared and said to be unapplied" \
+  "line_has \"\$out_cc0\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 and so is the tokenized hook" \
+  "line_has \"\$out_cc0\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+check "#2682 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_cc0\""
+CCSHIM="$WORK/cfgcmp-shim"; mkdir -p "$CCSHIM/perl-bin"
+cat > "$CCSHIM/perl-bin/perl" <<EOS
+#!/bin/sh
+# Fails a swap FROM the placeholder (claude-sync's detok) of any content holding CC_FAIL_ON, and is
+# the real perl for everything else.
+if [ "\${HT_FROM:-}" = "__CLAUDE_HOME__" ] && [ -n "\${CC_FAIL_ON:-}" ]; then
+  t="$CCSHIM/held-input.\$\$"; cat > "\$t"
+  if grep -qF -- "\$CC_FAIL_ON" "\$t"; then rm -f "\$t"; : > "$CCSHIM/perl-failed"; exit 2; fi
+  "$(command -v perl)" "\$@" < "\$t"; rc=\$?; rm -f "\$t"; exit \$rc
+fi
+exec "$(command -v perl)" "\$@"
+EOS
+chmod +x "$CCSHIM/perl-bin/perl"
+# THE ISSUE: the home path swap of settings.hooks.json fails.
+rc_cc1=0; out_cc1="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='"hooks"' bash "$SCRIPT" status 2>&1)" || rc_cc1=$?
+dbg "#2682 status with the hooks block's home path swap failing: $out_cc1"
+check "#2682 the fixture: the stand in perl did fail a home path swap" \
+  "[ -e '$CCSHIM/perl-failed' ]"
+check "#2682 a config file whose home path swap failed is named, with the step and its exit status" \
+  "line_has \"\$out_cc1\" 'could not compare settings\.hooks\.json' 'home path' 'exit 2'"
+check "#2682 under a heading saying how many files, in the words the mods comparison uses" \
+  "line_has \"\$out_cc1\" 'config not compared with the shared repo: status could not compare 1 file' 'applied'"
+check "#2682 and settings.hooks.json is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc1\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 while the file it could compare is still said to be unapplied" \
+  "line_has \"\$out_cc1\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+check "#2682 and status exits as it does when nothing failed" \
+  "[ $rc_cc1 -eq $rc_cc0 ]"
+# THE SAME CLASS, the other caller step: the tokenized hook's copy as this Mac should hold it.
+rm -f "$CCSHIM/perl-failed"
+out_cc2="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2682 status with the tokenized hook's home path swap failing: $out_cc2"
+check "#2682 a tokenized file whose copy for this Mac could not be made is named, with the step" \
+  "line_has \"\$out_cc2\" 'could not compare hooks/demo\.sh' 'exit 2'"
+check "#2682 and the tokenized hook is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc2\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+# AND THE JQ STEP: a settings.json jq cannot read is a comparison that failed, not a difference.
+cp "$CCH/settings.json" "$WORK/cfgcmp-settings.keep"
+printf 'not json\n' > "$CCH/settings.json"
+out_cc3="$(env $(ccenv) bash "$SCRIPT" status 2>&1 || true)"
+cp "$WORK/cfgcmp-settings.keep" "$CCH/settings.json"
+dbg "#2682 status with settings.json unreadable to jq: $out_cc3"
+check "#2682 a hooks block jq could not compare is named, with the step and its exit status" \
+  "line_has \"\$out_cc3\" 'could not compare settings\.hooks\.json' 'jq exit'"
+check "#2682 and a hooks block jq could not read is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc3\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+# THE SEND asks the same question to decide what to hold back. A file it could not compare is still
+# held back, but no longer said to be one the shared repo changed.
+out_cc4="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bash "$SCRIPT" push 2>&1 || true)"
+dbg "#2682 a push with the tokenized hook's home path swap failing: $out_cc4"
+check "#2682 a send holds back a file it could not compare, naming the step" \
+  "line_has \"\$out_cc4\" 'NOT publishing hooks/demo\.sh' 'exit 2' 'could not be compared'"
+check "#2682 and does not say the shared repo changed it" \
+  "! line_has \"\$out_cc4\" 'NOT publishing' 'hooks/demo\.sh' 'because the shared repo has changed'"
+check "#2682 and this Mac's copy did not go up over the repo's" \
+  "[ \"\$(git -C '$CCB' show main:payload/hooks/demo.sh 2>/dev/null | grep -c 'version 2')\" = 1 ]"
+
+section "== status names a mod file its home path search could not read, rather than reading the failure as none (claude-config#2688) =="
+# The mods comparison finds the installed files holding this Mac's home path with grep, and read
+# grep's exit 2 (a file it could not read) as no match. A file the search missed got no hash with
+# the placeholder put back, so it matched no version the repo held and read as this Mac's own work,
+# dropped from the lag line with nothing said: the class #2673 fixed one step later. grep -r exits 2
+# when one file is unreadable and the rest matched, so a failed search is now named per file it
+# could not read, and the matches it did print are still used.
+MSB="$WORK/modsearch-bare.git"; git init -q --bare -b main "$MSB"
+MSS="$WORK/modsearch-sender"; git clone -q "$MSB" "$MSS" 2>/dev/null
+mscommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MSS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MSS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MSS/payload/mods/path-mod/hooks" "$MSS/payload/mods/lock-mod" "$MSS/payload/mods/plain-mod"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 1\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 1\n' > "$MSS/payload/mods/plain-mod/index.ts"
+printf '# rules\n' > "$MSS/payload/CLAUDE.md"
+git -C "$MSS" add -A; mscommit 864000 "mods v1"
+MSR="$WORK/modsearch-repo"; git clone -q "$MSB" "$MSR" 2>/dev/null
+MSH="$WORK/modsearch-home"; mkdir -p "$MSH"; echo '{"hooks":{}}' > "$MSH/settings.json"
+MSAG="$WORK/modsearch-agents"; mkdir -p "$MSAG"
+msenv(){ echo "CLAUDE_HOME=$MSH SYNC_REPO=$MSR SYNC_LAUNCHAGENTS=$MSAG SYNC_HOLD_FILE=$WORK/modsearch-hold SYNC_WATCH_PID_FILE=$WORK/modsearch-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(msenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2688 the fixture: path-mod is installed with this Mac's home path in it" \
+  "grep -qF '$MSH/hooks' '$MSH/mods/path-mod/hooks/paths.ts'"
+# The shared repo changes all three two days ago, and this Mac receives none of it.
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 2\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 2\n' > "$MSS/payload/mods/plain-mod/index.ts"
+git -C "$MSS" add -A; mscommit 172800 "mods v2"
+git -C "$MSR" fetch -q origin 2>/dev/null
+# THE CONTROL: nothing is unreadable, so all three are compared and named, and no search failed.
+rc_ms0=0; out_ms0="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms0=$?
+dbg "#2688 status with nothing unreadable: $out_ms0"
+check "#2688 with nothing unreadable, all three lagging files are compared and their mods named" \
+  "line_has \"\$out_ms0\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_ms0\""
+# ONE FILE UNREADABLE: grep exits 2 for it, and still prints path-mod, which it could read.
+chmod 000 "$MSH/mods/lock-mod/index.ts"
+rc_ms1=0; out_ms1="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms1=$?
+chmod 644 "$MSH/mods/lock-mod/index.ts"
+dbg "#2688 status with one mod file unreadable: $out_ms1"
+check "#2688 the file the search could not read is named, with the step and grep's exit status" \
+  "line_has \"\$out_ms1\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2'"
+check "#2688 and the match the search did print is still used: path-mod is still named as behind" \
+  "line_has \"\$out_ms1\" 'mods behind the shared repo: 2 file' 'path-mod' 'plain-mod'"
+check "#2688 and status exits as it does when nothing failed" \
+  "[ $rc_ms1 -eq $rc_ms0 ]"
+# THE HARM ITSELF: the search fails on the tokenized file, which every other step can read. A grep
+# standing in front of the real one runs the search and then drops path-mod from it with an error,
+# as an unreadable file does, so path-mod gets no hash with the placeholder put back.
+MSSHIM="$WORK/modsearch-shim"; mkdir -p "$MSSHIM/drop-bin" "$MSSHIM/none-bin"
+cat > "$MSSHIM/drop-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*)
+    "$(command -v grep)" "\$@" | "$(command -v grep)" -v 'path-mod/'
+    echo "grep: $MSH/mods/path-mod/hooks/paths.ts: Input/output error" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+cat > "$MSSHIM/none-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/drop-bin/grep" "$MSSHIM/none-bin/grep"
+out_ms2="$(env $(msenv) PATH="$MSSHIM/drop-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the search failing on the tokenized file: $out_ms2"
+check "#2688 a tokenized file the search failed on is named, with the reason grep gave" \
+  "line_has \"\$out_ms2\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' 'grep exit 2' 'Input/output error'"
+check "#2688 and it is not counted as behind, since it was never compared" \
+  "! line_has \"\$out_ms2\" 'mods behind the shared repo' 'path-mod'"
+check "#2688 while the files it could compare are still named as behind" \
+  "line_has \"\$out_ms2\" 'mods behind the shared repo: 2 file' 'lock-mod' 'plain-mod'"
+# A SEARCH THAT FAILED NAMING NO FILE: which files hold the home path is unknown, so a tokenized file
+# compared without the placeholder would read as this Mac's own work, or a plain one be counted
+# while status said it could not compare it. So each file is searched on its own, and a file that
+# search answers for is compared as usual.
+out_ms_none="$(env $(msenv) PATH="$MSSHIM/none-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the whole search failing naming no file: $out_ms_none"
+check "#2688 when the whole search fails naming no file, each file is searched alone and path-mod is still compared" \
+  "line_has \"\$out_ms_none\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and with every file answered for one by one, nothing is called uncomparable" \
+  "! grep -q 'could not compare' <<< \"\$out_ms_none\""
+# AND WHEN EVERY SEARCH FAILS: no file is known not to hold the home path, so each is named and none
+# is counted, neither as behind nor as this Mac's own work.
+mkdir -p "$MSSHIM/all-bin"
+cat > "$MSSHIM/all-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*|*"-IlF -- $MSH "*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/all-bin/grep"
+out_ms_all="$(env $(msenv) PATH="$MSSHIM/all-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with every home path search failing: $out_ms_all"
+check "#2688 when every search fails, each file is named with grep's exit status and its words" \
+  "line_has \"\$out_ms_all\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2' 'something went wrong' && line_has \"\$out_ms_all\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' && line_has \"\$out_ms_all\" 'could not compare plain-mod/index\.ts' 'searching it'"
+check "#2688 under a heading counting all three files" \
+  "line_has \"\$out_ms_all\" 'mods not compared with the shared repo: status could not compare 3 file' 'neither as behind'"
+check "#2688 and none of them is in the lag line" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ms_all\""
+# A WHOLE FOLDER UNREADABLE (#2716): grep names the folder, not its files, and find, whose errors
+# are discarded, lists none of them, so each file the shared repo holds there would read as missing
+# here and be counted as behind. Each is named as not compared, with the folder as the reason.
+chmod 000 "$MSH/mods/plain-mod"
+out_ms_dir="$(env $(msenv) bash "$SCRIPT" status 2>&1 || true)"
+chmod 755 "$MSH/mods/plain-mod"
+dbg "#2716 status with one mod folder unreadable: $out_ms_dir"
+check "#2716 a file the shared repo holds in an unreadable folder is named as not compared, with the folder as the reason" \
+  "line_has \"\$out_ms_dir\" 'could not compare plain-mod/index\.ts' 'plain-mod'"
+check "#2716 and it is not in the lag line, while the files status could read still are" \
+  "line_has \"\$out_ms_dir\" 'mods behind the shared repo: 2 file' 'lock-mod' 'path-mod' && ! line_has \"\$out_ms_dir\" 'mods behind the shared repo' 'plain-mod'"
+# The count is what proves the folder's own entry went: the check above requires the file's entry, so
+# a folder entry kept beside it would make the count 2.
+check "#2716 and the folder itself is not counted as a file" \
+  "line_has \"\$out_ms_dir\" 'mods not compared with the shared repo: status could not compare 1 file' 'neither as behind'"
+
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266
 # for a sync that publishes a change and 162 for the pull receiving it, git being about half the
@@ -24994,6 +25218,166 @@ check "#2472 an entry for a folder no longer refused is still cleared from the r
   "! grep -q 'ghost' '$FPREC'"
 check "#2472 and another notice's entry is still kept" \
   "grep -q 'some other notice' '$FPREC'"
+
+section "== a pull's hook suite waits for the full suite slot only as long as its deadline allows, and says so (claude-config#2758) =="
+# The pull runs the whole hook suite after hooks land, under SYNC_HOOK_TESTS_TIMEOUT (1800s). That
+# run is a whole run, so it queues for this Mac's one full suite slot (#2012), whose wait was sized
+# for a person's run: HOOK_TESTS_SLOT_WAIT, 3600s. Builders' full runs waited 18 to 45 minutes for
+# the slot on 2026-11-10 and 11, so the pull could spend its whole deadline in the queue, run
+# nothing, and be reported as "still running after 1800s and was stopped": 17 of the 34 pulls that
+# landed hooks in one session ended that way.
+#
+# The REAL runner and the REAL slot library are installed by the pull, and a stand in holder keeps
+# the slot. Time is one clock both sides read: the runner's slot wait moves it on 120 seconds a
+# look, and the pull only reads it, so both judge their bounds against the same seconds however
+# loaded this Mac is, and the order in which the two bounds are reached is set here, not raced
+# (L290, L524). The slot wait looks every fifth of a real second, so the runner's own 3600 second
+# bound, were it in force, would arrive three real seconds after the pull's 1800 had.
+SWH="$WORK/slotwait-home"; mkdir -p "$SWH/hooks"; echo '{"hooks":{}}' > "$SWH/settings.json"
+SWR="$WORK/slotwait-repo"; mkdir -p "$SWR/payload/hooks"
+SWLOCK="$WORK/slotwait-lock"
+SWSLOT="$WORK/slotwait-slot"
+SWT="$WORK/slotwait-t"; mkdir -p "$SWT"
+SWPAY="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks"
+cp "$SWPAY/run-all-tests.sh" "$SWR/payload/hooks/run-all-tests.sh"
+cp -R "$SWPAY/lib" "$SWR/payload/hooks/lib"
+# One suite. It marks that it ran, and when SW_HANG names a file it marks that it started and then
+# never ends, which is a suite still running at the pull's deadline.
+cat > "$SWR/payload/hooks/test-sw-a.sh" <<'SWSUITE'
+#!/usr/bin/env bash
+[ -n "${SW_RAN:-}" ] && : > "$SW_RAN"
+if [ -n "${SW_HANG:-}" ]; then
+  : > "$SW_HANG"
+  while :; do sleep 3600 & wait "$!" || true; done
+fi
+echo "SUITE-RESULT passed=1 failed=0"
+SWSUITE
+chmod +x "$SWR/payload/hooks/test-sw-a.sh"
+sw_arrive(){ printf '# marker %s\n' "$1" > "$SWR/payload/hooks/sw-marker.sh"; }
+# The shared clock. The runner's reads move it on, and log whether the sync lock is held at that
+# moment, which asks the lock question while the wait is actually happening. The pull's reads move
+# it only once the suite has started (the SW_HANG file exists), when the slot is no longer read.
+printf '1000000\n' > "$SWT/now"
+cat > "$SWT/slot-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+if [ -d "$SWLOCK" ]; then echo held >> "$SWT/lock-log"; else echo free >> "$SWT/lock-log"; fi
+printf '%s\n' "\$n"
+SWCLK
+cat > "$SWT/pull-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"
+[ -f "$SWT/move" ] && printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+printf '%s\n' "\$n"
+SWCLK
+chmod +x "$SWT/slot-clock" "$SWT/pull-clock"
+# A process standing in for a builder's full run, detached so a dead one is gone rather than a
+# zombie, and its ticket written through the queue's own writer, holding the turn from the clock's
+# present.
+sw_holder(){ ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$SWT/holder" ) </dev/null >/dev/null 2>&1; cat "$SWT/holder"; }
+sw_hold(){ ( . "$SWPAY/lib/merge-turn.sh"; TURN_PID="$1"; TURN_PID_START=""
+  MWR_TURN_DIR="$SWSLOT" turn_open "full-run"; turn_join "/work/trees/a-builder" "$(cat "$SWT/now")" || exit 1
+  turn_look "$(cat "$SWT/now")" 999999 ) >/dev/null 2>&1; }
+# Run as a pull from a terminal or launchd is: without the marks this suite inherits from a full run
+# around it (HOOK_TESTS_RUNNING and that run's deadline), under which the fixture runner refused a
+# whole run outright as recursion, and with no HOOK_TESTS_SLOT, so the runner decides for itself that
+# this is a whole run and queues. The hold bound is lifted because the clock here only moves forward across pulls, and past its
+# 2700 seconds (the library's default, set and not measured) the stand in would be passed over as
+# stuck, which is the slot working, not this case.
+sw_pull(){ # sw_pull [env assignments...] -> the pull's output
+  env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SLEEP -u CI \
+    -u HOOK_TESTS_RUNNING -u HOOK_TESTS_ROOT -u HOOK_TESTS_SLOT -u HOOK_TESTS_DEADLINE \
+    -u HOOK_TESTS_DEADLINE_RESERVE -u HOOK_TESTS_JOB_STARTED -u HOOK_TESTS_NOW \
+    CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_LOCK="$SWLOCK" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    SYNC_POLL_INTERVAL=0.1 SYNC_HOOK_TESTS_TIMEOUT=1800 SYNC_TEST_SUITE_CLOCK="$SWT/pull-clock" \
+    HOOK_TESTS_SLOT_DIR="$SWSLOT" HOOK_TESTS_SLOT_NOW="$SWT/slot-clock" \
+    HOOK_TESTS_SLOT_POLL=0.2 HOOK_TESTS_SLOT_SAY_EVERY=600 HOOK_TESTS_SLOT_HOLD=999999 "$@" bash "$SCRIPT" pull 2>&1
+}
+# A first pull with the slot free installs the runner, its library and the suite, and passes.
+sw_arrive one
+out_sw0="$(sw_pull SW_RAN="$SWT/ran0")"
+dbg "#2758 first pull: $out_sw0"
+check "#2758 the fixture: with the slot free the real runner ran the suite and the pull passed" \
+  "[ -f '$SWT/ran0' ] && grep -q '^outcome=passed' '$SWR/.hook-tests'"
+
+# ---- the slot held for the whole deadline: the pull's run waits, runs nothing, and says so ----
+SWHP="$(sw_holder)"; sw_hold "$SWHP"
+check "#2758 the fixture: the stand in holder's ticket is in the queue" \
+  "ls '$SWSLOT/full-run' 2>/dev/null | grep -q -E '^[0-9]+\$'"
+sw_arrive two; rm -f "$SWT/lock-log" "$SWT/move"
+out_sw1="$(sw_pull SW_RAN="$SWT/ran1")"
+sw_end1="$(cat "$SWT/now")"
+dbg "#2758 a pull with the slot held: $out_sw1"
+check "#2758 the fixture: the suite did not run while the slot was held" "[ ! -f '$SWT/ran1' ]"
+check "#2758 a pull whose suite only waited for the slot is not reported as a suite still running" \
+  "! grep -q 'still running after' <<< \"\$out_sw1\""
+check "#2758 it says in its own words that the suite waited for the full suite slot and ran nothing" \
+  "line_has \"\$out_sw1\" 'hook suite did NOT run here' 'full suite slot' 'ran nothing'"
+check "#2758 and it names the run holding the slot" \
+  "line_has \"\$out_sw1\" 'hook suite did NOT run here' \"pid $SWHP\""
+check "#2758 the wait ended inside the pull's deadline (clock at $sw_end1, deadline at 1001800)" \
+  "[ '$sw_end1' -lt 1001800 ]"
+check "#2758 it is recorded as a run that waited for the slot, not as one that was stopped" \
+  "grep -q '^outcome=slotwait' '$SWR/.hook-tests'"
+check "#2758 the sync lock was looked at during the wait, and never held while the suite waited" \
+  "[ -s '$SWT/lock-log' ] && ! grep -q held '$SWT/lock-log'"
+out_sw1s="$(CLAUDE_HOME="$SWH" SYNC_REPO="$SWR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1)"
+dbg "#2758 status after the wait: $out_sw1s"
+check "#2758 status says the landed hooks are unverified because the suite waited for the slot" \
+  "line_has \"\$out_sw1s\" 'did NOT run' 'full suite slot' 'Nothing that landed has been verified'"
+
+# ---- the change watcher does not rerun it: every tick would block behind the same queue ----
+out_sw2w="$(sw_pull SYNC_IN_WATCH=1 SW_RAN="$SWT/ran2w")"
+check "#2758 a receive in the change watcher that landed no hook leaves the record for a pull" \
+  "[ ! -f '$SWT/ran2w' ] && grep -q '^outcome=slotwait' '$SWR/.hook-tests'"
+
+# ---- the slot wait setting: honoured below the deadline, said and replaced at or above it ----
+# These pulls land no hook: the slotwait record alone is what makes them run the suite.
+out_sw5="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=300 SW_RAN="$SWT/ran5")"
+dbg "#2758 a 300s slot wait: $out_sw5"
+check "#2758 a pull owed a run by the last slot wait runs it, and a slot wait set below the deadline is the one used" \
+  "line_has \"\$out_sw5\" 'hook suite did NOT run here' 'waited 6m for' 'the most this pull allows'"
+out_sw6="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=1800 SW_RAN="$SWT/ran6")"
+dbg "#2758 a slot wait as long as the deadline: $out_sw6"
+check "#2758 a slot wait as long as the deadline is named as refused, and half the deadline used instead" \
+  "line_has \"\$out_sw6\" \"SYNC_HOOK_TESTS_SLOT_WAIT='1800'\" 'not shorter than the 1800s deadline' 'at most 900s'"
+check "#2758 and that run still ended inside its deadline, saying it waited for the slot" \
+  "line_has \"\$out_sw6\" 'hook suite did NOT run here' 'waited 16m for'"
+out_sw7="$(sw_pull SYNC_HOOK_TESTS_SLOT_WAIT=soon SW_RAN="$SWT/ran7")"
+check "#2758 a slot wait that is not a number is named, and half the deadline used instead" \
+  "line_has \"\$out_sw7\" \"SYNC_HOOK_TESTS_SLOT_WAIT='soon'\" 'not a whole number' 'at most 900s'"
+check "#2758 (fixture) none of those runs reached the suite while the slot was held" \
+  "[ ! -f '$SWT/ran5' ] && [ ! -f '$SWT/ran6' ] && [ ! -f '$SWT/ran7' ]"
+
+# ---- the next pull reruns it although no hook arrived, and the record is replaced ----
+kill "$SWHP" 2>/dev/null || true
+out_sw2="$(sw_pull SW_RAN="$SWT/ran2")"
+dbg "#2758 the next pull, no hook landing, slot free: $out_sw2"
+check "#2758 the next pull reruns the suite a slot wait left unrun, though no hook arrived with it" \
+  "[ -f '$SWT/ran2' ] && grep -q '^outcome=passed' '$SWR/.hook-tests'"
+check "#2758 and its closing line says the suite passed" \
+  "line_has \"\$out_sw2\" 'hook suite passed here' 'all 1 of its suites'"
+# The control: with the record passed, a pull landing nothing runs nothing, as before (L1).
+out_sw3="$(sw_pull SW_RAN="$SWT/ran3")"
+check "#2758 (control) a pull landing no hook after a pass runs no suite" "[ ! -f '$SWT/ran3' ]"
+
+# ---- the slot frees partway, then the suite outruns the deadline: the wait is named ----
+SWHP2="$(sw_holder)"; sw_hold "$SWHP2"
+cat "$SWT/now" > "$SWT/t0"
+# The holder ends once the clock passes ten minutes, so the run waits that long and then takes it.
+cat > "$SWT/slot-clock" <<SWCLK
+#!/usr/bin/env bash
+n="\$(cat "$SWT/now")"; printf '%s\n' "\$(( n + 120 ))" > "$SWT/now"
+[ "\$n" -ge "\$(( \$(cat "$SWT/t0") + 600 ))" ] && kill "$SWHP2" 2>/dev/null
+printf '%s\n' "\$n"
+SWCLK
+sw_arrive three; rm -f "$SWT/move"
+out_sw4="$(sw_pull SW_HANG="$SWT/move")"
+dbg "#2758 the slot freed after ten minutes, then a suite that never ends: $out_sw4"
+check "#2758 the fixture: the suite started once the holder ended" "[ -f '$SWT/move' ]"
+check "#2758 a suite stopped at the deadline after waiting for the slot says how long it waited" \
+  "line_has \"\$out_sw4\" 'could NOT be completed here' 'still running after 1800s' 'waited' 'full suite slot'"
+kill "$SWHP2" 2>/dev/null || true
 
 suite_profile
 echo ""

@@ -71,6 +71,19 @@ says "the seams sit in one throwaway folder the scratch sweep reclaims" "$W/tmp/
 eq "every seam sits in that same folder" "$((NV - 1))" "$(printf '%s\n' "$armed" | grep -c -F "=$iso/")"
 eq "the claude binary is one that does not exist" "SYNC_CLAUDE_BIN=$SUITE_ISOLATION_NO_CLAUDE" "$(printf '%s\n' "$armed" | grep '^SYNC_CLAUDE_BIN=')"
 
+# Bytecode off for whatever an armed suite runs, as the runner hands it down (claude-config#2751):
+# a suite typed straight into a shell leaves lib/__pycache__ behind for test-shell-code-lines.sh and
+# test-work-names.sh to find otherwise. Measured as the flag Python itself reads, not only the
+# variable (L322), with an empty inherited value to show arming sets it whatever came down. That
+# the flag stops an import leaving bytecode is measured in test-lib-bytecode-importers.sh.
+eq "control: with nothing handed down, Python writes bytecode" 0 \
+  "$(env -u PYTHONDONTWRITEBYTECODE python3 -c 'import sys; print(sys.flags.dont_write_bytecode)')"
+bc_seen="$(env "${unsets[@]}" PYTHONDONTWRITEBYTECODE= HOME="$W/home1" SUITE_WALL_TIMEOUT=0 bash -c '
+  . "$1/lib/suite-deadline.sh" || exit 9
+  suite_deadline_arm || exit 8
+  python3 -c "import sys; print(sys.flags.dont_write_bytecode)"' _ "$HOOKS")"
+eq "arming on its own turns bytecode off for what the suite runs" 1 "$bc_seen"
+
 # A seam the suite or the runner already set wins, and a fully set environment makes no folder.
 kept="$(env "${unsets[@]}" HOME="$W/home1" SUITE_WALL_TIMEOUT=0 WRAPPED_REFUSAL_LEDGER_DIR="$W/mine" bash -c '
   . "$1/lib/suite-deadline.sh" || exit 9
