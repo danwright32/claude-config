@@ -1841,7 +1841,9 @@ on 2026-11-10 one session's 102 merge logs held 2,845 waits on that cap, 251 of 
 holding the turn, with a median of 8 runs in line behind it. A run in line reads the turn, and the
 line moving, from the queue on this Mac, and reads GitHub only every ten minutes
 (`MWR_LINE_LOOK_SECONDS`) to see its pull request is still open, each time leaving one of the
-session's looks a minute free, so the run holding the turn looks at its own pace. It accepts only the merge
+session's looks a minute free, so the run holding the turn looks at its own pace. A run not yet in
+line leaves that look free too whenever the queue shows another run holding the turn
+(claude-config#2749), since its first look comes before it learns it is in line. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run

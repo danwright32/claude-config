@@ -3718,10 +3718,32 @@ check "#2715 and again when it moved on" "which #11 holds (1 ahead of it in line
 check_eq "#2715 reading GitHub in line only at its first look and every ten minutes" "1000000 1000600 1001200" "$(awk '$1 < 1001800' "$ST/view-times" | tr '\n' ' ' | sed 's/ $//')"
 check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 
+# A run not yet in line leaves the holder the last of the minute's looks too (claude-config#2749):
+# with #9's live run holding the turn and three of the minute's four looks taken, its first read
+# waits until a look is a minute old (#9 leaves while it waits, so it then merges).
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+for _ in 1 2 3; do CLAUDE_CODE_SESSION_ID=mwr-suite bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+printf '%s\n' "$(leave 9)" > "$ST/on-sleep"
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#2749 a run not yet in line still merges" "0" "$rc"
+check "#2749 it leaves the holder the minute's last look, naming it" "and #9 holds the turn to merge in acme/widget, so a run not yet in line behind it leaves it the last of the minute's looks" "$out"
+check_eq "#2749 its first read waits until a look is a minute old" "1000060" "$(head -1 "$ST/view-times")"
+# Control: a holder whose run is no longer running holds nothing back. Its place is passed over, and
+# the run takes the minute's last look and the turn at once.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9 99999999 "Thu Jan  1 00:00:00 1970"
+for _ in 1 2 3; do CLAUDE_CODE_SESSION_ID=mwr-suite bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#2749 control: a dead holder's line still merges" "0" "$rc"
+check_eq "#2749 control: its first read is not held back" "1000000" "$(head -1 "$ST/view-times")"
+check_not "#2749 control: and it leaves no look to the dead run" "so a run not yet in line" "$out"
+check "#2749 control: saying the dead run's place was passed over" "#9's place in line was passed over" "$out"
+
 # Several helpers in line at once, each a real run of this helper, on one injected clock that moves
 # only once every run is asleep, to the earliest time any of them wakes: a run's work between its
 # sleeps takes no time on the clock, as it takes next to none on a real one. Only one run is ever
-# awake at a time, and runs due at the same moment wake in the order listed, the holder first, so
+# awake at a time, and runs due at the same moment wake in the order listed (both orders, below), so
 # what the runs do depends on the clock alone and never on how the machine schedules them
 # (claude-config#2745, L290). #7 holds the turn, its
 # checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
@@ -3798,9 +3820,7 @@ sim_run(){
     # sleeps again or ends before the next is woken (claude-config#2745). Woken together, as they
     # were, the order they reached the session's looks and the queue was the machine's scheduling,
     # not the clock: at a minute where the holder and runs not yet in line all woke, whichever ran
-    # first took the minute's looks. The order is the holder first. Woken last instead, it waited on
-    # the cap once, at 60s, measured on 2026-11-11, behind runs whose first look comes before they know they are in line
-    # (a first look leaves no look free): a gap in the helper, not here, recorded for its own issue.
+    # first took the minute's looks. sim_case below runs both orders, the holder first and last.
     for m in "$@"; do
       [ -e "$SIM_DIR/$m.wake" ] || continue
       w=""; read -r w < "$SIM_DIR/$m.wake"
@@ -3813,27 +3833,43 @@ sim_run(){
   for p in $SIM_PIDS; do wait "$p"; done
   SIM_PIDS=""
 }
-fresh "$OLD" 0 "$PENDING"; rm -rf "$SIM_DIR"; mkdir -p "$SIM_DIR"
+# sim_case <how they wake> <pr>...: one simulation, with the runs due at the same moment woken in the
+# order given. It runs twice: the holder woken first, and the holder woken LAST, behind runs whose
+# first look comes before they know they are in line (claude-config#2749). Woken last, the helper of
+# #2740 made the holder wait on the cap once, at 60s (measured 2026-11-11): each of those first looks
+# took one of the minute's four, and none was left for it.
 LINE_PRS="21 22 23 24 25 26 27 28"
-sim_start 7
-for p in $LINE_PRS; do sim_start "$p"; done
-SIM_QUIT="21@600 22@1200" sim_run 1800 7 $LINE_PRS
-sim_out="$(cat "$SIM_DIR/said" 2>/dev/null)"
-holder="$(cat "$SIM_DIR/7.out")"
-holder_looks="$(awk '$2 == 7 { print $1 }' "$ST/sim-views")"
-holder_gaps="$(printf '%s\n' "$holder_looks" | awk 'NR > 1 { print $1 - p } { p = $1 }' | sort -n | tr '\n' ' ' | sed 's/ $//')"
-line_looks="$(awk '$2 != 7' "$ST/sim-views" | wc -l | tr -d ' ')"
-echo "#2715 measured: the holder's gaps between looks (s): $holder_gaps; its waits on the session's cap: $(grep -c 'to look at GitHub again' <<<"$holder"); reads by the 8 in line: $line_looks"
-check_eq "#2715 the simulation ran its whole 30 minutes" "" "$sim_out"
-check "#2715 the holder held the turn" "Took the turn to merge in acme/widget" "$holder"
-check_eq "#2715 every run in line took a place behind it" "8" "$(grep -l 'waiting for its turn to merge in acme/widget, which #7 holds' "$SIM_DIR"/2?.out | wc -l | tr -d ' ')"
-check_not "#2715 the holder never waited on the session's cap with eight runs in line behind it" "to look at GitHub again" "$holder"
-check "#2715 while a run in line waited rather than take the last look of a minute" "a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one" "$(cat "$SIM_DIR"/2?.out)"
-check_eq "#2715 the holder looked the whole 30 minutes, at least once every three minutes" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | grep -c .)" -ge 10 ] && echo yes || echo no)"
-check_eq "#2715 the holder looked at its own pace, never more than its 180s ceiling apart" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | awk 'NR > 1 && $1 - p > 180 { bad = 1 } { p = $1 } END { print bad + 0 }')" = 0 ] && echo yes || echo no)"
-check_eq "#2715 the eight in line read GitHub at most once each every ten minutes (8 x 4 looks in 30 minutes)" "yes" "$( [ "$line_looks" -le 32 ] && echo yes || echo no)"
-check_eq "#2715 no run in line merged out of its turn" "0" "$(count gh-calls 'pr merge')"
-check_eq "#2715 every run in line was still waiting for its turn when the simulation ended" "" "$(for p in $LINE_PRS; do grep -q "It is #$p's turn\|Took the turn" "$SIM_DIR/$p.out" && printf '%s ' "$p"; done)"
+sim_case(){
+  local how="$1" sim_out holder holder_looks holder_gaps line_looks p; shift
+  fresh "$OLD" 0 "$PENDING"; rm -rf "$SIM_DIR"; mkdir -p "$SIM_DIR"
+  sim_start 7
+  for p in $LINE_PRS; do sim_start "$p"; done
+  SIM_QUIT="21@600 22@1200" sim_run 1800 "$@"
+  sim_out="$(cat "$SIM_DIR/said" 2>/dev/null)"
+  holder="$(cat "$SIM_DIR/7.out")"
+  holder_looks="$(awk '$2 == 7 { print $1 }' "$ST/sim-views")"
+  holder_gaps="$(printf '%s\n' "$holder_looks" | awk 'NR > 1 { print $1 - p } { p = $1 }' | sort -n | tr '\n' ' ' | sed 's/ $//')"
+  line_looks="$(awk '$2 != 7' "$ST/sim-views" | wc -l | tr -d ' ')"
+  echo "#2715 measured, $how: the holder's gaps between looks (s): $holder_gaps; its waits on the session's cap: $(grep -c 'to look at GitHub again' <<<"$holder"); reads by the 8 in line: $line_looks"
+  check_eq "#2715 $how: the simulation ran its whole 30 minutes" "" "$sim_out"
+  check "#2715 $how: the holder held the turn" "Took the turn to merge in acme/widget" "$holder"
+  check_eq "#2715 $how: every run in line took a place behind it" "8" "$(grep -l 'waiting for its turn to merge in acme/widget, which #7 holds' "$SIM_DIR"/2?.out | wc -l | tr -d ' ')"
+  check_not "#2715 $how: the holder never waited on the session's cap with eight runs in line behind it" "to look at GitHub again" "$holder"
+  check "#2749 $how: a run not yet in line waited rather than take the holder's last look of a minute" "and #7 holds the turn to merge in acme/widget, so a run not yet in line behind it leaves it the last of the minute's looks (GH_POLL_PER_MINUTE)." "$(cat "$SIM_DIR"/2?.out)"
+  # Woken last, the runs in line due with the holder (three of them, at 12m) look before it and fit
+  # in the three looks they may take, so none waits (measured 2026-11-11); woken first, the third
+  # finds the holder's look taken and waits. Either way the runs not yet in line wait, checked above.
+  [ "$how" = "holder woken last" ] || check "#2715 $how: while a run in line waited rather than take the last look of a minute" "a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one" "$(cat "$SIM_DIR"/2?.out)"
+  check_eq "#2715 $how: the holder looked the whole 30 minutes, at least once every three minutes" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | grep -c .)" -ge 10 ] && echo yes || echo no)"
+  check_eq "#2715 $how: the holder looked at its own pace, never more than its 180s ceiling apart" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | awk 'NR > 1 && $1 - p > 180 { bad = 1 } { p = $1 } END { print bad + 0 }')" = 0 ] && echo yes || echo no)"
+  check_eq "#2715 $how: the eight in line read GitHub at most once each every ten minutes (8 x 4 looks in 30 minutes)" "yes" "$( [ "$line_looks" -le 32 ] && echo yes || echo no)"
+  check_eq "#2715 $how: no run in line merged out of its turn" "0" "$(count gh-calls 'pr merge')"
+  check_eq "#2715 $how: every run in line was still waiting for its turn when the simulation ended" "" "$(for p in $LINE_PRS; do grep -q "It is #$p's turn\|Took the turn" "$SIM_DIR/$p.out" && printf '%s ' "$p"; done)"
+}
+# shellcheck disable=SC2086
+sim_case "holder woken first" 7 $LINE_PRS
+# shellcheck disable=SC2086
+sim_case "holder woken last" $LINE_PRS 7
 
 # =================================================================================================
 # 31. A run that waited for a runner says so (claude-config#2714). On 2026-11-10 the account's 20
