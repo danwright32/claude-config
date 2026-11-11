@@ -331,7 +331,9 @@ case "$nr" in *'shell-words.py'*) nr_named=1 ;; esac
 mkdir -p "$TMPROOT/pyc"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMPROOT/pyc" unwaited-children.py shell-words.py \
   || check "#2147 the hook helpers install into $TMPROOT/pyc" "the install refused"
-printf 'plain.sh\n' | python3 "$TMPROOT/pyc/unwaited-children.py" --root "$TMPROOT" >/dev/null 2>&1; pyc_rc=$?
+# With what arming and the runner hand down cleared (#2751), so what is measured is the scan's own
+# setting, not the suite's.
+printf 'plain.sh\n' | env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX python3 "$TMPROOT/pyc/unwaited-children.py" --root "$TMPROOT" >/dev/null 2>&1; pyc_rc=$?
 pyc_left="$(ls "$TMPROOT/pyc/__pycache__" 2>/dev/null | grep -c '^shell-words' || true)"
 [ "$pyc_rc" = 0 ] && [ "$pyc_left" = 0 ] \
   && check "#2073 loading lib/shell-words.py leaves no bytecode beside it" ok \

@@ -337,6 +337,8 @@ fi
 # load on BOTH Macs by decision (a guard missing on one Mac is a hole). This is the one exception to
 # #48, which keeps third party plugins per Mac; those live under ~/.claude/plugins and are never
 # mirrored. Each Mac's settings.json is told about the mods it holds by write_mod_plugin_dirs.
+# payload/hooks/lib/synced-trees.sh holds the same list plus skills, for the suites that scan the
+# installed config (claude-config#2750); test-synced-trees.sh fails when the two differ, so change both.
 MIRROR_DIRS=(hooks agents commands audits mods)   # full mirror (no overlap with plugins)
 # Floor for the top-level rule files, not the whole list. The real list is derived
 # from CLAUDE.md's own @imports by top_files_in(); this seed only guarantees that
