@@ -259,6 +259,8 @@ case "$*" in
   "api repos/acme/widget/actions/runs/"*"/jobs"*)
     fail_read jobs
     id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/runs/([0-9]+)/jobs.*#\1#p')"
+    # jobsjson-<id> holds GitHub's whole answer, a recorded one, for the runner queue (#2714).
+    if [ -s "$ST/jobsjson-$id" ]; then cat "$ST/jobsjson-$id"; exit 0; fi
     n="$(rd "jobs-$id")"
     printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
     ;;
@@ -266,6 +268,12 @@ case "$*" in
   "run rerun"*)
     fail_read rerun
     if [ -s "$ST/on-rerun" ]; then s="$(cat "$ST/on-rerun")"; : > "$ST/on-rerun"; eval "$s"; fi
+    ;;
+  # The repository's runs created in a window, read to count the jobs running while one waited for a
+  # runner (claude-config#2714): pool-runs holds GitHub's answer.
+  "api repos/acme/widget/actions/runs?created="*)
+    fail_read pool-runs
+    if [ -s "$ST/pool-runs" ]; then cat "$ST/pool-runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
     ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
@@ -3685,6 +3693,80 @@ check_eq "#2694 the two runs differ by 8 looks, one sleep each" "8" "$(( sl12 - 
 check_eq "#2694 the count saw the helper start programs at all" "yes" "$( [ "${pc4:-0}" -gt 50 ] && echo yes || echo no)"
 per_look=$(( (pc12 - pc4) / 8 ))
 check_eq "#2694 one look in a line of seven starts at most 40 programs (it started $per_look)" "yes" "$( [ "$per_look" -le 40 ] && echo yes || echo no)"
+
+# =================================================================================================
+# 30. A run that waited for a runner says so (claude-config#2714). On 2026-11-10 the account's 20
+#     concurrent jobs were all in use at about 01:15 and 13:40 ET, and 15 jobs waited over a minute to
+#     start, up to 6.6 minutes, which read in the merge logs as slow tests. The answers below are
+#     GitHub's own, recorded that day and kept to the fields read: run 42877567710's job deal was
+#     created at 18:40:26 UTC and started at 18:47:00, 6m 34s later, while the five runs created in
+#     the half minute before it held 20 jobs between them; jobs-42877448181.json is one of those five,
+#     every job of which started within 2 seconds of being created.
+# =================================================================================================
+PW_FIX="$DIR/merge-when-ready-fixtures/pool-wait-2026-11-10"
+PW_RUN=42877567710
+pw_rollup(){ # pw_rollup <run id> <status> <conclusion>: the run's one check, as the rollup shows it
+  jq -nc --arg id "$1" --arg s "$2" --arg c "$3" \
+    '[{__typename:"CheckRun",name:"deal",workflowName:"tests",status:$s,conclusion:$c,startedAt:null,detailsUrl:("https://github.com/acme/widget/actions/runs/" + $id + "/job/130044844243")}]'
+}
+pw_fresh(){ # pw_fresh <run id>: that run's check queued at the first look, finished at the next
+  local f
+  fresh "$OLD" 0 "$(pw_rollup "$1" QUEUED "")"
+  for f in "$PW_FIX"/jobs-*.json; do cp "$f" "$ST/jobsjson-$(basename "$f" .json | sed 's/^jobs-//')"; done
+  cp "$PW_FIX/runs.json" "$ST/pool-runs"
+  printf '%s\n' "printf '%s' '$(pw_rollup "$1" COMPLETED SUCCESS)' > \"\$ST/rollup\"" > "$ST/on-sleep"
+}
+
+pw_fresh "$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run whose job waited for a runner still merges" "0" "$rc"
+check "#2714 it names the job and how long it waited" "job deal waited 6m 34s" "$out"
+check "#2714 and how many of the repository's jobs were running when it was queued" "20 of this repository's jobs were running" "$out"
+check "#2714 and that the runner pool was full" "the runner pool was full" "$out"
+check "#2714 the jobs running are counted from runs created up to two hours before it" "actions/runs?created=2026-11-10T16:40:26Z..2026-11-10T18:40:26Z" "$(cat "$ST/gh-calls")"
+check_eq "#2714 the waited run's own jobs are read once" "1" "$(count gh-calls "runs/$PW_RUN/jobs")"
+check_eq "#2714 each overlapping run's jobs are read once" "6" "$(count gh-calls '/jobs')"
+check_not "#2714 the job that started at once is not said" "job suites part 2 waited" "$out"
+
+# Under the limit: the same wait, with a plan that allows 40, is not called a full pool.
+pw_fresh "$PW_RUN"
+out="$(MWR_POOL_LIMIT=40 run 7 --squash)"; rc=$?
+check_eq "#2714 under the limit it merges" "0" "$rc"
+check "#2714 under the limit it still says the wait" "job deal waited 6m 34s" "$out"
+check "#2714 and says the count was under the limit" "under the 40" "$out"
+check_not "#2714 and never that the pool was full" "the runner pool was full" "$out"
+
+# A clean run says nothing, and reads nothing past its own jobs.
+pw_fresh 42877448181
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run with no wait merges" "0" "$rc"
+check_not "#2714 and says nothing about a runner" "waited" "$out"
+check_eq "#2714 its own jobs were read once" "1" "$(count gh-calls '/jobs')"
+check_eq "#2714 and no window of runs was read" "0" "$(count gh-calls 'runs?created=')"
+
+# A run that had finished before the helper looked was never waited on here, so nothing is read.
+fresh "$OLD" 0 "$(pw_rollup "$PW_RUN" COMPLETED SUCCESS)"
+cp "$PW_FIX/jobs-$PW_RUN.json" "$ST/jobsjson-$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run finished before the first look merges" "0" "$rc"
+check_eq "#2714 with no jobs read" "0" "$(count gh-calls '/jobs')"
+check_not "#2714 and nothing said" "waited" "$out"
+
+# The count unreadable: the wait is still said, with why the count is missing, and it merges.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/pool-runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 an unreadable count still merges" "0" "$rc"
+check "#2714 the wait is still said" "job deal waited 6m 34s" "$out"
+check "#2714 with why the count is missing" "could not count the jobs running" "$out"
+check "#2714 naming GitHub's answer" "HTTP 502" "$out"
+
+# The run's own jobs unreadable: said once, and it merges as before.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/jobs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 unreadable jobs still merge" "0" "$rc"
+check "#2714 saying whether a job waited is unknown" "Could not read the jobs of workflow run $PW_RUN" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
