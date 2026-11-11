@@ -79,6 +79,7 @@ which is NOT loaded into the session.
 - L398. A gate must read its criteria from the SAME revision it is judging, never from the checkout it runs in, because the two drift with no symptom.
 - L179. A status query about work in flight must be scoped to the exact revision it asks about, or a superseded run answers for it in both directions.
 - L119. A detection that ACCUSES on an empty answer from a derived index must confirm against the primary record, because a missing entry looks like a breach.
+- L849. Check who is actually in a fallback channel, inbox or queue on production: one set up for testing accepts every message and reaches nobody.
 - L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can fail, not only the flavour named in the incident report.
 - L214. A fallback written for an ABSENT source must not be reached when it is PRESENT but EMPTY, or the work retargets and reports about the wrong thing.
 - L120. A fan out matching recipients against a subscription list reports SUCCESS on ZERO matches, so a new event reaches nobody while the path looks healthy.
