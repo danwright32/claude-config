@@ -322,11 +322,11 @@ export const register: Register = on => {
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
     const goal = await goalNow($)
-    if (goal.state === 'none' && !goal.met) {
+    if (goal.state !== 'none') return r
+    if (!goal.met) {
       await askIfDone($)
       return r
     }
-    if (goal.state !== 'none' || !goal.met) return r
     // Claimed first, so two turn ends at once send one prompt; released again when the prompt did not
     // enter (thrown, or dropped by a hook beneath), so a passing failure never loses the box (L368).
     if (!(await markAsked($, goal.met.id))) return r

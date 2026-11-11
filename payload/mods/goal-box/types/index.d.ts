@@ -13,7 +13,7 @@ declare module 'claude-code' {
   interface PluginState {
     /** In $.state so a reload of the mod keeps them: the rules of once per accomplishment live here. */
     'goal-box': {
-      /** Whether somebody is at the prompt: only then is the tool offered or a met goal asked about. */
+      /** Whether somebody is at the prompt: only then is the tool offered, or the session asked about a met goal or finished work. */
       interactive: boolean
       /** How many messages Dan has typed in this session (mod-kit's one reader of his own words). */
       prompts: number
