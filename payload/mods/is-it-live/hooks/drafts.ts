@@ -5,8 +5,8 @@ import { errorText } from './mod-kit/skew.ts'
 import { type Unrelated, draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, nameOfThread, owedThreads, threadKey, threadsIn } from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
-// this file keeps, per session in $.state: the threads, the step a merge last landed at, and each
-// thread's step of its last draft. register.ts calls markLanded when a merge lands and
+// this file keeps, per session in $.state: the threads, the step a merge last landed at, each
+// thread's step of its last draft, and whether the session said its later merges are unrelated (#2653). register.ts calls markLanded when a merge lands and
 // draftHold at its turn end, after the card's check has asked GitHub about the background merges.
 
 const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
