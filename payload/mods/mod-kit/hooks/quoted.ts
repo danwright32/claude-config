@@ -2,7 +2,8 @@
 // command reader ($.modkit.commands) reads shell only: it glues a flow list's brackets and commas
 // onto its words and knows nothing of YAML's '' escape. The design round guard read TypeScript
 // strings its own way (#1144) and the Slack alert guard GitLab's flow lists (#2448); both now read
-// with this. Pure. Kept here once and copied byte for byte into each mod that reads with it
+// with this. Python's strings and comments are read here too (pythonText, moved from code.ts in
+// #2710), so the file reader and a copy of it read them with no other file. Pure. Kept here once and copied byte for byte into each mod that reads with it
 // (hooks/mod-kit/quoted.ts, which tools/check-mod-shared-parts.sh holds to this one), since a mod
 // cannot import another mod's files.
 
@@ -28,6 +29,46 @@ export const quotedEnd = (text: string, i: number, style: 'code' | 'yaml'): numb
     else if (c === '\n' && style === 'code') return -1
   }
   return -1
+}
+
+/** A stretch of a python program that holds text, as pythonText gives it (published to mods as ModKitPythonText). */
+export type PythonText = { kind: 'comment' | 'string' | 'formatted'; from: number; to: number }
+
+/**
+ * Where a python program holds text rather than code (#1171, the one scanner for it): each comment
+ * after its `#`, and each string literal between its quotes, `formatted` for an f-string or a
+ * t-string, whose braces hold code. Read as python reads it: a backslash keeps a string open (in a
+ * raw string too), one with a single quote ends at its line, and one never closed runs to the end.
+ * What each reader does with a span is its own rule: codeOnly blanks comments and blocks spanning
+ * lines for the design round guard (#1165), ask before saving takes a mention of lasting memory in
+ * text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText,
+ * and the file reader (reaches.ts) counts nothing a string or comment holds (#2710).
+ */
+export const pythonText = (code: string): PythonText[] => {
+  const out: PythonText[] = []
+  let i = 0
+  while (i < code.length) {
+    const ch = code[i] as string
+    if (ch === '#') {
+      const end = code.indexOf('\n', i)
+      const to = end === -1 ? code.length : end
+      out.push({ kind: 'comment', from: i + 1, to })
+      i = to
+      continue
+    }
+    if (ch !== "'" && ch !== '"') {
+      i++
+      continue
+    }
+    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(code.slice(Math.max(0, i - 3), i))?.[1] ?? ''
+    const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+    let j = i + q.length
+    while (j < code.length && !code.startsWith(q, j) && (q.length === 3 || code[j] !== '\n')) j += code[j] === '\\' ? 2 : 1
+    const to = Math.min(j, code.length)
+    out.push({ kind: /[fFtT]/.test(prefix) ? 'formatted' : 'string', from: i + q.length, to })
+    i = to + (code.startsWith(q, to) ? q.length : 0)
+  }
+  return out
 }
 
 /** A YAML scalar as the shell receives it: a quoted one with its quoting undone, a plain one as written. */

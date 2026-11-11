@@ -53,6 +53,19 @@ trap 'rm -rf "$FIX"; [ -n "${WPID:-}" ] && kill "$WPID" 2>/dev/null; true' EXIT
 mkdir -p "$FIX/dev/payload/hooks" "$FIX/src/payload/hooks" "$FIX/state" "$FIX/elsewhere"
 : > "$FIX/dev/claude-sync"
 : > "$FIX/src/claude-sync"
+# The development checkout is a real git checkout, because that is what the daemon can reach: the
+# same folder with no repository is a plain copy, which is not warned about (claude-config#2705).
+# The daemon's clone is one too, so a case about it is quiet for being the watcher's own clone and
+# never for being a plain copy.
+git init -q "$FIX/dev" 2>/dev/null
+git init -q "$FIX/src" 2>/dev/null
+[ -e "$FIX/dev/.git" ] && [ -e "$FIX/src/.git" ] || {
+  echo "test-payload-revert-warning: git init left no repository in the fixture checkouts, so no case could ask about a checkout." >&2
+  printf 'SUITE-NOT-RUN %s\n' "the fixture checkouts could not be made git checkouts"
+  echo "passed: $pass, failed: $fail"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
+  exit 2
+}
 
 HOLD="$FIX/hold"
 # Whose hold counts depends on the session asking (claude-config#1886), and this suite runs inside a
@@ -256,6 +269,30 @@ fresh
 out_primary="$(run s1 "$G/primary")"
 [ -n "$out_primary" ] && check "#800 and so is the primary checkout" ok \
   || check "#800 and so is the primary checkout" "it stayed quiet"
+
+# A plain copy of the tree with no repository around it is out of the daemon's reach, and this
+# agrees with the payload write gate about that too (claude-config#2705, L370): quiet in a copy kept
+# in a session notes folder, and still a warning once that same copy is a git checkout of its own,
+# or when git cannot be asked.
+N="$FIX/home/.claude/state/session-notes/project/session/2678"
+mkdir -p "$N/copy/payload/hooks"; : > "$N/copy/claude-sync"
+fresh
+out_copy="$(run s1 "$N/copy")"
+[ -z "$out_copy" ] && check "#2705 a plain copy with no repository is not warned about" ok \
+  || check "#2705 a plain copy with no repository is not warned about" "out=$out_copy"
+cp -R "$N/copy" "$N/gitcopy"
+git init -q "$N/gitcopy" 2>/dev/null
+fresh
+out_gitcopy="$(run s1 "$N/gitcopy")"
+[ -n "$out_gitcopy" ] && check "#2705 the same copy is warned about once it is a git checkout" ok \
+  || check "#2705 the same copy is warned about once it is a git checkout" "it stayed quiet"
+mkdir -p "$FIX/nogit"; printf '#!/usr/bin/env bash\nexit 1\n' > "$FIX/nogit/git"; chmod +x "$FIX/nogit/git"
+fresh
+out_nogit="$(printf '{"session_id":"s1","cwd":"%s"}' "$N/copy" \
+  | env PATH="$FIX/nogit:$PATH" SYNC_WATCH_PID_FILE="$PIDF" SYNC_HOLD_FILE="$HOLD" \
+        CLAUDE_PAYLOAD_WARN_STATE_DIR="$FIX/state" bash "$HOOK" 2>/dev/null)"
+[ -n "$out_nogit" ] && check "#2705 and a plain copy still is when git cannot run" ok \
+  || check "#2705 and a plain copy still is when git cannot run" "it stayed quiet"
 
 # A subdirectory of the checkout is the same checkout: a session is rarely sitting at the root.
 fresh
