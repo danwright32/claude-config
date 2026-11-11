@@ -31,6 +31,8 @@ Try in order, and record which one works in the project's memory so future sessi
 
    Both push to the linked project. If either asks for a database password, the project is not linked with a saved one: stop, and hand Dan `supabase link` to run in his own terminal, where he types the password himself. Never pass it with `--password`.
 
+   Between the two, ask Dan with the Apply picker in section 3, carrying the migration's metadata, so his one answer covers the push and nothing asks him again (claude-config#2763). Run each of these as a command of its own, with nothing in the same Bash call but a `cd` to the project directory written out in full: no pipe, no redirection, no second command. The hooks read only a command like that, and the dry run and a read back from a file are then approved without a question. A migration written after the Apply, an edit to the file, a push to another project, or a new session means the push is asked about again.
+
 2. **Ad hoc SQL (backfills, one off fixes, reads):** the Supabase MCP `execute_sql` tool, with the project id. It needs no local tools. When it refuses a write because the connection is read only (an error saying the statement cannot run in a read only transaction), go to the next path. For a schema change in a project with no `supabase/migrations` folder, `apply_migration` is the same tool for DDL and records the change in the database's migration history; in a project that has the folder, use path 1 instead, so the history and the repository agree.
 
 3. **Ad hoc writes in a linked project: `supabase db query --linked`.** When the project directory has been linked with `supabase link`, this sends the SQL through the cached link and the Supabase Management API. No password or connection string is in the command and no env file is read, which is why it runs on the work MacBook, where a hook refuses any command that reads `.env.local`. That hook is right: never read, print or source an env file to get past it, and never route around it. Write the SQL to a file, then from the project directory:
@@ -75,6 +77,14 @@ Try in order, and record which one works in the project's memory so future sessi
 ## 3. Confirmation gate for live data
 
 Before any data-modifying statement (INSERT, UPDATE, DELETE, ALTER, migration) against a real database, show the exact SQL, the target project and tables, and the expected effect, then confirm via AskUserQuestion (Apply / Cancel). Exception: a step Dan already approved in a plan this session does not need a second confirmation.
+
+For a migration on path 1, the picker is one question whose options are labelled exactly `Apply` and `Cancel`, and it carries this metadata, filled in from the files themselves just before asking (never typed from memory):
+
+```json
+{"source": "db-apply", "migration": "<absolute path of the migration file>", "sha256": "<its sha256>", "project_ref": "<the linked project ref>"}
+```
+
+The sha256 is the first word `shasum -a 256 <file>` prints, and the project ref is the text of `supabase/.temp/project-ref` in the project directory. Never fill in `answers` yourself. `hooks/db-write-ask.sh` lets the push through on that answer while the migration is the newest file in `supabase/migrations` and unchanged, and the push goes to that project, in this session (`hooks/lib/db-apply-approval.py`); anything else is asked about, saying why.
 
 ## 4. Row counts, always
 

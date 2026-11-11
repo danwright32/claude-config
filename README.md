@@ -3685,6 +3685,11 @@ What it approves:
   never is, its query tool included.
 - The claude.ai Supabase `execute_sql` when its query is one statement starting with `select`, `with`,
   `explain` or `show`, against any project.
+- Since #2763, a Bash command that is one Supabase CLI run and nothing else but a `cd`: a `supabase db
+  query` whose every statement, in its words or in the `-f` file it names (which the hook reads), passes
+  the same rule, or a `supabase db push --dry-run`. A pipe, a redirection, a second command or a flag
+  it does not know leaves the call to the usual check. `db-write-ask.sh` reads the same command with
+  the same library, so a call approved here is never asked about there.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
 comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
@@ -3805,6 +3810,18 @@ rule lets those writes skip auto mode entirely, and the work MacBook's file held
 2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
 on that Mac. The message comes on each call of one of those tools and on every database question,
 never on a read it passes.
+
+One Apply covers one migration (#2763). Applying a migration through `/db-apply` was a dry run, a push
+and a read back, each asked about after Dan had answered the skill's own Apply or Cancel picker, so one
+decision reached him up to four times. Now a `supabase db push` that is the whole of its command (a
+`cd` before it aside) is let through, answered "allow", when Dan answered Apply in a picker carrying
+the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256 and the project
+ref) in the same session. `hooks/lib/db-apply-approval.py` reads his answer from the session
+transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
+to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
+`--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
+is asked about, the question saying why no Apply covers it. What it cannot see: which migrations the
+database already has, so an older one never applied would go with the newest.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
