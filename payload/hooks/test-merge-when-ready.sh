@@ -330,6 +330,9 @@ case "$*" in
     case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
     # merge-lands-fails: the merge lands, and gh prints an error anyway (claude-config#2289).
     [ -s "$ST/merge-lands-fails" ] && { cat "$ST/merge-lands-fails" >&2; rm -f "$ST/merge-lands-fails"; exit 1; }
+    # A merge that landed with nothing to complain about exits 0, as gh does. Without this the test
+    # above was the script's last command, so every merge exited 1 (claude-config#2687).
+    exit 0
     ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
 esac
@@ -542,6 +545,12 @@ fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
 check_eq "#851 an up to date green pull request merges" "0" "$rc"
 check "#851 and says it merged that head" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+# The clean path (claude-config#2687): gh pr merge exits 0, as it does when the merge lands with
+# nothing to complain about. Until #2687 the fake gh exited 1 after every merge, so every merge in
+# this suite took the "gh exited after merging" path and this one was never run.
+check "#2687 a clean merge reports the merge and the branch deleted, with nothing in between" "Merged #7 in acme/widget at ${OLD:0:7}. Deleted its branch feat/x." "$out"
+check_not "#2687 and names no gh failure, since there was none" "gh exited" "$out"
+check_eq "#2687 the branch is deleted, once" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
 check_eq "#851 the branch is not updated when it is not behind" "0" "$(count gh-calls 'pr update-branch')"
 check_eq "#851 exactly one merge" "1" "$(count gh-calls 'pr merge')"
 check "#851 the merge pins the head it judged" "pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
@@ -1152,6 +1161,18 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#2289 a merge that landed though GitHub answered Something went wrong is reported merged" "0" "$rc"
 check "#2289 as merged, naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: GraphQL: Something went wrong" "$out"
 check_eq "#2289 and merged once" "1" "$(count gh-calls 'pr merge')"
+
+# The other shape of merged but exited non zero (claude-config#2687): gh run from a detached HEAD
+# merges and then fails on the local branch, as the global CLAUDE.md records for --delete-branch.
+# The read back still finds it merged, and the branch on GitHub is still deleted.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'could not determine current branch: failed to run git: fatal: not a symbolic ref' > "$ST/merge-lands-fails"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#2687 a merge gh failed after, from a detached HEAD, is reported merged" "0" "$rc"
+check "#2687 naming what gh said" "Merged #7 in acme/widget at ${OLD:0:7} (gh exited 1 after merging: could not determine current branch" "$out"
+check "#2687 and the branch is still deleted" "Deleted its branch feat/x." "$out"
+check_eq "#2687 once" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#2687 with one merge" "1" "$(count gh-calls 'pr merge')"
 
 # The head moving during the wait is judged as a new head: the old head is never merged again.
 fresh "$OLD" 0 "$GREEN"
@@ -3621,6 +3642,49 @@ check_eq "#2629 control: as the active account" "active" "$(cat "$ST/merge-as" 2
 check_eq "#2629 control: its permission read once" "1" "$(count perm-asked .)"
 check_eq "#2629 control: the accounts never listed" "0" "$(count gh-calls '^auth status')"
 check "#2629 control: saying which account and why" "Merging as the active gh account: it has WRITE on acme/widget." "$out"
+
+# =================================================================================================
+# 29. What one look costs while it waits in line (claude-config#2694). On 2026-11-10 about 15 helpers
+#     waited at once on the personal MacBook, each looking about once a minute, while sessions there
+#     ran slow, and one look in a line of four started about 87 programs (29 sed, 16 cat, 12 jq), most
+#     of them a sed per field of every ticket in the line, so the cost grew with the line. Every common
+#     program is wrapped here to count what the helper itself starts; a fake's own programs are not
+#     counted (the bash wrapper takes the wrappers off the path for it), the fake's start is. One look
+#     is the difference between a run of 12 looks and one of 4, over 8, behind six live runs. The
+#     ceiling is a setting chosen from the measure on 2026-11-10 (109 a look here on the code before,
+#     about 22 after, the same behind 3 runs or 14), not a measured limit.
+# =================================================================================================
+PC_WRAP="$WORKDIR/pc-wrap"; PC_LOG="$WORKDIR/pc-spawns"; PC_BASH="$(command -v bash)"; mkdir -p "$PC_WRAP"
+for t in jq cat sed grep egrep mkdir date mv rm head tail awk git perl python3 mktemp wc tr cut sort uniq ls find stat touch ps sysctl dirname basename seq env sleep id hostname tee cp chmod ln readlink expr pgrep shasum xargs rmdir od; do
+  real="$(command -v "$t" 2>/dev/null)" || continue
+  case "$real" in /*) ;; *) continue ;; esac
+  printf '#!/bin/bash\nprintf "%%s\\n" %s >> "%s"\nexec "%s" "$@"\n' "$t" "$PC_LOG" "$real" > "$PC_WRAP/$t"
+done
+printf '#!/bin/bash\nprintf "bash\\n" >> "%s"\nw="%s:"; PATH="${PATH#"$w"}"\nexec "%s" "$@"\n' "$PC_LOG" "$PC_WRAP" "$(command -v bash)" > "$PC_WRAP/bash"
+chmod +x "$PC_WRAP"/*
+# pc_line <looks>: one run behind six live runs, who all leave after <looks> sleeps; sets out, rc,
+# pc_n (the programs it started) and pc_sleeps.
+pc_line(){
+  local p
+  fresh "$OLD" 0 "$GREEN"
+  for p in 101 102 103 104 105 106; do "$BIN/take-turn" acme/widget "$p"; done
+  for _ in $(seq 2 "$1"); do printf ':\n' >> "$ST/on-sleep"; done
+  for p in 101 102 103 104 105 106; do leave "$p"; printf '; '; done >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+  : > "$PC_LOG"
+  # The helper itself is started by the real bash, so the wrappers stay on its path.
+  out="$(cd "$REPO" && PATH="$PC_WRAP:$PATH" MWR_TURN_HOLD_SECONDS=100000 "$PC_BASH" "$HELPER" 7 --squash 2>&1)"; rc=$?
+  pc_n="$(wc -l < "$PC_LOG" | tr -d ' ')"; pc_sleeps="$(wc -l < "$ST/sleeps" | tr -d ' ')"
+}
+pc_line 4; pc4="$pc_n"; sl4="$pc_sleeps"
+check_eq "#2694 the run of 4 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 4 looks in line" "after waiting 2m 00s for it" "$out"
+pc_line 12; pc12="$pc_n"; sl12="$pc_sleeps"
+check_eq "#2694 the run of 12 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 12 looks in line" "after waiting 6m 00s for it" "$out"
+check_eq "#2694 the two runs differ by 8 looks, one sleep each" "8" "$(( sl12 - sl4 ))"
+check_eq "#2694 the count saw the helper start programs at all" "yes" "$( [ "${pc4:-0}" -gt 50 ] && echo yes || echo no)"
+per_look=$(( (pc12 - pc4) / 8 ))
+check_eq "#2694 one look in a line of seven starts at most 40 programs (it started $per_look)" "yes" "$( [ "$per_look" -le 40 ] && echo yes || echo no)"
 
 echo
 echo "passed: $pass, failed: $fail"

@@ -196,7 +196,14 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       gitRuns.push(e.argv.join(' '))
       if (ctl.gitBlob === 'throws') throw new Error('spawn git ENOENT')
       const text = blobs[`${args[1]} ${args[4]}`]
-      if (text === undefined) return { value: { exitCode: 128, stdout: '', stderr: `fatal: path '${args[4]}' does not exist\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (text === undefined) {
+        // A path the index holds, but not at the stage asked for (a file a merge left unmerged has
+        // none at stage 0), in git's own words, measured on a real conflict for #2704.
+        const staged = /^:(?:([0-3]):)?(.*)$/.exec(String(args[4]))
+        const held = staged ? ['1', '2', '3', '0'].find(n => blobs[`${args[1]} :${n === '0' ? '' : `${n}:`}${staged[2]}`] !== undefined) : undefined
+        const stderr = staged && held !== undefined ? `fatal: path '${staged[2]}' is in the index, but not at stage ${staged[1] ?? '0'}\nhint: Did you mean ':${held}:${staged[2]}'?\n` : `fatal: path '${args[4]}' does not exist\n`
+        return { value: { exitCode: 128, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      }
       return { value: { exitCode: 0, stdout: text, stderr: '', isStdoutTruncated: ctl.gitBlob === 'truncated', isStderrTruncated: false } } as never
     }
     if (cmd === '__modkit' && args[0] === 'writes') {
@@ -2688,6 +2695,100 @@ test('#1158: a restore git cannot read is held as a look change, and the refusal
   const reads = blobReads()
   expect(refusalOf(await call($, { tool: 'Bash', command: `git restore --source=--textconv ${MOD_REL}` }))).toContain('names its source as an option')
   expect(blobReads()).toBe(reads)
+  expect(w.ran).toEqual([])
+})
+
+// #2704: on 2026-11-10 main was merged into a pull request's branch and the merge left a guard's
+// hook files unmerged. `git checkout --conflict=diff3` on them was held: the guard read the index's
+// copy with `git cat-file blob :<path>`, which an unmerged file has none of (git exits 128, "is in
+// the index, but not at stage 0", measured on a real conflict), so it judged the whole file. An
+// unmerged file is read by the sides the index does hold: ':2', this branch's own, is what the file
+// was before the merge, and what a checkout or restore of it is judged against. The file as the
+// merge left it, on main's side a toast reworded:
+const GUARD_REL = 'payload/mods/demo/hooks/guard.ts'
+const OURS = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
+const THEIRS_LOGIC = GUARD_TEXT.replace('what.length > 3', 'what.length > 7')
+const THEIRS_WORDS = THEIRS_LOGIC.replace('print a secret.', 'print a secret, and told Dan.')
+const lineOf = (text: string) => text.split('\n').find(l => l.includes('what.length')) as string
+const conflicted = (theirs: string) => OURS.replace(lineOf(OURS), ['<<<<<<< HEAD', lineOf(OURS), '=======', lineOf(theirs), '>>>>>>> main'].join('\n'))
+const sides = (theirs: string) => ({ [`/w/slate :1:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate :2:${GUARD_REL}`]: OURS, [`/w/slate :3:${GUARD_REL}`]: theirs })
+
+test("#2704: on a file a merge left unmerged, a checkout that writes the conflict again or takes this branch's side passes, read from this branch's side", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: conflicted(THEIRS_WORDS) }, blobs: sides(THEIRS_WORDS) })
+  // The conflict written again, which settles nothing; then this branch's side taken whole.
+  const commands = [`git checkout --conflict=diff3 -- ${GUARD_REL}`, `git checkout -m -- ${GUARD_REL}`, `git restore --merge ${GUARD_REL}`, `git checkout --ours -- ${GUARD_REL}`, `git restore --ours ${GUARD_REL}`]
+  for (const command of commands) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(commands.length)
+  // The index's own copy is asked for first, and this branch's side only once git has none.
+  expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([`git -C /w/slate cat-file blob :${GUARD_REL}`, `git -C /w/slate cat-file blob :2:${GUARD_REL}`])
+  // An app page alike: its conflict written again, and this branch's side taken, pass.
+  const RESULT_REL = 'src/app/my-offers/result/page.tsx'
+  const wider = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
+  w.files[RESULT] = `<<<<<<< HEAD\n${RESULT_TEXT}=======\n${wider}>>>>>>> main\n`
+  w.blobs[`/w/slate :2:${RESULT_REL}`] = RESULT_TEXT
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = wider
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --conflict=diff3 -- ${RESULT_REL}` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${RESULT_REL}` }))).toBe('')
+})
+
+test("#2704: taking the side merged in is judged against this branch's side: new words for a message, or a new look, are asked about, and a logic change passes", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: conflicted(THEIRS_WORDS) }, blobs: sides(THEIRS_WORDS) })
+  const theirs = () => call($, { tool: 'Bash', command: `git checkout --theirs -- ${GUARD_REL}` })
+  const why = refusalOf(await theirs())
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(`${GUARD_REL} changes the words of a message Dan reads`)
+  expect(why).toContain('and told Dan')
+  // Held too once the file on disk already reads as main's side: it is this branch's side the
+  // words are new against, never the conflict as it stands in the file.
+  w.files[GUARD_HOOK] = THEIRS_WORDS
+  expect(refusalOf(await theirs())).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  // Main's side differing from this branch's only in logic passes, as that edit would.
+  w.files[GUARD_HOOK] = conflicted(THEIRS_LOGIC)
+  w.blobs[`/w/slate :3:${GUARD_REL}`] = THEIRS_LOGIC
+  expect(refusalOf(await theirs())).toBe('')
+  // An app page whose side on main changes a class is asked about; one changing a data prop passes.
+  const RESULT_REL = 'src/app/my-offers/result/page.tsx'
+  const wider = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
+  w.files[RESULT] = `<<<<<<< HEAD\n${RESULT_TEXT}=======\n${wider}>>>>>>> main\n`
+  w.blobs[`/w/slate :2:${RESULT_REL}`] = RESULT_TEXT
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = wider
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toContain(SKIP_QUESTION)
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = RESULT_TEXT.replace('xbc={xbc}', "xbc={leadXbc ?? ''}")
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test("#2704: an unmerged file whose side on this branch cannot be read is held whole as before, the refusal naming each read and what git said of it", withKit, async ($, on) => {
+  // Deleted on this branch and changed on main: the index holds stages 1 and 3 alone.
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: THEIRS_WORDS }, blobs: { [`/w/slate :1:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate :3:${GUARD_REL}`]: THEIRS_WORDS } })
+  const again = () => call($, { tool: 'Bash', command: `git checkout --conflict=diff3 -- ${GUARD_REL}` })
+  const why = refusalOf(await again())
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(`could not read what git puts back in ${GUARD_REL}`)
+  expect(why).toContain(`git cat-file blob :${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 0`)
+  expect(why).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 2`)
+  // A file the index holds at no stage at all says so of both reads.
+  delete w.blobs[`/w/slate :1:${GUARD_REL}`]
+  delete w.blobs[`/w/slate :3:${GUARD_REL}`]
+  const absent = refusalOf(await call($, { tool: 'Bash', command: `git checkout -- ${GUARD_REL}` }))
+  expect(absent).toContain(SKIP_QUESTION)
+  expect(absent).toContain(`git cat-file blob :${GUARD_REL} exited 128: fatal: path ':${GUARD_REL}' does not exist`)
+  expect(absent).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path ':2:${GUARD_REL}' does not exist`)
+  // This branch's side there, but too long to read whole, or git not run at all: held, saying which.
+  Object.assign(w.blobs, sides(THEIRS_WORDS))
+  w.files[GUARD_HOOK] = conflicted(THEIRS_WORDS)
+  w.ctl.gitBlob = 'truncated'
+  expect(refusalOf(await again())).toContain(`git cat-file blob :2:${GUARD_REL} gave more than could be read whole`)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${GUARD_REL}` }))).toContain(`git cat-file blob :3:${GUARD_REL} gave more than could be read whole`)
+  w.ctl.gitBlob = 'throws'
+  expect(refusalOf(await again())).toContain(`git cat-file blob :2:${GUARD_REL} could not be run`)
+  // --ours on a file no merge left unmerged has no such side, and is held as it was.
+  w.ctl.gitBlob = undefined
+  w.files[GUARD_HOOK] = THEIRS_WORDS
+  for (const key of Object.keys(sides(''))) delete w.blobs[key]
+  w.blobs[`/w/slate :${GUARD_REL}`] = OURS
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${GUARD_REL}` }))).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 2`)
   expect(w.ran).toEqual([])
 })
 

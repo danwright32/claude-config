@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
@@ -3459,6 +3469,23 @@ The gate cannot trace which string reaches the sink (a variable, a function, ano
 any file reached names one, the walk starts again following every string, as before. Measured over
 1514 scripts in the personal MacBook's repositories on 2026-11-09: no verdict changed.
 
+A type only import statement of a declaration file that is not there is not followed either (#2526):
+`import type { A } from '../types/index.d.ts'`, `import type A from` and `import type * as ns from`,
+where the path as written ends `.d.ts`. The whole statement is erased before anything runs, so no
+module is loaded for it whatever a resolver would make of the path. Measured 2026-11-10 with bun
+1.3.11, node 22.22.2 and deno, with and without `verbatimModuleSyntax`: a module that prints when
+loaded printed under none of them, and a missing one stopped none of them. Before this, `bun test` on
+a mod's test was refused in every agent worktree, because the tests import the generated
+`.claude-plugin/types/mod-kit/index.d.ts` for its types and a worktree does not have it. Nothing
+wider passes. `import { type A } from` is still refused, because node only blanks the names and
+loads the module (measured the same day: the module printed), and so are a value import, a mixed
+one, a bare `import`, `require`, `import()`, `import type A = require()` and `export type ... from`
+of the same missing file, a type only import of a missing file that is not a `.d.ts`, and a default
+import that is merely named `type`. A declaration file that is there is read and judged like any
+module. Measured over the 469 scripts in this repository, run as `bun test <file>` in a worktree:
+52 went from refused to passing, every one refused before for that one generated file, and none
+went the other way.
+
 A Python script's imports are followed the same way: `import x`, `from x import y` and relative
 `from .x import y`, each package's `__init__.py` included, an absolute import found from the script's
 own folder as Python finds it. A module not beside the script is looked for where Python looks next
@@ -3561,6 +3588,23 @@ distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse 
 the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
+
+When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
+to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
+with `gh pr merge` directly once every check is green, without deleting the branch (the helper
+deletes it only after moving the pull requests stacked on it), to confirm the state with
+`gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
+same merge seven times because the refusal named no other way. The reader prints a verdict of its
+own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
+bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
+refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
+for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
+seconds) is inferred, not measured.
 
 ## Read only queries are approved without asking
 
@@ -3968,6 +4012,28 @@ sync suite recomputes both bounds from the record, read by column name, and fail
 at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
 make rather than a pull request gone red at random.
 
+The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
+
+```bash
+bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
+```
+
+It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
+main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
+suite ran in: its section time and check count, and that runner's core count, processor and region.
+A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
+lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
+middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
+`--split` gives one. `--print` shows the result and changes nothing. A run it cannot read without
+guessing (no core count, no section time after the result, a suite reported in two parts, a new
+run whose log gh could not fetch) is named and nothing is written; a recorded run whose log gh
+could not fetch keeps its row and is named; a run that never reached the sync suite's result
+is named as skipped. The cache matters: on 2026-11-10 the window held about 400 runs, whose logs of
+half a megabyte each took several minutes to fetch, and a finished run's log never changes.
+`tools/test-ci-section-time-readings.sh` holds the tool to the committed record, from real logs
+saved in `tools/ci-section-time-sample/`. Finished runs are picked out by the tool rather than by
+`gh run list --status completed`, which on 2026-11-10 left out 3 of 290 finished runs.
+
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
 ```bash
@@ -4367,6 +4433,15 @@ each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TES
 each part's timings into the cache the next deal reads. A part refuses outright when the deal does
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
+
+A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
+the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
+named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
+tree has such a record, and reuses it only on proof: that run completed green, is this repository's
+own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
+exactly this tree. Every job then still reports under its own name, skips its work, and says in its
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite, and a
+push to main or a run by hand always runs in full.
 
 Run ONE section while iterating, which is the fast path:
 
@@ -5462,6 +5537,15 @@ of those steps discarded its errors, so a file whose hash failed matched nothing
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
 
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
@@ -6308,7 +6392,9 @@ judged) or by Bash: every file mod-kit's `$.modkit.writes` names, a removal or e
 git itself changes (a checkout of a path, `git restore`, `git rm`, both names of a `git mv`, #1136;
 since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the lines it changes, read
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
-of changed lines at a time, so undoing an edit the guard let through passes; one git cannot read, or
+of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
+merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
+and judged against that side rather than the conflict on disk; one git cannot read, or
 one beside any other command on the line (a cd aside), which may change what it puts back first, is
 judged whole with the refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
