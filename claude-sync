@@ -5203,16 +5203,28 @@ stage_local_to_payload(){
   # Only where this Mac's copy really differs. A path the repo moved that is byte for byte what is
   # here has nothing of this Mac's waiting behind it, and naming it would put a line on every send
   # from a Mac that is merely behind, which is the alert nobody reads (L36).
-  local _sw_p _sw_held=""
+  # A path that could not be compared is held back too, since whether the repo moved past this Mac's
+  # copy is unknown, but said in its own words: the sentence below claims the repo changed it, which
+  # nothing measured for those (#2682, L11).
+  local _sw_p _sw_held="" _sw_unknown="" _sw_rc
   while IFS= read -r _sw_p; do
     [ -n "$_sw_p" ] || continue
     [ -e "$CLAUDE_HOME/$_sw_p" ] || continue
-    payload_path_applied "$_sw_p" && continue
+    _sw_rc=0; payload_path_applied "$_sw_p" || _sw_rc=$?
+    [ "$_sw_rc" -eq 0 ] && continue
+    if [ "$_sw_rc" -eq 2 ]; then
+      _sw_unknown="${_sw_unknown:+$_sw_unknown; }$_sw_p ($PPA_WHY)"
+      note_held_back "$_sw_p"
+      continue
+    fi
     _sw_held="${_sw_held:+$_sw_held
 }$_sw_p"
   done <<SWPROT
 $protected
 SWPROT
+  if [ -n "$_sw_unknown" ]; then
+    echo "claude-sync: NOT publishing $_sw_unknown, because whether the shared repo has changed it since this Mac last applied could not be compared, and sending this Mac's copy over a newer one would revert it. Nothing here was altered and nothing was lost. Run 'claude-sync status' again: a step that fails every time is failing on that file here, and is worth running by hand." >&2
+  fi
   if [ -n "$_sw_held" ]; then
     # The way out depends on what runs next (claude-config#845). A sync receives straight after this,
     # so sending its reader to another command was advice to repeat work already under way; and from
@@ -8550,21 +8562,37 @@ LOOP_INPUT
 # own name; a plugin-managed skill is deliberately never applied at all. Compared
 # against a counterpart that will never exist, those read as "not applied" on
 # every run, which is the same permanent wedge this guard was just fixed for.
+#
+# THREE ANSWERS (claude-config#2682): 0 applied, 1 not applied, and 2 COULD NOT COMPARE, with the step
+# that failed and its exit status in PPA_WHY. A failed step used to answer 1, so status said "the
+# shared repo changed it and this Mac has not applied it" of a file nothing had compared (L11, L184).
+# Every caller that acts treats 2 as it treated 1, holding the file back, which is the side that
+# cannot revert the other Mac's work; the ones that speak say it could not compare instead.
+PPA_WHY=""
 payload_path_applied(){   # $1 = path relative to payload/
-  local p="$1" frag carried
+  local p="$1" frag carried rc view
+  PPA_WHY=""
   case "$p" in
     settings.hooks.json)
       [ -f "$PAYLOAD/$p" ] || return 0
       command -v jq >/dev/null 2>&1 || return 0
       [ -f "$CLAUDE_HOME/settings.json" ] || return 1
-      frag="$(detok < "$PAYLOAD/$p")" || return 1
+      rc=0; frag="$(detok < "$PAYLOAD/$p")" || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        PPA_WHY="putting this Mac's home path in place of the placeholder failed (exit $rc)"
+        return 2
+      fi
       # Compare the hooks block itself, not the file's bytes. settings.json is
       # hand-edited and tool-edited, so its formatting drifts from what jq would
       # emit; asking whether the rendered file matches would answer "no" forever
       # on nothing but whitespace, and wedge sending all over again.
-      jq -e --argjson frag "$frag" '(.hooks // {}) == ($frag.hooks // {})' \
-        "$CLAUDE_HOME/settings.json" >/dev/null 2>&1
-      return $?
+      # jq -e answers 1 for false and 2 or more when it could not run the comparison at all (a
+      # settings.json or a hooks block it cannot parse), which is no answer about the hooks.
+      rc=0; jq -e --argjson frag "$frag" '(.hooks // {}) == ($frag.hooks // {})' \
+        "$CLAUDE_HOME/settings.json" >/dev/null 2>&1 || rc=$?
+      case "$rc" in 0|1) return "$rc" ;; esac
+      PPA_WHY="comparing its hooks block with $CLAUDE_HOME/settings.json failed (jq exit $rc)"
+      return 2
       ;;
     settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
     "$RTK_EXCLUDES_FILE")
@@ -8589,9 +8617,11 @@ payload_path_applied(){   # $1 = path relative to payload/
       local want; want="$(shared_settings_wanted 2>/dev/null)"
       [ "$want" = '{}' ] && return 0
       [ -f "$CLAUDE_HOME/settings.json" ] || return 1
-      jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --argjson s "$want" \
-        "$SHARED_SETTINGS_APPLY_JQ"' ($cur[0] | apply_shared($s)) == $cur[0]' >/dev/null 2>&1
-      return $?
+      rc=0; jq -en --slurpfile cur "$CLAUDE_HOME/settings.json" --argjson s "$want" \
+        "$SHARED_SETTINGS_APPLY_JQ"' ($cur[0] | apply_shared($s)) == $cur[0]' >/dev/null 2>&1 || rc=$?
+      case "$rc" in 0|1) return "$rc" ;; esac
+      PPA_WHY="comparing it with $CLAUDE_HOME/settings.json failed (jq exit $rc)"
+      return 2
       ;;
   esac
   # A skills/ path the apply never writes (a plugin skill, the platform's downloads, a .trash folder)
@@ -8599,11 +8629,15 @@ payload_path_applied(){   # $1 = path relative to payload/
   # matches exactly what rsync leaves out: an anchored name only at the top of skills/, an unanchored
   # one at any depth. This used to parse the excludes itself and match every name at the top only,
   # so a .trash folder inside a real skill read as unapplied for ever (claude-config#2004, L263).
-  # A filter that fails (the list unreadable, its stand in exiting) answers "not applied" rather
-  # than "left out": an empty answer from a broken reader must not read as an exclusion.
+  # A filter that fails (the list unreadable, its stand in exiting) answers "could not compare"
+  # rather than "left out": an empty answer from a broken reader must not read as an exclusion.
   case "$p" in
     skills/*)
-      carried="$(carried_skill_paths skills <<< "$p")" || return 1
+      rc=0; carried="$(carried_skill_paths skills <<< "$p")" || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        PPA_WHY="reading which skills the sync carries failed (exit $rc)"
+        return 2
+      fi
       [ -n "$carried" ] || return 0
       ;;
   esac
@@ -8614,8 +8648,24 @@ payload_path_applied(){   # $1 = path relative to payload/
   fi
   [ -f "$CLAUDE_HOME/$p" ] || return 1
   # Through the local view, never the raw bytes: a tokenized file cannot equal its payload copy,
-  # so a raw comparison answers "not applied" for ever (#87).
-  payload_local_view "$p" | cmp -s - "$CLAUDE_HOME/$p"
+  # so a raw comparison answers "not applied" for ever (#87). Through a file, so the view and the
+  # comparison each answer for themselves: piped, a view that failed handed cmp a short stream,
+  # which compares as a difference (#2682).
+  if ! view="$(scratch_file 2>/dev/null)" || [ -z "$view" ]; then
+    PPA_WHY="no scratch file could be made to compare it in"
+    return 2
+  fi
+  rc=0; payload_local_view "$p" > "$view" 2>/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$view"
+    PPA_WHY="making the repo's copy as this Mac holds it, with this Mac's home path in place of the placeholder, failed (exit $rc)"
+    return 2
+  fi
+  rc=0; cmp -s "$view" "$CLAUDE_HOME/$p" || rc=$?
+  rm -f "$view"
+  case "$rc" in 0|1) return "$rc" ;; esac
+  PPA_WHY="comparing it with this Mac's copy failed (cmp exit $rc)"
+  return 2
 }
 
 # Is every path the repo has changed since this Mac last applied already what this Mac holds?
@@ -8628,6 +8678,9 @@ payload_fully_applied(){
   local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
+    # A path that could not be compared (2) is not known to be applied, so it answers no as an
+    # unapplied one does: the marker this repairs then stays where it is, and nothing is sent over
+    # the other Mac's copy on a guess (#2682).
     payload_path_applied "$p" || return 1
   done <<LOOP_INPUT
 $loop_input
@@ -13164,7 +13217,50 @@ mods_lag_records(){
   # hash an empty stream, whose hash is a real one that matches nothing.
   tokhashes=""
   if [ -d "$CLAUDE_HOME/mods" ]; then
-    local loop_input; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)" || true
+    # grep exits 1 for no match and 2 for a file it could not read, and exits 2 even when every
+    # other file matched, so the matches it printed are still used and each file it named in an
+    # error is recorded as not compared: with no placeholder hash it would read as this Mac's own
+    # work (#2688, the class #2673 fixed one step later). An error naming no file under mods leaves
+    # unknown which files hold the home path, and a file compared without knowing would be counted
+    # in the lag line, or read as this Mac's own work, while status said it could not compare it. So
+    # each installed file the search neither printed nor named is then searched on its own: one it
+    # answers for is compared as usual, and one whose own search fails is recorded as not compared,
+    # counted neither as behind nor as this Mac's own work. A process per file, on that failure only.
+    local loop_input gerr gline gpath unattributed="" grc gmsg
+    gerr="$(scratch_file 2>/dev/null)" || gerr=""
+    rc=0; loop_input="$(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>"${gerr:-/dev/null}")" || rc=$?
+    if [ "$rc" -ge 2 ]; then
+      if [ -n "$gerr" ] && [ -s "$gerr" ]; then
+        while IFS= read -r gline; do
+          case "$gline" in
+            *"$CLAUDE_HOME/mods/"*": "*)
+              gpath="${gline#*"$CLAUDE_HOME/mods/"}"
+              unread="${unread}unread	${gpath%: *}	searching it for this Mac's home path failed (grep exit $rc: ${gpath##*: })
+"
+              ;;
+            *) unattributed=1 ;;
+          esac
+        done < "$gerr"
+      else
+        unattributed=1
+      fi
+      if [ -n "$unattributed" ]; then
+        while IFS= read -r f; do
+          [ -n "$f" ] || continue
+          case $'\n'"$loop_input"$'\n' in *$'\n'"$CLAUDE_HOME/mods/$f"$'\n'*) continue ;; esac
+          case "$unread" in *"unread	$f	"*) continue ;; esac
+          grc=0; gmsg="$(grep -IlF -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods/$f" 2>&1 >/dev/null)" || grc=$?
+          case "$grc" in
+            0) loop_input="${loop_input:+$loop_input
+}$CLAUDE_HOME/mods/$f" ;;
+            1) ;;
+            *) unread="${unread}unread	$f	searching it for this Mac's home path failed (grep exit $grc${gmsg:+: ${gmsg##*: }})
+" ;;
+          esac
+        done <<< "$installed"
+      fi
+    fi
+    [ -n "$gerr" ] && rm -f "$gerr"
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       rel="${f#"$CLAUDE_HOME/mods/"}"
@@ -13303,7 +13399,7 @@ CAUSEEOF
 }
 
 report_mods_behind_main(){
-  local window recs unread n kind rel why
+  local window recs unread
   window="${SYNC_MODS_LAG_AFTER:-90000}"
   case "$window" in
     ''|*[!0-9]*)
@@ -13316,14 +13412,25 @@ report_mods_behind_main(){
   # A file that could not be compared is said whatever the window, since it is no lag of any age:
   # whether it is behind is unknown, and saying nothing would read as it being level (L98, L11).
   [ -n "$unread" ] || return 0
-  # Files, not lines: a file can fail more than one step (its own hash and the placeholder one), and
-  # each failure keeps its own line below.
-  n="$(printf '%s\n' "$unread" | awk -F '\t' '!seen[$2]++ { k++ } END { print k + 0 }')"
-  echo "mods not compared with the shared repo: status could not compare $n file(s) in $CLAUDE_HOME/mods with origin/$(sync_branch), so it cannot say whether they are behind it, and counts them neither as behind nor as this Mac's own work:"
-  while IFS=$'\t' read -r kind rel why; do
+  report_not_compared "mods not compared with the shared repo" \
+    "in $CLAUDE_HOME/mods with origin/$(sync_branch), so it cannot say whether they are behind it, and counts them neither as behind nor as this Mac's own work" \
+    "$(printf '%s\n' "$unread" | cut -f 2-)" \
+    "Run 'claude-sync status' again: a step that fails every time is git, perl or grep failing on that file here, and is worth running by hand."
+  return 0
+}
+
+# A file status could not compare, said the same way whatever it was being compared for (#2673,
+# #2682): a heading counting the files and saying what is therefore unknown, then one line per
+# failure naming the file and the step that failed, then what to do. Files, not lines, are counted:
+# one file can fail more than one step, and each failure keeps its own line.
+report_not_compared(){   # $1 = the heading's subject  $2 = the rest of its sentence  $3 = "<file>\t<why>" lines  $4 = the closing line
+  local n rel why
+  n="$(printf '%s\n' "$3" | awk -F '\t' 'NF && !seen[$1]++ { k++ } END { print k + 0 }')"
+  echo "$1: status could not compare $n file(s) $2:"
+  while IFS=$'\t' read -r rel why; do
     [ -n "$rel" ] && echo "  could not compare $rel: $why"
-  done <<< "$unread"
-  echo "  Run 'claude-sync status' again: a step that fails every time is git or perl failing on that file here, and is worth running by hand."
+  done <<< "$3"
+  echo "  $4"
   return 0
 }
 
@@ -13763,7 +13870,7 @@ report_superseded_snapshot(){
 # applied (L41, L70).
 report_unapplied_payload(){
   have_git || return 0
-  local last head p held=""
+  local last head p held="" unknown="" rc
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
   head="$(repo_head)"
@@ -13772,12 +13879,26 @@ report_unapplied_payload(){
   local loop_input; loop_input="$(unapplied_paths)" || true
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    payload_path_applied "$p" && continue
+    rc=0; payload_path_applied "$p" || rc=$?
+    [ "$rc" -eq 0 ] && continue
+    # Could not compare: said under its own heading, in the words the mods comparison uses, and
+    # never as a file the shared repo changed, which nothing measured (#2682, L11).
+    if [ "$rc" -eq 2 ]; then
+      unknown="${unknown}$p	$PPA_WHY
+"
+      continue
+    fi
     held="${held:+$held
 }$p"
   done <<LOOP_INPUT
 $loop_input
 LOOP_INPUT
+  if [ -n "$unknown" ]; then
+    report_not_compared "config not compared with the shared repo" \
+      "that the shared repo changed since this Mac last applied with what this Mac holds, so it cannot say whether this Mac has applied them, and lists them neither as applied nor as unapplied" \
+      "$unknown" \
+      "Run 'claude-sync status' again: a step that fails every time is perl, jq or cmp failing on that file here, and is worth running by hand."
+  fi
   [ -n "$held" ] || return 0
   echo "--- config this clone holds and has not applied ---"
   # ONE LINE PER FILE, each carrying the path AND what is true of it. A list of names under a

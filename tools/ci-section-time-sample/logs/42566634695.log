@@ -1,0 +1,8 @@
+suite	Set up job	2026-11-09T05:19:32.0173653Z Region: centralus
+suite	Record the environment the suite is judged in	2026-11-09T05:19:37.7270977Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suite	Record the environment the suite is judged in	2026-11-09T05:19:37.7273695Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suite	Record the environment the suite is judged in	2026-11-09T05:19:40.7987214Z cores: 4
+suite	Record the environment the suite is judged in	2026-11-09T05:19:40.8010767Z processor: INTEL(R) XEON(R) PLATINUM 8573C
+suite	Every suite in the repo	2026-11-09T05:55:07.0701546Z   FAIL  test-python-bad-bytes.sh               47 passed, 1 failed        (2s)
+suite	Every suite in the repo	2026-11-09T05:55:12.6193222Z   ok    test-claude-sync.sh                    3398 passed, 0 failed      (530s)
+suite	Every suite in the repo	2026-11-09T05:55:12.6401230Z           note: 1046s of section time against a 1368s budget
