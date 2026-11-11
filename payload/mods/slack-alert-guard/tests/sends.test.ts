@@ -175,3 +175,49 @@ test('in a file that posts by itself, a send reaching a name it did not could br
   expect(mayBringIn(own('  console.log(note)'), own(posts('line')))).toBe(true)
   expect(mayBringIn(own(posts('note')), own(`  console.log(line)\n${posts('note')}`))).toBe(false)
 })
+
+// #2719: a name's declarations are found only where the name stands, and what a file holds apart
+// from what it is asked to follow is worked out once for its text. Each case here is one the search
+// over the whole file found, so a narrower search that missed it would fail.
+test('declarations are found where the name stands: a destructuring, a python target list after a bare line, never a longer word holding the name (#2719)', async () => {
+  const r = js(
+    [
+      `const build = () => ({ text: 'The queue has stopped moving', channel: '#ops' })`,
+      `const textual = 'A longer word is not the name'`,
+      `export const run = () => {`,
+      `  const { text, channel } = build()`,
+      `  console.log('built', channel, textual)`,
+      `  return sendSlackAlert(text)`,
+      `}`,
+    ].join('\n'),
+  )
+  const got = reached(r)
+  expect(got['The queue has stopped moving']).toBe('sendSlackAlert')
+  expect(got['A longer word is not the name']).toBe('')
+  expect(got.built).toBe('')
+  const p = py(
+    [
+      `import os, requests`,
+      `URL = os.environ["SLACK_WEBHOOK_URL"]`,
+      `def report():`,
+      `    pass`,
+      `    text, head = "The nightly load is late", "Nightly"`,
+      `    print("report ran")`,
+      `    requests.post(URL, json={"text": text})`,
+    ].join('\n'),
+  )
+  const sent = reached(p)
+  expect(sent['The nightly load is late']).toBe('requests.post')
+  expect(sent['report ran']).toBe('')
+})
+
+test('tracing a text again with other send functions or names starts from the text alone: nothing asked of one trace carries into the next (#2719)', async () => {
+  const text = "import { postAlert } from './post'\nexport const GET = async () => { console.log('cron started'); await postAlert('The nightly job is late') }\n"
+  const imported = reached(js(text), new Map(), new Set(['postAlert']))
+  expect(imported['The nightly job is late']).toBe('postAlert')
+  // The same text, read again as a later step reads it: postAlert is no send of its own.
+  const bare = reached(js(text))
+  expect(bare['The nightly job is late']).toBe('')
+  expect(trace(js(text)).sends).toEqual([])
+  expect(reached(js(text), new Map(), new Set(['postAlert']))).toEqual(imported)
+})
