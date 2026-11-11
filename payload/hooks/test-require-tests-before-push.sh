@@ -195,7 +195,7 @@ rm -rf "$PYFAKE"
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
 #
-# The unit tests above source pure classifiers out of the hook, so they cannot
+# The unit tests above run pure classifiers copied out of the hook, so they cannot
 # see a gate that has stopped gating: both #733 bugs shipped behind a fully
 # green unit suite. Everything below runs the hook as a subprocess with a JSON
 # payload on stdin, exactly as Claude Code invokes it.
