@@ -102,9 +102,19 @@ if [ "$rc" -ne 0 ]; then
   couldnt "slack_drafts_only_gate.py failed, rc=$rc: ${out//$'\n'/ }"
 fi
 
+# What to do instead, for a call the gate could not judge in time that runs the merge helper
+# (claude-config#2576). On 2026-11-09 no merge through lib/merge-when-ready.sh could start on the work
+# MacBook, and a session retried the same line seven times: the refusal named no other way to merge.
+# The other merge gates (block-red-merge.sh, pr-review-gate.sh) still judge the direct merge.
+merge_instead() {
+  case "$payload" in *merge-when-ready.sh*) ;; *) return 0 ;; esac
+  printf '%s\n' 'This call runs merge-when-ready.sh, so do not retry it in a loop. If one more try is refused the same way, merge the pull request without the helper once every check on it is green: gh pr merge <number> --repo <owner>/<repo> --squash, with no --delete-branch (the helper deletes a branch only after moving the pull requests stacked on it), then confirm with gh pr view <number> --repo <owner>/<repo> --json state, and tell Dan the helper could not be started and the branch is still there.' >&2
+}
+
 case "$verdict" in
   allow) exit 0 ;;
   refuse) printf '%s\n' "$detail" >&2; exit 2 ;;
+  outoftime) printf '%s\n' "$detail" >&2; merge_instead; exit 2 ;;
   unreadable)
     # The words a send route is written in, matched case blind (nocasematch above).
     if [ -n "$have_scope" ]; then

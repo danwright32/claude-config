@@ -3304,7 +3304,9 @@ def main():
         if judge.overran:
             raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
     except OutOfTime as e:
-        print("refuse\n" + judge.out_of_time(e.doing))
+        # A verdict of its own, refused like any other, so the wrapper can say what to do instead
+        # for a merge (claude-config#2576).
+        print("outoftime\n" + judge.out_of_time(e.doing))
         return
     if reason:
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives
