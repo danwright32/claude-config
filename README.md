@@ -1872,7 +1872,16 @@ and log, and waited on like any other run. A run whose jobs ran and failed is ne
 already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
 left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
 gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
-has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+has to pass `block-red-merge.sh`. A job that waited for a runner is said (claude-config#2714): GitHub
+runs at most 20 jobs at once on the Free plan's hosted runners (docs.github.com/en/actions/reference/limits),
+and on 2026-11-10 that pool was full twice and 15 jobs waited over a minute, up to 6.6 minutes, which
+read in the merge logs as slow tests. Once every run of the head has finished, each run the helper
+saw a check of still open has its jobs read once, and a job that waited more than
+`MWR_POOL_WAIT_SECONDS` (60) to start is said with how long, and how many of this repository's jobs
+were running when it was queued (counted from the runs created up to `MWR_POOL_LOOKBACK_SECONDS`
+before it); the pool is called full only when that count reaches `MWR_POOL_LIMIT` (20). Only this
+repository's jobs can be counted, since GitHub gives no read of an account's running jobs. A run with
+no wait says nothing, and a failed read is said and changes nothing. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -7380,9 +7389,11 @@ checked again that session. A Bash command is judged by the files mod-kit's writ
 judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
 followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
-its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
-in no checkout, or where the repository has no fast growing file and no structural issue naming a
-file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
+its words do not name) is held saying it cannot be read, and may proceed, or fold into one of the
+repository's open structural issues naming a file, which the hold lists, the session's own included
+(#2706); a fold only records the issue, and the command runs as proceed would let it. It passes
+where it is in no checkout, or where the repository has no fast growing file and no structural issue
+naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 A folder a script is handed is judged as a write of every file under it (#2321), unless the
 script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which

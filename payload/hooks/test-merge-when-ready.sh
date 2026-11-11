@@ -259,6 +259,8 @@ case "$*" in
   "api repos/acme/widget/actions/runs/"*"/jobs"*)
     fail_read jobs
     id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/runs/([0-9]+)/jobs.*#\1#p')"
+    # jobsjson-<id> holds GitHub's whole answer, a recorded one, for the runner queue (#2714).
+    if [ -s "$ST/jobsjson-$id" ]; then cat "$ST/jobsjson-$id"; exit 0; fi
     n="$(rd "jobs-$id")"
     printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
     ;;
@@ -266,6 +268,12 @@ case "$*" in
   "run rerun"*)
     fail_read rerun
     if [ -s "$ST/on-rerun" ]; then s="$(cat "$ST/on-rerun")"; : > "$ST/on-rerun"; eval "$s"; fi
+    ;;
+  # The repository's runs created in a window, read to count the jobs running while one waited for a
+  # runner (claude-config#2714): pool-runs holds GitHub's answer.
+  "api repos/acme/widget/actions/runs?created="*)
+    fail_read pool-runs
+    if [ -s "$ST/pool-runs" ]; then cat "$ST/pool-runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
     ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
@@ -3712,7 +3720,10 @@ check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$ou
 
 # Several helpers in line at once, each a real run of this helper, on one injected clock that moves
 # only once every run is asleep, to the earliest time any of them wakes: a run's work between its
-# sleeps takes no time on the clock, as it takes next to none on a real one. #7 holds the turn, its
+# sleeps takes no time on the clock, as it takes next to none on a real one. Only one run is ever
+# awake at a time, and runs due at the same moment wake in the order listed, the holder first, so
+# what the runs do depends on the clock alone and never on how the machine schedules them
+# (claude-config#2745, L290). #7 holds the turn, its
 # checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
 # four looks a minute. The line moves twice, as the first two in line are stopped at 10 and 20
 # minutes. Fixture settings, not measured, but eight, the median of the 2026-11-10 logs.
@@ -3725,16 +3736,20 @@ EOS
 chmod +x "$SIMBIN/gh"
 # The sleep each run in the simulation is given: it marks when it wakes and waits, in real time, for
 # the clock to reach it. A run told to quit, and every run once the simulation ends, is stopped as a
-# person would stop it.
+# person would stop it. Whether it was woken or stopped is read only AFTER its mark is gone
+# (claude-config#2745): the simulation writes the stop before it takes the mark away, so that read
+# always sees it. Read before, as it was, a run that looked for the stop just before it was written
+# and for its mark just after it went took the stop for a wake, and went on at the last time on the
+# clock while the others were being stopped: in CI on 2026-11-11, and in 7 of 10 copies run at once
+# here, a run in line then found the holder's place gone and took the turn.
 sim_sleep(){ (
   set +e +u
   { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
   c=""; read -r c < "$ST/clock"
   printf '%s' "$(( c + $1 ))" > "$SIM_DIR/$SIM_ME.tmp" && mv -f "$SIM_DIR/$SIM_ME.tmp" "$SIM_DIR/$SIM_ME.wake"
-  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do
-    { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
-    sleep 0.01
-  done
+  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do sleep 0.01; done
+  { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+  exit 0
 ) }
 export -f sim_sleep
 export SIM_DIR
@@ -3779,10 +3794,19 @@ sim_run(){
       : > "$SIM_DIR/$quit.quit"; rm -f "$SIM_DIR/$quit.wake"; continue
     fi
     printf '%s' "$sim_min" > "$ST/clock"
+    # The runs due now wake ONE at a time, in the order they are listed, each left to run until it
+    # sleeps again or ends before the next is woken (claude-config#2745). Woken together, as they
+    # were, the order they reached the session's looks and the queue was the machine's scheduling,
+    # not the clock: at a minute where the holder and runs not yet in line all woke, whichever ran
+    # first took the minute's looks. The order is the holder first. Woken last instead, it waited on
+    # the cap once, at 60s, measured on 2026-11-11, behind runs whose first look comes before they know they are in line
+    # (a first look leaves no look free): a gap in the helper, not here, recorded for its own issue.
     for m in "$@"; do
       [ -e "$SIM_DIR/$m.wake" ] || continue
       w=""; read -r w < "$SIM_DIR/$m.wake"
-      [ "$w" -gt "$sim_min" ] || rm -f "$SIM_DIR/$m.wake"
+      [ "$w" -gt "$sim_min" ] && continue
+      rm -f "$SIM_DIR/$m.wake"
+      hang_wait "[ -e '$SIM_DIR/$m.wake' ] || [ -e '$SIM_DIR/$m.rc' ]" 0.01 || { echo "run $m never slept again at $sim_min" >> "$SIM_DIR/said"; break 2; }
     done
   done
   : > "$SIM_DIR/stop"; rm -f "$SIM_DIR"/*.wake
@@ -3810,6 +3834,101 @@ check_eq "#2715 the holder looked at its own pace, never more than its 180s ceil
 check_eq "#2715 the eight in line read GitHub at most once each every ten minutes (8 x 4 looks in 30 minutes)" "yes" "$( [ "$line_looks" -le 32 ] && echo yes || echo no)"
 check_eq "#2715 no run in line merged out of its turn" "0" "$(count gh-calls 'pr merge')"
 check_eq "#2715 every run in line was still waiting for its turn when the simulation ended" "" "$(for p in $LINE_PRS; do grep -q "It is #$p's turn\|Took the turn" "$SIM_DIR/$p.out" && printf '%s ' "$p"; done)"
+
+# =================================================================================================
+# 31. A run that waited for a runner says so (claude-config#2714). On 2026-11-10 the account's 20
+#     concurrent jobs were all in use at about 01:15 and 13:40 ET, and 15 jobs waited over a minute to
+#     start, up to 6.6 minutes, which read in the merge logs as slow tests. The answers below are
+#     GitHub's own, recorded that day and kept to the fields read: run 42877567710's job deal was
+#     created at 18:40:26 UTC and started at 18:47:00, 6m 34s later, while the five runs created in
+#     the half minute before it held 20 jobs between them; jobs-42877448181.json is one of those five,
+#     every job of which started within 2 seconds of being created.
+# =================================================================================================
+PW_FIX="$DIR/merge-when-ready-fixtures/pool-wait-2026-11-10"
+PW_RUN=42877567710
+pw_rollup(){ # pw_rollup <run id> <status> <conclusion>: the run's one check, as the rollup shows it
+  jq -nc --arg id "$1" --arg s "$2" --arg c "$3" \
+    '[{__typename:"CheckRun",name:"deal",workflowName:"tests",status:$s,conclusion:$c,startedAt:null,detailsUrl:("https://github.com/acme/widget/actions/runs/" + $id + "/job/130044844243")}]'
+}
+pw_fresh(){ # pw_fresh <run id>: that run's check queued at the first look, finished at the next
+  local f
+  fresh "$OLD" 0 "$(pw_rollup "$1" QUEUED "")"
+  for f in "$PW_FIX"/jobs-*.json; do cp "$f" "$ST/jobsjson-$(basename "$f" .json | sed 's/^jobs-//')"; done
+  cp "$PW_FIX/runs.json" "$ST/pool-runs"
+  printf '%s\n' "printf '%s' '$(pw_rollup "$1" COMPLETED SUCCESS)' > \"\$ST/rollup\"" > "$ST/on-sleep"
+}
+
+pw_fresh "$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run whose job waited for a runner still merges" "0" "$rc"
+check "#2714 it names the job and how long it waited" "job deal waited 6m 34s" "$out"
+check "#2714 and how many of the repository's jobs were running when it was queued" "20 of this repository's jobs were running" "$out"
+check "#2714 and that the runner pool was full" "the runner pool was full" "$out"
+check "#2714 the jobs running are counted from runs created up to two hours before it" "actions/runs?created=2026-11-10T16:40:26Z..2026-11-10T18:40:26Z" "$(cat "$ST/gh-calls")"
+check_eq "#2714 the waited run's own jobs are read once" "1" "$(count gh-calls "runs/$PW_RUN/jobs")"
+check_eq "#2714 each overlapping run's jobs are read once" "6" "$(count gh-calls '/jobs')"
+check_not "#2714 the job that started at once is not said" "job suites part 2 waited" "$out"
+
+# Under the limit: the same wait, with a plan that allows 40, is not called a full pool.
+pw_fresh "$PW_RUN"
+out="$(MWR_POOL_LIMIT=40 run 7 --squash)"; rc=$?
+check_eq "#2714 under the limit it merges" "0" "$rc"
+check "#2714 under the limit it still says the wait" "job deal waited 6m 34s" "$out"
+check "#2714 and says the count was under the limit" "under the 40" "$out"
+check_not "#2714 and never that the pool was full" "the runner pool was full" "$out"
+
+# Two runs waited on for one head, the first under the limit: each is judged on its own count, so
+# the second, the run recorded on 2026-11-10 with 20 running, is still called a full pool. Run 1001
+# is made up for this, not recorded: one job
+# that waited 2 minutes at a time no recorded run overlaps, so it counts 0 running.
+pw_fresh "$PW_RUN"
+jq -nc '[{__typename:"CheckRun",name:"lint",workflowName:"lint",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/1001/job/1"},{__typename:"CheckRun",name:"deal",workflowName:"tests",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/42877567710/job/130044844243"}]' > "$ST/rollup"
+printf '%s\n' '{"total_count":1,"jobs":[{"id":1,"run_id":1001,"name":"lint","status":"completed","conclusion":"success","created_at":"2026-11-10T20:00:00Z","started_at":"2026-11-10T20:02:00Z","completed_at":"2026-11-10T20:03:00Z"}]}' > "$ST/jobsjson-1001"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 two waited runs merge" "0" "$rc"
+check "#2714 the first run is said under the limit" "job lint waited 2m 00s, and 0 of this repository's jobs" "$out"
+check "#2714 the second run is still called a full pool" "job deal waited 6m 34s, and 20 of this repository's jobs were running when it was queued. GitHub runs at most 20 jobs at once" "$out"
+
+# A third party status open beside it, whose link is no Actions run: still counted as open, so the
+# head waits for it, and the run beside it is still found and said.
+pw_fresh "$PW_RUN"
+jq -c '. + [{__typename:"StatusContext",context:"deploy/preview",state:"PENDING",targetUrl:"https://example.com/preview"}]' "$ST/rollup" > "$ST/rollup.tmp"; mv "$ST/rollup.tmp" "$ST/rollup"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 with a third party status beside it, it merges" "0" "$rc"
+check "#2714 the status was waited on as an open check" "checks still running (2 of 2)" "$out"
+check "#2714 and the run's wait is still said" "job deal waited 6m 34s" "$out"
+
+# A clean run says nothing, and reads nothing past its own jobs.
+pw_fresh 42877448181
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run with no wait merges" "0" "$rc"
+check_not "#2714 and says nothing about a runner" "waited" "$out"
+check_eq "#2714 its own jobs were read once" "1" "$(count gh-calls '/jobs')"
+check_eq "#2714 and no window of runs was read" "0" "$(count gh-calls 'runs?created=')"
+
+# A run that had finished before the helper looked was never waited on here, so nothing is read.
+fresh "$OLD" 0 "$(pw_rollup "$PW_RUN" COMPLETED SUCCESS)"
+cp "$PW_FIX/jobs-$PW_RUN.json" "$ST/jobsjson-$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run finished before the first look merges" "0" "$rc"
+check_eq "#2714 with no jobs read" "0" "$(count gh-calls '/jobs')"
+check_not "#2714 and nothing said" "waited" "$out"
+
+# The count unreadable: the wait is still said, with why the count is missing, and it merges.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/pool-runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 an unreadable count still merges" "0" "$rc"
+check "#2714 the wait is still said" "job deal waited 6m 34s" "$out"
+check "#2714 with why the count is missing" "could not count the jobs running" "$out"
+check "#2714 naming GitHub's answer" "HTTP 502" "$out"
+
+# The run's own jobs unreadable: said once, and it merges as before.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/jobs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 unreadable jobs still merge" "0" "$rc"
+check "#2714 saying whether a job waited is unknown" "Could not read the jobs of workflow run $PW_RUN" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
