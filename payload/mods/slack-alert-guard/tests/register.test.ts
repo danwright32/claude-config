@@ -1218,7 +1218,7 @@ test('a template re-exported twice, then sent to Slack, is held naming the file 
   expect(w.ran).toEqual([])
 })
 
-test(`a template handed on through ${REEXPORT_HOPS} files is followed; through more, the edit is held as could not check`, withKit, async ($, on) => {
+test(`a template handed on through ${REEXPORT_HOPS} files is followed; through more, the edit is held as one the guard could not trace, for Dan to approve (#2709)`, withKit, async ($, on) => {
   const ALPHA = '/w/app/lib/alpha.ts'
   const BRAVO = '/w/app/lib/bravo.ts'
   const CHARLIE = '/w/app/lib/charlie.ts'
@@ -1229,9 +1229,115 @@ test(`a template handed on through ${REEXPORT_HOPS} files is followed; through m
   w.files[CHARLIE] = reexports('./bravo')
   w.files[NOTIFY] = notifies('./charlie')
   const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain('could not check')
+  expect(why).toContain('could not trace')
+  expect(why).not.toContain('Try it again')
   expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
   expect(why).toContain(CHARLIE)
+  expect(why).toContain('export const deployFailed = (id: string) => `Deploy ${id} failed on production`')
+  expect(idIn(why)).toBeDefined()
+  expect(w.ran).toEqual([])
+})
+
+// claude-config#2709: on 2026-11-10 an import added to an index file was held every time as "handed
+// on through more than 3 files before anything sends it", with no route forward, since the trace is
+// the same on every try. It is now held for Dan with the exact line shown, and his approval lets
+// that one edit through, and only that edit.
+test(`an import added to a file handed on through more than ${REEXPORT_HOPS} files is held with the line shown; Dan's approval lets that one edit through and no other (#2709)`, withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const CHARLIE = '/w/app/lib/charlie.ts'
+  const DELTA = '/w/app/lib/delta.ts'
+  const PAD = '/w/app/lib/templates/pad.ts'
+  const w = world($, on, {
+    files: {
+      [TEMPLATE]: TEMPLATE_TEXT,
+      [BARREL]: BARREL_TEXT,
+      [PAD]: 'export const pad = (s: string) => s.trim()\n',
+      [ALPHA]: reexports('./templates'),
+      [BRAVO]: reexports('./alpha'),
+      [CHARLIE]: reexports('./bravo'),
+      [DELTA]: reexports('./charlie'),
+      [NOTIFY]: notifies('./delta'),
+    },
+  })
+  const LINE = "import { pad } from './pad'"
+  const edit = { tool: 'Edit', file_path: BARREL, old_string: BARREL_TEXT, new_string: `${LINE}\n${BARREL_TEXT}` }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('could not trace')
+  expect(why).toContain(BARREL)
+  expect(why).toContain(LINE)
+  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
+  expect(why).not.toContain('Try it again')
+  expect(w.ran).toEqual([])
+  expect(w.cards.length).toBe(1)
+  // A subagent making the same edit is told to stop and report, never to ask.
+  const agent = refusalOf(await call($, { ...edit, agentId: 'agent-a1' }))
+  expect(agent).toContain('could not trace')
+  expect(agent).toContain('Stop and report to the main session')
+  // Dan is asked with the line shown; there is no message to render, so none is required.
+  const a = await ask($, w, why, APPROVE, {})
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toContain(LINE)
+  expect(q?.question).toContain('could not trace')
+  expect(q?.header).toBe(HEADER)
+  expect(q?.options.map(o => o.label)).toEqual([APPROVE, CHANGE])
+  expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
+  expect(contextOf(a)).toContain('again')
+  // That exact edit goes through.
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Any other edit to the same file is asked about again.
+  const other = refusalOf(await call($, { ...edit, new_string: `import { pin } from './pin'\n${BARREL_TEXT}` }))
+  expect(other).toContain('could not trace')
+  expect(idIn(other)).not.toBe(idIn(why))
+  expect(w.ran.length).toBe(1)
+})
+
+test(`a sender newly sending a name handed down through more than ${REEXPORT_HOPS} files below it is held with its line shown, for Dan to approve (#2709)`, withKit, async ($, on) => {
+  const DEEP = '/w/app/src/lib/deep'
+  const WATCH = '/w/app/src/jobs/watch.ts'
+  const w = world($, on, {
+    files: {
+      [`${DEEP}/copy.ts`]: 'export const quietPage = (f: string) => `The ${f} feed has gone quiet`\n',
+      [`${DEEP}/h4.ts`]: "export { quietPage } from './copy'\n",
+      [`${DEEP}/h3.ts`]: "export { quietPage } from './h4'\n",
+      [`${DEEP}/h2.ts`]: "export { quietPage } from './h3'\n",
+      [`${DEEP}/h1.ts`]: "export { quietPage } from './h2'\n",
+      [WATCH]: "import { quietPage } from '../lib/deep/h1'\nexport const watch = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: t }) })\n",
+    },
+  })
+  const edit = { tool: 'Edit', file_path: WATCH, old_string: '{ text: t }', new_string: "{ text: t || quietPage('orders') }" }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('could not trace')
+  expect(why).toContain(`more than ${REEXPORT_HOPS} files below it`)
+  expect(why).toContain("quietPage('orders')")
+  expect(why).not.toContain('Try it again')
+  await ask($, w, why, APPROVE, {})
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('Change wording, or no answer, on an untraced edit records nothing, and the edit stays held (#2709)', withKit, async ($, on) => {
+  const ALPHA = '/w/app/lib/alpha.ts'
+  const BRAVO = '/w/app/lib/bravo.ts'
+  const CHARLIE = '/w/app/lib/charlie.ts'
+  const DELTA = '/w/app/lib/delta.ts'
+  const w = world($, on, {
+    files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [ALPHA]: reexports('./templates'), [BRAVO]: reexports('./alpha'), [CHARLIE]: reexports('./bravo'), [DELTA]: reexports('./charlie'), [NOTIFY]: notifies('./delta') },
+  })
+  const edit = { tool: 'Edit', file_path: BARREL, old_string: BARREL_TEXT, new_string: `import { pad } from './pad'\n${BARREL_TEXT}` }
+  const why = refusalOf(await call($, edit))
+  await ask($, w, why, CHANGE, {})
+  await ask($, w, why, undefined, {})
+  expect(Object.keys(w.store).length).toBe(0)
+  expect(refusalOf(await call($, edit))).toContain('could not trace')
+  expect(w.ran).toEqual([])
+  // A shell write to the same file is held as a shell write is, with an id Dan can approve, never
+  // as could not check.
+  const shell = refusalOf(await call($, { tool: 'Bash', command: `printf 'export const V = 1\\n' >> ${BARREL}` }))
+  expect(shell).toContain('shell command')
+  expect(shell).not.toContain('could not check')
+  expect(idIn(shell)).toBeDefined()
   expect(w.ran).toEqual([])
 })
 
@@ -1265,7 +1371,8 @@ test('a template imported only by UI components settles there, never followed pa
 })
 
 test('a template imported by a UI component and by any other file is judged as before', withKit, async ($, on) => {
-  // The other importer leads past what the guard follows: held as could not check, as without the component.
+  // The other importer leads past what the guard follows: held as an edit the guard could not trace
+  // (#2709), as without the component.
   const deep = {
     '/w/app/lib/emails/alpha.tsx': "import { deployFailed } from '../templates/deploy'\nexport const Alpha = () => <p>{deployFailed('1')}</p>\n",
     '/w/app/lib/emails/bravo.tsx': "export { Alpha } from './alpha'\n",
@@ -1274,7 +1381,7 @@ test('a template imported by a UI component and by any other file is judged as b
   }
   const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN, ...deep } })
   const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain('could not check')
+  expect(why).toContain('could not trace')
   expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
   expect(w.ran).toEqual([])
   // The other importer sends nothing, and the component is imported by a file that posts it to
@@ -1760,9 +1867,14 @@ test('a new copy module is held as it is written, though nothing sends it yet, n
   expect(held).not.toContain(MONITOR)
   expect(w.ran).toEqual([])
   expect(w.cards.length).toBe(1)
+  // The refusal, the card and the question say it is copy nothing sends yet, not a live send.
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  expect(held).toContain(UNWIRED)
+  expect(String(w.cards[0]?.reason)).toContain(UNWIRED)
   await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
   // The question names the file that holds the wording.
   expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  expect(w.asked[0]?.questions[0]?.question).toContain(`defined in ${QUIET}, a module of message copy not yet wired to Slack?`)
   // Approving posts nothing (#2284), so the question above the message never reads as a send.
   expect(readsAsSend((w.asked[0]?.questions[0]?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
   expect(refusalOf(await call($, write))).toBe('')
@@ -1840,6 +1952,8 @@ test('a new module that is no copy module passes while nothing sends it; the edi
   expect(w.cards.length).toBe(1)
   await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
   expect(w.asked[0]?.questions[0]?.question).toContain(FEEDS)
+  // A send that is wired is never named as copy not yet wired (#2720).
+  for (const t of [held, String(w.cards[0]?.reason), w.asked[0]?.questions[0]?.question ?? '']) expect(t).not.toContain('not yet wired')
   expect(refusalOf(await call($, send))).toBe('')
   expect(w.ran.length).toBe(3)
 })
@@ -2265,6 +2379,26 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
   expect(refusalOf(await call($, MERGE))).toBe('')
   expect(w.ghs).toEqual([])
   expect(await promptLines($)).toBe('')
+})
+
+test('a copy module nothing sends yet is named as one asleep, and by the awake refusal a choice gets (#2720, #2628)', withNight, async ($, on) => {
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  nightFresh(true)
+  const w = world($, on)
+  const asleep = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(asleep).toContain(CHOOSE)
+  expect(asleep).toContain(UNWIRED)
+  // The choice keeps it, so the morning question names it too.
+  expect(refusalOf(await choose($, /"call": "(t\d+)"/.exec(asleep)?.[1] ?? '', QUIET_SHOWN))).toBe('')
+  const kept = chosenIn(w).map(k => w.store[k] as { unwired?: boolean })
+  expect(kept.length).toBeGreaterThan(0)
+  for (const c of kept) expect(c.unwired).toBe(true)
+  nightFresh(false)
+  const awake = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
+  expect(awake).toContain(UNWIRED)
+  const chosen = refusalOf(await choose($, idIn(awake) as string))
+  expect(chosen).toContain('awake')
+  expect(chosen).toContain(UNWIRED)
 })
 
 test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {

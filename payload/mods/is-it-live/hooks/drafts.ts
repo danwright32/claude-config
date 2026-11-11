@@ -2,11 +2,11 @@ import type { EngineInterface, On } from 'claude-code'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, owedThreads, threadKey, threadsIn } from './threads.ts'
+import { type Unrelated, draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, nameOfThread, owedThreads, threadKey, threadsIn } from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
-// this file keeps, per session in $.state: the threads, the step a merge last landed at, and each
-// thread's step of its last draft. register.ts calls markLanded when a merge lands and
+// this file keeps, per session in $.state: the threads, the step a merge last landed at, each
+// thread's step of its last draft, and whether the session said its later merges are unrelated (#2653). register.ts calls markLanded when a merge lands and
 // draftHold at its turn end, after the card's check has asked GitHub about the background merges.
 
 const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
@@ -14,6 +14,40 @@ const stepRef = { plugin: 'is-it-live', key: 'step' } as const
 const landedRef = { plugin: 'is-it-live', key: 'landed' } as const
 const draftRefusedRef = { plugin: 'is-it-live', key: 'draftRefused' } as const
 const promptsRef = { plugin: 'is-it-live', key: 'prompts' } as const
+const unrelatedRef = { plugin: 'is-it-live', key: 'unrelated' } as const
+
+// #2653, Dan, 2026-11-11: a session started from a Slack thread says ONCE, by calling this tool,
+// that its later merges have nothing to do with the thread, and no draft reply is then held for
+// them. The session's own act, never inferred from a pull request's text; kept in session state, so
+// a new session from the same thread is asked again; and a merge already landed is still owed.
+const UNRELATED = 'unrelated_merges'
+export const UNRELATED_TOOL = `mcp__${MOD}__${UNRELATED}`
+const UNRELATED_DESCRIPTION =
+  "Say, once, that this session's later merges have nothing to do with the Slack thread it started from, so the turn end stops asking for a draft reply in that thread after each of them. A merge that has already landed is still owed its reply, and a new session started from the thread is asked again. Call it only when the rest of the session's work is unrelated to the thread."
+const UNRELATED_SCHEMA = { type: 'object', properties: {}, additionalProperties: false }
+
+/** #2653: registers the unrelated_merges tool, at session start. */
+export async function registerUnrelated($: EngineInterface): Promise<void> {
+  await $.tool.register({ name: UNRELATED, description: UNRELATED_DESCRIPTION, inputSchema: UNRELATED_SCHEMA })
+}
+
+// The answer to the tool: refused from a subagent (the main session's turn end is the one held) and
+// where the session started from no thread; a second call keeps the first one's step.
+async function declareUnrelated($: EngineInterface, agentId: unknown): Promise<{ deny: string } | { result: string }> {
+  if (agentId !== undefined) return { deny: 'Not from a subagent: only the main session can say its later merges are unrelated to the thread it started from.' }
+  const started = ((await $.state.get(threadsRef)).value ?? []).filter(t => !t.mid)
+  if (!started.length) return { deny: 'Nothing to say: this session started from no Slack thread, so no draft reply is asked after its merges.' }
+  const names = started.map(nameOfThread).join(', ')
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(unrelatedRef)
+    if (held.value !== undefined) return { result: `Already said: no draft reply is asked in ${names} for this session's later merges.` }
+    const landed = (await $.state.get(landedRef)).value
+    const said: Unrelated = landed === undefined ? {} : { landed }
+    if ((await $.state.set(unrelatedRef, said, { ifVersion: held.version })).isSet)
+      return { result: `Noted: no draft reply is asked in ${names} for this session's merges from here on. A merge that landed before now is still owed its reply, and a new session started from that thread is asked again.` }
+  }
+  throw new Error('the record of what the session said kept changing under it')
+}
 
 // #2578: whether a thread recorded now comes once the session is under way, given how many prompts
 // Dan had typed before it: any merge landed, or more than `before` of them.
@@ -132,10 +166,11 @@ async function inFlight($: EngineInterface, owed: IsItLiveOwed[]): Promise<boole
  * the turn: the next end in the chain goes ahead, said.
  */
 export async function draftHold($: EngineInterface, e: { stop_hook_active?: boolean }, owed: IsItLiveOwed[]): Promise<string | undefined> {
-  const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value)
+  const unrelated = (await $.state.get(unrelatedRef)).value
+  const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value, unrelated)
   if (!due.length || (await inFlight($, owed))) return undefined
   const landed = (await $.state.get(landedRef)).value
-  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${draftOwedFrom(t, landed)}`
+  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${draftOwedFrom(t, landed, unrelated)}`
   const held = (await $.state.get(draftRefusedRef)).value
   const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
   const fresh = due.filter(t => !before.keys.includes(keyOf(t)))
@@ -148,10 +183,14 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
     return undefined
   }
   await $.state.set(draftRefusedRef, { keys: [...before.keys, ...fresh.map(keyOf)], told: before.told })
-  return draftHoldOf(due)
+  return draftHoldOf(due, UNRELATED_TOOL)
 }
 
 export function registerDrafts(on: On): void {
+  // #2653: the tool a session says its later merges are unrelated with (registered by
+  // registerUnrelated from register.ts's session.start, the one an event may have), answered here.
+  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId))
+
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
   // what he types, never a notification or another plugin's prompt), when in his first prompt and
   // before any merge; one linked later is recorded as pasted mid session (#2578). His prompts are

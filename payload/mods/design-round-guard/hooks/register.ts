@@ -19,6 +19,9 @@ import {
   callKey,
   callText,
   cannotCheck,
+  caughtCall,
+  caughtCheck,
+  passesByShape,
   changedRuns,
   contractOf,
   card,
@@ -1082,7 +1085,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
 
 const judged = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
   // Only the shell, and a tool carrying a file path it may write, can change a file at all.
-  if (tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)) return { pass: true }
+  if (passesByShape(tool, input)) return { pass: true }
   const at = await whereOf($)
   const { targets, storeMentioned } = await targetsOf($, tool, input, at)
   // By its path, or by its name where the reader could not follow the folder (lessons review of #991).
@@ -1755,7 +1758,11 @@ export const register: Register = on => {
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }
-  }).catch(($, e, next) => neverThrows(() => ({ deny: cannotCheck(message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
+  // A failure after the call was passed on (most often Claude Code replacing its hooks worker while a
+  // long command ran) replays what the call settled to, outside neverThrows: it already ran, so a
+  // refusal saying it was stopped would be untrue and could have Claude run it twice (#2726, #2039).
+  // One before is answered as the hook would answer it where that needs no reading (caughtCall).
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, argsOf(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -1803,7 +1810,9 @@ export const register: Register = on => {
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
-  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
+  // A call passing by its shape is answered as above, by the verdicts beneath (#2726); every other is
+  // refused, `next` there running nothing whether or not the hook had read it.
+  }).catch(($, e, next) => neverThrows(() => caughtCheck(e.tool, (e.input ?? {}) as Record<string, unknown>, message(next.error), () => next(e)), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
   // answers, and reads his choice from the dialog's own result, the one place it comes from him.
