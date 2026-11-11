@@ -44,20 +44,26 @@ trap 'rm -rf "$WORK"' EXIT
 # the check against something the gate does not hold: the timeout settings.hooks.json registers it
 # with (section 3). Each is one whole line of the gate. A line rewritten past recognition stops the
 # suite naming it, never leaves an expectation built on nothing (L100).
-gate_number() {  # $1 = variable to set, $2 = what it is, $3 = extended regex for its whole line, the number its one group
-  local hits
-  hits="$(sed -n -E "s/$3/\1/p" "$HOOK")"
-  case "$hits" in
+# The number is printed and the caller captures it, never set through printf -v "$1": a helper
+# binding its caller's variable by a name only running can tell leaves the Slack drafts gate sure of
+# no variable past its first call, so every path sourced after it was refused unread (#2538).
+gate_number() {  # gate_number <extended regex for its whole line>: the number its one group captures
+  sed -n -E "s/$1/\1/p" "$HOOK"
+}
+gate_whole() {  # gate_whole <what it is> <value read>: stops the suite unless the value is one whole number
+  case "$2" in
     ''|*[!0-9]*)
-      echo "  FAIL: $2 could not be read from check-work-names-merge.sh as one whole number (got [$hits]), so nothing built on it can be checked"
+      echo "  FAIL: $1 could not be read from check-work-names-merge.sh as one whole number (got [$2]), so nothing built on it can be checked"
       printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$((failed + 1))"
       exit 1 ;;
   esac
-  printf -v "$1" '%s' "$hits"
 }
-gate_number READ_CAP "the read budget cap" '^READ_BUDGET_CAP=([0-9]+)$'
-gate_number READ_DEFAULT "the default read budget" '^READ_DEADLINE="\$\(mt_gate_read_budget "\$\{WN_MERGE_READ_BUDGET_SECONDS:-\}" ([0-9]+)\)"$'
-gate_number LIST_SECONDS "the seconds the work repository list is given after the reads" '^repos_budget=\$\(\( READ_DEADLINE \+ ([0-9]+) - SECONDS \)\)$'
+READ_CAP="$(gate_number '^READ_BUDGET_CAP=([0-9]+)$')"
+gate_whole "the read budget cap" "$READ_CAP"
+READ_DEFAULT="$(gate_number '^READ_DEADLINE="\$\(mt_gate_read_budget "\$\{WN_MERGE_READ_BUDGET_SECONDS:-\}" ([0-9]+)\)"$')"
+gate_whole "the default read budget" "$READ_DEFAULT"
+LIST_SECONDS="$(gate_number '^repos_budget=\$\(\( READ_DEADLINE \+ ([0-9]+) - SECONDS \)\)$')"
+gate_whole "the seconds the work repository list is given after the reads" "$LIST_SECONDS"
 # The budget the reads get when none is set is the default held to the cap, and the work repository
 # list is handed what is left of that plus its own seconds: these are the most it can be handed.
 READ_USED=$(( READ_DEFAULT < READ_CAP ? READ_DEFAULT : READ_CAP ))
