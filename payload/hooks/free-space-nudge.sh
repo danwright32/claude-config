@@ -21,7 +21,8 @@
 # that goes on falling is not the same answer as one that has stopped, and going quiet about it
 # would leave the most urgent case saying least (L152). So it is quiet while nothing changes, and
 # speaks again for every further 5 GB lost. A new session hears it too: that session has been told
-# nothing and loaded nothing.
+# nothing and loaded nothing. And a session that saw the disk or swap recover hears the warning
+# again if it comes back (claude-config#2635): the healthy answer clears what it was last told.
 #
 # It NEVER blocks the prompt. A UserPromptSubmit hook exiting non-zero stops the turn, and a
 # filling disk is something to mention, not a reason to refuse to work (L54). Every path exits 0.
