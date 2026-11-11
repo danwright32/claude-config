@@ -801,7 +801,7 @@ stubborn_left=""
 # the stand in outlives that ceiling, so it is gone in time only if the hook stopped it.
 . "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; fail=$((fail+1)); }
 if [ -n "$stubborn_pid" ]; then
-  hang_wait "! kill -0 $stubborn_pid 2>/dev/null" 0.1 || stubborn_left=1
+  hang_wait '! kill -0 "$stubborn_pid" 2>/dev/null' 0.1 || stubborn_left=1
 fi
 if [ -n "$stubborn_pid" ] && [ -z "$stubborn_left" ] && holds "$stubborn_out" '"decision":"block"'; then pass=$((pass+1)); else
   fail=$((fail+1)); echo "FAIL: #1989 a label gate past its deadline is stopped even when it ignores TERM, and the quiz still fires (gate pid '${stubborn_pid:-never recorded}', still running: ${stubborn_left:-no}; got: ${stubborn_out:0:120})"; fi
