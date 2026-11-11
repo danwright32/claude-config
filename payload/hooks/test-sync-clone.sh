@@ -53,6 +53,42 @@ want "a payload with no claude-sync beside it is not a clone" "" "$(sc_clone_roo
 want "a directory that is neither is not a clone" "" "$(sc_clone_root_of "$FIX/bare" || true)"
 want "a directory that is not there answers nothing" "" "$(sc_clone_root_of "$FIX/no/such/dir" || true)"
 
+echo "sync clone: whether a clone is a plain copy with no repository around it (claude-config#2705)"
+
+# What the daemon overwrites in a development checkout it reaches through the repository, so a copy
+# of the tree with none is out of its reach. Yes is said only when git, asked, says there is no
+# repository AND no .git is found by looking, and every other answer, an unanswered one included,
+# is no (L42). Each fixture is built here, so what is being asked about is what the case says (L52).
+DESC="a copy of the tree with no repository is a plain copy"; yes sc_is_plain_copy "$FIX/clone"
+cp -R "$FIX/clone" "$FIX/gitclone"
+git init -q "$FIX/gitclone" 2>/dev/null
+[ -e "$FIX/gitclone/.git" ] && check "the checkout fixture was built" ok || check "the checkout fixture was built" "git init left no .git at $FIX/gitclone"
+DESC="the same tree with a repository in it is not"; no sc_is_plain_copy "$FIX/gitclone"
+mkdir -p "$FIX/gitclone/inner/copy/payload"
+: > "$FIX/gitclone/inner/copy/claude-sync"
+DESC="a copy inside a checkout's work tree is not"; no sc_is_plain_copy "$FIX/gitclone/inner/copy"
+# git stops looking at a ceiling it is given and says there is no repository; the .git above still
+# counts, found by looking rather than by asking.
+ceiling_no(){ GIT_CEILING_DIRECTORIES="$FIX/gitclone/inner" sc_is_plain_copy "$FIX/gitclone/inner/copy"; }
+DESC="nor is it when git is told to stop looking below the repository"; no ceiling_no
+cp -R "$FIX/clone" "$FIX/brokenclone"
+printf 'gitdir: %s\n' "$FIX/no/such/repository" > "$FIX/brokenclone/.git"
+DESC="a tree whose .git points at a repository that is gone is not"; no sc_is_plain_copy "$FIX/brokenclone"
+# With no git that runs, or one that fails for a reason of its own, nothing has said there is no
+# repository, and the answer is no.
+mkdir -p "$FIX/nogit" "$FIX/othergit"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FIX/nogit/git"
+printf '#!/usr/bin/env bash\necho "fatal: detected dubious ownership in repository" >&2\nexit 128\n' > "$FIX/othergit/git"
+chmod +x "$FIX/nogit/git" "$FIX/othergit/git"
+nogit_no(){ PATH="$FIX/nogit:$PATH" sc_is_plain_copy "$FIX/clone"; }
+othergit_no(){ PATH="$FIX/othergit:$PATH" sc_is_plain_copy "$FIX/clone"; }
+DESC="a plain copy is not taken for one when git cannot run"; no nogit_no
+DESC="nor when git fails without saying there is no repository"; no othergit_no
+DESC="a directory that is not there is not a plain copy"; no sc_is_plain_copy "$FIX/no/such/dir"
+DESC="and nothing asked about is not one either"; no sc_is_plain_copy ""
+# The control: with the real git back, the first answer stands (L159).
+DESC="and the plain copy is one again once git answers"; yes sc_is_plain_copy "$FIX/clone"
+
 echo "sync clone: which clone a live watcher runs from"
 
 # The boundary is the point: without it a watcher at /x/a/b/claude-sync answers for a clone at
@@ -202,9 +238,14 @@ case "$nr_out" in *"git checkout -- payload/hooks/lib/hold-record.sh"*) check "a
 echo "sync clone: one reading of the hold record"
 
 # claude-sync and these hooks must read the record one way, or "is this my hold" has two answers
-# (L370). The parser lives in lib/hold-record.sh, and claude-sync keeps no copy of it.
-SYNC_SCRIPT="$DIR/../../claude-sync"
-if [ -f "$SYNC_SCRIPT" ]; then
+# (L370). The parser lives in lib/hold-record.sh, and claude-sync keeps no copy of it. claude-sync
+# sits at the top of the checkout and is never installed, so it is found through the checkout this
+# copy sits in (lib/checkout-root.sh, #1567); the installed copy is in none, and says so (#2623, L411).
+SYNC_CHECKOUT="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+SYNC_SCRIPT="${SYNC_CHECKOUT:+$SYNC_CHECKOUT/claude-sync}"
+if [ -z "$SYNC_SCRIPT" ] || [ ! -f "$SYNC_SCRIPT" ]; then
+  echo "SUITE-PART-UNMEASURED claude-sync reading the hold record through lib/hold-record.sh: $DIR/.. is not the payload of a claude-config checkout, so there is no claude-sync to read"
+else
   if grep -q 'hold_record_rows' "$SYNC_SCRIPT" && ! grep -q 'substr($4, 9)' "$SYNC_SCRIPT"; then
     check "claude-sync reads the hold record through lib/hold-record.sh, not a copy of its own" ok
   else

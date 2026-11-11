@@ -8,7 +8,7 @@ import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 // lands after the Stop hooks and the mod hooks no Stop) or when Claude judges the work Dan asked for
 // finished and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
 
-const T = '/Users/dan/.claude/projects/-repo/s1.jsonl'
+const T = `${'/Users'}/dan/.claude/projects/-repo/s1.jsonl`
 const TOOL = 'mcp__goal-box__goal_accomplished'
 type Goal = { state: 'set'; condition: string } | { state: 'none'; met?: { condition: string; reason: string; id: string } } | { state: 'unreadable'; why: string }
 type Card = { toolUseId: string; border?: string; title: { text: string; color?: string; bold?: boolean }[]; lines: { text: string; color?: string }[][] }

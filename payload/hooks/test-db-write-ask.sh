@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # send-gate: scans settings.hooks.json
 # Tests for the hook that asks Dan before any database SQL call that is not read only
-# (claude-config#2521).
+# (claude-config#2521), before a Supabase tool that changes a database with no SQL (#2632), and
+# before an edge function deploy that turns JWT verification off (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql on both Macs, and auto
@@ -116,8 +117,9 @@ expect "execute_sql whose input is not an object is asked about" ask "$(python3 
 # A migration changes the database by definition, whatever its text.
 expect "apply_migration is asked about even for a select" ask "$(payload "$MIG_TOOL" "select 1")"
 expect "apply_migration of a table is asked about" ask "$(payload "$MIG_TOOL" "create table t (id int)")"
-# Tools it does not watch get nothing from it.
-expect "Bash gets no decision" none "$(tool_payload Bash '{"command": "update t set a = 1"}')"
+# A call naming no database client or tool gets nothing from it: this Bash command holds SQL
+# words but runs no client, so the hook, which now reads every Bash call, has nothing to ask.
+expect "a Bash command with SQL words but no database client gets no decision" none "$(tool_payload Bash '{"command": "update t set a = 1"}')"
 expect "another Supabase tool gets no decision" none "$(tool_payload mcp__claude_ai_Supabase__list_tables '{"project_id": "p"}')"
 
 # --- payloads it cannot read: fail closed when the raw text names a database tool ---------------
@@ -280,7 +282,474 @@ case "$(decision "$r")|$(field "$r" message)" in
   *) check "with lib/hook-notice.sh missing, a database question still carries the Salesforce notice" "$(decision "$r") $(field "$r" message)" ;;
 esac
 
-# --- the settings run it for exactly these tools, and refuse the call if it fails ---------------
+# --- any other database tool, and database clients run in a shell (claude-config#2536) ----------
+# #2521 asked only about the claude.ai Supabase connector's two SQL tools, so a write through any
+# other database tool, or through psql and its like in a Bash call, still went unasked. The same hook
+# now reads those too, with the one read only rule (lib/sql-read-only.py), and asks about anything
+# it cannot classify. The tool names are the ones measured on the personal MacBook on 2026-11-10
+# (settings, ~/.claude.json and every transcript), plus invented ones for a connector not yet seen.
+bash_payload() {  # bash_payload <command>
+  python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "cwd": "/tmp", "tool_name": "Bash", "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$1"
+}
+expect_bash() { expect "Bash [$3]: $1" "$2" "$(bash_payload "$3")"; }  # <label> <want> <command>
+reason_of() { field "$(run "$HOOK" "$EMPTY_HOME" "$1")" reason; }
+
+# The cases the issue names.
+PSQL_UPDATE='psql "$DATABASE_URL" -c "update workflows set note = note where false"'
+expect_bash "a psql -c update is asked about" ask "$PSQL_UPDATE"
+reason="$(reason_of "$(bash_payload "$PSQL_UPDATE")")"
+case "$reason" in *"update workflows set note = note where false"*) check "the question about a psql update names the statement" ok ;; *) check "the question about a psql update names the statement" "reason: ${reason:0:300}" ;; esac
+expect_bash "a psql -c select is not" none 'psql "$DATABASE_URL" -c "select id, name from workflows where active = true"'
+UNKNOWN_WRITE="$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "update orders set total = 0"}')"
+expect "an unknown database tool's write is asked about" ask "$UNKNOWN_WRITE"
+expect "an unknown database tool's read is not" none "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select id from orders"}')"
+reason="$(reason_of "$UNKNOWN_WRITE")"
+case "$reason" in *mcp__acme_warehouse__run_sql*"update orders set total = 0"*) check "the question about an unknown tool names the tool and the statement" ok ;; *) check "the question about an unknown tool names the tool and the statement" "reason: ${reason:0:300}" ;; esac
+# A statement it cannot classify is asked about, never passed.
+expect_bash "a statement that does not parse is asked about" ask 'psql -c "selec t frm (( where"'
+expect_bash "a statement held in a shell variable is asked about" ask 'psql -c "$QUERY"'
+expect_bash "a select with a shell variable inside it is asked about" ask 'psql -c "select * from runs where id = $ID"'
+expect_bash "statements in a file are asked about" ask 'psql "$url" -X -1 -v ON_ERROR_STOP=1 -f change.sql'
+expect_bash "statements on its input (a heredoc) are asked about" ask $'psql "$url" <<SQL\nupdate runs set note = 1;\nSQL'
+expect_bash "statements piped into it are asked about" ask 'echo "update runs set note = 1" | psql'
+expect_bash "an option the hook does not know is asked about" ask 'psql --no-such-option -c "select 1"'
+expect_bash "a psql variable in the statement is asked about" ask 'psql -v cond="1; delete from runs" -c "select :cond"'
+expect "an unknown SQL tool with no statement it can find is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"text": "update orders set total = 0"}')"
+expect "an unknown SQL tool whose statement is not text is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": 7}')"
+expect "an unknown SQL tool whose input is not an object is asked about" ask "$(python3 -c 'import json; print(json.dumps({"tool_name": "mcp__acme_warehouse__run_sql", "tool_input": "update t set a = 1"}))')"
+expect "a list of statements holding one write is asked about" ask "$(tool_payload mcp__acme_warehouse__run_sql '{"statements": ["select 1", "delete from orders"]}')"
+expect "a list of read only statements is not" none "$(tool_payload mcp__acme_warehouse__run_sql '{"statements": ["select 1", "select 2"]}')"
+
+# psql in the shapes a command really takes.
+expect_bash "bundled options ending in -c, a select" none 'psql "$U" -XAtc "select count(*) from runs"'
+expect_bash "bundled options ending in -c, a delete" ask 'psql "$U" -XAtc "delete from runs"'
+expect_bash "--command= with a select, its output redirected and piped" none 'psql --command="select 1" 2>/dev/null > out.txt | head -5'
+expect_bash "two -c, the second a write" ask 'psql -c "select 1" -c "truncate runs"'
+expect_bash "an assignment, cd and sudo in front" ask 'cd /srv && PGPASSWORD=x sudo -u postgres psql -c "drop table runs"'
+expect_bash "inside bash -c" ask "bash -c 'psql -c \"delete from runs\"'"
+expect_bash "inside a substitution" ask 'n="$(psql -Atc "delete from runs returning 1")"'
+expect_bash "after then, in an if" ask 'if true; then psql -c "alter table runs add column x int"; fi'
+expect_bash "through docker exec, a write" ask 'docker exec -i supabase_db psql -U postgres -c "update runs set note = 1"'
+expect_bash "through docker exec, a select" none 'docker exec -i supabase_db psql -U postgres -c "select 1"'
+expect_bash "through ssh, in one quoted string" ask "ssh db.example.com \"psql -c 'delete from runs'\""
+expect_bash "through npx" ask 'npx supabase db push'
+expect_bash "a psql meta command is not provably a read" ask 'psql -c "\copy runs from stdin"'
+expect_bash "psql --version runs nothing" none 'psql --version'
+expect_bash "psql --help runs nothing" none 'psql --help'
+expect_bash "psql -l only lists" none 'psql -l'
+expect_bash "a wrapper the hook cannot read that names a client" ask 'eval "$RUNNER psql -c \"delete from runs\""'
+# A mention is not a run.
+expect_bash "a search for the word" none 'grep -n psql notes.txt'
+expect_bash "a message naming it" none 'echo "psql is not installed, so nothing ran"'
+expect_bash "asking whether it is installed" none 'if ! command -v psql >/dev/null; then echo missing; fi'
+expect_bash "which" none 'which psql sqlite3 mysql'
+expect_bash "a commit message" none 'git commit -m "psql -c update wrapper"'
+expect_bash "a heredoc body" none $'cat > notes.md <<EOF\npsql -c "delete from runs"\nEOF'
+expect_bash "a script named after it" none 'bash scripts/psql-backup.sh'
+# Both measured in the 30 days of Bash calls to 2026-11-10: eval of what a read prints (10 calls),
+# and a note handed to a script as data (1).
+expect_bash "eval of what a read only client command prints" none 'eval "$(supabase status -o env | grep API_URL)"'
+expect_bash "a script handed the word as data" none 'bash ~/.claude/hooks/lib/issue-spool.sh note . "psql was slow to start" "2536 agent"'
+expect_bash "a command with no client in it" none 'ls -la'
+
+# mysql, mariadb and sqlite3.
+expect_bash "mysql -e, an update" ask 'mysql -uroot -psecret shop -e "update orders set total = 0"'
+expect_bash "mysql -e, a select" none 'mysql -uroot -psecret -NBe "select count(*) from orders" shop'
+expect_bash "mysql --execute=, a drop" ask 'mysql --execute="drop table orders"'
+expect_bash "mysql with nothing to run reads its input" ask 'mysql shop < dump.sql'
+expect_bash "mariadb -e, a delete" ask 'mariadb -e "delete from orders"'
+expect_bash "sqlite3, a select" none 'sqlite3 app.db "select id, name from shows"'
+expect_bash "sqlite3 -readonly with options, a select, redirected" none 'sqlite3 -readonly -header -separator "|" app.db "select id from shows" > out.txt 2>&1'
+expect_bash "sqlite3, a delete" ask 'sqlite3 app.db "delete from shows"'
+expect_bash "sqlite3, two statement words, the second a write" ask 'sqlite3 app.db "select 1" "drop table shows"'
+expect_bash "sqlite3, a dot command" ask 'sqlite3 app.db ".read change.sql"'
+expect_bash "sqlite3 with no statement reads its input" ask 'sqlite3 app.db'
+expect_bash "sqlite3 -cmd holds a statement too" ask 'sqlite3 -cmd "delete from shows" app.db "select 1"'
+# A statement that only runs BEFORE the client reads its input does not stand in for that input.
+expect_bash "sqlite3 -cmd with a select still reads the write piped into it" ask 'echo "delete from shows" | sqlite3 -cmd "select 1" app.db'
+expect_bash "mysql --init-command with a select still reads the file given as its input" ask 'mysql --init-command="select 1" shop < dump.sql'
+expect_bash "a quoted > is a statement word, never a redirection" ask "sqlite3 app.db '>' 'delete from shows'"
+expect_bash "sqlite3 -version runs nothing" none 'sqlite3 -version'
+
+# The Supabase CLI's database subcommands (the routes /db-apply uses).
+expect_bash "supabase db query, a select" none 'supabase db query --linked "select count(*) from runs"'
+expect_bash "supabase db query, an update" ask 'supabase db query --linked --yes "update runs set note = 1"'
+expect_bash "supabase db query from a file" ask 'supabase db query --linked --yes -f change.sql'
+expect_bash "supabase db query asking only for help" none 'supabase db query --linked --file /dev/null --help'
+expect_bash "supabase db push" ask 'supabase db push --yes'
+expect_bash "supabase db push --dry-run changes nothing" none 'supabase db push --dry-run'
+expect_bash "supabase db push --dry-run=true changes nothing" none 'supabase db push --dry-run=true'
+# A dry run flag set to anything but true is a real push (lessons review, fc56bfb).
+expect_bash "supabase db push --dry-run=false is a real push" ask 'supabase db push --dry-run=false'
+expect_bash "supabase db push --dry-run=0 is a real push" ask 'supabase db push --dry-run=0'
+expect_bash "a dry run flag undone by a later false is a real push" ask 'supabase db push --dry-run --dry-run=false'
+expect_bash "supabase db reset" ask 'supabase db reset --linked'
+expect_bash "supabase migration up" ask 'supabase migration up --linked'
+expect_bash "supabase migration list only reads" none 'supabase migration list'
+expect_bash "supabase db diff only reads" none 'supabase db diff --linked'
+expect_bash "a supabase db subcommand the hook does not know" ask 'supabase db nosuchcmd'
+expect_bash "supabase status" none 'supabase status -o env'
+# The CLI's own branch and project subcommands change a database with no statement, as the
+# connector's tools further down do, so asking about one route and not the other would leave the
+# unasked one as the way round (claude-config#2632, L450). Names from the CLI's help (2.75.0).
+expect_bash "supabase branches delete" ask 'supabase branches delete preview-1'
+expect_bash "supabase branches create" ask 'supabase branches create preview-1 --project-ref abcdefgh'
+expect_bash "supabase branches pause" ask 'supabase branches pause preview-1'
+expect_bash "supabase branches unpause" ask 'supabase branches unpause preview-1'
+expect_bash "supabase branches update" ask 'supabase branches update preview-1 --persistent'
+expect_bash "supabase branches behind a project ref" ask 'supabase --project-ref abcdefgh branches delete preview-1'
+expect_bash "supabase branches list only reads" none 'supabase branches list'
+expect_bash "supabase branches get only reads" none 'supabase branches get preview-1'
+expect_bash "a supabase branches subcommand the hook does not know" ask 'supabase branches nosuchcmd'
+expect_bash "supabase projects delete" ask 'supabase projects delete abcdefgh'
+expect_bash "supabase projects create" ask 'supabase projects create shop --org-id exampleorg --region us-east-1'
+expect_bash "supabase projects list only reads" none 'supabase projects list'
+expect_bash "supabase projects api-keys only reads" none 'supabase projects api-keys --project-ref abcdefgh'
+expect_bash "supabase projects --help runs nothing" none 'supabase projects --help'
+expect_bash "supabase branches delete --help runs nothing" none 'supabase branches delete --help'
+# A deploy with JWT verification off publishes a function the platform lets anyone call without
+# signing in, which is not a change to a database and is asked about all the same
+# (claude-config#2660). In a shell the setting can sit in the project's supabase/config.toml, where
+# no flag shows it and the hook never reads, so Dan decided on 2026-11-10 ("Ask on every shell
+# deploy") that every `supabase functions deploy` is asked about, whatever its flags. That reverses
+# #2632's "supabase functions deploy changes no database", which this check held as a pass. The
+# flag and the subcommands are from `supabase functions deploy --help` and `supabase functions
+# --help`, CLI 2.75.0.
+expect_bash "a plain function deploy, naming no function" ask 'supabase functions deploy'
+expect_bash "a function deploy naming its function" ask 'supabase functions deploy hello'
+expect_bash "a function deploy with --no-verify-jwt" ask 'supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt before the function's name" ask 'supabase functions deploy --no-verify-jwt hello'
+expect_bash "--no-verify-jwt with no function named, which deploys them all" ask 'supabase functions deploy --no-verify-jwt'
+expect_bash "--no-verify-jwt=true" ask 'supabase functions deploy hello --no-verify-jwt=true'
+expect_bash "--no-verify-jwt behind a project ref" ask 'supabase --project-ref abcdefgh functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt behind a deploy flag that takes a value" ask 'supabase functions -j 2 deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt through npx" ask 'npx supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt in the second command of a line" ask 'cd app && supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt set to false and then given bare" ask 'supabase functions deploy hello --no-verify-jwt=false --no-verify-jwt'
+expect_bash "--no-verify-jwt with a value that is neither true nor false" ask 'supabase functions deploy hello --no-verify-jwt=maybe'
+expect_bash "an older CLI's --verify-jwt=false" ask 'supabase functions deploy hello --verify-jwt=false'
+expect_bash "a deploy with --no-verify-jwt=false is asked about as any deploy is" ask 'supabase functions deploy hello --no-verify-jwt=false'
+expect_bash "a deploy with --verify-jwt=true is asked about as any deploy is" ask 'supabase functions deploy hello --verify-jwt=true'
+expect_bash "a deploy with its other flags" ask 'supabase functions deploy hello --project-ref abcdefgh --use-api -j 4 --import-map ./import_map.json'
+expect_bash "a plain deploy through npx" ask 'npx supabase functions deploy hello'
+expect_bash "a plain deploy behind a workdir" ask 'supabase --workdir app functions deploy hello'
+expect_bash "a deploy --no-verify-jwt --help runs nothing" none 'supabase functions deploy --no-verify-jwt --help'
+expect_bash "a deploy --help runs nothing" none 'supabase functions deploy --help'
+expect_bash "a mention of a deploy runs nothing" none 'echo "then run supabase functions deploy hello"'
+expect_bash "supabase functions new only writes a file here" none 'supabase functions new hello'
+expect_bash "supabase functions download" none 'supabase functions download hello'
+expect_bash "supabase functions serve --no-verify-jwt runs on this Mac only" none 'supabase functions serve --no-verify-jwt'
+expect_bash "supabase functions serve of a function named deploy" none 'supabase functions serve deploy --no-verify-jwt'
+expect_bash "supabase functions list" none 'supabase functions list --project-ref abcdefgh'
+expect_bash "a db reset is still asked about with the flag beside it" ask 'supabase db reset --no-verify-jwt'
+OPEN_DEPLOY='supabase functions deploy hello --no-verify-jwt --project-ref abcdefgh'
+reason="$(reason_of "$(bash_payload "$OPEN_DEPLOY")")"
+case "$reason" in
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"JWT verification off"*"without signing in"*"claude-config#2660"*) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" ok ;;
+  *) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a --no-verify-jwt deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a --no-verify-jwt deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy --no-verify-jwt')")"
+case "$reason" in
+  *"all functions"*"the linked project"*"JWT verification off"*) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" ok ;;
+  *) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" "reason: ${reason:0:400}" ;;
+esac
+# A deploy whose flags do not turn verification off says where the setting it cannot see is kept,
+# and never says verification is off or on.
+reason="$(reason_of "$(bash_payload 'supabase functions deploy')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming no function says all functions and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"supabase functions deploy publishes all functions"*"the linked project"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming no function says all functions and where the setting is kept" ok ;;
+  *) check "a plain deploy naming no function says all functions and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --project-ref abcdefgh')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming its function names it, the project and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming its function names it, the project and where the setting is kept" ok ;;
+  *) check "a plain deploy naming its function names it, the project and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a plain deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a plain deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --no-verify-jwt=false')")"
+case "$reason" in
+  *"JWT verification off"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "it says verification is off: ${reason:0:400}" ;;
+  *"--no-verify-jwt=false"*"edge function hello"*"config.toml"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" ok ;;
+  *) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello world -j 2 --no-verify-jwt')")"
+case "$reason" in
+  *"edge functions hello, world "*) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" ok ;;
+  *) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" "reason: ${reason:0:400}" ;;
+esac
+# One command line holding a database write and an open deploy is one question about both.
+reason="$(reason_of "$(bash_payload 'supabase db reset && supabase functions deploy hello --no-verify-jwt')")"
+case "$reason" in
+  *"database call and edge function deploy"*"supabase db reset"*"JWT verification off"*"claude-config#2536"*"claude-config#2660"*) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" ok ;;
+  *) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" "reason: ${reason:0:400}" ;;
+esac
+# The branch and project rule is added to the db and migration one, never read in its place, so no
+# command asked about before #2632 lost its question to a branches or projects word beside it.
+expect_bash "a db reset is asked about whatever stands before it" ask 'supabase projects list db reset'
+expect_bash "a project delete is asked about whatever its ref is" ask 'supabase projects delete db'
+case "$(reason_of "$(bash_payload 'supabase projects delete abcdefgh')")" in
+  *"supabase projects delete deletes a project and its database"*) check "the question about supabase projects delete says what it does" ok ;;
+  *) check "the question about supabase projects delete says what it does" "$(reason_of "$(bash_payload 'supabase projects delete abcdefgh')")" ;;
+esac
+# A client whose statements the hook does not read is asked about whenever it runs.
+expect_bash "pgcli" ask 'pgcli "$DATABASE_URL"'
+expect_bash "pg_restore" ask 'pg_restore -d shop dump.tar'
+expect_bash "dropdb" ask 'dropdb shop'
+expect_bash "pgcli --help runs nothing" none 'pgcli --help'
+# A help or version word counts only when it is the whole command: in these clients -h is the HOST,
+# so a word that reads as help elsewhere in a real run must not let it pass (lessons review, 5cb8288).
+expect_bash "dropdb -h names the host, so it is asked about" ask 'dropdb -h prod.example.com shop'
+expect_bash "pgcli -h names the host, so it is asked about" ask 'pgcli -h prod.example.com shop'
+expect_bash "a version word beside a real restore is asked about" ask 'pg_restore --version -d shop dump.tar'
+expect_bash "dropdb --version alone runs nothing" none 'dropdb --version'
+
+# Other database tools, by the names measured on this Mac and by invented ones.
+expect "the project level Supabase server's execute_sql, a write" ask "$(tool_payload mcp__supabase__execute_sql '{"query": "update runs set note = 1"}')"
+expect "the project level Supabase server's execute_sql, a select" none "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')"
+expect "the project level Supabase server's apply_migration" ask "$(tool_payload mcp__supabase__apply_migration '{"name": "n", "query": "select 1"}')"
+expect "query_logs with a select over logs" none "$(tool_payload mcp__claude_ai_Supabase__query_logs '{"project_id": "p", "sql": "select count(*) from logs"}')"
+expect "query_logs with a write" ask "$(tool_payload mcp__claude_ai_Supabase__query_logs '{"project_id": "p", "sql": "insert into logs values (1)"}')"
+expect "run_notebook, whose statements are in the notebook" ask "$(tool_payload mcp__claude_ai_Supabase__run_notebook '{"project_id": "p", "notebook_id": "n", "expected_updated_at": "t"}')"
+expect "a database server's query tool, a delete" ask "$(tool_payload mcp__postgres__query '{"query": "delete from runs"}')"
+expect "a database server's query tool, a select" none "$(tool_payload mcp__postgres__query '{"query": "select 1"}')"
+expect "a database server's tool that carries no statement" none "$(tool_payload mcp__postgres__list_tables '{"schema": "public"}')"
+expect "a camel case SQL tool" ask "$(tool_payload mcp__acme__executeSql '{"sqlQuery": "drop table runs"}')"
+# Measured names that are no database execution: none of them may be asked about.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_SFDC_USE__soqlQuery	{"q": "SELECT Id FROM Account LIMIT 5"}
+mcp__claude_ai_SFDC_-_Read_Only__soqlQuery	{"q": "SELECT Id FROM Account LIMIT 5"}
+mcp__claude_ai_Claude_Docs__query	{"object": "utterance", "payload": "update the plan"}
+mcp__claude_ai_Supabase__search_docs	{"graphql_query": "{ searchDocs(query: \"delete rows\") { nodes { title } } }"}
+mcp__claude_ai_Supabase__list_tables	{"project_id": "p"}
+mcp__posthog__exec	{"command": "call execute-sql {\"query\": \"select 1\"}", "context": "c"}
+mcp__claude_ai_Slack__slack_search_channels	{"query": "update on the migration"}
+mcp__sentry__search_issues	{"query": "is:unresolved delete"}
+mcp__wix__ExecuteWixAPI	{"url": "https://example.com/query", "method": "POST"}
+mcp__plugin_cloudflare_cloudflare-docs__migrate_pages_to_workers_guide	{}
+mcp__job-watcher__keep_job	{"id": "sql"}
+Edit	{"file_path": "/tmp/x.sql", "old_string": "select", "new_string": "delete from runs"}
+TOOLS
+
+# --- the Supabase tools that change a database with no statement (claude-config#2632) ----------
+# merge_branch, reset_branch and rebase_branch carry no SQL, so nothing above saw them, and each
+# changes a database. The payloads are in the shape the tool schemas declare (read 2026-11-10):
+# merge_branch, rebase_branch and delete_branch take branch_id, reset_branch branch_id and an
+# optional migration_version, create_branch project_id and name, pause_project and restore_project
+# project_id, create_project name, region and organization_id. Every id is invented.
+# expect_change <label> <payload> <text the question must hold>...
+expect_change() {
+  local label="$1" r got reason w missing=""
+  r="$(run "$HOOK" "$EMPTY_HOME" "$2")"; shift 2
+  got="$(decision "$r")"; reason="$(field "$r" reason)"
+  for w in "$@"; do case "$reason" in *"$w"*) ;; *) missing="$missing [$w]" ;; esac; done
+  if [ "$got" = "ask rc=0" ] && [ -z "$missing" ]; then check "$label" ok
+  else check "$label" "wanted ask rc=0, got $got; the question lacks:${missing:- nothing}; it reads: ${reason:0:240}"; fi
+}
+SB="mcp__claude_ai_Supabase__"
+expect_change "merge_branch is asked about, naming the tool, the branch and production" "$(tool_payload "${SB}merge_branch" '{"branch_id": "examplebranch1"}')" "${SB}merge_branch" "branch examplebranch1" "production" "claude-config#2632"
+expect_change "reset_branch is asked about, naming the branch and what is lost" "$(tool_payload "${SB}reset_branch" '{"branch_id": "examplebranch1"}')" "${SB}reset_branch" "branch examplebranch1" "to its migrations" "is lost" "claude-config#2632"
+expect_change "reset_branch to a version names the version" "$(tool_payload "${SB}reset_branch" '{"branch_id": "examplebranch1", "migration_version": "20261101120000"}')" "branch examplebranch1" "migration version 20261101120000" "is lost"
+expect_change "rebase_branch is asked about, naming the branch" "$(tool_payload "${SB}rebase_branch" '{"branch_id": "examplebranch1"}')" "${SB}rebase_branch" "branch examplebranch1" "migrations" "claude-config#2632"
+expect_change "delete_branch is asked about, naming the branch" "$(tool_payload "${SB}delete_branch" '{"branch_id": "examplebranch1"}')" "${SB}delete_branch" "branch examplebranch1" "database"
+expect_change "create_branch is asked about, naming the branch and its project" "$(tool_payload "${SB}create_branch" '{"project_id": "exampleprodproject", "name": "develop"}')" "${SB}create_branch" "named develop" "project exampleprodproject" "billed"
+expect_change "create_project is asked about, naming the project and its organization" "$(tool_payload "${SB}create_project" '{"name": "shop", "region": "us-east-1", "organization_id": "exampleorg"}')" "${SB}create_project" "named shop" "organization exampleorg" "bill"
+expect_change "pause_project is asked about, naming the project" "$(tool_payload "${SB}pause_project" '{"project_id": "exampleprodproject"}')" "${SB}pause_project" "project exampleprodproject" "offline"
+expect_change "restore_project is asked about, naming the project" "$(tool_payload "${SB}restore_project" '{"project_id": "exampleprodproject"}')" "${SB}restore_project" "project exampleprodproject"
+# The same tools on any other Supabase server, and written in camel case.
+expect_change "the project level Supabase server's merge_branch" "$(tool_payload mcp__supabase__merge_branch '{"branch_id": "examplebranch1"}')" "mcp__supabase__merge_branch" "branch examplebranch1"
+expect_change "a plugin's Supabase server's delete_branch" "$(tool_payload mcp__plugin_supabase_supabase__delete_branch '{"branch_id": "examplebranch1"}')" "branch examplebranch1"
+expect_change "a camel case resetBranch on a Supabase server" "$(tool_payload mcp__supabase__resetBranch '{"branch_id": "examplebranch1"}')" "branch examplebranch1" "is lost"
+# A target the call does not name, or names as something other than text, is said to be so: the
+# question never reads as though it named one.
+expect_change "merge_branch naming no branch says none is named" "$(tool_payload "${SB}merge_branch" '{}')" "branch (none named)"
+expect_change "merge_branch with an empty branch says none is named" "$(tool_payload "${SB}merge_branch" '{"branch_id": ""}')" "branch (none named)"
+expect_change "merge_branch whose branch is not text says so" "$(tool_payload "${SB}merge_branch" '{"branch_id": ["examplebranch1"]}')" "branch (not text)"
+expect_change "merge_branch whose input is not an object says none is named" "$(tool_payload "${SB}merge_branch" 'null')" "branch (none named)"
+long_id="$(printf 'b%.0s' $(seq 1 300))"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(tool_payload "${SB}delete_branch" "{\"branch_id\": \"$long_id\"}")")"
+reason="$(field "$r" reason)"
+case "$(decision "$r")|$reason" in
+  *"$long_id"*) check "a very long branch id is cut in the question, with its length said" "the whole 300 characters are in the question" ;;
+  "ask rc=0|"*"300 characters in all"*) check "a very long branch id is cut in the question, with its length said" ok ;;
+  *) check "a very long branch id is cut in the question, with its length said" "$(decision "$r") ${reason:0:240}" ;;
+esac
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__claude_ai_Supabase__merge_branch", "tool_input": {"branch_id": "examplebr' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*merge_branch*) check "a cut short payload naming merge_branch is asked about, naming it" ok ;;
+  *) check "a cut short payload naming merge_branch is asked about, naming it" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# Every tool in the library's table goes through the hook, so an entry added later is exercised on
+# the day it lands and one whose sentence leaves a placeholder unfilled fails here (L96).
+change_tools="$(python3 -I -B - "$DIR/lib/db-write-calls.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("db_write_calls_shared", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(m)
+    print(" ".join(sorted(m.SUPABASE_CHANGES)))
+except Exception as e:
+    print("ERROR:" + type(e).__name__)
+PY
+)"
+case "$change_tools" in
+  *merge_branch*reset_branch*) check "the library lists the Supabase tools that change a database with no statement" ok ;;
+  *) check "the library lists the Supabase tools that change a database with no statement" "got: ${change_tools:-nothing}" ;;
+esac
+for t in $change_tools; do
+  case "$t" in ERROR:*) continue ;; esac
+  r="$(run "$HOOK" "$EMPTY_HOME" "$(tool_payload "${SB}$t" '{"branch_id": "b9", "project_id": "p9", "name": "n9", "organization_id": "o9"}')")"
+  reason="$(field "$r" reason)"
+  case "$(decision "$r")|$reason" in
+    *"{"*|*"}"*) check "$t from the library's table is asked about, its sentence filled in" "a placeholder is left in: ${reason:0:240}" ;;
+    "ask rc=0|"*"${SB}$t "*"9"*) check "$t from the library's table is asked about, its sentence filled in" ok ;;
+    *) check "$t from the library's table is asked about, its sentence filled in" "$(decision "$r") ${reason:0:240}" ;;
+  esac
+done
+
+# --- an edge function deploy with JWT verification off (claude-config#2660) ---------------------
+# deploy_edge_function with verify_jwt false publishes a function the platform lets anyone call
+# without signing in. #2632 left every deploy unasked, as code and not a database; this one case is
+# asked about, naming the function and the project. The payloads are in the shape the connector's
+# schema declares (read 2026-11-10): project_id, name, entrypoint_path, verify_jwt and files, all
+# required, verify_jwt a boolean whose default is true. Every id is invented.
+DEPLOY="${SB}deploy_edge_function"
+BODY='"entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]'
+deploy_payload() {  # deploy_payload <tool> <the fields before the entrypoint and files>
+  tool_payload "$1" "{$2, $BODY}"
+}
+expect_change "a deploy with verify_jwt false is asked about, naming the function and the project" "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')" "asks before this edge function deploy" "$DEPLOY" "edge function hello" "project exampleprodproject" "JWT verification off" "without signing in" "claude-config#2660"
+reason="$(reason_of "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')")"
+case "$reason" in *"database call"*) check "the question about an open deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about an open deploy does not call it a database call" ok ;; esac
+expect_change "the project level Supabase server's deploy with verify_jwt false" "$(deploy_payload mcp__supabase__deploy_edge_function '"project_id": "p", "name": "hello", "verify_jwt": false')" "mcp__supabase__deploy_edge_function" "edge function hello" "JWT verification off"
+expect_change "a camel case deployEdgeFunction with verifyJwt false" "$(deploy_payload mcp__supabase__deployEdgeFunction '"project_id": "p", "name": "hello", "verifyJwt": false')" "edge function hello" "JWT verification off"
+expect_change "a deploy with no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "no_verify_jwt": true')" "JWT verification off"
+expect_change "a deploy whose verify_jwt is the text false" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "false"')" "JWT verification off"
+expect_change "a deploy with verify_jwt true and no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": true, "no_verify_jwt": true')" "JWT verification off"
+# A value that is neither true nor false is asked about as one that could not be read, never
+# passed: what the server makes of it was not measured.
+expect_change "a deploy whose verify_jwt is null" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": null')" "edge function hello" "could not be told"
+expect_change "a deploy whose verify_jwt is 0" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": 0')" "could not be told"
+expect_change "a deploy whose verify_jwt is the text true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "true"')" "could not be told"
+expect_change "a deploy whose verify_jwt is a list" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": [false]')" "could not be told"
+expect_change "a deploy whose input is not an object" "$(tool_payload "$DEPLOY" 'null')" "$DEPLOY" "could not be told" "claude-config#2660"
+expect_change "an open deploy naming no function or project says none is named" "$(tool_payload "$DEPLOY" '{"verify_jwt": false}')" "edge function (none named)" "project (none named)"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" "\"project_id\": \"p\", \"name\": \"$long_id\", \"verify_jwt\": false")")"
+reason="$(field "$r" reason)"
+case "$(decision "$r")|$reason" in
+  *"$long_id"*) check "a very long function name is cut in the question, with its length said" "the whole 300 characters are in the question" ;;
+  "ask rc=0|"*"300 characters in all"*) check "a very long function name is cut in the question, with its length said" ok ;;
+  *) check "a very long function name is cut in the question, with its length said" "$(decision "$r") ${reason:0:240}" ;;
+esac
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__claude_ai_Supabase__deploy_edge_function", "tool_input": {"name": "hello", "verify_jwt": fal' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*deploy_edge_function*"JWT verification"*"claude-config#2660"*) check "a cut short payload naming deploy_edge_function is asked about, naming it" ok ;;
+  *) check "a cut short payload naming deploy_edge_function is asked about, naming it" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# A deploy that keeps verification on is passed, as before #2660: verify_jwt true, and verify_jwt
+# left out, since the schema's default is true. So is one whose own code mentions the setting, a
+# tool that only reads a function, and the same tool name on a server that is not Supabase's.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t keeping JWT verification on is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deployEdgeFunction	{"project_id": "p", "name": "hello", "verifyJwt": true, "noVerifyJwt": false}
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "config.toml", "content": "[functions.hello]\nverify_jwt = false"}, {"name": "index.ts", "content": "// \"verify_jwt\": false\nDeno.serve(() => new Response(1))"}]}
+mcp__claude_ai_Supabase__get_edge_function	{"project_id": "p", "function_slug": "hello"}
+mcp__claude_ai_Supabase__list_edge_functions	{"project_id": "p"}
+mcp__acme_hosting__deploy_edge_function	{"name": "hello", "verify_jwt": false, "note": "moved from supabase"}
+TOOLS
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-write-calls.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-write-calls.py missing, an open deploy is asked about" ok || check "with lib/db-write-calls.py missing, an open deploy is asked about" "$(decision "$r")"
+rm -rf "$WORK/part"
+
+# Decided in #2632 as no change to a database, so none of them may be asked about: an edge function
+# deploy that keeps JWT verification on (one that turns it off is asked about, above) and its
+# secret change code and configuration, a notebook is saved without being run (run_notebook is
+# asked about, always), feedback goes to Supabase, and the rest only read. And the same tool names
+# on a server that is not Supabase's are another product's branches.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response('ok'))"}]}
+mcp__claude_ai_Supabase__create_edge_function_secret	{"project_id": "p", "name": "API_KEY"}
+mcp__claude_ai_Supabase__create_notebook	{"project_id": "p", "name": "n", "content": {"cells": [{"type": "database", "sql": "delete from runs", "row_limit": 10}]}}
+mcp__claude_ai_Supabase__delete_notebook	{"project_id": "p", "notebook_id": "n"}
+mcp__claude_ai_Supabase__submit_feedback	{"feedback": "merge_branch gave no result", "project_id": "p"}
+mcp__claude_ai_Supabase__delete_feedback	{"delete_token": "t1", "project_id": "p"}
+mcp__claude_ai_Supabase__list_branches	{"project_id": "p"}
+mcp__claude_ai_Supabase__get_project	{"id": "p"}
+mcp__github__create_branch	{"owner": "o", "repo": "supabase-app", "branch": "fix"}
+mcp__github__merge_branch	{"owner": "o", "repo": "supabase-app", "base": "main", "head": "fix"}
+mcp__linear__delete_branch	{"note": "the supabase reset_branch tool"}
+TOOLS
+# The read hook never approves any of these, so the two hooks still cannot disagree about one.
+for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')"; do
+  a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$p")")"
+  [ "$a" = "none rc=0" ] && check "the read hook gives no decision on a call outside its own tools" ok || check "the read hook gives no decision on a call outside its own tools" "$a"
+done
+
+# Payloads it cannot read, and its own parts missing: asked about, never passed.
+expect "a Bash call whose command is not text, naming a client" ask "$(tool_payload Bash '{"command": ["psql", "-c", "delete from runs"]}')"
+r="$(cd "$WORK" && printf '{"tool_name": "Bash", "tool_input": {"command": "psql -c \\"delete from runs' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a cut short Bash payload naming a client is asked about" ok || check "a cut short Bash payload naming a client is asked about" "$(decision "$r")"
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__acme_warehouse__run_sql", "tool_input": {"sql": "update t' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "a cut short payload naming an unknown SQL tool is asked about" ok || check "a cut short payload naming an unknown SQL tool is asked about" "$(decision "$r")"
+for missing in db-write-calls.py shell-words.py sql-read-only.py; do
+  rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+  cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/$missing"
+  r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(bash_payload 'psql -c "select 1"')")"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"$missing"*) check "with lib/$missing missing, even a psql select is asked about, naming the file" ok ;;
+    *) check "with lib/$missing missing, even a psql select is asked about, naming the file" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
+done
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-write-calls.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-write-calls.py missing, an unknown SQL tool's select is asked about" ok || check "with lib/db-write-calls.py missing, an unknown SQL tool's select is asked about" "$(decision "$r")"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(bash_payload 'ls -la')")"
+[ "$(decision "$r")" = "none rc=0" ] && check "with lib/db-write-calls.py missing, a command naming nothing of a database is still passed" ok || check "with lib/db-write-calls.py missing, a command naming nothing of a database is still passed" "$(decision "$r")"
+# With no python3, a database client in a shell is asked about too, and a plain command is not.
+if ! npp_reaches_python3 "$NOPY"; then
+  r="$(run_nopy "$(bash_payload 'psql -c "select 1"')")"
+  case "$(decision "$r")|$(field "$r" reason)" in
+    "ask rc=0|"*"python3 is not on PATH"*) check "with no python3, a psql select is asked about, naming python3" ok ;;
+    *) check "with no python3, a psql select is asked about, naming python3" "$(decision "$r") $(field "$r" reason)" ;;
+  esac
+  r="$(run_nopy "$(bash_payload 'ls -la')")"
+  [ "$(decision "$r")" = "none rc=0" ] && check "with no python3, a command naming nothing of a database is passed" ok || check "with no python3, a command naming nothing of a database is passed" "$(decision "$r")"
+fi
+
+# The hook leaves early, before python3 starts, on a payload holding none of its screen words, so
+# every word the classifier can ask about must hold one of them or that call would never be read.
+screen="$(sed -n 's/^DB_SCREEN_WORDS="\(.*\)"$/\1/p' "$HOOK")"
+[ -n "$screen" ] && check "the hook declares its screen words" ok || check "the hook declares its screen words" "no DB_SCREEN_WORDS line"
+unscreened="$(python3 -I -B - "$DIR/lib/db-write-calls.py" "$screen" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("db_write_calls_shared", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(m)
+except Exception as e:
+    print("lib/db-write-calls.py did not load: " + type(e).__name__); sys.exit()
+words = sys.argv[2].split()
+print(" ".join(sorted(w for w in m.asked_words() if not any(s in w.lower() for s in words))))
+PY
+)"
+[ -z "$unscreened" ] && check "every client, tool and key the classifier knows holds a screen word" ok || check "every client, tool and key the classifier knows holds a screen word" "not screened: $unscreened"
+
+# --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
 d = json.load(open(sys.argv[1]))
@@ -290,16 +759,23 @@ if len(hits) != 1:
     print("registered %d times" % len(hits)); sys.exit()
 m, h = hits[0]
 want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_migration"] + [
-        "mcp__claude_ai_SFDC_USE__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")]
-never = ["mcp__claude_ai_Supabase__list_tables", "mcp__claude_ai_SFDC_USE__soqlQuery",
-         "mcp__claude_ai_SFDC_-_Read_Only__soqlQuery", "Bash", "Edit"]
+        "mcp__claude_ai_SFDC_USE__" + t for t in ("createSobjectRecord", "updateSobjectRecord", "deleteSobjectRecord")] + [
+        # Since #2536: Bash, for psql and its like, and every MCP tool, since a database tool on a
+        # connector not yet seen can only be told by its name or its input once the hook runs.
+        "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs",
+        # Since #2632: the Supabase tools that change a database with no statement.
+        "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
+        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch",
+        # Since #2660: an edge function deploy, asked about when it turns JWT verification off.
+        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction"]
+never = ["Edit", "Write", "Read", "Monitor", "Agent"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":
     bad.append("onFailure is not block, so a crash or a timeout would let a write through unasked")
 print("ok" if not bad else "matcher %s: %s" % (m, ", ".join(bad)))
 PY
 )"
-check "the settings run the hook for the two Supabase SQL tools and the three Salesforce write tools, blocking on failure" "$wiring"
+check "the settings run the hook for Bash and every MCP tool, blocking on failure" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

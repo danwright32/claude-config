@@ -1115,8 +1115,40 @@ happened on 2026-11-09, when Fable 5.2 became Dan's default: `claude-fable-5-2` 
 beside the Opus entry, which stays for the builders and sessions still on Opus (#2547), and the sync
 suite reads the real file to confirm status says nothing for either.
 
+On 2026-11-10 Dan chose to share the default subagent model too, as `opus` (#2645). The same change
+of default had a second effect nobody chose: an agent that names no model inherits the session's, so
+the planning panel, plan-lite's agents and every ad hoc agent call moved onto Fable with it, while
+the model tiers in the orchestrate skill cover only that skill's builders. Claude Code reads the
+default from `CLAUDE_CODE_SUBAGENT_MODEL` in the `env` block of `settings.json`. Measured on 2.1.322
+with a headless Fable run starting one agent that names no model: the agent ran on
+`claude-fable-5-2` with nothing set and on `claude-opus-5-5` with the variable set, and a call
+naming `sonnet` still ran on Sonnet, so it is a default and never an override (L82, L188). The `env` block is otherwise
+each Mac's own (it holds `CLAUDE_CODE_PLUGIN_DIRS`, and may hold a credential), so the file may
+carry that one variable under `env` and the pull writes that one leaf. Any other variable refuses
+the whole file, named but with its value left out of the message, since a refusal reaches the log
+and a notification. The value is an alias (`opus`, `sonnet`, `haiku`, `fable`) or a full model name:
+unlike `modelSettings`, this variable takes either. Taking it out of the file leaves each Mac's
+value in place, as with a model the file stops naming.
+
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
+
+Workflow agents, which the planning panel starts, were measured on 2026-11-10 (#2649): one test
+workflow, run once from a headless Fable session with hooks off, started one agent in each shape
+`payload/skills/plan-council/panel.workflow.js` uses. The model is read from each transcript's
+assistant turns, never from what an agent says about itself:
+
+| Agent shape | Model named | Model on its transcript |
+|---|---|---|
+| the parent session (`--model claude-fable-5-2`) | | `claude-fable-5-2` (5 of 5 turns) |
+| ad hoc, no agent type | none | `claude-opus-5-5` (2 of 2) |
+| `plan-architect` | none | `claude-opus-5-5` (1 of 1) |
+| `plan-redteam` | `sonnet` | `claude-sonnet-5-5` (1 of 1) |
+
+So a workflow agent naming no model takes the default subagent model, Opus, and does not copy its
+Fable parent, and one naming a model gets it: the panel follows the default as intended. The run
+had to come from a Fable session, since from an Opus one following the default and copying the
+parent both read as Opus.
 
 ## rtk's excluded commands are written into rtk's own config (#1427)
 
@@ -1248,8 +1280,7 @@ documents and held by two suites. Three shapes were weighed:
   fallback for a session where it did not arrive, the one number a static file must state, held to
   the hook's default by `test-agent-cap.sh`.
 
-Which Mac this is comes from `hostname`, the short name, as `check-project-list.sh` and
-`ai-review-on-push.sh` already read it; a name that cannot be read is said as that, with the default,
+Which Mac this is comes from `lib/this-mac.sh`, the short name every hook reads (#2561); a name that cannot be read is said as that, with the default,
 never a guess (L11). The production audit workflow runs in an engine with no shell or file access,
 so it takes the number as `args.agentCap` and falls back, logged, to a literal default that its
 suite holds to the hook's by running it with none. The scan in `test-agent-cap.sh` finds a number
@@ -2020,6 +2051,17 @@ remedy is itself a command (L362). A notice on the prompt arrives before any edi
 `ps` and two small file reads, and addresses what was actually lost, which was a day of work rather
 than one edit.
 
+**Which trees the daemon can reach (#2705).** The warning, and `payload-write-gate.sh`, which
+refuses the write itself, find a clone by a folder holding `claude-sync` and `payload/`, then ask
+whether the daemon can reach it. The revert above arrived through the repository: the work was
+pushed, and the daemon's send overwrote it on main. So a linked worktree on a branch other than the
+default is out of reach, and so is a plain copy of the tree with no repository around it, such as
+one a session keeps in its notes folder to measure a change in. A plain copy is recognised only
+when git, asked, says in its own exit code and words that there is no repository, and no `.git` is
+found at the copy's root or above it. A copy that is its own git checkout, a copy inside another
+work tree, and anything git cannot answer for are judged as a checkout, and there is no list of
+exempt folders. Both hooks ask through `sc_is_plain_copy` in `hooks/lib/sync-clone.sh`.
+
 The recovery, if it happens again: find the sync commit (`git log --author=claude-config-sync`),
 take the file list it touched, and check those paths out of the commit BEFORE it, keeping
 `LESSONS.md` and its index, which carry the other Mac's real additions.
@@ -2289,6 +2331,121 @@ approved would have held 72 seats rather than 20: at least 52 lessons that were 
 disputed in September are agreed diff now. That is why the seats became a tracked file (the seats
 paragraphs above): the 72 are the candidates the 20 seats were seeded from, and the other 52 are
 protected.
+
+## A fresh worktree's first edit waits for an up to date base (#2517)
+
+`hooks/fresh-worktree-base-gate.sh` refuses a file edit in a worktree that has no commits of its own
+while it is behind the remote's main branch. The choices, and what each rules out:
+
+- **Refuse until updated, not warn once.** A warning read and passed is exactly how the 2026-09-14
+  merge went out without its rebase, and the remedy is one local command, so the refusal costs one
+  round trip. Recorded as a decision taken without Dan, on the pull request.
+- **The gate fetches before judging.** Worktrees share refs, so the local `origin/main` is whatever
+  the last fetch in ANY worktree left, and a check against it says "current" on stale data (L345).
+- **Once per worktree per session, then cached, and only a pass is cached.** One fetch per worktree
+  rather than one per edit; a refused worktree is judged again so the edit after the update goes
+  ahead. The record is a file per session and worktree in `TMPDIR`, the same keying as
+  `project-list-nudge.sh` and `payload-revert-warning.sh` (a hash of the session id).
+- **It stands down for good once the worktree has its own commits.** Main moving after that is a
+  rebase question for the merge step (#766), and that check is read on the local ref, needing no
+  fetch, since a fetch only adds to main.
+- **A failed fetch neither passes in silence nor blocks for good.** It says it could not check, once,
+  and tries again once its retry window has passed (a setting, `FRESH_WORKTREE_RETRY_MINUTES`, not a
+  measurement), because a session that cannot reach GitHub must still be able to
+  work. The one exception refuses: when even the unrefreshed local ref shows the worktree behind, it
+  is behind at least that far, and `git merge --ff-only origin/main` needs no network.
+- **A fetch that was never run is refused, not treated as a failed one (#2634).** With
+  `lib/bounded-run.sh` missing the gate's stand in runs nothing, and with the `lib/whole-number.sh`
+  it reads its bound with missing the library runs nothing; both answer 125. The gate took that
+  down the failed fetch path, so a worktree it refuses with the library in place was let through
+  with a notice said once and then in silence for the retry window. The reason a failed fetch
+  passes does not hold here: nothing on the network is wrong, waiting does not clear it, and
+  `claude-sync pull` does. It went unseen because `test-gates-fail-closed.sh` left out every
+  library loaded with a stand in function as optional. That suite now counts such a library as
+  needed unless it names the stand in as examined, and runs each gate with each examined one gone.
+- **The fetch is bounded at 10 seconds inside a 30 second registration timeout.** The gate is
+  registered with onFailure block (#1899), so a gate Claude Code kills is a refused edit; the bound
+  makes the gate settle itself long before that. Eight fetches with nothing new took 0.18 to 0.33
+  seconds on 2026-11-10 on the personal MacBook at a load average of 16 to 19 over one minute.
+- **Primary checkouts are out of scope, as the issue set.** A worktree is cut from whatever main the
+  shared refs held at that moment; a primary checkout holds Dan's own branch and state, which an
+  edit refusal there would get in the way of.
+
+## The mirrored trees go through one rsync per step (#2614)
+
+Every step that compares or copies the trees in `MIRROR_DIRS` (the send side dry run in
+`past_release_paths`, the copy into the payload, the receive side dry runs in
+`deleted_leftovers_here` and `locally_ahead_paths`, and the apply) used to start one rsync per tree.
+A local rsync costs about 35 ms however little it moves, nearly all of it the tool starting and
+waiting on its own second process, and one call naming several trees costs the same as one naming
+one (measured 2026-11-10 on rsync 3.4.1 and on the openrsync macOS ships). On these small trees that
+fixed cost was most of the price: a sync started 16 rsync runs, about a third of its time.
+`mirror_rsync_go` now names every tree in one call. The choices:
+
+- **Each tree is named without its trailing slash**, so it lands under its own name inside the
+  destination root. `--delete` then reaches only inside the trees named, so nothing else in
+  `~/.claude` or the payload is touched, and the root's own mode and time are left alone.
+- **Excludes are rewritten, never shared blindly.** One anchored to a tree's top (`/held.sh`)
+  becomes `/hooks/held.sh`; an anchored exclude in `COMMON_EXCLUDES` is written once per tree, as each
+  per tree call applied it to its own top. Unanchored ones match at any depth either way and pass
+  through. An unanchored exclude handed for ONE tree is refused, since it would reach every tree.
+- **A linked tree runs alone, as before.** Without the trailing slash rsync copies a symbolic link
+  itself, and onto a linked destination it would replace the link with a folder, so a tree that is a
+  link at either end, or whose source is not a folder named after it, keeps its own call.
+- **The judging order is kept.** The copy and the apply still work out each tree's excludes in the
+  order they always did, and run the combined call once the last (skills, since #2661) is judged; the
+  mods placeholder and each tree's applied records follow it in tree order. Nothing a tree's
+  judgement reads is written by another tree's copy.
+- **skills kept its own rsync at first, and joined in #2661** (below). Its excludes include
+  unanchored plugin names, which become `/skills/NAME` plus `/skills/**/NAME`, and its turn runs the
+  unloadable skill checks with side effects of their own.
+- **A failure still fails the step.** A failing combined call has already written whatever it could
+  for every tree, where the per tree calls stopped at the first failing tree; the step then fails as
+  it did, and the apply records what was written before it does.
+
+`tests/test-mirror-rsync.sh` holds the equivalence, for every flag set the callers use and every rsync
+on the machine: one combined call leaves the destination exactly as one call per tree did and
+itemizes the same lines per tree. The one line it does not reproduce is the `created directory`
+line a per tree dry run prints for a destination tree that does not exist yet, which only
+`past_release_paths` meets and nothing reads. It also counts the rsync calls of a real sync, so a
+caller that goes back to one call per tree fails it.
+
+## The expanded copy is built once per apply, and skills joins the one rsync (#2661)
+
+`apply_source_dir` hands the apply each payload tree as it should land on this Mac: the payload
+itself, or, when a file in it carries the home path placeholder, a scratch copy with this Mac's home
+put back. An apply asks for it once per step for each tree (the deletion dry run, the locally ahead
+dry run, the apply) and once per mod folder on this Mac, and every ask rebuilt the answer. Measured
+2026-11-10 on this repository's own payload (hooks and skills carry the placeholder, about 450 and 310 files) one
+apply copied each of them three times, at about 0.35 s a copy, and read the whole mods tree 26
+times looking for the placeholder, at about 0.08 s a read. The choices:
+
+- **The answer is remembered for the rest of that apply, on disk.** Every caller reads the function
+  through a command substitution, whose variables die with it, so the answer is a file beside the
+  copy (`<tree>.answer`: plain or expanded, the source, and which apply it belongs to). The apply
+  sets `APPLY_SOURCE_GEN`, so a second apply in one run starts afresh, and the whole folder is
+  removed on exit as before.
+- **It is believed only while the source is unchanged by CHANGE time.** `<tree>.stamp` is made
+  before the source is read, and a remembered answer stands only while `find -newercc` finds nothing
+  under the source newer than it. Not modification time: rsync -a and git set a file's (and with
+  rsync, its folder's) modification time back, but any write, deletion, rename or mode change moves
+  the change time forward. An edit landing while the copy is being made is newer than the stamp, so
+  the next ask rebuilds. The check costs one `find` (about 0.015 s on these trees) where the plain
+  case used to cost a full read for the placeholder.
+- **The mods lookup is asked once per apply**, not once per mod folder, since nothing in that loop
+  writes the payload.
+- **skills joins the combined rsync in every step that ran it alone** (the send side dry run, the
+  copy into the payload, both receive side dry runs and the apply). Its bare names (plugin skills,
+  `.trash`) become `/NAME` plus `/**/NAME` through `mirror_rsync_add_any_depth`, which match at every
+  depth of skills and nowhere else on both rsyncs a Mac can have; an unanchored pattern holding a
+  slash is still refused. In the apply and the copy, skills' checks (which prune empty entries from
+  the payload and report) now run before the one rsync rather than after the other trees were
+  written; they read only skills folders.
+
+`tests/test-apply-source-cache.sh` holds the reuse, every way the source can change (four mutants
+seen to fail it: no change check, a modification time check, a stamp made after the build, no
+apply key), and a real pull and sync building each copy once. `tests/test-mirror-rsync.sh` holds
+skills' excludes to the per tree call on every rsync. Measured before and after in the pull request.
 
 ## Things known to be wrong and left that way
 

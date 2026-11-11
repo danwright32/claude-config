@@ -950,6 +950,10 @@ for want in 'collision-guard keeps its own write-reader' 'collision-guard keeps 
 done
 printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'modkit.pipeline(' \
   && check "and points a mod judging code its own way at what modkit.pipeline gives" ok || check "and points a mod judging code its own way at what modkit.pipeline gives" "$out"
+# #2710: a file's text is judged by mod-kit's file reader, kept as a copy since a search asks it
+# synchronously, so the remedy names that copy as well as pipeline.
+printf '%s\n' "$out" | grep 'scope-modes keeps its own program-reader' | grep -q 'fileReach from the copy of hooks/reaches.ts kept at hooks/mod-kit/reaches.ts' \
+  && check "and points a mod judging a file's text at mod-kit's file reader" ok || check "and points a mod judging a file's text at mod-kit's file reader" "$out"
 # #939: a button must work where it is drawn. A mod-kit button's press reaches its mod through
 # modkit.press, which a click and a typed /press both raise, so a mod hooking ui.press for one is
 # reached by a click alone and fails the run. A mod drawing its own Button must ask
@@ -1010,7 +1014,10 @@ out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a copy that no longer matches mod-kit's fails the run" ok || check "a copy that no longer matches mod-kit's fails the run" "exit=$code out=$out"
 remedy="$(printf '%s\n' "$out" | grep "reads-real's tests/mod-kit/hooks/register.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
 case "$remedy" in cp*) check "and names the cp that brings it back" ok ;; *) check "and names the cp that brings it back" "$out" ;; esac
-[ -n "$remedy" ] && eval "$remedy"
+# In a subshell, here and for #1281's remedy below: text the checker printed, run in this shell,
+# could set any of this suite's variables, so the Slack drafts gate stopped being sure where ROOT
+# points and refused the whole suite at its ts_source step (#2654). A cp needs nothing from this shell.
+[ -n "$remedy" ] && ( eval "$remedy" )
 out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "and running that cp passes the run again" ok || check "and running that cp passes the run again" "exit=$code out=$out"
 printf 'x\n' > "$M9C/reads-real/tests/mod-kit/hooks/gone.ts"
@@ -1546,6 +1553,24 @@ for m in prefix-strip prefix-match; do
     || check "and names $m, pointing it at errorText" "$out"
 done
 case "$out" in *clean-asks-words*|*clean-reads-aborted*) check "a mod asking errorText, or reading an abandoned command, passes" "$out" ;; *) check "a mod asking errorText, or reading an abandoned command, passes" ok ;; esac
+# #2467: the design round guard read a TypeScript string to its closing quote itself, and the Slack
+# alert guard a YAML flow list and its '' escape, while mod-kit's command reader reads shell only. Both
+# now read with quotedEnd, yamlScalar and yamlFlowList from the copy of mod-kit's hooks/quoted.ts, so a
+# mod undoing YAML's '' by hand, matching a single quoted scalar with a pattern, or walking a string to
+# the quote it opened with fails the run, pointed at that copy. A mod asking the copy passes, and so
+# does the design round guard's emptying of '' and "" in a prop value, which reads no string.
+M9Q="$TMPROOT/m9-quoted-reader"
+mkmodsrc "$M9Q" clean-asks-quoted "const items = yamlFlowList(text); const e = quotedEnd(text, i, 'code'); const empty = (v: string) => v.replace(/''|\"\"/g, 'x')"
+mkmodsrc "$M9Q" quoted-escape "if (s.startsWith(\"'\") && s.endsWith(\"'\")) return s.slice(1, -1).replace(/''/g, \"'\")"
+mkmodsrc "$M9Q" quoted-token "const FLOW = /\"(?:\\\\[\\s\\S]|[^\"\\\\])*\"?|'(?:''|[^'])*'?|#[^\\n]*/y"
+mkmodsrc "$M9Q" quoted-walk "for (let j = i + 1; j < n; j++) { if (text[j] === '\\\\') j++; else if (text[j] === q) return j }"
+out="$(bash "$SHARED" "$M9Q" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#2467: a mod reading a quoted string or a YAML flow list by hand fails the run" ok || check "#2467: a mod reading a quoted string or a YAML flow list by hand fails the run" "exit=$code out=$out"
+for m in quoted-escape quoted-token quoted-walk; do
+  printf '%s\n' "$out" | grep "$m keeps its own quoted-reader" | grep -q 'hooks/mod-kit/quoted.ts' && check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" ok \
+    || check "#2467: and names $m, pointing it at the copy of hooks/quoted.ts" "$out"
+done
+case "$out" in *clean-asks-quoted*) check "#2467: a mod asking the copy of hooks/quoted.ts passes" "$out" ;; *) check "#2467: a mod asking the copy of hooks/quoted.ts passes" ok ;; esac
 # #1765: three guards read each file a command reads by hand, looping over the write reader's inputs,
 # and one meeting /dev/stdin or a fifo waited for ever, so the call never ran. Each hand rolled loop
 # fails the run, pointed at inputTexts in the copy of mod-kit's hooks/inputs.ts; a mod handing the
@@ -1657,7 +1682,7 @@ out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
 remedy="$(printf '%s\n' "$out" | grep "clean-reads-missing's hooks/mod-kit/skew.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
 [ "$code" -eq 1 ] && case "$remedy" in cp*) true ;; *) false ;; esac \
   && check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" ok || check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" "exit=$code out=$out"
-[ -n "$remedy" ] && eval "$remedy"
+[ -n "$remedy" ] && ( eval "$remedy" )
 out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
 [ "$code" -eq 0 ] && check "#1281: and running that cp passes the run again" ok || check "#1281: and running that cp passes the run again" "exit=$code out=$out"
 printf 'export const x = 1\n' > "$M9K/clean-reads-missing/hooks/mod-kit/gone.ts"

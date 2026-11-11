@@ -254,3 +254,25 @@ export const unansweredText = (left: { repo: string; issue: number }[]) => {
   const lines = [...new Set(left.map(l => `${l.repo.toLowerCase()}#${l.issue}`))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
   return lines.length ? `${lines.join('\n')}\n` : ''
 }
+
+/** What /sleep could read of a held question's issue (#2585): open, closed, or why it could not tell. */
+export type HeldIssueState = { state: 'open' } | { state: 'closed' } | { state: 'unchecked'; why: string }
+
+/**
+ * The sentence naming the design round guard questions /sleep holds but never asks (#2261), read
+ * against each issue's state here, where they are read (#2585, L559): one whose issue is closed asks
+ * about finished work and is left out; one whose issue could not be read is still named, saying so,
+ * never dropped (L215). The same words noted on two nights are named once. Null when none is left.
+ */
+export const heldGuardsSaid = (held: { repo: string; issue: number; text: string }[], stateOf: (repo: string, issue: number) => HeldIssueState): string | null => {
+  const items: string[] = []
+  for (const q of held) {
+    const s = stateOf(q.repo, q.issue)
+    if (s.state === 'closed') continue
+    const item = `${q.repo}#${q.issue} "${q.text}"${s.state === 'unchecked' ? ` (whether its issue is still open could not be checked: ${s.why})` : ''}`
+    if (!items.includes(item)) items.push(item)
+  }
+  if (!items.length) return null
+  const list = items.length === 1 ? items[0] : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+  return `Not asked, since only the design round guard's own question can settle ${items.length === 1 ? 'it' : 'them'}: ${list}.`
+}

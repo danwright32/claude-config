@@ -141,6 +141,34 @@ export const scriptProgram = (run: ShellRun, text: string): { command: string; n
 }
 
 const SOURCES = new Set(['source', '.'])
+// A word that only sets a variable, though the reader gives it as a command: an array's element
+// (`seen[$f]=1`) or an append (`list+=("$f")`), which its own test for an assignment does not match.
+const SETS = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/
+
+type ReadCommand = { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }
+
+/**
+ * The commands that are the words of an arithmetic command (#2619), by their place: mod-kit's reader
+ * gives `(( $# < 1 ))` as two `(` commands, the expression's words as commands (`$#` `<` `1`, split
+ * at any `&&` or `||`), and two `)` commands, so a value there reads as a command named by a value
+ * though it names none. Only that exact shape counts: two `(` in a row, no parenthesis between, and
+ * two `)` in a row closing them, in a text that holds `((` at all. Two subshells with nothing else
+ * inside the outer one (`( ( "$TOOL" x ) )`) give the same commands, so in a script that also holds
+ * a `((` somewhere they read as arithmetic too, as they read as no write before #2619; any other
+ * nesting, and every script holding no `((`, is read as the commands it runs.
+ */
+const inArithmetic = (commands: readonly ReadCommand[], text: string): Set<number> => {
+  const is = (i: number, paren: string) => commands[i]?.words.length === 1 && commands[i]?.words[0] === paren
+  const found = new Set<number>()
+  if (!text.includes('((')) return found
+  for (let i = 0; i + 1 < commands.length; i++) {
+    if (!is(i, '(') || !is(i + 1, '(')) continue
+    let j = i + 2
+    while (j < commands.length && !is(j, '(') && !is(j, ')')) j++
+    if (is(j, ')') && is(j + 1, ')')) for (let k = i + 2; k < j; k++) found.add(k)
+  }
+  return found
+}
 
 /**
  * Why the commands mod-kit's pipeline gives for the command scriptProgram built leave what the script
@@ -150,16 +178,47 @@ const SOURCES = new Set(['source', '.'])
  * interpreter, by its path or through source, writes what no word names, which mod-kit's writes give
  * only for one handed arguments, so each is named here. A program run by its bare name (make, npm) is
  * read as the area check reads the same command typed on its own.
+ *
+ * And text the reader does not read as commands (#2619; each measured on 2026-11-10 to give no
+ * write, so a script writing through one was read as writing nothing and the folder it was handed
+ * went unjudged): what eval runs; what an alias makes a later word run; and a command named by a
+ * value (`"$TOOL" --write "$1"`, `$(command -v fixer) "$1"`, `"$@"`, and `bash -c "$FIX"`, which the
+ * reader gives as the command `$FIX`). A word that only sets a variable names no command, nor does
+ * a value inside arithmetic (inArithmetic, told from `source`, the text the commands were read
+ * from; with none given nothing is arithmetic). A trap's text is the caller's to read (trapTexts).
  */
-export const unreadPart = (commands: readonly { words: readonly string[]; program?: unknown; script?: { files: readonly string[]; stdin?: true } }[], delimiter: string): string | null => {
-  for (const c of commands) {
-    const head = c.words[0] ?? ''
+export const unreadPart = (commands: readonly ReadCommand[], delimiter: string, source = ''): string | null => {
+  const arithmetic = inArithmetic(commands, source)
+  for (const [i, c] of commands.entries()) {
+    // `builtin eval "$FIX"` runs eval: the reader does not look past `builtin`, so it is looked past here.
+    const words = c.words[0] === 'builtin' ? c.words.slice(1) : c.words
+    const head = words[0] ?? ''
     const text = typeof c.program === 'object' && c.program !== null && 'text' in c.program
     if (c.words.some(w => w.includes(delimiter)) && !text) return `${head} is no interpreter whose program mod-kit reads`
     if (c.script && !c.script.stdin) return `it runs the script ${c.script.files[0] ?? head}, whose writes are not read`
-    if (head.includes('/') || (SOURCES.has(head) && c.words.length > 1)) return `it runs ${SOURCES.has(head) ? c.words[1] : head}, whose writes are not read`
+    if (head.includes('/') || (SOURCES.has(head) && words.length > 1)) return `it runs ${SOURCES.has(head) ? words[1] : head}, whose writes are not read`
+    if (head === 'eval') return 'it runs text through eval, whose writes are not read'
+    if (head === 'alias' && words.some(w => w.includes('='))) return `it sets an alias (${words.find(w => w.includes('='))}), so what a later word runs is not read`
+    if (/[$`]/.test(head) && !SETS.test(head) && !arithmetic.has(i)) return `it runs ${head}, which cannot be named before it runs`
   }
   return null
+}
+
+/**
+ * The text each trap a script sets would run (#2619), once each: `trap 'echo x > "$1/big.ts"' EXIT`
+ * reaches the reader as a trap command whose first word is that text, which it reads as no command,
+ * so a write in it was no write. The caller reads each text as the commands it is, with the same
+ * reader and the same rules as the script's own. A trap that lists (`trap`, `-p`, `-l`), resets
+ * (`trap - EXIT`) or ignores (`trap '' HUP`) runs nothing.
+ */
+export const trapTexts = (commands: readonly { words: readonly string[] }[]): string[] => {
+  const texts = new Set<string>()
+  for (const c of commands) {
+    if (c.words[0] !== 'trap') continue
+    const text = c.words[c.words[1] === '--' ? 2 : 1]
+    if (text !== undefined && text.trim() !== '' && !text.startsWith('-')) texts.add(text)
+  }
+  return [...texts]
 }
 
 /**
@@ -177,20 +236,41 @@ export const scriptWrite = (w: ModKitWrites, home?: string): string | null => {
   return 'path' in t ? `it writes ${t.word}` : `it writes ${t.word}: ${t.unread}`
 }
 
+// Whether a run is the installed spool helper, run by bash or directly: only that path under the home
+// given, since a copy of the helper elsewhere may be any script, and without a home nothing is let off.
+const installedSpool = (r: ModKitRun, home: string | undefined): boolean =>
+  home !== undefined &&
+  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
+  r.path === `${home}/.claude/hooks/lib/issue-spool.sh`
+
 /**
  * Whether a run is a findings note to the installed spool helper (#2254):
  * `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, or the helper run directly.
  * Its note writes one record under ~/.claude-issue-spool and nothing in any repository, so its words,
- * a finding that often holds $ or *, are no files it writes. Only that path under the home given and
- * only its note subcommand: a copy of the helper elsewhere may be any script, and without a home
- * nothing is let off. Any substitution inside the note, and every other part of the command, is read
- * by mod-kit as its own write and judged as before.
+ * a finding that often holds $ or *, are no files it writes. Only its note subcommand. Any
+ * substitution inside the note, and every other part of the command, is read by mod-kit as its own
+ * write and judged as before.
  */
-const spoolNote = (r: ModKitRun, home: string | undefined): boolean =>
-  home !== undefined &&
-  (r.what === 'a bash script file' || r.what === 'a script file run directly') &&
-  r.path === `${home}/.claude/hooks/lib/issue-spool.sh` &&
-  r.args[0]?.word === 'note'
+const spoolNote = (r: ModKitRun, home: string | undefined): boolean => installedSpool(r, home) && r.args[0]?.word === 'note'
+
+/**
+ * The installed spool helper's subcommands whose first argument is the project folder its spool key
+ * is read from (#2636): the helper reads that folder's git common dir, or resolves it with cd and
+ * pwd, and writes only under its spool root, so the folder is never a place it writes. Each one is a
+ * line of the helper's dispatch handing `"${1:-$PWD}"` on as that folder, and
+ * tests/test-area-check-spool-key-only.sh holds this list to those lines and runs every one against
+ * a throwaway checkout, red when one leaves a file there changed or new. Its other arguments (a
+ * transcript, a stamp it writes) are judged as any script's are; a subcommand handed some other
+ * folder (sweep-stamps, keep-ledgers, which take the review's temp folder) is not in the list.
+ */
+export const SPOOL_KEY_COMMANDS: readonly string[] = [
+  'key', 'read-keys', 'path', 'archive-path', 'append', 'note', 'raw', 'pending', 'has-findings', 'archive',
+  'clear', 'file-errors', 'file-muted', 'muted-summary', 'muted-stamp', 'muted-sent',
+]
+
+// Whether a run's first argument after the subcommand is only the project a spool key is read from.
+const spoolKeyOnly = (r: ModKitRun, home: string | undefined): boolean =>
+  installedSpool(r, home) && SPOOL_KEY_COMMANDS.includes(r.args[0]?.word ?? '')
 
 /**
  * The one file a quoted pattern handed to a script file names (#2255), or undefined. mod-kit marks an
@@ -217,7 +297,8 @@ const quotedName = (r: ModKitRun, a: ModKitRun['args'][number]): string | undefi
  * folder and a mode change add no lines, so they are not judged. A folder handed to a script, or a copy
  * landing in a folder, is given here by its path like a file; the hook finds on the disk that it is a
  * folder and judges the files under it (#2321), since no answer here says so.
- * Nor are the words of a findings note (#2254), given `home`: see spoolNote. A quoted pattern handed to
+ * Nor are the words of a findings note (#2254), given `home`: see spoolNote; nor the project folder
+ * the installed spool helper reads a key from (#2636): see SPOOL_KEY_COMMANDS. A quoted pattern handed to
  * a script file is judged as the one file its characters name (#2255): see quotedName. A word handed
  * to a script that mod-kit marks `unexpanded` holds no value, so it is never read as built while the
  * command runs: every $ in it is in single quotes or after a backslash (#1953), or one the shell leaves
@@ -261,7 +342,9 @@ export const shellTargets = (w: ModKitWrites, home?: string): ShellTarget[] => {
   for (const r of w.runs ?? []) {
     if (spoolNote(r, home)) continue
     const run: ShellRun = { what: r.what, ...(r.path ? { path: r.path } : {}), ...(r.tool ? { tool: true as const } : {}) }
-    for (const a of r.args) {
+    const keyOnly = spoolKeyOnly(r, home)
+    for (const [i, a] of r.args.entries()) {
+      if (keyOnly && i === 1) continue
       const literal = a.path ? undefined : quotedName(r, a)
       if (a.path) add({ word: a.word, path: a.path, runs: [run] })
       else if (literal) add({ word: a.word, path: literal })
@@ -287,6 +370,18 @@ export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly num
   const bar = f.bar ?? DEFAULT_BAR
   return f.top.length > 0 || f.issues.some(i => i.structural.length > 0 && i.refs.length > 0 && !f.own.includes(i.n) && bar.holdPriorities.includes(i.priority ?? 'p2'))
 }
+
+/**
+ * The issues a held command whose files cannot be named may be folded into (#2706): every open
+ * structural issue naming a file in the repository, by number, at any priority and the session's own
+ * included, since a builder whose task is the structural fix runs exactly the commands that restructure
+ * most files. A fold only records which fix the work belongs to; the command runs as proceed lets it.
+ */
+export const repoIssues = (issues: readonly CachedIssue[]): Match[] =>
+  issues
+    .filter(i => i.structural.length > 0 && i.refs.length > 0)
+    .map(i => ({ n: i.n, how: 'repo' as const, structural: i.structural, priority: i.priority }))
+    .sort((a, b) => a.n - b.n)
 
 /**
  * A command's own key, so its unchanged resend after a decision runs and any other command is judged:
@@ -353,7 +448,8 @@ export const issuesRead = (stdout: string): IssuesRead => {
 export const toCached = (rows: readonly IssueRow[], refs: Readonly<Record<string, string[]>>): CachedIssue[] =>
   rows.map(r => ({ n: r.number, ...labelFacts(r.labels), refs: refs[String(r.number)] ?? [] }))
 
-export type MatchHow = 'path' | 'suffix' | 'basename' | 'folder'
+/** How an issue was matched: to the file (path, suffix, basename, folder), or to the repository a command whose files cannot be named writes in (#2706). */
+export type MatchHow = 'path' | 'suffix' | 'basename' | 'folder' | 'repo'
 export type Match = { n: number; how: MatchHow; structural: string[]; priority: string | null }
 
 const baseOf = (p: string) => p.slice(p.lastIndexOf('/') + 1)
@@ -694,7 +790,8 @@ export const decideProblem = (input: { decision?: unknown; reason?: unknown; iss
   const d = input.decision
   if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
   if (d === 'proceed') return reasonProblem(input.reason)
-  if (h.unread) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
+  // A command whose files cannot be named folds only into an issue its hold listed (#2706).
+  if (h.unread && !(d === 'fold' && h.shown.length)) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
   if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
@@ -733,8 +830,9 @@ export const holdRefusal = (h: Held): string => {
   const facts = [c.reason, c.note].filter(Boolean).join(' ')
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
   const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
-  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways[0]}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
+  // For a command whose files cannot be named, the issues are the repository's it may fold into (#2706).
   if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
+  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
   ways.push(
     h.agent === null
       ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`

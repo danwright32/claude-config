@@ -153,6 +153,10 @@ export HOOK_TESTS_RUNNING=1
 # that list sets it again with the other seams once the run's throwaway folder exists.
 . "$SELF_DIR/lib/suite-isolation.sh" || { echo "run-all-tests: refusing to run: lib/suite-isolation.sh is missing, so every suite would write into the real records." >&2; exit 1; }
 suite_isolation_no_claude
+# No suite started from here writes bytecode beside what it imports, whatever was inherited: one
+# importing from lib/ beside test-work-names.sh failed that suite on an unrelated pull request
+# (claude-config#2751). Same list, same file, as a suite started on its own gets when it arms.
+suite_isolation_no_bytecode
 
 # How long a suite may wait for a lock another run holds (claude-config#1297). The sync suite
 # refuses at once when started by hand, and reporting that refusal as NOT RUN is honest, but on

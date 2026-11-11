@@ -218,7 +218,7 @@ wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L
   # Only while a review is PENDING: with no marker nothing is running, so there is nothing to wait
   # for and the absence is the answer.
   local f; f="$(final_of "$1")"
-  hang_wait "[ -e '$f' ] || [ ! -e '$f.pending' ]"
+  hang_wait '[ -e "$f" ] || [ ! -e "$f.pending" ]'   # written out: one built from a value is unreadable to the Slack drafts gate (#2538)
   [ -e "$f" ] || return 1
   # The review file is not the runner's last act: it then appends the outcome ledger row and only
   # then removes its input (ai-review-run.py; a review in groups removes its run's parts folder after
@@ -227,7 +227,7 @@ wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L
   # on 2026-10-13 with a 2 s pause put in front of ar_pr_ledger, which failed 18 checks of this
   # suite). So the wait ends on the input being gone.
   local n="${f##*/}"; n="${n%.txt}"
-  hang_wait "! { [ -e '$AI_REVIEW_STATE_DIR/$n.diff' ] || compgen -G '$AI_REVIEW_STATE_DIR/parts/$n.*' >/dev/null; }"
+  hang_wait '! { [ -e "$AI_REVIEW_STATE_DIR/$n.diff" ] || compgen -G "$AI_REVIEW_STATE_DIR/parts/$n.*" >/dev/null; }'
   return 0
 }
 # Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
@@ -692,7 +692,7 @@ reviews_busy(){ bash -c ". '$DIR/lib/merge-turn.sh' && . '$DIR/lib/merge-phase.s
 reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a running review published no phase record in ${HANG_S}s"
+hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 a running review published no phase record in ${HANG_S}s"
 rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 rec="$(cat "$rec_file" 2>/dev/null)"
 check "#1730 the record says a review is running" "phase review" "$rec"
@@ -703,34 +703,34 @@ check_eq "#1730 good until its deadline plus the slack, never open ended" "$((st
 check_eq "#1730 a reader believes it busy, by its pid compared whole (#1959)" "$rpid" "$(reviews_busy | cut -f1)"
 : > "$HOLD"
 wait_final "$HEAD_SHA" || bad "#1730 the held review did not finish once let go"
-hang_wait "! compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a review that finished left its phase record behind"
+hang_wait '! compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 a review that finished left its phase record behind"
 check_eq "#1730 and once it has finished nothing is busy" "" "$(reviews_busy)"
 # A reviewer killed outright is not believed busy afterwards, whatever its record says.
 reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
+hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 the second review published no phase record in ${HANG_S}s"
 rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 check_eq "#1730 control: busy while it runs" "$rpid" "$(reviews_busy | cut -f1)"
 kill -KILL "$rpid" 2>/dev/null
 # Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
 # matcher that can leave early under pipefail.
 gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) return 0 ;; *) return 1 ;; esac; }
-hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
+hang_wait 'gone_pid "$rpid"' || bad "#1730 the killed reviewer was still running"
 check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
 : > "$HOLD"
 # A KILLED REVIEW'S INPUT (claude-config#1745). The reviewer removed its copy of the changes only in
 # its own `finally`, which a SIGKILL never reaches, so killed reviews left their inputs behind and the
 # next reset waited on them; this case used to remove it by hand. The runner around the reviewer now
 # removes it however the reviewer ended.
-hang_wait "! compgen -G '$AI_REVIEW_STATE_DIR/*.diff' >/dev/null"
+hang_wait '! compgen -G "$AI_REVIEW_STATE_DIR/*.diff" >/dev/null'
 check_eq "#1745 a reviewer killed with SIGKILL leaves no input behind" "" "$(compgen -G "$AI_REVIEW_STATE_DIR/*.diff")"
 # The runner killed outright too: nothing of the review is left to clean up, so the next review to
 # start sweeps an input whose reviewer, judged by pid and start time, is gone.
 held_review(){ # held_review <hold file> -> prints the reviewer's pid once its phase record is up
   rm -rf "$MWR_PHASE_DIR"; rm -f "$1"
   FAKE_CLAUDE_HOLD="$1" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-  hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || return 1
+  hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || return 1
   local f; for f in "$MWR_PHASE_DIR"/[0-9]*; do printf '%s' "${f##*/}"; return 0; done
 }
 head_input="$AI_REVIEW_STATE_DIR/$(basename "$(final_of "$HEAD_SHA")" .txt).diff"
@@ -739,7 +739,7 @@ rpid="$(held_review "$HOLD")" || bad "#1745 the held review published no phase r
 rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
 check "#1745 control: the held review's input is there while it runs" "yes" "$([ -e "$head_input" ] && echo yes)"
 kill -KILL "$rrun" "$rpid" 2>/dev/null
-hang_wait "gone_pid '$rpid' && gone_pid '$rrun'" || bad "#1745 the killed review was still running"
+hang_wait 'gone_pid "$rpid" && gone_pid "$rrun"' || bad "#1745 the killed review was still running"
 check "#1745 control: with its runner killed too, the input is left" "yes" "$([ -e "$head_input" ] && echo yes)"
 prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
 check_eq "#1745 the next review to start sweeps the input of a reviewer that is gone" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
@@ -753,10 +753,10 @@ check "#1745 a running reviewer's input survives another review's sweep" "yes" "
 # Stopped with SIGTERM after its runner was killed outright, the reviewer removes its own input.
 rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
 kill -KILL "$rrun" 2>/dev/null
-hang_wait "gone_pid '$rrun'" || bad "#1745 the runner was still running"
+hang_wait 'gone_pid "$rrun"' || bad "#1745 the runner was still running"
 kill -TERM "$rpid" 2>/dev/null
-hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
-hang_wait "[ ! -e '$head_input' ]"
+hang_wait 'gone_pid "$rpid"' || bad "#1745 the reviewer did not stop on SIGTERM"
+hang_wait '[ ! -e "$head_input" ]'
 check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
 : > "$HOLD"
 # SIGINT at its default is Python's own default_int_handler, never SIG_DFL, so a check for SIG_DFL
@@ -817,7 +817,7 @@ for flag in --dir --sha --base-ref --pr; do
   bash "$LIB" check "$flag" >"$WORKDIR/trail.out" 2>&1 &
   pid=$!
   # Waited on with the hang ceiling: it was 5 s, which bash starting under load can pass (#1620; a setting, not a measurement).
-  hang_wait "! kill -0 $pid 2>/dev/null"
+  hang_wait '! kill -0 "$pid" 2>/dev/null'
   if kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; bad "$flag given last hangs instead of being refused"
   else
@@ -1537,14 +1537,18 @@ check_not "#583 a file marked generated only by this branch is not" "new.gen" "$
 # skill's own design_file.py --sealed (#1524), the same check the design round guard runs: the text is
 # exactly what make-settled.py wrote. A hand edited, unsealed or misplaced page is still read, and so
 # is every page when the check cannot run or answers in another shape.
-DESIGN_PY="$DIR/../skills/design-rounds/design_file.py"
+# The skill's folder is spelt from BASH_SOURCE where python is handed it, never held in a variable:
+# this suite sources hang-wait.sh, whose waits run their condition in this shell, where it can set
+# any name, so past that line the Slack drafts gate is sure of no variable. It could not find
+# design_file through one and refused the whole suite when a session ran it (claude-config#2668).
+# test-slack-drafts-only-gate.sh judges this suite, so putting a variable back fails there.
 seal_page(){   # $1 = the page's words -> a settled design page, sealed by design_file.py's own seal()
   python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import design_file
 page = "<html><body><p>" + sys.argv[2] + "</p>\n" \
   + "<script type=\"application/json\" id=\"decision-map\">{\"decisions\": []}</script>\n" \
   + "<script type=\"application/json\" id=\"design-frames\">{\"frames\": []}</script>\n" \
   + "<script>try { load() } catch (e) { return [] }</script></body></html>\n"
-sys.stdout.write(design_file.seal(page))' "${DESIGN_PY%/*}" "$1"
+sys.stdout.write(design_file.seal(page))' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/design-rounds" "$1"
 }
 DREPO="$WORKDIR/design"; git init -q "$DREPO"
 DG(){ git -C "$DREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }

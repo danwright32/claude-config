@@ -44,6 +44,10 @@ SCAN="$HERE/lib/work-names.py"
   exit 1
 }
 suite_deadline_arm || exit $?
+# Arming and the runner turn bytecode off for every suite (#2751). This one's #2444 checks are about
+# whether its own programs write bytecode into lib/, so it runs them with it on, as a new caller of
+# the scanner would. Where that bytecode goes is set once its throwaway folder exists, below.
+unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX
 
 pass=0; fail=0
 check(){   # $1 = name  $2.. = a command that succeeds when the check holds
@@ -64,9 +68,13 @@ done
 _tmp="${TMPDIR:-/tmp}"
 WORK="$(mktemp -d "${_tmp%/}/work-names.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-# The start of this run, so the bytecode check at the end (#2444) counts only files this run could
-# have written, never a copy an older run left behind.
-touch "$WORK/.started"
+# Every python3 this suite starts writes its bytecode under $WORK/pyc, mirroring each source's path,
+# so the checks at the end (#2444) count only what this suite's own programs wrote. Counting
+# lib/__pycache__, even by time since the run started, named a file anything else wrote there: a
+# probe run by hand, another suite at the same moment (#2757). None of its programs runs with -I or
+# -E, which would drop this and write beside the source unseen; test-lib-bytecode-importers.sh is the
+# guard on importers that do.
+export PYTHONPYCACHEPREFIX="$WORK/pyc"
 
 # An invented organisation, handed to the scanner by hash exactly as the real two are built in.
 FAKE_ORG="Acme-HQ"
@@ -264,12 +272,31 @@ PROJECTS_LOCAL="$LOCALDIR/CLAUDE.md"
 printf '## Projects\n\nOn Daniels-MacBook-Pro-2 (personal MacBook):\n- `~/Apps/home-garden`\n\nOn Dans-MacBook-Pro:\n- Its projects are kept in that Mac'"'"'s own @projects.local.txt instead, which the sync never carries.\n\n## Writing Style\n' > "$PROJECTS_LOCAL"
 INKWELL_HASH="$(printf '%s' "inkwellcove" | shasum -a 256 | cut -d' ' -f1)"
 OTHER_HASH="$(printf '%s' "nothing-named-this" | shasum -a 256 | cut -d' ' -f1)"
+# Outside a test run the scanner ignores WORK_NAMES_PROJECT_LIST and reads the CLAUDE.md two folders
+# above itself, with the projects.local.txt beside it. Run from the installed copy that is the Mac's
+# own ~/.claude, and on the work MacBook its projects.local.txt added that Mac's projects to the
+# count, so the case failed there and passed everywhere else (claude-config#2626, L411). So the
+# "unset" case runs a copy of the scanner placed the installed way under $WORK, beside a CLAUDE.md
+# this suite writes, and never reads the Mac's own list. That the real payload/CLAUDE.md block reads
+# is tests/test-work-names-tree.sh's check, where the repository is.
+. "$HERE/lib/placement-copy.sh" || {
+  echo "FAIL: $(basename "$0"): lib/placement-copy.sh is missing, so the case outside a test run cannot be kept off this Mac's own project list."
+  printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+PLACED="$(placement_copy installed "$WORK/placed" "$HERE/.." hooks/lib/work-names.py hooks/lib/dev-update-registry.js)" \
+  && cp "$PROJECTS_LOCAL" "$PLACED/CLAUDE.md" || {
+  echo "FAIL: $(basename "$0"): the scanner could not be placed beside a fixture CLAUDE.md under $WORK, so the case outside a test run would read this Mac's own project list."
+  printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+PLACED_SCAN="$PLACED/hooks/lib/work-names.py"
 local_texts(){   # <hashes or "unset"> <printf format and arguments> -> text_out, text_rc
   local h="$1"; shift
   if [ "$h" = unset ]; then
     text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
       WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=0 WORK_NAMES_PROJECT_HASHES="" \
-      python3 "$SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
+      python3 "$PLACED_SCAN" --texts0-from - --work-repos 2>&1 )"; text_rc=$?
   else
     text_out="$( printf "$@" | PATH="$GHBIN:$PATH" FAKE_LIST="$LIST" HOME="$EMPTY_HOME" WORK_NAMES_EXTRA_HASHES="$FAKE_HASH" \
       WORK_NAMES_PROJECT_LIST="$PROJECTS_LOCAL" HOOK_TESTS_RUNNING=1 WORK_NAMES_PROJECT_HASHES="$h" \
@@ -304,6 +331,16 @@ rm -f "$LOCALDIR/projects.local.txt"
 local_texts unset 'commit 1a2b3c4\0clean\n'
 check "#2112 outside a test run the seam is ignored and the committed hashes make the list readable (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
 check "and the six committed hashes are counted beside the list's four names: $text_out" has "$text_out" "10 work repository and owner names"
+# claude-config#2626: what moved that count on the work MacBook, set here instead of found there. A
+# projects.local.txt beside the placed CLAUDE.md is read outside a test run, and its projects are
+# counted on top of the ten and found in a message.
+printf -- '- `~/Apps/Thistledown`: a work app\n- `~/Apps/Marrowgate`: another\n' > "$PLACED/projects.local.txt"
+local_texts unset 'commit 1a2b3c4\0clean\n'
+check "#2626 outside a test run the placed copy's own projects.local.txt is read (exit $text_rc): $text_out" [ "$text_rc" -eq 0 ]
+check "and its two projects are counted beside the ten: $text_out" has "$text_out" "12 work repository and owner names"
+local_texts unset 'commit 5d6e7f8\0Move it\n\nfrom the Thistledown checkout\n'
+check "#2626 and a project it lists is found in a message (exit $text_rc): $text_out" [ "$text_rc" -eq 1 ]
+rm -f "$PLACED/projects.local.txt"
 # Cannot tell is refused, never passed (L98, L345).
 rm -f "$LIST"
 repo_texts "$STREAM_REPO"
@@ -432,14 +469,22 @@ case "$cover_out" in
 esac
 
 # #2444: loading lib/work-names.py by path, as the budget checks above do, must never leave bytecode
-# in lib/ (the class that broke #2422's CI, #2080).
-wn_pyc="$(find "$HERE/lib/__pycache__" -name 'work-names*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
-check "#2444 nothing this suite runs leaves work-names bytecode in lib/ (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
-# And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py). Another
-# suite running beside this one that writes lib bytecode fails it too: that suite's defect, named by
-# the file listed.
-lib_pyc="$(find "$HERE/lib/__pycache__" -name '*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
-check "#2444 no module in lib/ gained bytecode during this run (found: ${lib_pyc:-none})" [ -z "$lib_pyc" ]
+# in lib/ (the class that broke #2422's CI, #2080). Only a check while this suite's own programs run
+# with bytecode on, as a new caller of the scanner would: the runner and arming turn it off for every
+# suite (#2751), which would pass a writer here unseen. And only a check where their bytecode lands
+# in $WORK/pyc, where it is counted: the standard library they import is written there on the first
+# run, the control that the folder is honoured (L322).
+bc_flag="$(python3 -c 'import sys; print(sys.flags.dont_write_bytecode, sys.pycache_prefix)' 2>&1)"
+check "#2751 this suite's own programs run with bytecode on, written under this run's folder, so the checks below can see a writer in it (flag, folder: $bc_flag)" [ "$bc_flag" = "0 $WORK/pyc" ]
+any_pyc="$(find "$WORK/pyc" -name '*.pyc' 2>/dev/null | wc -l | tr -d ' ')"
+check "#2757 control: this suite's programs wrote bytecode into its own folder ($any_pyc files)" [ "$any_pyc" -gt 0 ]
+wn_pyc="$(find "$WORK/pyc" -name 'work-names*.pyc' 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 nothing this suite runs leaves work-names bytecode (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
+# And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py), in the
+# folder the prefix mirrors lib/ into. Another suite's writes are no longer seen here (#2757): the
+# runner's PYTHONDONTWRITEBYTECODE and test-lib-bytecode-importers.sh are what stop those.
+lib_pyc="$(find "$WORK/pyc" -path '*/hooks/lib/*' -name '*.pyc' 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 no module in lib/ gained bytecode from this suite's programs (found: ${lib_pyc:-none})" [ -z "$lib_pyc" ]
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

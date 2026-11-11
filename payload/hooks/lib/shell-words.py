@@ -66,11 +66,43 @@ def is_name(word):
     return bool(word) and (word[0].isalpha() or word[0] == "_") and all(ch.isalnum() or ch == "_" for ch in word)
 
 
+def join_continuations(s):
+    """s with every backslash newline the shell removes taken out: one outside single quotes is a line
+    continuation, gone before the words are read, and inside single quotes it is two characters the
+    shell keeps. shlex reads it as an escaped newline, a word of its own, so a command continued that
+    way had a newline for its first word and its assignments left in front (claude-config#2447)."""
+    if "\\\n" not in s:
+        return s
+    out, i, n, quote = [], 0, len(s), ""
+    while i < n:
+        c = s[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if s[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(s[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and quote != '"':
+            quote = "'"
+        elif c == '"':
+            quote = "" if quote == '"' else '"'
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def split(s, limit=None):
     """(the leading NAME=value assignments of s, the text after them); at most limit of them when
     limit is given, so past_redirects can read one redirection's target as one value."""
     assigns = []
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     while limit is None or len(assigns) < limit:
         eq = s.find("=")
         if eq <= 0 or not is_name(s[:eq]):
@@ -248,7 +280,7 @@ def heredoc_opener(s, i, marker_start=False):
     return "".join(word), m.group(1) == "-", quoted, j
 
 
-def heredoc_openers(line):
+def heredoc_openers(line, marker_start=True):
     """Each heredoc a line opens, read on its own without following its quotes, as (start, marker,
     strip_tabs, quoted, end), start at its << and the rest as heredoc_opener gives them.
 
@@ -258,6 +290,10 @@ def heredoc_openers(line):
     written (marker_start): `$((1<<2))` and `grep -c '1<<2'` open nothing, and neither does the
     << of a here string. The cost is a heredoc whose marker starts with a digit, which bash accepts
     and no file here uses.
+
+    With marker_start False every << with a word after it is taken, a here string still apart, for
+    a reader that must not miss a heredoc and can afford to count one that is not there: a gate
+    refusing a text it cannot follow (claude-config#2641). The text can then be a whole script.
     """
     out, i = [], 0
     while True:
@@ -267,7 +303,7 @@ def heredoc_openers(line):
         if line.startswith("<<<", i):
             i += 3
             continue
-        op = heredoc_opener(line, i, marker_start=True)
+        op = heredoc_opener(line, i, marker_start=marker_start)
         if op is None:
             i += 2
             continue
@@ -281,6 +317,7 @@ def cd_target(text):
     A bare cd goes home. Only a leading tilde is expanded later; a variable stays as written, so
     the caller refuses it rather than guessing what it holds.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -316,7 +353,7 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd="", heredocs=None, parts=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -325,6 +362,11 @@ def commands(s, cwd="", heredocs=None, parts=None):
     the opener, and body is the text between the opener's line and its closing line. An unquoted
     body is given too, though the substitutions in it are also read as commands (#2053). A body
     that never closes is not skipped, so it is read as commands and given to nobody here.
+
+    spans, when a list, is given one (opener, start, end) for each body heredocs is given, in the
+    same order: opener is where its << is in s, the same start parts gives the opener, and s[start:end]
+    is the body, from the line break that ends the opener's line to the start of its closing line
+    (claude-config#2722), so a caller can tell which command a body is given to.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -555,16 +597,17 @@ def commands(s, cwd="", heredocs=None, parts=None):
             if opener:
                 before = s[f["start"]:i]
                 f["openers"].append((i, opener[3]))
+                at = i
                 word, strip_tabs, quoted, i = opener
-                pending.append((word, strip_tabs, quoted, before))
+                pending.append((word, strip_tabs, quoted, before, at))
             else:
                 i += 2
             continue
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
-            j, unquoted, skipped = i, [], []
-            for word, strip_tabs, quoted, before in pending:
+            j, unquoted, skipped, where = i, [], [], []
+            for word, strip_tabs, quoted, before, at in pending:
                 m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
                     j = None
@@ -573,9 +616,12 @@ def commands(s, cwd="", heredocs=None, parts=None):
                     unquoted.append((j, m.start()))
                 body = s[j:m.start()]
                 skipped.append((quoted, before, body[len(line_break):] if body.startswith(line_break) else body))
+                where.append((at, j, m.start()))
                 j = m.end()
             if j is not None and heredocs is not None:
                 heredocs.extend(skipped)
+            if j is not None and spans is not None:
+                spans.extend(where)
             pending.clear()
             if j is not None:
                 cut(f, i, "\n")
@@ -650,6 +696,7 @@ def command_words(text):
     disagree about which word is the command. A command shlex cannot read (an unbalanced quote) is
     split on whitespace instead, the reading that still lets a push be seen.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -903,7 +950,7 @@ POSITIONALS = {"timeout": 1, "gtimeout": 1}
 
 def first_word(s):
     """(the first word of s with its quotes removed, the text after it as written), or (None, s)."""
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     if not s:
         return None, s
     lex = shlex.shlex(s, posix=True)
@@ -1236,7 +1283,7 @@ def rtk_field(passed):
     passed over with it, as rtk itself passes over them."""
     if not passed or passed[-1][0] != "rtk":
         return ""
-    after = passed[-1][1]
+    after = join_continuations(passed[-1][1])
     try:
         words = shlex.split(after, posix=True)
     except ValueError:
@@ -1305,6 +1352,7 @@ ARRAY_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 def _script_run(word, rest):
     """(wrapper, None, why) for a command whose own word runs a script file, by its path or by
     source or `.`, else None (claude-config#1623)."""
+    rest = join_continuations(rest)
     if word in ("source", "."):
         try:
             operands = shlex.split(rest, posix=True)[1:]
@@ -1332,6 +1380,7 @@ def wrapped(rest):
     when it reads its input, `direct` or `source` for a script file run by its path or sourced);
     string is the command line it runs, None when there is none to read; why is "" when the string
     can be read, else the reason it cannot."""
+    rest = join_continuations(rest)
     name, _ = first_word(rest)
     if name is None:
         raw = rest.split(None, 1)

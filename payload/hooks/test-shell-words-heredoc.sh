@@ -187,6 +187,70 @@ print(m.heredoc_opener("x" + h + "1EOF", 1), m.heredoc_opener("x" + h + "1EOF", 
 [ "$py_got" = "('1EOF', False, False, 7) None EOF (2, 'EOF', True, True, 10)" ] \
   && check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" ok \
   || check "#2080 marker_start refuses only a word not started as a marker is written, and heredoc_openers gives where each opens" "got [$py_got]"
+# A reader that must not miss a heredoc asks with marker_start False (claude-config#2641: the Slack
+# drafts gate, over a script it cannot follow). Then a marker starting with a digit is an opener,
+# over a whole text of several lines, a here string still is not, and quoted says whether the shell
+# expands the body. The same text asked the default way, as the scans ask, misses the digit marker.
+py_got="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+h = "<" "<"
+text = "bash " + h + "1\necho x\n1\ncat " + h + "\x27EOF\x27\ny\nEOF\ngrep -c x " + h + "<" + " \"$1\"\n"
+print([(o[1], o[3]) for o in m.heredoc_openers(text, marker_start=False)], [(o[1], o[3]) for o in m.heredoc_openers(text)])' "$SW" 2>&1)"
+[ "$py_got" = "[('1', False), ('EOF', True)] [('EOF', True)]" ] \
+  && check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" ok \
+  || check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" "got [$py_got]"
+
+# #2447: a backslash newline outside single quotes is a line continuation, which the shell removes,
+# so a command continued that way has the same words as one written on one line, and its leading
+# assignments come off it, at the top level and inside a substitution alike. Inside single quotes it
+# is two characters the shell keeps.
+cont_got="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+out = []
+for c in ["A=1 B=2 \\\n  curl https://e.invalid/h", "x=$(\nA=1 \\\n curl https://e.invalid/h)"]:
+    for r in m.every_command(c):
+        if "x=" not in r[1]:
+            out.append((m.command_words(r[1]), m.split(r[1])[0], m.first_word(m.split(r[1])[1])[0]))
+out.append(m.command_words("echo '"'"'a\\\nb'"'"'"))
+print(out)' "$SW" 2>&1)"
+[ "$cont_got" = "[(['A=1', 'B=2', 'curl', 'https://e.invalid/h'], ['A=1', 'B=2'], 'curl'), (['A=1', 'curl', 'https://e.invalid/h'], ['A=1'], 'curl'), ['echo', 'a\\\\\\nb']]" ] \
+  && check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" ok \
+  || check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" "got [$cont_got]"
+
+# #2447: the readers that split a command's words themselves read a continuation the same way: the
+# directory a cd moves to, the string a bash -c runs, the file a source reads and rtk's subcommand
+# each come out as written on one line, not with a newline in front.
+cont_readers="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(repr(m.cd_target("cd \\\n/w")))
+print(repr(m.wrapped("bash \\\n-c \"git push\"")))
+print(repr(m._script_run("source", "source \\\n/x/file.sh")))
+print(repr(m.rtk_field([("rtk", "\\\ninit -g")])))' "$SW" 2>&1 | paste -sd'|' -)"
+[ "$cont_readers" = "'/w'|('bash -c', 'git push', '')|('source', None, $(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(repr(m.WHY_FILE % "/x/file.sh"))' "$SW"))|'rtk\\x1dinit\\x1d\\x1d-g'" ] \
+  && check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" ok \
+  || check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" "got [$cont_readers]"
+
+# spans gives each body the reading skipped as text: where its << is (the opener parts gives the
+# command that opens it) and where the body is, so a caller can tell whose body it is (#2722).
+spans_read="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+cmd = "cat <<A; tee f <<'"'"'B'"'"'\na1\nA\nb1\nb2\nB\necho done"
+parts, spans, hd = [], [], []
+m.commands(cmd, heredocs=hd, parts=parts, spans=spans)
+for opener, start, end in spans:
+    owner = [cmd[p["start"]:p["end"]].strip() for p in parts if any(o[0] == opener for o in p["openers"])]
+    print(cmd[opener:opener + 2] + "|" + "/".join(owner) + "|" + cmd[start:end].replace("\n", "~"))
+print(len(spans) == len(hd))' "$SW" 2>&1 | paste -sd'^' -)"
+[ "$spans_read" = "<<|cat <<A|~a1^<<|tee f <<'B'|~b1~b2^True" ] \
+  && check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" ok \
+  || check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" "got [$spans_read]"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

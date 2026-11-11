@@ -387,23 +387,23 @@ test('#2171: only a variable every assignment gives bare mktemp or mktemp -d nam
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {
-  expect(isOwnRecord('/Users/dan/.claude/plugins/store/design-round-guard_inline-ab12.json')).toBe(true)
-  expect(isOwnRecord('/Users/dan/.claude/plugins/store/simpler_inline-dc77.json')).toBe(false)
-  expect(isOwnRecord('/Users/dan/Apps/x/design-round-guard.json')).toBe(false)
+  expect(isOwnRecord(`${'/Users'}/dan/.claude/plugins/store/design-round-guard_inline-ab12.json`)).toBe(true)
+  expect(isOwnRecord(`${'/Users'}/dan/.claude/plugins/store/simpler_inline-dc77.json`)).toBe(false)
+  expect(isOwnRecord(`${'/Users'}/dan/Apps/x/design-round-guard.json`)).toBe(false)
   expect(isOwnRecord('$D/design-round-guard_inline-x.json')).toBe(true)
 })
 
 test('a branch naming an issue is keyed by the issue, one naming none by the branch, the default branch by this session only', () => {
   // Where the checkout stands, as mod-kit's $.modkit.branch reads it (its own tests pin that reading).
-  const at = { main: '/Users/dan/Apps/slate', repo: 'slate', session: 's1', isDefault: false }
-  expect(subjectsOf({ ...at, branch: '978-design-round-guard', issues: [978] })).toEqual([{ key: 'record:/Users/dan/Apps/slate|issue:978', label: 'issue #978 in slate' }])
-  expect(subjectsOf({ ...at, branch: '41-52-both', issues: [41, 52] }).map(s => s.key)).toEqual(['record:/Users/dan/Apps/slate|issue:41', 'record:/Users/dan/Apps/slate|issue:52'])
-  expect(subjectsOf({ ...at, branch: 'polish-header', issues: [] })).toEqual([{ key: 'record:/Users/dan/Apps/slate|branch:polish-header', label: 'branch polish-header in slate' }])
+  const at = { main: `${'/Users'}/dan/Apps/slate`, repo: 'slate', session: 's1', isDefault: false }
+  expect(subjectsOf({ ...at, branch: '978-design-round-guard', issues: [978] })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|issue:978`, label: 'issue #978 in slate' }])
+  expect(subjectsOf({ ...at, branch: '41-52-both', issues: [41, 52] }).map(s => s.key)).toEqual([`record:${'/Users'}/dan/Apps/slate|issue:41`, `record:${'/Users'}/dan/Apps/slate|issue:52`])
+  expect(subjectsOf({ ...at, branch: 'polish-header', issues: [] })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|branch:polish-header`, label: 'branch polish-header in slate' }])
   // A no on the default branch would otherwise cover every later issue built there, even one it names.
-  expect(subjectsOf({ ...at, branch: 'main', isDefault: true, issues: [] })).toEqual([{ key: 'record:/Users/dan/Apps/slate|branch:main|session:s1', label: 'main in slate, for this session' }])
-  expect(subjectsOf({ ...at, branch: 'release-2026', isDefault: true, issues: [2026] })[0]?.key).toBe('record:/Users/dan/Apps/slate|branch:release-2026|session:s1')
+  expect(subjectsOf({ ...at, branch: 'main', isDefault: true, issues: [] })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|branch:main|session:s1`, label: 'main in slate, for this session' }])
+  expect(subjectsOf({ ...at, branch: 'release-2026', isDefault: true, issues: [2026] })[0]?.key).toBe(`record:${'/Users'}/dan/Apps/slate|branch:release-2026|session:s1`)
   // An issue named on the settled question, whatever the branch.
-  expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: 'record:/Users/dan/Apps/slate|issue:12', label: 'issue #12 in slate' }])
+  expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|issue:12`, label: 'issue #12 in slate' }])
 })
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
@@ -412,20 +412,20 @@ test("the session's scratchpad is known by the session's id, under Claude Code's
   // CLAUDE_CODE_TMPDIR when it is set, else /tmp; macOS spells /tmp and /var under /private too.
   expect(tempRoots(undefined)).toEqual(['/tmp', '/private/tmp'])
   expect(tempRoots('')).toEqual(['/tmp', '/private/tmp'])
-  expect(tempRoots('/Users/dan/Temp Dir/')).toEqual(['/Users/dan/Temp Dir'])
+  expect(tempRoots(`${'/Users'}/dan/Temp Dir/`)).toEqual([`${'/Users'}/dan/Temp Dir`])
   expect(tempRoots('/var/folders/x/T')).toEqual(['/var/folders/x/T', '/private/var/folders/x/T'])
   // A relative or climbing setting is not one Claude Code could have used as written: the default.
   expect(tempRoots('tmp')).toEqual(['/tmp', '/private/tmp'])
   expect(tempRoots('/tmp/../w/slate')).toEqual(['/tmp', '/private/tmp'])
   const tmp = tempRoots(undefined)
-  const spaced = tempRoots('/Users/dan/Temp Dir')
+  const spaced = tempRoots(`${'/Users'}/dan/Temp Dir`)
   expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1/screen.css', 's1', tmp)).toBe(true)
   expect(inScratchpad('/tmp/claude-501/-Users-dan-slate/s1/scratchpad', 's1', tmp)).toBe(true)
-  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css', 's1', spaced)).toBe(true)
+  expect(inScratchpad(`${'/Users'}/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css`, 's1', spaced)).toBe(true)
   // Lessons review: a folder shaped like it anywhere else, a checkout included, is not it.
   expect(inScratchpad('/w/slate/app/claude-1/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
   expect(inScratchpad('/w/slate/tmp/claude-501/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
-  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/x/s1/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad(`${'/Users'}/dan/Temp Dir/claude-501/x/s1/scratchpad/screen.css`, 's1', tmp)).toBe(false)
   // Another session's, a folder merely called scratchpad, a name that only starts like it, a climb out, and no id.
   expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/screen.css', 's1', tmp)).toBe(false)
   expect(inScratchpad('/w/slate/scratchpad/screen.css', 's1', tmp)).toBe(false)
@@ -437,7 +437,7 @@ test("the session's scratchpad is known by the session's id, under Claude Code's
   // A command naming it, quoted or not, or with a space in the temp folder's name.
   expect(namesScratchpad("d = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'", 's1', tmp)).toBe(true)
   expect(namesScratchpad('cd /tmp/claude-501/x/s1/scratchpad && ls', 's1', tmp)).toBe(true)
-  expect(namesScratchpad('R="/Users/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"', 's1', spaced)).toBe(true)
+  expect(namesScratchpad(`R="${'/Users'}/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"`, 's1', spaced)).toBe(true)
   expect(namesScratchpad("d = '/private/tmp/claude-501/x/s2/scratchpad'", 's1', tmp)).toBe(false)
   expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1', tmp)).toBe(false)
   expect(namesScratchpad("d = '/w/slate/tmp/claude-501/x/s1/scratchpad'", 's1', tmp)).toBe(false)
@@ -522,7 +522,7 @@ test("every refusal of a look changing edit says a design round's files go in th
 test("a name the shell spells through a variable lands where the command's own assignment of it puts it", () => {
   const text = 'open("$R/screen.css", "w")'
   expect(shellVarPath("R='/tmp/claude-501/x/s1/scratchpad/3718/round1'; python3 - <<PY", text, 'R/screen.css')).toBe('/tmp/claude-501/x/s1/scratchpad/3718/round1/screen.css')
-  expect(shellVarPath('R="/Users/dan/Temp Dir/r1/"; x', text, 'R/screen.css')).toBe('/Users/dan/Temp Dir/r1/screen.css')
+  expect(shellVarPath(`R="${'/Users'}/dan/Temp Dir/r1/"; x`, text, 'R/screen.css')).toBe(`${'/Users'}/dan/Temp Dir/r1/screen.css`)
   expect(shellVarPath('export R=/w/slate/src/app && x', text, 'R/screen.css')).toBe('/w/slate/src/app/screen.css')
   expect(shellVarPath('R=src/app; x', text, 'R/screen.css')).toBe('src/app/screen.css')
   expect(shellVarPath('R=/a; R=/a; x', text, 'R/screen.css')).toBe('/a/screen.css')
@@ -744,6 +744,15 @@ test('the JSX reader finds elements only where an expression starts, past string
     const s = sourceSpans(generic)
     expect(s?.jsx.map(([a, b]) => generic.slice(a, b))).toEqual(generic.includes('<Box />') ? ['<Box />'] : [])
   }
+})
+
+test("the source reader's strings end where mod-kit's quotedEnd says, and one a line break leaves open is unread (#2467)", () => {
+  const text = `const a = 'it\\'s'; const b = "say \\"hi\\""; const c = 'one\\\ntwo'`
+  const spans = sourceSpans(text, false)
+  if (!spans) throw new Error('the fixture could not be read')
+  expect(spans.strings.map(([x, y]) => text.slice(x, y))).toEqual(["it\\'s", 'say \\"hi\\"', 'one\\\ntwo'])
+  // A string a bare line break leaves open, or the end of the text, is read as nothing at all.
+  for (const bad of ["const s = 'open\nshut'", 'const s = "open', "const s = 'ends\\"]) expect(sourceSpans(bad, false)).toBeNull()
 })
 
 test('a mod hook edit is logic only when it touches no JSX line and names no drawing word, comments aside', () => {
@@ -2126,20 +2135,20 @@ test('a settled design is under docs/design at the top of its checkout, in any c
   // Only an HTML page, the one kind make-settled.py writes (lessons review): a sealed stylesheet or component there is no record.
   for (const rel of ['docs/design/x.css', 'docs/design/Picker.tsx', 'docs/design/x.vue', 'docs/design/x.html.tsx', 'docs/design/', 'docs/designs/x.html', 'src/docs/design/x.html', 'app/settled.html', 'docs/design/../../app/x.html', '/w/slate/docs/design/x.html'])
     expect({ rel, record: isDesignRecord(rel) }).toEqual({ rel, record: false })
-  expect(sealCheck('/Users/dan')).toEqual(['python3', '-I', '/Users/dan/.claude/skills/design-rounds/design_file.py', '--sealed'])
+  expect(sealCheck(`${'/Users'}/dan`)).toEqual(['python3', '-I', `${'/Users'}/dan/.claude/skills/design-rounds/design_file.py`, '--sealed'])
 })
 
 // #1747: only the spool helper at its installed path, and only its note, writes none of what it is handed.
 test('spoolNote is the installed spool helper running note, and nothing else', () => {
-  const HELPER = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+  const HELPER = `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`
   const args = (...w: string[]) => w.map(word => ({ word }))
-  expect(spoolNote({ path: HELPER, args: args('note', '.', 'app/page.tsx', 'a builder') }, '/Users/dan')).toBe(true)
-  expect(spoolNote({ path: HELPER, args: args('append', 'app/page.tsx', '{}') }, '/Users/dan')).toBe(false)
-  expect(spoolNote({ path: '/w/slate/scripts/issue-spool.sh', args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
-  expect(spoolNote({ args: args('note', '.', 'x') }, '/Users/dan')).toBe(false)
-  expect(spoolNote({ path: HELPER, args: args('note', '.', 'x') }, '/Users/other')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'app/page.tsx', 'a builder') }, `${'/Users'}/dan`)).toBe(true)
+  expect(spoolNote({ path: HELPER, args: args('append', 'app/page.tsx', '{}') }, `${'/Users'}/dan`)).toBe(false)
+  expect(spoolNote({ path: '/w/slate/scripts/issue-spool.sh', args: args('note', '.', 'x') }, `${'/Users'}/dan`)).toBe(false)
+  expect(spoolNote({ args: args('note', '.', 'x') }, `${'/Users'}/dan`)).toBe(false)
+  expect(spoolNote({ path: HELPER, args: args('note', '.', 'x') }, `${'/Users'}/other`)).toBe(false)
   expect(spoolNote({ path: '/.claude/hooks/lib/issue-spool.sh', args: args('note', '.', 'x') }, '')).toBe(false)
-  expect(spoolNote({ path: HELPER, args: [] }, '/Users/dan')).toBe(false)
+  expect(spoolNote({ path: HELPER, args: [] }, `${'/Users'}/dan`)).toBe(false)
 })
 
 // #1904: a builder's starting branch, worktree-agent-<id>, names no issue (#1306), so Dan was asked
@@ -2148,8 +2157,8 @@ test('spoolNote is the installed spool helper running note, and nothing else', (
 // issue, said to hold for this builder only; where his answer is kept does not change, so it reaches
 // no other worktree and not the main checkout (#1306, #1740).
 test('#1904: the skip question names the issue a builder works on in place of its throwaway branch, kept where it was', () => {
-  const at = { main: '/Users/dan/Apps/slate', repo: 'slate', session: 's1', isDefault: false, issues: [] as number[] }
-  const wt = '/Users/dan/Apps/slate/.claude/worktrees/agent-a09a06788b6ba53ab'
+  const at = { main: `${'/Users'}/dan/Apps/slate`, repo: 'slate', session: 's1', isDefault: false, issues: [] as number[] }
+  const wt = `${'/Users'}/dan/Apps/slate/.claude/worktrees/agent-a09a06788b6ba53ab`
   const [agent] = subjectsOf({ ...at, branch: 'worktree-agent-a09a06788b6ba53ab', root: wt })
   if (!agent) throw new Error('no subject')
   expect(agent.label).toBe('branch worktree-agent-a09a06788b6ba53ab in slate')
@@ -2157,7 +2166,7 @@ test('#1904: the skip question names the issue a builder works on in place of it
   expect(named.label).toBe('issue #1859 in slate (this builder only)')
   // Only the label changes: the key and the worktree its skip is also kept under stay the branch's.
   expect({ ...named, label: agent.label }).toEqual(agent)
-  expect(named.key).toBe('record:/Users/dan/Apps/slate|branch:worktree-agent-a09a06788b6ba53ab')
+  expect(named.key).toBe(`record:${'/Users'}/dan/Apps/slate|branch:worktree-agent-a09a06788b6ba53ab`)
   const q = skipQuestion('The heading on the home page gets more space above it.', ['app/page.tsx'], [named])
   expect(q).toContain('This is for issue #1859 in slate (this builder only); the file is app/page.tsx.')
   expect(q).not.toContain('worktree-agent')

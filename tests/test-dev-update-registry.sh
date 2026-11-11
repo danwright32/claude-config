@@ -172,6 +172,28 @@ printf '{ not json\n' > "$H3/.claude/$REL_NEW"
 out_bad="$(gate "$H3" "$WORK/untagged.json" "$MERGE 7 --repo acme/widget --squash")"
 check "an unreadable registry is still refused" denied "$out_bad"
 
+# claude-config#2564: the channel the post's Slack draft is saved to comes from the same file, read
+# by the same reader, so the skill never finds it by searching Slack and never guesses one. The id
+# here is invented. A registry with no channel says so, by name, rather than printing an empty one.
+H4="$WORK/home four"
+mkdir -p "$H4/.claude/$REL_SKILL"
+ch_none="$(HOME="$H4" node "$READER" channel 2>&1)"
+check "with no registry, channel reports it missing: $ch_none" has "$ch_none" '"state":"missing"'
+check "and gives no channel" has "$ch_none" '"channel":""'
+printf '{"repos": []}\n' > "$H4/.claude/$REL_NEW"
+ch_unset="$(HOME="$H4" node "$READER" channel 2>&1)"
+check "a registry recording no channel gives none: $ch_unset" has "$ch_unset" '"channel":""'
+check "and says the registry records no slackChannel" has "$ch_unset" 'records no slackChannel'
+check "and names the file to add it to" has "$ch_unset" "$H4/.claude/$REL_NEW"
+printf '{"repos": [], "slackChannel": "#dev-updates"}\n' > "$H4/.claude/$REL_NEW"
+ch_name="$(HOME="$H4" node "$READER" channel 2>&1)"
+check "a channel name rather than an id is refused, never passed on: $ch_name" has "$ch_name" '"channel":""'
+check "and the refusal says it is not a channel id" has "$ch_name" 'not a Slack channel id'
+printf '{"repos": [], "slackChannel": "C0000TEST01"}\n' > "$H4/.claude/$REL_NEW"
+ch_ok="$(HOME="$H4" node "$READER" channel 2>&1)"
+check "a recorded channel id is given back: $ch_ok" has "$ch_ok" '"channel":"C0000TEST01"'
+check "and the state is ok" has "$ch_ok" '"state":"ok"'
+
 # ---------------------------------------------------------------- 3. the move loses nothing
 # Two Macs and the shared repository, as the #1009 cases in test-claude-sync.sh build them. Both
 # hold the skill with the registry under its OLD tracked name, as every Mac does before this change.

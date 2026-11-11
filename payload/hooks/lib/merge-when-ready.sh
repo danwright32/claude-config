@@ -134,7 +134,8 @@
 #      the repository's recent check runs took (claude-config#1604). A head whose CI run finished
 #      as a failure with no jobs (GitHub failing to start it) is not a stop the first time: that run
 #      is re-run once and waited on, and only a second such start stops (claude-config#2537, see
-#      rerun_failed_start)
+#      rerun_failed_start), or no signed in gh account that can merge in the repository, or none
+#      confirmed (claude-config#2629, see resolve_merger)
 #   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
 #      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, claude-config#1697;
 #      a line that keeps moving never ends it, #2351) or the poll count ran out, or
@@ -142,8 +143,9 @@
 #      deadline left than a check run takes (claude-config#1604); running it again resumes, at the
 #      back of the line
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
-#      based on it could not be moved, GitHub could not be read, or the branch holds commits the
-#      merge did not; running it again finishes the branch
+#      based on it could not be moved, GitHub could not be read, the branch holds commits the
+#      merge did not, or no signed in account can delete it (claude-config#2629); running it again
+#      finishes the branch
 #   64 refused its arguments, was run outside a checkout, was given a read key nobody typed in front
 #      of it (claude-config#1673), or was passed no merge method for a repository that allows more
 #      than one (or does not say which)
@@ -174,12 +176,22 @@
 # passed. Each of those waits is said as what it is, and its heartbeat says paused for the rate
 # limit, never waiting on checks.
 #
+# A RUN WAITING FOR ITS TURN LEAVES GITHUB TO THE RUN HOLDING IT (claude-config#2715). On 2026-11-10
+# one session's 102 merge logs held 2,845 waits on the session's looks a minute: 2,594 by helpers
+# waiting in line, and 251 by the helper holding the turn, with a median of 8 in line behind it. A run
+# in line learns its turn, and the line moving, from the queue on this Mac, read at the base pace, so
+# it reads GitHub only every MWR_LINE_LOOK_SECONDS, to see that its own pull request is still open,
+# and never because the line moved. Each of those looks leaves one of the session's looks a minute
+# free (lib/gh-poll.sh's ghp_take), so the run holding the turn is not held back by the line behind it.
+#
 # Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_POLL_MAX_SECONDS (180: the ceiling
 # the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
 # GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800, counted from when the run first
 # takes the repository's turn, claude-config#1604, and only while it holds it, #1975),
 # MWR_LINE_SECONDS (10800: how long it may wait in line with the line standing still, counting only
 # time in which nothing ahead of it advanced, claude-config#1697; a setting, not a measurement),
+# MWR_LINE_LOOK_SECONDS (600: how often a run waiting for its turn reads GitHub, claude-config#2715;
+# a setting, not a measurement, never under MWR_POLL_SECONDS),
 # MWR_MAX_POLLS (derived from those and the pace, bounding the loop by count as well as by clock, L704;
 # looks in a line that moved are not counted, claude-config#2351),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
@@ -196,10 +208,15 @@
 # on every try keeps being asked before it stops, claude-config#2303), MWR_MERGE_TRIES (3: how many
 # times in all a merge GitHub answers "Something went wrong" is tried, claude-config#2289) and
 # MWR_MERGE_RETRY_SECONDS (120: the wait between; settings, not measurements), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
-# the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
+# the gates it asks, see ask_gate), MWR_GATE_TIMEOUT_TRIES (4: how many times in all a gate that ran out of its own time
+# is asked, claude-config#2558) and MWR_GATE_TIMEOUT_RETRY_SECONDS (30: the wait between; settings, not measurements), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
-# measurement), and the commands and scripts it runs, each honoured only with
+# measurement), MWR_POOL_LIMIT (20: the concurrent jobs the account's plan allows on GitHub hosted
+# runners, the Free plan's figure, claude-config#2714, see pool_note), MWR_POOL_WAIT_SECONDS (60: how
+# long a job must have waited for a runner before it is said) and MWR_POOL_LOOKBACK_SECONDS (7200: how
+# far before a waiting job the runs counted as holding runners may have been created; settings, not
+# measurements), and the commands and scripts it runs, each honoured only with
 # HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
 # MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
 # MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
@@ -250,9 +267,15 @@ GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 TURN_HOLD="$(num_or "${MWR_TURN_HOLD_SECONDS:-}" 3600)"
+# How often a run waiting for its turn reads GitHub (claude-config#2715, see the turn's wait below).
+LINE_LOOK="$(num_or "${MWR_LINE_LOOK_SECONDS:-}" 600)"; [ "$LINE_LOOK" -ge "$POLL" ] || LINE_LOOK="$POLL"
 # A merge GitHub answers "Something went wrong" is tried again (claude-config#2289, see the merge).
 MERGE_TRIES="$(num_or "${MWR_MERGE_TRIES:-}" 3)"; [ "$MERGE_TRIES" -ge 1 ] || MERGE_TRIES=1
 MERGE_WAIT="$(num_or "${MWR_MERGE_RETRY_SECONDS:-}" 120)"
+# A job that waited for a runner is said (claude-config#2714, see pool_note).
+POOL_LIMIT="$(num_or "${MWR_POOL_LIMIT:-}" 20)"
+POOL_WAIT="$(num_or "${MWR_POOL_WAIT_SECONDS:-}" 60)"
+POOL_LOOKBACK="$(num_or "${MWR_POOL_LOOKBACK_SECONDS:-}" 7200)"
 wrong_head=""; wrong_tries=0
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
@@ -468,7 +491,37 @@ merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "
 # could read areas.json, twice. MWR_GATE_READ_BUDGET_SECONDS (90) is a setting, not a measurement; a
 # budget only bounds how long a read is asked again, and a read that never answers still refuses.
 GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
-ask_gate(){   # $1 = gate script, $2 = command text
+
+# A GATE THAT RAN OUT OF ITS OWN TIME DECIDED NOTHING, so it is asked again (claude-config#2558). On
+# 2026-11-09, with this Mac out of memory, this stopped three times on check-work-names-merge.sh
+# saying "this hook's read budget of 15 seconds was spent" (that gate caps its budget at 15 whatever
+# it is handed) when the same read by hand took 3.6 seconds, and each stopped pull request lost its
+# place in the line. A refusal carrying that sentence, which check-work-names-merge.sh,
+# check-closing-merge.sh and require-verification-run.sh each build as BUDGET_SPENT, is asked again
+# up to MWR_GATE_TIMEOUT_TRIES (4) times in all, MWR_GATE_TIMEOUT_RETRY_SECONDS (30) apart through the
+# injected sleep (L524), each retry said in this run's log; both are settings, not measurements. A
+# gate that still has no time after that stops the run as before, saying how many asks it had. Any
+# other refusal is a decision and stops it at once, unasked again. test-merge-when-ready.sh reads
+# the sentence from each gate's own source, so a gate that rewords it fails the suite.
+GATE_TRIES="$(num_or "${MWR_GATE_TIMEOUT_TRIES:-}" 4)"; [ "$GATE_TRIES" -ge 1 ] || GATE_TRIES=1
+GATE_WAIT="$(num_or "${MWR_GATE_TIMEOUT_RETRY_SECONDS:-}" 30)"
+gate_out_of_time(){ case "$1" in *"read budget of "*" seconds was spent"*) return 0 ;; esac; return 1; }
+ask_gate(){   # $1 = gate script, $2 = command text; prints the refusal's reason, as ask_gate_once does
+  local ask=1 why
+  while :; do
+    why="$(ask_gate_once "$1" "$2")" && return 0
+    gate_out_of_time "$why" || { printf '%s' "$why"; return 1; }
+    if [ "$ask" -ge "$GATE_TRIES" ]; then
+      [ "$ask" -gt 1 ] && why="$why (it ran out of its own time on each of $ask asks, $(dur "$GATE_WAIT") apart)"
+      printf '%s' "$why"; return 1
+    fi
+    # On stderr: the caller keeps stdout for a refusal's reason.
+    say "${1##*/} ran out of its own time and decided nothing (ask $ask of $GATE_TRIES); asking it again in $(dur "$GATE_WAIT")." >&2
+    rest "$GATE_WAIT"
+    ask=$((ask + 1))
+  done
+}
+ask_gate_once(){   # $1 = gate script, $2 = command text
   local payload out rc reason context
   # A gate is local work (claude-config#1676): it runs here, and a load window must not overlap it.
   phase_local "asking ${1##*/} about the merge of #$pr"
@@ -636,7 +689,8 @@ read_pr(){   # sets view_env
 }
 # The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
 # runs_pending, and runs_failed (the head's runs that finished as a failure), which
-# rerun_failed_start reads (claude-config#2537). Asked as the account that could see the pull request.
+# rerun_failed_start reads (claude-config#2537). Asked as the account this run merges as, once
+# resolve_merger has chosen it, and before that as the one that could see the pull request (#2629).
 read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
@@ -687,6 +741,106 @@ rerun_failed_start(){
   done <<< "$runs_failed"
   return 1
 }
+# A JOB THAT WAITED FOR A RUNNER (claude-config#2714). GitHub runs at most a fixed number of jobs at
+# once on its hosted runners for an account's plan (20 on the Free plan, "Total concurrent jobs" on
+# docs.github.com/en/actions/reference/limits), and a job asked for past that waits in a queue. On
+# 2026-11-10 that pool was full at about 01:15 and 13:40 ET and 15 jobs waited over a minute, up to
+# 6.6 minutes, which read in the merge logs as slow tests. So once a head's checks have all finished,
+# each workflow run this helper saw a check of still open, for that head, has its jobs read once, and
+# any job that waited more than POOL_WAIT between being created and starting is said: how long, and
+# how many of this repository's jobs were running when it was created. Those are counted from the jobs
+# of the runs created up to POOL_LOOKBACK before it and not finished by then. Only this repository's
+# can be counted, since GitHub has no read of an account's running jobs, so the line says whose they
+# are and calls the pool full only when the count reaches POOL_LIMIT. A run that finished before this
+# helper first looked was never waited on here and is not read. A run with no wait costs one read and
+# says nothing; the count costs one read of the runs and one per run overlapping the wait, only when a
+# job waited, and a finished run's jobs are kept for the next count rather than read again. A read
+# that fails is said and changes nothing else: this is a note about the wait, never a gate.
+pool_head=""; pool_open=""; pool_done=""; pool_cache=""; pool_got=""; pool_err=""
+pool_seen(){   # $1 = the ids of the runs with a check still open at this look, space separated
+  local id
+  [ "$pool_head" = "$head" ] || { pool_head="$head"; pool_open=""; }
+  for id in $1; do
+    case " $pool_open " in *" $id "*) ;; *) pool_open="$pool_open $id" ;; esac
+  done
+  return 0
+}
+# pool_jobs <run id> <1 when the run has finished>: sets pool_got to its jobs, kept to the four fields
+# read, from what was kept or from GitHub; sets pool_err and returns 1 when it cannot.
+pool_jobs(){
+  local rid jobs out rc
+  while IFS=$'\t' read -r rid jobs; do
+    [ "$rid" = "$1" ] && { pool_got="$jobs"; return 0; }
+  done <<< "$pool_cache"
+  out="$(gh_as api "repos/$slug/actions/runs/$1/jobs?per_page=100" 2>&1 </dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ] || ! jobs="$(printf '%s' "$out" | jq -c 'if (.jobs | type) != "array" then error("no list of jobs") else [.jobs[] | {name, created_at, started_at, completed_at}] end' 2>/dev/null)"; then
+    pool_err="${out:0:200}, exit $rc"; return 1
+  fi
+  [ "${2:-}" = 1 ] && pool_cache="$pool_cache"$'\n'"$1"$'\t'"$jobs"
+  pool_got="$jobs"
+}
+POOL_WAITED_JQ='[.[] | select((.created_at | type) == "string" and (.started_at | type) == "string")
+  | {name, at: (.created_at | fromdateiso8601), d: ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601))}
+  | select(.d > $w)]'
+# Each waited job with how many jobs were running when it was created: started by then, not finished.
+POOL_COUNT_JQ='[.[][]] as $all | $waited[] | . as $j
+  | [$all[] | select((.started_at | type) == "string" and (.started_at | fromdateiso8601) <= $j.at
+      and ((.completed_at | type) != "string" or (.completed_at | fromdateiso8601) > $j.at))] | length
+  | [$j.name, $j.d, .] | @tsv'
+pool_note(){
+  local id waited range runs out rc rid fin all counts name d n items under least
+  [ "$pool_head" = "$head" ] || return 0
+  for id in $pool_open; do
+    case " $pool_done " in *" $id "*) continue ;; esac
+    pool_done="$pool_done $id"
+    if ! pool_jobs "$id" 1; then
+      say "Could not read the jobs of workflow run $id ($pool_err), so whether any of them waited for a runner is not known."
+      continue
+    fi
+    waited="$(printf '%s' "$pool_got" | jq -c --argjson w "$POOL_WAIT" "$POOL_WAITED_JQ" 2>/dev/null)"
+    case "$waited" in ''|'[]') continue ;; esac
+    # Each run is judged on its own counts: nothing carries over from the run before (#2714).
+    all="$pool_got"; counts=""; pool_err=""; under=0; least=""
+    range="$(printf '%s' "$waited" | jq -r --argjson b "$POOL_LOOKBACK" '"\((map(.at) | min) - $b | todate)..\(map(.at) | max | todate)"' 2>/dev/null)"
+    out="$(gh_as api "repos/$slug/actions/runs?created=$range&per_page=100" 2>&1 </dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ] || ! runs="$(printf '%s' "$out" | jq -r --argjson waited "$waited" --arg own "$id" '
+        if (.workflow_runs | type) != "array" then error("no list of runs") else
+        ($waited | map(.at) | min) as $lo | ($waited | map(.at) | max) as $hi
+        | (if (.total_count // 0) > (.workflow_runs | length) then "more\t0" else empty end),
+          (.workflow_runs[] | select((.id | tostring) != $own and (.created_at | fromdateiso8601) <= $hi
+            and (.status != "completed" or (.updated_at | fromdateiso8601) >= $lo))
+          | [(.id | tostring), (if .status == "completed" then "1" else "0" end)] | @tsv) end' 2>/dev/null)"; then
+      pool_err="${out:0:200}, exit $rc"
+    else
+      while IFS=$'\t' read -r rid fin; do
+        [ -n "$rid" ] || continue
+        [ "$rid" = more ] && { least="at least "; continue; }
+        pool_jobs "$rid" "$fin" || break
+        all="$all"$'\n'"$pool_got"
+      done <<< "$runs"
+    fi
+    [ -n "$pool_err" ] || counts="$(printf '%s\n' "$all" | jq -s -r --argjson waited "$waited" "$POOL_COUNT_JQ" 2>/dev/null)"
+    items=""
+    if [ -n "$counts" ]; then
+      while IFS=$'\t' read -r name d n; do
+        items="${items:+$items; }job $name waited $(dur "$d"), and $least$n of this repository's jobs were running when it was queued"
+        [ "$n" -ge "$POOL_LIMIT" ] || under=$((under + 1))
+      done <<< "$counts"
+      if [ "$under" -eq 0 ]; then
+        say "Workflow run $id waited for a runner: $items. GitHub runs at most $POOL_LIMIT jobs at once for the account's plan (MWR_POOL_LIMIT), so the runner pool was full, and that time was GitHub's queue, not the tests."
+      else
+        say "Workflow run $id waited for a runner: $items. Where that is under the $POOL_LIMIT jobs the account's plan runs at once (MWR_POOL_LIMIT), the other runners were held by the account's other repositories, or GitHub was slow to start the job; either way that time was GitHub's queue, not the tests."
+      fi
+    else
+      [ -n "$pool_err" ] || pool_err="the jobs read could not be counted"
+      while IFS=$'\t' read -r name d; do
+        [ -n "$name" ] && items="${items:+$items; }job $name waited $(dur "$d")"
+      done <<< "$(printf '%s' "$waited" | jq -r '.[] | [.name, .d] | @tsv' 2>/dev/null)"
+      say "Workflow run $id waited for a runner: $items. This could not count the jobs running when it was queued ($pool_err), so whether all $POOL_LIMIT runners the account's plan allows were in use is not known."
+    fi
+  done
+  return 0
+}
 read_compare(){   # sets compare, crc, behind, base_tip
   local rc
   compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
@@ -721,6 +875,101 @@ read_methods(){
   [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
   [ "$rc" -ne 0 ] || return 1
   mt_gh_read_class "$out" "$account"
+}
+# WHICH ACCOUNT IT MERGES AS (claude-config#2629). The account that could READ the pull request is
+# not necessarily one that can merge it: on 2026-11-10 the active account could read a repository
+# owned by a second personal account and only read it, so the merge ran as that account and GitHub
+# refused it ("does not have the correct permissions to execute MergePullRequest") after a 7m 30s
+# wait for checks and review that were already green. So at its first look the run asks GitHub what
+# permission the account that read the pull request has on the repository (viewerPermission), and
+# when that is not WRITE, MAINTAIN or ADMIN it asks each other account gh is signed in to, scoping a
+# token to each call as mt_pr_view does, never `gh auth switch`, which would move every other
+# session's account too. The first that can merge is the one every write here is made as (the update,
+# a re-run, a base reset, the merge and the branch's deletion), and the run says which and why.
+# When none can, it stops before any update or wait, naming each account and its permission. It is
+# decided once in a run, at the start rather than after a refused merge, because a refusal arriving
+# only at the merge costs the whole wait first (L667).
+merge_as=""; merge_as_known=""; perm_account=""; perm_seen=""; active_name=""
+can_merge(){ case "$1" in ADMIN|MAINTAIN|WRITE) return 0 ;; esac; return 1; }
+# An account as a sentence names it: $1 is the account, empty for the active one.
+who_is(){
+  if [ -z "$1" ]; then
+    if [ -n "$active_name" ]; then printf '%s (the active account)' "$active_name"; else printf 'the active gh account'; fi
+  elif [ "$1" = "$active_name" ]; then printf '%s (the active account)' "$1"
+  else printf '%s' "$1"; fi
+}
+# The permission perm_account (empty for the active one) has on the repository: sets perm_seen.
+# A named account with no token is a read that failed, never the active account asked instead.
+read_permission(){
+  local out rc tok
+  perm_seen=""
+  if [ -n "$perm_account" ]; then
+    tok="$(gh auth token -u "$perm_account" 2>/dev/null)" || tok=""
+    [ -n "$tok" ] || { read_err="gh read no token for it"; return 1; }
+    out="$(GH_TOKEN="$tok" gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+  else
+    out="$(gh repo view "$slug" --json viewerPermission 2>&1 </dev/null)"; rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
+    perm_seen="$(printf '%s' "$out" | jq -r '.viewerPermission // ""' 2>/dev/null)" || perm_seen=""
+    [ -n "$perm_seen" ] && return 0
+    read_err="GitHub named no permission: ${out:0:200}"; return 1
+  fi
+  read_err="${out:0:300}, exit $rc"
+  ghp_rate_limited "$out" && return 5
+  mt_gh_read_class "$out" "$perm_account"
+}
+# Sets account to the account this run merges as, or stops when no signed in account can merge.
+# Returns 5 when a read was refused for the rate limit, so the look is made again after the pause.
+# $1 and $2 are the stop's exit and what it says was left undone: 1 and nothing merged, unless the
+# caller is finishing a pull request already merged, where only the branch is left (stop 4).
+resolve_merger(){
+  [ -n "$merge_as_known" ] && { account="$merge_as"; return 0; }
+  local code="${1:-1}" undone="${2:-Nothing was merged.}"
+  local rrc listed names name i out="" sep="" unread=""
+  local -a r_acct=() r_said=()
+  active_name=""
+  perm_account="$view_account"
+  with_retries "the permission $(who_is "$perm_account") has on $slug" read_permission; rrc=$?
+  [ "$rrc" -eq 5 ] && return 5
+  if [ "$rrc" -eq 0 ] && can_merge "$perm_seen"; then
+    merge_as="$perm_account"; merge_as_known=1; account="$merge_as"
+    say "Merging as $(who_is "$merge_as"): it has $perm_seen on $slug."
+    return 0
+  fi
+  r_acct+=("$perm_account")
+  if [ "$rrc" -eq 0 ]; then r_said+=(" has $perm_seen")
+  else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
+  # The other accounts, listed only now: `gh auth status` checks every account's token with a request
+  # of its own, which the run whose first account can merge never needs (claude-config#1014).
+  # Read whole, from here strings, so no pipeline is cut short and no child goes unwaited.
+  listed="$(gh auth status 2>/dev/null </dev/null)"
+  active_name="$(awk '{ for (i = 1; i < NF; i++) if ($i == "account") n = $(i + 1) } /Active account: true/ && a == "" { a = n } END { print a }' <<<"$listed")"
+  names="$(awk '{ for (i = 1; i < NF; i++) if ($i == "account" && $(i + 1) ~ /^[A-Za-z0-9_.-]+$/ && !seen[$(i + 1)]++) print $(i + 1) }' <<<"$listed")"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$name" = "$view_account" ] && continue
+    [ -z "$view_account" ] && [ "$name" = "$active_name" ] && continue
+    perm_account="$name"
+    with_retries "the permission $name has on $slug" read_permission; rrc=$?
+    [ "$rrc" -eq 5 ] && return 5
+    if [ "$rrc" -eq 0 ] && can_merge "$perm_seen"; then
+      merge_as="$name"; merge_as_known=1; account="$merge_as"
+      for i in "${!r_acct[@]}"; do out+="$sep$(who_is "${r_acct[$i]}")${r_said[$i]}"; sep="; "; done
+      say "Merging as $name: it has $perm_seen on $slug, and $out."
+      return 0
+    fi
+    r_acct+=("$name")
+    if [ "$rrc" -eq 0 ]; then r_said+=(" has $perm_seen")
+    else r_said+=(": $(signin_or_unread "its permission on $slug" "$rrc")"); unread=1; fi
+  done <<NAMES
+$names
+NAMES
+  for i in "${!r_acct[@]}"; do out+="$sep$(who_is "${r_acct[$i]}")${r_said[$i]}"; sep="; "; done
+  # A permission that could not be read may be one that can merge, so then it says only what it
+  # measured (L11), and that asking again may be the whole remedy.
+  [ -z "$unread" ] || stop "$code" "Stopped: could not confirm any signed in gh account can merge in $slug ($out); that needs WRITE, MAINTAIN or ADMIN. $undone Run the same command again once GitHub answers, or sign gh in to an account with write access to $slug (gh auth login)."
+  stop "$code" "Stopped: no signed in gh account can merge in $slug ($out); that needs WRITE, MAINTAIN or ADMIN. $undone Sign gh in to an account with write access to $slug (gh auth login), or have write access given to one already signed in, then run the same command again."
 }
 # HOW LONG THE REPOSITORY'S CHECKS TAKE (claude-config#1604), read each time this run is about to
 # take the turn (see turn_weigh): sets checks_took, in seconds, empty when there was nothing to
@@ -1127,10 +1376,11 @@ not_caught_up(){   # $1 = what GitHub shows
 # measurement, on the injected clock (L524), and checked at each look, so it falls on the first look
 # at or after it.
 #
-# THE WAIT GROWS (claude-config#1482): with $3 set (the wait on a head's checks and review, the one
-# that runs for many minutes), a look whose line is the last one's doubles the wait, up to POLL_MAX,
-# through lib/gh-poll.sh's ghp_next_interval, and a changed line starts it at POLL again. The other
-# waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
+# THE WAIT GROWS (claude-config#1482): with $3 "grows" (the wait on a head's checks and review, the
+# one that runs for many minutes), a look whose line is the last one's doubles the wait, up to
+# POLL_MAX, through lib/gh-poll.sh's ghp_next_interval, and a changed line starts it at POLL again.
+# With $3 a number of seconds, the wait is that long (the wait for the turn, until its next look at
+# GitHub is due, claude-config#2715). The other waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
 # it (nap), so the log is never quiet for longer than the heartbeat whatever the wait.
 wait_key=""; wait_since=0
 #
@@ -1140,20 +1390,25 @@ wait_key=""; wait_since=0
 #
 # $5, when given, is a check run between the sleeps of the wait at the base pace, which reads no
 # GitHub, and ends the wait early when it returns 0 (claude-config#1697): the wait for the
-# repository's turn grows, since nothing there needs GitHub read every minute, but the turn itself is
-# read locally every POLL, so a turn passing mid wait is taken at once, as before.
-wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow, $4 = what grows with the line, $5 = a local check that ends the wait
+# repository's turn runs until its next look at GitHub is due, MWR_LINE_LOOK_SECONDS apart
+# (claude-config#2715), but the turn itself is read locally every POLL, so a turn passing mid wait
+# is taken at once, as before.
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = grows, or the seconds to wait, $4 = what grows with the line, $5 = a local check that ends the wait
   local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
   if [ "$2" != "$last_status" ]; then
     say "$2${4:-}"; last_status="$2"; last_said="$t"; interval="$POLL"
   else
-    [ -n "${3:-}" ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
+    [ "${3:-}" = grows ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
     if [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
       say "$2${4:-} Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
     fi
   fi
-  [ -n "${3:-}" ] && pause="$interval"
+  case "${3:-}" in
+    grows) pause="$interval" ;;
+    ''|*[!0-9]*) ;;
+    *) pause="$3" ;;
+  esac
   nap "$pause" "$2 Still waiting" "${5:-}"
 }
 # Sleep the wait it is given through the injected sleep, in one call when it is no longer than the heartbeat,
@@ -1185,10 +1440,24 @@ nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on, $3 = a 
 }
 # Every look first takes its place in the session's looks (lib/gh-poll.sh's ghp_take), waiting while
 # a rate limit pause is in force or while the session's loops have used their looks for this minute,
-# each said as what it is (claude-config#1482).
+# each said as what it is (claude-config#1482). A run waiting for its turn leaves one of the minute's
+# looks free, so the run holding the turn never waits on the line behind it (claude-config#2715); the
+# look that finds the turn is now its own (turn_moved saw it) leaves none. So does a run not yet in
+# line while another run on this Mac holds the turn (claude-config#2749), read from the queue here,
+# never GitHub: its first look comes before it learns it is in line, and on 2026-11-11 four such
+# first looks due with the holder's took the whole minute and made the holder wait. The minute's
+# looks still go to whoever comes first otherwise, so no run looks more, and none takes the turn.
 take_a_look(){
-  local key line still
-  while ! ghp_take "$(now)"; do
+  local key line still free holder
+  while :; do
+    free=""; holder=""
+    if [ "$turn_state" = waiting ] && [ "${TURN_MINE:-}" != 1 ]; then
+      free=1
+    elif [ -z "$turn_state" ] && [ -z "$TURN_TICKET" ]; then
+      turn_open "$slug"; turn_look "$(now)" "$TURN_HOLD"; turn_say_passed
+      [ -n "$TURN_HEAD_PR" ] && { free=1; holder="$TURN_HEAD_PR"; }
+    fi
+    ghp_take "$(now)" $free && break
     budget_left
     [ "$BUDGET_LEFT" -gt 0 ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s), at the end of $BUDGET_SAID. Nothing was merged; run the same command again to resume."
     if [ "$GHP_WHY" = pause ]; then
@@ -1196,7 +1465,13 @@ take_a_look(){
       line="Paused for GitHub's rate limit (${GHP_SAID:-it refused a read}): this session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
     else
       key="cap"; still="Still waiting for this session's next look at GitHub"
-      line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
+      if [ -n "$holder" ]; then
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub: this session's loops have looked $GHP_SEEN times in the last minute, and #$holder holds the turn to merge in $slug, so a run not yet in line behind it leaves it the last of the minute's looks (GH_POLL_PER_MINUTE)."
+      elif [ -n "$free" ]; then
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_SEEN times in the last minute, and a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one."
+      else
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
+      fi
     fi
     if [ "$key" != "$wait_key" ]; then
       wait_key="$key"; wait_since="$(now)"; say "$line"; last_said="$(now)"; last_status=""
@@ -1434,14 +1709,17 @@ turn_check(){
 }
 # The local check the wait for the turn runs between its sleeps (claude-config#1697, see wait_a_look):
 # reads the queue on this Mac, never GitHub, and ends the wait when the turn is this run's, its place
-# is gone, or the line moved, so the next look reads GitHub and says the line as it now stands.
+# is gone, or the line moved, so the line is said again as it now stands, from the queue
+# (claude-config#2715), and when the heartbeat is due, so it is said with how long the holder has held
+# the turn by then (claude-config#1515), which the wait's own heartbeat does not know.
 turn_moved(){
   local t; t="$(now)"
   turn_look "$t" "$TURN_HOLD"
   turn_say_passed
   [ "$TURN_MINE" = 1 ] && return 0
   [ -n "$TURN_GONE" ] && return 0
-  line_note "$t"
+  line_note "$t" && return 0
+  [ $(( t - last_said )) -ge "$HEARTBEAT" ]
 }
 
 # A CONFLICT CONFINED TO README.md's MODS TABLE ROWS IS MERGED HERE (claude-config#1867). Two pull
@@ -1459,8 +1737,8 @@ turn_moved(){
 # and rr_why holds the sentence the stop adds, naming the conflicted files when there are any.
 RR_RESOLVER="$MWR_LIB/readme-rows-merge.py"
 rr_why=""; rr_new=""; rr_report=""
-# A fetch or push from the clone, as the account this run reads GitHub with when it has one, which
-# gh's credential helper honours.
+# A fetch or push from the clone, as the account this run merges as (resolve_merger,
+# claude-config#2629) when it is not the active one, which gh's credential helper honours.
 rr_net(){
   if [ -n "$account" ]; then
     local tok; tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
@@ -1546,15 +1824,26 @@ while :; do
   fi
   # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
   ghp_answered
-  account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
-  view="$(printf '%s' "$view_env" | jq -c '.view')"
-  state="$(printf '%s' "$view" | jq -r '.state // ""')"
-  head="$(printf '%s' "$view" | jq -r '.headRefOid // ""')"
-  base="$(printf '%s' "$view" | jq -r '.baseRefName // ""')"
-  branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
+  # One jq for the answer's six fields, one per line, not six (claude-config#2694). `.view | tojson`
+  # prints what `jq -c .view` did, byte for byte; none of the fields can hold a line break (a login, a
+  # state, a commit and two branch names), and an answer jq cannot read leaves every one empty, as
+  # six failed reads did, saying why on standard error once.
+  { IFS= read -r view_account; IFS= read -r view; IFS= read -r state; IFS= read -r head; IFS= read -r base; IFS= read -r branch; } <<EOF_VIEW
+$(printf '%s' "$view_env" | jq -r '(.account // ""), (.view | tojson), (.view | .state // ""), (.view | .headRefOid // ""), (.view | .baseRefName // ""), (.view | .headRefName // "")')
+EOF_VIEW
+  # view_account is the account that could read the pull request; every write is made as the one
+  # resolve_merger picked, once it has (claude-config#2629).
+  if [ -n "$merge_as_known" ]; then account="$merge_as"; else account="$view_account"; fi
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
-    MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+    # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629);
+    # a fork's branch is never deleted here (finish_branch), so it needs no such account.
+    MERGED) if [ -n "$want_delete" ]; then
+              if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" != "true" ]; then
+                resolve_merger 4 "Pull request #$pr in $slug is already merged (head ${head:0:7}), and its branch was left in place." || continue
+              fi
+              finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+            fi
             merged_now=1
             stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
     OPEN) ;;
@@ -1562,6 +1851,10 @@ while :; do
   esac
   [ -n "$head" ] && [ -n "$base" ] || stop 1 "Stopped: GitHub did not report the head commit or base branch of #$pr. Nothing was merged."
   if [ "$head" != "$head_seen" ]; then head_seen="$head"; head_since="$(now)"; fi
+
+  # Which account merges, decided at the first look that finds it open, before any update or wait,
+  # and stopping here when none of the signed in accounts can (claude-config#2629, L667).
+  resolve_merger || continue
 
   # No method passed: the repository's settings choose one, or it stops here, before the changelog
   # gate judges a merge command and before any update or wait (claude-config#1476, L667).
@@ -1590,14 +1883,27 @@ while :; do
   # helper's merge would put behind (claude-config#1515). Each look while waiting still reads the
   # pull request, so one merged or closed meanwhile stops here as it would have anyway.
   if ! turn_check; then
-    line_long_note
-    out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
-    # A growing wait on GitHub since claude-config#1697, which lets a run wait hours in a moving line:
-    # at one read a minute a line of 15 waiters spent about 900 of the account's 5,000 GraphQL points
-    # an hour on reads that only confirm the pull request is still open. The turn itself is read
-    # locally at the base pace between them (turn_moved), so a waiter never leaves the repository
-    # idle after the holder has merged.
-    wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" grows "$turn_extra" turn_moved
+    # GitHub is read in line only every LINE_LOOK, to see this pull request is still open: at one
+    # read a minute a line of 15 waiters spent about 900 of the account's 5,000 GraphQL points an
+    # hour (claude-config#1697), and on a wait growing to three minutes the line still took most of
+    # the session's looks a minute from the run holding the turn (claude-config#2715). The turn is
+    # read from the queue on this Mac at the base pace between those looks (turn_moved), so a turn
+    # passing is taken at once, and a line that moves is said again from the queue, never by reading
+    # GitHub. The look that finds the turn is this run's reads GitHub first, as every look does.
+    line_look_at="$(now)"
+    while :; do
+      line_long_note
+      out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
+      line_left=$(( line_look_at + LINE_LOOK - $(now) ))
+      [ "$line_left" -gt 0 ] || break
+      # Never past the end of its budget in line, so it stops on time, from the check above.
+      budget_left; [ "$BUDGET_LEFT" -ge "$line_left" ] || line_left="$BUDGET_LEFT"
+      wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" "$line_left" "$turn_extra" turn_moved
+      { [ "$TURN_MINE" = 1 ] || [ -n "$TURN_GONE" ]; } && break
+      # The line moved, or this wait ended: the line as the queue now has it. Taking the turn here,
+      # when it passed between the two reads of the queue, reads GitHub at the next look as above.
+      turn_check && break
+    done
     continue
   fi
 
@@ -1684,8 +1990,14 @@ while :; do
   fi
 
   waiting=""
-  checks_total="$(printf '%s' "$view" | jq '[.statusCheckRollup[]?] | length')"
-  checks_open="$(printf '%s' "$view" | jq '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_upcase) | select(IN("", "PENDING", "EXPECTED"))] | length')"
+  # One read of the rollup for how many checks there are, how many are still open, and the workflow
+  # runs the open ones belong to, from each check's details link (claude-config#2714, see pool_note).
+  checks_total=""; checks_open=""; pool_now=""
+  read -r checks_total checks_open pool_now <<< "$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]?] as $c
+    | [$c[] | select((.conclusion // .state // "") | ascii_upcase | IN("", "PENDING", "EXPECTED"))] as $o
+    | "\($c | length) \($o | length) \([$o[] | (.detailsUrl // "") | select(test("/actions/runs/[0-9]+/")) | capture("/actions/runs/(?<id>[0-9]+)/").id] | unique | join(" "))"')"
+  checks_total="$(num_or "$checks_total" 0)"; checks_open="$(num_or "$checks_open" 0)"
+  pool_seen "$pool_now"
   if [ "$checks_open" -gt 0 ]; then
     waiting="checks still running ($checks_open of $checks_total)"
   else
@@ -1706,6 +2018,8 @@ while :; do
     elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
       waiting="checks still running (none reported yet)"
     fi
+    # Every run of the head has finished: say any of its jobs that waited for a runner.
+    [ -n "$waiting" ] || pool_note
   fi
   phase_local "asking the lessons review of ${head:0:7}"
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?

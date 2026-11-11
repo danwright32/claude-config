@@ -71,6 +71,7 @@ SHARED_SCRIPT_DIRS = ("~/.claude/hooks/", "~/.claude/skills/", "~/.claude/comman
 
 
 def load_report():
+    sys.dont_write_bytecode = True   # no cache left in the hooks lib (#2600)
     spec = importlib.util.spec_from_file_location("wrapped_refusal_report", REPORT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

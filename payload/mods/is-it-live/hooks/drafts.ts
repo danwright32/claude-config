@@ -2,28 +2,11 @@ import type { EngineInterface, On } from 'claude-code'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
-import {
-  DRAFT_OPTIONS,
-  DRAFT_SOURCE,
-  SAVE,
-  SKIP,
-  draftHoldOf,
-  draftLetGoOf,
-  draftOwedFrom,
-  draftSaved,
-  isSlackTool,
-  owedThreads,
-  saveLine,
-  skipLine,
-  sourceOf,
-  threadKey,
-  threadOfSource,
-  threadsIn,
-} from './threads.ts'
+import { type Unrelated, draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, nameOfThread, owedThreads, threadKey, threadsIn } from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
-// this file keeps, per session in $.state: the threads, the step a merge last landed at, and each
-// thread's step of its last draft or skip. register.ts calls markLanded when a merge lands and
+// this file keeps, per session in $.state: the threads, the step a merge last landed at, each
+// thread's step of its last draft, and whether the session said its later merges are unrelated (#2653). register.ts calls markLanded when a merge lands and
 // draftHold at its turn end, after the card's check has asked GitHub about the background merges.
 
 const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
@@ -31,6 +14,40 @@ const stepRef = { plugin: 'is-it-live', key: 'step' } as const
 const landedRef = { plugin: 'is-it-live', key: 'landed' } as const
 const draftRefusedRef = { plugin: 'is-it-live', key: 'draftRefused' } as const
 const promptsRef = { plugin: 'is-it-live', key: 'prompts' } as const
+const unrelatedRef = { plugin: 'is-it-live', key: 'unrelated' } as const
+
+// #2653, Dan, 2026-11-11: a session started from a Slack thread says ONCE, by calling this tool,
+// that its later merges have nothing to do with the thread, and no draft reply is then held for
+// them. The session's own act, never inferred from a pull request's text; kept in session state, so
+// a new session from the same thread is asked again; and a merge already landed is still owed.
+const UNRELATED = 'unrelated_merges'
+export const UNRELATED_TOOL = `mcp__${MOD}__${UNRELATED}`
+const UNRELATED_DESCRIPTION =
+  "Say, once, that this session's later merges have nothing to do with the Slack thread it started from, so the turn end stops asking for a draft reply in that thread after each of them. A merge that has already landed is still owed its reply, and a new session started from the thread is asked again. Call it only when the rest of the session's work is unrelated to the thread."
+const UNRELATED_SCHEMA = { type: 'object', properties: {}, additionalProperties: false }
+
+/** #2653: registers the unrelated_merges tool, at session start. */
+export async function registerUnrelated($: EngineInterface): Promise<void> {
+  await $.tool.register({ name: UNRELATED, description: UNRELATED_DESCRIPTION, inputSchema: UNRELATED_SCHEMA })
+}
+
+// The answer to the tool: refused from a subagent (the main session's turn end is the one held) and
+// where the session started from no thread; a second call keeps the first one's step.
+async function declareUnrelated($: EngineInterface, agentId: unknown): Promise<{ deny: string } | { result: string }> {
+  if (agentId !== undefined) return { deny: 'Not from a subagent: only the main session can say its later merges are unrelated to the thread it started from.' }
+  const started = ((await $.state.get(threadsRef)).value ?? []).filter(t => !t.mid)
+  if (!started.length) return { deny: 'Nothing to say: this session started from no Slack thread, so no draft reply is asked after its merges.' }
+  const names = started.map(nameOfThread).join(', ')
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(unrelatedRef)
+    if (held.value !== undefined) return { result: `Already said: no draft reply is asked in ${names} for this session's later merges.` }
+    const landed = (await $.state.get(landedRef)).value
+    const said: Unrelated = landed === undefined ? {} : { landed }
+    if ((await $.state.set(unrelatedRef, said, { ifVersion: held.version })).isSet)
+      return { result: `Noted: no draft reply is asked in ${names} for this session's merges from here on. A merge that landed before now is still owed its reply, and a new session started from that thread is asked again.` }
+  }
+  throw new Error('the record of what the session said kept changing under it')
+}
 
 // #2578: whether a thread recorded now comes once the session is under way, given how many prompts
 // Dan had typed before it: any merge landed, or more than `before` of them.
@@ -103,9 +120,18 @@ export async function relateCard($: EngineInterface, t: { channel: string; ts: s
   await relate($, [{ key, pr }], await nextStep($))
 }
 
+/** #2630: a card asked a draft of its message for a recorded thread, so the hold for that thread
+ * names that message, the one Dan was shown, rather than asking for a second reply. A later card's
+ * message for the thread replaces it, as its draft would. */
+export async function noteCard($: EngineInterface, t: { channel: string; ts: string }, card: { pr: string; name: string; message: string }): Promise<void> {
+  const key = threadKey(t)
+  await changeThreads($, ts => ts.map(x => (threadKey(x) === key ? { ...x, card } : x)))
+}
+
+// A draft saved settles the thread, and the card message it was owed is no longer owed.
 async function settle($: EngineInterface, t: { channel: string; ts: string }): Promise<void> {
   const step = await nextStep($)
-  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
+  await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, card: _saved, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
 }
 
 async function recorded($: EngineInterface, t: { channel: string; ts: string }): Promise<IsItLiveThread | undefined> {
@@ -140,10 +166,11 @@ async function inFlight($: EngineInterface, owed: IsItLiveOwed[]): Promise<boole
  * the turn: the next end in the chain goes ahead, said.
  */
 export async function draftHold($: EngineInterface, e: { stop_hook_active?: boolean }, owed: IsItLiveOwed[]): Promise<string | undefined> {
-  const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value)
+  const unrelated = (await $.state.get(unrelatedRef)).value
+  const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value, unrelated)
   if (!due.length || (await inFlight($, owed))) return undefined
   const landed = (await $.state.get(landedRef)).value
-  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${draftOwedFrom(t, landed)}`
+  const keyOf = (t: IsItLiveThread) => `${threadKey(t)}@${draftOwedFrom(t, landed, unrelated)}`
   const held = (await $.state.get(draftRefusedRef)).value
   const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
   const fresh = due.filter(t => !before.keys.includes(keyOf(t)))
@@ -156,13 +183,14 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
     return undefined
   }
   await $.state.set(draftRefusedRef, { keys: [...before.keys, ...fresh.map(keyOf)], told: before.told })
-  return draftHoldOf(due)
+  return draftHoldOf(due, UNRELATED_TOOL)
 }
 
-type AskInput = { questions?: { question?: unknown }[]; metadata?: { source?: unknown } }
-type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; afkTimeoutMs?: unknown }
-
 export function registerDrafts(on: On): void {
+  // #2653: the tool a session says its later merges are unrelated with (registered by
+  // registerUnrelated from register.ts's session.start, the one an event may have), answered here.
+  on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId))
+
   // A thread Dan links to in his own words is where the session started (mod-kit's isDans: only
   // what he types, never a notification or another plugin's prompt), when in his first prompt and
   // before any merge; one linked later is recorded as pasted mid session (#2578). His prompts are
@@ -214,38 +242,5 @@ export function registerDrafts(on: On): void {
       $.ui.log(`is-it-live: could not record a Slack thread call: ${msg(err)}`, { to: 'debug' })
     }
     return done
-  })
-
-  // Dan's answer about a draft reply, in Claude Code's own dialog: the session writes the question
-  // (the reply, shown to him), this mod words the answers, and reads his choice from the dialog's
-  // own result, the one place it comes from him.
-  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-    const ask = e as unknown as AskInput
-    const source = ask.metadata?.source
-    if (typeof source !== 'string' || !source.startsWith(`${DRAFT_SOURCE}:`)) return next(e)
-    if (e.agentId !== undefined) return { deny: 'Only the main session asks Dan about a Slack draft reply. Stop and report to the main session that the reply waits on him.' }
-    const named = threadOfSource(source)
-    const t = named ? await recorded($, named) : undefined
-    if (!t) return { deny: `No Slack thread this session started from is named by ${source}. Pass the source the turn end's hold named.` }
-    const question = typeof ask.questions?.[0]?.question === 'string' && ask.questions[0].question.trim() ? ask.questions[0].question : `Save a draft reply to ${t.link ?? 'the thread'}?`
-    const r = await next({ ...e, questions: [{ question, header: 'Slack draft', options: DRAFT_OPTIONS, multiSelect: false }] } as typeof e)
-    if (r.deny !== undefined || r.isError) return r
-    const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
-    const out = (r.result ?? {}) as AskResult
-    if (out.afkTimeoutMs !== undefined) return say('Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and the draft reply is still owed. Ask him again when he is back.')
-    const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : question
-    const chosen = out.answers?.[shown] ?? out.answers?.[question]
-    if (chosen === SAVE) return say(saveLine(t))
-    if (chosen === SKIP) {
-      await settle($, t)
-      return say(skipLine(t))
-    }
-    if (typeof chosen !== 'string' || !chosen.trim()) return say('Dan gave no answer, so nothing is recorded and the draft reply is still owed. Ask him again.')
-    const parts = { still: 'the draft reply is still owed', again: `ask him again with metadata {"source": "${sourceOf(t)}"}` }
-    try {
-      return say(await $.modkit.typedAnswer({ guard: 'Is it live', typed: chosen, ...parts }))
-    } catch (err) {
-      return say(`Dan typed "${chosen}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${msg(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`)
-    }
   })
 }

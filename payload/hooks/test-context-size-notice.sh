@@ -321,21 +321,26 @@ for m in d["hooks"].get("PostToolUse", []):
 check_eq "8 registered as a PostToolUse hook on every tool (no matcher)" "matcher=None" "$reg"
 
 # ---- 9. lib/context_size.py, the one sum tools/cache-usage.py also reports through ----
-out="$(python3 -c '
+# lib/ is spelt from BASH_SOURCE here and in 10, never "$DIR/lib": this suite sources hang-wait.sh,
+# whose waits run their condition in this shell, where it can set any name, so past that line the
+# Slack drafts gate is sure of no variable. It could not find context_size through $DIR and refused
+# the whole suite when a session ran it (claude-config#2668). test-slack-drafts-only-gate.sh judges
+# this suite, so putting the variable back fails there.
+out="$(python3 -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 import context_size as c
 print(c.context_of({"input_tokens": 1, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 300, "output_tokens": 4000}),
       c.context_of({"input_tokens": "9", "cache_read_input_tokens": True, "cache_creation_input_tokens": None}),
       c.DEFAULT_LINE, c.DEFAULT_COMPACTIONS)
-' "$DIR/lib" 2>&1)"
+' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" 2>&1)"
 check_eq "9 context_size.py sums input, cache read and cache write, never output, and skips what is not a number" "321 0 330000 5" "$out"
 
 # ---- 10. What must be written down before a restart is one list, said the same in the notice and
 # in the orchestrate skill that explains it, so the two cannot drift apart (L83) ----
 SKILL="$DIR/../skills/orchestrate/SKILL.md"
 skill_text="$(cat "$SKILL" 2>/dev/null)"
-notice_text="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import context_size as c; print(c.WRITE_DOWN)' "$DIR/lib" 2>&1)"
+notice_text="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import context_size as c; print(c.WRITE_DOWN)' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" 2>&1)"
 for item in "in Dan's words" "quoted with its date" "what was ruled out" "commit shas" "with their ids" "next step" "waiting on Dan"; do
   check "10 the notice's list carries: $item" "$item" "$notice_text"
   check "10 and so does the orchestrate skill: $item" "$item" "$skill_text"

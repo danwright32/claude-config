@@ -9,6 +9,7 @@ import {
   ciMessages,
   ciWorkflow,
   codeOf,
+  copyModule,
   editedText,
   flowCommands,
   foreignNames,
@@ -26,10 +27,14 @@ import {
   inScope,
   isMessage,
   isOwnRecord,
+  isSender,
+  requestLanguage,
+  sendMarks,
   isProse,
   isProseFile,
   literalsOf,
   mentionsStore,
+  moduleSpecs,
   namePatterns,
   plainYamlValues,
   question,
@@ -82,6 +87,118 @@ test('a file posts to Slack by a webhook, the chat API, an SDK, or a send helper
   expect(slackMarked('// see the slack channel for context\nconst x = 1')).toBe(false)
   expect(slackMarked('export const slackMarked = (text: string) => true')).toBe(false)
   expect(slackMarked('console.log("Deploy failed")')).toBe(false)
+})
+
+// #2662 (Dan, 2026-11-10: "Recognise refusal code"): a gate that refuses Slack posts names the
+// endpoints it refuses, in a pattern or a glob, and posts nothing.
+const PATTERN = "MARKERS='chat[._](postmessage|schedulemessage)|hooks\\.slack\\.com|slack_webhook|slack_(send|schedule|post)_message'\n"
+const GLOBS = 'refuse "$payload" \'*chat[._]postmessage*\' \'*hooks.slack.com*\' \'*slack_webhook*\'\n'
+const PY_PATTERN = 'import re\nMARKER = re.compile(r"chat[._](postMessage|scheduleMessage)|hooks\\.slack\\.com|slack_webhook", re.I)\n'
+
+test('code that names a Slack endpoint only to match or refuse it is not a sender: a pattern, a glob, a comment (#2662)', () => {
+  // Each carries a marker, so each was a sender before; none is named or exempted anywhere.
+  for (const t of [PATTERN, GLOBS, PY_PATTERN]) expect(slackMarked(t)).toBe(true)
+  expect(isSender('hooks/gate.sh', `#!/bin/bash\n${PATTERN}${GLOBS}printf 'BLOCKED: this call was not checked.\\n' >&2\n`)).toBe(false)
+  expect(isSender('hooks/gate', `#!/usr/bin/env bash\n${PATTERN}`)).toBe(false)
+  // A gate's list of the programs it refuses is names it reads, in python never a program it runs.
+  expect(isSender('hooks/gate.py', `${PY_PATTERN}SENDERS = {"curl", "wget", "http", "https"}\nJS_RUNS = re.compile(r"\\b(fetch|XMLHttpRequest|WebSocket)\\b")\n`)).toBe(false)
+  expect(isSender('src/gate.ts', "export const refused = (cmd: string) => new RegExp('slack_webhook|hooks[.]slack[.]com', 'i').test(cmd)\n")).toBe(false)
+  // The file being edited: a comment naming the endpoints it refuses is no send either.
+  const commented = `#!/bin/bash\n# refuses curl aimed at chat.postMessage or hooks.slack.com\n${PATTERN}`
+  expect(slackMarked(commented)).toBe(true)
+  expect(isSender('hooks/gate.sh', commented, true)).toBe(false)
+  expect(isSender('hooks/note.sh', '#!/bin/bash\n# the digest goes to $SLACK_WEBHOOK_URL from another job\nprintf "Noted\\n"\n', true)).toBe(false)
+  expect(sendMarks('python', PY_PATTERN)).toEqual([])
+  expect(sendMarks('shell', PATTERN + GLOBS)).toEqual([])
+})
+
+test('a name that is used is still a sender, however the file also matches it (#2662)', () => {
+  // An address, a setting read, a method called, a whole quoted name handed to a call, an SDK.
+  expect(isSender('scripts/notify.sh', '#!/bin/bash\ncurl -s --data "Deploy failed" https://hooks.slack.com/services/T000/B000/XXXX\n')).toBe(true)
+  expect(isSender('scripts/notify.sh', '#!/bin/bash\npost "$SLACK_WEBHOOK_URL" "Deploy failed"\n')).toBe(true)
+  expect(isSender('jobs/late.py', 'client.chat_postMessage(channel=c, text="Backup is late")\n')).toBe(true)
+  expect(isSender('skills/nudge.py', 'answer = call("chat.postMessage", {"channel": channel, "text": text})\n')).toBe(true)
+  expect(isSender('src/alert.ts', "import { WebClient } from '@slack/web-api'\n")).toBe(true)
+  expect(isSender('src/alert.ts', 'export const late = () => sendSlackAlert("Backup is late")\n')).toBe(true)
+  // A script that refuses and also posts: the half that posts decides.
+  expect(isSender('hooks/gate.sh', `#!/bin/bash\n${PATTERN}${GLOBS}curl -s --data "$1" "$SLACK_WEBHOOK_URL"\n`)).toBe(true)
+  expect(isSender('hooks/gate.py', `${PY_PATTERN}client.chat_postMessage(channel=c, text=t)\n`)).toBe(true)
+  // A bar that is code, a bracket alone, a setting piped on: none is a pattern.
+  expect(isSender('src/alert.ts', 'const channel = opts.channel || SLACK_CHANNEL || fallback\n')).toBe(true)
+  expect(isSender('src/alert.ts', 'const channel = (opts.channel||SLACK_CHANNEL)\n')).toBe(true)
+  expect(isSender('src/alert.ts', 'const hook = read(SLACK_WEBHOOK)\n')).toBe(true)
+  expect(isSender('scripts/notify.sh', '#!/bin/bash\nprintf "%s" "$1" | post $SLACK_WEBHOOK|tee log\n')).toBe(true)
+  // A pattern with the address beside it, and a list of bare names, are held as before.
+  expect(isSender('scripts/relay.sh', '#!/bin/bash\ncase "$1" in https://hooks.slack.com/*) relay "$1" ;; esac\n')).toBe(true)
+  expect(isSender('src/gate.ts', "export const REFUSED = ['chat.postMessage', 'hooks.slack.com']\n")).toBe(true)
+  // A marker in a comment still makes the edited file a sender when the file makes a request.
+  expect(isSender('scripts/notify.sh', '#!/bin/bash\n# posts to $SLACK_WEBHOOK_URL\ncurl -s --data "Deploy failed" "$HOOK"\n', true)).toBe(true)
+  expect(isSender('scripts/notify.sh', '#!/bin/bash\n# posts to $SLACK_WEBHOOK_URL\ncurl -s --data "Deploy failed" "$HOOK"\n')).toBe(false)
+  expect(sendMarks('python', 'client.chat_postMessage(channel=c, text=t)\n')).toEqual([7])
+})
+
+test('a file that matches a Slack endpoint and then makes a request is still a sender, in each language read for one (#2662)', () => {
+  const sh = (body: string) => isSender('scripts/relay.sh', `#!/bin/bash\ncase "$1" in *hooks.slack.com*) ${body} ;; esac\n`)
+  expect(sh('printf "skipped\\n"')).toBe(false)
+  for (const body of [
+    'curl -s --data "Relay is down" "$1"',
+    '/usr/bin/curl -s "$1"',
+    'out="$(wget -q -O - "$1")"',
+    'http POST "$1" text="Relay is down"',
+    'exec 3<>/dev/tcp/relay.example/443',
+    'ssh relay "post $1"',
+    'python3 -c "import urllib.request; urllib.request.urlopen(\'$1\')"',
+    'node -e "fetch(process.argv[1])" "$1"',
+    // A helper named for Slack, called as a shell calls one, which no marker sees.
+    'notify_slack "Relay is down"',
+    './bin/post-to-slack.sh "Relay is down"',
+  ])
+    expect(sh(body)).toBe(true)
+  const py = (body: string) => isSender('jobs/relay.py', `${PY_PATTERN}${body}\n`)
+  expect(py('print("skipped")')).toBe(false)
+  for (const body of ['import urllib.request', 'import os, subprocess', 'from requests import post', 'import http.client as h', 'os.system(cmd)', 'mod = __import__(name)', 'import slack_bolt_helpers'])
+    expect(py(body)).toBe(true)
+  const js = (body: string) => isSender('src/relay.ts', `const SLACK = new RegExp('slack_webhook|hooks[.]slack[.]com')\n${body}\n`)
+  expect(js('export const is = (u: string) => SLACK.test(u)')).toBe(false)
+  for (const body of [
+    'export const relay = (u: string) => SLACK.test(u) && fetch(u, { method: "POST" })',
+    "import axios from 'axios'",
+    "const { execFile } = require('node:child_process')",
+    'const ws = new WebSocket(u)',
+    "await Bun.spawn(['curl', u])",
+    "await $.process.run(['curl', u])",
+  ])
+    expect(js(body)).toBe(true)
+})
+
+test("what a file reaches is read by mod-kit's file reader, so a program or module it only names in a string or pattern starts nothing (#2710)", () => {
+  const py = (body: string) => isSender('hooks/gate.py', `${PY_PATTERN}${body}\n`)
+  for (const body of [
+    'HELP = "run: import subprocess, then os.system(cmd)"',
+    "RUNS = re.compile(r'\\b(subprocess|pty|multiprocessing)\\b')",
+    '"""\nimport urllib.request\n"""',
+  ])
+    expect(py(body)).toBe(false)
+  // The control: the same file that does import one, or posts through a subprocess, still is one.
+  expect(py('import subprocess\nsubprocess.run(["curl", "-d", text, url])')).toBe(true)
+  expect(py('HELP = "import subprocess"\nimport subprocess')).toBe(true)
+  const js = (body: string) => isSender('src/gate.ts', `const SLACK = new RegExp('slack_webhook|hooks[.]slack[.]com')\n${body}\n`)
+  for (const body of ["const HINT = 'call fetch(u) or require(\"child_process\") yourself'", 'const RUNS = /\\b(child_process|fetch\\(|axios)/', 'const T = `import axios from "axios"`'])
+    expect(js(body)).toBe(false)
+  expect(js("const { exec } = require('child_process')")).toBe(true)
+  // A shell script's inline python or node sits in quotes, so its text is read whole, as before.
+  expect(isSender('scripts/relay.sh', `#!/bin/bash\ncase "$1" in *hooks.slack.com*) python3 -c "import subprocess" ;; esac\n`)).toBe(true)
+})
+
+test('only shell, python, JavaScript and TypeScript are read for a pattern: in any other language a marker is a sender, as before (#2662)', () => {
+  expect(requestLanguage('hooks/gate.sh', '')).toBe('shell')
+  expect(requestLanguage('hooks/gate', '#!/usr/bin/env python3\n')).toBe('python')
+  expect(requestLanguage('hooks/gate', '#!/bin/zsh\n')).toBe('shell')
+  expect(requestLanguage('src/gate.mts', '')).toBe('js')
+  for (const p of ['lib/gate.rb', 'cmd/gate.go', '.github/workflows/gate.yml', 'config/gate.json', 'bin/gate']) {
+    expect(requestLanguage(p, '#!/usr/bin/env ruby\n')).toBe(undefined)
+    expect(isSender(p, "PATTERN = 'slack_webhook|hooks[.]slack[.]com'\n")).toBe(true)
+  }
 })
 
 test('string literals are read past comments, in every quote a C-like or hash-comment language uses', () => {
@@ -186,7 +303,7 @@ test("a workflow's script step that posts to Slack is read as JavaScript: each p
 })
 
 test("the guard's own record is recognised in the store, by name, and in a shell command", () => {
-  expect(isOwnRecord('/Users/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json')).toBe(true)
+  expect(isOwnRecord(`${'/Users'}/dan/.claude/plugins/store/slack-alert-guard_inline-ab12.json`)).toBe(true)
   expect(isOwnRecord('/x/slack-alert-guard_inline.json')).toBe(true)
   expect(isOwnRecord('/w/a/slack-alert-guard/hooks/rules.ts')).toBe(false)
   expect(mentionsStore('cat > ~/.claude/plugins/store/x.json')).toBe(true)
@@ -225,8 +342,12 @@ test('a held template names the file that sends it, and says the template itself
 test('a test file is told by its name or a test folder, read from the repository root', () => {
   for (const p of ['lib/alert.test.ts', 'app/route.spec.tsx', 'lib/__tests__/alert.ts', 'tests/notify.py', 'test/notify.js', 'pkg/notify_test.go', 'app/test_notify.py', 'app/notify_test.py', 'lib/notify_spec.rb', 'spec/notify.rb', 'hooks/test-notify.sh', 'lib/__mocks__/slack.ts'])
     expect(testFile(p)).toBe(true)
+  // A node test script, as a work repository runs its tests (#2509): test-*.ts and its JavaScript
+  // and TSX forms, beside the .test. and .spec. files of every one of them.
+  for (const p of ['scripts/test-copy.ts', 'scripts/test-copy.tsx', 'scripts/test-copy.js', 'scripts/test-copy.jsx', 'scripts/test-copy.mjs', 'scripts/test-copy.cjs', 'lib/copy.test.js', 'lib/copy.spec.mjs'])
+    expect(testFile(p)).toBe(true)
   // A word holding "test" or "spec" is not a test.
-  for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts']) expect(testFile(p)).toBe(false)
+  for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts', 'scripts/testflight-notify.ts', 'scripts/tester.ts', 'lib/test-copy.md']) expect(testFile(p)).toBe(false)
 })
 
 test('docs are not text templates any more; a plain text template still is', () => {
@@ -712,6 +833,35 @@ test('the question approves the wording of an automated alert in the named file,
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
 })
 
+// claude-config#2637: wording an edit adds none of and brings to a send from a file it imports.
+
+test('a held edit that brings in another file\'s wording names that file as where the text is, and what sends it; the question names it too and never asks to post (#2637)', () => {
+  const ROUTE = '/w/a/monitor/route.ts'
+  const COPY = '/w/a/monitor/quiet-feed-copy.ts'
+  expect(heldText(ROUTE, ['The feed has gone quiet'], [], undefined, COPY)).toBe(`This edit to ${ROUTE} makes it send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
+  expect(heldText('/w/a/barrel.ts', ['The feed has gone quiet'], [], ROUTE, COPY)).toBe(`This edit to /w/a/barrel.ts makes ${ROUTE} send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
+  for (const r of [refusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY), agentRefusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY)]) {
+    expect(r.startsWith(`Blocked: this edit to ${ROUTE} makes it send Slack message text from ${COPY}`)).toBe(true)
+    expect(r).not.toContain('adds Slack message text')
+  }
+  // With no such file the wording is as it was.
+  expect(refusal('t1', ROUTE, ['The feed has gone quiet'], [])).toContain(`this edit to ${ROUTE} adds Slack message text Dan has not approved`)
+  const q = question(ROUTE, 'The orders feed has gone quiet', COPY)
+  const [lead] = q.split('\n\n')
+  expect(readsAsSend(lead ?? '')).toBe(false)
+  expect(lead).toContain(`defined in ${COPY}`)
+  expect(lead).toContain(`the held edit to ${ROUTE}`)
+  expect(lead).toContain('sends nothing')
+  expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
+})
+
+test('every module a file imports is named as the file names it, so one file name in two folders is two modules; a bare package is none (#2637)', () => {
+  const ts = "import { a } from './copy'\nimport { b } from '../other/copy'\nimport React from 'react'\nconst c = require('@/lib/notify/post')\n// import { d } from './commented'\n"
+  expect(moduleSpecs(ts).sort()).toEqual(['../other/copy', './copy', '@/lib/notify/post'])
+  expect(moduleSpecs('from app.alerts.copy import late_booking\nimport app.jobs.digest as digest\n')).toEqual(expect.arrayContaining(['app.alerts.copy', 'app.jobs.digest']))
+  expect(moduleSpecs('export const x = 1\n')).toEqual([])
+})
+
 // #2368's line reader and #2361's comment blanking were one rule written twice; codeOf is now the
 // tokenizer, and this holds the behaviours #2368's test of the line reader asserted.
 test('codeOf leaves comments out and keeps code, strings, and code after a closed block comment', () => {
@@ -818,4 +968,58 @@ test('another file using a prompt: an import by its own name is no use, a model 
 test('only prose files are ruled out as senders', () => {
   for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
   for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
+})
+
+// claude-config#2720: wording written into a module of message copy that nothing sends yet. On
+// 2026-11-10 four alert messages went into a new copy module unasked, and were held only later, at
+// the edit importing it. A copy module is known by its path or by its shape.
+const QUIET_COPY = [
+  'export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`',
+  'export const quietAgain = (feed: string) => `The ${feed} feed is still quiet, so somebody needs to look at it now`',
+  'export const quietClear = (feed: string) => `The ${feed} feed is sending again`',
+  "export const allClear = 'Every feed is sending again'",
+  "export const CHECKED = 'Checked every feed for a quiet one'",
+  '',
+].join('\n')
+
+test('a module of message copy is known by its path: a name ending in copy or wording, a copy folder, or an alert or Slack name beside a message one (#2720)', () => {
+  const prose = "export const m = 'Nothing has arrived for an hour'\n"
+  for (const p of ['src/lib/notify/outage-copy.ts', 'src/lib/monitor/quiet-feed-copy.ts', 'lib/quietFeedCopy.ts', 'lib/copy/alerts.ts', 'lib/copy.py', 'lib/slack/messages.ts', 'lib/alertText.ts', 'jobs/slack_templates.py', 'ops/alerts/notices.ts', 'notify/wording.ts'])
+    expect([p, copyModule(p, prose)]).toEqual([p, true])
+  // A verb, a guard named for Slack, a test, a doc or a screen is not a copy module by its path.
+  for (const p of ['scripts/copy-assets.sh', 'lib/copyFiles.ts', 'payload/mods/slack-alert-guard/hooks/rules.ts', 'payload/hooks/slack-drafts-only-gate.sh', 'lib/alerts.ts', 'lib/messages.ts', 'tests/send-wording.ts', 'lib/outage-copy.test.ts', 'docs/alert-copy.md', 'src/components/AlertMessage.tsx', 'src/lib/date.ts'])
+    expect([p, copyModule(p, prose)]).toEqual([p, false])
+})
+
+test('a module of message copy is known by its shape: mostly functions building message text, or Slack formatting (#2720)', () => {
+  expect(copyModule('src/lib/monitor/quiet.ts', QUIET_COPY)).toBe(true)
+  const py = 'def late_page(feed, minutes):\n    return f"The {feed} feed has gone quiet for {minutes} minutes"\n\ndef late_clear(feed):\n    return f"The {feed} feed is sending again"\n'
+  expect(copyModule('jobs/quiet.py', py)).toBe(true)
+  expect(copyModule('lib/run.ts', "export const blocks = (url: string) => [{ type: 'section', text: { type: 'mrkdwn', text: 'Run finished' } }]\n")).toBe(true)
+  expect(copyModule('lib/run.ts', 'export const line = (url: string) => `The nightly run failed: <${url}|open the log>`\n')).toBe(true)
+  expect(copyModule('lib/run.ts', "export const line = 'Somebody look at this <!here>'\n")).toBe(true)
+  // One builder alone, constants of error text, or a few builders among much other code is not.
+  expect(copyModule('lib/late.ts', 'export const late = (id: string) => `Booking ${id} is late`\n')).toBe(false)
+  expect(copyModule('lib/errors.ts', "export const NOT_FOUND = 'No booking has that id'\nexport const TAKEN = 'That slot is taken'\nexport const LATE = 'You are too late to book'\n")).toBe(false)
+  const busy = [
+    'export const a = (n: string) => `The ${n} job failed`',
+    'export const b = (n: string) => `The ${n} job is late again`',
+    ...Array.from({ length: 6 }, (_, i) => `export const k${i} = (x: number) => x + ${i}`),
+    '',
+  ].join('\n')
+  expect(copyModule('lib/jobs.ts', busy)).toBe(false)
+  // A test and a screen are never copy modules, whatever their shape.
+  expect(copyModule('src/lib/monitor/quiet.test.ts', QUIET_COPY)).toBe(false)
+  expect(copyModule('src/components/Quiet.tsx', QUIET_COPY)).toBe(false)
+  // Functions that do work and print or throw a message on the way build no copy: measured on this
+  // repository, reading those as builders made 16 scripts and mods copy modules (#2720).
+  const script = 'def load(path):\n    print(f"Reading {path} from disk now")\n    return open(path).read()\n\ndef check(rows):\n    if not rows:\n        raise SystemExit(f"No rows were found in {len(rows)} files")\n    return rows\n'
+  expect(copyModule('tools/merge.py', script)).toBe(false)
+  const thrower = 'export function load(p: string) {\n  if (!p) throw new Error(`No file was named for ${p} here`)\n  return p\n}\nexport function save(p: string) {\n  console.log(`Saved the file at ${p} just now`)\n  return p\n}\n'
+  expect(copyModule('lib/files.ts', thrower)).toBe(false)
+  // A shell script is a program, never a module another file imports, whatever its name.
+  expect(copyModule('payload/hooks/lib/placement-copy.sh', 'echo "Copied the payload into the fixture"\n')).toBe(false)
+  // A pipe in a shell string, or a word between colons, is no Slack formatting.
+  expect(copyModule('lib/run.sh', 'echo "a | b"\n')).toBe(false)
+  expect(copyModule('lib/run.ts', "export const t = 'Wait for <the run|other> to finish'\n")).toBe(false)
 })

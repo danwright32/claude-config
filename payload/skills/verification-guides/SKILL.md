@@ -34,8 +34,17 @@ starts and stops serve is [scripts/run_session.py](scripts/run_session.py). Both
 | `commands.stamp` | Optional. Prints the commit the SERVED build reports (a `/__build` route, a footer). Recorded as the receipt's `build_stamp`; the merge check wants it to equal the head SHA. |
 | `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long the egress monitor's canary may take to show up, at the start and at the end). |
 | `egress` | Optional `{"allow": [<host>, ...]}`: the hosts serve and the drive helper may reach during a run, as bare host names or IP addresses (no scheme, port, path or wildcard). `127.0.0.1`, `localhost` and `::1` are always allowed, and by default nothing else is. A run's egress verdict is `clean` only when nothing outside this list was reached. |
-| `areas` | A list of `{"name", "guide", "owns"}`: a lower case hyphenated name, the guide's repository path, and the glob patterns of the files the area owns. |
+| `areas` | A list of `{"name", "guide", "owns", "screens"}`: a lower case hyphenated name, the guide's repository path, the glob patterns of the files the area owns, and optionally the screens its pull requests are pictured at (below). |
 | `exempt` | A list of `{"glob", "why"}`: files no area verifies, each with its reason. |
+| `seeds` | Optional `{<name>: {"synthetic": true or false, "why": <one line>}}`: the data each screen is shot with. `synthetic` true declares it made up, the only data a PUBLIC repository may show pictures of. |
+| `screenshots` | Optional `{"mode": "warn" or "block"}`, default `warn`: how the merge check treats a UI pull request whose body lacks its pictures, apart from `mode` above. |
+
+A screen is `{"name", "path", "seed", "rows", "min_rows"}`: a name, the route on the served app
+(starting with `/`), a seed from `seeds`, and optionally a CSS selector and the count of matches the
+screen must show before it is shot, so it is pictured at the production count (L606). A pull request
+is UI when it touches an area with screens; each such screen is shot on the base build and the head
+build, at 1440 and 1280 wide, in light and dark: eight pictures (claude-config#2516). Web apps only;
+native apps are claude-config#2696. No area declaring screens is reported as unmeasured, never as passed.
 
 Ownership: every file in the repository lands in EXACTLY one bucket, an area or `exempt`. A file
 in none is unowned and a file in two is ambiguous, and both are refusals, never guesses. Patterns
@@ -201,6 +210,33 @@ The runner's brief:
 >    the guide.
 > 7. Hand back: the receipt id, the comment's URL, and each failing check with its blame and note.
 
+### Screenshots, when a touched area declares screens
+
+[scripts/screenshots.py](scripts/screenshots.py) takes, publishes and renders them; the runner does
+this in the same run, before step 5 stops the head run:
+
+1. Shoot the head: `python3 ~/.claude/skills/verification-guides/scripts/screenshots.py shoot <receipt id> --side head --areas-file <scratch>/areas.json`,
+   with the BASE areas.json the main session read. It calls the drive helper once a picture as
+   `screenshot <path> <width> <light|dark> <file.png> <rows selector or -> <min rows>`, through
+   `run_session.py drive`, and the helper saves the file into `VERIFICATION_RECEIPT_DIR`.
+   [scripts/shoot_web.mjs](scripts/shoot_web.mjs) is a helper that does exactly that with the
+   Playwright library, so a web project's helper can hand `screenshot` to it.
+2. Shoot the base: `run_session.py start` at the PR's `baseRefOid` (fetch it first), `shoot ... --side base`,
+   then `run_session.py stop`. One run at a time per project, so the base run follows the head run's stop.
+3. Publish: `screenshots.py publish --areas-file <scratch>/areas.json --repo <owner/repo> --pr <n> --base-receipt <id> --head-receipt <id> > <scratchpad>/verify-<n>/shots.json`.
+   It refuses a missing picture by area, screen, side, width and theme before uploading anything.
+   In a public repository whose screens all use a seed declared synthetic, it adds the pictures to
+   the orphan `pr-screenshots` branch through GitHub's git data API (no push), under
+   `pr-<n>/<head sha>/`, linked by the commit that added them, keeping everything already there:
+   nothing is ever pruned (Dan, 2026-11-10). Anywhere else it refuses
+   `screenshots-need-private-link`: publish the pictures to a private Artifact page and run it again
+   with `--link <that page>`, which uploads nothing. A private repository takes the link too until
+   inline images there are measured to render (`PRIVATE_REPO_IMAGES`, claude-config#2699).
+4. Render: `screenshots.py render --manifest <scratchpad>/verify-<n>/shots.json --body <scratchpad>/verify-<n>/body.md > <scratchpad>/verify-<n>/new-body.md`,
+   then `gh pr edit <n> --body-file <scratchpad>/verify-<n>/new-body.md`. The `## Screenshots`
+   block is replaced in place, so rendering again leaves one block, and its fingerprint is kept in
+   `rendered-screenshots.jsonl` beside the head receipt: a block edited by hand is refused.
+
 If the runner ends without stopping, `run_session.py stop <receipt id>` from the main session
 stops serve, runs the project's stop command and removes the worktree; the run's deadline does the
 same unattended.
@@ -225,10 +261,25 @@ tally per pull request under `~/.claude-verification/merge-tally/`. Each time th
 `TALLY_ASK_EVERY` pull requests (set in `verification.py`), `hooks/verification-tally-notice.sh` asks Dan in the main session whether to switch
 the repository to `block`. The override is `ALLOW_UNVERIFIED_MERGE=1 <the same command>`.
 
+The same check judges the pictures (claude-config#2516), under `screenshots.mode` rather than
+`mode`. For a UI pull request it names, by area, screen, side, width and theme, every picture the
+body's `## Screenshots` block lacks, and refuses a block that is missing, malformed, edited after
+render, stale (taken before a later change to a pictured area), linking a file the branch does not
+hold, or showing pictures of a seed not declared synthetic in a public repository. In `warn` the
+merge is allowed and the verdict reaches the session even when the run records pass in `block`;
+the screenshot kinds are added to the warn tally. The block switch is present and off: a project
+moves to `"screenshots": {"mode": "block"}` once warn has been seen working for a week
+(claude-config#2697; the first project is claude-config#2698). Its own
+override is `ALLOW_NO_SCREENSHOTS=1 <the same command>`, which lifts the pictures check alone.
+
 ## Not built yet
 
 These are what the merge check expects that nothing here can supply yet, said rather than faked:
 
 - **Build stamp.** Recorded only when the project's `stamp` command prints one; otherwise
   `build_stamp_source` is `none`.
-- **Drive helpers.** Each project supplies its own; none ships here.
+- **Drive helpers.** Each project supplies its own; only the screenshot verb ships here (shoot_web.mjs).
+- **Inline pictures in a private repository.** Unmeasured, so private repositories get the private
+  link until it is measured (claude-config#2699).
+- **Native apps.** Screens are routes on a served web app; a native app's pictures need an offscreen
+  test of its own (claude-config#2696).

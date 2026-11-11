@@ -1,0 +1,28 @@
+deal	UNKNOWN STEP	2026-11-09T23:38:08.5406164Z Region: westus2
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:20.6422616Z Region: westcentralus
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:27.0642949Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:27.0645585Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:27.4062749Z cores: 4
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:27.4097071Z processor: AMD EPYC 9V74 80-Core Processor
+suites part 2	UNKNOWN STEP	2026-11-09T23:57:03.1502756Z   FAIL  test-claude-sync.sh                    3418 passed, 0 failed      (705s)
+suites part 2	UNKNOWN STEP	2026-11-09T23:57:03.1839057Z           FAIL: test suite: this run's sections cost 1393s of section time between them, against a budget of 1368s (76% of the 1800s ceiling), and 1239s of that was the suite's own processor time at a load average of 3.07 on 4 cores (2 of it this suite's own shards), so it has grown rather than waited on a busy machine. Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why.
+suites part 2	UNKNOWN STEP	2026-11-09T23:57:03.2125120Z           note: 1393s of section time against a 1368s budget
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:20.4434301Z Region: centralus
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:26.5465657Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:26.5468331Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:26.9251114Z cores: 4
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:26.9283185Z processor: AMD EPYC 7763 64-Core Processor
+suites part 1	UNKNOWN STEP	2026-11-09T23:48:33.5465592Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:19.9735269Z Region: eastus2
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:25.8406019Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:25.8408852Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:26.4182374Z cores: 4
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:26.4209872Z processor: INTEL(R) XEON(R) PLATINUM 8573C
+suites part 4	UNKNOWN STEP	2026-11-09T23:47:38.3242904Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:22.0669047Z Region: westus3
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:28.7948111Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:28.7950632Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:30.8466182Z cores: 4
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:30.8489591Z processor: Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz
+suites part 3	UNKNOWN STEP	2026-11-09T23:48:11.9210021Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suite	UNKNOWN STEP	2026-11-09T23:57:09.9030349Z Region: westus2

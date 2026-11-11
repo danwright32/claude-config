@@ -13,11 +13,18 @@ const WRITES: Record<string, unknown> = {
   // #2254: a findings note, its text holding $PWD, *.ts and a question mark, to the installed spool
   // helper; the same note chained with a write, sent to a copy of the helper in a checkout, and the
   // helper's other subcommand. Written out in full, since the shell reader suite reads this block alone.
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && sed -i \'\' \'s/a/b/\' src/lib/slack.ts': { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }], stdout: [{ word: '$OUT/big.ts' }] },
+  // So each home path builds its root inline, ${'/Users'}, never from a constant outside the block,
+  // which that suite would not have (#2754: no line here may hold a literal home path).
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && sed -i \'\' \'s/a/b/\' src/lib/slack.ts': { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }], stdout: [{ word: '$OUT/big.ts' }] },
   'bash payload/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'payload/hooks/lib/issue-spool.sh', path: '/w/app/payload/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'append', path: '/w/app/append' }, { word: '.', path: '/w/app' }, { word: '$RECORD' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'append', path: '/w/app/append' }, { word: '.', path: '/w/app' }, { word: '$RECORD' }] }] },
+  // #2636: the end of turn review's clear line, handed the project folder whose spool key it reads.
+  [`bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest`]: { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: `${'/Users'}/dan/.claude/projects/app/s1.jsonl`, path: `${'/Users'}/dan/.claude/projects/app/s1.jsonl` }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
+  [`bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest && sed -i '' 's/a/b/' src/big.ts`]: { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: `${'/Users'}/dan/.claude/projects/app/s1.jsonl`, path: `${'/Users'}/dan/.claude/projects/app/s1.jsonl` }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh sweep-stamps src/ review.': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'sweep-stamps', path: '/w/app/sweep-stamps' }, { word: 'src/', path: '/w/app/src' }, { word: 'review.', path: '/w/app/review.' }] }] },
+  'bash payload/hooks/lib/issue-spool.sh clear /w/app': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'payload/hooks/lib/issue-spool.sh', path: '/w/app/payload/hooks/lib/issue-spool.sh', args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }] }] },
   // #2246: a write whose unreadable word, and so the question about it, is longer than the store's 256 characters.
   [`echo hi > "$OUT/${'a'.repeat(300)}.ts"`]: { files: [{ word: `$OUT/${'a'.repeat(300)}.ts` }], changes: [], unnamed: [], stdout: [{ word: `$OUT/${'a'.repeat(300)}.ts` }] },
   "sed -i '' 's/a/b/' src/lib/slack.ts": { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [] },
@@ -588,7 +595,7 @@ test('a shell command writing no file, a new file or only files that are no sour
   expect(w.judged().length).toBe(0)
 })
 
-test('a shell command whose file cannot be read is held saying so, may only proceed, and the unchanged command then runs', KIT, async ($, on) => {
+test('a shell command whose file cannot be read is held saying so, may not restructure, and the unchanged command runs once it proceeds', KIT, async ($, on) => {
   const w = world($, on)
   const why = refusal(await bash($ as never, w, BUILT))
   expect(why).toContain('cannot be read')
@@ -602,6 +609,34 @@ test('a shell command whose file cannot be read is held saying so, may only proc
   expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
   // Another command is decided on its own.
   expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
+})
+
+test('a held command naming no file can be folded into an open structural issue the hold listed, recorded with its number, and never into one it did not list (#2706)', KIT, async ($, on) => {
+  // #41 is an open tech-debt issue naming src/lib/slack.ts; #42 names a file but is no structural issue.
+  const w = world($, on)
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('cannot be read')
+  expect(why).toContain('"decision": "fold", "issue": <one of #41>')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 42 }))).toContain('#41')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 99 }))).toContain('#41')
+  expect(w.records().filter(x => x.kind === 'decided')).toEqual([])
+  expect(refusal(await bash($ as never, w, BUILT, {}, 'b2'))).toContain('cannot be read')
+  const d = await decide($ as never, { call: 'b2', decision: 'fold', issue: 41 })
+  expect(said(d)).toContain('#41 is folded into this work')
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ v: 3, decision: 'fold', issue: 41, path: '$OUT/big.ts', call: 'b2' })
+  // The unchanged command then runs, as it would after proceed; another is judged on its own.
+  expect((await bash($ as never, w, BUILT, {}, 'b3')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b4'))).toContain('cannot be read')
+})
+
+test('a held command naming no file lists the session\'s own structural issue too, so its own restructure can be folded in (#2706)', KIT, async ($, on) => {
+  // The branch is #41's own, so #41 does not hold; the fast growing src/big.ts still holds the command.
+  const w = world($, on, { branch: '41-split-slack' })
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('<one of #41>')
+  await decide($ as never, { call: 'b1', decision: 'fold', issue: 41 })
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ decision: 'fold', issue: 41 })
 })
 
 test('a script handed a double quoted regex ending in a dollar sign the shell leaves as text runs unjudged; one handed a word the shell expands is held (#2320)', KIT, async ($, on) => {
@@ -673,15 +708,11 @@ test('a write chained with a findings note is still judged, and a copy of the he
   const w = world($, on)
   expect(refusal(await bash($ as never, w, `${NOTE} && sed -i '' 's/a/b/' src/lib/slack.ts`))).toContain('which writes src/lib/slack.ts')
   expect(refusal(await bash($ as never, w, `${NOTE} && echo hi > "$OUT/big.ts"`, {}, 'b2'))).toContain('$OUT/big.ts')
-  // Each is handed `.`, the checkout itself, so since #2321 it is held first for the held files under it;
-  // once that file is decided, the append is still held for its unreadable word.
+  // The copy is handed `.`, the checkout itself, so since #2321 it is held for the held files under it.
+  // The installed helper's append reads only a spool key from `.` (#2636), so it is held at once for
+  // its unreadable word.
   expect(refusal(await bash($ as never, w, COPY_NOTE, {}, 'b3'))).toContain('which writes src/big.ts.')
-  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('which writes src/big.ts.')
-  await decide($ as never, { call: 'b4', decision: 'proceed', reason: REASON })
-  const why = refusal(await bash($ as never, w, APPEND, {}, 'b5'))
-  expect(why).toContain('which writes src/lib/slack.ts.')
-  await decide($ as never, { call: 'b5', decision: 'proceed', reason: REASON })
-  expect(refusal(await bash($ as never, w, APPEND, {}, 'b6'))).toContain('$RECORD')
+  expect(refusal(await bash($ as never, w, APPEND, {}, 'b4'))).toContain('$RECORD')
 })
 
 // #2142 lessons review: a write reaching a whole folder (find -exec over it, git putting a folder
@@ -913,6 +944,81 @@ test('a loop handing a script quoted search terms runs; one whose words cannot b
   expect(w.records().find(x => x.kind === 'unread')).toMatchObject({ word: '$t', decision: 'held' })
 })
 
+// #2619: writes a script makes through text mod-kit's reader gives no write for. Each of these, read
+// through the real reader on 2026-11-10, came back as a script writing nothing, so the folder it was
+// handed went unjudged and the command ran. Each is a write that cannot be followed, so the folder
+// stays held for the files under it (fail closed).
+const sed = `sed -i '' 's/a/b/' "$1"/*.ts`
+const UNREAD_WRITES: [string, string][] = [
+  ['runs text it builds through eval', 'eval "$FIX"\n'],
+  ['runs text it builds through eval named as a builtin', 'builtin eval "$FIX"\n'],
+  ['runs text it builds through bash -c', 'bash -c "$FIX"\n'],
+  ['pipes text it builds into bash', 'echo "$FIX" | bash\n'],
+  ['runs a program named by a value', '"$TOOL" --write "$1"\n'],
+  ['runs a program named by a value inside an if', 'if "$TOOL" --write "$1"; then echo ok; fi\n'],
+  ['runs a program named by what a command prints', '$(command -v fixer) "$1"\n'],
+  ['runs the arguments it is handed as a command', '"$@"\n'],
+  ['runs a program named by a value in two subshells', '( ( "$TOOL" --write "$1" ); ( echo done ) )\n'],
+  ['writes from a trap', 'trap \'echo x > "$1/big.ts"\' EXIT\n'],
+  ['edits from a trap', `trap '${sed.replace(/'/g, '"')}' EXIT\n`],
+  ['edits from a trap set after --', `trap -- '${sed.replace(/'/g, '"')}' EXIT INT\n`],
+  ['runs text it builds from a trap', 'trap \'eval "$FIX"\' EXIT\n'],
+  ['sets a writing trap from a trap', 'trap \'trap "echo x > $1/big.ts" EXIT\' INT\n'],
+  ['writes through an alias', `alias fix="sed -i '' 's/a/b/'"\nfix "$1"/*.ts\n`],
+  ['writes in a function defined on one line', `w(){ ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line, spaced', `w() { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line with the function word', `function w { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line with the function word and parentheses', `function w() { ${sed}; }\nw "$1"\n`],
+  ['writes in a function defined on one line whose body is a subshell', `w()( ${sed} )\nw "$1"\n`],
+  ['writes in a function defined on one line inside an if', `if true; then w(){ ${sed}; }; fi\nw "$1"\n`],
+]
+
+test('a script whose write goes through eval, bash -c, a program named by a value, a trap, an alias or a one line function is held for the files under the folder (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text]] of UNREAD_WRITES.entries()) {
+    w.files[`${APP}/check.sh`] = text
+    const r = await bash($ as never, w, 'bash check.sh src/', {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: a script that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: a script that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(UNREAD_WRITES.map(([what]) => `held: a script that ${what}`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// The controls (#2619): none of these writes a file, so each still runs with nothing judged. A value
+// in an argument, an assignment or arithmetic names no command; a trap that only removes, stops or
+// runs a function the script defines writes nothing; a one line function that only reads is read.
+const STILL_READ_ONLY: [string, string][] = [
+  ['writes nothing at all', 'set -euo pipefail\necho "checking $1"\nexit 0\n'],
+  ['only reads, with a value in an argument', 'grep -n "$PATTERN" "$1"/*.ts\n'],
+  ['only reads in a function defined on one line', 'count() { grep -c TODO "$1"; }\nfunction total { wc -l "$1"; }\ncount "$1"/a.ts\ntotal "$1"/a.ts\n'],
+  ['sets a trap that removes its temp file, stops, or runs its own function', 'tmp=x\ncleanup() {\n  rm -rf "$tmp"\n}\ntrap cleanup EXIT\ntrap \'rm -f "$tmp"; exit 130\' INT\ntrap - TERM\ntrap \'\' HUP\ntrap -p\ngrep -rn TODO "$1"\n'],
+  ['sets array elements and appends by value', 'declare -A seen\nfor f in "$1"/*.ts; do\n  seen[$f]=1\n  list+=("$f")\n  total+=" $f"\ndone\necho "${#list[@]}"\n'],
+  ['compares values in arithmetic', 'if (( $# < 1 )); then echo usage; exit 1; fi\n(( ${#list[@]} == 0 || $# < 2 )) && exit 0\n(( n += $step ))\n'],
+  ['lists its aliases', 'alias\ngrep -rn TODO "$1"\n'],
+]
+
+test('a script that writes nothing still runs judging no file, though it holds a value, a quiet trap, arithmetic or a one line function (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  const ran: string[] = []
+  for (const [i, [what, text]] of STILL_READ_ONLY.entries()) {
+    w.files[`${APP}/check.sh`] = text
+    const r = await bash($ as never, w, 'bash check.sh src/', {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `ran: a script that ${what}` : `held: a script that ${what}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(STILL_READ_ONLY.map(([what]) => `ran: a script that ${what}`))
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads').map(x => x.decision)).toEqual(STILL_READ_ONLY.map(() => 'passed'))
+})
+
+// #2619: the one line function form was a gap in mod-kit's reader itself, so a write typed in a
+// command went unjudged too.
+test('a typed command writing a held file inside a function defined on one line is held, naming the file (#2619)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, "f(){ sed -i '' 's/a/b/' src/big.ts; }; f"))).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, "function f { sed -i '' 's/a/b/' src/big.ts; }; f", {}, 'b2'))).toContain('The area check held this Bash command, which writes src/big.ts.')
+})
+
 // #2373: a write marked as reaching a whole folder (find with exec, git putting a folder back) is
 // bounded the same way, so a folder like payload/hooks cannot outrun the hook's 10 second budget.
 const FIND_GEN = "find gen -exec sed -i '' 's/a/b/' {} +"
@@ -959,4 +1065,48 @@ test('a reader that fails lets the command through, kept in the error file and s
   expect((await bash($ as never, w, SED)).result).toBe('done')
   expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', session: 's1', error: 'the command could not be read' })
   expect(w.logs.filter(l => l.includes('area check'))).toEqual(["The area check could not read what a shell command writes (the command could not be read), so it went ahead unchecked; the error is kept in ~/.claude-area-check/errors.jsonl."])
+})
+
+// #2636: the end of turn review's clear line names the project folder only as the project whose spool
+// key the installed helper reads, and writes under ~/.claude-issue-spool. It was held once per large
+// file under that folder, each proceed claiming only the file it named, so the next send named the next.
+const CLEAR = `bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest`
+
+test('the spool clear line goes through with nothing judged, its folder only the project whose key the helper reads (#2636)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect((await bash($ as never, w, CLEAR)).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a real write chained with the clear line is held, and a copy of the helper or a subcommand handed no project folder is judged as before (#2636)', KIT, async ($, on) => {
+  const w = world($, on)
+  expect(refusal(await bash($ as never, w, `${CLEAR} && sed -i '' 's/a/b/' src/big.ts`))).toContain('which writes src/big.ts.')
+  // sweep-stamps is handed the review's temp folder, which it removes files from: no project key.
+  expect(refusal(await bash($ as never, w, 'bash ~/.claude/hooks/lib/issue-spool.sh sweep-stamps src/ review.', {}, 'b2'))).toContain('which writes src/big.ts.')
+  expect(refusal(await bash($ as never, w, 'bash payload/hooks/lib/issue-spool.sh clear /w/app', {}, 'b3'))).toContain('which writes src/big.ts.')
+})
+
+// Two fast growing files under src, so a folder reach judged file by file holds twice.
+const TWO_GROWING = ['\x1efix: stop the crash (#3)', '900\t100\tsrc/big.ts', '\x1eMore', '700\t50\tsrc/pay/stripe.ts'].join('\n')
+
+test('a folder reach whose open issues cannot be read is one hold for the whole command, saying so, and one proceed lets it run (#2636)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.numstat = TWO_GROWING
+  w.ctl.lines = 'origin/main:src/big.ts:2400\norigin/main:src/pay/stripe.ts:2000\n'
+  w.ctl.gh = () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })
+  const why = refusal(await bash($ as never, w, FIND))
+  expect(why).toContain('src reaches every file under it, and its open issues could not be read (error connecting to api.github.com)')
+  expect(why).not.toContain('which writes src/big.ts')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND, {}, 'b2')).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+})
+
+test('with its open issues unread, a command that names a fast growing file is still held for that file (#2636)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.gh = () => ({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })
+  const why = refusal(await bash($ as never, w, `${CLEAR} && sed -i '' 's/a/b/' src/big.ts`))
+  expect(why).toContain('which writes src/big.ts.')
+  expect(why).toContain('so its growth alone decided')
 })

@@ -39,7 +39,7 @@ export const SESSION_FIXTURES = [
 // 2026-10-08, with the Mac up since the day before), so an exact match ended the night on the
 // shell side while the mod, holding its first reading, still said asleep.
 export const SLEEP_FIXTURES = [
-  { "name": "valid", "text": "{\"v\":1,\"generation\":\"g1\",\"since\":1791345600000,\"until\":1791388800000,\"night\":\"2026-10-07\",\"bootTime\":1759800000,\"report\":\"/Users/x/Downloads/Sleep report 2026-10-07.md\",\"startedBy\":{\"sessionId\":\"s1\",\"cwd\":\"/repo\"},\"workers\":[\"s1\"],\"placeBefore\":\"home\"}", "now": 1791360000000, "boot": 1759800000, "state": "asleep" },
+  { "name": "valid", "text": "{\"v\":1,\"generation\":\"g1\",\"since\":1791345600000,\"until\":1791388800000,\"night\":\"2026-10-07\",\"bootTime\":1759800000,\"report\":\"/Users\/x/Downloads/Sleep report 2026-10-07.md\",\"startedBy\":{\"sessionId\":\"s1\",\"cwd\":\"/repo\"},\"workers\":[\"s1\"],\"placeBefore\":\"home\"}", "now": 1791360000000, "boot": 1759800000, "state": "asleep" },
   { "name": "one ms before until", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791388799999, "boot": 1759800000, "state": "asleep" },
   { "name": "at until exactly", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791388800000, "boot": 1759800000, "state": "expired" },
   { "name": "expired", "text": "{\"v\":1,\"generation\":\"g1\",\"until\":1791388800000,\"bootTime\":1759800000}", "now": 1791400000000, "boot": 1759800000, "state": "expired" },

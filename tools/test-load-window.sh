@@ -39,7 +39,9 @@ eq(){ if [ "$2" = "$3" ]; then ok; else bad "$1 (wanted '$2', got '$3')"; fi; }
 
 # A wait on a condition, with the one ceiling only a hang reaches (lib/hang-wait.sh, #1620).
 . "$DIR/../payload/hooks/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
-wait_for(){ hang_wait "$1"; }   # wait_for <shell condition> -> 0 once true, 1 at the ceiling
+# Each wait is hang_wait on a condition written out at the call, 0 once true, 1 at the ceiling: one
+# handed through a function of this suite, or built from a value, is a condition the Slack drafts gate
+# cannot read, so it stops following this suite's variables there (#2538).
 # Gone means not running: a killed process waiting to be reaped (state Z) is gone, since it runs
 # nothing and holds nothing, and whether the system has reaped it yet is not the helper's to decide.
 gone(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) true ;; *) false ;; esac; }
@@ -98,8 +100,29 @@ says "#1618 and the refusal names the cap" "outside 1 to 180" "$OUT"
 run --workers 1
 eq "#1618 a window with no --seconds is refused" 2 "$RC"
 run --seconds 5 --workers 0 --spawners 0
-eq "#1618 a window with no workers is refused" 2 "$RC"
+eq "#1618 a window with no workers and no command is refused" 2 "$RC"
+says "#2568 and the refusal says it has nothing to run" "a window with no command needs at least one worker" "$OUT"
 eq "#1618 and none of these recorded a window" "" "$(record)"
+# A window given a command may add no load of its own (#2568): a measurement needs the window only
+# for its turn, its wait for merges and full suites, its ceiling and its cleanup.
+fresh noworkers
+run --seconds 30 --workers 0 --spawners 0 --label "measure only" -- bash "$W/report.sh" "$case_dir/r" 4
+eq "#2568 a command with no workers runs, and its exit comes back" 4 "$RC"
+says "#2568 the command's output is passed through" "the command ran" "$OUT"
+says "#2568 the start says plainly there were no busy workers" "Window started at 20:00:00 ET, until 20:00:30 ET at the latest: no busy workers, \"measure only\"" "$OUT"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$OUT"
+eq "#2568 no workers' group was started for the command to find" "" "$(cat "$case_dir/r.wgroup" 2>/dev/null)"
+rec="$(record)"
+says "#2568 the window is recorded with no workers" "$(printf '\t0\t0\tmeasure only')" "$rec"
+says "#2568 and its end" "the command finished (exit 4)" "$rec"
+run --status
+says "#2568 --status says plainly the window had no busy workers" "no busy workers, \"measure only\"" "$OUT"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$OUT"
+eq "#2568 the window's turn is given up" "" "$(ls "$LOAD_WINDOW_DIR/queue/turn" 2>/dev/null | grep -E '^[0-9]+$')"
+n="$( . "$LIB" && load_window_note "$((T0 + 60))" )"
+says "#2568 the sentence the merge helper appends says it had no busy workers" "(tools/load-window.sh, pid " "$n"
+says "#2568 in words" "no busy workers, \"measure only\")" "$n"
+lacks "#2568 and never as a count of zero" "0 busy and 0 process launching" "$n"
 # A leading zero is a number, never an octal error that kills the run (lessons review, #1640).
 fresh zeros
 run --seconds 09 --workers 08 --spawners 09 -- bash "$W/report.sh" "$case_dir/r"
@@ -306,7 +329,7 @@ lacks "#1618 without waiting for it" "Waiting for" "$OUT"
 fresh term
 LOAD_WINDOW_SLEEP=sleep LOAD_WINDOW_NOW="" bash "$TOOL" --seconds 120 --workers 1 -- bash "$W/forever.sh" "$case_dir/f" > "$case_dir/out" 2>&1 &
 hp=$!; BG="$hp"
-if wait_for "[ -s '$case_dir/f.pid' ] && [ -s '$case_dir/f.wgroup' ]"; then ok; else bad "#1618 the TERM case's command started"; fi
+if hang_wait '[ -s "$case_dir/f.pid" ] && [ -s "$case_dir/f.wgroup" ]'; then ok; else bad "#1618 the TERM case's command started"; fi
 kill -TERM "$hp"; wait "$hp"; rc=$?; BG=""
 eq "#1618 TERM ends the window with 143" 143 "$rc"
 fp="$(cat "$case_dir/f.pid" 2>/dev/null)"; wg="$(cat "$case_dir/f.wgroup" 2>/dev/null)"
@@ -318,11 +341,11 @@ eq "#1618 and the turn was given up" "" "$(ls "$LOAD_WINDOW_DIR/queue/turn" 2>/d
 fresh sigkill
 LOAD_WINDOW_SLEEP=sleep LOAD_WINDOW_NOW="" bash "$TOOL" --seconds 1 --workers 1 -- bash "$W/forever.sh" "$case_dir/f" > "$case_dir/out" 2>&1 &
 hp=$!; BG="$hp"
-if wait_for "[ -s '$case_dir/f.pid' ] && [ -s '$case_dir/f.wgroup' ]"; then ok; else bad "#1618 the SIGKILL case's command started"; fi
+if hang_wait '[ -s "$case_dir/f.pid" ] && [ -s "$case_dir/f.wgroup" ]'; then ok; else bad "#1618 the SIGKILL case's command started"; fi
 kill -9 "$hp"; wait "$hp" 2>/dev/null; BG=""
 fp="$(cat "$case_dir/f.pid" 2>/dev/null)"; wg="$(cat "$case_dir/f.wgroup" 2>/dev/null)"
-if [ -n "$fp" ] && wait_for "gone $fp"; then ok; else bad "#1618 a helper killed outright still leaves no command behind: its group's watchdog ends it (pid '$fp')"; fi
-if [ -n "$wg" ] && wait_for "group_empty $wg"; then ok; else bad "#1618 nor any worker (group '$wg')"; fi
+if [ -n "$fp" ] && hang_wait 'gone "$fp"'; then ok; else bad "#1618 a helper killed outright still leaves no command behind: its group's watchdog ends it (pid '$fp')"; fi
+if [ -n "$wg" ] && hang_wait 'group_empty "$wg"'; then ok; else bad "#1618 nor any worker (group '$wg')"; fi
 
 # =================================================================================================
 # 11. The sentence the merge helper and the suite pile notice append (lib/load-window.sh).
@@ -353,7 +376,7 @@ unset SYNC_PS_FIXTURE
 # suite is a fixture and is rightly not counted (#1620), and a real merge is not started by one.
 mkdir -p "$W/real"; printf 'echo $$ > "%s"\nsleep 600\n' "$W/real/pid" > "$W/real/merge-when-ready.sh"
 ( bash "$W/real/merge-when-ready.sh" >/dev/null 2>&1 & )
-wait_for "[ -s '$W/real/pid' ]" || true
+hang_wait '[ -s "$W/real/pid" ]' || true
 dummy="$(cat "$W/real/pid" 2>/dev/null)"; BG="$dummy"
 run --status
 says "#1618 --status reads the real process table" "a merge-when-ready.sh run (bash $W/real/merge-when-ready.sh)" "$OUT"

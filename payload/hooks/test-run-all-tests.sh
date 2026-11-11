@@ -3409,6 +3409,41 @@ printf '%s\n' "$out_lk3" | grep -E '^ +FAIL +test-locked\.sh.*suite lock' > /dev
   || check "#1083 and says it was the lock" "out=$out_lk3"
 
 # ---------------------------------------------------------------------------
+# NO SUITE THE RUNNER STARTS WRITES BYTECODE BESIDE WHAT IT IMPORTS (claude-config#2751).
+#
+# A part's suites run side by side, so one suite importing a module from lib/ with bytecode on left
+# lib/__pycache__/work-names.*.pyc for test-work-names.sh's #2444 check to find, on a pull request
+# that touched neither: the third such writer after #2444 and #2600. The runner hands every suite
+# PYTHONDONTWRITEBYTECODE=1 whatever it inherited, so the next importer nobody has found is covered
+# the day it lands. The fixture suite does not arm its deadline, so what it sees is the runner's, and
+# it records the flag Python itself reads, not only the variable (L322). That the flag stops an
+# import leaving bytecode is measured in test-lib-bytecode-importers.sh.
+# ---------------------------------------------------------------------------
+BC="$TMPROOT/dir-bytecode"
+mkdir -p "$BC"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'python3 -c "import sys; print(sys.flags.dont_write_bytecode)" > "$(dirname "$0")/bc.seen"\n'
+  printf 'printf "%s passed=1 failed=0\\n"\n' "$MARK"
+} > "$BC/test-bytecode.sh"
+chmod +x "$BC/test-bytecode.sh"
+bc_control="$(env -u PYTHONDONTWRITEBYTECODE python3 -c 'import sys; print(sys.flags.dont_write_bytecode)')"
+[ "$bc_control" = 0 ] \
+  && check "#2751 control: with nothing handed down, Python writes bytecode" ok \
+  || check "#2751 control: with nothing handed down, Python writes bytecode" "its flag read '$bc_control'"
+env -u PYTHONDONTWRITEBYTECODE HOOK_TESTS_TIMINGS= bash "$RUNNER" "$BC" > /dev/null 2>&1
+bc_seen="$(cat "$BC/bc.seen" 2>/dev/null)"
+[ "$bc_seen" = 1 ] \
+  && check "#2751 a suite the runner starts has bytecode off" ok \
+  || check "#2751 a suite the runner starts has bytecode off" "its Python's flag read '$bc_seen'"
+rm -f "$BC/bc.seen"
+env PYTHONDONTWRITEBYTECODE= HOOK_TESTS_TIMINGS= bash "$RUNNER" "$BC" > /dev/null 2>&1
+bc_seen="$(cat "$BC/bc.seen" 2>/dev/null)"
+[ "$bc_seen" = 1 ] \
+  && check "#2751 whatever the run inherited" ok \
+  || check "#2751 whatever the run inherited" "with it inherited empty, the suite's Python's flag read '$bc_seen'"
+
+# ---------------------------------------------------------------------------
 # A LOCAL RUN ASKS EACH SUITE TO WAIT A BOUNDED TIME FOR ITS LOCK (claude-config#1297).
 #
 # NOT RUN is honest, and on 2026-10-17 it was all four overlapping builders got for the sync suite:
@@ -3756,18 +3791,21 @@ printf '%s\n' "$out_la4" | grep -E 'load average could not be read' > /dev/null 
 # the guard beside it passed for the same reason (L159). The checkout that run was handed is in
 # RUN_ALL_TESTS_CHECKOUT, the one variable meant for it, so the script is looked for there when this
 # copy is not inside one. Where neither holds it, both checks are said to be UNMEASURED here, never
-# a red that is about the layout rather than the runner (L411).
+# a red that is about the layout rather than the runner (L411). The checkout a suite's own copy sits
+# in is asked of lib/checkout-root.sh (#1567), never counted two folders up (#2623).
 # ---------------------------------------------------------------------------
 claude_sync_for_suite(){ # claude_sync_for_suite <suite dir> <checkout or empty>: prints the path, or fails
-  local here; here="$(cd "$1/../.." 2>/dev/null && pwd)" || here=""
+  local here; here="$(bash "$DIR/lib/checkout-root.sh" "$1/.." 2>/dev/null)" || here=""
   if [ -n "$here" ] && [ -f "$here/claude-sync" ]; then printf '%s\n' "$here/claude-sync"; return 0; fi
   if [ -n "$2" ] && [ -f "${2%/}/claude-sync" ]; then printf '%s\n' "${2%/}/claude-sync"; return 0; fi
   return 1
 }
-# Resolved through cd and pwd, as the function resolves, so a TMPDIR ending in a slash cannot make
-# the expected path differ from the found one by a doubled separator.
-CSR="$(cd "$TMPROOT" && pwd)/claude-sync-resolve"; mkdir -p "$CSR/home/.claude/hooks" "$CSR/co/payload/hooks"
+# Resolved through cd and pwd -P, as git resolves the checkout the function asks for, so neither a
+# TMPDIR ending in a slash nor one reached through a link can make the expected path differ from
+# the found one. The fixture checkout is a git repository, which is what checkout-root.sh tests.
+CSR="$(cd "$TMPROOT" && pwd -P)/claude-sync-resolve"; mkdir -p "$CSR/home/.claude/hooks" "$CSR/co/payload/hooks"
 : > "$CSR/co/claude-sync"
+git init -q "$CSR/co" 2>/dev/null
 [ "$(claude_sync_for_suite "$CSR/co/payload/hooks" "")" = "$CSR/co/claude-sync" ] \
   && check "#865 a suite in a checkout drives that checkout's claude-sync" ok \
   || check "#865 a suite in a checkout drives that checkout's claude-sync" "got: $(claude_sync_for_suite "$CSR/co/payload/hooks" "")"

@@ -206,6 +206,24 @@ t="$WORK/promise-wait-on.jsonl"; start "$t"
 L assistant-text "The other four wait on next week's area data." >> "$t"
 fires "work waiting on next week's data fires" "$t" "wait on next week"
 
+# The check verbs in their other forms (#2087): a week of real sessions held a dated recheck said
+# in the passive ("gets rechecked on <date>"), which the bare stem missed. Invented text, same shape.
+t="$WORK/promise-rechecked-passive.jsonl"; start "$t"
+L assistant-text "The supplier quote holds for now, and the price gets rechecked on 2026-12-14." >> "$t"
+fires "a passive 'gets rechecked on' a later date fires" "$t" "rechecked on 2026-12-14"
+
+t="$WORK/promise-rechecking.jsonl"; start "$t"
+L assistant-text "I'm rechecking the backlog count next week, after the import settles." >> "$t"
+fires "'rechecking' before next week fires" "$t" "rechecking the backlog count next week"
+
+t="$WORK/promise-reruns.jsonl"; start "$t"
+L assistant-text "The nightly job reruns the comparison on Nov 6." >> "$t"
+fires "'reruns' on a named later date fires" "$t" "reruns the comparison on Nov 6"
+
+t="$WORK/promise-rechecked-past.jsonl"; start "$t"
+L assistant-text "The quote was rechecked on Oct 28 and still holds." >> "$t"
+silent "control: 'rechecked' on a date already past stays silent" "$t"
+
 t="$WORK/promise-rather-than-wait.jsonl"; start "$t"
 L assistant-text "Rather than wait for tomorrow's scheduled run, I started it by hand and it passed." >> "$t"
 silent "control: choosing not to wait for tomorrow's run stays silent" "$t"

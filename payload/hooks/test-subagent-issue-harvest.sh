@@ -141,94 +141,101 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# The 12 hex characters a key is MADE of (claude-config#281).
+# The 12 hex characters a key is MADE of (claude-config#281, claude-config#2446).
 #
-# Measured on this Mac 2026-09-03: shasum costs 11.5ms a call against openssl's 5.2ms, because
-# shasum is a perl script, and this library computes a key on nearly every operation. One run of
-# this suite made 690 of them, about a quarter of its whole cost. The digest is taken with openssl
-# where that works, and `cut` is gone with it.
+# The digest is shasum, called by its literal name. From 2026-09-03 to 2026-11-10 it was openssl
+# where that worked (#281: shasum is a perl script and cost 11.5ms a call against openssl's 5.2ms,
+# measured 2026-09-03), and the program to run was read from CLAUDE_ISSUE_SPOOL_SHA. That piped text
+# the script was handed into a program named by a variable, which the Slack drafts gate cannot know
+# to be unable to send a request or run code, so once the gate followed pipes it refused the end of
+# turn `issue-spool.sh clear` line (#2446). Dan chose on 2026-11-10: "Hash with shasum". The speed is
+# given up on purpose, and the gate got no entry for openssl.
 #
 # THE VALUE MUST NOT CHANGE BY A CHARACTER. A key is a FILENAME, so a different digest strands
 # every record already pending under the old name with nothing left that could find it (L92). It is
-# pinned three ways below: against a recorded constant, against shasum itself, which is the
-# reference implementation and the fallback, and by proving the fast path is the one being taken,
-# because an agreement test where both sides ran shasum agrees about nothing (L159, L3).
+# pinned three ways below: against constants recorded while openssl still made the keys; against
+# openssl itself where it is installed, a second implementation of the same digest (agreeing with
+# shasum would now be the function agreeing with itself, L58); and by proving that a program named
+# in the old variable is never run.
 sha12(){ bash "$SPOOL_LIB" sha12 "$1" 2>/dev/null; }
 
 [ "$(sha12 /some/path)" = "39359e3abc60" ] \
   && check "#281 the key digest is the value it has always been" ok \
   || check "#281 the key digest is the value it has always been" "got $(sha12 /some/path)"
 
+# Recorded 2026-11-10 from `openssl dgst -sha1` (OpenSSL 3.6.5) and from shasum, which agreed on
+# every one. The count is asserted too: a loop that read no pin would disagree with nothing (L98).
 sha_disagreed=""
-for _sha_in in "/some/path" "/a path with spaces/x" "/tmp" "" "/opt/deep/nested/checkout"; do
-  _sha_want="$(printf '%s' "$_sha_in" | shasum | cut -c1-12)"
+sha_pinned=0
+while IFS='|' read -r _sha_want _sha_in; do
+  sha_pinned=$((sha_pinned + 1))
   _sha_got="$(sha12 "$_sha_in")"
   [ "$_sha_got" = "$_sha_want" ] || sha_disagreed="$sha_disagreed [$_sha_in: $_sha_got vs $_sha_want]"
-done
-[ -z "$sha_disagreed" ] \
-  && check "#281 and it agrees with shasum on every shape of input" ok \
-  || check "#281 and it agrees with shasum on every shape of input" "$sha_disagreed"
+done <<'SHA_PINS'
+39359e3abc60|/some/path
+9b44ffa9232f|/a path with spaces/x
+8c393341f536|/tmp
+da39a3ee5e6b|
+b1b1dfcb12a5|/opt/deep/nested/checkout
+SHA_PINS
+[ -z "$sha_disagreed" ] && [ "$sha_pinned" -eq 5 ] \
+  && check "#281 and every shape of input gives the key it gave when openssl made it" ok \
+  || check "#281 and every shape of input gives the key it gave when openssl made it" "$sha_pinned of 5 pins read;$sha_disagreed"
 
-# The fast path is LIVE, proved by a stub that answers differently from shasum: if the digest were
-# quietly always falling back, this would return the shasum value and the agreement above would be
-# proving nothing. Both output shapes are covered, because the two openssl builds a Mac can have
-# print differently (Homebrew's prints "SHA1(stdin)= <hex>", the system LibreSSL prints bare hex).
+if command -v openssl >/dev/null 2>&1; then
+  sha_disagreed=""
+  for _sha_in in "/some/path" "/a path with spaces/x" "/tmp" "" "/opt/deep/nested/checkout"; do
+    _sha_want="$(printf '%s' "$_sha_in" | openssl dgst -sha1 2>/dev/null)"
+    _sha_want="${_sha_want##* }"; _sha_want="${_sha_want:0:12}"
+    _sha_got="$(sha12 "$_sha_in")"
+    [ -n "$_sha_want" ] && [ "$_sha_got" = "$_sha_want" ] || sha_disagreed="$sha_disagreed [$_sha_in: $_sha_got vs $_sha_want]"
+  done
+  [ -z "$sha_disagreed" ] \
+    && check "#2446 and it agrees with openssl, which made every key before it" ok \
+    || check "#2446 and it agrees with openssl, which made every key before it" "$sha_disagreed"
+else
+  echo "SUITE-PART-UNMEASURED #2446 the key digest against openssl (openssl is not installed here, so only the recorded constants pin it)"
+fi
+
+# CLAUDE_ISSUE_SPOOL_SHA used to name the program the text was piped into, and a stub there answered
+# in the digest's place. Nothing reads it now: a program named there is never run, whatever it would
+# have answered, so no text the script is handed reaches a program the environment chose (#2446).
+# The stub leaves a file when it runs, and it was seen to run and to answer before the change.
 FAKESSL="$TMPROOT/fakessl"
-cat > "$FAKESSL" <<'FAKESSL_EOF'
+cat > "$FAKESSL" <<FAKESSL_EOF
 #!/usr/bin/env bash
+: > "$TMPROOT/fakessl.ran"
 cat >/dev/null
 echo "SHA1(stdin)= aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"
 FAKESSL_EOF
 chmod +x "$FAKESSL"
-[ "$(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL" sha12 /some/path)" = "aaaaaaaaaaaa" ] \
-  && check "#281 the openssl path is the one actually taken" ok \
-  || check "#281 the openssl path is the one actually taken" "got $(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL" sha12 /some/path)"
-
-FAKESSL_BARE="$TMPROOT/fakessl-bare"
-cat > "$FAKESSL_BARE" <<'FAKESSL_EOF'
-#!/usr/bin/env bash
-cat >/dev/null
-echo "aaaaaaaaaaaabbbbbbbbbbbbccccccccccccdddd"
-FAKESSL_EOF
-chmod +x "$FAKESSL_BARE"
-[ "$(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL_BARE" sha12 /some/path)" = "aaaaaaaaaaaa" ] \
-  && check "#281 and a build that prints the bare hex is read too" ok \
-  || check "#281 and a build that prints the bare hex is read too" "got $(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL_BARE" sha12 /some/path)"
-
-# Every way the fast path can fail falls back to shasum and still produces the right key: a tool
-# that is not installed, one that errors, and one that answers with something that is not a SHA-1.
-# Falling back is correct and merely slower, which is exactly why it is silent and has to be tested
-# (L289).
-GOOD12="$(printf '%s' /some/path | shasum | cut -c1-12)"
-JUNKSSL="$TMPROOT/junkssl"
-printf '#!/usr/bin/env bash\ncat >/dev/null\necho "not a digest at all"\n' > "$JUNKSSL"; chmod +x "$JUNKSSL"
-DEADSSL="$TMPROOT/deadssl"
-printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 3\n' > "$DEADSSL"; chmod +x "$DEADSSL"
-sha_fallback_bad=""
-for _sha_tool in "$TMPROOT/not-installed-at-all" "$JUNKSSL" "$DEADSSL" ""; do
-  _sha_got="$(CLAUDE_ISSUE_SPOOL_SHA="$_sha_tool" sha12 /some/path)"
-  [ "$_sha_got" = "$GOOD12" ] || sha_fallback_bad="$sha_fallback_bad [${_sha_tool:-<none>}: $_sha_got]"
-done
-[ -z "$sha_fallback_bad" ] \
-  && check "#281 and every way that path can fail falls back to the same key" ok \
-  || check "#281 and every way that path can fail falls back to the same key" "$sha_fallback_bad"
+_sha_got="$(CLAUDE_ISSUE_SPOOL_SHA="$FAKESSL" sha12 /some/path)"
+if [ "$_sha_got" = "39359e3abc60" ] && [ ! -e "$TMPROOT/fakessl.ran" ]; then
+  check "#2446 a program named in CLAUDE_ISSUE_SPOOL_SHA is never run, and the key is unchanged" ok
+else
+  check "#2446 a program named in CLAUDE_ISSUE_SPOOL_SHA is never run, and the key is unchanged" \
+    "got $_sha_got, and the program $([ -e "$TMPROOT/fakessl.ran" ] && echo "was run" || echo "was not run")"
+fi
 
 # THE RATCHET, on the thing that was actually measured (claude-config#281). A saving that quietly
-# stops happening looks exactly like one still working, because the fallback is correct and merely
-# slower (L289). Counted in PROCESS LAUNCHES rather than in seconds, because elapsed time on this
-# machine is set by whatever else is running on it and a threshold on it measures the machine
-# (L224, L364).
+# stops happening looks exactly like one still working (L289). Counted in PROCESS LAUNCHES rather
+# than in seconds, because elapsed time on this machine is set by whatever else is running on it and
+# a threshold on it measures the machine (L224, L364).
 #
 # One `note` is the representative operation: it builds a record and appends it, which is every
-# expensive step the library has. Measured 2026-09-03 it launches 2 python3, 2 openssl and 1 git,
-# and nothing else. The ceiling is deliberately close to that: it is here to catch a shasum coming
-# back, or a third python3, not to leave room for one.
+# expensive step the library has. Measured 2026-09-03 it launched 2 python3, 2 openssl and 1 git,
+# and nothing else. The ceiling is deliberately close to that: it is here to catch a `cut` coming
+# back beside the digest, or a third python3, not to leave room for one.
 #
 # It was 3 when this was written, and went to 5 in claude-config#294, which stamps the project key
 # on every record: that is one more digest and one git, resolved while the directory still exists.
 # The ratchet is what made that cost visible on the way in rather than a month later, so the number
-# is RAISED with its reason rather than quietly loosened, and the composition is asserted beside it
-# so a swap back to the slow digest fails even though the count would not move.
+# is RAISED with its reason rather than quietly loosened, and the composition is asserted beside it.
+#
+# Since 2026-11-10 the two digests are shasum, not openssl (claude-config#2446, above): the count is
+# still 5 (2 python3, 2 shasum, 1 git), and the composition check now runs the other way, so a swap
+# back to openssl, or to any program the environment names, fails even though the count would not
+# move.
 FORKSHIM="$TMPROOT/forkshim"
 FORKLOG="$TMPROOT/forkshim.log"
 mkdir -p "$FORKSHIM"
@@ -255,10 +262,14 @@ fork_seen="$(sort "$FORKLOG" 2>/dev/null | uniq -c | tr -s ' ' | tr '\n' ' ')"
 [ "${fork_total:-99}" -le 5 ] \
   && check "#281 one spooled note still costs at most five process launches" ok \
   || check "#281 one spooled note still costs at most five process launches" "$fork_total launches: $fork_seen"
-# And specifically not the slow digest, which is the saving this protects.
+# And specifically shasum, never openssl: the digest the Slack drafts gate can read (#2446).
 case "$fork_seen" in
-  *shasum*) check "#281 and it does not reach for shasum" "$fork_seen" ;;
-  *)        check "#281 and it does not reach for shasum" ok ;;
+  *openssl*) check "#2446 and the digest does not reach for openssl" "$fork_seen" ;;
+  *)         check "#2446 and the digest does not reach for openssl" ok ;;
+esac
+case "$fork_seen" in
+  *shasum*) check "#2446 and it is shasum that makes the digest" ok ;;
+  *)        check "#2446 and it is shasum that makes the digest" "$fork_seen" ;;
 esac
 
 # And the key itself, which is what all of that exists to keep stable.
@@ -306,6 +317,12 @@ pending_file() { bash "$SPOOL_LIB" path "${1:-$REPO}" "${2:-$PARENT_TRANSCRIPT}"
 # shasum 690 and cut 690 became openssl 509, python3 591 became 338, and the tracked launches went
 # from 2495 to 1458. Alternating runs of the old and new file in the same session, so the machine's
 # load hit both equally (L224): 39, 40, 40, 43 seconds against 26, 26, 28, 29.
+#
+# One of those levers was put back on 2026-11-10 (claude-config#2446, Dan: "Hash with shasum"): the
+# digest is shasum again, without the cut, so the Slack drafts gate can read what the script pipes
+# its arguments into. Measured that day, three samples of 100 calls each on a loaded Mac: shasum
+# 18.1 to 19.0 ms a call, openssl 8.6 to 9.6. It is the biggest lever now deliberately not pulled:
+# pulling it again means a digest program the gate knows by name, which is Dan's to approve.
 #
 # What is LEFT, and why:
 #
@@ -3098,6 +3115,169 @@ contains "did not reach" "$r1011_keys" \
 contains "only the directory key holds" "$(bash "$SPOOL_LIB" raw "$REPO" 2>/dev/null)" \
   && check "#1011 and that record is still pending" ok \
   || check "#1011 and that record is still pending" "it is gone"
+
+# --- no digest program, so no key, so nothing read or written (claude-config#2639) ----------------
+# A key is the first 12 characters of a SHA-1 that shasum makes. When shasum is not there, or runs
+# and gives no digest, the key used to come back EMPTY and every caller built a path from it: a file
+# named `.jsonl` under the spool root, shared by every project, with nothing saying why. Now the
+# digest refuses, naming the program, every caller stops, and the harvest and the review say so.
+#
+# The fixture is a PATH holding every program this one does except shasum, so everything else the
+# library, the harvest and the review run is exactly what they run in production.
+NOSHA="$TMPROOT/nosha-bin"
+python3 - "$NOSHA" "$PATH" <<'PY'
+import os, sys
+dest, path = sys.argv[1], sys.argv[2]
+os.makedirs(dest, exist_ok=True)
+for d in path.split(os.pathsep):
+    if not d or not os.path.isdir(d):
+        continue
+    for name in os.listdir(d):
+        if name == "shasum":
+            continue
+        src, link = os.path.join(d, name), os.path.join(dest, name)
+        if os.path.lexists(link):
+            continue
+        if os.path.isfile(src) and os.access(src, os.X_OK):
+            os.symlink(src, link)
+PY
+# The fixture is only real if shasum really is out of reach on it (L1), and the rest is still there.
+if ( PATH="$NOSHA"; command -v shasum ) >/dev/null 2>&1; then
+  check "#2639 the fixture PATH holds no shasum" "shasum is still reachable on it"
+else
+  check "#2639 the fixture PATH holds no shasum" ok
+fi
+( PATH="$NOSHA"; command -v python3 && command -v git && command -v jq ) >/dev/null 2>&1 \
+  && check "#2639 and it still holds everything else" ok \
+  || check "#2639 and it still holds everything else" "python3, git or jq is missing from it"
+
+NS_SPOOL="$TMPROOT/nosha-spool"
+rm -rf "$NS_SPOOL"; mkdir -p "$NS_SPOOL"
+ns() { PATH="$NOSHA" CLAUDE_ISSUE_SPOOL_DIR="$NS_SPOOL" "$@"; }
+ns_files() { find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | grep -c . || true; }
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" key "$REPO" 2>/dev/null)" || ns_rc=$?
+ns_err="$(ns bash "$SPOOL_LIB" key "$REPO" 2>&1 >/dev/null)" || true
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a key with no shasum is refused with exit 4 and prints no key" ok \
+  || check "#2639 a key with no shasum is refused with exit 4 and prints no key" "exit $ns_rc out='$ns_out'"
+contains "shasum" "$ns_err" && contains "not on PATH" "$ns_err" \
+  && check "#2639 and the refusal names the missing program" ok \
+  || check "#2639 and the refusal names the missing program" "said=${ns_err:0:300}"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" key "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a key from a session transcript is refused the same way" ok \
+  || check "#2639 a key from a session transcript is refused the same way" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" path "$REPO" "$PARENT_TRANSCRIPT" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 a spool path is never named from an empty key" ok \
+  || check "#2639 a spool path is never named from an empty key" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_out="$(ns bash "$SPOOL_LIB" muted-stamp "$REPO" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && [ -z "$ns_out" ] \
+  && check "#2639 nor the held-back count's stamp" ok \
+  || check "#2639 nor the held-back count's stamp" "exit $ns_rc out='$ns_out'"
+
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" note "$REPO" "r2639 a finding with nowhere to go" tester "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a note with no key is refused and says why" ok \
+  || check "#2639 a note with no key is refused and says why" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" append "$REPO" '{"status":"found","agent":"tester","findings":["r2639 appended"]}' "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so is an append" ok \
+  || check "#2639 and so is an append" "exit $ns_rc said=${ns_err:0:300}"
+[ "$(ns_files)" = 0 ] \
+  && check "#2639 and no spool file was written anywhere" ok \
+  || check "#2639 and no spool file was written anywhere" "$(find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | tr '\n' ' ')"
+
+# The readers refuse too, with the same exit, rather than reporting an empty spool (exit 1), which is
+# what an unreadable spool and a clean one would otherwise both look like (L11, L98).
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" pending "$REPO" "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a pending read with no key is a refusal, not an empty spool" ok \
+  || check "#2639 a pending read with no key is a refusal, not an empty spool" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" has-findings "$REPO" "$PARENT_TRANSCRIPT" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] \
+  && check "#2639 and so is has-findings" ok \
+  || check "#2639 and so is has-findings" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" clear "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 a clear with no key refuses and says why" ok \
+  || check "#2639 a clear with no key refuses and says why" "exit $ns_rc said=${ns_err:0:300}"
+contains "nothing was pending" "$ns_err" \
+  && check "#2639 and does not call the spool empty" "said=${ns_err:0:300}" \
+  || check "#2639 and does not call the spool empty" ok
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" file-errors "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] \
+  && check "#2639 and so does filing the failures" ok \
+  || check "#2639 and so does filing the failures" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" raw "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does a raw read" ok \
+  || check "#2639 and so does a raw read" "exit $ns_rc said=${ns_err:0:300}"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" archive "$REPO" "$PARENT_TRANSCRIPT" 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does reading the archive" ok \
+  || check "#2639 and so does reading the archive" "exit $ns_rc said=${ns_err:0:300}"
+mkdir -p "$CLAUDE_TRANSCRIPT_ROOT/r2639-project"
+ns_rc=0; ns_err="$(ns bash "$SPOOL_LIB" reach-report 2>&1)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" \
+  && check "#2639 and so does the reachability report" ok \
+  || check "#2639 and so does the reachability report" "exit $ns_rc said=${ns_err:0:300}"
+
+# A shasum that is there but gives no digest is a different cause, and gets its own words (L11).
+FAILSHA="$TMPROOT/failsha-bin"
+mkdir -p "$FAILSHA"
+printf '#!/bin/sh\ncat >/dev/null\nexit 3\n' > "$FAILSHA/shasum"
+chmod +x "$FAILSHA/shasum"
+ns_rc=0; ns_err="$(PATH="$FAILSHA:$PATH" bash "$SPOOL_LIB" key "$REPO" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "shasum" "$ns_err" && contains "exit status 3" "$ns_err" \
+  && ! contains "not on PATH" "$ns_err" \
+  && check "#2639 a shasum that fails is refused in its own words" ok \
+  || check "#2639 a shasum that fails is refused in its own words" "exit $ns_rc said=${ns_err:0:300}"
+printf '#!/bin/sh\ncat >/dev/null\necho "not a digest  -"\n' > "$FAILSHA/shasum"
+ns_rc=0; ns_err="$(PATH="$FAILSHA:$PATH" bash "$SPOOL_LIB" sha12 "x" 2>&1 >/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 4 ] && contains "no digest" "$ns_err" \
+  && check "#2639 and so is one that prints something other than a digest" ok \
+  || check "#2639 and so is one that prints something other than a digest" "exit $ns_rc said=${ns_err:0:300}"
+
+# THE HARVEST says it: the record goes to the lost records file, as for any append that fails, and
+# the refusal's own words go into its log, so the reason is on disk beside the record it cost.
+rm -rf "$NS_SPOOL"; mkdir -p "$NS_SPOOL"
+rm -f "$LOST_RECORDS"
+stub 'echo "FINDING: r2639 a harvested finding with no key to file it under."'
+payload "$REPO" | ns bash "$HARVEST" >/dev/null 2>&1
+[ "$(ns_files)" = 0 ] \
+  && check "#2639 a harvest with no key writes no spool file" ok \
+  || check "#2639 a harvest with no key writes no spool file" "$(find "$NS_SPOOL" -name '*.jsonl' 2>/dev/null | tr '\n' ' ')"
+contains "r2639 a harvested finding" "$(cat "$LOST_RECORDS" 2>/dev/null)" \
+  && check "#2639 and keeps the record in the lost records file" ok \
+  || check "#2639 and keeps the record in the lost records file" "not there"
+ns_log="$(cat "$NS_SPOOL/harvest-unrecorded.log" 2>/dev/null)"
+contains "shasum" "$ns_log" && contains "not on PATH" "$ns_log" \
+  && check "#2639 and its log carries the refusal's own words" ok \
+  || check "#2639 and its log carries the refusal's own words" "log=${ns_log:0:300}"
+
+# THE REVIEW says it, and does not die on the way: under errexit and pipefail a digest that fails
+# used to kill the hook before it spoke, so a missing shasum silenced the review altogether.
+rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
+ns_rc=0; ns_review="$(printf '%s' "$review_payload" | ns bash "$REVIEW" 2>/dev/null)" || ns_rc=$?
+[ "$ns_rc" -eq 0 ] && contains '"decision"' "$ns_review" \
+  && check "#2639 the review still speaks with no shasum" ok \
+  || check "#2639 the review still speaks with no shasum" "exit $ns_rc out=${ns_review:0:200}"
+ns_carried="$(carried "$ns_review")"
+contains "shasum" "$ns_carried" && contains "not on PATH" "$ns_carried" \
+  && check "#2639 and its reason carries the refusal" ok \
+  || check "#2639 and its reason carries the refusal" "carried=${ns_carried:0:400}"
+# And only then: an ordinary review with shasum in place says nothing of the kind.
+rm -f "$TMPDIR"/claude-feature-issue-review-*.stamp
+ok_review="$(printf '%s' "$review_payload" | bash "$REVIEW" 2>/dev/null)"
+ok_carried="$(carried "$ok_review")"
+contains "no spool key" "$ok_carried" \
+  && check "#2639 a review with shasum in place does not raise it" "carried=${ok_carried:0:300}" \
+  || check "#2639 a review with shasum in place does not raise it" ok
 
 echo "passed: $pass  failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -36,7 +36,11 @@
 #   program-reader                                              use the language, program and verdict on each
 #             reading what a shell or interpreter runs, or     command $.modkit.pipeline({ command }) gives,
 #             judging inline code by what it can do (naming    read and judged once (#712: no build kept the
-#             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked)
+#             nodejs, child_process or subprocess)             only copy, which mod-kit's writes then lacked);
+#                                                               a file's text by what it imports or calls:
+#                                                               fileReach from the copy of hooks/reaches.ts
+#                                                               kept at hooks/mod-kit/reaches.ts (#2710: the
+#                                                               Slack alert guard kept its own lists)
 #   remote-reader                                               use $.modkit.repo({ root, remote }), whose
 #             reading a git remote's address by hand (a         github and name are the two questions the
 #             pattern taking a trailing .git off, or matching   copies asked (#951: four copies drifted on
@@ -97,6 +101,12 @@
 #             prefix off an error (a pattern on ': \$\.')       a caller deciding by its code (#2150: auto
 #                                                               session name stripped it alone, every other
 #                                                               mod showed it to Dan)
+#   quoted-reader                                               quotedEnd, yamlScalar and yamlFlowList from
+#             reading a quoted string that is not shell, or     the copy of hooks/quoted.ts kept at
+#             a YAML flow list, by hand (YAML's '' undone by    hooks/mod-kit/quoted.ts (#2467: the design
+#             /''/g, a pattern matching '(?:'' for a single     round guard read TypeScript strings its own
+#             quoted scalar, or a walk to `] === q)`)            way and the Slack alert guard GitLab's flow
+#                                                               lists; $.modkit.commands reads shell only)
 #   press   a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -209,7 +219,7 @@ PARTS=(
   "send|\|\| *['\"]no reason given['\"]|\.isDelivered\) *return|a plain \$.session.send (mod-kit tries every mod's refused send once more)"
   "write-reader|['\"]tee['\"]|\$.modkit.writes({ command, cwd, home })"
   "working-tree|[\"'\`/]\\.git([\"'\`/]|\$)|\$.modkit.workingTree({ path })"
-  "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives"
+  "program-reader|child_process|subprocess|nodejs|the language, program and verdict on each command \$.modkit.pipeline({ command }) gives, or for a file's text fileReach from the copy of hooks/reaches.ts kept at hooks/mod-kit/reaches.ts"
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name), or \$.modkit.ghRepo({ spelling }) for a repository as gh spells one"
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
@@ -225,6 +235,10 @@ PARTS=(
   # #2150: a pattern reading the engine's "<mod>: $.noun.member: " prefix off an error. errorText says
   # such a failure in words without it, and errorCode gives its code to a caller deciding by it.
   "engine-prefix|: \\\\\\\$\\\\\\.|errorText(err, mod) (errorCode(err) for its code) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts, which says an engine call's failure in words without its prefix"
+  # #2467: a quoted string that is not shell, or a YAML flow list, read by hand: YAML's '' escape
+  # undone (/''/g), a single quoted YAML scalar matched by a pattern ('(?:''|), or a string walked to
+  # the quote it opened with (] === q)). These are the spellings the two copies used, not every one.
+  "quoted-reader|/''/g|'\\(\\?:''\\||\\] === (q|quote)\\)|quotedEnd, yamlScalar and yamlFlowList from the copy of hooks/quoted.ts kept at hooks/mod-kit/quoted.ts"
 )
 
 n=0

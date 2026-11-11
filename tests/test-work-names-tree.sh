@@ -149,7 +149,11 @@ check "the scan's scratch name is one the reaper sweeps" has "$(grep -E '^SYNC_S
 # CLAUDE.md (claude-config#2184), and refuse every public text when it cannot be read. So an edit to
 # payload/CLAUDE.md that breaks that block is caught here, before it is installed, rather than by
 # every gh pr create on every Mac. Only the count is printed: the names are work repositories.
-proj_out="$(python3 -I -c '
+# -B: the scanner is loaded by path from lib/, and -I drops any PYTHONDONTWRITEBYTECODE handed down,
+# so without it lib/__pycache__/work-names.*.pyc is left in the hooks' own lib/ (claude-config#2751).
+# test-work-names.sh's #2444 check counts only its own programs' bytecode now (#2757), so the guard
+# on this load is test-lib-bytecode-importers.sh.
+proj_out="$(python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
 wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)
@@ -170,8 +174,8 @@ check "and lists at least one project: ${proj_out:0:300}" [ "$proj_n" -ge 1 ]
 # folder the last CLAUDE.md that listed them named must be in it, the one spelled as an organisation
 # without its hyphens included (claude-config#2190), or that folder passes as a plain word everywhere
 # but the work MacBook. Read from history by the scanner's own patterns, counts only. A checkout with
-# no history to read says so rather than failing (L411).
-hist_out="$(python3 -I -c '
+# no history to read says so rather than failing (L411). -B for the reason given in section 4.
+hist_out="$(python3 -I -B -c '
 import importlib.util, os, subprocess, sys
 spec = importlib.util.spec_from_file_location("wn", sys.argv[1])
 wn = importlib.util.module_from_spec(spec); spec.loader.exec_module(wn)

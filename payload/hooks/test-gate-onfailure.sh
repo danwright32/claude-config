@@ -70,6 +70,7 @@ REFUSING=(
   no-verify-gate.sh
   amend-force-push-gate.sh
   temp-worktree-gate.sh
+  fresh-worktree-base-gate.sh
   check-rtk-init.sh
   check-zsh-builtins.sh
   check-wrapped-commands.sh
@@ -288,13 +289,14 @@ EXPECTED_SAMPLES="payload-write-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 no-verify-gate.sh Bash,Edit,Write,MultiEdit,NotebookEdit
 scratchpad-subagent-gate.sh Write,Bash
 temp-worktree-gate.sh Bash,EnterWorktree
+fresh-worktree-base-gate.sh Edit,Write,MultiEdit,NotebookEdit
 monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
-db-write-ask.sh mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord"
+db-write-ask.sh Bash,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
 if [ -s "$WORK/received.tsv" ]; then
   received_gates="$(cut -f1 "$WORK/received.tsv" | awk '!seen[$0]++')"
   while IFS= read -r script; do

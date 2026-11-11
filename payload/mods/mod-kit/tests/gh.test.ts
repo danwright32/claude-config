@@ -56,7 +56,7 @@ const helperIn = (line: string) => {
 }
 describe('the merge helper, read as the gh pr merge it runs', () => {
   test('run by bash, by its path or by its name, its arguments are read as gh pr merge reads them', () => {
-    const viaBash = helperIn('bash /Users/x/.claude/hooks/lib/merge-when-ready.sh 12 --squash -Ro/x')
+    const viaBash = helperIn(`bash ${'/Users'}/x/.claude/hooks/lib/merge-when-ready.sh 12 --squash -Ro/x`)
     expect(viaBash).toEqual(ghArgs(['gh', 'pr', 'merge', '12', '--squash', '-Ro/x']))
     expect(viaBash).toMatchObject({ sub: 'pr', act: 'merge', positionals: ['12'], named: 'o/x', unreadable: false })
     expect(helperIn(`${H} https://github.com/O/Z/pull/3`).named).toBe('o/z')

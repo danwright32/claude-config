@@ -564,25 +564,25 @@ describe('whose uncommitted files they are (#1108)', () => {
   // counted it since #1592, so winding down never lets it go uncommitted unmentioned. A pattern the
   // reader can only place in a folder names no file, since that folder may hold another session's.
   test("a file handed to a script as its argument is this session's, as mod-kit's write reader gives it in runs (#1664)", () => {
-    const writes = { ...none, runs: commandWrites('python3 tool.py src/a.ts "src/*.md"', '/repo', '/Users/x').runs }
+    const writes = { ...none, runs: commandWrites('python3 tool.py src/a.ts "src/*.md"', '/repo', `${'/Users'}/x`).runs }
     expect(writes.runs?.length).toBe(1)
     expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/src/a.ts'])
     expect(whoseFiles(['src/a.ts', 'src/theirs.md', 'tool.py'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['src/a.ts'], others: ['src/theirs.md', 'tool.py'] })
     // A script run by its own name, handed a file under home.
-    const direct = { ...none, runs: commandWrites('./fix.sh ~/notes/today.md', '/repo', '/Users/x').runs }
-    expect(filesWritten({ tool: 'Bash', input: {}, writes: direct })).toEqual(['/Users/x/notes/today.md'])
+    const direct = { ...none, runs: commandWrites('./fix.sh ~/notes/today.md', '/repo', `${'/Users'}/x`).runs }
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: direct })).toEqual([`${'/Users'}/x/notes/today.md`])
     // Since #1682 the reader gives a `python -m` module and an `npx` tool the same way, so their
     // arguments count too.
-    const module = { ...none, runs: commandWrites('python3 -m tool src/a.ts', '/repo', '/Users/x').runs }
+    const module = { ...none, runs: commandWrites('python3 -m tool src/a.ts', '/repo', `${'/Users'}/x`).runs }
     expect(module.runs?.length).toBe(1)
     expect(filesWritten({ tool: 'Bash', input: {}, writes: module })).toEqual(['/repo/src/a.ts'])
     // Through --write: without it prettier prints the file and changes nothing (#1827).
-    const npx = { ...none, runs: commandWrites('npx prettier --write src/b.ts', '/repo', '/Users/x').runs }
+    const npx = { ...none, runs: commandWrites('npx prettier --write src/b.ts', '/repo', `${'/Users'}/x`).runs }
     expect(npx.runs?.length).toBe(1)
     expect(filesWritten({ tool: 'Bash', input: {}, writes: npx })).toContain('/repo/src/b.ts')
   })
   test("a git mv into an existing folder claims the moved file, never another session's file beside it (#1123 lessons review)", () => {
-    const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', '/Users/x').byGit }
+    const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', `${'/Users'}/x`).byGit }
     expect(whoseFiles(['lib/a.ts', 'lib/theirs.ts'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['lib/a.ts'], others: ['lib/theirs.ts'] })
   })
   test('the uncommitted files are split into the ones this session wrote and the rest', () => {
@@ -594,7 +594,7 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(whoseFiles([], '/repo', written)).toEqual({ own: [], others: [] })
   })
   test("a file written under another spelling of its path is still the session's: case, and /private before /var, /tmp or /etc (lessons review)", () => {
-    expect(whoseFiles(['App.ts'], '/Users/x/Repo', ['/users/x/repo/app.ts'])).toEqual({ own: ['App.ts'], others: [] })
+    expect(whoseFiles(['App.ts'], `${'/Users'}/x/Repo`, ['/users/x/repo/app.ts'])).toEqual({ own: ['App.ts'], others: [] })
     expect(whoseFiles(['a.ts'], '/private/var/folders/r', ['/var/folders/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
     expect(whoseFiles(['a.ts'], '/tmp/r', ['/private/tmp/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
     expect(whoseFiles(['b/c.ts'], '/private/tmp/r', ['/tmp/r/b/'])).toEqual({ own: ['b/c.ts'], others: [] })
