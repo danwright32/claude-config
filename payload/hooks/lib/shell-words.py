@@ -353,7 +353,7 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s, cwd="", heredocs=None, parts=None):
+def commands(s, cwd="", heredocs=None, parts=None, spans=None):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     heredocs, when a list, is given one (quoted, before, body) for each heredoc body the reading
@@ -362,6 +362,11 @@ def commands(s, cwd="", heredocs=None, parts=None):
     the opener, and body is the text between the opener's line and its closing line. An unquoted
     body is given too, though the substitutions in it are also read as commands (#2053). A body
     that never closes is not skipped, so it is read as commands and given to nobody here.
+
+    spans, when a list, is given one (opener, start, end) for each body heredocs is given, in the
+    same order: opener is where its << is in s, the same start parts gives the opener, and s[start:end]
+    is the body, from the line break that ends the opener's line to the start of its closing line
+    (claude-config#2722), so a caller can tell which command a body is given to.
 
     The text is the command as written, quotes and all, and a command substitution's text stays
     inside the command that holds it as well as being read as commands of its own, which come first.
@@ -592,16 +597,17 @@ def commands(s, cwd="", heredocs=None, parts=None):
             if opener:
                 before = s[f["start"]:i]
                 f["openers"].append((i, opener[3]))
+                at = i
                 word, strip_tabs, quoted, i = opener
-                pending.append((word, strip_tabs, quoted, before))
+                pending.append((word, strip_tabs, quoted, before, at))
             else:
                 i += 2
             continue
         if pending and s.startswith(line_break, i):
             # The bodies start on the next line: find the closing line of each in turn. One that never
             # closes is not skipped, so nothing after it is hidden.
-            j, unquoted, skipped = i, [], []
-            for word, strip_tabs, quoted, before in pending:
+            j, unquoted, skipped, where = i, [], [], []
+            for word, strip_tabs, quoted, before, at in pending:
                 m = re.compile(closing_line % ("\t*" if strip_tabs else "", re.escape(word))).search(s, j)
                 if not m:
                     j = None
@@ -610,9 +616,12 @@ def commands(s, cwd="", heredocs=None, parts=None):
                     unquoted.append((j, m.start()))
                 body = s[j:m.start()]
                 skipped.append((quoted, before, body[len(line_break):] if body.startswith(line_break) else body))
+                where.append((at, j, m.start()))
                 j = m.end()
             if j is not None and heredocs is not None:
                 heredocs.extend(skipped)
+            if j is not None and spans is not None:
+                spans.extend(where)
             pending.clear()
             if j is not None:
                 cut(f, i, "\n")
