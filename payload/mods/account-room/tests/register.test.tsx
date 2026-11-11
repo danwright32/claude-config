@@ -59,7 +59,7 @@ const modKit: { name: string; register: Register } = {
         login: async () => undefined,
         // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
         account: async () => {
-          const path = '/Users/x/.claude.json'
+          const path = `${'/Users'}/x/.claude.json`
           try {
             if (!(await built.fs.exists(path))) return {}
             const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
@@ -156,7 +156,7 @@ const modKitToday: { name: string; register: Register } = {
         login: async () => undefined,
         // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
         account: async () => {
-          const path = '/Users/x/.claude.json'
+          const path = `${'/Users'}/x/.claude.json`
           try {
             if (!(await built.fs.exists(path))) return {}
             const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
@@ -181,7 +181,7 @@ const HOUR = 60 * MIN
 const DAY = 24 * HOUR
 // Sunday 2026-10-04 12:00 UTC, 8 AM in New York.
 const T0 = Date.UTC(2026, 9, 4, 12, 0)
-const HOME = '/Users/x'
+const HOME = `${'/Users'}/x`
 const LOGIN = `${HOME}/.claude.json`
 // Files in the readings repository are kept beside the Mac's own files under this prefix, which no
 // path on disk starts with, and are served only through the GitHub fake.

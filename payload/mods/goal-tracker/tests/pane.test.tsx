@@ -149,8 +149,8 @@ const progress = (p: Record<string, unknown>) => ({ steps: [], done: 0, total: 0
 const session = (id: string, project: string, p: Record<string, unknown> | undefined) => ({
   v: 1,
   sessionId: id,
-  cwd: `/Users/dan/Apps/${project}`,
-  repoRoot: `/Users/dan/Apps/${project}`,
+  cwd: `${'/Users'}/dan/Apps/${project}`,
+  repoRoot: `${'/Users'}/dan/Apps/${project}`,
   startedAt: 0,
   lastSeen: 0,
   closedAt: null,

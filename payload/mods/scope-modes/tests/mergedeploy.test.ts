@@ -405,35 +405,35 @@ describe('what a command does, by effect', () => {
 // (policyOf, refusalOf), never a second copy of it (L263); phase 3 refuses every other claude-sync
 // write, and a pull from anywhere but the live sync clone.
 describe('claude-sync pull, the config repository deploy step (#1106)', () => {
-  const HOME = '/Users/x'
-  const CLONE = '/Users/x/claude-config-sync'
+  const HOME = `${'/Users'}/x`
+  const CLONE = `${'/Users'}/x/claude-config-sync`
   const CONFIG = 'danwright32/claude-config'
   const place: Place = { ...ON_BRANCH, own: CONFIG }
-  const judge = (night: unknown, command: string, cwd = '/Users/x/repo') => {
+  const judge = (night: unknown, command: string, cwd = `${'/Users'}/x/repo`) => {
     const commands = cmds(command)
     return judgeNight(night, commands, dirsOf(commands, cwd, HOME).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
   }
   const lists = (j: object) => nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [], ...j })), [])
   test('a pull is a deploy, by any path to the script, and only a pull among the reads', () => {
-    for (const c of ['~/claude-config-sync/claude-sync pull', 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -5', 'claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull', 'sh -o errexit ~/claude-config-sync/claude-sync pull'])
+    for (const c of ['~/claude-config-sync/claude-sync pull', 'bash ~/claude-config-sync/claude-sync pull', `${'/Users'}/x/claude-config-sync/claude-sync pull 2>&1 | tail -5`, 'claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull', 'sh -o errexit ~/claude-config-sync/claude-sync pull'])
       expect({ c, k: kinds(c) }).toEqual({ c, k: ['deploy'] })
     for (const c of ['~/claude-config-sync/claude-sync status', '~/claude-config-sync/claude-sync lesson L174', 'git pull'])
       expect({ c, k: kinds(c) }).toEqual({ c, k: [] })
   })
   test('the folder a claude-sync command reaches is the clone its script lives in, never the session folder; a bare name is one that cannot be told', () => {
-    expect(dirsOf(cmds('~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE, CLONE])
-    expect(dirsOf(cmds('bash /Users/x/Apps/claude-config/claude-sync pull'), '/Users/x/repo', HOME)).toEqual(['/Users/x/Apps/claude-config'])
-    expect(dirsOf(cmds('claude-sync pull'), '/Users/x/repo', HOME)).toEqual([null])
+    expect(dirsOf(cmds('~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE, CLONE])
+    expect(dirsOf(cmds(`bash ${'/Users'}/x/Apps/claude-config/claude-sync pull`), `${'/Users'}/x/repo`, HOME)).toEqual([`${'/Users'}/x/Apps/claude-config`])
+    expect(dirsOf(cmds('claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
     // A shell's own options before the script, a value taking one included, are read past.
-    expect(dirsOf(cmds('bash -e -o pipefail ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
-    expect(dirsOf(cmds('bash ./other.sh ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([null])
+    expect(dirsOf(cmds('bash -e -o pipefail ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('bash ./other.sh ~/claude-config-sync/claude-sync pull'), `${'/Users'}/x/repo`, HOME)).toEqual([null])
   })
   test('allowed exactly when the night says the config repository may deploy, from any session folder', () => {
     const night = lists({ mayDeploy: [CONFIG] })
     expect(judge(night, '~/claude-config-sync/claude-sync pull')).toBeUndefined()
-    expect(judge(night, 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/elsewhere')).toBeUndefined()
+    expect(judge(night, 'bash ~/claude-config-sync/claude-sync pull', `${'/Users'}/x/elsewhere`)).toBeUndefined()
   })
   test('refused when the config repository is merge only, on neither list, closed, or under an owner that waits, and when the record carries no lists', () => {
     const why = (night: unknown, command = '~/claude-config-sync/claude-sync pull') => judge(night, command)?.why

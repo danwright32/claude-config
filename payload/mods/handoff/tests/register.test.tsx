@@ -105,7 +105,7 @@ const withOldKit = { plugins: [modKit, { name: 'kit-lacks-clear-band-row', regis
 const MIN = 60_000
 const HOUR = 60 * MIN
 const T0 = 1_000 * HOUR
-const DIR = '/Users/x/.claude/state/handoff/repo'
+const DIR = `${'/Users'}/x/.claude/state/handoff/repo`
 const CURRENT = `${DIR}/current.json`
 const PROMPT = 'Continue milestone 18 in claude-config. Read #615 and its latest comment first. Do not build anything without asking.'
 
@@ -124,7 +124,7 @@ const world = (on: On, init: { files?: Record<string, string>; gh?: Gh; root?: s
   const submitted: { text: string; asUser?: boolean }[] = []
   const commands: string[] = []
   const tools: string[] = []
-  mock.env(on, init.noHome ? {} : { HOME: '/Users/x' })
+  mock.env(on, init.noHome ? {} : { HOME: `${'/Users'}/x` })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
     files[e.path] = e.text

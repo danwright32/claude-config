@@ -150,8 +150,9 @@ check "the scan's scratch name is one the reaper sweeps" has "$(grep -E '^SYNC_S
 # payload/CLAUDE.md that breaks that block is caught here, before it is installed, rather than by
 # every gh pr create on every Mac. Only the count is printed: the names are work repositories.
 # -B: the scanner is loaded by path from lib/, and -I drops any PYTHONDONTWRITEBYTECODE handed down,
-# so without it lib/__pycache__/work-names.*.pyc is left for test-work-names.sh's #2444 check to
-# find when the two run side by side in one CI part (claude-config#2751).
+# so without it lib/__pycache__/work-names.*.pyc is left in the hooks' own lib/ (claude-config#2751).
+# test-work-names.sh's #2444 check counts only its own programs' bytecode now (#2757), so the guard
+# on this load is test-lib-bytecode-importers.sh.
 proj_out="$(python3 -I -B -c '
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("wn", sys.argv[1])

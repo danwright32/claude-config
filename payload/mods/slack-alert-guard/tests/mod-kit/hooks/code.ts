@@ -690,7 +690,7 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
 // mod's byte for byte copy of it can read python's strings without this file (#2710).
 export { pythonText }
 // A one line literal that is only a path (#1194): one with no space in it, or one from the root, the
-// home folder or the folder the program runs in (`/Users/dan/Documents - Dan Pro/...`, `~/...`,
+// home folder or the folder the program runs in (`/Users/<name>/Documents - Dan Pro/...`, `~/...`,
 // `./...`), whose spaces are a folder's. A literal holding a space anywhere else reads as a sentence
 // unless the program uses it as a path (pathUses).
 const pathShaped = (body: string): boolean => {

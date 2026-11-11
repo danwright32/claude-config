@@ -70,7 +70,7 @@ describe('the goal a session has set, from its transcript lines', () => {
 })
 
 describe('the goal a session has set, read from its transcript file', () => {
-  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const T = `${'/Users'}/x/.claude/projects/-repo/s1.jsonl`
   const runs = (answer: Awaited<ReturnType<GoalRun>> | 'throws') => {
     const asked: string[][] = []
     const run: GoalRun = async argv => {

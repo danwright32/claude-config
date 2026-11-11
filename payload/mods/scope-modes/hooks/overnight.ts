@@ -255,7 +255,7 @@ const pushesToTemp = (args: readonly string[], where: string | null, home: strin
 // A folder a word names, resolved against the folder before it, with the temp folder's words read
 // as tempWords reads them. A climb (`..`) out of a mktemp folder or $TMPDIR, or from a folder
 // reached through one, cannot be followed: the marks stand for folders whose parents nobody knows,
-// so `$TMPDIR/../Users/x/repo` would otherwise read as inside the mark (lessons review of 214d3ce).
+// so `$TMPDIR/../Users/<name>/repo` would otherwise read as inside the mark (lessons review of 214d3ce).
 const resolveIn = (word: string, dir: string | null, home: string, expand: (w: string) => string): string | null => {
   const w = expand(word)
   const marked = w !== word || (dir !== null && (dir === MARK || dir.startsWith(`${MARK}/`)))

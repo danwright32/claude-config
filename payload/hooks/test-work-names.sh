@@ -46,7 +46,7 @@ SCAN="$HERE/lib/work-names.py"
 suite_deadline_arm || exit $?
 # Arming and the runner turn bytecode off for every suite (#2751). This one's #2444 checks are about
 # whether its own programs write bytecode into lib/, so it runs them with it on, as a new caller of
-# the scanner would.
+# the scanner would. Where that bytecode goes is set once its throwaway folder exists, below.
 unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX
 
 pass=0; fail=0
@@ -68,9 +68,13 @@ done
 _tmp="${TMPDIR:-/tmp}"
 WORK="$(mktemp -d "${_tmp%/}/work-names.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-# The start of this run, so the bytecode check at the end (#2444) counts only files this run could
-# have written, never a copy an older run left behind.
-touch "$WORK/.started"
+# Every python3 this suite starts writes its bytecode under $WORK/pyc, mirroring each source's path,
+# so the checks at the end (#2444) count only what this suite's own programs wrote. Counting
+# lib/__pycache__, even by time since the run started, named a file anything else wrote there: a
+# probe run by hand, another suite at the same moment (#2757). None of its programs runs with -I or
+# -E, which would drop this and write beside the source unseen; test-lib-bytecode-importers.sh is the
+# guard on importers that do.
+export PYTHONPYCACHEPREFIX="$WORK/pyc"
 
 # An invented organisation, handed to the scanner by hash exactly as the real two are built in.
 FAKE_ORG="Acme-HQ"
@@ -467,16 +471,20 @@ esac
 # #2444: loading lib/work-names.py by path, as the budget checks above do, must never leave bytecode
 # in lib/ (the class that broke #2422's CI, #2080). Only a check while this suite's own programs run
 # with bytecode on, as a new caller of the scanner would: the runner and arming turn it off for every
-# suite (#2751), which would pass a writer here unseen.
-bc_flag="$(python3 -c 'import sys; print(sys.flags.dont_write_bytecode)' 2>&1)"
-check "#2751 this suite's own programs run with bytecode on, so the checks below can see a writer in it (flag: $bc_flag)" [ "$bc_flag" = 0 ]
-wn_pyc="$(find "$HERE/lib/__pycache__" -name 'work-names*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
-check "#2444 nothing this suite runs leaves work-names bytecode in lib/ (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
-# And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py). Another
-# suite running beside this one that writes lib bytecode fails it too: that suite's defect, named by
-# the file listed.
-lib_pyc="$(find "$HERE/lib/__pycache__" -name '*.pyc' -newer "$WORK/.started" 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
-check "#2444 no module in lib/ gained bytecode during this run (found: ${lib_pyc:-none})" [ -z "$lib_pyc" ]
+# suite (#2751), which would pass a writer here unseen. And only a check where their bytecode lands
+# in $WORK/pyc, where it is counted: the standard library they import is written there on the first
+# run, the control that the folder is honoured (L322).
+bc_flag="$(python3 -c 'import sys; print(sys.flags.dont_write_bytecode, sys.pycache_prefix)' 2>&1)"
+check "#2751 this suite's own programs run with bytecode on, written under this run's folder, so the checks below can see a writer in it (flag, folder: $bc_flag)" [ "$bc_flag" = "0 $WORK/pyc" ]
+any_pyc="$(find "$WORK/pyc" -name '*.pyc' 2>/dev/null | wc -l | tr -d ' ')"
+check "#2757 control: this suite's programs wrote bytecode into its own folder ($any_pyc files)" [ "$any_pyc" -gt 0 ]
+wn_pyc="$(find "$WORK/pyc" -name 'work-names*.pyc' 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 nothing this suite runs leaves work-names bytecode (found: ${wn_pyc:-none})" [ -z "$wn_pyc" ]
+# And for every module in lib/, not work-names.py alone (#2080 checked only shell-words.py), in the
+# folder the prefix mirrors lib/ into. Another suite's writes are no longer seen here (#2757): the
+# runner's PYTHONDONTWRITEBYTECODE and test-lib-bytecode-importers.sh are what stop those.
+lib_pyc="$(find "$WORK/pyc" -path '*/hooks/lib/*' -name '*.pyc' 2>/dev/null | sed 's#.*/##' | paste -sd' ' -)"
+check "#2444 no module in lib/ gained bytecode from this suite's programs (found: ${lib_pyc:-none})" [ -z "$lib_pyc" ]
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
