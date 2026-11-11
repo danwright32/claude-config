@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for require-tests-before-push.sh: the docs-only classifier (docs_style_for / diff_docs_only)
-# sourced out of the hook, and the whole gate driven end to end as a subprocess. The is_test /
+# copied out of the hook into a scratch script that runs each case as a process of its own, and the
+# whole gate driven end to end as a subprocess. The is_test /
 # is_source file classifier moved to lib/source-class.sh (shared with simplify-before-push.sh); its
 # cases live in test-source-class.sh and this suite no longer asserts on it directly (the end to end
 # runs exercise it through the real hook, which sources the lib itself).
