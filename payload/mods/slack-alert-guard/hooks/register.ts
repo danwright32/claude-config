@@ -86,8 +86,15 @@ const cannotCheck = (why: string) =>
 const HELD = cannotCheck('unknown failure')
 
 // from (#2637): for wording the edit adds none of and brings to a send, the files that hold it.
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string }
-type Verdict = { pass: true } | { own: true } | { unchecked: string } | { hold: Hold }
+// untraced (#2709): for an edit the trace stopped short of at one of its limits, why it stopped; its
+// added and removed are then the lines the edit adds and takes away, not message text.
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; untraced?: string }
+// Could not check, and with `untraced` (#2709), because the trace met one of its own limits (more
+// files handed on than it follows), which it meets the same way on every try: held for Dan to
+// approve that one edit, since trying again can never get it through. Any other could not check
+// (out of time, git failing, a file unreadable) may pass on another try, so says to try again.
+type Unchecked = { unchecked: string; untraced?: true }
+type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold }
 const PASS: Verdict = { pass: true }
 
 // The arguments the tool takes, without the keys the engine carries beside them.
@@ -234,7 +241,7 @@ type Senders = { senders: Sender[]; top: string; texts: Map<string, string>; com
 // none: nothing sends the file. With `rel` (#2720), the file is in a repository and no test, its
 // path below the top is `rel`, and the search found no sender; `unused` when no file but a test
 // imports it at all, so whether anything will send it cannot be told yet.
-type Found = Senders | { none: true; rel?: string; unused?: boolean } | { unchecked: string } | { posts: true } | { maybe: true }
+type Found = Senders | { none: true; rel?: string; unused?: boolean } | Unchecked | { posts: true } | { maybe: true }
 /** Whether the senders found so far settle the question, so the search may stop (#2570). */
 type Settle = (senders: Sender[], top: string, texts: Map<string, string>, template: string) => Promise<boolean>
 const firstSender = (f: Senders): string => `${f.top}/${(f.senders[0] as Sender).rel}`
@@ -499,6 +506,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       if (hop === REEXPORT_HOPS)
         return withFound(false, {
           unchecked: `${path} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: ${next.map(r => `${top}/${r}`).join(', ')})`,
+          untraced: true,
         })
       for (const r of next) seen.add(r)
       level = next
@@ -679,7 +687,7 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
   const freshOf = async (now: Reached, was: Reached | undefined): Promise<Hold | undefined> => {
     for (const [m, names] of now.cut)
       if ([...names].some(n => !was?.cut.get(m)?.has(n)))
-        end({ unchecked: `this edit to ${path} hands what a Slack send carries on through more than ${REEXPORT_HOPS} files below it, more than the guard follows (next: ${top}/${m})` })
+        end({ unchecked: `this edit to ${path} hands what a Slack send carries on through more than ${REEXPORT_HOPS} files below it, more than the guard follows (next: ${top}/${m})`, untraced: true })
     const added: string[] = []
     const literal: string[] = []
     const from: string[] = []
@@ -701,7 +709,9 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     }
     return added.length ? { file: path, added, removed: [], keys: added.map(wordingKey), from: from.join(', '), ...(literal.length ? { literal: [...new Set(literal)] } : {}) } : undefined
   }
-  const failed = (err: unknown): Verdict => ({ unchecked: err instanceof Ended && 'unchecked' in err.found ? err.found.unchecked : message(err) })
+  // Untraced is kept, so a limit the trace met is still told from a failure (#2709).
+  const failed = (err: unknown): Verdict =>
+    err instanceof Ended && 'unchecked' in err.found ? { unchecked: err.found.unchecked, ...(err.found.untraced ? { untraced: true as const } : {}) } : { unchecked: message(err) }
   let verdict: Verdict | undefined
   const settle: Settle = async (senders, repo, texts, template) => {
     top = repo

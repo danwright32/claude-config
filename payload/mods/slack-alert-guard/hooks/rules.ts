@@ -1198,6 +1198,33 @@ export const removalKey = (file: string, removed: string[]): string => `removal:
  * there are another call.
  */
 export const shellKey = (command: string, paths: string[]): string => `shell:${hash(JSON.stringify([command, [...new Set(paths)].sort()]))}`
+/**
+ * Where his approval of one edit the guard could not trace is kept (#2709): by the file and the
+ * whole text the edit finds there and leaves, so it lets through that one edit and no other. Any
+ * other edit to the file, or the same edit to a file that has changed since, is asked about again.
+ */
+export const untracedKey = (file: string, before: string, after: string): string => `untraced:${hash(JSON.stringify([file, before, after]))}`
+
+/** The lines an edit adds and takes away, each exactly as written and in its order, blank lines left out (#2709). */
+export const changedLines = (before: string, after: string): { added: string[]; removed: string[] } => {
+  const lines = (t: string) => t.split('\n').filter(l => l.trim())
+  const counted = (ls: string[]) => {
+    const m = new Map<string, number>()
+    for (const l of ls) m.set(l, (m.get(l) ?? 0) + 1)
+    return m
+  }
+  // The lines of `ls` left once each line `other` also holds has been matched off, one for one.
+  const beyond = (ls: string[], other: string[]) => {
+    const left = counted(other)
+    return ls.filter(l => {
+      const n = left.get(l) ?? 0
+      if (n > 0) left.set(l, n - 1)
+      return n === 0
+    })
+  }
+  const [was, now] = [lines(before), lines(after)]
+  return { added: beyond(now, was), removed: beyond(was, now) }
+}
 
 /**
  * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's
@@ -1282,6 +1309,32 @@ export const refusal = (id: string, file: string, added: string[], removed: stri
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
 export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
   `${blocked(file, added, removed, sender, from)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+
+/**
+ * An edit the guard could not trace (#2709): the trace stopped at one of its limits, which it meets
+ * the same way on every try, so trying again can never get it through. What it changes, line by
+ * line, and why the guard stopped.
+ */
+export const untracedText = (file: string, added: string[], removed: string[], why: string): string => {
+  const parts = [...(added.length ? [`adds ${listed(added)}`] : []), ...(removed.length ? [`takes away ${listed(removed)}`] : [])]
+  const what = parts.length ? parts.join(' and ') : 'changes only blank lines or the order of its lines'
+  return `This edit to ${file} ${what}, and the Slack alert guard could not trace whether that reaches Slack: ${why}`
+}
+
+/** The main session's refusal of an untraced edit: ask Dan, who sees the lines the guard shows him. */
+export const untracedRefusal = (id: string, file: string, added: string[], removed: string[], why: string): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. Trying again is held the same way, so Dan decides this one edit. Ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}"} and no answers filled in. The guard words the question and shows him the lines. Send this call again, unchanged, once he answers ${APPROVE}.`
+
+/** A subagent's refusal of an untraced edit: it may not ask Dan, so it stops and reports. */
+export const untracedAgentRefusal = (id: string, file: string, added: string[], removed: string[], why: string): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. Trying again is held the same way, and only the main session can ask Dan to approve this one edit. Stop and report to the main session that call ${id} waits on Dan approving an edit the Slack alert guard could not trace.`
+
+/** The question for an untraced edit: the file, that the guard could not trace it, why, and its exact lines. */
+export const untracedQuestion = (file: string, added: string[], removed: string[], why: string): string => {
+  const lines = [...(added.length ? [`Adds:\n${added.join('\n')}`] : []), ...(removed.length ? [`Takes away:\n${removed.join('\n')}`] : [])]
+  const shown = lines.length ? lines.join('\n\n') : 'Changes only blank lines or the order of its lines.'
+  return `The Slack alert guard could not trace whether this edit to ${file} reaches Slack. Approve this one edit? Approving sends nothing: it only lets that edit go ahead.\n\nWhy: ${why}\n\n${shown}`
+}
 
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets

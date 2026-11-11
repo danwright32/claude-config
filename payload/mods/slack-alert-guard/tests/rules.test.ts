@@ -6,6 +6,7 @@ import {
   REEXPORT_HOPS,
   SENDER_PREFILTER,
   agentRefusal,
+  changedLines,
   ciMessages,
   ciWorkflow,
   codeOf,
@@ -48,6 +49,10 @@ import {
   testFile,
   textTemplate,
   uiComponent,
+  untracedAgentRefusal,
+  untracedKey,
+  untracedQuestion,
+  untracedRefusal,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -1022,4 +1027,60 @@ test('a module of message copy is known by its shape: mostly functions building 
   // A pipe in a shell string, or a word between colons, is no Slack formatting.
   expect(copyModule('lib/run.sh', 'echo "a | b"\n')).toBe(false)
   expect(copyModule('lib/run.ts', "export const t = 'Wait for <the run|other> to finish'\n")).toBe(false)
+})
+
+// claude-config#2709: a line the guard cannot trace gets the approval route real wording has, keyed
+// to that one edit, with the exact lines shown and the guard saying it could not trace them.
+const INDEX = '/w/a/lib/index.ts'
+const WHY = `${INDEX} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: /w/a/lib/delta.ts)`
+
+test('the lines an untraced edit adds and takes away are each exactly as written, blank lines left out (#2709)', () => {
+  const before = "export * from './deploy'\n\nexport const VERSION = 1\n"
+  const after = "export * from './deploy'\nimport { pad } from './pad'\n\nexport const VERSION = 2\n"
+  expect(changedLines(before, after)).toEqual({ added: ["import { pad } from './pad'", 'export const VERSION = 2'], removed: ['export const VERSION = 1'] })
+  // A line written twice where it was once is one added line.
+  expect(changedLines('a\n', 'a\na\n')).toEqual({ added: ['a'], removed: [] })
+})
+
+test('an untraced edit is approved by its file and its exact text, so any other edit, or the same edit to another file, is asked about again (#2709)', () => {
+  const before = "export * from './deploy'\n"
+  const after = "export * from './deploy'\nimport { pad } from './pad'\n"
+  const key = untracedKey(INDEX, before, after)
+  expect(key).toBe(untracedKey(INDEX, before, after))
+  expect(key.startsWith('untraced:')).toBe(true)
+  expect(untracedKey('/w/a/other/index.ts', before, after)).not.toBe(key)
+  expect(untracedKey(INDEX, before, `${after}import { pin } from './pin'\n`)).not.toBe(key)
+  expect(untracedKey(INDEX, `${before}export const V = 1\n`, `${after}export const V = 1\n`)).not.toBe(key)
+  // Never the key real wording is kept under, so approving one never approves the other.
+  expect(key).not.toBe(wordingKey("import { pad } from './pad'"))
+})
+
+test('an untraced edit is refused with an id Dan can approve, the lines shown and why the guard could not trace them; a subagent is told to stop and report (#2709)', () => {
+  const r = untracedRefusal('t9', INDEX, ["import { pad } from './pad'"], [], WHY)
+  expect(r.startsWith('Blocked: ')).toBe(true)
+  expect(r).toContain('could not trace')
+  expect(r).toContain(INDEX)
+  expect(r).toContain("import { pad } from './pad'")
+  expect(r).toContain(WHY)
+  expect(r).toContain('"source": "slack-alert-guard:t9"')
+  // There is no message to render: the guard shows Dan the lines itself.
+  expect(r).not.toContain('"rendered"')
+  expect(r).not.toContain('Try it again')
+  const a = untracedAgentRefusal('t9', INDEX, ["import { pad } from './pad'"], [], WHY)
+  expect(a).toContain('could not trace')
+  expect(a).toContain('t9')
+  expect(a).toContain('Stop and report to the main session')
+  expect(a).not.toContain('AskUserQuestion')
+})
+
+test('the question for an untraced edit names the file, says the guard could not trace it and that approving sends nothing, and shows the exact lines (#2709)', () => {
+  const q = untracedQuestion(INDEX, ["import { pad } from './pad'"], ['export const VERSION = 1'], WHY)
+  const [lead] = q.split('\n\n')
+  expect(readsAsSend(lead ?? '')).toBe(false)
+  expect(lead).toContain(INDEX)
+  expect(lead).toContain('could not trace')
+  expect(lead).toContain('sends nothing')
+  expect(q).toContain(WHY)
+  expect(q).toContain("import { pad } from './pad'")
+  expect(q).toContain('export const VERSION = 1')
 })
