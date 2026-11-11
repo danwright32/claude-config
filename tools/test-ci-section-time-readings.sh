@@ -220,13 +220,21 @@ lacks "finished runs are picked out by the tool, not by gh's status filter" "--s
 PATH="$WORK/bin:$PATH" "$TOOL" --print --record "$RECORD" --cache "$WORK/cache" > "$WORK/out7b" 2>/dev/null
 same "a read from the cache prints the same rows" "$WORK/out1" "$WORK/out7b"
 lacks "and fetches no log twice" "run view" "$(cat "$GH_STUB_LOG")"
-# A log gh could not fetch is not the same as a run that has none.
+# A log gh could not fetch is not the same as a run that has none. For a run the record already
+# holds (GitHub expires logs), the recorded row is kept, so a refresh loses nothing.
 cp "$RECORD" "$WORK/record-gone.tsv"
 GH_STUB_FAIL_ID=42566634695 PATH="$WORK/bin:$PATH" "$TOOL" --record "$WORK/record-gone.tsv" --cache "$WORK/cache-gone" >/dev/null 2>"$WORK/err7c"; rc=$?
-rc_not "a log gh fails to fetch fails the refresh" 0 "$rc"
-says "and names the run" "42566634695" "$(cat "$WORK/err7c")"
-same "and leaves the record alone" "$RECORD" "$WORK/record-gone.tsv"
+rc_is "a recorded run whose log gh cannot fetch does not stop the refresh" 0 "$rc"
+says "it names the run and keeps its row" "kept run 42566634695's row from the record" "$(cat "$WORK/err7c")"
+same "and the record keeps that row exactly" "$RECORD" "$WORK/record-gone.tsv"
 if [ ! -e "$WORK/cache-gone/42566634695.log" ]; then ok; else bad "a failed fetch left a log in the cache that a later read would trust"; fi
+# For a run the record does not hold, there is no reading to keep, so the refresh refuses.
+grep -v '^42566634695	' "$RECORD" > "$WORK/record-new.tsv"
+cp "$WORK/record-new.tsv" "$WORK/record-new-before.tsv"
+GH_STUB_FAIL_ID=42566634695 PATH="$WORK/bin:$PATH" "$TOOL" --record "$WORK/record-new.tsv" --cache "$WORK/cache-new" >/dev/null 2>"$WORK/err7d"; rc=$?
+rc_not "a new run whose log gh fails to fetch fails the refresh" 0 "$rc"
+says "and names the run" "COULD NOT READ run 42566634695" "$(cat "$WORK/err7d")"
+same "and leaves the record alone" "$WORK/record-new-before.tsv" "$WORK/record-new.tsv"
 
 echo
 echo "passed: $pass, failed: $fail"

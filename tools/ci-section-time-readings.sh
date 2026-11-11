@@ -22,8 +22,9 @@
 #
 # What it will not do is guess. A run whose log has no core count, a core count of UNKNOWN, a sync
 # suite result with no section time after it, a suite that reported in two parts, or a log gh could
-# not fetch is named, and then NOTHING is written or printed, since a record with the readable runs
-# only reads as a complete one. A run with no jobs, or no sync suite result (cancelled before it
+# not fetch for a run the record does not hold yet is named, and then NOTHING is written or printed,
+# since a record with the readable runs only reads as a complete one. A run the record already holds
+# whose log gh cannot fetch keeps its recorded row, and is named. A run with no jobs, or no sync suite result (cancelled before it
 # finished), carries no reading and is named as skipped with that reason. The processor and region
 # are recorded as unknown when the log does not print them, which is how runs from before the step
 # printed the processor already read (#2403).
@@ -135,6 +136,11 @@ if [ -z "$runs" ]; then
   # Pushes run on main only, which is the workflow's own trigger; every pull request is in the record.
   list_runs push --branch main
   list_runs pull_request
+  # A log gh cannot fetch (GitHub expires them) loses nothing when the record already holds that
+  # run: its row is kept, as it is for any run not re-read, and the run is named. A run the record
+  # does not hold yet has no reading to keep, so it is a refusal like any other unreadable run.
+  recorded_ids="$(cut -f1 "$rec_rows")"
+  : > "$TMP/unfetched"
   while IFS=$'\t' read -r id _rest; do
     [ -n "$id" ] || continue
     [ -f "$logs/$id.log" ] && continue   # a finished run's log never changes, so a cached one is final
@@ -142,9 +148,18 @@ if [ -z "$runs" ]; then
       mv "$logs/$id.log.part" "$logs/$id.log"
     else
       rm -f "$logs/$id.log.part"
-      printf '%s\tgh could not fetch its log: %s\n' "$id" "$(head -1 "$TMP/view.err")" >> "$refusals"
+      why="$(sed -n '1p' "$TMP/view.err")"
+      case $'\n'"$recorded_ids"$'\n' in
+        *$'\n'"$id"$'\n'*)
+          printf '%s\n' "$id" >> "$TMP/unfetched"
+          say "kept run $id's row from the record: gh could not fetch its log ($why)" ;;
+        *) printf '%s\tgh could not fetch its log: %s\n' "$id" "$why" >> "$refusals" ;;
+      esac
     fi
   done < "$runs"
+  # Those runs are left out of the reading below, so the merge keeps their recorded rows.
+  awk -F'\t' 'FILENAME == ARGV[1] { gone[$1] = 1; next } !($1 in gone)' "$TMP/unfetched" "$runs" > "$TMP/runs-fetched.tsv"
+  runs="$TMP/runs-fetched.tsv"
 fi
 [ -f "$runs" ] || { say "no run list at $runs"; exit 2; }
 [ -d "$logs" ] || { say "no log folder at $logs"; exit 2; }
