@@ -1703,6 +1703,20 @@ for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.tx
   run_cp "$runs"
   refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
 done
+# BSD install's -D destdir is recorded only in a -M metalog and "does not affect where the actual files
+# are installed" (man install on macOS); `install -D /nonexist a.txt f.txt` wrote ./f.txt on
+# 2026-11-11. Read as a prefix, the copy was recorded under /elsewhere and run.sh ran unread (#2742).
+run_cp "install -D /elsewhere plain.txt run.sh && bash run.sh"
+allowed "install -D copying a harmless file passes"
+for runs in "install -D /elsewhere post.txt run.sh && bash run.sh" \
+  "install -D/elsewhere -m 755 post.txt run.sh && ./run.sh" "install -D /elsewhere post.txt bin && bash bin/post.txt"; do
+  run_cp "$runs"
+  refused "install -D does not move the copy, so it is judged at the path it lands on: $runs"
+done
+# A guard, not a red case: it was refused before #2742 too. The -D joined record is kept so the change
+# only adds refusals and a run at that path is still judged by the copy's source.
+run_cp "install -D /elsewhere post.txt run.sh && bash /elsewhere/run.sh"
+refused "a copy run at the install -D joined path is still judged by its source"
 # The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
 run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
 refused "a copy of the nudge script made and run in the same command is refused"
