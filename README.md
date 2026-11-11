@@ -7540,7 +7540,14 @@ the search stops short. A python docstring is never message text (#2574).
 Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
 copy module of four alert messages passed because nothing sent it yet, and the edits that made a
 route import and post it passed because they added no text of their own). A new file that nothing
-sends still passes, since nothing can post it. Once an edit's own wording has passed, an edit to a
+sends still passes, since nothing can post it, unless it is a module of message copy that no file
+but a test imports yet (#2720): its added wording is held as it is written. A copy module is known
+by its path (a name ending in copy or wording, a copy folder, or an alert word beside a message
+word) or by its shape (Slack formatting in a string, or mostly functions that only return message
+text with a value filled in); tests, prose, UI components and shell scripts never are. Measured on
+2026-11-10 it reads 1 of this repository's 665 code files as copy, one that is imported, so it
+holds none here today. A copy module already used, by a route that posts nothing or a screen, is
+judged by that use as before. Once an edit's own wording has passed, an edit to a
 JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
 more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
 send: each sender through the edited file (the file itself when it posts or imports a send helper,
@@ -7617,7 +7624,7 @@ path the write reader cannot name is outside it.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720
 
 </td></tr>
 </tbody>
