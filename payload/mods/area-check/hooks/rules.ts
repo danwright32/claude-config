@@ -784,14 +784,21 @@ export const reasonProblem = (reason: unknown): string | undefined => {
 }
 
 const issueList = (h: Held) => h.shown.map(m => `#${m.n}`).join(', ')
+/** The fold a command whose files cannot be named may take (#2706), as the refusal and the card say it. */
+const foldWay = (h: Held, verb: 'fold' | 'folds' = 'fold') => `${verb} the structural fix for one of ${issueList(h)} into this work`
 
 /** Why a decision cannot be taken for this held edit, or undefined when it can. */
 export const decideProblem = (input: { decision?: unknown; reason?: unknown; issue?: unknown }, h: Held): string | undefined => {
   const d = input.decision
   if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
   if (d === 'proceed') return reasonProblem(input.reason)
-  // A command whose files cannot be named folds only into an issue its hold listed (#2706).
-  if (h.unread && !(d === 'fold' && h.shown.length)) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
+  // A command whose files cannot be named folds only into an issue its hold listed (#2706), and the
+  // refusal names that fold whenever the hold listed one.
+  if (h.unread && !(d === 'fold' && h.shown.length)) {
+    return h.shown.length
+      ? `This command writes a file whose name cannot be read, so there is no file to restructure: proceed with a reason, ${foldWay(h)}, or make the change with Edit or Write, which the area check can judge.`
+      : 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
+  }
   if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
@@ -813,7 +820,9 @@ export const holdCard = (h: Held): { reason: string; safeWay: string; note?: str
   if (h.unread) {
     return {
       reason: `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,
-      safeWay: 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
+      safeWay: h.shown.length
+        ? `Claude proceeds with a reason, ${foldWay(h, 'folds')}, or makes the change with Edit or Write, which the area check can judge.`
+        : 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
     }
   }
   const parts: string[] = []
