@@ -1,5 +1,5 @@
 import type { SlackAlertChoice } from '../types/index.d.ts'
-import { APPROVE, CHANGE, SOURCE, fixedParts } from './rules.ts'
+import { APPROVE, CHANGE, SOURCE, UNWIRED, fixedParts } from './rules.ts'
 
 // Alert wording chosen in sleep mode (claude-config#2628). Dan, 2026-11-09: "Don't let alerts stop
 // you in sleep mode. Just keep working and if I don't like them we'll change them tomorrow. You
@@ -43,9 +43,12 @@ export const CHOICE_MS = 3 * 24 * 60 * 60_000
 export const asleepRefusal = (blocked: string, id: string): string =>
   `${blocked}. Dan is asleep (sleep mode), so choose the wording yourself rather than stopping: call ${CHOOSE_TOOL} with {"call": "${id}", "rendered": "<the whole message as Slack will post it, every variable filled in from a realistic example>"}, then send this call again, unchanged. Your choice is recorded, not approved: Dan is asked in the morning whether to keep it, and no pull request carrying it can merge until he approves it.`
 
-/** The morning question: the message chosen overnight, put to Dan to keep or change. Approving sends nothing. */
-export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'from' | 'rendered'>): string =>
-  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.from ?? c.file}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
+/**
+ * The morning question: the message chosen overnight, put to Dan to keep or change. Approving sends
+ * nothing. A module of message copy no file uses yet (#2720) is named as one, as the day question does.
+ */
+export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'from' | 'rendered' | 'unwired'>): string =>
+  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.from ?? c.file}${!c.from && c.unwired ? `, ${UNWIRED}` : ''}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
 
 export const MORNING_OPTIONS = [
   { label: APPROVE, description: 'Keep the wording chosen overnight. Only the pull request carrying it may merge.' },
