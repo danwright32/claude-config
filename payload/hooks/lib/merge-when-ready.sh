@@ -1703,15 +1703,16 @@ while :; do
   fi
   # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
   ghp_answered
-  # The account that could read the pull request; every write is made as the one resolve_merger
-  # picked, once it has (claude-config#2629).
-  view_account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
+  # One jq for the answer's six fields, one per line, not six (claude-config#2694). `.view | tojson`
+  # prints what `jq -c .view` did, byte for byte; none of the fields can hold a line break (a login, a
+  # state, a commit and two branch names), and an answer jq cannot read leaves every one empty, as
+  # six failed reads did, saying why on standard error once.
+  { IFS= read -r view_account; IFS= read -r view; IFS= read -r state; IFS= read -r head; IFS= read -r base; IFS= read -r branch; } <<EOF_VIEW
+$(printf '%s' "$view_env" | jq -r '(.account // ""), (.view | tojson), (.view | .state // ""), (.view | .headRefOid // ""), (.view | .baseRefName // ""), (.view | .headRefName // "")')
+EOF_VIEW
+  # view_account is the account that could read the pull request; every write is made as the one
+  # resolve_merger picked, once it has (claude-config#2629).
   if [ -n "$merge_as_known" ]; then account="$merge_as"; else account="$view_account"; fi
-  view="$(printf '%s' "$view_env" | jq -c '.view')"
-  state="$(printf '%s' "$view" | jq -r '.state // ""')"
-  head="$(printf '%s' "$view" | jq -r '.headRefOid // ""')"
-  base="$(printf '%s' "$view" | jq -r '.baseRefName // ""')"
-  branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
     # Deleting the branch is a write, so it is made as an account that can merge (claude-config#2629);

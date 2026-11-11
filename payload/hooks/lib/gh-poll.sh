@@ -53,9 +53,19 @@ ghp__num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;;
 ghp__dir(){ printf '%s' "${GH_POLL_STATE_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/gh-poll}"; }
 
 # The session's key: its id kept to a file name's characters, or no-session.
+# Worked out once per id (ghp__key_keep, in the caller's own shell, before the command substitutions
+# that read it), not by a tr at every look (claude-config#2694).
+GHP__KEY_ID=""; GHP__KEY=""
+ghp__key_keep(){
+  local id="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$id" ] || return 0
+  [ "$GHP__KEY_ID" = "$id" ] && [ -n "$GHP__KEY" ] && return 0
+  GHP__KEY="$(printf '%s' "$id" | tr -c 'A-Za-z0-9_-' '_')"; GHP__KEY_ID="$id"
+}
 ghp_session_key(){
   local id="${CLAUDE_CODE_SESSION_ID:-}"
   [ -n "$id" ] || { printf 'no-session'; return 0; }
+  if [ "$GHP__KEY_ID" = "$id" ] && [ -n "$GHP__KEY" ]; then printf '%s' "$GHP__KEY"; return 0; fi
   printf '%s' "$id" | tr -c 'A-Za-z0-9_-' '_'
 }
 
@@ -153,6 +163,7 @@ ghp_take(){
   free="$(ghp__num "${2:-}" 0)"
   cap=$(( cap - free )); [ "$cap" -ge 1 ] || cap=1
   GHP_CAP="$cap"
+  ghp__key_keep
   s="$(ghp__session_dir)" || { echo "gh-poll: the state folder $(ghp__dir) could not be made, so this look is not counted against the session's cap." >&2; return 0; }
   ghp__lock "$s"
   ghp__read_pause "$s"
@@ -187,6 +198,7 @@ ghp_take(){
 # A look was answered: the next rate limit starts again at the first wait.
 ghp_answered(){
   local s
+  ghp__key_keep
   s="$(ghp__dir)/$(ghp_session_key)"
   [ -f "$s/pause" ] || return 0
   ghp__lock "$s"

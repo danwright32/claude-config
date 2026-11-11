@@ -3644,7 +3644,50 @@ check_eq "#2629 control: the accounts never listed" "0" "$(count gh-calls '^auth
 check "#2629 control: saying which account and why" "Merging as the active gh account: it has WRITE on acme/widget." "$out"
 
 # =================================================================================================
-# 29. A run waiting for its turn leaves GitHub to the run holding it (claude-config#2715). On
+# 29. What one look costs while it waits in line (claude-config#2694). On 2026-11-10 about 15 helpers
+#     waited at once on the personal MacBook, each looking about once a minute, while sessions there
+#     ran slow, and one look in a line of four started about 87 programs (29 sed, 16 cat, 12 jq), most
+#     of them a sed per field of every ticket in the line, so the cost grew with the line. Every common
+#     program is wrapped here to count what the helper itself starts; a fake's own programs are not
+#     counted (the bash wrapper takes the wrappers off the path for it), the fake's start is. One look
+#     is the difference between a run of 12 looks and one of 4, over 8, behind six live runs. The
+#     ceiling is a setting chosen from the measure on 2026-11-10 (109 a look here on the code before,
+#     about 22 after, the same behind 3 runs or 14), not a measured limit.
+# =================================================================================================
+PC_WRAP="$WORKDIR/pc-wrap"; PC_LOG="$WORKDIR/pc-spawns"; PC_BASH="$(command -v bash)"; mkdir -p "$PC_WRAP"
+for t in jq cat sed grep egrep mkdir date mv rm head tail awk git perl python3 mktemp wc tr cut sort uniq ls find stat touch ps sysctl dirname basename seq env sleep id hostname tee cp chmod ln readlink expr pgrep shasum xargs rmdir od; do
+  real="$(command -v "$t" 2>/dev/null)" || continue
+  case "$real" in /*) ;; *) continue ;; esac
+  printf '#!/bin/bash\nprintf "%%s\\n" %s >> "%s"\nexec "%s" "$@"\n' "$t" "$PC_LOG" "$real" > "$PC_WRAP/$t"
+done
+printf '#!/bin/bash\nprintf "bash\\n" >> "%s"\nw="%s:"; PATH="${PATH#"$w"}"\nexec "%s" "$@"\n' "$PC_LOG" "$PC_WRAP" "$(command -v bash)" > "$PC_WRAP/bash"
+chmod +x "$PC_WRAP"/*
+# pc_line <looks>: one run behind six live runs, who all leave after <looks> sleeps; sets out, rc,
+# pc_n (the programs it started) and pc_sleeps.
+pc_line(){
+  local p
+  fresh "$OLD" 0 "$GREEN"
+  for p in 101 102 103 104 105 106; do "$BIN/take-turn" acme/widget "$p"; done
+  for _ in $(seq 2 "$1"); do printf ':\n' >> "$ST/on-sleep"; done
+  for p in 101 102 103 104 105 106; do leave "$p"; printf '; '; done >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+  : > "$PC_LOG"
+  # The helper itself is started by the real bash, so the wrappers stay on its path.
+  out="$(cd "$REPO" && PATH="$PC_WRAP:$PATH" MWR_TURN_HOLD_SECONDS=100000 "$PC_BASH" "$HELPER" 7 --squash 2>&1)"; rc=$?
+  pc_n="$(wc -l < "$PC_LOG" | tr -d ' ')"; pc_sleeps="$(wc -l < "$ST/sleeps" | tr -d ' ')"
+}
+pc_line 4; pc4="$pc_n"; sl4="$pc_sleeps"
+check_eq "#2694 the run of 4 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 4 looks in line" "after waiting 2m 00s for it" "$out"
+pc_line 12; pc12="$pc_n"; sl12="$pc_sleeps"
+check_eq "#2694 the run of 12 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 12 looks in line" "after waiting 6m 00s for it" "$out"
+check_eq "#2694 the two runs differ by 8 looks, one sleep each" "8" "$(( sl12 - sl4 ))"
+check_eq "#2694 the count saw the helper start programs at all" "yes" "$( [ "${pc4:-0}" -gt 50 ] && echo yes || echo no)"
+per_look=$(( (pc12 - pc4) / 8 ))
+check_eq "#2694 one look in a line of seven starts at most 40 programs (it started $per_look)" "yes" "$( [ "$per_look" -le 40 ] && echo yes || echo no)"
+
+# =================================================================================================
+# 30. A run waiting for its turn leaves GitHub to the run holding it (claude-config#2715). On
 #     2026-11-10 one session's 102 merge logs held 2,845 waits on the session's cap of looks a minute
 #     (GH_POLL_PER_MINUTE): 2,594 by helpers waiting in line, and 251 by the helper holding the turn,
 #     with a median of 8 helpers in line behind it, and the holder went a median of 120s between looks

@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
@@ -5499,6 +5509,15 @@ behind nor as this Mac's own work, and status exits as it would otherwise. Befor
 of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
 
 <table>
 <thead>
