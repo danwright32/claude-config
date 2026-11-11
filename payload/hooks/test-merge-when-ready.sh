@@ -3737,7 +3737,8 @@ check "#2714 and says the count was under the limit" "under the 40" "$out"
 check_not "#2714 and never that the pool was full" "the runner pool was full" "$out"
 
 # Two runs waited on for one head, the first under the limit: each is judged on its own count, so
-# the second, at 20, is still called a full pool. Run 1001 is made up for this, not recorded: one job
+# the second, the run recorded on 2026-11-10 with 20 running, is still called a full pool. Run 1001
+# is made up for this, not recorded: one job
 # that waited 2 minutes at a time no recorded run overlaps, so it counts 0 running.
 pw_fresh "$PW_RUN"
 jq -nc '[{__typename:"CheckRun",name:"lint",workflowName:"lint",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/1001/job/1"},{__typename:"CheckRun",name:"deal",workflowName:"tests",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/42877567710/job/130044844243"}]' > "$ST/rollup"
