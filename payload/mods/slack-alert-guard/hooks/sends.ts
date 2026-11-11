@@ -458,40 +458,12 @@ export type Traced = {
  * helper module.
  */
 export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported: Set<string> = new Set()): Traced => {
-  const { calls, fns, distinct, defsFor, marked, isArrow, pointCalls, changesFor } = analysisOf(r)
-
-  const sending = new Set<Call>()
-  const sendFns = new Set(imported)
-  const last = (callee: string) => callee.split(/\??\./).pop() as string
-  const head = (callee: string) => callee.split(/\??\./)[0] as string
-  const sendCallee = (callee: string) => MARKERS.some(m => m.test(`${callee}(`)) || sendFns.has(callee) || sendFns.has(last(callee)) || marked.has(head(callee))
-  for (let grew = true; grew; ) {
-    grew = false
-    for (const c of calls)
-      if (!sending.has(c) && sendCallee(c.callee)) {
-        sending.add(c)
-        grew = true
-      }
-    for (const c of pointCalls) {
-      if (c && !sending.has(c)) {
-        sending.add(c)
-        grew = true
-      }
-    }
-    // A function whose own body sends is a send: written as a function, or as an arrow given to a name.
-    const sendAts = [...sending].map(c => c.at).sort((a, b) => a - b)
-    const holds = (b: Range) => (sendAts[atLeast(sendAts, b.from)] ?? Infinity) < b.to
-    for (const f of fns)
-      if (!sendFns.has(f.name) && holds(f.body)) {
-        sendFns.add(f.name)
-        grew = true
-      }
-    for (const name of distinct)
-      if (!sendFns.has(name) && defsFor(name).some(d => isArrow(d) && holds(d.value))) {
-        sendFns.add(name)
-        grew = true
-      }
-  }
+  const { defsFor, changesFor, sendsWith, namesAt, renames } = analysisOf(r)
+  // Which calls send does not depend on the seeds, so it is worked out once for each set of imported
+  // send functions (#2796); a copy is handed back, so no caller changes the one kept.
+  const found = sendsWith(imported)
+  const sending = found.sending
+  const sendFns = new Set(found.sendFns)
 
   const ix = indexOf(r)
   const send = (c: Call): Send => ({ callee: c.callee, line: lineOf(ix, c.at) })
@@ -529,13 +501,13 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
     if (covered(span)) continue
     spans.push(span)
     followed(span)
-    for (const u of namesIn(r, span)) follow(u.name, u.at, span.send)
+    for (const u of namesAt(span)) follow(u.name, u.at, span.send)
   }
   // A name renamed on import or export (import { A as B }, export { A as B }, import a as b) is known
   // to the file below by its first name.
-  for (const m of r.skel.matchAll(/([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g)) {
-    const s = names.get(m[2] as string)
-    if (s && !names.has(m[1] as string)) names.set(m[1] as string, s)
+  for (const [first, given] of renames) {
+    const s = names.get(given)
+    if (s && !names.has(first)) names.set(first, s)
   }
   return { sends: [...sending].map(send), spans, names, fns: sendFns }
 }
@@ -547,14 +519,14 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
  * last ANALYSED texts, by the text and its reading, so it is only ever reused for the same file.
  */
 type Analysis = {
-  calls: Call[]
-  fns: Fn[]
-  distinct: string[]
   defsFor: (name: string) => Def[]
-  marked: Set<string>
-  isArrow: (d: Def) => boolean
-  pointCalls: (Call | undefined)[]
   changesFor: (name: string, within: Range) => Range[]
+  /** The calls that send, in the order found, and the functions that send, given the send functions imported. */
+  sendsWith: (imported: ReadonlySet<string>) => { sending: ReadonlySet<Call>; sendFns: ReadonlySet<string> }
+  /** The names a stretch of the skeleton uses, read once for each stretch (#2796). */
+  namesAt: (span: Range) => { name: string; at: number }[]
+  /** Each name renamed on import or export (A as B), as its first name and the name given, in file order. */
+  renames: [string, string][]
 }
 const ANALYSED = 8
 const analyses = new Map<string, { r: Reading; a: Analysis }>()
@@ -628,7 +600,63 @@ const analyse = (r: Reading): Analysis => {
     if (!c) changes.set(key, (c = changesOf(r, name, within)))
     return c
   }
-  return { calls, fns, distinct, defsFor, marked, isArrow, pointCalls, changesFor }
+
+  // Which calls send, grown until nothing more is found: a call to a Slack marker, a send function
+  // or a marked name; a call holding a marker; a function whose own body sends, written as a function
+  // or as an arrow given to a name. Every sender of a file traces it with its own seeds and the same
+  // imported send functions, so this, the same each time, is kept for each set of them (#2796): on
+  // 2026-11-11, 40 senders of a 5,500 line module worked it out 82 times, half of a 3.5 s search.
+  const sendSets = new Map<string, { sending: ReadonlySet<Call>; sendFns: ReadonlySet<string> }>()
+  const sendsWith = (imported: ReadonlySet<string>) => {
+    const key = [...imported].sort().join('\u0000')
+    const known = sendSets.get(key)
+    if (known) return known
+    const sending = new Set<Call>()
+    const sendFns = new Set(imported)
+    const last = (callee: string) => callee.split(/\??\./).pop() as string
+    const head = (callee: string) => callee.split(/\??\./)[0] as string
+    const sendCallee = (callee: string) => MARKERS.some(m => m.test(`${callee}(`)) || sendFns.has(callee) || sendFns.has(last(callee)) || marked.has(head(callee))
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const c of calls)
+        if (!sending.has(c) && sendCallee(c.callee)) {
+          sending.add(c)
+          grew = true
+        }
+      for (const c of pointCalls) {
+        if (c && !sending.has(c)) {
+          sending.add(c)
+          grew = true
+        }
+      }
+      const sendAts = [...sending].map(c => c.at).sort((a, b) => a - b)
+      const holds = (b: Range) => (sendAts[atLeast(sendAts, b.from)] ?? Infinity) < b.to
+      for (const f of fns)
+        if (!sendFns.has(f.name) && holds(f.body)) {
+          sendFns.add(f.name)
+          grew = true
+        }
+      for (const name of distinct)
+        if (!sendFns.has(name) && defsFor(name).some(d => isArrow(d) && holds(d.value))) {
+          sendFns.add(name)
+          grew = true
+        }
+    }
+    const found = { sending, sendFns }
+    sendSets.set(key, found)
+    return found
+  }
+  // A followed stretch's names, read once for each stretch, since every sender's trace follows the
+  // same stretches of its sends' arguments and declarations (#2796).
+  const spanNames = new Map<string, { name: string; at: number }[]>()
+  const namesAt = (span: Range) => {
+    const key = `${span.from}:${span.to}`
+    let n = spanNames.get(key)
+    if (!n) spanNames.set(key, (n = namesIn(r, span)))
+    return n
+  }
+  const renames = [...r.skel.matchAll(/([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g)].map(m => [m[1] as string, m[2] as string] as [string, string])
+  return { defsFor, changesFor, sendsWith, namesAt, renames }
 }
 
 /**

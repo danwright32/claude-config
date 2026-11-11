@@ -803,6 +803,9 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     top = repo
     try {
       for (const s of senders) {
+        // Tracing a sender reads nothing new once its files are read, so without this the search ran
+        // on past its deadline, sender after sender, toward the hook's own limit (#2796).
+        if ((await left()) <= 0) late()
         let now: Reached
         let was: Reached | undefined
         if (s.rel === template) {

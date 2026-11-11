@@ -2589,3 +2589,51 @@ test('a search for what an edit brings to a send that runs out of time says so, 
   expect(late).not.toContain('could not name the repository')
   expect(w.ran).toEqual([])
 })
+
+// claude-config#2796: on 2026-11-11, in a work repository, an edit adding names to an existing
+// import in a 5,500 line module that sends the alerts ran out of the search time on every try, about
+// 20 tries across four builders. Each file that sends the module is a sender of it, and for each one
+// the module was traced again as it was and as the edit leaves it, every trace working out afresh
+// which of the module's calls send (the same answer each time, since it does not depend on what the
+// sender sends) and reading every followed stretch's names again. Measured on the personal MacBook
+// at load 16: 40 senders of a 5,500 line module, 3.5 s an edit, half of it finding the same sends 82
+// times over; at 11,000 lines, 7.0 s. And the search never looked at its deadline between senders,
+// so on the wall it ran on past it. Judged on the wall at 11,000 lines and 80 senders, where the guard
+// before the fix runs out of time.
+const LIB = '/w/app/src/lib/monitor/alerts.ts'
+const DB_FILE = '/w/app/src/lib/db.ts'
+const dbModule = (helpers: number) =>
+  [
+    "import { Pool } from 'pg'\n",
+    'export type Db = { query: (q: string, p?: unknown[]) => Promise<Row[]> }\n',
+    'export type Row = Record<string, unknown>\n',
+    ...Array.from({ length: helpers }, (_, i) => `export const helper${i} = async (db: Db, id: string) => {\n  const rows = await db.query('select * from t${i} where id = $1', [id])\n  if (!rows.length) throw new Error('row ${i} not found')\n  return rows[0]\n}\n`),
+    'export const getDb = async (): Promise<Db> => new Pool() as never\nexport const withTx = async () => undefined\n',
+  ].join('')
+const DB_IMPORT = "import { getDb, type Db, type Row } from '@/lib/db'\n"
+const jobSending = (i: number) =>
+  `import { check${i} } from '@/lib/monitor/alerts'\nimport { postSlackAlert } from '@/lib/notify/slack'\nexport const run = async () => {\n  const r = await check${i}({} as never, new Date())\n  if (!r.ok) await postSlackAlert(\`Job ${i} failed: \${r.detail}\`)\n}\n`
+
+test('names added to an existing import in an 11,000 line module that 80 files send are judged inside the search time (#2796)', withKit, async ($, on) => {
+  const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
+  const files: Record<string, string> = {
+    [SLACK_POST]: POST_TEXT.replace('postAlert', 'postSlackAlert'),
+    [LIB]: bigRoute(BIG_LINES),
+    [DB_FILE]: dbModule(60),
+    '/w/app/src/lib/logger.ts': 'export const logger = { info: (m: string, x?: unknown) => console.log(m, x) }\n',
+  }
+  for (let i = 0; i < 80; i++) files[`/w/app/src/app/api/jobs/job${i}/route.ts`] = jobSending(i)
+  const w = world($, on, { files })
+  // The test clock moves only at the guard's calls to the world, and tracing the senders makes none,
+  // so the real time the call took is read as well: it must fit the search time too.
+  const started = performance.now()
+  expect(await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: DB_IMPORT, new_string: "import { getDb, withTx, helper3, type Db, type Row } from '@/lib/db'\n" })).toBe('')
+  expect(performance.now() - started).toBeLessThan(SCAN_MS)
+  expect(w.ran.length).toBe(1)
+  // Wording the module newly sends is still held, so the pass above was the search finishing, never a
+  // search that judged nothing.
+  const reworded = await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: "  if (!rows3.length) return { name: 'check3', ok: true }", new_string: "  if (!rows3.length) return { name: 'check3', ok: false, detail: 'Nothing has arrived for kind 3 today' }" })
+  expect(reworded).toContain('Nothing has arrived for kind 3 today')
+  expect(reworded).not.toContain('not searched within')
+  expect(w.ran.length).toBe(1)
+})
