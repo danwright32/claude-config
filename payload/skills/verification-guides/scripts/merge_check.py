@@ -22,13 +22,21 @@ The bundle is a folder the hook writes:
                                GitHub could not be read for them
   comments.json | comments.err its comments, oldest first
   guides/<area>.md | .absent | .err      each touched area's guide at BASE
-  compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head
+  compare/<sha>.json | .err    GitHub's compare of an older record's commit with the head (or with
+                               the head a screenshots block was rendered at)
+  repo.json | repo.err         gh api repos/<slug>, read only when a screenshots block links images,
+                               for whether the repository is public (#2516)
+  shots/<commit>.json | .err   the folder of pictures a screenshots block links, listed at that commit
+  allow-no-screenshots         present when the merge command carries ALLOW_NO_SCREENSHOTS=1
 
 CLI: merge_check.py verdict <bundle> [--final]
-  Prints {"need": {"guides": [{area, path}], "compares": [sha]}} while the bundle lacks something a
-  verdict needs; the hook fetches those and asks again with --final, where anything still missing is
-  GitHub unreadable. Otherwise the verdict: {"mode", "passed", "decision" (allow or refuse), "text",
-  "problems" [{kind, area, message}], "touched_areas", "head_sha"}. In mode warn the verdict is also
+  Prints {"need": {"guides": [{area, path}], "compares": [sha], "listings": [{commit, folder}],
+  "repo": true or false}} while the bundle lacks something a verdict needs; the hook fetches those
+  (listings into shots/<commit>.json, the repository into repo.json) and asks again with --final,
+  where anything still missing is GitHub unreadable. Otherwise the verdict: {"mode", "passed",
+  "decision" (allow or refuse), "text", "problems" [{kind, area, message}], "touched_areas",
+  "head_sha", "say" (hand the text to the session on an allow), "screenshots" {mode, problems,
+  note, overridden}}. The bundle may also hold allow-no-screenshots. In mode warn the verdict is also
   appended to the warn tally. Exit 0 whenever it printed an answer, 2 on usage; a crash prints no
   JSON, and the hook refuses on that.
 
@@ -38,7 +46,11 @@ ambiguous-file, no-record, malformed-record, failing-record, record-not-base-gui
 done-when-changed, stale-record, receipt-other-machine, receipt-missing, receipt-unreadable,
 receipt-mismatch, receipt-not-stopped, record-not-rendered, record-edited, egress-unmeasured,
 egress-not-clean, stamp-missing, stamp-failed, stamp-mismatch, no-drive, merge-unpinned,
-merge-pinned-elsewhere.
+merge-pinned-elsewhere. The screenshots check (#2516, screenshots.py) has its own, judged under
+screenshots.mode and reported under "screenshots": screenshots-missing, screenshots-malformed,
+screenshots-receipt-unreadable, screenshots-edited, screenshots-stale, screenshots-missing-shot,
+screenshots-bad-link, screenshots-github-unreadable, screenshots-public-not-synthetic,
+screenshots-link-unresolved.
 """
 
 import json
@@ -47,6 +59,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verification as v  # noqa: E402
+import screenshots as shots  # noqa: E402
 
 # GitHub's documented list limits: a pull request's files endpoint returns at most 3000 files, and a
 # compare at most 300. A list at the cap may be cut short, so it cannot show a file is absent.
@@ -117,7 +130,8 @@ class _Verdict:
     def __init__(self, bundle, home):
         self.bundle, self.home = bundle, home
         self.problems = []
-        self.need = {"guides": [], "compares": []}
+        self.need = {"guides": [], "compares": [], "listings": [], "repo": False}
+        self.shots = None
         view_text = _read(os.path.join(bundle, "view.json"))
         try:
             self.view = json.loads(view_text) if view_text else {}
@@ -187,7 +201,8 @@ class _Verdict:
                     sha = rec["record"]["head_sha"]
                     if not final and sha not in self.need["compares"]:
                         self.need["compares"].append(sha)
-        if not final and (self.need["guides"] or self.need["compares"]):
+        self.judge_screenshots(areas, touched, pr_files, final)
+        if not final and any(self.need.values()):
             return {"need": self.need}
 
         for name in touched:
@@ -443,7 +458,8 @@ class _Verdict:
 
     def tally(self, passed):
         try:
-            v.tally_append(self.slug, self.number, self.head, passed, [p["kind"] for p in self.problems], home=self.home)
+            kinds = [p["kind"] for p in self.problems + ((self.shots or {}).get("problems") or [])]
+            v.tally_append(self.slug, self.number, self.head, passed, kinds, home=self.home)
             n, ask_at = v.tally_progress(self.slug, home=self.home)
         except (v.VerificationError, OSError, TypeError, ValueError) as e:
             return "The warn tally could not be written (%s), so this verdict counts toward nothing." % e
@@ -451,8 +467,112 @@ class _Verdict:
                " mode at %d." % (self.slug, n, "" if n == 1 else "s", ask_at)
 
     def answer(self, mode, passed, decision, text, touched):
+        """The verdict, with the screenshots judgment laid over it under its own mode (#2516).
+
+        `passed` and `problems` stay the run records' alone; the pictures have `screenshots`. `say`
+        is whether the hook hands the text to the session on an allow: always in warn mode, and
+        whenever a picture is missing, so a warning is never lost behind a passing block mode check.
+        """
+        sh = self.shots or {"problems": [], "note": "", "mode": "warn"}
+        allow_no = os.path.exists(self.path("allow-no-screenshots"))
+        say = mode == "warn"
+        if sh["problems"]:
+            say = True
+            lines = "\n".join("- %s: %s" % (p["area"] or "this merge", p["message"]) for p in sh["problems"])
+            if allow_no:
+                text += "\nScreenshots overridden for this command with ALLOW_NO_SCREENSHOTS=1, so these do not" \
+                        " refuse it:\n" + lines
+            elif sh["mode"] == "block":
+                decision = "refuse"
+                text += "\nRefusing to merge until this pull request's body carries its screenshots (screenshots.mode" \
+                        " is block in %s on %s):\n%s\nDeliberate override: ALLOW_NO_SCREENSHOTS=1 <the same command>." % (
+                            v.AREAS_PATH, self.where, lines)
+            else:
+                text += "\nScreenshots, warn mode (screenshots.mode is warn in %s on %s), so they do not refuse this" \
+                        " merge. In block mode it would be refused:\n%s" % (v.AREAS_PATH, self.where, lines)
+        elif sh["note"] and mode == "warn":
+            text += "\n" + sh["note"]
         return {"mode": mode, "passed": passed, "decision": decision, "text": text, "problems": self.problems,
-                "touched_areas": touched, "head_sha": self.head}
+                "touched_areas": touched, "head_sha": self.head, "say": say,
+                "screenshots": {"mode": sh["mode"], "problems": sh["problems"], "note": sh["note"],
+                                "overridden": bool(allow_no and sh["problems"])}}
+
+    # -- the pictures (#2516) ------------------------------------------------------------------
+
+    def judge_screenshots(self, areas, touched, pr_files, final):
+        repo_raw = _read(self.path("repo.json"))
+        try:
+            repo = json.loads(repo_raw) if repo_raw else None
+        except ValueError:
+            repo = None
+        private = repo.get("private") if isinstance(repo, dict) and isinstance(repo.get("private"), bool) else None
+        if repo_raw is None and _read(self.path("repo.err")) is None:
+            private = "unasked"
+        listings = {}
+        folder = self.path("shots")
+        for fn in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+            commit, ext = os.path.splitext(fn)
+            if ext == ".err":
+                listings[commit] = _read(os.path.join(folder, fn)) or "GitHub gave no reason"
+            elif ext == ".json":
+                try:
+                    entries = _pages(_read(os.path.join(folder, fn)) or "")
+                except ValueError as e:
+                    listings[commit] = "GitHub's listing was not JSON: %s" % e
+                    continue
+                listings[commit] = [e.get("name") for e in entries if isinstance(e, dict) and e.get("type") == "file"]
+        body = self.view.get("body") or ""
+        found = shots.parse_block(body)
+        m, changed, unread = found["manifest"], None, []
+        if m and m["head_sha"] != self.head:
+            changed = self.changed_since(m["head_sha"], pr_files, unread)
+        out = shots.judge(areas, touched, body, self.head, private, listings, changed, home=self.home)
+        names = ", ".join(a["name"] for a in shots.ui_areas(areas, touched))
+        for why in unread:
+            out["problems"].append({"kind": "screenshots-github-unreadable", "area": names, "message": why})
+        for sha in out["need"]["compares"]:
+            if unread:
+                continue
+            if not final:
+                if sha not in self.need["compares"]:
+                    self.need["compares"].append(sha)
+            else:
+                out["problems"].append({"kind": "screenshots-github-unreadable", "area": names, "message":
+                                        "no answer from GitHub was recorded for the changes since the pictures at %s" % sha[:7]})
+        if out["need"]["repo"]:
+            if not final:
+                self.need["repo"] = True
+            else:
+                out["problems"].append({"kind": "screenshots-github-unreadable", "area": names, "message":
+                                        "no answer from GitHub was recorded for whether this repository is public"})
+        for want in out["need"]["listings"]:
+            if not final:
+                self.need["listings"].append(want)
+            else:
+                out["problems"].append({"kind": "screenshots-github-unreadable", "area": names, "message":
+                                        "no answer from GitHub was recorded for %s at %s, so whether its pictures"
+                                        " exist cannot be told" % (want["folder"], want["commit"][:7])})
+        self.shots = out
+
+    def changed_since(self, sha, pr_files, unread):
+        """The pull request's own files changed since `sha`, None when not yet read; failures to `unread`."""
+        err = _read(self.path("compare", sha + ".err"))
+        if err is not None:
+            unread.append("GitHub could not be read for the changes since the pictures at %s: %s" % (sha[:7], err.strip()))
+            return None
+        raw = _read(self.path("compare", sha + ".json"))
+        if raw is None:
+            return None
+        try:
+            cmp = json.loads(raw)
+        except ValueError as e:
+            unread.append("GitHub's compare of %s with the head was not JSON: %s" % (sha[:7], e))
+            return None
+        files = cmp.get("files") if isinstance(cmp, dict) and isinstance(cmp.get("files"), list) else []
+        if not isinstance(cmp, dict) or cmp.get("status") not in ("ahead", "identical") or len(files) >= COMPARE_FILES_CAP:
+            # Rebased past the pictures, or too many files to tell: every file counts as changed.
+            return sorted(pr_files)
+        return [p for p in _paths(files) if p in pr_files]
 
 
 def verdict(bundle, home=None, final=False):
