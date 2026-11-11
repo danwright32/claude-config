@@ -7539,8 +7539,9 @@ id and the message as Slack will post it, checked as the question's `rendered` i
 kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
 a `wording` note, and the call sent again goes through; a choice lets wording through only while
 sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
-merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of chosen
-wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could not check.
+merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
+chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
+not check.
 In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
 next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
