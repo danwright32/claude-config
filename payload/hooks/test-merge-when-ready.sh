@@ -3087,8 +3087,8 @@ fresh "$OLD" 0 "$GREEN"
 for _ in $(seq 1 11); do printf ':\n' >> "$ST/on-sleep"; done
 leave 9 >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
 out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 run 7 --squash)"; rc=$?
-check_eq "#1697 a run in line on a growing wait still merges" "0" "$rc"
-check "#1697 taking the turn the look after it passed, not at the end of a grown wait" "after waiting 12m 00s for it" "$out"
+check_eq "#1697 a run in line, reading GitHub every ten minutes, still merges" "0" "$rc"
+check "#1697 taking the turn the look after it passed, not at its next ten minute look at GitHub" "after waiting 12m 00s for it" "$out"
 check_eq "#1697 never sleeping longer than a base look in line" "60" "$(sort -n "$ST/sleeps" | tail -1)"
 reads_in_line="$(awk '$1 < 1000720' "$ST/view-times" | wc -l | tr -d ' ')"
 check_eq "#1697 reading GitHub fewer times than once a minute while in line (2 reads in its 12 minutes in line, at its first look and ten minutes later, claude-config#2715; 5 on the growing wait before it, 12 at one a minute)" "2" "$reads_in_line"
