@@ -593,7 +593,7 @@ test('a shell command writing no file, a new file or only files that are no sour
   expect(w.judged().length).toBe(0)
 })
 
-test('a shell command whose file cannot be read is held saying so, may only proceed, and the unchanged command then runs', KIT, async ($, on) => {
+test('a shell command whose file cannot be read is held saying so, may not restructure, and the unchanged command runs once it proceeds', KIT, async ($, on) => {
   const w = world($, on)
   const why = refusal(await bash($ as never, w, BUILT))
   expect(why).toContain('cannot be read')

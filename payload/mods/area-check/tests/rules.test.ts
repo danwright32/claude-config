@@ -628,7 +628,7 @@ test("a held Bash command is named as a command that writes the file, and is sen
   expect(r).not.toContain('Before editing it')
 })
 
-test('a command whose file cannot be read is held saying so, and can only proceed: there is no file to fold into or restructure', () => {
+test('a command whose file cannot be read is held saying so, and with no issue listed can only proceed: there is no file to fold into or restructure', () => {
   const card = holdCard(UNREAD)
   expect(card.reason).toContain('cannot be read')
   expect(card.reason).toContain('$OUT')
