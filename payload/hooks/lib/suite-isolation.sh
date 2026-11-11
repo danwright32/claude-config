@@ -34,6 +34,19 @@ suite_isolation_no_claude(){
   export SYNC_CLAUDE_BIN
 }
 
+# Turns Python's bytecode cache off for everything a suite runs, whatever was inherited
+# (claude-config#2751). A program importing a module with it on leaves __pycache__ beside the
+# module, and a part's suites run side by side, so one suite's import from lib/ failed
+# test-work-names.sh's #2444 check on a pull request that touched neither: three writers found one
+# at a time (#2444, #2600, #2751). Called by the runner near its top and by every suite arming its
+# deadline, so the next importer nobody has found is covered the day it lands. `python3 -I` and `-E`
+# drop it, which is why test-lib-bytecode-importers.sh still asks for -B on the command itself, and
+# a suite whose check is ABOUT bytecode unsets it after arming so the check can still see a writer.
+suite_isolation_no_bytecode(){
+  PYTHONDONTWRITEBYTECODE=1
+  export PYTHONDONTWRITEBYTECODE
+}
+
 # One seam per line: the variable, then where it points inside the throwaway folder.
 suite_isolation_seams(){
   printf '%s\n' \
