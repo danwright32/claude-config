@@ -2,7 +2,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, owedThreads, threadKey, threadsIn } from './threads.ts'
+import { type Unrelated, draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, nameOfThread, owedThreads, threadKey, threadsIn } from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
 // this file keeps, per session in $.state: the threads, the step a merge last landed at, and each
