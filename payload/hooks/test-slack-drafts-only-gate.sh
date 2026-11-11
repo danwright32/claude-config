@@ -2583,14 +2583,20 @@ spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
 gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gate)
 d = sys.argv[2]
-judge = gate.Judge(gate.load_reader())
-parses, real = {}, judge.sw.commands
-def counting(s, *a, **k):
-    # Only what the gate's own code asks for: the reader's own calls to itself are not the gate's.
-    if sys._getframe(1).f_code.co_filename == gate.__file__:
-        parses[s] = parses.get(s, 0) + 1
-    return real(s, *a, **k)
-judge.sw.commands = counting
+# Counted beneath what the gate puts over the reader (remember_readings, claude-config#2784), so each
+# count is a real reading, whoever asked for it.
+import os
+spec = importlib.util.spec_from_file_location("shell_words", os.path.join(os.path.dirname(sys.argv[1]), "lib", "shell-words.py"))
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+parses, real = {}, sw.commands
+def counting(s, cwd="", heredocs=None, parts=None, spans=None):
+    if heredocs is None and spans is None:
+        parses[(s, cwd)] = parses.get((s, cwd), 0) + 1
+    return real(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+sw.commands = counting
+gate.remember_readings(sw)
+judge = gate.Judge(sw)
 asked, binds = [], gate.Judge.sh_binds
 gate.Judge.sh_binds = staticmethod(lambda name, text, allowed=0: asked.append((name, text)) or binds(name, text, allowed))
 if judge.line("bash a.sh", d, 0, "bash a.sh") is not None:
@@ -2615,6 +2621,138 @@ print("; ".join(wrong) or "ok")
 PY
 once="$(python3 "$T/once.py" "$DIR/slack_drafts_only_gate.py" "$T/once" 2>&1)"
 check "a text is read into commands once, and a sourced file asked about a name once (#2576)" "$once"
+
+echo "slack drafts only: a claude-sync line is judged in about the time it took at #2640 (claude-config#2784)"
+
+# The #2642 replay (2026-11-11) found `claude-sync lesson L174`, which CLAUDE.md tells every session
+# to run, judged in 7.9 seconds on average against 1.8 at #2640, and 48 lines running claude-sync two
+# or three times out of time and refused. Measured here the same day: 8.1 seconds of processor time
+# on main, 1.8 at #2640, 1.8 with the fix. Three causes: sh_binds' NAME= pattern opened on a
+# lookbehind, so re tried it at every character of claude-sync's 973,000 (16 ms a pass, once per local
+# the walk follows, 4 seconds); claude-sync was read into commands twice, by the line being judged and
+# by every_command (a second each under a profiler); and each of its 14,000 commands cut a copy of all
+# the text before it, split it into lines, and read its own words three times over.
+# Held two ways. The work itself, counted, which no load can move (L290): one reading of claude-sync
+# into commands and one of each command's words in a run, and the same answers from sh_binds as the
+# patterns it had. And the time, as processor time against a yardstick taken in the same run (L656):
+# the reader's one reading of claude-sync, the median of four, two before and two after. On
+# 2026-11-11 that reading took 0.3 seconds, so one lesson line came to about 6 readings with the fix
+# and 27 on main, and three lesson lines to 11 with the fix, while main ran out of its 11 seconds.
+# The ceilings sit at about twice the fix.
+# The checkout's own claude-sync, found by the one shared test (lib/checkout-root.sh, #1663); installed
+# in ~/.claude there is no checkout, and the clone the sync runs from is read instead.
+CS=""
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+for c in "${REPO:+$REPO/claude-sync}" "$HOME/claude-config-sync/claude-sync"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then CS="$c"; break; fi
+done
+if [ -z "$CS" ]; then
+  # L411: with no claude-sync on this Mac there is nothing to measure, and a red would read as the gate.
+  echo "SUITE-PART-UNMEASURED #2784: no claude-sync in this checkout or at ~/claude-config-sync, so the time to judge a claude-sync line was not measured"
+else
+  cat > "$T/work.py" <<'PY'
+import importlib.util, os, re, sys
+gate_path, cs = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+spec = importlib.util.spec_from_file_location("shell_words", os.path.join(os.path.dirname(gate_path), "lib", "shell-words.py"))
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+# Counted beneath whatever the gate puts over the reader, so each count is a real reading.
+reads, rests = {}, {}
+plain, plain_rest = sw.commands, sw.command_rest
+def commands(s, cwd="", heredocs=None, parts=None, spans=None):
+    if heredocs is None and spans is None:
+        reads[(s, cwd)] = reads.get((s, cwd), 0) + 1
+    return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+def command_rest(text, passed=None):
+    if passed is None:
+        rests[text] = rests.get(text, 0) + 1
+    return plain_rest(text, passed)
+sw.commands, sw.command_rest = commands, command_rest
+remember = getattr(gate, "remember_readings", None)
+if remember is None:
+    print("the gate has no remember_readings, so the reader reads each text afresh for every caller"); sys.exit()
+remember(sw)
+judge = gate.Judge(sw)
+line = cs + " lesson L174; " + cs + " lesson L290"
+if judge.line(line, "/", 0, line) is not None:
+    print("two claude-sync lessons were refused"); sys.exit()
+text = open(cs).read()
+wrong = []
+whole = sum(n for (s, _), n in reads.items() if s == text)
+if whole != 1:
+    wrong.append("claude-sync was read into commands %d times" % whole)
+again = sorted(n for n in rests.values() if n > 1)
+if again:
+    wrong.append("one command's words were read %d times" % again[-1])
+# sh_binds answers as the patterns it had did, over every name claude-sync binds or reads, on a
+# piece of it and on texts placed to catch a line's edges.
+SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
+              r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+def before(name, t, allowed=0):
+    if name not in t:
+        return False
+    n = re.escape(name)
+    if len(re.findall(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t)) > allowed:
+        return True
+    if re.search(r"\(\([^()]*(?<![\w$])" + n + r"\b", t):
+        return True
+    return any(not re.match(r"(?:export|readonly)\b", m.group(0)) for m in re.finditer(SH_BINDERS.format(n), t))
+piece = text[200000:260000]
+names = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", piece)))
+edges = ["x=1", "\nx=1", "$x=1", "ax=1", "x[1]=a\n", "local\nx", "read -r a x", "export x", "export x=1",
+         "(( y +\n x ))", "((a)) x", "echo ${x:=d}", "for x in a", "a; read x", "x", "local y x\nexport x",
+         "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2"]
+bad = []
+for t in [piece] + edges:
+    for name in (names if t is piece else ["x"]):
+        for allowed in (0, 1):
+            if gate.Judge.sh_binds(name, t, allowed) != before(name, t, allowed):
+                bad.append((name, t if t is not piece else "claude-sync", allowed))
+if bad:
+    wrong.append("sh_binds answered differently from the patterns it had for %d cases, first %r" % (len(bad), bad[0]))
+if len(names) < 500:
+    wrong.append("only %d names were compared" % len(names))
+print("; ".join(wrong) or "ok")
+PY
+  work="$(python3 "$T/work.py" "$DIR/slack_drafts_only_gate.py" "$CS" 2>&1)"
+  check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
+
+  cat > "$T/cost.py" <<'PY'
+import importlib.util, json, resource, statistics, subprocess, sys, time
+hook, reader, cs, ceiling = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
+line = " ; ".join("%s lesson %s" % (cs, l) for l in sys.argv[5:])
+spec = importlib.util.spec_from_file_location("shell_words", reader)
+sw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sw)
+text = open(cs).read()
+def yard():
+    t = time.process_time()
+    sw.commands(text, "/")
+    return time.process_time() - t
+samples = [yard(), yard()]
+payload = json.dumps({"session_id": "s", "transcript_path": "/tmp/t.jsonl", "cwd": "/", "permission_mode": "auto",
+                      "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                      "tool_input": {"command": line, "description": "d"}, "tool_use_id": "t"})
+was = resource.getrusage(resource.RUSAGE_CHILDREN)
+p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True)
+now = resource.getrusage(resource.RUSAGE_CHILDREN)
+spent = (now.ru_utime - was.ru_utime) + (now.ru_stime - was.ru_stime)
+samples += [yard(), yard()]
+unit = statistics.median(samples)
+if p.returncode != 0:
+    print("the line was refused (exit %d) after %.1f s of processor time: %s" % (p.returncode, spent, p.stderr[:200])); sys.exit()
+ratio = spent / unit
+print("ok" if ratio <= ceiling else "judging it took %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s"
+      % (spent, ratio, unit, ceiling))
+PY
+  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
+  check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
+  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
+  check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

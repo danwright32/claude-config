@@ -455,11 +455,15 @@ span "$MERGE 7 --repo acme/widget; cd $gitrepo && $MERGE 8" "$root/plain" \
 LONE_MT="$root/lone-mt"
 python3 "$HOOK_DIR/lib/install-hook-libs.py" "$HOOK_DIR/lib" "$LONE_MT" merge-target.sh >/dev/null \
   || fail "#2204 merge-target.sh could not be installed with what it sources"
-lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+# Driven by a script written beside the copy and run as a process of its own, which sources the
+# copy from its own directory. Sourcing the copy from here names a path made at run time, which the
+# Slack drafts gate cannot work out (claude-config#2538).
+printf '%s\n' '. "${BASH_SOURCE[0]%/*}/merge-target.sh"' 'mt_merge_span_why "$1" "$2"' > "$LONE_MT/drive-lone.sh"
+lone_why="$(bash "$LONE_MT/drive-lone.sh" \
   "cd $root/plain && ./scripts/merge-when-green.sh 7; cd $root/deep && ./scripts/merge-when-green.sh 8" "$root/parent")"; rc=$?
 if [ "$rc" -eq 0 ] && [[ "$lone_why" == *"shell-words.py"* ]]; then pass
 else fail "with no reader, two wrapper merges are refused by name, not read as one (rc=$rc said [$lone_why])"; fi
-lone_why="$(bash -c '. "$1/merge-target.sh"; mt_merge_span_why "$2" "$3"' _ "$LONE_MT" \
+lone_why="$(bash "$LONE_MT/drive-lone.sh" \
   "cd $root/plain && ./scripts/merge-when-green.sh 7" "$root/parent")"; rc=$?
 if [ "$rc" -ne 0 ]; then pass; else fail "control: with no reader, one wrapper merge is not refused (said [$lone_why])"; fi
 # A merge whose pull request number cannot be read is its own target, never folded into another merge

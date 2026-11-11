@@ -49,6 +49,7 @@ assembled from pieces, an import path built at run time) is not the threat this 
 The threat is a session that means well choosing the quickest way to post.
 """
 import ast
+import bisect
 import faulthandler
 import fnmatch
 import functools
@@ -622,10 +623,15 @@ SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
 # The three patterns Judge.sh_binds reads a name by, compiled once per name for the life of the run:
 # NAME=, NAME+= and NAME[i]=; NAME inside (( )); and the builtins that bind a name. re keeps only 512
 # compiled patterns, and one script can have thousands of names (claude-config#2569).
+# NAME= starts with the name itself and checks the character before it from there (a lookbehind
+# over [\w$]NAME, fixed width since the name is literal), which matches exactly what a leading
+# (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
+# but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
+# 973,000, and sh_locals asks once per local (claude-config#2784).
 @functools.lru_cache(maxsize=None)
 def sh_bind_patterns(name):
     n = re.escape(name)
-    return (re.compile(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?="),
+    return (re.compile(n + r"(?<![\w$]" + n + r")(?:\[[^\]\n]*\])?\+?="),
             re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b"),
             re.compile(SH_BINDERS.format(n)))
 
@@ -657,7 +663,58 @@ def load_reader():
     spec = importlib.util.spec_from_file_location("shell_words", os.path.join(HERE, "lib", "shell-words.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    remember_readings(mod)
     return mod
+
+
+@functools.lru_cache(maxsize=8)
+def lines_of(text):
+    """(text's lines, the offset each starts at), worked out once for the few texts a run reads
+    commands' input from (Judge.fed): asked once per command that reads its input, it split
+    claude-sync's 973,000 characters 123 times (claude-config#2784). Tuples, so no caller can change
+    what the next one is given."""
+    lines = tuple(text.split("\n"))
+    starts, at = [], 0
+    for ln in lines:
+        starts.append(at)
+        at += len(ln) + 1
+    return lines, tuple(starts)
+
+
+def remember_readings(mod):
+    """Make the reader's commands() and command_rest() read each text once in this run, for every
+    caller: what each gives depends on its arguments alone. commands() was asked for one (text,
+    directory) by the line being judged, every_command's walk of it, the walk of its variables and the
+    names a sourced file binds, 40 readings for the 11 files of the merge helper (claude-config#2576),
+    and two whole readings of claude-sync's 973,000 characters for every claude-sync line, about a
+    second each; command_rest() three times for each of its 14,000 commands (claude-config#2784).
+    Only this run's own copy of the reader is changed. Each caller gets lists of its own. A call
+    asking for heredoc bodies, their spans or the runners passed is read afresh, and a text the
+    reader cannot read raises as it did, every time it is asked for."""
+    plain, memo = mod.commands, {}
+
+    def commands(s, cwd="", heredocs=None, parts=None, spans=None):
+        if heredocs is not None or spans is not None:
+            return plain(s, cwd, heredocs=heredocs, parts=parts, spans=spans)
+        key = (s, cwd)
+        if key not in memo:
+            where = []
+            memo[key] = (plain(s, cwd, parts=where), where)
+        cmds, where = memo[key]
+        if parts is not None:
+            parts.extend(dict(p) for p in where)
+        return list(cmds)
+
+    plain_rest, rests = mod.command_rest, {}
+
+    def command_rest(text, passed=None):
+        if passed is not None:
+            return plain_rest(text, passed)
+        if text not in rests:
+            rests[text] = plain_rest(text)  # (rest, assigns), two strings
+        return rests[text]
+
+    mod.commands, mod.command_rest = commands, command_rest
 
 
 def draft_advice(where):
@@ -750,7 +807,6 @@ class Judge:
         self.next_cwd_known = True
         self.known_memo = {}
         self.binds_memo = {}  # {a sourced file's text: {name: whether it binds it}}, for sh_bound_in
-        self.parsed_memo = {}  # {(text, directory): (its commands, where each is)}, for parsed
         # The files and directories an earlier command of this call writes (claude-config#2525), by
         # real path: {file: [(kind, the path or the text, its name for a refusal)]}, kind "file",
         # "text" or "unknown" (text that cannot be worked out, claude-config#2721), and {directory:
@@ -2010,18 +2066,11 @@ class Judge:
         return value if v is None else v
 
     # The commands of s read from cwd, and where each is in s: (commands, parts), as the reader's
-    # commands() gives them. Read once for each text in a run: what it gives depends on the text and
-    # the directory alone, and the line being judged, the walk of its variables and the names a
-    # sourced file binds each asked for it again, 40 readings for the 11 files of the merge helper
-    # (claude-config#2576). Each caller gets lists of its own. A text the reader cannot read raises
-    # as it did, every time it is asked for.
+    # commands() gives them, which load_reader has read each text once in a run (remember_readings).
+    # Each caller gets lists of its own.
     def parsed(self, s, cwd):
-        key = (s, cwd)
-        if key not in self.parsed_memo:
-            parts = []
-            self.parsed_memo[key] = (self.sw.commands(s, cwd, parts=parts), parts)
-        cmds, parts = self.parsed_memo[key]
-        return list(cmds), [dict(p) for p in parts]
+        parts = []
+        return self.sw.commands(s, cwd, parts=parts), parts
 
     def sh_known(self, s, cwd, script, cwd_known=True, depth=0):
         """sh_walk(), worked out once for each text, which is asked about from several places. A text
@@ -2404,7 +2453,19 @@ class Judge:
             return True
         if arithmetic.search(text):
             return True
-        return any(not SH_VALUE_KEPT.match(m.group(0)) for m in binders.finditer(text))
+        # A binder never spans a line (no newline can sit inside one), so only the lines that hold the
+        # name are read, each by its own bounds: a lookbehind and \b still see the text around them,
+        # and the line break at the end reads as the end does. The same matches as one pass over the
+        # whole text, without trying a keyword at every character of it (claude-config#2784).
+        at = text.find(name)
+        while at >= 0:
+            start = text.rfind("\n", 0, at) + 1
+            end = text.find("\n", at)
+            end = len(text) if end < 0 else end
+            if any(not SH_VALUE_KEPT.match(m.group(0)) for m in binders.finditer(text, start, end)):
+                return True
+            at = text.find(name, end + 1)
+        return False
 
     def sh_indirect(self, text):
         """Whether a command can bind a name it does not spell out, so no name is certain past it: eval,
@@ -3347,10 +3408,15 @@ class Judge:
                 prev = self.shell.get("last_cmd")
                 fed = False
                 if at is not None and prev is not None:
-                    before = s[:at].rstrip()
-                    if before.endswith(("|", "|&")) and not before.endswith("||"):
-                        feeder = before[:-2 if before.endswith("|&") else -1]
-                        fed = prev[0] < at and feeder[prev[0]:].strip() == prev[1].strip()
+                    # s[:end] is s[:at].rstrip(), found by stepping back over the white space alone:
+                    # cutting the whole text before every command costs a copy of it each time, 0.27
+                    # seconds over claude-sync's 14,000 commands (claude-config#2784).
+                    end = at
+                    while end and s[end - 1].isspace():
+                        end -= 1
+                    if s.endswith(("|", "|&"), 0, end) and not s.endswith("||", 0, end):
+                        feeder = end - (2 if s.endswith("|&", 0, end) else 1)
+                        fed = prev[0] < at and s[prev[0]:feeder].strip() == prev[1].strip()
                 self.shell["piped"] = fed
                 self.shell["outer"] = not wdepth
                 reason = self.record(d, text, wrapper, why, depth, whole)
@@ -4312,9 +4378,15 @@ class Judge:
         found, the whole line is, which can only refuse more, never less. The same command written
         twice in a script reads the same here, so every place it is written counts.
         """
-        lines = whole.split("\n")
+        lines, starts = lines_of(whole)
         key = text.strip()
-        ats = [i for i, ln in enumerate(lines) if key and key in ln]
+        # The lines holding key, found by searching whole for it rather than each line in turn; one
+        # holding a line break is in no line.
+        ats, at = [], whole.find(key) if key and "\n" not in key else -1
+        while at >= 0:
+            i = bisect.bisect_right(starts, at) - 1
+            ats.append(i)
+            at = whole.find(key, starts[i + 1]) if i + 1 < len(starts) else -1
         if not ats:
             return whole, False
         m = re.search(r"<<-?\s*(['\"]?)([A-Za-z0-9_]+)\1", text)

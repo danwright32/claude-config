@@ -36,7 +36,8 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
-SCRIPT="${SCRIPT:-$ROOT/claude-sync}"
+# The claude-sync beside this suite, never one the environment names (claude-config#2538).
+SCRIPT="$ROOT/claude-sync"
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); echo "ok: $1"; }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,25p' | sed 's/^/    /'; return 0; }
@@ -44,20 +45,32 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-mirror-rsync.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- the shipped helpers and the shipped excludes, read out of claude-sync ----
-LIB="$WORK/lib.sh"
-{
-  awk '/^LOCAL_FILE_GLOBS=/,/^unset _mv$/' "$SCRIPT"
-  awk '/^MR_[A-Z_]*=/' "$SCRIPT"
-  awk '/^mirror_rsync_[a-z_]*\(\)/,/^}$/' "$SCRIPT"
-} > "$LIB"
-if grep -q '^mirror_rsync_go()' "$LIB" && grep -q '^COMMON_EXCLUDES=' "$LIB"; then
+# They are extracted into a file made here, and this suite then runs a second time, in a bash of
+# its own started from a driver written beside that file, which sources it and then this file with
+# MIRROR_RSYNC_HELPERS set. Sourcing the extracted file from here names a path made at run time,
+# which the Slack drafts gate cannot work out (claude-config#2538).
+if [ -z "${MIRROR_RSYNC_HELPERS:-}" ]; then
+  LIB="$WORK/lib.sh"
+  {
+    awk '/^LOCAL_FILE_GLOBS=/,/^unset _mv$/' "$SCRIPT"
+    awk '/^MR_[A-Z_]*=/' "$SCRIPT"
+    awk '/^mirror_rsync_[a-z_]*\(\)/,/^}$/' "$SCRIPT"
+  } > "$LIB"
+  if ! grep -q '^mirror_rsync_go()' "$LIB" || ! grep -q '^COMMON_EXCLUDES=' "$LIB"; then
+    bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+    echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
+  fi
+  printf '%s\n' '. "${BASH_SOURCE[0]%/*}/lib.sh" || exit 1' 'MIRROR_RSYNC_HELPERS=1' '. "$1"' > "$WORK/drive.sh"
+  bash "$WORK/drive.sh" "$DIR/test-mirror-rsync.sh"
+  exit $?
+fi
+# Here in the second run, with the helpers loaded, which is checked rather than assumed (L98).
+if declare -F mirror_rsync_go >/dev/null && declare -p COMMON_EXCLUDES >/dev/null 2>&1; then
   ok "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them"
 else
-  bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+  bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "the driver did not load them"
   echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
 fi
-# shellcheck source=/dev/null
-. "$LIB"
 set -u
 
 # skills' own excludes, from the one list the tool reads them from (claude-config#2661).

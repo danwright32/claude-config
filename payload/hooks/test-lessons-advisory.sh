@@ -736,8 +736,14 @@ assert_absent "and nothing is said to be skipped" 'Skipped' "$out"
 # an installed copy or a copy inside some other repository.
 REPO_ROOT="$(bash "$(dirname "$HOOK")/lib/checkout-root.sh" "$(dirname "$HOOK")/.." 2>/dev/null || true)"
 SYNC_TOOL="$REPO_ROOT/claude-sync"
-# shellcheck disable=SC1090
-eval "$(sed -n '/^RULE_TEXT_PATH_RE=/p' "$HOOK")"
+# Read in a subshell that prints the value, as the trigger tables are above, so the line from the
+# hook binds nothing else in this suite and the Slack drafts gate can go on following its variables
+# to the files sourced below (claude-config#2538).
+RULE_TEXT_PATH_RE="$(
+  # shellcheck disable=SC1090
+  eval "$(sed -n '/^RULE_TEXT_PATH_RE=/p' "$HOOK")"
+  printf '%s' "${RULE_TEXT_PATH_RE:-}"
+)"
 # This value is handed to awk through -v, which processes escape sequences in it, and the two awks
 # disagree about an unknown one: the Mac's takes it silently, gawk warns on stderr (L434). That
 # warning went into the hook's OWN stderr on every Linux run and was invisible while every path
