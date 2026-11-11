@@ -860,6 +860,38 @@ test('a held edit that brings in another file\'s wording names that file as wher
   expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
 })
 
+// claude-config#2720: wording held in a module of message copy that nothing sends from yet, which
+// the card, both refusals and the question say, so Dan can tell it from a live send.
+
+test('a held copy module nothing sends yet is named as one on the card, both refusals and the question; every other hold reads as before (#2720)', () => {
+  const PHRASE = 'a module of message copy not yet wired to Slack'
+  const COPY = '/w/a/monitor/quiet-feed-copy.ts'
+  const added = ['The feed has gone quiet']
+  expect(heldText(COPY, added, [], undefined, undefined, true)).toBe(`This edit to ${COPY}, ${PHRASE}, adds Slack message text Dan has not approved: "The feed has gone quiet"`)
+  for (const r of [refusal('t1', COPY, added, [], undefined, undefined, true), agentRefusal('t1', COPY, added, [], undefined, undefined, true)])
+    expect(r.startsWith(`Blocked: this edit to ${COPY}, ${PHRASE}, adds Slack message text Dan has not approved`)).toBe(true)
+  const q = question(COPY, 'The orders feed has gone quiet', undefined, true)
+  const [lead] = q.split('\n\n')
+  expect(lead).toContain(`defined in ${COPY}, ${PHRASE}?`)
+  expect(readsAsSend(lead ?? '')).toBe(false)
+  expect(lead).toContain('sends nothing')
+  expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
+  // A live send, a template another file sends, wording brought in from another file, a removal
+  // and a shell command never carry it.
+  const others = [
+    heldText(COPY, added, []),
+    heldText(COPY, added, [], '/w/a/notify.ts'),
+    heldText(COPY, added, [], undefined, '/w/a/feeds.ts'),
+    heldText(COPY, [], ['The feed has gone quiet']),
+    heldText(COPY, [], []),
+    refusal('t1', COPY, added, []),
+    agentRefusal('t1', COPY, added, []),
+    question(COPY, 'The orders feed has gone quiet'),
+    question(COPY, 'The orders feed has gone quiet', '/w/a/feeds.ts'),
+  ]
+  for (const t of others) expect(t).not.toContain('not yet wired')
+})
+
 test('every module a file imports is named as the file names it, so one file name in two folders is two modules; a bare package is none (#2637)', () => {
   const ts = "import { a } from './copy'\nimport { b } from '../other/copy'\nimport React from 'react'\nconst c = require('@/lib/notify/post')\n// import { d } from './commented'\n"
   expect(moduleSpecs(ts).sort()).toEqual(['../other/copy', './copy', '@/lib/notify/post'])

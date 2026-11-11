@@ -18,6 +18,8 @@ export type SlackAlertPending = {
   literal?: string[]
   /** For wording the edit adds none of and brings to a Slack send from the files it imports (#2637): those files, named on the card, refusal and question. */
   from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one on the card, refusal and question. */
+  unwired?: true
   /**
    * For an edit the guard could not trace (#2709): why the trace stopped. Its `added` and `removed`
    * are then the lines the edit adds and takes away, shown to Dan in place of a rendered message.
@@ -49,6 +51,8 @@ export type SlackAlertChoice = {
   session: string | null
   sender?: string
   from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one in the morning question. */
+  unwired?: true
   /** When it expired unanswered: still held, said once in every session. */
   expired?: number
 }
