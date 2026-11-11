@@ -53,6 +53,7 @@ import {
   DECISIONS,
   answerStands,
   couldHold,
+  repoIssues,
   decideProblem,
   heldCall,
   holdCard,
@@ -597,7 +598,8 @@ const judgeUnread = async ($: EngineInterface, id: string, t: Extract<ShellTarge
     agent,
     at: started,
     why: [],
-    shown: [],
+    // The open structural issues it may be folded into (#2706), the session's own among them.
+    shown: issues.state === 'unread' ? [] : repoIssues(issues.issues),
     issues: issues.state === 'unread' ? { state: 'unread', why: issues.why } : { state: issues.state },
     growth: { unread: 'no file is named, so no growth is read' },
     unread: { why: t.unread, key },

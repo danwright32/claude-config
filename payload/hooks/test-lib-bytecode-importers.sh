@@ -25,7 +25,10 @@
 #      program outside lib/ is that program's own, not lib's.
 #   2. by path: spec_from_file_location, SourceFileLoader, run_path or import_module, in a program
 #      whose string literals (or, for a shell program, its command line) name a file in lib/ or a lib
-#      folder.
+#      folder. A variable on a shell command line is read through the file's own assignments to it
+#      (#2751: tests/test-work-names-tree.sh loaded lib/work-names.py as "$SCAN" with -I and no -B).
+#   The runner and arming hand every suite PYTHONDONTWRITEBYTECODE=1 as well (#2751), but -I and -E
+#   drop it, so this rule still asks for the setting on the command or in the program itself.
 # NOT READ: a program held in a shell variable (`python3 -B -c "$BUDGET_PY"` in test-work-names.sh,
 # which test-work-names.sh's own #2444 check covers); a heredoc piped into python3 from another
 # command (`cat <<EOF | python3`) and a here string, neither used anywhere on 2026-11-10; programs
@@ -182,6 +185,33 @@ def judge(src, own_dir, extra=""):
 C_HEAD = re.compile(r"python3?((?:[ \t]+-[A-Za-z]+)*?)[ \t]+(-[A-Za-z]*c)[ \t]+$")
 ENV_OFF = re.compile(r"(?<![\w-])PYTHONDONTWRITEBYTECODE=(?:[^\s;|&'\"]|'[^']+'|\"[^\"]+\")")
 H_CALL = re.compile(r"(?<![A-Za-z0-9_./-])python3?((?:[ \t]+-[A-Za-z]+)*)(?=[ \t]|$)([^<]*)<<")
+# A shell variable on the command line is read through the file's own assignments to it (#2751):
+# tests/test-work-names-tree.sh loaded lib/work-names.py as "$SCAN", assigned at its top, so its
+# command line alone named no lib file and the load was never judged. Every value the file ever
+# gives the name counts, and a value naming another variable is followed a few levels.
+ASSIGN = re.compile(r"^[ \t]*(?:(?:export|local|readonly|declare(?:[ \t]+-\w+)*)[ \t]+)?([A-Za-z_]\w*)=(.*)$", re.M)
+VAR_REF = re.compile(r"\$\{?([A-Za-z_]\w*)")
+
+
+def assignments(text):
+    out = {}
+    for m in ASSIGN.finditer(text):
+        out.setdefault(m.group(1), []).append(m.group(2))
+    return out
+
+
+def expand(words, assigned):
+    """The command line, followed by every value assigned to each variable it names."""
+    out, todo, seen = [words], set(VAR_REF.findall(words)), set()
+    for _ in range(3):
+        nxt = set()
+        for name in todo - seen:
+            seen.add(name)
+            for value in assigned.get(name, ()):
+                out.append(value)
+                nxt |= set(VAR_REF.findall(value))
+        todo = nxt
+    return " ".join(out)
 
 
 def is_shell(rel, b):
@@ -234,6 +264,8 @@ for rel in paths:
         continue
     if b"python" not in b or not is_shell(rel, b):
         continue
+    text = b.decode("utf-8", "replace")
+    assigned = assignments(text)
     for line, start, end, prog in c_programs(b):
         if prog is None:
             continue
@@ -250,7 +282,7 @@ for rel in paths:
             if not b[:nl].rstrip(b" \t").endswith(b"\\"):
                 break
         tail = b[end:le].decode("utf-8", "replace")
-        res = judge(prog.decode("utf-8", "replace"), None, tail)
+        res = judge(prog.decode("utf-8", "replace"), None, expand(tail, assigned))
         if not res:
             continue
         m = C_HEAD.search(head)
@@ -258,7 +290,6 @@ for rel in paths:
         how = "python3 -B" if re.search(r"-[A-Za-z]*B", flags) else \
             ("PYTHONDONTWRITEBYTECODE" if ENV_OFF.search(head) else None)
         report(rel, line, "the python3 -c program", res, how)
-    text = b.decode("utf-8", "replace")
     rows = list(read_lines(text))
     for i, (n, line, kind, bare, ops) in enumerate(rows):
         if kind != "code" or not ops:
@@ -272,7 +303,7 @@ for rel in paths:
                 break
             body.append(bl)
         progs += 1
-        res = judge("\n".join(body), None, m.group(2))
+        res = judge("\n".join(body), None, expand(m.group(2), assigned))
         if not res:
             continue
         how = "python3 -B" if re.search(r"-[A-Za-z]*B", m.group(1)) else \
@@ -319,21 +350,29 @@ printf 'import importlib.util\ns = importlib.util.spec_from_file_location("g", "
   printf "env -u PYTHONDONTWRITEBYTECODE $P -c 'import ratchet'\n"                                                # 17: cleared
   printf "W=\"\$SW\" $P -c 'import importlib.util,os; s=importlib.util.spec_from_file_location(\"shell_words\", os.environ[\"W\"])'\n"     # 18: path in a variable
   printf "W=\"\$SW\" $P -B -c 'import importlib.util,os; s=importlib.util.spec_from_file_location(\"shell_words\", os.environ[\"W\"])'\n"  # 19: the same, -B
+  # #2751: the file to load named by a shell variable assigned elsewhere in the file, the shape of
+  # tests/test-work-names-tree.sh's SCAN, and run with -I, which drops any PYTHONDONTWRITEBYTECODE
+  # the runner or arming hands down, so only -B on the command itself turns bytecode off there.
+  printf "SCANV=\"\$D/lib/shell-words.py\"\n"                                                                      # 20: the assignment
+  printf "out=\"\$($P -I -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location(\"w\", sys.argv[1])' \"\$SCANV\" 2>&1)\"\n"     # 21: by path, in a variable
+  printf "out=\"\$($P -I -B -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location(\"w\", sys.argv[1])' \"\${SCANV}\" 2>&1)\"\n"  # 22: the same, -B
+  printf "OTHERV=\"\$D/filed_issue_session.py\"\n"                                                                  # 23: not lib
+  printf "$P -I -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location(\"f\", sys.argv[1])' \"\$OTHERV\"\n"   # 24: not lib, in a variable
 } > "$PROBE/payload/hooks/probe.sh"
 ( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py ) > "$TMPROOT/probe.list"
 probe="$(scan "$PROBE" "$TMPROOT/probe.list" --list)"
 hits="$(printf '%s\n' "$probe" | sed -n 's/^HIT \([^:]*:[0-9]*\):.*/\1/p' | sort | tr '\n' ' ')"
-want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:5 "
-# Sixteen importers: five Python files (by-name, late, early, by-path, sibling) and eleven shell
-# programs (lines 2, 3, 4, 5, 10, 13, 15 to 19). prose.py, local.py, not-lib.py and line 6 load
-# nothing from lib.
+want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:5 "
+# Eighteen importers: five Python files (by-name, late, early, by-path, sibling) and thirteen shell
+# programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22). prose.py, local.py, not-lib.py and lines 6
+# and 24 load nothing from lib.
 [ "$hits" = "$want" ] \
   && check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" ok \
   || check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" "it found [$hits], wanted [$want]: $probe"
 nimp="$(printf '%s\n' "$probe" | grep -c '^IMPORTER ' || true)"
-[ "$nimp" = 16 ] \
+[ "$nimp" = 18 ] \
   && check "the scan lists every importer in the probe, the ones that turn bytecode off too" ok \
-  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 16: $probe"
+  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 18: $probe"
 case "$probe" in
   *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave payload/hooks/lib/__pycache__ behind (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
     check "a finding names the file, the line, the module and the fix" ok ;;
@@ -372,8 +411,9 @@ nimp="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=[0-9]* imp
 [ "${nimp:-0}" -ge 40 ] \
   && check "the scan found the repository's importers" ok \
   || check "the scan found the repository's importers" "it found ${nimp:-no} importers in $ROOT, where 63 were found on 2026-11-10"
-# The two #2600 named, and the one whose shape they copy, are among those read.
-for known in payload/hooks/lib/bundle-budget.py payload/hooks/scan-absence-needles.py payload/hooks/scan-subshell-globals.py; do
+# The two #2600 named, the one whose shape they copy, and the #2751 writer, whose file to load is
+# named by a variable, are among those read.
+for known in payload/hooks/lib/bundle-budget.py payload/hooks/scan-absence-needles.py payload/hooks/scan-subshell-globals.py tests/test-work-names-tree.sh; do
   case "$tree" in
     *"IMPORTER $known:"*) check "#2600 $known is an importer the scan reads" ok ;;
     *) check "#2600 $known is an importer the scan reads" "it is not listed: $(printf '%s\n' "$tree" | tail -1)" ;;

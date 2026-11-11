@@ -108,13 +108,16 @@ skey(){ printf '%s' "${1//[^A-Za-z0-9_.-]/_}"; }   # the session's record is nam
 settle(){ # settle <session id>
   local f="$STATE_DIR/claude-stale-worktrees-$(skey "$1").state" pid
   for pid in $(sed -n 's/^runner //p' "$f" 2>/dev/null); do
-    hang_wait "! kill -0 $pid 2>/dev/null" 0.05
+    # Each condition is written out, its values read when it is evaluated, never pasted into it: the
+    # Slack drafts gate cannot read a condition built from a value (#2538).
+    hang_wait '! kill -0 "$pid" 2>/dev/null' 0.05
     kill -0 "$pid" 2>/dev/null && bad "the run session $1 started (process $pid) finished within the hang ceiling, ${HANG_S}s"
   done
   return 0
 }
 reached(){ # reached <gate>: wait for the stub to reach it
-  hang_wait "[ -e '$1.reached' ]" 0.05
+  local _rc_gate="$1"
+  hang_wait '[ -e "$_rc_gate.reached" ]' 0.05
 }
 last_record(){ cat "$STATE_DIR"/claude-stale-worktrees-repo-*.last 2>/dev/null; }
 
@@ -286,7 +289,8 @@ check "with what it said on stderr" "syntax error" "$OUT"
 # Said twice is a smaller failure than never said, so with nothing to key the record on it starts a
 # run on every prompt, and says on stderr that it could not hold itself to once per session (L622).
 nosession_settle(){ # wait until the check has run $1 times and the run holding the lock has ended
-  hang_wait "[ \"\$(calls)\" -ge $1 ]" 0.05
+  local _ns_runs="$1"
+  hang_wait '[ "$(calls)" -ge "$_ns_runs" ]' 0.05
   python3 -c '
 import fcntl, glob, os, signal, sys
 signal.alarm(30)

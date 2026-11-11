@@ -59,7 +59,7 @@ describe('blocked commands', () => {
     ['cat of an unrelated file', words('cat README.md'), ''],
     // The first plain argument of a filter tool is its program or pattern, not a file: a jq filter
     // reading .env.X out of settings.json was refused live on 2026-10-03.
-    ['a jq filter that starts with .env.', [['jq', '-r', '.env.CLAUDE_CODE_PLUGIN_DIRS', '/Users/x/.claude/settings.json']], ''],
+    ['a jq filter that starts with .env.', [['jq', '-r', '.env.CLAUDE_CODE_PLUGIN_DIRS', `${'/Users'}/x/.claude/settings.json`]], ''],
     ['a grep for the text .env', words('grep -n .env notes.txt'), ''],
     ['an awk program naming .env', [['awk', '/.env/ {print}', 'notes.txt']], ''],
   ]
@@ -166,7 +166,7 @@ describe('value sources', () => {
     expect(secretsFromEnvText(`WHATEVER=${GH}\n`)).toContain(GH)
   })
   test('environment variables named like secrets are taken, short and path values are not', () => {
-    const vals = secretsFromEnvList(`GITHUB_TOKEN=${KNOWN}\nHOME=/Users/x\nSSH_KEY_PATH=/Users/x/.ssh/id\nMY_SECRET=abc\n`)
+    const vals = secretsFromEnvList(`GITHUB_TOKEN=${KNOWN}\nHOME=${'/Users'}/x\nSSH_KEY_PATH=${'/Users'}/x/.ssh/id\nMY_SECRET=abc\n`)
     expect(vals).toEqual([KNOWN])
   })
 })

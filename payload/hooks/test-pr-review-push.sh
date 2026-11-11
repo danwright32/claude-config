@@ -134,7 +134,7 @@ KEY="$(bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repo_key '$REPO'")"
 final_of(){ printf '%s/%s-pr-%s.txt' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
 wait_final(){ # on the condition (L290), with the hang ceiling: it was 40 s (#1620)
   local f; f="$(final_of "$1")"
-  hang_wait "[ -e '$f' ] || [ ! -e '$f.pending' ]"
+  hang_wait '[ -e "$f" ] || [ ! -e "$f.pending" ]'   # written out: one built from a value is unreadable to the Slack drafts gate (#2538)
   [ -e "$f" ]
 }
 # A runner from the case before, still finishing, would write into the next case's fresh state, so

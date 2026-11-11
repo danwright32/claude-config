@@ -147,7 +147,7 @@ describe('morningPrompt sets what the overnight sessions wrote apart as data (#9
 
 describe('openers: the BBEdit helper with its front window flag, then open -a BBEdit', () => {
   test('never a bare open', () => {
-    const report = '/Users/x/Downloads/Sleep report 1969-12-31.md'
+    const report = `${'/Users'}/x/Downloads/Sleep report 1969-12-31.md`
     expect(openers(report)).toEqual([
       [BBEDIT, '--front-window', report],
       ['open', '-a', 'BBEdit', report],

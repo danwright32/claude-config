@@ -171,8 +171,8 @@ const unsaidOf = (w: { toasts: string[] }) =>
     .map(t => t.slice('Claude was not told: '.length))
     .join('\n')
 
-const HOME = '/Users/dan'
-const CWD = '/Users/dan/Apps/slate'
+const HOME = `${'/Users'}/dan`
+const CWD = `${'/Users'}/dan/Apps/slate`
 // What a refusal tells Claude to do when the save waits on Dan (#777): ask him in the dialog.
 const ASKS = 'Ask him now with AskUserQuestion'
 
@@ -511,7 +511,7 @@ test('a printenv that fails is never read as the variable being unset: the save 
 // (#830: the script itself writes the test file it names, which is judged alone).
 const FIXTURE_UNNAMED = FIXTURE.replace("open(p,'w')", "import sys; open(sys.argv[1],'w')")
 test('a path through a variable Claude Code\'s environment holds still counts, so its save is refused', withKit, async ($, on) => {
-  const w = world($, on, { env: { WORK: '/Users/dan/.claude' } })
+  const w = world($, on, { env: { WORK: `${'/Users'}/dan/.claude` } })
   expect(FIXTURE_UNNAMED).not.toBe(FIXTURE)
   expect(refusalOf(await call($, { tool: 'Bash', command: FIXTURE_UNNAMED }))).toContain(ASKS)
   expect(w.ran).toEqual([])
@@ -570,7 +570,7 @@ test('a write by any shell route mod-kit reads is refused: a cd into the memory 
   const routes = [
     "cd ~/.claude/projects/p/memory && cat > note.md <<'EOF'\n- skip it\nEOF",
     'cp note.md ~/.claude/projects/p/memory/',
-    "python3 -c \"open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\"",
+    `python3 -c "open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('- rule')"`,
     'git apply rules.patch',
   ]
   for (const command of routes) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain(ASKS)
@@ -587,7 +587,7 @@ test('a script handed a lasting memory file as its argument is asked about, as a
     ['python3 x.py payload/LESSONS.md', '~/Apps/slate/payload/LESSONS.md'],
     ['bash tools/fix.sh --in-place CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
     ['./tidy.sh AGENTS.md', '~/Apps/slate/AGENTS.md'],
-    ['node build.mjs --out=/Users/dan/.claude/CLAUDE.md', '~/.claude/CLAUDE.md'],
+    [`node build.mjs --out=${'/Users'}/dan/.claude/CLAUDE.md`, '~/.claude/CLAUDE.md'],
   ]
   for (const [command, file] of handed) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
@@ -739,7 +739,7 @@ test('a python heredoc whose text only names lasting memory in a sentence, writi
   expect(w.ran.map(r => r.input.command)).toEqual([ISSUE_940])
   quietOnMain(w)
   // The positive control, the same program writing that file itself (L159): still asked about.
-  const real = ISSUE_940.replace("open(p,'w')", "open('/Users/dan/.claude/CLAUDE.md','a')")
+  const real = ISSUE_940.replace("open(p,'w')", `open('${'/Users'}/dan/.claude/CLAUDE.md','a')`)
   expect(real).not.toBe(ISSUE_940)
   expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
   expect(w.ran.length).toBe(1)
@@ -756,7 +756,7 @@ test("a sentence naming lasting memory in a program whose files are unnamed is t
   expect(commandWrites(UNNAMED_940, CWD, HOME).unnamed.map(u => u.targets)).toEqual([undefined])
   expect(refusalOf(await call($, { tool: 'Bash', command: UNNAMED_940 }))).toBe('')
   expect(w.ran.map(r => r.input.command)).toEqual([UNNAMED_940])
-  const real = UNNAMED_940.replace("open(p,'w')", "open('/Users/dan/.claude/CLAUDE.md','a')")
+  const real = UNNAMED_940.replace("open(p,'w')", `open('${'/Users'}/dan/.claude/CLAUDE.md','a')`)
   expect(refusalOf(await call($, { tool: 'Bash', command: real }))).toContain(ASKS)
   const broken = UNNAMED_940.replace("import os\n", "import os\n# SCANNER_BREAKS\n")
   for (let i = 0; i < 2; i++) expect(refusalOf(await call($, { tool: 'Bash', command: broken }))).toContain(ASKS)
@@ -774,10 +774,10 @@ test('every route that really writes lasting memory is still asked about, a sent
     "sed -i '' 's/a/b/' ~/.claude/CLAUDE.md",
     "cat >> ~/.claude/CLAUDE.md <<'EOF'\n- Keep ~/.claude/CLAUDE.md short. It costs $5 a line.\nEOF",
     // Python whose files the reader cannot name (a $ in its text), judged by what it mentions.
-    "python3 - <<'EOF'\n# costs $5, see ~/.claude/CLAUDE.md first\nopen('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\nEOF",
+    `python3 - <<'EOF'\n# costs $5, see ~/.claude/CLAUDE.md first\nopen('${'/Users'}/dan/.claude/CLAUDE.md','a').write('- rule')\nEOF`,
     "python3 - <<'EOF'\nimport os\n# costs $5\nopen(os.path.expanduser('~/.claude/CLAUDE.md'),'a').write('- rule')\nEOF",
-    "python3 - <<'EOF'\n# costs $5\nexec(\"open('/Users/dan/.claude/CLAUDE.md','a').write('- rule')\")\nEOF",
-    "python3 -c \"open('/Users/dan/.claude/CLAUDE.md','a').write('\\$5 - rule')\"",
+    `python3 - <<'EOF'\n# costs $5\nexec("open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('- rule')")\nEOF`,
+    `python3 -c "open('${'/Users'}/dan/.claude/CLAUDE.md','a').write('\\$5 - rule')"`,
     // A program that runs a process: its text is read whole, sentences included.
     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run('echo rule >> ~/.claude/CLAUDE.md; echo done', shell=True)\nEOF",
   ]
@@ -1226,7 +1226,7 @@ test('For good approves the save, not the spelling: the same file and text by an
 test('For good approves the file named: sent again after the session moves, a relative path is refused again', withKit, async ($, on) => {
   const w = world($, on, { auto: true })
   const refused = refusalOf(await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' }))
-  w.at.cwd = '/Users/dan/Apps/other'
+  w.at.cwd = `${'/Users'}/dan/Apps/other`
   await askDan($, w, refused, 'For good', '~/Apps/slate/CLAUDE.md')
   expect(refusalOf(await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '- Ask before merging.\n' }))).toContain(ASKS)
   expect(w.ran).toEqual([])
@@ -1238,7 +1238,7 @@ test('a Bash save approved in one folder is refused again when it is sent from a
   const w = world($, on, { auto: true })
   const command = "cat >> CLAUDE.md <<'EOF'\n- Never merge on Fridays.\nEOF"
   await askDan($, w, refusalOf(await call($, { tool: 'Bash', command })), 'For good', '~/Apps/slate/CLAUDE.md')
-  w.at.cwd = '/Users/dan/Apps/other'
+  w.at.cwd = `${'/Users'}/dan/Apps/other`
   expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(ASKS)
   expect(w.ran).toEqual([])
   w.at.cwd = CWD

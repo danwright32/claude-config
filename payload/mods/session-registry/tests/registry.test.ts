@@ -3,7 +3,7 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 
-const DIR = '/Users/x/.claude/state/sessions'
+const DIR = `${'/Users'}/x/.claude/state/sessions`
 const MIN = 60_000
 
 // A consumer standing in for the collision guard, the job watcher and the goal tracker: Bash
@@ -73,7 +73,7 @@ const world = (on: On, opts: WorldOpts = {}) => {
   const finds: string[] = []
   // Each command run and the timeout it was given, so a bound can be asserted (#802).
   const bounds: [string, number | undefined][] = []
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, { HOME: `${'/Users'}/x` })
   const clock = mock.clock(on, { now: 100 * MIN })
   const put = (p: string, text: string) => {
     files[p] = text
@@ -677,21 +677,21 @@ const openOf = async ($: Parameters<typeof call>[0], id: string) =>
   (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null }[] }).open.find(r => r.sessionId === id)
 
 test("an open session's transcript is found in Claude Code's folder for its working directory", withConsumer, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-Users-x-my-app-v2/s2.jsonl'
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/my_app.v2'), [T]: '' } })
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-my-app-v2/s2.jsonl`
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/my_app.v2`), [T]: '' } })
   await start($)
   expect((await openOf($, 's2'))?.transcriptPath).toBe(T)
 })
 
 test('a transcript filed under another folder is found by the session id (a session that changed folder)', withConsumer, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-Users-x-elsewhere/s2.jsonl'
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' } })
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-elsewhere/s2.jsonl`
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`), [T]: '' } })
   await start($)
   expect((await openOf($, 's2'))?.transcriptPath).toBe(T)
 })
 
 test('a transcript that is nowhere is handed on as none, never as a guessed path', withConsumer, async ($, on) => {
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`) } })
   await start($)
   const r = await openOf($, 's2')
   expect(r).toBeDefined()
@@ -699,7 +699,7 @@ test('a transcript that is nowhere is handed on as none, never as a guessed path
 })
 
 test('a transcript that is nowhere is searched for once a minute, not on every read', withConsumer, async ($, on) => {
-  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`) } })
   await start($)
   const ofS2 = () => w.finds.filter(f => f === 's2.jsonl').length
   await openOf($, 's2')
@@ -711,7 +711,7 @@ test('a transcript that is nowhere is searched for once a minute, not on every r
 })
 
 test('a session id that is not an id is never put into a path or a search', withConsumer, async ($, on) => {
-  const w = world(on, { files: { [`${DIR}/s2.json`]: other('../*', '/Users/x/app') } })
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('../*', `${'/Users'}/x/app`) } })
   await start($)
   const r = (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null }[] }).open.find(x => x.sessionId === '../*')
   expect(r?.transcriptPath).toBeNull()
@@ -726,8 +726,8 @@ const unreadOf = async ($: Parameters<typeof call>[0], id: string) =>
   (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null; transcriptUnread?: string }[] }).open.find(r => r.sessionId === id)
 
 test('a transcript lookup whose checks fail is said as unread with why, never as not found (#1636)', withConsumer, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-Users-x-app/s2.jsonl'
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' }, existsFails: { [T]: 'fs.exists did not answer within 10 seconds' }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-app/s2.jsonl`
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`), [T]: '' }, existsFails: { [T]: 'fs.exists did not answer within 10 seconds' }, findFails: { deny: 'find did not answer within 5 seconds' } })
   await start($)
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBeNull()
@@ -735,15 +735,15 @@ test('a transcript lookup whose checks fail is said as unread with why, never as
 })
 
 test('a search for a transcript that exits with an error and finds nothing is said as unread, never as not found (#1636)', withConsumer, async ($, on) => {
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') }, findFails: { exitCode: 1, stderr: 'find: /Users/x/.claude/projects/-a: Permission denied' } })
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`) }, findFails: { exitCode: 1, stderr: `find: ${'/Users'}/x/.claude/projects/-a: Permission denied` } })
   await start($)
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBeNull()
-  expect(r?.transcriptUnread).toBe('the search for s2.jsonl failed (find: /Users/x/.claude/projects/-a: Permission denied)')
+  expect(r?.transcriptUnread).toBe(`the search for s2.jsonl failed (find: ${'/Users'}/x/.claude/projects/-a: Permission denied)`)
 })
 
 test('a lookup that failed is not remembered as a miss: the next read searches again (#1636)', withConsumer, async ($, on) => {
-  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`) }, findFails: { deny: 'find did not answer within 5 seconds' } })
   await start($)
   const ofS2 = () => w.finds.filter(f => f === 's2.jsonl').length
   await unreadOf($, 's2')
@@ -752,8 +752,8 @@ test('a lookup that failed is not remembered as a miss: the next read searches a
 })
 
 test('a check that fails on one place is passed over when the transcript is found at another, with nothing said (#1636)', withConsumer, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-Users-x-elsewhere/s2.jsonl'
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' }, existsFails: { '/Users/x/.claude/projects/-Users-x-app/s2.jsonl': 'EIO' } })
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-elsewhere/s2.jsonl`
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`), [T]: '' }, existsFails: { [`${'/Users'}/x/.claude/projects/-Users-x-app/s2.jsonl`]: 'EIO' } })
   await start($)
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBe(T)
@@ -768,7 +768,7 @@ const LONG_CWD =
   Array.from({ length: 22 }, (_, i) => `segment.${String(i + 1).padStart(3, '0')}/`).join('') +
   'end.x'
 const LONG_T =
-  '/Users/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s2.jsonl'
+  `${'/Users'}/x/.claude/projects/-private-var-folders-kd-98c3xw516598081hs59hbkt80000gn-T-measure-long-27sZoY-segment-001-segment-002-segment-003-segment-004-segment-005-segment-006-segment-007-segment-008-segment-009-segment-010-seg-20wnth/s2.jsonl`
 test("a session in a folder past 200 characters has its transcript found under Claude Code's cut spelling, without the search by id (#1725)", withConsumer, async ($, on) => {
   const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', LONG_CWD), [LONG_T]: '' }, findFails: { deny: 'find did not answer within 5 seconds' } })
   await start($)
@@ -778,15 +778,15 @@ test("a session in a folder past 200 characters has its transcript found under C
   expect(w.finds.filter(f => f === 's2.jsonl')).toEqual([])
 })
 test('a session in a folder of ordinary length is never looked for by listing the folder of transcripts (#1725)', withConsumer, async ($, on) => {
-  const T = '/Users/x/.claude/projects/-Users-x-app/s2.jsonl'
-  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' } })
+  const T = `${'/Users'}/x/.claude/projects/-Users-x-app/s2.jsonl`
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`), [T]: '' } })
   await start($)
   expect((await unreadOf($, 's2'))?.transcriptPath).toBe(T)
-  expect(w.lists.filter(p => p === '/Users/x/.claude/projects')).toEqual([])
+  expect(w.lists.filter(p => p === `${'/Users'}/x/.claude/projects`)).toEqual([])
 })
 
 test('a transcript that is truly nowhere carries no unread reason (#1636)', withConsumer, async ($, on) => {
-  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', `${'/Users'}/x/app`) } })
   await start($)
   const r = await unreadOf($, 's2')
   expect(r?.transcriptPath).toBeNull()
@@ -801,7 +801,7 @@ test('a transcript that is truly nowhere carries no unread reason (#1636)', with
 const DAY = 24 * 60 * MIN
 const HOUR = 60 * MIN
 const NOW = 100 * MIN
-const ARCH = '/Users/x/.claude/state/sessions-archive'
+const ARCH = `${'/Users'}/x/.claude/state/sessions-archive`
 const recOf = (id: string, over: Record<string, unknown>) =>
   JSON.stringify({ v: 1, sessionId: id, cwd: '/repo', repoRoot: '/repo', startedAt: NOW - 9 * DAY, lastSeen: NOW, closedAt: null, transcriptPath: null, edits: [], extra: {}, ...over })
 

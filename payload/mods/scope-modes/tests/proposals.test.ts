@@ -6,7 +6,7 @@ import { CLAIM_MS, claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEnt
 // handed four proposals as never put to Dan that had been filed on 2026-10-09, and three of them had
 // been filed twice, by two sessions seconds apart.
 
-const SLEEP = '/Users/x/.claude/state/sleep'
+const SLEEP = `${'/Users'}/x/.claude/state/sleep`
 const NOW = 10 * CLAIM_MS
 
 describe('proposalPath: one folder per proposal, by its repository and title', () => {

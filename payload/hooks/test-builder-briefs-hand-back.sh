@@ -103,9 +103,23 @@ if [ ! -f "$PAYLOAD/CLAUDE.md" ] || [ ! -d "$PAYLOAD/skills" ]; then
 fi
 # Each listing read into a variable first, then fed from a here document (a process substitution is
 # a child the shell never waits for, #2040), skipping the one empty line an empty listing gives.
-a_list="$(find "$PAYLOAD/skills" "$PAYLOAD/agents" "$PAYLOAD/commands" -type f -name '*.md' 2>/dev/null | sort)"
-b_list="$(find "$PAYLOAD/agents" -type f -name '*.md' 2>/dev/null | sort)"
-a_files=("$PAYLOAD/CLAUDE.md")
+# Only what the sync carries (claude-config#2750): installed, the payload is ~/.claude, whose skills/
+# also holds Claude Code's .trash and the Claude app's downloads, and lib/synced-trees.sh is the one
+# list of what a scan of the config may read.
+. "$DIR/lib/synced-trees.sh" && declare -F synced_files >/dev/null || {
+  echo "FAIL: $(basename "$0"): lib/synced-trees.sh is missing or holds no synced_files, so the scan cannot tell a skill the sync carries from a copy a Mac keeps for itself."
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+brief_texts(){ # brief_texts <payload> -> the global rules, then every skill, agent and command .md the sync carries
+  local listed
+  printf '%s\n' "$1/CLAUDE.md"
+  listed="$(synced_files "$1" skills agents commands)" || return 1
+  printf '%s\n' "$listed" | grep '\.md$'
+}
+a_list="$(brief_texts "$PAYLOAD")"
+b_list="$(synced_files "$PAYLOAD" agents | grep '\.md$')"
+a_files=()
 while IFS= read -r f; do [ -n "$f" ] && a_files+=("$f"); done <<< "$a_list"
 [ -f "$PAYLOAD/mods/job-watcher/hooks/jobs.ts" ] && a_files+=("$PAYLOAD/mods/job-watcher/hooks/jobs.ts")
 b_files=()
@@ -149,6 +163,34 @@ for f in findings.md.txt report.md.txt; do
   check "rule C fires on $f" "$([ -n "$(rule_c "$FIX/$f")" ] && echo ok || echo "rule C passed a file name Claude Code refuses a subagent")"
 done
 check "rule C passes allowed.md.txt" "$([ -z "$(rule_c "$FIX/allowed.md.txt")" ] && echo ok || echo "rule C fired on $(rule_c "$FIX/allowed.md.txt")")"
+
+# Installed, the payload is ~/.claude, which also holds what a Mac keeps for itself: Claude Code's
+# skills/.trash, the Claude app's skills/synced, and copies of skills an agent kept in its session
+# notes. On 2026-11-11 rule C failed the pull on a trashed deep-research skill naming report-writer.md
+# (claude-config#2750). The scan reads what lib/synced-trees.sh lists, so a refused name in any of
+# those is ignored while the same name in a real skill still fails.
+FP="$FIX/installed"
+for d in skills/.trash/1791847280260-1-Ab/deep-research skills/synced/acct/skill-creator \
+  state/session-notes/p/s/2721/base/skills/deep-research skills/clean; do
+  mkdir -p "$FP/$d"
+done
+printf '%s\n' 'Write your evidence to `findings.md`.' > "$FP/skills/.trash/1791847280260-1-Ab/deep-research/SKILL.md"
+printf '%s\n' 'Write your evidence to `findings.md`.' > "$FP/skills/synced/acct/skill-creator/SKILL.md"
+printf '%s\n' 'Write your evidence to `findings.md`.' > "$FP/state/session-notes/p/s/2721/base/skills/deep-research/SKILL.md"
+printf '%s\n' 'Write your evidence to `evidence.md`.' > "$FP/skills/clean/SKILL.md"
+: > "$FP/CLAUDE.md"
+fix_list="$(brief_texts "$FP")"
+check "#2750 the scan of that tree reads the global rules and the real skill" \
+  "$(grep -qx "$FP/CLAUDE.md" <<< "$fix_list" && grep -qx "$FP/skills/clean/SKILL.md" <<< "$fix_list" && echo ok || echo "listed: $fix_list")"
+fix_hits="$(rule_c $(brief_texts "$FP"))"
+check "#2750 rule C ignores a refused name kept in skills/.trash, skills/synced or state/" \
+  "$([ -z "$fix_hits" ] && echo ok || echo "fired on $fix_hits")"
+mkdir -p "$FP/skills/real"
+printf '%s\n' 'Write your evidence to `findings.md`.' > "$FP/skills/real/SKILL.md"
+fix_hits="$(rule_c $(brief_texts "$FP"))"
+check "#2750 rule C still fires on a refused name in a real skill" \
+  "$([ "$fix_hits" = "$FP/skills/real/SKILL.md:1:findings.md" ] && echo ok || echo "reported: ${fix_hits:-nothing}")"
+
 hits="$(rule_c "${a_files[@]}")"
 check "no brief text names a file Claude Code refuses a subagent" "$([ -z "$hits" ] && echo ok || echo "$hits")"
 
