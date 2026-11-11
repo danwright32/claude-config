@@ -750,9 +750,14 @@ class Judge:
         """A fresh record of one text's variables: each NAME=value command read so far (pending, its
         text and directory), the names exported, the offset in the text of the command being read
         (at), whether the directory the text starts in is certain, and what sh_walk finds certain
-        about its variables, worked out the first time one is asked for."""
+        about its variables, worked out the first time one is asked for. For note_writes
+        (claude-config#2721), which line() sets per command: whether a pipe feeds the command being
+        read (piped, None where not known), whether it is one of the text's own rather than a
+        wrapper's (outer), and what the last such command printed (last_out); and, set once by line(),
+        whether the text is a file on disk rather than one this call wrote (on_disk)."""
         return {"text": text, "cwd": cwd, "script": script, "pending": {}, "exported": set(), "at": None,
-                "cwd_known": cwd_known, "known": None, "piped": None, "outer": True, "last_out": None}
+                "cwd_known": cwd_known, "known": None, "piped": None, "outer": True, "last_out": None,
+                "on_disk": False}
 
     @staticmethod
     def py_path(value, d):
@@ -2924,13 +2929,18 @@ class Judge:
                     self.shell["at"] = starts[k] if k < len(starts) else None
                     k += 1
                 # Whether a pipe feeds this command, for note_writes (claude-config#2721): read from
-                # the text before it, for a command of s's own; None, not known, for a wrapper's.
+                # the text before it, for a command of s's own; None, not known, for a wrapper's, or
+                # where a group, subshell, loop or if feeds the pipe: that prints what every command
+                # in it prints, and last_out holds only its last (lessons review at 8fe178b).
                 at = self.shell["at"] if not wdepth else None
                 if at is None:
                     self.shell["piped"] = None
                 else:
                     before = s[:at].rstrip()
-                    self.shell["piped"] = before.endswith(("|", "|&")) and not before.endswith("||")
+                    piped = before.endswith(("|", "|&")) and not before.endswith("||")
+                    feeder = before.rstrip("&").rstrip("|").rstrip()
+                    compound = feeder.endswith((")", "}")) or bool(re.search(r"(?:^|[\s;&|])(?:done|fi|esac)\Z", feeder))
+                    self.shell["piped"] = None if piped and compound else piped
                 self.shell["outer"] = not wdepth
                 reason = self.record(d, text, wrapper, why, depth, whole)
                 if reason:
