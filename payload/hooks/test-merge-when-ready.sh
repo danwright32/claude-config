@@ -3873,6 +3873,15 @@ check_eq "#2714 two waited runs merge" "0" "$rc"
 check "#2714 the first run is said under the limit" "job lint waited 2m 00s, and 0 of this repository's jobs" "$out"
 check "#2714 the second run is still called a full pool" "job deal waited 6m 34s, and 20 of this repository's jobs were running when it was queued. GitHub runs at most 20 jobs at once" "$out"
 
+# A third party status open beside it, whose link is no Actions run: still counted as open, so the
+# head waits for it, and the run beside it is still found and said.
+pw_fresh "$PW_RUN"
+jq -c '. + [{__typename:"StatusContext",context:"deploy/preview",state:"PENDING",targetUrl:"https://example.com/preview"}]' "$ST/rollup" > "$ST/rollup.tmp"; mv "$ST/rollup.tmp" "$ST/rollup"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 with a third party status beside it, it merges" "0" "$rc"
+check "#2714 the status was waited on as an open check" "checks still running (2 of 2)" "$out"
+check "#2714 and the run's wait is still said" "job deal waited 6m 34s" "$out"
+
 # A clean run says nothing, and reads nothing past its own jobs.
 pw_fresh 42877448181
 out="$(run 7 --squash)"; rc=$?

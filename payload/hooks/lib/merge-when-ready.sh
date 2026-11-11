@@ -1983,7 +1983,7 @@ EOF_VIEW
   checks_total=""; checks_open=""; pool_now=""
   read -r checks_total checks_open pool_now <<< "$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]?] as $c
     | [$c[] | select((.conclusion // .state // "") | ascii_upcase | IN("", "PENDING", "EXPECTED"))] as $o
-    | "\($c | length) \($o | length) \([$o[] | (.detailsUrl // "") | capture("/actions/runs/(?<id>[0-9]+)/").id] | unique | join(" "))"')"
+    | "\($c | length) \($o | length) \([$o[] | (.detailsUrl // "") | select(test("/actions/runs/[0-9]+/")) | capture("/actions/runs/(?<id>[0-9]+)/").id] | unique | join(" "))"')"
   checks_total="$(num_or "$checks_total" 0)"; checks_open="$(num_or "$checks_open" 0)"
   pool_seen "$pool_now"
   if [ "$checks_open" -gt 0 ]; then
