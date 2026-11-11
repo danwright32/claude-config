@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ci-reuse-green-tree.sh: may this pull request run stand on an earlier green run of EXACTLY the
-# same tree, rather than running every suite again? (claude-config#2690)
+# ci-reuse-green-tree.sh: may this pull request run, or this push to main, stand on an earlier green
+# run of EXACTLY the same tree, rather than running every suite again? (claude-config#2690, #2717)
 #
 # Dan's choice, 2026-11-10: keep the merge gate that refuses a head behind main (#766) exactly as it
 # is, and make the run that follows `gh pr update-branch` cheap instead, when the tree it produces has
@@ -18,14 +18,17 @@
 #      whose parents include that run's head.
 # Anything else, including any API call failing or an answer that will not parse, is the full suite.
 #
-# Only a pull request run consumes a proof. A push to main always runs in full: every run on main is
-# kept on purpose so a red main names its commit (claude-config#594), and dropping that run is a
-# separate decision (pricing for #2690, section D). A run by hand always runs in full too.
+# A pull request run consumes any such proof. A push to main consumes only a PULL REQUEST run's proof:
+# the merge it follows was tested as exactly this tree, so that run is the verdict for this commit,
+# and a red main still names its commit (claude-config#594), since a commit whose tree never passed
+# runs in full. Dan chose this on 2026-11-10 (claude-config#2717); a sync push from a Mac makes a tree
+# no pull request ran, so it runs in full. A push anywhere else and a run by hand always run in full.
 #
 # Input, from the environment:
 #   REUSE_REPO    owner/name the run belongs to (github.repository)
 #   REUSE_TREE    the tree this run would test (git rev-parse HEAD^{tree} of its checkout)
 #   REUSE_EVENT   github.event_name
+#   REUSE_REF     github.ref, read for a push: only a push to refs/heads/main reuses
 #   REUSE_RUN_ID  github.run_id, so a run never stands on its own record
 #   REUSE_GH      the gh to call (default gh); the tests point it at a fake
 # Output: on a reuse ONLY, three lines on stdout for GITHUB_OUTPUT, reused-run=, reused-sha= and
@@ -37,13 +40,19 @@ gh="${REUSE_GH:-gh}"
 repo="${REUSE_REPO:-}"
 tree="${REUSE_TREE:-}"
 event="${REUSE_EVENT:-}"
+ref="${REUSE_REF:-}"
 me="${REUSE_RUN_ID:-}"
 workflow_path=".github/workflows/tests.yml"
 
 full(){ echo "Running the full suite: $*" >&2; exit 0; }
 is_sha(){ [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 
-[ "$event" = pull_request ] || full "only a pull request run reuses an earlier green run, and this is a '$event' run."
+case "$event" in
+  pull_request) ;;
+  push) [ "$ref" = refs/heads/main ] \
+      || full "only a push to main reuses an earlier green run, and this push is to '${ref:-no ref named}'." ;;
+  *) full "only a pull request run or a push to main reuses an earlier green run, and this is a '$event' run." ;;
+esac
 is_sha "$tree" || full "the tree to test came through as '$tree', which is not a full hash."
 [ -n "$repo" ] || full "no repository was named."
 command -v jq > /dev/null 2>&1 || full "could not read GitHub's answers: jq is not installed."
@@ -77,6 +86,8 @@ IFS=$'\x1f' read -r status conclusion path run_repo head_repo run_head run_event
 [ "$head_repo" = "$repo" ] || full "run $run_id tested a fork's head ($head_repo), and a fork's run is never proof here."
 is_sha "$run_head" || full "run $run_id has no head commit."
 [ "$run_head" = "$index_head" ] || full "run $run_id's head is $run_head but its record names head $index_head."
+[ "$event" = pull_request ] || [ "$run_event" = pull_request ] \
+  || full "a push to main stands only on a pull request run of its tree, and run $run_id is a $run_event run."
 
 # 3. The commit it tested, from the record, then read from GitHub by that sha.
 dl="$(mktemp -d "${TMPDIR:-/tmp}/reuse-green-tree.XXXXXXXX")" || full "could not make a directory to download the record into."
