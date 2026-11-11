@@ -502,7 +502,8 @@ segments = re.split(r"&&|\|\||;|\||\n", shell_text)
 # The commands a shell runs from its -c string, eval from its words and env -S from its string
 # (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
 # directory it runs in, so a cd inside one moves only what follows it there. Only added to the
-# segments of the whole command above, which still read every line of it, heredoc bodies included.
+# segments of the whole command above, which still read every line of it, heredoc bodies included,
+# except a body only cat or tee copies into a named file, which is blank there (claude-config#2722).
 # So are the commands inside a substitution, which those segments never read as commands of their
 # own, those in the body of a heredoc whose end marker is unquoted among them, since the shell runs
 # them too (claude-config#2053). And with a heredoc, every command it runs, each in the directory it
