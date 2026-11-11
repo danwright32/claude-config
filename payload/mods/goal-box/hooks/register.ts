@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askDoneText, askText, boxText, cardOf, cardedSince, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, waitKey, type Confirmed, type Holds, type Linked } from './box.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText } from './mod-kit/skew.ts'
@@ -23,8 +23,11 @@ import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
 //    calls waiting asked of GitHub again here, #1818), or a pull request the session
 //    touched is still open (GitHub, asked as each account), and at most one box per request (a
 //    second needs a new message from Dan, mod-kit's one reader of his own words). What reminds the
-//    session to call it is the SESSION REFLECTION's last line (hooks/review/session-reflection.md,
-//    #1749), which fires after every turn that changed something.
+//    session to call it is the last step of both end of turn reviews (hooks/review/
+//    session-reflection.md, #1749, and issue-review.md, #2523). A reflection folded into the issue
+//    review once dropped its line (#2523), so a prompt is not the whole reminder (L27): at a turn end
+//    where work measurably shipped (an is it live card made since Dan's last message), nothing is in
+//    flight and no box was shown, this mod asks the session itself, once per message of Dan's.
 //
 // The box is the tool's result: drawn as mod-kit's card, its heading in the success colour, and as
 // text led by the goal wherever the card is not drawn (#2512).
@@ -33,6 +36,8 @@ const interactiveRef = { plugin: 'goal-box', key: 'interactive' } as const
 const promptsRef = { plugin: 'goal-box', key: 'prompts' } as const
 const shownRef = { plugin: 'goal-box', key: 'shown' } as const
 const askedRef = { plugin: 'goal-box', key: 'asked' } as const
+const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
+const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
 // is it live's own record of this session's merges, read here; it may not be loaded at all.
 const owedRef = { plugin: 'is-it-live', key: 'owed' } as const
 const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
@@ -198,6 +203,62 @@ const unmarkAsked = async ($: EngineInterface, id: string): Promise<void> => {
   }
 }
 
+/**
+ * Sends the session one prompt of its own, holding back mod-kit's reload of goal-box until it is sent
+ * (#2132: the prompt waits until the session is idle, and a reload in that time would drop it), for
+ * at most mod-kit's hour. Why it did not enter (thrown, or dropped by a hook beneath), or undefined.
+ */
+const sendHeld = async ($: EngineInterface, id: string, what: string, text: string): Promise<string | undefined> => {
+  try {
+    const held = {
+      mod: MOD,
+      id,
+      what,
+      ms: HOLD_MAX_MS,
+      hold: (input: { mod: string; id: string; what: string; ms: number }) => $.modkit.hold(input),
+      release: (input: { mod: string; id: string }) => $.modkit.release(input),
+      log: (line: string) => $.ui.log(line, { to: 'debug' }),
+    }
+    const sent = await whileHeld(held, () => $.prompt.submit({ text }))
+    if (sent.drop !== undefined) return sent.drop || 'the prompt was dropped'
+    return undefined
+  } catch (err) {
+    return msg(err)
+  }
+}
+
+/**
+ * #2523: with no /goal, asks the session once per message of Dan's whether the work is finished, when
+ * an is it live card was made since that message, no box was shown for it, and nothing holds the box.
+ * Claimed before it is sent, so two turn ends at once ask once, and released when it did not enter,
+ * so a passing failure is asked again at the next turn end (L368).
+ */
+const askIfDone = async ($: EngineInterface): Promise<void> => {
+  const since = (await $.state.get(requestAtRef)).value
+  if (since === undefined) return
+  const prompts = (await $.state.get(promptsRef)).value ?? 0
+  const asked = await $.state.get(askedDoneRef)
+  if (asked.value !== undefined && asked.value >= prompts) return
+  const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
+  if ('why' in facts) {
+    debug($, `is it live's record could not be read (${facts.why}), so whether work shipped since Dan's last message is not known and the session was not asked about the box`)
+    return
+  }
+  if (!cardedSince(facts.verdicts, since)) return
+  if (((await $.state.get(shownRef)).value ?? []).some(s => s.prompts >= prompts)) return
+  const holds = [...(await agentHolds($)), ...(await mergeHoldsNow($)), ...(await openHolds($))]
+  if (holds.length) return
+  if (!(await $.state.set(askedDoneRef, prompts, { ifVersion: asked.version })).isSet) return
+  const failed = await sendHeld($, 'ask-done', 'the prompt asking whether the work is finished', askDoneText())
+  if (failed === undefined) return
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(askedDoneRef)
+    if (held.value !== prompts) break
+    if ((await $.state.set(askedDoneRef, asked.value ?? -1, { ifVersion: held.version })).isSet) break
+  }
+  $.ui.log(`Work shipped since Dan's last message, but the session could not be asked whether the work is finished (${failed}); it is asked again at the next turn end.`)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(interactiveRef, e.isInteractive === true)
@@ -218,6 +279,7 @@ export const register: Register = on => {
       debug($, `could not ask mod-kit whether a message was Dan's own words (${errorText(err, MOD)}), so it was not counted as a new request`)
     }
     if (isDans) {
+      await $.state.set(requestAtRef, await $.clock.now())
       for (let i = 0; i < 10; i++) {
         const held = await $.state.get(promptsRef)
         if ((await $.state.set(promptsRef, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) break
@@ -260,6 +322,10 @@ export const register: Register = on => {
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if ((await $.state.get(interactiveRef)).value !== true) return r
     const goal = await goalNow($)
+    if (goal.state === 'none' && !goal.met) {
+      await askIfDone($)
+      return r
+    }
     if (goal.state !== 'none' || !goal.met) return r
     // Claimed first, so two turn ends at once send one prompt; released again when the prompt did not
     // enter (thrown, or dropped by a hook beneath), so a passing failure never loses the box (L368).
