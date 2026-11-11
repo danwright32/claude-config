@@ -15,6 +15,7 @@ import {
   SOURCE,
   agentRefusal,
   blocked,
+  changedLines,
   ciMessages,
   ciWorkflow,
   codeOf,
@@ -55,6 +56,11 @@ import {
   uiComponent,
   textTemplate,
   tokenRanges,
+  untracedAgentRefusal,
+  untracedKey,
+  untracedQuestion,
+  untracedRefusal,
+  untracedText,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -875,16 +881,30 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
   const code = inScope(path, current || after)
   const text = !code && textTemplate(path)
   if (!code && !text) return PASS
-  const own = await ownWording($, { path, current, edited, before, after, code, text })
+  const own = await askUntraced($, path, before, after, await ownWording($, { path, current, edited, before, after, code, text }))
   // The edit's own wording passed: it is still judged for the wording it brings to a send from the
   // files it imports (#2637), inside the one search time the whole call has. An edit that does not
   // apply leaves the file as it was, so brings nothing.
   if (!('pass' in own) || !code || edited === undefined) return own
   try {
-    return await broughtIn($, path, before, after, started + SCAN_MS)
+    return await askUntraced($, path, before, after, await broughtIn($, path, before, after, started + SCAN_MS))
   } catch (err) {
     return { unchecked: message(err) }
   }
+}
+
+// An edit whose trace stopped at one of the guard's own limits (#2709) stops there on every try, so
+// it is held for Dan to approve, with the lines it adds and takes away shown. His approval is kept by
+// the file and the edit's whole text, so it lets that one edit through and no other.
+const askUntraced = async ($: EngineInterface, path: string, before: string, after: string, v: Verdict): Promise<Verdict> => {
+  if (!('unchecked' in v) || !v.untraced) return v
+  const key = untracedKey(path, before, after)
+  try {
+    if (!(await unapproved($, [key])).length) return PASS
+  } catch (err) {
+    return { unchecked: message(err) }
+  }
+  return { hold: { file: path, ...changedLines(before, after), keys: [key], untraced: v.unchecked } }
 }
 
 /** The verdict on the wording an edit changes in its own file. */
@@ -1039,8 +1059,10 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       if (!keys.length) return PASS
       deadline ??= (await $.clock.now()) + SCAN_MS
       const found = await findSender($, f.path, deadline, code && isSender(f.path, text, true))
-      if ('unchecked' in found) return found
-      if ('posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
+      // A trace stopped at one of the guard's own limits (#2709) is held as a shell write that may
+      // reach Slack is, which Dan can approve, since trying again stops at the same limit.
+      if ('unchecked' in found && !found.untraced) return found
+      if ('unchecked' in found || 'posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
       if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }
     }
     return PASS
@@ -1080,6 +1102,17 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
   if ('merge' in v) {
     await drawCard($, id, 'This pull request carries Slack alert wording chosen overnight that you have not approved.', 'It merges once you approve the wording.')
     return v.merge
+  }
+  // An edit the guard could not trace (#2709): Dan is shown its lines, never a rendered message, so it
+  // is never chosen overnight, which needs one.
+  if (v.hold.untraced !== undefined) {
+    const { file, added, removed, keys, untraced } = v.hold
+    if (id) {
+      const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, untraced, ...(agent ? { agent: true as const } : {}) }
+      await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
+      await drawCard($, id, `${untracedText(file, added, removed, untraced)}.`, agent ? 'The main session asks you about it.' : undefined)
+    }
+    return agent ? untracedAgentRefusal(id, file, added, removed, untraced) : untracedRefusal(id, file, added, removed, untraced)
   }
   const { file, added, removed, keys, sender, literal, from } = v.hold
   // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
@@ -1182,10 +1215,19 @@ export const register: Register = on => {
       if (!waiting) return { deny: `No Slack alert edit is waiting under ${id}: it was answered already, or the session ended. Make the edit again, and you will be told how to ask.` }
       if (ask.answers !== undefined && (typeof ask.answers !== 'object' || ask.answers === null || Object.keys(ask.answers).length > 0))
         return { deny: 'Ask Dan without answers already filled in: only his choice in the dialog decides this.' }
-      const problem = renderedProblem(ask.metadata?.rendered, waiting.added, waiting.literal ?? [])
-      if (problem !== undefined) return { deny: problem }
-      const rendered = String(ask.metadata?.rendered).trim()
-      const q = question(waiting.file, rendered, waiting.from)
+      // An edit the guard could not trace (#2709) has no message to render: the guard shows Dan its
+      // lines, and what he approved is kept as the question he was shown.
+      let q: string
+      let rendered: string
+      if (waiting.untraced !== undefined) {
+        q = untracedQuestion(waiting.file, waiting.added, waiting.removed, waiting.untraced)
+        rendered = q
+      } else {
+        const problem = renderedProblem(ask.metadata?.rendered, waiting.added, waiting.literal ?? [])
+        if (problem !== undefined) return { deny: problem }
+        rendered = String(ask.metadata?.rendered).trim()
+        q = question(waiting.file, rendered, waiting.from)
+      }
       const options = [
         { label: APPROVE, description: 'The wording is right. Only the edit to the file goes ahead.' },
         { label: CHANGE, description: 'Hold the edit, and say what it should say instead.' },

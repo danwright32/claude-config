@@ -1371,7 +1371,8 @@ test('a template imported only by UI components settles there, never followed pa
 })
 
 test('a template imported by a UI component and by any other file is judged as before', withKit, async ($, on) => {
-  // The other importer leads past what the guard follows: held as could not check, as without the component.
+  // The other importer leads past what the guard follows: held as an edit the guard could not trace
+  // (#2709), as without the component.
   const deep = {
     '/w/app/lib/emails/alpha.tsx': "import { deployFailed } from '../templates/deploy'\nexport const Alpha = () => <p>{deployFailed('1')}</p>\n",
     '/w/app/lib/emails/bravo.tsx': "export { Alpha } from './alpha'\n",
@@ -1380,7 +1381,7 @@ test('a template imported by a UI component and by any other file is judged as b
   }
   const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN, ...deep } })
   const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain('could not check')
+  expect(why).toContain('could not trace')
   expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
   expect(w.ran).toEqual([])
   // The other importer sends nothing, and the component is imported by a file that posts it to
