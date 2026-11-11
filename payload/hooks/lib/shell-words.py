@@ -317,6 +317,7 @@ def cd_target(text):
     A bare cd goes home. Only a leading tilde is expanded later; a variable stays as written, so
     the caller refuses it rather than guessing what it holds.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -1273,7 +1274,7 @@ def rtk_field(passed):
     passed over with it, as rtk itself passes over them."""
     if not passed or passed[-1][0] != "rtk":
         return ""
-    after = passed[-1][1]
+    after = join_continuations(passed[-1][1])
     try:
         words = shlex.split(after, posix=True)
     except ValueError:
@@ -1342,6 +1343,7 @@ ARRAY_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 def _script_run(word, rest):
     """(wrapper, None, why) for a command whose own word runs a script file, by its path or by
     source or `.`, else None (claude-config#1623)."""
+    rest = join_continuations(rest)
     if word in ("source", "."):
         try:
             operands = shlex.split(rest, posix=True)[1:]
@@ -1369,6 +1371,7 @@ def wrapped(rest):
     when it reads its input, `direct` or `source` for a script file run by its path or sourced);
     string is the command line it runs, None when there is none to read; why is "" when the string
     can be read, else the reason it cannot."""
+    rest = join_continuations(rest)
     name, _ = first_word(rest)
     if name is None:
         raw = rest.split(None, 1)

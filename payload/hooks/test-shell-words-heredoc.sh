@@ -219,6 +219,23 @@ print(out)' "$SW" 2>&1)"
   && check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" ok \
   || check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" "got [$cont_got]"
 
+# #2447: the readers that split a command's words themselves read a continuation the same way: the
+# directory a cd moves to, the string a bash -c runs, the file a source reads and rtk's subcommand
+# each come out as written on one line, not with a newline in front.
+cont_readers="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(repr(m.cd_target("cd \\\n/w")))
+print(repr(m.wrapped("bash \\\n-c \"git push\"")))
+print(repr(m._script_run("source", "source \\\n/x/file.sh")))
+print(repr(m.rtk_field([("rtk", "\\\ninit -g")])))' "$SW" 2>&1 | paste -sd'|' -)"
+[ "$cont_readers" = "'/w'|('bash -c', 'git push', '')|('source', None, $(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(repr(m.WHY_FILE % "/x/file.sh"))' "$SW"))|'rtk\\x1dinit\\x1d\\x1d-g'" ] \
+  && check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" ok \
+  || check "#2447 cd_target, wrapped, a sourced file and rtk_field read past a backslash newline continuation" "got [$cont_readers]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
