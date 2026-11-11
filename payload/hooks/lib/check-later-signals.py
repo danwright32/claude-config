@@ -295,12 +295,16 @@ def memory_signal(use, when):
 
 # ---- 3. a promise in the assistant's own words ----
 VERB = re.compile(
-    r"\b(?:re-?check|check(?: (?:it|this|that|them|in on it))? (?:again|back)|look(?: at [^.;!?]{0,40}?)? again"
+    # The re- verbs take their other forms (#2087): a week of real sessions held a dated recheck
+    # said in the passive ("gets rechecked on <date>"), which the bare stem missed. On 70 days of
+    # this Mac's transcripts (25,260 assistant text lines) the forms added that one real wait and
+    # no other fire. A past tense report stays silent because the day must still be ahead.
+    r"\b(?:re-?check(?:s|ed|ing)?|check(?: (?:it|this|that|them|in on it))? (?:again|back)|look(?: at [^.;!?]{0,40}?)? again"
     # A dated wait said without a check verb (measured on real transcripts, #2079): an issue kept
     # open for a later reading, or work waiting ON later data. "wait for" is left out, because it
     # is what a sentence choosing NOT to wait says ("rather than wait for tomorrow's run").
     r"|stays? open (?:for|until)|(?:is|are)? ?waiting on|waits? on"
-    r"|re-?pull|re-?run|re-?read|revisit|circle back|come back to"
+    r"|re-?pull(?:s|ed|ing)?|re-?run(?:s|ning)?|re-?read(?:s|ing)?|revisit(?:s|ed|ing)?|circle back|come back to"
     r"|(?:I'll|I will|we'll|we will|I'm going to|I plan to|let's|I can) (?:check|look|verify|confirm|see|measure|watch|pull))\b",
     re.IGNORECASE)
 WEEKDAYS = r"(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day"
