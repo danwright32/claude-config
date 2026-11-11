@@ -1883,6 +1883,33 @@ unset L_ENV_2785
 run_k 'cd @K@ && L_ENV_2785=out/x.log; curl -s https://example.com/x > $L_ENV_2785; bash tools/check.sh'
 allowed "and the same command passes with nothing in the environment"
 
+# The reading above lives in lib/written-paths.py, which the gate takes as its Judge's base. Its
+# patterns are read directly here too, so a change there shows as a pattern, not only as a verdict:
+# an unknown part keeps only the text after it, from its last .. on, and a literal glob is escaped.
+cat > "$T/written-paths-check.py" <<'PY'
+import os, sys
+hooks = sys.argv[1]
+sys.path.insert(0, hooks)
+import slack_drafts_only_gate as gate
+judge = gate.Judge.__new__(gate.Judge)
+base = gate.Judge.__mro__[1]
+wrong = []
+if "unknown_patterns" not in vars(base) or \
+        os.path.basename(base.shape_patterns.__code__.co_filename) != "written-paths.py":
+    wrong.append("the gate's Judge does not take its write patterns from lib/written-paths.py")
+# The unknown marker of the copy the gate loaded: a second load of the file would make another.
+ANY = base.shape_patterns.__globals__["ANY"]
+cases = [([ANY, ".txt"], ["*.txt"]), ([ANY, "/a/../b.sh"], ["*/b.sh"]),
+         ([ANY, "/./c.sh"], ["*/c.sh"]), (["/x/a*b"], ["/x/a[*]b"])]
+for shape, want in cases:
+    got = judge.shape_patterns(shape, "/")
+    if got[:1] != want:
+        wrong.append("%r gave %r, not %r" % (shape, got, want))
+print("; ".join(wrong) or "ok")
+PY
+written="$(python3 "$T/written-paths-check.py" "$DIR" 2>&1)"
+check "lib/written-paths.py reads an unknown write's path as the text after its last unknown part" "$written"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
