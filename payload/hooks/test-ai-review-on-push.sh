@@ -181,7 +181,8 @@ fire_push(){ # fire_push <command> <exit code> [cwd]
 wait_for_final(){ # wait_for_final <sha>  -> 0 when the finished file appears, 1 at the hang ceiling
   # It took a ceiling of its own from each caller, 20 or 120 seconds, which a loaded Mac can reach
   # with nothing broken (#1679; those were settings, not measurements).
-  hang_wait "compgen -G '$AI_REVIEW_STATE_DIR/*-$1.txt' >/dev/null"
+  local _wf_sha="$1"   # read when the condition is evaluated: one built from a value is unreadable to the Slack drafts gate (#2538)
+  hang_wait 'compgen -G "$AI_REVIEW_STATE_DIR/*-$_wf_sha.txt" >/dev/null'
 }
 
 # The sessions the nudge cases below speak as, begun HERE, before any push, as a real session's first
