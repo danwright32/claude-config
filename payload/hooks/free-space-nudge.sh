@@ -58,9 +58,12 @@ STATE_DIR="${FREE_SPACE_NUDGE_STATE_DIR:-${TMPDIR:-/tmp}/claude-free-space-nudge
 # said again in the same session (claude-config#2635, as #2559 asked). Forgetting what this session
 # was last told is what makes the next warning new. This runs on every prompt, so it stays in bash:
 # the session id is matched from the payload here rather than parsed by python as below, and a
-# payload this cannot match changes nothing, which is only the old behaviour of staying quiet.
+# payload this cannot match changes nothing, which is only the old behaviour of staying quiet. The
+# match is asked again under LC_ALL=C when it fails, since in the session locale a byte that is not
+# UTF-8 hides every word after it (claude-config#1885); the same line as every other hook's copy.
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
 if [ "$verdict" -eq 0 ]; then
-  if [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+  if payload_match "$input" '"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'; then
     healthy_session="${BASH_REMATCH[1]//[^A-Za-z0-9]/_}"
     [ -f "$STATE_DIR/$healthy_session" ] && rm -f "$STATE_DIR/$healthy_session" 2>/dev/null
   fi
