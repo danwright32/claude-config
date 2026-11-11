@@ -84,26 +84,46 @@ const owedOf = (t: Pasted) =>
 // Said after the save, whichever reply it was.
 const TOLD = 'Then tell Dan it is a draft waiting in that thread and that nothing was sent.'
 
+// #2653: said to a session started from a thread, the one kind owed a reply after every merge: how
+// it says, once, that its later merges have nothing to do with the thread. Never for a merge that
+// has already landed, so it cannot stand in for the reply this hold asks for.
+const unrelatedOf = (t: SlackThread, tool: string) =>
+  `If this session's later merges have nothing to do with ${nameOfThread(t)}, say so once by calling ${tool} (load it with ToolSearch, query "select:${tool}"), and no reply is then asked for them. This reply is still owed.`
+
 /** Why a turn end is held, naming every thread owed a draft reply. A thread a card asked a draft of
- * its message for is owed that message, the one Dan was shown, never a second reply (#2630). */
-export const draftHoldOf = (owed: Pasted[]): string =>
+ * its message for is owed that message, the one Dan was shown, never a second reply (#2630).
+ * `unrelatedTool` is the tool a session calls to say its later merges are unrelated (#2653). */
+export const draftHoldOf = (owed: Pasted[], unrelatedTool: string): string =>
   owed
     .map(t =>
       t.card
         ? `The message for ${t.card.name} on the is it live card for ${t.card.pr} is owed as a Slack draft reply in ${nameOfThread(t)}, and no draft of it is saved since. Before ending the turn, save it now, without asking Dan first: call ${saveWith(t)}, with message set to exactly "${t.card.message}", word for word. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}`
-        : `${owedOf(t)}, run /no-ai-tells on it, show it to Dan in your reply, and in that same step, without asking Dan first, save that exact text with ${saveWith(t)}. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}`,
+        : `${owedOf(t)}, run /no-ai-tells on it, show it to Dan in your reply, and in that same step, without asking Dan first, save that exact text with ${saveWith(t)}. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}${t.mid ? '' : ` ${unrelatedOf(t, unrelatedTool)}`}`,
     )
     .join('\n\n')
 
 /** What is said when a turn ends while a draft is still owed, the turn end having been held once in this chain. */
 export const draftLetGoOf = (owed: SlackThread[]): string => `No Slack draft reply saved to ${owed.map(nameOfThread).join(', ')}: the turn ended without one.`
 
-/** The step a thread's draft is owed from: the latest merge for it when pasted mid session (#2578), else the latest merge. */
-export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined): number | undefined => (t.mid ? t.related : landed)
+/**
+ * #2653: the session said its later merges are unrelated to the thread it started from, and the
+ * step its last merge had landed at when it did (absent when none had). Kept in session state, so a
+ * new session from the same thread is asked again.
+ */
+export type Unrelated = { landed?: number }
+
+/**
+ * The step a thread's draft is owed from: the latest merge for it when pasted mid session (#2578),
+ * else the latest merge. Once the session has said its later merges are unrelated (#2653), a thread
+ * it started from is owed only for the merges that had landed by then, unless a card asked a draft
+ * of its message there (#2630), which is a merge for it whatever was said.
+ */
+export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined, unrelated?: Unrelated): number | undefined =>
+  t.mid ? t.related : unrelated === undefined || t.card !== undefined ? landed : unrelated.landed
 
 /** The threads owed a draft: those whose last draft came before the latest merge they are owed for. */
-export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined): IsItLiveThread[] =>
+export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined, unrelated?: Unrelated): IsItLiveThread[] =>
   threads.filter(t => {
-    const from = draftOwedFrom(t, landed)
+    const from = draftOwedFrom(t, landed, unrelated)
     return from !== undefined && (t.settled ?? -Infinity) < from
   })
