@@ -121,7 +121,7 @@ STATE_DIR="${CHECKOUT_BEHIND_STATE_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 STAMP="$STATE_DIR/claude-checkout-fetch-$(printf '%s\n%s' "$common" "$dbranch" | shasum | cut -c1-16).stamp"
 
-# ago <seconds>: "10 hours ago", "3 days ago".
+# ago <seconds>: the age in words, in its largest whole unit of days, hours or minutes.
 ago() {
   local s="$1" unit size n
   [ "$s" -ge 0 ] 2>/dev/null || s=0
