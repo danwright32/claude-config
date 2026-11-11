@@ -1281,6 +1281,9 @@ export const mentionsStore = (text: string): boolean => /plugins\/store/.test(te
 
 const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 
+/** What a held module of message copy that no file uses yet is called on the card, refusals and question (#2720). */
+export const UNWIRED = 'a module of message copy not yet wired to Slack'
+
 /** What changes, in the words the refusal and card name it by. */
 export const changeText = (added: string[], removed: string[]): string =>
   added.length ? `adds Slack message text Dan has not approved: ${listed(added)}` : `takes Slack message text away: ${listed(removed)}`
@@ -1290,25 +1293,26 @@ export const changeText = (added: string[], removed: string[]): string =>
  * can read before it runs, so it is named as that rather than as an empty list taken away. A
  * template another file sends (#2248) names that file, its sender, so Dan sees what posts it. An
  * edit that adds no text of its own and brings another file's to a send (#2637) names that file,
- * `from`, as where the text is.
+ * `from`, as where the text is. A module of message copy no file uses yet (#2720), `unwired`, is
+ * named as that, so Dan can tell it from a live send (his choice of words, 2026-11-11).
  */
-export const heldText = (file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
+export const heldText = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
   from
     ? `This edit to ${file} makes ${sender && sender !== file ? sender : 'it'} send Slack message text from ${from} that Dan has not approved: ${listed(added)}`
     : added.length || removed.length
-    ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : ''} ${changeText(added, removed)}`
+    ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : unwired ? `, ${UNWIRED},` : ''} ${changeText(added, removed)}`
     : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
-export const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
-  `Blocked: t${heldText(file, added, removed, sender, from).slice(1)}`
+export const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `Blocked: t${heldText(file, added, removed, sender, from, unwired).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
-export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
-  `${blocked(file, added, removed, sender, from)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `${blocked(file, added, removed, sender, from, unwired)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
-export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string): string =>
-  `${blocked(file, added, removed, sender, from)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `${blocked(file, added, removed, sender, from, unwired)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
 /**
  * An edit the guard could not trace (#2709): the trace stopped at one of its limits, which it meets
@@ -1339,9 +1343,10 @@ export const untracedQuestion = (file: string, added: string[], removed: string[
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets
  * the held edit through, so the question never asks to post (claude-config#2284). For wording an
- * edit brings in from another file (#2637), `from` is the file that holds it.
+ * edit brings in from another file (#2637), `from` is the file that holds it. For a module of
+ * message copy no file uses yet (#2720), `unwired`, the file is named as that.
  */
-export const question = (file: string, rendered: string, from?: string): string =>
+export const question = (file: string, rendered: string, from?: string, unwired?: boolean): string =>
   from
     ? `Approve the wording of an automated Slack alert defined in ${from}, which the held edit to ${file} brings into use? Approving sends nothing: it only lets that edit go ahead.\n\n${rendered}`
-    : `Approve the wording of an automated Slack alert defined in ${file}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`
+    : `Approve the wording of an automated Slack alert defined in ${file}${unwired ? `, ${UNWIRED}` : ''}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`
