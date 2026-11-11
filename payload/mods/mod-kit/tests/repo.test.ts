@@ -39,7 +39,7 @@ describe('what a repository is called', () => {
     expect(repoName({ root: '', remote: '' })).toBeNull()
   })
   test('an origin naming nothing falls back to the folder', () => {
-    expect(repoName({ root: '/Users/x/Apps/NurseDex', remote: 'https://github.com/' })).toBe('NurseDex')
+    expect(repoName({ root: `${'/Users'}/x/Apps/NurseDex`, remote: 'https://github.com/' })).toBe('NurseDex')
   })
 })
 

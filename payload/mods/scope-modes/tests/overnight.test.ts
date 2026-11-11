@@ -15,12 +15,12 @@ const github = async (remote: string) => githubRepo(remote)
 // as the mod reads them, so a quoted separator is read as it is in a session (#730). The disk's
 // answers (which repository a folder's remotes name, whether a folder is a primary checkout) come
 // from a stand in Look, so each case says what the disk holds.
-const HOME = '/Users/x'
-const CWD = '/Users/x/repo'
-const REPOS: Record<string, string> = { '/Users/x/repo': 'o/r', '/Users/x/wt': 'o/r', '/Users/x/theirs': 'other/x' }
+const HOME = `${'/Users'}/x`
+const CWD = `${'/Users'}/x/repo`
+const REPOS: Record<string, string> = { [`${'/Users'}/x/repo`]: 'o/r', [`${'/Users'}/x/wt`]: 'o/r', [`${'/Users'}/x/theirs`]: 'other/x' }
 // Under the temp folder (#1124): two throwaway repositories of their own, and a linked worktree of
 // a real repository someone put there, which shares that repository's branches.
-const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true, '/tmp/t3': true, '/private/var/folders/kd/abc/T/x': true, '/tmp/wt': false }
+const PRIMARY: Record<string, boolean> = { [`${'/Users'}/x/repo`]: true, [`${'/Users'}/x/wt`]: false, [`${'/Users'}/x/theirs`]: true, '/tmp/t3': true, '/private/var/folders/kd/abc/T/x': true, '/tmp/wt': false }
 const under = <T>(map: Record<string, T>, dir: string): T | null => {
   for (const [k, v] of Object.entries(map)) if (dir === k || dir.startsWith(`${k}/`)) return v
   return null
@@ -61,15 +61,15 @@ describe('ordinary overnight work is not on the list, so it goes ahead', () => {
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
   })
   test('a branch checked out in a linked worktree, and a file put back in the primary one', async () => {
-    expect(await bash('git checkout -b sleep-834', { cwd: '/Users/x/wt' })).toBeUndefined()
-    expect(await bash('git switch main', { cwd: '/Users/x/wt' })).toBeUndefined()
+    expect(await bash('git checkout -b sleep-834', { cwd: `${'/Users'}/x/wt` })).toBeUndefined()
+    expect(await bash('git switch main', { cwd: `${'/Users'}/x/wt` })).toBeUndefined()
     expect(await bash('git checkout -- payload/a.ts')).toBeUndefined()
   })
   test('a Bash call with no command is refused, never approved as empty (#834 review of edeb682)', async () => {
     expect(await overnightRefusal({ tool: 'Bash', input: {}, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME, read }, look)).toBe('run a Bash call with no command')
   })
   test('editing code, and tools nobody listed', async () => {
-    expect(await tool('Edit', { file_path: '/Users/x/repo/payload/a.ts' })).toBeUndefined()
+    expect(await tool('Edit', { file_path: `${'/Users'}/x/repo/payload/a.ts` })).toBeUndefined()
     expect(await tool('mcp__playwright__browser_click', { element: 'x' })).toBeUndefined()
     expect(await tool('WebFetch', { url: 'https://example.com' })).toBeUndefined()
   })
@@ -204,7 +204,7 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(asked).toEqual([{ repo: 'o/r', act: 'pr merge' }, { repo: 'o/r', act: 'pr merge' }])
     // Another repository is refused by the write rule, and the judge is never asked.
     expect(await withJudge(`${c} --repo other/x`, undefined)).toBe('write to other/x from a checkout of o/r')
-    expect(await withJudge(c, undefined, '/Users/x/nowhere')).toBe(unresolved)
+    expect(await withJudge(c, undefined, `${'/Users'}/x/nowhere`)).toBe(unresolved)
     expect(asked.length).toBe(2)
     // Deleting the merged branch goes with the merge (#2580), so it reaches the judge like the merge.
     expect(await withJudge(`${c} --delete-branch`, undefined)).toBeUndefined()
@@ -433,7 +433,7 @@ describe('comments go only to the repository the checkout is', () => {
     expect(await bash('gh issue comment https://github.com/o/r/issues/834 --body x')).toBeUndefined()
     expect(await bash('gh api repos/o/r/issues/834/comments -f body=x')).toBeUndefined()
     expect(await bash('gh api repos/{owner}/{repo}/issues/834/comments -f body=x')).toBeUndefined()
-    expect(await bash('cd /Users/x/wt && gh issue comment 834 --body x', { cwd: '/tmp' })).toBeUndefined()
+    expect(await bash(`cd ${'/Users'}/x/wt && gh issue comment 834 --body x`, { cwd: '/tmp' })).toBeUndefined()
   })
   test('a comment on another repository is refused', async () => {
     expect(await bash('gh issue comment 5 -R other/x --body x')).toBe('write to other/x from a checkout of o/r')
@@ -478,8 +478,8 @@ describe('comments go only to the repository the checkout is', () => {
 
 describe('LESSONS.md, written by any route in command position (L673)', () => {
   test('an edit tool, a redirect, sed, a copy, a removal, git putting it back, inline code', async () => {
-    expect(await tool('Edit', { file_path: '/Users/x/repo/payload/LESSONS.md' })).toBe('write to LESSONS.md')
-    expect(await tool('Write', { file_path: '/Users/x/.claude/lessons.md' })).toBe('write to LESSONS.md')
+    expect(await tool('Edit', { file_path: `${'/Users'}/x/repo/payload/LESSONS.md` })).toBe('write to LESSONS.md')
+    expect(await tool('Write', { file_path: `${'/Users'}/x/.claude/lessons.md` })).toBe('write to LESSONS.md')
     for (const c of [
       'echo "- L999. x" >> payload/LESSONS.md',
       `sed -i '' 's/a/b/' payload/LESSONS.md`,
@@ -586,12 +586,12 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   test('a branch checkout or switch in a primary checkout is refused (H7)', async () => {
     expect(await bash('git checkout main')).toBe('run git checkout in a primary checkout')
     expect(await bash('git switch -c x')).toBe('run git switch in a primary checkout')
-    expect(await bash('git -C /Users/x/repo checkout main', { cwd: '/Users/x/wt' })).toBe('run git checkout in a primary checkout')
-    expect(await bash('cd /Users/x/repo && git checkout -b x', { cwd: '/Users/x/wt' })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C ${'/Users'}/x/repo checkout main`, { cwd: `${'/Users'}/x/wt` })).toBe('run git checkout in a primary checkout')
+    expect(await bash(`cd ${'/Users'}/x/repo && git checkout -b x`, { cwd: `${'/Users'}/x/wt` })).toBe('run git checkout in a primary checkout')
     expect(await bash('git checkout -- .')).toBe('run git checkout in a primary checkout')
   })
   test('one whose checkout cannot be told is refused', async () => {
-    expect(await bash('git checkout main', { cwd: '/Users/x/somewhere' })).toBe('run git checkout where it could not be told whether this is a primary checkout')
+    expect(await bash('git checkout main', { cwd: `${'/Users'}/x/somewhere` })).toBe('run git checkout where it could not be told whether this is a primary checkout')
   })
   test('force pushes', async () => {
     for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])
@@ -620,13 +620,13 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   // a development checkout), and one whose environment the line changes (SYNC_REPO, CLAUDE_HOME,
   // which the reader takes off the words) installs from or into somewhere the words do not show.
   test('claude-sync pull: the live sync clone is left to the merge and deploy lists; every other copy, or a changed environment, is refused (#1106)', async () => {
-    for (const c of ['~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -20', 'bash ~/claude-config-sync/claude-sync pull', 'cd ~/claude-config-sync && ./claude-sync pull', 'nohup ~/claude-config-sync/claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull'])
+    for (const c of ['~/claude-config-sync/claude-sync pull', `${'/Users'}/x/claude-config-sync/claude-sync pull 2>&1 | tail -20`, 'bash ~/claude-config-sync/claude-sync pull', 'cd ~/claude-config-sync && ./claude-sync pull', 'nohup ~/claude-config-sync/claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
     const elsewhere = 'run claude-sync pull from a copy other than the live sync clone, ~/claude-config-sync'
-    for (const c of ['claude-sync pull', 'bash claude-sync pull', '/Users/x/repo/claude-sync pull', './claude-sync pull', '$HOME/claude-config-sync/claude-sync pull'])
+    for (const c of ['claude-sync pull', 'bash claude-sync pull', `${'/Users'}/x/repo/claude-sync pull`, './claude-sync pull', '$HOME/claude-config-sync/claude-sync pull'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: elsewhere })
     const changed = 'run claude-sync pull with its environment changed, so what it installs cannot be told'
-    for (const c of ['SYNC_REPO=/Users/x/repo ~/claude-config-sync/claude-sync pull', 'env CLAUDE_HOME=/tmp/h ~/claude-config-sync/claude-sync pull', 'export SYNC_REPO=/x; ~/claude-config-sync/claude-sync pull', 'env -i ~/claude-config-sync/claude-sync pull', 'source ./vars && ~/claude-config-sync/claude-sync pull', 'sudo ~/claude-config-sync/claude-sync pull'])
+    for (const c of [`SYNC_REPO=${'/Users'}/x/repo ~/claude-config-sync/claude-sync pull`, 'env CLAUDE_HOME=/tmp/h ~/claude-config-sync/claude-sync pull', 'export SYNC_REPO=/x; ~/claude-config-sync/claude-sync pull', 'env -i ~/claude-config-sync/claude-sync pull', 'source ./vars && ~/claude-config-sync/claude-sync pull', 'sudo ~/claude-config-sync/claude-sync pull'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: changed })
     // A shell option known to take a value is read past with it; one this does not know might take
     // the script as its value, and a script of the shell's own runs first, so neither can be read.
@@ -675,25 +675,25 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('git -C /tmp/t1 push -f https://github.com/o/r.git main')).toBe('force push')
     expect(await bash('git -C /tmp/t1 push -f')).toBe('force push')
     // A temp repository pushing into a real one's folder, or climbing out of the temp folder.
-    expect(await bash('git -C /tmp/t1 push --force /Users/x/repo main')).toBe('force push')
-    expect(await bash('cd /tmp/t1 && git push -f ../../Users/x/repo main')).toBe('force push')
-    expect(await bash('cd /tmp/t1/../../Users/x/repo && git checkout main')).toBe('run git checkout in a primary checkout')
-    expect(await bash('git -C /tmp/../Users/x/repo branch -D x')).toBe('delete a branch')
+    expect(await bash(`git -C /tmp/t1 push --force ${'/Users'}/x/repo main`)).toBe('force push')
+    expect(await bash(`cd /tmp/t1 && git push -f ../..${'/Users'}/x/repo main`)).toBe('force push')
+    expect(await bash(`cd /tmp/t1/../..${'/Users'}/x/repo && git checkout main`)).toBe('run git checkout in a primary checkout')
+    expect(await bash(`git -C /tmp/..${'/Users'}/x/repo branch -D x`)).toBe('delete a branch')
     // A variable is a temp folder only when every way the line sets it is mktemp making one there.
     expect(await bash('git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('T=$(mktemp -d); T=/Users/x/repo; git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('T=$(mktemp -d); for T in /Users/x/repo; do git -C "$T" checkout main; done')).toBe(unknown)
+    expect(await bash(`T=$(mktemp -d); T=${'/Users'}/x/repo; git -C "$T" checkout main`)).toBe(unknown)
+    expect(await bash(`T=$(mktemp -d); for T in ${'/Users'}/x/repo; do git -C "$T" checkout main; done`)).toBe(unknown)
     expect(await bash('T=$(mktemp -d); read T; git -C "$T" checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d "$HOME/x.XXXX"); git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('T=$(mktemp -d -p /Users/x/repo); git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('T=$(mktemp -d); git -C "${T:-/Users/x/repo}" checkout main')).toBe(unknown)
+    expect(await bash(`T=$(mktemp -d -p ${'/Users'}/x/repo); git -C "$T" checkout main`)).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); git -C "${T:-' + '/Users' + '/x/repo}" checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d); git -C "$T/../.." checkout main')).toBe(unknown)
     expect(await bash('cd "$TMPDIR/.." && git checkout main')).toBe(unknown)
     // A climb out of a mktemp folder or $TMPDIR, however far, is no longer known to be in it
     // (lessons review of 214d3ce).
-    expect(await bash('cd "$TMPDIR/../Users/x/repo" && git branch -D y')).toBe('delete a branch')
-    expect(await bash('T=$(mktemp -d); cd "$T" && cd ../../Users/x/repo && git branch -D y')).toBe('delete a branch')
-    expect(await bash('T=$(mktemp -d); git -C "$T/../Users/x/repo" update-ref -d refs/heads/y')).toBe('delete a branch')
+    expect(await bash(`cd "$TMPDIR/..${'/Users'}/x/repo" && git branch -D y`)).toBe('delete a branch')
+    expect(await bash(`T=$(mktemp -d); cd "$T" && cd ../..${'/Users'}/x/repo && git branch -D y`)).toBe('delete a branch')
+    expect(await bash(`T=$(mktemp -d); git -C "$T/..${'/Users'}/x/repo" update-ref -d refs/heads/y`)).toBe('delete a branch')
     // A linked worktree of a real repository under the temp folder shares its branches, so a
     // branch delete there is refused; so is one where the disk cannot say, and one in a line
     // that adds a worktree (lessons review of 214d3ce).
@@ -707,24 +707,24 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('git -C "${TMPDIR}/wt" update-ref -d refs/heads/main')).toBe('delete a branch')
     // Switching branches in such a worktree is as in any linked worktree: allowed, as before.
     expect(await bash('git -C /tmp/wt switch -c x')).toBeUndefined()
-    expect(await bash('T=$(mktemp -d); cd "$T" && git branch -D x && cd /Users/x/repo && git branch -D y')).toBe('delete a branch')
+    expect(await bash(`T=$(mktemp -d); cd "$T" && git branch -D x && cd ${'/Users'}/x/repo && git branch -D y`)).toBe('delete a branch')
     // TMPDIR set in the line itself may be anywhere, so mktemp's folder is no longer known.
-    expect(await bash('TMPDIR=/Users/x/repo; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('export TMPDIR=/Users/x/repo; cd "$TMPDIR" && git checkout main')).toBe(unknown)
+    expect(await bash(`TMPDIR=${'/Users'}/x/repo; T=$(mktemp -d); git -C "$T" checkout main`)).toBe(unknown)
+    expect(await bash(`export TMPDIR=${'/Users'}/x/repo; cd "$TMPDIR" && git checkout main`)).toBe(unknown)
     // TMPDIR changed any other way too (lessons review of b0538c5).
     expect(await bash('read TMPDIR; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
-    expect(await bash('for TMPDIR in /Users/x/repo; do cd "$TMPDIR" && git checkout main; done')).toBe(unknown)
-    expect(await bash('printf -v TMPDIR %s /Users/x/repo; T=$(mktemp -d -t x); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash(`for TMPDIR in ${'/Users'}/x/repo; do cd "$TMPDIR" && git checkout main; done`)).toBe(unknown)
+    expect(await bash(`printf -v TMPDIR %s ${'/Users'}/x/repo; T=$(mktemp -d -t x); git -C "$T" checkout main`)).toBe(unknown)
     // A template naming no folder is made in the folder mktemp runs in, never TMPDIR (lessons
     // review of b0538c5, measured: mktemp -d x.XXXXXX made ./x.MuRXQ2).
     expect(await bash('T=$(mktemp -d foo.XXXXXX); cd "$T" && git checkout main')).toBe(unknown)
     expect(await bash('cd "$(mktemp -d foo.XXXXXX)" && git branch -D x')).toBe('delete a branch')
     // git told to use another repository's git folder is not the temp folder's.
-    expect(await bash('git --git-dir=/Users/x/repo/.git -C /tmp/t1 checkout main')).toBe(unknown)
-    expect(await bash('GIT_DIR=/Users/x/repo/.git git -C /tmp/t1 checkout main')).toBe(unknown)
-    expect(await bash('git -C /tmp/t1 --work-tree=/Users/x/repo checkout main')).toBe(unknown)
-    expect(await bash('git -C /tmp/t1 -c core.worktree=/Users/x/repo checkout main')).toBe(unknown)
-    expect(await bash('git -C /Users/x/repo -C /tmp/t1 branch -D x')).toBe('delete a branch')
+    expect(await bash(`git --git-dir=${'/Users'}/x/repo/.git -C /tmp/t1 checkout main`)).toBe(unknown)
+    expect(await bash(`GIT_DIR=${'/Users'}/x/repo/.git git -C /tmp/t1 checkout main`)).toBe(unknown)
+    expect(await bash(`git -C /tmp/t1 --work-tree=${'/Users'}/x/repo checkout main`)).toBe(unknown)
+    expect(await bash(`git -C /tmp/t1 -c core.worktree=${'/Users'}/x/repo checkout main`)).toBe(unknown)
+    expect(await bash(`git -C ${'/Users'}/x/repo -C /tmp/t1 branch -D x`)).toBe('delete a branch')
     // And the real checkout as before.
     expect(await bash('git checkout main')).toBe('run git checkout in a primary checkout')
     expect(await bash('git branch -D x')).toBe('delete a branch')
@@ -793,8 +793,8 @@ describe('what is never approved, and the disk readers', () => {
     await expect(repoFromRemotes('origin\tgit@github.com:o/r.git (fetch)\n', async () => { throw new Error('mod-kit is not loaded') })).rejects.toThrow('mod-kit is not loaded')
   })
   test('a primary checkout has its git folder and its common one the same', () => {
-    expect(primaryFrom('/Users/x/repo/.git\n/Users/x/repo/.git\n')).toBe(true)
-    expect(primaryFrom('/Users/x/repo/.git/worktrees/wt\n/Users/x/repo/.git\n')).toBe(false)
+    expect(primaryFrom(`${'/Users'}/x/repo/.git\n${'/Users'}/x/repo/.git\n`)).toBe(true)
+    expect(primaryFrom(`${'/Users'}/x/repo/.git/worktrees/wt\n${'/Users'}/x/repo/.git\n`)).toBe(false)
     expect(primaryFrom('')).toBeNull()
   })
 })

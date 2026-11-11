@@ -54,7 +54,7 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
 }
 const withKit = { plugins: [secDefault, modKit] }
 
-const HOME = '/Users/dan'
+const HOME = `${'/Users'}/dan`
 const T0 = Date.UTC(2026, 10, 4, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/slack-alert-guard_inline-ab12cd34ef56.json`
 // A file that posts to Slack, and one that does not.

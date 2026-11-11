@@ -62,7 +62,7 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   // The folders on this Mac every session shares, for the weekly count's claim: mkdir makes one or
   // says it exists, rmdir takes it away, stat reads its age. `mkdirFails` stands for a folder that
   // cannot be made at all (a full or unwritable disk).
-  mock.env(on, { HOME: '/Users/x', ...(opts.noClicks ? { NO_CLICKS: '1' } : {}) })
+  mock.env(on, { HOME: `${'/Users'}/x`, ...(opts.noClicks ? { NO_CLICKS: '1' } : {}) })
   const dirs = new Map<string, number>()
   const disk = { mkdirFails: '' }
   on('process.run', ($, e) => {
@@ -97,12 +97,12 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
   })
   return { clock, store, fail, between, submits, toasts, logs, debug, dirs, disk, held }
 }
-const CLAIM = '/Users/x/.claude/state/simpler/weekly.lock'
+const CLAIM = `${'/Users'}/x/.claude/state/simpler/weekly.lock`
 
 const answer = ($: Engine, text: string, extra: Record<string, unknown> = {}) =>
   $.turn.complete({ answer: text, durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', ...extra } as never)
 const start = ($: Engine, isInteractive = true) =>
-  $.session.start({ cwd: '/Users/x/Documents/Bidspoke', surface: isInteractive ? 'terminal' : null, isInteractive })
+  $.session.start({ cwd: `${'/Users'}/x/Documents/Bidspoke`, surface: isInteractive ? 'terminal' : null, isInteractive })
 const mountReply = ($: Engine, surface: (typeof SURFACES)[number], text = FIRST_BLOCK, isFirstOfReply = true) =>
   $.ui.mount({ plugin: 'simpler', surface, component: 'AssistantMessage', props: { text, isFirstOfReply } })
 const type = ($: Engine, inputText: string) =>

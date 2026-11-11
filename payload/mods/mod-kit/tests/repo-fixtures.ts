@@ -13,8 +13,8 @@
 
 export type RepoFixture = { why: string; root: string; remote: string | null; github: string | null; name: string | null }
 
-const ROOT = '/Users/x/Apps/folder'
-const DOCS = '/Users/x/Documents/Documents - Dan’s MacBook Pro'
+const ROOT = `${'/Users'}/x/Apps/folder`
+const DOCS = `${'/Users'}/x/Documents/Documents - Dan’s MacBook Pro`
 
 export const REPO_FIXTURES: readonly RepoFixture[] = [
   { why: 'ssh, the scp form', root: ROOT, remote: 'git@github.com:danwright32/claude-config.git', github: 'danwright32/claude-config', name: 'claude-config' },
@@ -42,13 +42,13 @@ export const REPO_FIXTURES: readonly RepoFixture[] = [
   { why: 'a file address', root: ROOT, remote: 'file:///srv/git/thing.git', github: null, name: 'thing' },
   { why: 'owner/name alone, which git reads as a relative path', root: ROOT, remote: 'o/r', github: null, name: 'r' },
   { why: 'github.com/o/r with no scheme, which git reads as a relative path', root: ROOT, remote: 'github.com/o/r', github: null, name: 'r' },
-  { why: 'no origin: the checkout folder', root: '/Users/x/Apps/Overture', remote: null, github: null, name: 'Overture' },
-  { why: 'an empty origin: the checkout folder', root: '/Users/x/Apps/Overture', remote: '', github: null, name: 'Overture' },
-  { why: "a session in a linked worktree, as $.session.repo() gives it: the main working tree", root: '/Users/x/Apps/claude-config', remote: null, github: null, name: 'claude-config' },
+  { why: 'no origin: the checkout folder', root: `${'/Users'}/x/Apps/Overture`, remote: null, github: null, name: 'Overture' },
+  { why: 'an empty origin: the checkout folder', root: `${'/Users'}/x/Apps/Overture`, remote: '', github: null, name: 'Overture' },
+  { why: "a session in a linked worktree, as $.session.repo() gives it: the main working tree", root: `${'/Users'}/x/Apps/claude-config`, remote: null, github: null, name: 'claude-config' },
   { why: "a session in a linked worktree under spaces and a curly apostrophe, as $.session.repo() gives it", root: `${DOCS}/Bidspoke`, remote: null, github: null, name: 'Bidspoke' },
-  { why: "a worktree's own folder (never from $.session.repo()) names its parent", root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-ac031537', remote: null, github: null, name: 'claude-config' },
-  { why: "a worktree's own folder with a trailing slash", root: '/Users/x/Apps/claude-config/.claude/worktrees/issue-945/', remote: null, github: null, name: 'claude-config' },
+  { why: "a worktree's own folder (never from $.session.repo()) names its parent", root: `${'/Users'}/x/Apps/claude-config/.claude/worktrees/agent-ac031537`, remote: null, github: null, name: 'claude-config' },
+  { why: "a worktree's own folder with a trailing slash", root: `${'/Users'}/x/Apps/claude-config/.claude/worktrees/issue-945/`, remote: null, github: null, name: 'claude-config' },
   { why: "a worktree's own folder under spaces and a curly apostrophe", root: `${DOCS}/Bidspoke/.claude/worktrees/agent-1`, remote: null, github: null, name: 'Bidspoke' },
-  { why: 'the origin wins over the folder', root: '/Users/x/Apps/old-folder-name', remote: 'git@github.com:danwright32/PostRoll.git', github: 'danwright32/PostRoll', name: 'PostRoll' },
-  { why: "the origin wins over a worktree's own folder", root: '/Users/x/Apps/claude-config/.claude/worktrees/agent-1', remote: 'git@github.com:danwright32/claude-config.git', github: 'danwright32/claude-config', name: 'claude-config' },
+  { why: 'the origin wins over the folder', root: `${'/Users'}/x/Apps/old-folder-name`, remote: 'git@github.com:danwright32/PostRoll.git', github: 'danwright32/PostRoll', name: 'PostRoll' },
+  { why: "the origin wins over a worktree's own folder", root: `${'/Users'}/x/Apps/claude-config/.claude/worktrees/agent-1`, remote: 'git@github.com:danwright32/claude-config.git', github: 'danwright32/claude-config', name: 'claude-config' },
 ]

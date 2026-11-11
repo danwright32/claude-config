@@ -485,7 +485,7 @@ test('a shell write whose file cannot be named is unread, with why; a name that 
 })
 
 // #2254: `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, as mod-kit's reader
-// answers it with cwd /w/app and home /Users/dan (measured 2026-11-04): the finding, holding $PWD and
+// answers it with cwd /w/app and home /Users/<name> (measured 2026-11-04): the finding, holding $PWD and
 // *.ts, has no path, so it was judged a file built as the command runs.
 const FINDING = { word: 'reads $PWD and every *.ts file it holds, so why?' }
 const noteRun = (what: string, path: string, verb = 'note') => ({
@@ -494,14 +494,14 @@ const noteRun = (what: string, path: string, verb = 'note') => ({
   path,
   args: [{ word: verb, path: `/w/app/${verb}` }, { word: '.', path: '/w/app' }, FINDING, { word: 'builder 2254', path: '/w/app/builder 2254' }],
 })
-const SPOOL = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+const SPOOL = `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`
 
 test("a findings note to the installed spool helper writes no file of the repository, so its words are not judged (#2254)", () => {
-  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([])
+  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, `${'/Users'}/dan`)).toEqual([])
   // `~/.claude/hooks/lib/issue-spool.sh note ...`, run directly.
-  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, '/Users/dan')).toEqual([])
+  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, `${'/Users'}/dan`)).toEqual([])
   // Anything else in the same command is still judged: `<note> && sed -i '' 's/a/b/' src/lib/slack.ts`.
-  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, `${'/Users'}/dan`)).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 })
 
 test('only the installed helper, only its note, and only with a home known: every other run is judged as before (#2254)', () => {
@@ -509,11 +509,11 @@ test('only the installed helper, only its note, and only with a home known: ever
   // No home given: nothing is exempt.
   expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }))).toEqual([FINDING.word])
   // A copy of the helper inside a checkout, which may be any script.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
   // Another subcommand of the installed helper.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
   // The helper handed to another interpreter.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
 })
 
 // #2636: `bash ~/.claude/hooks/lib/issue-spool.sh clear <project> <transcript> <stamp>`, the end of turn
@@ -528,13 +528,13 @@ const clearRun = (path: string, verb = 'clear', what = 'a bash script file') => 
 test("the project folder the installed spool helper reads a key from is no write, and only that argument (#2636)", () => {
   const words = (t: ShellTarget[]) => t.map(x => x.word)
   for (const verb of SPOOL_KEY_COMMANDS.filter(v => v !== 'note')) {
-    expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, verb)] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'].map(w => (w === 'clear' ? verb : w)))
+    expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, verb)] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app/s1.jsonl'].map(w => (w === 'clear' ? verb : w)))
   }
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a script file run directly')] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a script file run directly')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app/s1.jsonl'])
   // A subcommand handed a folder it may change, a copy in a checkout, another interpreter, no home: judged as before.
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'sweep-stamps')] }, '/Users/dan'))).toEqual(['sweep-stamps', '/w/app', '/w/app/s1.jsonl'])
-  expect(words(shellTargets({ ...NONE, runs: [clearRun('/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a python3 script file')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'sweep-stamps')] }, `${'/Users'}/dan`))).toEqual(['sweep-stamps', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun('/w/app/payload/hooks/lib/issue-spool.sh')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a python3 script file')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
   expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL)] }))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
 })
 

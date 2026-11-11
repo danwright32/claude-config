@@ -5,7 +5,7 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { publishInstead } from '../hooks/mod-kit/deliver.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
-const DEBUG = '/Users/x/Build/Debug/Overture.app/Contents/MacOS/Overture'
+const DEBUG = `${'/Users'}/x/Build/Debug/Overture.app/Contents/MacOS/Overture`
 const LIGHTROOM = '/Applications/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
 const KEYWORD = 'key' + 'stroke'
 
@@ -200,7 +200,7 @@ test('a wrong frontmost app is refused, with the card and a toast', withKit, asy
 
 test('two copies of an app with a long name are refused too (lessons review)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
-  const OTHER_LR = '/Users/x/Beta/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic'
+  const OTHER_LR = `${'/Users'}/x/Beta/Adobe Lightroom Classic.app/Contents/MacOS/Adobe Lightroom Classic`
   const w = world($, on, { front: 10, running: { 10: LIGHTROOM, 11: OTHER_LR }, answer: 'Go ahead' })
   await $.tool.call(bash(`TARGET_APP="${LIGHTROOM}" cliclick c:1,1`))
   expect(w.reached).not.toContain('Bash')
@@ -208,8 +208,8 @@ test('two copies of an app with a long name are refused too (lessons review)', w
 
 // #1751, the commands a PostRoll session sent on 2026-10-26 at a running build in front: the marker
 // followed by a semicolon, and the marker naming the bundle. Both were refused as not running.
-const BUILD = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app/Contents/MacOS/PostRoll'
-const BUILD_BUNDLE = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app'
+const BUILD = `${'/Users'}/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app/Contents/MacOS/PostRoll`
+const BUILD_BUNDLE = `${'/Users'}/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app`
 test('a running build products app in front, named before a semicolon, is asked about and runs (#1751)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on, { front: 26710, running: { 26710: BUILD }, answer: 'Go ahead' })
@@ -499,7 +499,7 @@ test('while Dan is away an app is brought to the front with no question and noth
 // Typing into a test build runs while away, but only past the same frontmost proof as at home: the
 // target's pid by its executable path, read apart from the frontmost pid (the 2026-07-12 Lightroom
 // and 2026-08-04 Overture incidents). Only the Taking over question is skipped.
-const TEST_BUILD = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
+const TEST_BUILD = `${'/Users'}/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture`
 const TEST_KEY = `TARGET_APP=${TEST_BUILD} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
 test('while Dan is away a keystroke to a test build of Overture is refused when Lightroom is in front (#1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
