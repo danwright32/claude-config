@@ -60,7 +60,9 @@ case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=
 . "$HOOK_DIR/lib/hook-notice.sh" 2>/dev/null || hook_allow_notice() {  # the library is missing
   printf '%s\n' "$1" >&2
   printf '{"systemMessage": "%s (lib/hook-notice.sh is missing beside this hook)"}\n' "${1//[^A-Za-z0-9 .,:;()\/_=+#-]/}"; exit 0; }
-# Without the library a context the person already saw is said to them again: louder, never lost.
+# Without the library no notice reaches the session's context at all, since the stand in above
+# carries only a systemMessage; a context the person already saw is then said to them again instead,
+# so the person can still pass it on.
 declare -F hook_context_json >/dev/null || hook_context_json() { hook_allow_notice "$2"; }
 # The stand in answers 125, the library's own code for having run nothing, which is said as a fetch
 # that could not be run, never as a checkout found current.
