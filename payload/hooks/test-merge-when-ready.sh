@@ -3790,8 +3790,8 @@ sim_run(){
     # sleeps again or ends before the next is woken (claude-config#2745). Woken together, as they
     # were, the order they reached the session's looks and the queue was the machine's scheduling,
     # not the clock: at a minute where the holder and runs not yet in line all woke, whichever ran
-    # first took the minute's looks. The order is the holder first. Woken last instead, it waits on
-    # the cap once, at 60s, behind runs whose first look comes before they know they are in line
+    # first took the minute's looks. The order is the holder first. Woken last instead, it waited on
+    # the cap once, at 60s, measured on 2026-11-11, behind runs whose first look comes before they know they are in line
     # (a first look leaves no look free): a gap in the helper, not here, recorded for its own issue.
     for m in "$@"; do
       [ -e "$SIM_DIR/$m.wake" ] || continue
