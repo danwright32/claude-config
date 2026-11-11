@@ -4370,6 +4370,15 @@ each part's timings into the cache the next deal reads. A part refuses outright 
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
 
+A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
+the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
+named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
+tree has such a record, and reuses it only on proof: that run completed green, is this repository's
+own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
+exactly this tree. Every job then still reports under its own name, skips its work, and says in its
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite, and a
+push to main or a run by hand always runs in full.
+
 Run ONE section while iterating, which is the fast path:
 
 ```bash
