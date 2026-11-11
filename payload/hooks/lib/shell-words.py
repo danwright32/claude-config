@@ -66,11 +66,43 @@ def is_name(word):
     return bool(word) and (word[0].isalpha() or word[0] == "_") and all(ch.isalnum() or ch == "_" for ch in word)
 
 
+def join_continuations(s):
+    """s with every backslash newline the shell removes taken out: one outside single quotes is a line
+    continuation, gone before the words are read, and inside single quotes it is two characters the
+    shell keeps. shlex reads it as an escaped newline, a word of its own, so a command continued that
+    way had a newline for its first word and its assignments left in front (claude-config#2447)."""
+    if "\\\n" not in s:
+        return s
+    out, i, n, quote = [], 0, len(s), ""
+    while i < n:
+        c = s[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if s[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(s[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and quote != '"':
+            quote = "'"
+        elif c == '"':
+            quote = "" if quote == '"' else '"'
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def split(s, limit=None):
     """(the leading NAME=value assignments of s, the text after them); at most limit of them when
     limit is given, so past_redirects can read one redirection's target as one value."""
     assigns = []
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     while limit is None or len(assigns) < limit:
         eq = s.find("=")
         if eq <= 0 or not is_name(s[:eq]):
@@ -654,6 +686,7 @@ def command_words(text):
     disagree about which word is the command. A command shlex cannot read (an unbalanced quote) is
     split on whitespace instead, the reading that still lets a push be seen.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -907,7 +940,7 @@ POSITIONALS = {"timeout": 1, "gtimeout": 1}
 
 def first_word(s):
     """(the first word of s with its quotes removed, the text after it as written), or (None, s)."""
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     if not s:
         return None, s
     lex = shlex.shlex(s, posix=True)

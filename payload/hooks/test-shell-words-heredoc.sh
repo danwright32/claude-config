@@ -201,6 +201,24 @@ print([(o[1], o[3]) for o in m.heredoc_openers(text, marker_start=False)], [(o[1
   && check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" ok \
   || check "#2641 heredoc_openers with marker_start False takes a marker starting with a digit, and by default does not" "got [$py_got]"
 
+# #2447: a backslash newline outside single quotes is a line continuation, which the shell removes,
+# so a command continued that way has the same words as one written on one line, and its leading
+# assignments come off it, at the top level and inside a substitution alike. Inside single quotes it
+# is two characters the shell keeps.
+cont_got="$(python3 -B -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("sw", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+out = []
+for c in ["A=1 B=2 \\\n  curl https://e.invalid/h", "x=$(\nA=1 \\\n curl https://e.invalid/h)"]:
+    for r in m.every_command(c):
+        if "x=" not in r[1]:
+            out.append((m.command_words(r[1]), m.split(r[1])[0], m.first_word(m.split(r[1])[1])[0]))
+out.append(m.command_words("echo '"'"'a\\\nb'"'"'"))
+print(out)' "$SW" 2>&1)"
+[ "$cont_got" = "[(['A=1', 'B=2', 'curl', 'https://e.invalid/h'], ['A=1', 'B=2'], 'curl'), (['A=1', 'curl', 'https://e.invalid/h'], ['A=1'], 'curl'), ['echo', 'a\\\\\\nb']]" ] \
+  && check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" ok \
+  || check "#2447 a backslash newline continuation is removed from a command's words, at the top level and in a substitution, and kept inside single quotes" "got [$cont_got]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
