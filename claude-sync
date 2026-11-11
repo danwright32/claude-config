@@ -10006,6 +10006,19 @@ stop_suite_tree(){   # $1 = pid of the suite
   return 1
 }
 
+# Is the last verdict a run the full suite slot kept from running (claude-config#2758)? Then the
+# hooks it was for are still unverified, and the next receive runs the suite even when it carries
+# no hook of its own. Not in the change watcher: it receives on every local change, and each tick
+# would wait out the same queue the last run gave up on, holding up the sends it exists for. A
+# pull, typed or scheduled, or  claude-sync recheck  settles it.
+hook_suite_owed_by_slot_wait(){
+  local line
+  [ "${SYNC_IN_WATCH:-0}" = "1" ] && return 1
+  [ -f "$HOOK_TESTS_FILE" ] || return 1
+  IFS= read -r line < "$HOOK_TESTS_FILE" 2>/dev/null || return 1
+  [ "$(hook_suite_field "$line" outcome)" = "slotwait" ]
+}
+
 hook_suite_verdict(){   # prints the clause to fold into the closing line, or nothing at all
   local runner out pid started dl_started now limit rc=0 killed=0 ran='?' notrun='?' took='?' nrnames='?' suite_notes=''
   [ "${SYNC_NO_HOOK_TESTS:-0}" = "1" ] && return 0
@@ -10014,7 +10027,10 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # arriving had no way to say so and went on reporting the old one (claude-config#305). HOOK_SUITE_FORCE
   # is `claude-sync recheck` asking for that same run deliberately, which is what makes the remedy
   # the failure message names one that can actually clear it (L144, L111).
-  if [ "${HOOK_SUITE_FORCE:-0}" != "1" ]; then
+  # A run the full suite slot kept from running is OWED too (claude-config#2758): nothing that landed
+  # with it was verified, and a receive carrying no hook would otherwise leave that standing until
+  # the next hook happened to arrive.
+  if [ "${HOOK_SUITE_FORCE:-0}" != "1" ] && ! hook_suite_owed_by_slot_wait; then
     [ -n "${APPLIED_LOG:-}" ] || return 0
     [ -s "$APPLIED_LOG" ] || return 0
     # The log is kind<TAB>path, so the tab is part of the match: without it a file merely NAMED
@@ -10038,6 +10054,32 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # as an unverified one on exactly the days everything is busy.
   limit="${SYNC_HOOK_TESTS_TIMEOUT:-1800}"
   case "$limit" in ''|*[!0-9]*) limit=1800 ;; esac
+  # How long the runner may queue for this Mac's one full suite slot (claude-config#2758). The run
+  # is a whole run, so it queues (#2012), and the runner's own bound, HOOK_TESTS_SLOT_WAIT, is 3600
+  # seconds, sized for a person's run. Against this 1800 second deadline that meant a pull whose
+  # slot a builder held could spend the whole deadline in the queue, run nothing, and be stopped as
+  # a suite "still running": 17 of 34 pulls landing hooks in one session on 2026-11-10 and 11.
+  #
+  # So the wait gets its own bound, inside the deadline: half of it, which leaves the suite the
+  # other half (the deployed suite's longest single suite measured 365 seconds on 2026-11-11, and
+  # it no longer competes with other full runs once it holds the slot). Waiting the whole bound,
+  # the runner refuses with exit 75 and runs nothing, which is said and recorded as exactly that
+  # and owed to the next pull (hook_suite_owed_by_slot_wait). Always handed down, so a value left
+  # in the shell that started this cannot stretch the wait past the deadline again. The lever NOT
+  # pulled: starting the deadline only once the slot is taken, which needs the runner to say when
+  # that happens and would let one pull run for the wait and the whole deadline on top (L308).
+  local slot_wait="" slot_said=""
+  if [ "$limit" -gt 0 ]; then
+    slot_wait=$(( limit / 2 ))
+    if [ -n "${SYNC_HOOK_TESTS_SLOT_WAIT:-}" ]; then
+      case "$SYNC_HOOK_TESTS_SLOT_WAIT" in
+        ''|*[!0-9]*) slot_said="is not a whole number of seconds" ;;
+        *) if [ "$SYNC_HOOK_TESTS_SLOT_WAIT" -lt "$limit" ]; then slot_wait="$SYNC_HOOK_TESTS_SLOT_WAIT"
+           else slot_said="is not shorter than the ${limit}s deadline, which the suite could then spend entirely in the queue"; fi ;;
+      esac
+      [ -z "$slot_said" ] || echo "claude-sync: SYNC_HOOK_TESTS_SLOT_WAIT='$SYNC_HOOK_TESTS_SLOT_WAIT' $slot_said. The hook suite waits at most ${slot_wait}s, half its deadline, for this Mac's full suite slot instead." >&2
+    fi
+  fi
   # The checkout is handed to the runner, never guessed by it (claude-config#237). Three suites
   # audit the repository and declare SUITE-NOT-RUN in a deployed copy, which is every Mac, so the
   # pull announced the same unverified gap on every single run and never closed it. This clone IS
@@ -10058,6 +10100,7 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # never about a test's clock.
   dl_started="$(suite_clock_now)"
   env ${SUITE_ENV_STRIP[@]+"${SUITE_ENV_STRIP[@]}"} \
+    ${slot_wait:+HOOK_TESTS_SLOT_WAIT="$slot_wait"} \
     SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
   pid=$!
   started="$(date +%s)"
@@ -10096,7 +10139,34 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   if [ "$killed" -eq 1 ]; then
     notify "the hook suite was still running after ${limit}s and was stopped"
     record_hook_suite_result incomplete 0 "$out" "?" "?" "$took"
-    printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
+    # Whether part of the deadline went on the full suite slot's queue, from the runner's own lines,
+    # which come first in its output and so are gone from the record's tail (claude-config#2758). A
+    # suite stopped after a long wait is not one that got longer, and saying only "still running"
+    # sends the reader to look for a hang (L11).
+    local slot_took
+    slot_took="$(sed -n "s/^run-all-tests: took this Mac's full suite slot after waiting \(.*\)\.\$/\1/p" "$out" 2>/dev/null | tail -1)"
+    if [ -n "$slot_took" ]; then
+      printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, having waited %s of that for this Mac'"'"'s full suite slot before it began, so nothing that just landed has been verified' "$limit" "$slot_took"
+    elif grep -q "^run-all-tests: waiting for this Mac's full suite slot" "$out" 2>/dev/null; then
+      printf ', and the hook suite could NOT be run here: it was still waiting for this Mac'"'"'s full suite slot after %ss and was stopped, so it ran nothing and nothing that just landed has been verified' "$limit"
+    else
+      printf ', and the hook suite could NOT be completed here: it was still running after %ss and was stopped, so nothing that just landed has been verified' "$limit"
+    fi
+    return 0
+  fi
+  # Refused by the full suite slot (claude-config#2758): the runner waited the bound handed to it
+  # above and exits 75 having run nothing. Judged by the exit code AND the runner's own refusal
+  # line, so a 75 from anything else is still read as the failure it is (L184, L11). Not a failure
+  # and not a stopped run: nothing checked the config, and the next pull runs it again. No
+  # notification: it is the expected outcome while builders hold the slot, the next pull repairs
+  # it, and status carries it until then.
+  if [ "$rc" -eq 75 ] && grep -q "^run-all-tests: REFUSED: waited .* for this Mac's full suite slot" "$out" 2>/dev/null; then
+    local slot_who slot_for
+    slot_for="$(sed -n "s/^run-all-tests: REFUSED: waited \(.*\) for this Mac's full suite slot, the most HOOK_TESTS_SLOT_WAIT allows.*/\1/p" "$out" 2>/dev/null | tail -1)"
+    slot_who="$(sed -n "s/^run-all-tests: REFUSED: waited .* the most HOOK_TESTS_SLOT_WAIT allows, and \(.*\)\. Nothing was run\..*/\1/p" "$out" 2>/dev/null | tail -1)"
+    record_hook_suite_result slotwait 75 "$out" "?" "?" "$took"
+    printf ', and the hook suite did NOT run here: it waited %s for this Mac'"'"'s full suite slot, the most this pull allows%s, so it ran nothing and nothing that just landed has been verified. The next pull runs it again, or run  claude-sync recheck  once that run ends' \
+      "${slot_for:-its whole bound}" "${slot_who:+, and $slot_who}"
     return 0
   fi
   if [ "$rc" -eq 0 ]; then
@@ -12878,7 +12948,7 @@ HSREOF
       # those words rather than reading as none.
       echo "${prefix}passed $(age_in_words "$(( now - when ))")$(hook_suite_headroom "$took")$(hook_suite_skipped "$notrun" "$notrun_names")."
       return 0 ;;
-    failed|notrun|incomplete)
+    failed|notrun|incomplete|slotwait)
       [ -n "$when" ] || outcome="" ;;
     *) outcome="" ;;
   esac
@@ -12895,6 +12965,10 @@ HSREOF
       echo "${prefix}could NOT be run $age, because hooks arrived and there was no $CLAUDE_HOME/hooks/run-all-tests.sh to check them with. Nothing that landed has been verified." ;;
     incomplete)
       echo "${prefix}could NOT be completed $age, because it was still running when the run that started it stopped waiting. Nothing that landed has been verified. What it managed to say is in $1, and  claude-sync recheck  runs them again and records what they say" ;;
+    slotwait)
+      # claude-config#2758: queued behind another full run for the whole of its bound, so it never
+      # started. Its own words, never folded into "could not be completed", which reads as a hang.
+      echo "${prefix}did NOT run $age: it waited for this Mac's full suite slot, which another full run held, and ran nothing. Nothing that landed has been verified. The next pull runs it again, and  claude-sync recheck  runs it now and records what it says" ;;
   esac
   return 0
 }
