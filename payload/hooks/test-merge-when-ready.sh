@@ -344,21 +344,32 @@ export PATH="$BIN:$PATH"
 # and written whole through a rename (claude-config#2327): a read that failed used to write the bare
 # seconds asked as the time, and a write cut short left an empty clock, either one a jump of about a
 # million seconds for the next read. A clock it cannot read stops it, loudly, with the clock untouched.
-cat > "$BIN/fake-sleep" <<'EOS'
-#!/usr/bin/env bash
-printf '%s\n' "$1" >> "$ST/sleeps"
-c=""; read -r c < "$ST/clock"
-case "$c" in ''|*[!0-9]*) echo "fake sleep: the injected clock in $ST/clock reads '$c', not a time" >&2; exit 1 ;; esac
-printf '%s' "$(( c + $1 ))" > "$ST/clock.$$" && mv -f "$ST/clock.$$" "$ST/clock"
-if [ -s "$ST/on-sleep" ]; then
-  step="$(head -1 "$ST/on-sleep")"; tail -n +2 "$ST/on-sleep" > "$ST/on-sleep.tmp"; mv "$ST/on-sleep.tmp" "$ST/on-sleep"
-  eval "$step"
-fi
-EOS
-chmod +x "$BIN/fake-sleep"
-export MWR_SLEEP="$BIN/fake-sleep"
-printf '#!/usr/bin/env bash\ncat "$ST/clock"\n' > "$BIN/fake-now"; chmod +x "$BIN/fake-now"
-export MWR_NOW="$BIN/fake-now"
+# The sleep and the clock are exported shell functions (claude-config#2674): the helper runs whatever
+# command MWR_SLEEP and MWR_NOW name, and a function is one, so each read of the clock costs a subshell
+# rather than a bash and a cat started for it, and each sleep a subshell rather than a bash. Measured
+# on 2026-11-10, a simple merge read the clock 27 times, and the long waits thousands. The sleep runs in a subshell with the
+# helper's shell options turned off, as the script it replaces ran, so a step it runs can neither
+# change the helper nor be stopped by its set -u. The files remain for the sections that put a sleep
+# on the PATH (#2399), and run these same functions. A step that signals the helper names it as
+# helper_pid: the shell the subshell belongs to, or the parent of the file that ran it.
+mwr_suite_sleep(){ (
+  set +e +u; set +o pipefail
+  helper_pid="${MWR_SUITE_SLEEP_CALLER:-$$}"
+  printf '%s\n' "$1" >> "$ST/sleeps"
+  c=""; read -r c < "$ST/clock"
+  case "$c" in ''|*[!0-9]*) echo "fake sleep: the injected clock in $ST/clock reads '$c', not a time" >&2; exit 1 ;; esac
+  printf '%s' "$(( c + $1 ))" > "$ST/clock.$$" && mv -f "$ST/clock.$$" "$ST/clock"
+  if [ -s "$ST/on-sleep" ]; then
+    step=""; { IFS= read -r step; cat > "$ST/on-sleep.tmp"; } < "$ST/on-sleep"; mv "$ST/on-sleep.tmp" "$ST/on-sleep"
+    eval "$step"
+  fi
+) }
+mwr_suite_now(){ local c=""; read -r c < "$ST/clock"; printf '%s' "$c"; }
+export -f mwr_suite_sleep mwr_suite_now
+printf '#!/usr/bin/env bash\nMWR_SUITE_SLEEP_CALLER=$PPID mwr_suite_sleep "$@"\n' > "$BIN/fake-sleep"; chmod +x "$BIN/fake-sleep"
+printf '#!/usr/bin/env bash\nmwr_suite_now\n' > "$BIN/fake-now"; chmod +x "$BIN/fake-now"
+export MWR_SLEEP=mwr_suite_sleep
+export MWR_NOW=mwr_suite_now
 export MWR_POLL_SECONDS=30
 export MWR_READ_RETRY_SECONDS=7
 export MWR_NO_CHECKS_GRACE_SECONDS=0
@@ -378,7 +389,7 @@ export MWR_PHASE_DIR="$WORKDIR/phases"
 # And the record of refused sign ins (claude-config#1626), so the refusals this suite fakes are never
 # counted as this Mac's, on the suite's own clock.
 export MT_SIGNIN_LEDGER_DIR="$WORKDIR/gh-signin"
-export MT_SIGNIN_CLOCK="$BIN/fake-now"
+export MT_SIGNIN_CLOCK=mwr_suite_now
 # And the record of deliberate load windows (claude-config#1618), so a real window on this Mac never
 # adds a sentence to what these sections read.
 export LOAD_WINDOW_DIR="$WORKDIR/load-window"
@@ -1036,18 +1047,25 @@ check_eq "#1735 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 # MWR_NET_WAIT_SECONDS (3600 by default), and carries on when GitHub answers. The sections above run
 # with that wait at 0, since they measure the four tries and their wording. Every wait here is the
 # injected sleep (L524): an outage of 40 minutes is crossed in no real time.
+# The long waits below ask again every NET_RETRY seconds rather than the 7 above (claude-config#2674):
+# at 7 the 40 minute outage and the 60 minute limit took about 860 tries of the helper's whole read
+# path, nearly half this suite's time, where 40 takes about 150. It stays under the 120 second
+# heartbeat, so a line is still said only every few tries, and apart from the 30 second looks.
+NET_RETRY=40
 net_back_at(){ local i; for i in $(seq 1 600); do printf '[ "$(cat "$ST/clock")" -lt %s ] || rm -f "$ST/view-down"\n' "$1" >> "$ST/on-sleep"; done; }
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"; net_back_at 1002400
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_READ_RETRY_SECONDS=$NET_RETRY run 7 --squash)"; rc=$?
 check_eq "#2303 a pull request read through a 40 minute outage merges" "0" "$rc"
 check "#2303 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 check_eq "#2303 it waited past the 40 minutes" "yes" "$( [ "$(( $(cat "$ST/clock") - 1000000 ))" -ge 2400 ] && echo yes || echo no)"
-check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 21s reading pull request #7" "$out"
+check "#2303 saying it is waiting on the network, with how long" "Waiting on the network: GitHub has not been reachable for 2m 00s reading pull request #7" "$out"
 check "#2303 and how long it will wait" "stops once it has waited 60m (MWR_NET_WAIT_SECONDS)" "$out"
-# Not measured, worked out from the settings this suite sets: said at the end of the first round, then
-# on the first try at least the heartbeat after the last line, so the last line before 40m is 38m 09s.
-check "#2303 a later line says the wait has grown" "Waiting on the network: GitHub has not been reachable for 38m 09s" "$out"
+# Worked out from the settings this suite sets, not measured: said at the end of the first round, its
+# three waits of 40s at 2m, then on the first try at least the 120s heartbeat after the last line.
+# Every try falls on a multiple of 40s, and 120 is one, so the lines fall every 2m and the last line
+# before 40m is 38m 00s.
+check "#2303 a later line says the wait has grown" "Waiting on the network: GitHub has not been reachable for 38m 00s" "$out"
 check "#2303 saying when GitHub answers again" "GitHub answered again reading pull request #7 after 40m" "$out"
 check_eq "#2303 the four tries before the wait are said as today, three retry lines" "3" "$(printf '%s\n' "$out" | grep -c 'Could not connect to GitHub reading pull request #7 (try')"
 net_lines="$(printf '%s\n' "$out" | grep -c 'Waiting on the network')"
@@ -1057,7 +1075,7 @@ check_not "#2303 never out of time" "Out of time" "$out"
 # The outer limit: a network that never comes back still ends in a stop, at MWR_NET_WAIT_SECONDS.
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_READ_RETRY_SECONDS=$NET_RETRY run 7 --squash)"; rc=$?
 check_eq "#2303 a network that never comes back still stops" "1" "$rc"
 waited=$(( $(cat "$ST/clock") - 1000000 ))
 check_eq "#2303 at the 60 minute limit, within one round of tries ($waited s)" "yes" "$( [ "$waited" -ge 3600 ] && [ "$waited" -le 3660 ] && echo yes || echo no)"
@@ -1068,7 +1086,7 @@ check_eq "#2303 nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"
-out="$(MWR_NET_WAIT_SECONDS=600 run 7 --squash)"; rc=$?
+out="$(MWR_NET_WAIT_SECONDS=600 MWR_READ_RETRY_SECONDS=$NET_RETRY run 7 --squash)"; rc=$?
 waited=$(( $(cat "$ST/clock") - 1000000 ))
 check_eq "#2303 MWR_NET_WAIT_SECONDS sets the limit" "1" "$rc"
 check_eq "#2303 a 10 minute limit stops near 10 minutes ($waited s)" "yes" "$( [ "$waited" -ge 600 ] && [ "$waited" -le 660 ] && echo yes || echo no)"
@@ -1091,7 +1109,7 @@ check_not "#2303 control: and not said as waiting on the network" "Waiting on th
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$CONNECT" > "$ST/view-down"
 for _ in $(seq 1 600); do printf '%s\n' '[ "$(cat "$ST/clock")" -lt 1000600 ] || printf "%s\n" "HTTP 502: Bad Gateway (https://api.github.com/graphql)" > "$ST/view-down"' >> "$ST/on-sleep"; done
-out="$(run 7 --squash)"; rc=$?
+out="$(MWR_READ_RETRY_SECONDS=$NET_RETRY run 7 --squash)"; rc=$?
 waited=$(( $(cat "$ST/clock") - 1000000 ))
 check_eq "#2303 control: GitHub answering with a server error during the wait stops as today" "1" "$rc"
 check_eq "#2303 control: soon after it answered, not at the limit ($waited s)" "yes" "$( [ "$waited" -lt 700 ] && echo yes || echo no)"
@@ -2710,9 +2728,9 @@ check_eq "#1515 so nothing merged under the run that took it" "0" "$(count gh-ca
 check_eq "#1515 and no gate was asked about a merge it may not make" "" "$(cat "$ST/red-gate-payloads" 2>/dev/null)"
 
 # A run stopped by a signal while it holds the turn gives it up, so the next in line is not left to
-# wait for the bound. The step signals the helper itself, the fake sleep's parent.
+# wait for the bound. The step signals the helper itself, the one sleeping (helper_pid).
 fresh "$OLD" 0 "$PENDING"
-printf '%s\n' "kill -TERM \$PPID" > "$ST/on-sleep"
+printf '%s\n' "kill -TERM \$helper_pid" > "$ST/on-sleep"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1515 a holder sent TERM stops" "143" "$rc"
 check "#1515 having held the turn" "Took the turn to merge in acme/widget" "$out"
@@ -3124,8 +3142,12 @@ chmod +x "$BIN/drive"
 drive_queue(){ local i; for i in $(seq 1 400); do printf '"$BIN_DIR/drive"\n' >> "$ST/on-sleep"; done; }
 # secs_of <line>: the elapsed figure a said line carries ([Xm YYs]), in seconds.
 secs_of(){ local l="${1%%$'\n'*}"; [[ "$l" =~ ^merge-when-ready:\ \[([0-9]+)m\ ([0-9]+)s\] ]] && printf '%s' $(( 10#${BASH_REMATCH[1]} * 60 + 10#${BASH_REMATCH[2]} )); }
-# Every run here: deadline 15m, line budget 15m, and no holder passed over by this run.
-line_run(){ MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
+# Every run here: deadline 15m, line budget 15m, and no holder passed over by this run. It looks
+# every 60s rather than the suite's 30 (claude-config#2674): measured on 2026-11-10, each look in a
+# line of several cost about 90 processes, and these four runs were a fifth of the suite's time, and every figure they judge
+# (passed over at 5m, a holder leaving every 4m, the 15m budgets) is a whole number of minutes, so a
+# look lands on each of them at either pace.
+line_run(){ MWR_POLL_SECONDS=60 MWR_DEADLINE_SECONDS=900 MWR_LINE_SECONDS=900 MWR_TURN_HOLD_SECONDS=100000 BIN_DIR="$BIN" run 7 --squash; }
 
 # Passed over at 5m, then five ahead each leaving after 4m: it waits 20m in line, past its 15m line
 # budget and past 15m from taking the turn, with the line never still for 15m, so it keeps waiting,
@@ -3206,7 +3228,7 @@ check "#1676 naming the review" "lessons review" "$seen1"
 # Killed outright mid wait (L409, L617): while it runs, a reader believes its record; once it is
 # killed the record stays behind, and says nothing.
 fresh "$OLD" 0 "$PENDING"
-printf '%s\n' "( $MP_LIBS && mp_waiting \$PPID \$(cat \"\$ST/clock\") ) && echo believed > \"\$ST/verdict-alive\"; echo \$PPID > \"\$ST/helper-pid\"; kill -9 \$PPID" > "$ST/on-sleep"
+printf '%s\n' "( $MP_LIBS && mp_waiting \$helper_pid \$(cat \"\$ST/clock\") ) && echo believed > \"\$ST/verdict-alive\"; echo \$helper_pid > \"\$ST/helper-pid\"; kill -9 \$helper_pid" > "$ST/on-sleep"
 # The shell running the helper reports the kill ("Killed: 9 bash $HELPER") on its own stderr, which is
 # not the helper's output and nothing here reads. It is dropped: printed into the suite's own output, at
 # the tail of every run, it was read as a helper killed at its deadline and blamed for a failure two
