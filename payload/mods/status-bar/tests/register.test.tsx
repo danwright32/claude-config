@@ -1838,7 +1838,7 @@ test('a job watcher from before agents were watched still shows its jobs, with n
 
 // #1583, settled with Dan: nothing is asked of him while Claude works, so a quiet background command
 // is not in the band then; once Claude's turn has ended and it is still quiet, it asks him to ask
-// Claude to check. Read from the turn the bar already follows: this conversation's own request
+// Claude to check. Read from the turn the bar already follows: this conversation's own turn start
 // starts it, its turn's end ends it.
 test('a quiet background command shows only once Claude has stopped, and goes again when a turn runs (#1583)', { plugins: [modKit, quietWatcher] }, async ($, on) => {
   const { clock } = world(on)
