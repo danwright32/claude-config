@@ -406,6 +406,89 @@ printf '%s\n' '/* never closed' 'import { gone } from "./not-here";' > "$T/imp/c
 run_bash "node $T/imp/cmt/open.ts"
 refused "an import after a block comment that never closes"
 
+# A type only import statement of a declaration file that is not there loads nothing, so it is not
+# a module the gate could not see (claude-config#2526). Measured 2026-11-09: `bun test` on a mod's
+# test in an agent worktree was refused, because the test imports the generated
+# ../.claude-plugin/types/mod-kit/index.d.ts for its types and a worktree does not have that file.
+# Measured 2026-11-10 with bun 1.3.11, node 22.22.2 and deno: `import type ... from` never loads its
+# module, there or not, while `import { type A } from` is loaded by node, which only blanks the
+# names. So only the statement form is passed, only for a .d.ts, and only when the file is missing:
+# one that is there is read and judged as any module is.
+mkdir -p "$T/imp/dts/tests"
+D2526="'../types/index.d.ts'"
+dts_case() { # dts_case <lines of the test file...>: judge a bun test run of a test holding them
+  printf '%s\n' "$@" 'console.log(1);' > "$T/imp/dts/tests/a.test.ts"
+  run_bash "bun test $T/imp/dts/tests/a.test.ts"
+}
+dts_case "import type { ModKitBandRow } from $D2526"
+allowed "a test importing only types from a declaration file that is not there"
+dts_case 'import type {' '  A,' '  B as C,' "} from $D2526"
+allowed "the same import written over several lines, with a renamed type"
+dts_case "import type A from $D2526"
+allowed "a type only default import of a missing declaration file"
+dts_case "import type * as Kit from $D2526"
+allowed "a type only namespace import of a missing declaration file"
+dts_case "import type { A } /* the kit */ from $D2526"
+allowed "a type only import with a comment before its from"
+printf '%s\n' "import type { A } from $D2526" 'export const n = 1;' > "$T/imp/dts/tests/helper.ts"
+dts_case 'import { n } from "./helper.ts";' 'console.log(n);'
+allowed "a test whose helper imports only types from a missing declaration file"
+# Every other way of naming the same missing file is refused as it was: each one loads the module in
+# some runtime, or is not seen to be unable to.
+for line in "import { A } from $D2526" \
+  "import { type A, b } from $D2526" \
+  "import { type A } from $D2526" \
+  "import { type A, type B } from $D2526" \
+  "import type from $D2526" \
+  "import type, { A } from $D2526" \
+  "import $D2526" \
+  "const kit = await import($D2526)" \
+  "const kit = require($D2526)" \
+  "import type Kit = require($D2526)" \
+  "export type { A } from $D2526" \
+  "export * from $D2526" \
+  "const s = \"import type { A } \"; export * from $D2526" \
+  "import type { A } from '../types/index.ts'" \
+  "import type { A } from '../types/index.d.ts.js'" \
+  "import type { A } from '../types/index'"; do
+  dts_case "$line"
+  refused "a missing module imported as: ${line:0:60}"
+  says "that refusal is the module it could not find: ${line:0:40}" "a module the gate cannot find"
+done
+dts_case 'import type { A }' "export * from $D2526"
+refused "a re-export of a missing module on the line after a type only import"
+dts_case "import type { A } from $D2526" "import { b } from $D2526"
+refused "a value import of a missing declaration file beside a type only import of it"
+dts_case "import type { A } from $D2526" "fetch('https://slack.com/api/chat.postMessage');"
+refused "a test that posts by itself and imports types from a missing declaration file"
+says "that refusal is the endpoint the test names" "chat.postMessage"
+# A type only import of a file that is there is followed and judged as it always was.
+mkdir -p "$T/imp/dts/types"
+printf '%s\n' 'export type A = number;' "fetch('https://slack.com/api/chat.postMessage');" > "$T/imp/dts/types/index.d.ts"
+dts_case "import type { A } from $D2526"
+refused "a type only import of a declaration file that is there and posts"
+says "that refusal names the declaration file" "index.d.ts"
+says "and says it posts" "which posts to Slack"
+printf '%s\n' 'export type A = number;' > "$T/imp/dts/types/index.d.ts"
+dts_case "import type { A } from $D2526"
+allowed "a type only import of a declaration file that is there and posts nothing"
+rm -rf "$T/imp/dts/types"
+# What a script can do with a file it is handed (claude-config#2362) is read the same way: the type
+# import no longer makes an inert script one that acts, and nothing else stops being one.
+printf '%s\n' 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi' > "$T/imp/dts/msg.txt"
+printf '%s\n' "import type { A } from $D2526" 'import { readFileSync } from "node:fs";' \
+  'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+allowed "an inert script importing types from a missing declaration file, handed a file naming the endpoint"
+printf '%s\n' "import { A } from $D2526" 'import { readFileSync } from "node:fs";' \
+  'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+refused "the same script with a value import of the missing declaration file"
+printf '%s\n' "import type { A } from $D2526" 'import { execSync } from "node:child_process";' \
+  'import { readFileSync } from "node:fs";' 'execSync(readFileSync(process.argv[2], "utf8"));' > "$T/imp/dts/tests/count.ts"
+run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+refused "a script that runs what it is handed, importing types from a missing declaration file"
+
 # Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
 # narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
 # esbuild stdin entry and a Miniflare module source as strings was refused for modules nothing loads,
@@ -1499,9 +1582,23 @@ allowed "a harmless heredoc written to a file and run passes"
 # copy fails, so judging only the new text would let a refused script through.
 run_cp "cp plain.txt old.sh; bash old.sh"
 refused "a posting script a harmless copy overwrites is still read"
+# BSD install's -S is a flag (flush to disk, man install on macOS), so the word after it is the
+# source; read as a value, post.txt was swallowed and run.sh never recorded (PR #2730 review).
+# GNU install's -S is still a suffix, so its value is not taken for the source.
+run_cp "install -S plain.txt run.sh && bash run.sh"
+allowed "install -S copying a harmless file passes"
+for runs in "install -S post.txt run.sh && bash run.sh" "install -Sm 755 post.txt run.sh && ./run.sh" \
+  "ginstall -S .bak post.txt run.sh && bash run.sh"; do
+  run_cp "$runs"
+  refused "install's flags and values are told apart, so the copy is judged by its source: $runs"
+done
 # The one exemption is /nudge by its real path; a copy of it run in the same command is not /nudge.
 run_cp "cp $NUDGE nudge-copy.py && python3 nudge-copy.py 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
 refused "a copy of the nudge script made and run in the same command is refused"
+# And the nudge script's own path, overwritten earlier in the same command, is no longer the shipped
+# script, so the exemption does not cover it (PR #2730 review). Nothing here runs, so it is untouched.
+run_cp "cp post.txt.py $NUDGE && python3 $NUDGE 'https://example.slack.com/archives/C0TEST1/p1730000000000100'"
+refused "the nudge script's path overwritten and run in the same command is refused"
 
 echo "slack drafts only: a file written by printf, echo, tee or curl and run in the same command is judged by what is written (claude-config#2721)"
 
@@ -2074,7 +2171,9 @@ echo "slack drafts only: the merge helper's own line is judged inside the gate's
 # time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
 # to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
 # half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
-# the ceiling raised on a new measurement.
+# the ceiling raised on a new measurement. Measured again on 2026-11-10: 7,975 steps, 12 files read
+# 35 times, the 76 more all from the helper (one more sourced file), none from the gate; and 8,132
+# later that day, once the helper had grown again.
 MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
 MWR_STEPS=12000
 run_budget "$MWR_STEPS" "$MWR"
@@ -2084,6 +2183,17 @@ allowed "the real merge helper, with everything it sources, is judged within $MW
 run_budget 2000 "$MWR"
 refused "the merge helper's line under a budget its walk passes is refused"
 says "that refusal says the gate ran out of time" "ran out of time"
+says "and says how to merge without the helper" "gh pr merge"
+says "and to leave the branch for the helper" "--delete-branch"
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a call that is no merge still runs out of its budget"
+lacks "a call that is no merge gets no merge advice" "gh pr merge"
+# The advice belongs to running out of time only: a line the gate did judge, and refused for
+# posting, says nothing of merging however it names the helper.
+run_bash "curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi; echo merge-when-ready.sh"
+refused "a line that posts and names the merge helper is refused for the post"
+says "and that refusal is for the post" "posts to Slack:"
+lacks "and carries no merge advice" "gh pr merge"
 
 # A function of the script that calls others was followed once per path to it, so a chain of
 # functions each calling the next twice cost two to the power of its length: 16,383 walks for 14

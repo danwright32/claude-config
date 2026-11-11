@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 
 import verification as v  # noqa: E402
 import merge_check as mc  # noqa: E402
+import screenshots as shots  # noqa: E402
 
 HEAD = "1111111111111111111111111111111111111111"
 OLD = "2222222222222222222222222222222222222222"
@@ -109,6 +110,11 @@ class Fixture:
         self.guides = {"invoices": GUIDE, "clients": GUIDE.replace("Invoices", "Clients")}
         self.compares = {}
         self.pin = "required " + HEAD
+        # The screenshots reads (#2516): GitHub's answer about the repository, each folder listing
+        # of the pr-screenshots branch by commit (None for a failed read), and the override.
+        self.repo = None
+        self.listings = {}
+        self.allow_no_screenshots = False
         # Every record posted is one record render wrote (#1572), unless a test says otherwise.
         self.render_all = True
         self.receipt(RID, HEAD)
@@ -155,10 +161,22 @@ class Fixture:
                 write(os.path.join(self.dir, "guides", area + ".md"), text)
         for sha, cmp in self.compares.items():
             write(os.path.join(self.dir, "compare", sha + ".json"), json.dumps(cmp))
+        if self.repo == "fail":
+            write(os.path.join(self.dir, "repo.err"), "gh: Server Error (HTTP 502)")
+        elif self.repo is not None:
+            write(os.path.join(self.dir, "repo.json"), json.dumps(self.repo))
+        for commit, names in self.listings.items():
+            if names is None:
+                write(os.path.join(self.dir, "shots", commit + ".err"), "gh: Server Error (HTTP 502)")
+            else:
+                write(os.path.join(self.dir, "shots", commit + ".json"),
+                      json.dumps([{"name": n, "type": "file"} for n in names]))
+        if self.allow_no_screenshots:
+            write(os.path.join(self.dir, "allow-no-screenshots"), "")
 
-    def judge(self, skip=()):
+    def judge(self, skip=(), final=False):
         self.save(skip)
-        return mc.verdict(self.dir, home=self.home)
+        return mc.verdict(self.dir, home=self.home, final=final)
 
 
 def kinds(out):
@@ -421,7 +439,7 @@ class Judging(unittest.TestCase):
         self.f.save()
         out = mc.verdict(self.f.dir, home=self.f.home)
         self.assertEqual(out["need"], {"guides": [{"area": "invoices", "path": ".claude/verification/guides/invoices.md"}],
-                                       "compares": [OLD]})
+                                       "compares": [OLD], "listings": [], "repo": False})
 
     def test_a_need_left_unanswered_on_the_final_call_is_unreadable_not_a_crash(self):
         self.f.guides = {}
@@ -570,6 +588,130 @@ class Readers(unittest.TestCase):
     def test_parse_comment_is_unchanged_by_sharing_the_block_reader(self):
         out = v.parse_comment(comment(record(), raw="{x"), sha=HEAD)
         self.assertEqual((len(out["records"]), len(out["invalid"]), len(out["matching"])), (1, 1, 1))
+
+
+RID_BASE = "20261022T225000Z-3333333-d4e5f6"
+
+
+def with_screens(doc, shots_mode=None):
+    doc = json.loads(json.dumps(doc))
+    doc["seeds"] = {"demo": {"synthetic": True, "why": "made up invoices from the fixture seed"}}
+    doc["areas"][0]["screens"] = [{"name": "list", "path": "/invoices", "seed": "demo"}]
+    if shots_mode:
+        doc["screenshots"] = {"mode": shots_mode}
+    return doc
+
+
+class Screenshots(unittest.TestCase):
+    """The pictures check (#2516), judged beside the run records, with its own mode and override."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.f = Fixture(self.tmp.name)
+        self.f.areas = with_screens(areas_doc())
+        self.f.repo = {"full_name": SLUG, "private": False}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def publish_block(self):
+        """Every picture shot, published through the fake git data API and rendered into the body."""
+        from test_screenshots import FakeGitHub
+        areas = v.parse_areas(json.dumps(self.f.areas))
+        req = shots.required_shots(areas, ["invoices"])
+        self.f.receipt(RID_BASE, BASE)
+        for r in req:
+            write(os.path.join(self.f.home, "receipts", RID if r["side"] == "head" else RID_BASE, r["name"]),
+                  "png " + r["name"])
+        gh = FakeGitHub()  # it answers for SLUG, the fixture's repository
+        m = shots.publish(areas, SLUG, 7, RID_BASE, RID, gh=gh, home=self.f.home)
+        self.f.view["body"] = shots.render_into_body(m, BODY, home=self.f.home)
+        self.f.listings = {m["commit"]: [r["name"] for r in req]}
+        return m
+
+    def test_warn_names_every_missing_shot_and_still_allows(self):
+        out = self.f.judge()
+        self.assertEqual(out["decision"], "allow")
+        self.assertTrue(out["passed"], "the run records still pass; the pictures are judged apart")
+        self.assertTrue(out["say"], "a warning must reach the session even when the run check is in block mode")
+        self.assertEqual([p["kind"] for p in out["screenshots"]["problems"]], ["screenshots-missing"])
+        for side in ("base", "head"):
+            self.assertIn("invoices list %s 1280 dark" % side, out["text"])
+        self.assertIn("warn", out["text"])
+
+    def test_block_mode_refuses_naming_the_override(self):
+        self.f.areas = with_screens(areas_doc(), shots_mode="block")
+        out = self.f.judge()
+        self.assertEqual(out["decision"], "refuse")
+        self.assertIn("invoices list head 1440 light", out["text"])
+        self.assertIn("ALLOW_NO_SCREENSHOTS=1", out["text"])
+
+    def test_the_override_allows_and_says_so(self):
+        self.f.areas = with_screens(areas_doc(), shots_mode="block")
+        self.f.allow_no_screenshots = True
+        out = self.f.judge()
+        self.assertEqual(out["decision"], "allow")
+        self.assertIn("ALLOW_NO_SCREENSHOTS=1", out["text"])
+        self.assertTrue(out["screenshots"]["overridden"])
+
+    def test_the_override_does_not_excuse_a_missing_run_record(self):
+        self.f.allow_no_screenshots = True
+        self.f.comments = []
+        self.assertEqual(self.f.judge()["decision"], "refuse")
+
+    def test_a_published_block_passes_and_says_nothing_in_block_mode(self):
+        self.f.areas = with_screens(areas_doc(), shots_mode="block")
+        self.publish_block()
+        out = self.f.judge()
+        self.assertEqual((out["decision"], out["screenshots"]["problems"], out["say"]), ("allow", [], False))
+
+    def test_the_folder_listing_is_asked_for_then_unreadable_on_the_final_ask(self):
+        m = self.publish_block()
+        self.f.listings = {}
+        out = self.f.judge()
+        self.assertEqual(out["need"]["listings"], [{"commit": m["commit"], "folder": m["folder"]}])
+        final = self.f.judge(final=True)
+        self.assertEqual([p["kind"] for p in final["screenshots"]["problems"]], ["screenshots-github-unreadable"])
+
+    def test_a_listing_github_failed_is_unreadable(self):
+        m = self.publish_block()
+        self.f.listings = {m["commit"]: None}
+        out = self.f.judge()
+        self.assertEqual([p["kind"] for p in out["screenshots"]["problems"]], ["screenshots-github-unreadable"])
+
+    def test_the_repository_is_asked_about_only_for_an_images_block(self):
+        self.f.repo = None
+        self.assertNotIn("need", self.f.judge(), "a merge with no pictures block costs no extra read")
+        self.publish_block()
+        self.assertTrue(self.f.judge()["need"]["repo"])
+        final = self.f.judge(final=True)
+        self.assertEqual([p["kind"] for p in final["screenshots"]["problems"]], ["screenshots-github-unreadable"])
+
+    def test_a_failed_read_of_the_repository_is_unreadable_for_an_images_block(self):
+        self.publish_block()
+        self.f.repo = "fail"
+        out = self.f.judge()
+        self.assertEqual([p["kind"] for p in out["screenshots"]["problems"]], ["screenshots-github-unreadable"])
+
+    def test_a_block_at_an_older_head_is_judged_by_the_changes_since(self):
+        self.publish_block()
+        self.f.view["headRefOid"] = OLD
+        self.f.receipt(RID_OLD, OLD)
+        self.f.comments = [comment(record(sha=OLD, rid=RID_OLD))]
+        self.f.pin = "required " + OLD
+        self.f.compares = {HEAD: {"status": "ahead", "files": [{"filename": "src/invoices/list.ts"}]}}
+        out = self.f.judge()
+        self.assertEqual([p["kind"] for p in out["screenshots"]["problems"]], ["screenshots-stale"])
+
+    def test_warn_tally_carries_the_screenshot_kinds(self):
+        self.f.areas = with_screens(areas_doc(mode="warn"))
+        self.f.judge()
+        self.assertIn("screenshots-missing", v.tally_read(SLUG, home=self.f.home)[7]["kinds"])
+
+    def test_no_screens_anywhere_is_said_unmeasured_in_warn_mode(self):
+        self.f.areas = areas_doc(mode="warn")
+        out = self.f.judge()
+        self.assertIn("Screenshots: unmeasured", out["text"])
 
 
 class Cli(unittest.TestCase):
