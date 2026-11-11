@@ -176,12 +176,22 @@
 # passed. Each of those waits is said as what it is, and its heartbeat says paused for the rate
 # limit, never waiting on checks.
 #
+# A RUN WAITING FOR ITS TURN LEAVES GITHUB TO THE RUN HOLDING IT (claude-config#2715). On 2026-11-10
+# one session's 102 merge logs held 2,845 waits on the session's looks a minute: 2,594 by helpers
+# waiting in line, and 251 by the helper holding the turn, with a median of 8 in line behind it. A run
+# in line learns its turn, and the line moving, from the queue on this Mac, read at the base pace, so
+# it reads GitHub only every MWR_LINE_LOOK_SECONDS, to see that its own pull request is still open,
+# and never because the line moved. Each of those looks leaves one of the session's looks a minute
+# free (lib/gh-poll.sh's ghp_take), so the run holding the turn is not held back by the line behind it.
+#
 # Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_POLL_MAX_SECONDS (180: the ceiling
 # the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
 # GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800, counted from when the run first
 # takes the repository's turn, claude-config#1604, and only while it holds it, #1975),
 # MWR_LINE_SECONDS (10800: how long it may wait in line with the line standing still, counting only
 # time in which nothing ahead of it advanced, claude-config#1697; a setting, not a measurement),
+# MWR_LINE_LOOK_SECONDS (600: how often a run waiting for its turn reads GitHub, claude-config#2715;
+# a setting, not a measurement, never under MWR_POLL_SECONDS),
 # MWR_MAX_POLLS (derived from those and the pace, bounding the loop by count as well as by clock, L704;
 # looks in a line that moved are not counted, claude-config#2351),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
@@ -253,6 +263,8 @@ GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 TURN_HOLD="$(num_or "${MWR_TURN_HOLD_SECONDS:-}" 3600)"
+# How often a run waiting for its turn reads GitHub (claude-config#2715, see the turn's wait below).
+LINE_LOOK="$(num_or "${MWR_LINE_LOOK_SECONDS:-}" 600)"; [ "$LINE_LOOK" -ge "$POLL" ] || LINE_LOOK="$POLL"
 # A merge GitHub answers "Something went wrong" is tried again (claude-config#2289, see the merge).
 MERGE_TRIES="$(num_or "${MWR_MERGE_TRIES:-}" 3)"; [ "$MERGE_TRIES" -ge 1 ] || MERGE_TRIES=1
 MERGE_WAIT="$(num_or "${MWR_MERGE_RETRY_SECONDS:-}" 120)"
@@ -1256,10 +1268,11 @@ not_caught_up(){   # $1 = what GitHub shows
 # measurement, on the injected clock (L524), and checked at each look, so it falls on the first look
 # at or after it.
 #
-# THE WAIT GROWS (claude-config#1482): with $3 set (the wait on a head's checks and review, the one
-# that runs for many minutes), a look whose line is the last one's doubles the wait, up to POLL_MAX,
-# through lib/gh-poll.sh's ghp_next_interval, and a changed line starts it at POLL again. The other
-# waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
+# THE WAIT GROWS (claude-config#1482): with $3 "grows" (the wait on a head's checks and review, the
+# one that runs for many minutes), a look whose line is the last one's doubles the wait, up to
+# POLL_MAX, through lib/gh-poll.sh's ghp_next_interval, and a changed line starts it at POLL again.
+# With $3 a number of seconds, the wait is that long (the wait for the turn, until its next look at
+# GitHub is due, claude-config#2715). The other waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
 # it (nap), so the log is never quiet for longer than the heartbeat whatever the wait.
 wait_key=""; wait_since=0
 #
@@ -1271,18 +1284,22 @@ wait_key=""; wait_since=0
 # GitHub, and ends the wait early when it returns 0 (claude-config#1697): the wait for the
 # repository's turn grows, since nothing there needs GitHub read every minute, but the turn itself is
 # read locally every POLL, so a turn passing mid wait is taken at once, as before.
-wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow, $4 = what grows with the line, $5 = a local check that ends the wait
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = grows, or the seconds to wait, $4 = what grows with the line, $5 = a local check that ends the wait
   local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
   if [ "$2" != "$last_status" ]; then
     say "$2${4:-}"; last_status="$2"; last_said="$t"; interval="$POLL"
   else
-    [ -n "${3:-}" ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
+    [ "${3:-}" = grows ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
     if [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
       say "$2${4:-} Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
     fi
   fi
-  [ -n "${3:-}" ] && pause="$interval"
+  case "${3:-}" in
+    grows) pause="$interval" ;;
+    ''|*[!0-9]*) ;;
+    *) pause="$3" ;;
+  esac
   nap "$pause" "$2 Still waiting" "${5:-}"
 }
 # Sleep the wait it is given through the injected sleep, in one call when it is no longer than the heartbeat,
@@ -1314,10 +1331,14 @@ nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on, $3 = a 
 }
 # Every look first takes its place in the session's looks (lib/gh-poll.sh's ghp_take), waiting while
 # a rate limit pause is in force or while the session's loops have used their looks for this minute,
-# each said as what it is (claude-config#1482).
+# each said as what it is (claude-config#1482). A run waiting for its turn leaves one of the minute's
+# looks free, so the run holding the turn never waits on the line behind it (claude-config#2715); the
+# look that finds the turn is now its own (turn_moved saw it) leaves none.
 take_a_look(){
-  local key line still
-  while ! ghp_take "$(now)"; do
+  local key line still free
+  while :; do
+    free=""; [ "$turn_state" = waiting ] && [ "${TURN_MINE:-}" != 1 ] && free=1
+    ghp_take "$(now)" $free && break
     budget_left
     [ "$BUDGET_LEFT" -gt 0 ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s), at the end of $BUDGET_SAID. Nothing was merged; run the same command again to resume."
     if [ "$GHP_WHY" = pause ]; then
@@ -1325,7 +1346,11 @@ take_a_look(){
       line="Paused for GitHub's rate limit (${GHP_SAID:-it refused a read}): this session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
     else
       key="cap"; still="Still waiting for this session's next look at GitHub"
-      line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
+      if [ -n "$free" ]; then
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_SEEN times in the last minute, and a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one."
+      else
+        line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
+      fi
     fi
     if [ "$key" != "$wait_key" ]; then
       wait_key="$key"; wait_since="$(now)"; say "$line"; last_said="$(now)"; last_status=""
@@ -1563,14 +1588,17 @@ turn_check(){
 }
 # The local check the wait for the turn runs between its sleeps (claude-config#1697, see wait_a_look):
 # reads the queue on this Mac, never GitHub, and ends the wait when the turn is this run's, its place
-# is gone, or the line moved, so the next look reads GitHub and says the line as it now stands.
+# is gone, or the line moved, so the line is said again as it now stands, from the queue
+# (claude-config#2715), and when the heartbeat is due, so it is said with how long the holder has held
+# the turn by then (claude-config#1515), which the wait's own heartbeat does not know.
 turn_moved(){
   local t; t="$(now)"
   turn_look "$t" "$TURN_HOLD"
   turn_say_passed
   [ "$TURN_MINE" = 1 ] && return 0
   [ -n "$TURN_GONE" ] && return 0
-  line_note "$t"
+  line_note "$t" && return 0
+  [ $(( t - last_said )) -ge "$HEARTBEAT" ]
 }
 
 # A CONFLICT CONFINED TO README.md's MODS TABLE ROWS IS MERGED HERE (claude-config#1867). Two pull
@@ -1733,14 +1761,27 @@ while :; do
   # helper's merge would put behind (claude-config#1515). Each look while waiting still reads the
   # pull request, so one merged or closed meanwhile stops here as it would have anyway.
   if ! turn_check; then
-    line_long_note
-    out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
-    # A growing wait on GitHub since claude-config#1697, which lets a run wait hours in a moving line:
-    # at one read a minute a line of 15 waiters spent about 900 of the account's 5,000 GraphQL points
-    # an hour on reads that only confirm the pull request is still open. The turn itself is read
-    # locally at the base pace between them (turn_moved), so a waiter never leaves the repository
-    # idle after the holder has merged.
-    wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" grows "$turn_extra" turn_moved
+    # GitHub is read in line only every LINE_LOOK, to see this pull request is still open: at one
+    # read a minute a line of 15 waiters spent about 900 of the account's 5,000 GraphQL points an
+    # hour (claude-config#1697), and on a wait growing to three minutes the line still took most of
+    # the session's looks a minute from the run holding the turn (claude-config#2715). The turn is
+    # read from the queue on this Mac at the base pace between those looks (turn_moved), so a turn
+    # passing is taken at once, and a line that moves is said again from the queue, never by reading
+    # GitHub. The look that finds the turn is this run's reads GitHub first, as every look does.
+    line_look_at="$(now)"
+    while :; do
+      line_long_note
+      out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
+      line_left=$(( line_look_at + LINE_LOOK - $(now) ))
+      [ "$line_left" -gt 0 ] || break
+      # Never past the end of its budget in line, so it stops on time, from the check above.
+      budget_left; [ "$BUDGET_LEFT" -ge "$line_left" ] || line_left="$BUDGET_LEFT"
+      wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" "$line_left" "$turn_extra" turn_moved
+      { [ "$TURN_MINE" = 1 ] || [ -n "$TURN_GONE" ]; } && break
+      # The line moved, or this wait ended: the line as the queue now has it. Taking the turn here,
+      # when it passed between the two reads of the queue, reads GitHub at the next look as above.
+      turn_check && break
+    done
     continue
   fi
 
