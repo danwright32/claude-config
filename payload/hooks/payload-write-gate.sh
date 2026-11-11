@@ -411,7 +411,86 @@ def add(tok, base):
 # as a redirect; that was chosen over a reading of where a body ends that could ever hide a command
 # after it, as the pattern this gate kept did with <<'E'OF, <<END-OF and a << inside a quoted string.
 # Where a body really ends is read by lib/shell-words.py, below, for the commands the shell runs.
-shell_text = cmd
+#
+# One narrowing (Dan, 2026-11-11, the middle path, claude-config#2722): a body only cat or tee copies
+# into files named on the command line is text, so the paths it names are not write targets. Where
+# that command writes is still judged, from its own words, and the substitutions the shell runs in
+# an unquoted body are still read as commands below. Every other consumer (a shell, sh -s, python,
+# xargs, eval, a function, any command not known here) has its body read as before: a consumer that
+# cannot be told is read. On 2026-11-10 a cat append to a session notes file was refused for the
+# payload paths its text named in backticks.
+# A command that could make cat or tee something else, or send what it writes on to a shell, is
+# never narrowed: a function or alias of either, a change to PATH or the command hash, or a
+# process substitution anywhere in it.
+NOT_A_PLAIN_COPY = re.compile(r"[<>]\(|\bfunction\b|\balias\b|\bhash\b|\b(?:PATH|path)\+?=|(?:^|[\s;&|(){}])(?:cat|tee)\s*\(\s*\)")
+
+def copy_targets(text):
+    """The files a cat or tee command copies its input into, from its own words, or [] when text is
+    not such a command: cat with its output sent to a file, or tee naming one, and nothing else."""
+    try:
+        toks = _sw.shell_tokens(text)
+    except Exception:
+        return []
+    if not toks or toks[0] not in ("cat", "tee"):
+        return []
+    head, files, to_file, i = toks[0], [], False, 1
+    while i < len(toks):
+        t = toks[i]
+        if re.fullmatch(r"[0-9]*<<-?", t):          # the heredoc itself, and its end marker
+            i += 2
+            continue
+        if t in (">", ">>", "1>", "1>>"):
+            if i + 1 >= len(toks):
+                return []
+            files.append(toks[i + 1])
+            to_file = True
+            i += 2
+            continue
+        if re.fullmatch(r"(?:2>>?|[0-9]*<)", t):    # stderr, or an input, read as a redirect as ever
+            i += 2
+            continue
+        if any(c in t for c in "<>&|;()`$"):
+            return []                                # any other operator or value: cannot be told
+        if head == "tee" and not t.startswith("-"):
+            files.append(t)
+        i += 1
+    if head == "cat" and not to_file:
+        return []
+    return files
+
+def copied_as_text(cmd):
+    """cmd with the body of each heredoc only cat or tee copies into a named file blanked, its line
+    breaks kept, or cmd unchanged wherever that cannot be read (claude-config#2722)."""
+    if "<<" not in cmd or "\n" not in cmd or NOT_A_PLAIN_COPY.search(cmd):
+        return cmd
+    try:
+        parts, spans = [], []
+        _sw.commands(cmd, heredocs=[], parts=parts, spans=spans)
+    except Exception:
+        return cmd
+    out = list(cmd)
+    for opener, start, end in spans:
+        part = next((p for p in parts if any(o[0] == opener for o in p["openers"])), None)
+        # Only a command the session shell runs itself, its output not piped on to another.
+        if part is None or part["scope"] != (0,) or part["how"] == "|":
+            continue
+        files = copy_targets(cmd[part["start"]:part["end"]])
+        if not files:
+            continue
+        # A file it writes that the command names again anywhere else may be run (a script written
+        # and then run), so that body is read.
+        rest = cmd[:part["start"]] + cmd[part["end"]:start] + cmd[end:]
+        if any(os.path.basename(f.rstrip("/")) in rest for f in files):
+            continue
+        for k in range(start, end):
+            if out[k] != "\n":
+                out[k] = " "
+    return "".join(out)
+
+try:
+    shell_text = copied_as_text(cmd)
+except Exception:
+    shell_text = cmd
 
 # Commands whose arguments ARE what they write. Scanned per segment, in order, so a read in one
 # segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
@@ -458,7 +537,7 @@ WRITE_CALLS = (r"open\([^)]*,\s*[\"\x27][^\"\x27]*[wax+]", r"\.write_(text|bytes
                r"shutil\.(copy|copy2|copyfile|copytree|move|rmtree)\(",
                r"os\.(replace|rename|remove|unlink|makedirs|mkdir|rmdir)\(", r"\.unlink\(",
                r"\.rename\(", r"\.touch\(", r"writeFileSync|appendFileSync|File\.write")
-WRITE_SCRIPT = any(re.search(p, cmd) for p in WRITE_CALLS)
+WRITE_SCRIPT = any(re.search(p, shell_text) for p in WRITE_CALLS)
 SCRIPT_PATH = r"[\"\x27]([^\"\x27\s]*payload/[^\"\x27\s]*)[\"\x27]"
 # The original single line form, kept: a literal opened for writing in place.
 OPENED_PATH = r"open\(\s*([\"\x27][^\"\x27]+[\"\x27])\s*,\s*[\"\x27][wa]"
@@ -553,10 +632,10 @@ for seg in segments:
 # Read over the whole command too, for a script path the cut into segments split (a quoted path
 # holding a ; or |): one no segment placed is judged where the session is, as it always was,
 # rather than not at all (L42).
-for m in (re.finditer(SCRIPT_PATH, cmd) if WRITE_SCRIPT else ()):
+for m in (re.finditer(SCRIPT_PATH, shell_text) if WRITE_SCRIPT else ()):
     if m.group(1) not in placed:
         add(m.group(1), cwd)
-for m in re.finditer(OPENED_PATH, cmd):
+for m in re.finditer(OPENED_PATH, shell_text):
     if m.group(1) not in placed:
         add(m.group(1), cwd)
 
