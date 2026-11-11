@@ -1,0 +1,29 @@
+deal	UNKNOWN STEP	2026-11-09T23:38:06.8794262Z Region: centralus
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:16.1208632Z Region: westus2
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:23.5720705Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:23.5722666Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:23.9795374Z cores: 4
+suites part 3	UNKNOWN STEP	2026-11-09T23:38:23.9820277Z processor: AMD EPYC 9V74 80-Core Processor
+suites part 3	UNKNOWN STEP	2026-11-09T23:46:08.0969187Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:15.8928719Z Region: northcentralus
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:21.7028410Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:21.7030942Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:22.0313291Z cores: 4
+suites part 4	UNKNOWN STEP	2026-11-09T23:38:22.0344259Z processor: AMD EPYC 9V74 80-Core Processor
+suites part 4	UNKNOWN STEP	2026-11-09T23:48:22.1834980Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:16.1517820Z Region: westcentralus
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:22.5362738Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:22.5365336Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:25.4950290Z cores: 4
+suites part 1	UNKNOWN STEP	2026-11-09T23:38:25.4980787Z processor: AMD EPYC 9V74 80-Core Processor
+suites part 1	UNKNOWN STEP	2026-11-09T23:48:41.8953428Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:16.0969492Z Region: eastus
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:21.4147661Z [36;1mecho "cores: $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:21.4150236Z [36;1mecho "processor: $(awk -F': *' '/^model name/ && !n++ { print $2 }' /proc/cpuinfo 2>/dev/null | grep . || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo UNKNOWN)"[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:21.8321985Z cores: 4
+suites part 2	UNKNOWN STEP	2026-11-09T23:38:21.8350304Z processor: AMD EPYC 7763 64-Core Processor
+suites part 2	UNKNOWN STEP	2026-11-09T23:49:26.6896354Z   ok    test-claude-sync.sh                    3418 passed, 0 failed      (656s)
+suites part 2	UNKNOWN STEP	2026-11-09T23:49:26.7162091Z           note: 1302s of section time against a 1368s budget
+suites part 2	UNKNOWN STEP	2026-11-09T23:49:27.3731232Z [36;1mecho "Shards dealt from measured section time for $dm of $dt section(s)."[0m
+suites part 2	UNKNOWN STEP	2026-11-09T23:49:27.4063194Z Shards dealt from measured section time for 217 of 217 section(s).
+suite	UNKNOWN STEP	2026-11-09T23:49:33.3709668Z Region: southcentralus
