@@ -21,7 +21,8 @@ export type AreaCheckHeld = {
   agent: string | null
   at: number
   why: ('issues' | 'growth')[]
-  shown: { n: number; how: 'path' | 'suffix' | 'basename' | 'folder'; structural: string[]; priority: string | null }[]
+  /** For a command whose files cannot be named, `repo`: the repository's structural issues it may fold into (#2706). */
+  shown: { n: number; how: 'path' | 'suffix' | 'basename' | 'folder' | 'repo'; structural: string[]; priority: string | null }[]
   issues: { state: 'read' | 'truncated' } | { state: 'unread'; why: string }
   growth: { net: number; size: number | null; fixes: number; rank: number | null; crosses: boolean } | { unread: string }
   /** A Bash command whose file cannot be named before it runs (#2142): `rel` holds its word, `key` the command's claim. */
