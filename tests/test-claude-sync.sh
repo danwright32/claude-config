@@ -3872,8 +3872,9 @@ CLAUDE_HOME="$SEH" SYNC_REPO="$SEC" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "
 check "#2004 the pull writes the synced folder inside the real skill" "[ -f '$SEH/skills/real-skill/synced/kept.md' ]"
 check "#2004 and never the .trash folder inside it, as the check judged" "[ ! -e '$SEH/skills/real-skill/.trash' ]"
 # THE FAILURE PATH. The filter's empty answer means "left out", so a filter that FAILS (the list
-# unreadable, so the tool's stand in runs and exits) must answer "not applied", or a broken reader
-# would read every skills path as excluded and wave it through. Called directly: every run that
+# unreadable, so the tool's stand in runs and exits) must never answer "applied", or a broken reader
+# would read every skills path as excluded and wave it through. Since #2682 it answers "could not
+# compare" (2), which every caller that acts treats as it treated "not applied" (1). Called directly: every run that
 # reaches skills/ stops first at require_unmanaged_skill_list, so the stand in is the last line.
 SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
 sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
@@ -3886,8 +3887,8 @@ se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/no
 dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
 check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
 check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
-check "#2004 with the list unreadable, it answers not applied rather than left out, and says why" \
-  "[ \"\$se_rc_bad\" -eq 1 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
+check "#2004 with the list unreadable, it answers could not compare rather than left out, and says why" \
+  "[ \"\$se_rc_bad\" -eq 2 ] && line_has \"\$se_err_bad\" 'cannot read the list of skills' 'no skills path was judged'"
 
 section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
 # On 2026-10-12 a session backed up the tracker's token file as
@@ -24920,6 +24921,214 @@ check "#2673 a removed file whose removed version could not be read is named" \
   "line_has \"\$out_mc3\" 'could not compare gone-mod/index.ts' 'version origin/main removed' 'exit 128'"
 check "#2673 and the rest are still named as behind" \
   "line_has \"\$out_mc3\" 'mods behind the shared repo: 5 file' 'kit-mod' 'path-mod'"
+
+section "== status names config it could not compare, rather than saying the shared repo changed it (claude-config#2682) =="
+# Whether this Mac has applied a path the repo changed was a yes or a no, so a step that failed while
+# asking (putting this Mac's home path into the repo's settings.hooks.json, the jq comparing its
+# hooks block, the copy of a tokenized file as this Mac should hold it) answered no, and status
+# listed the file as one "the shared repo changed and this Mac has not applied", which nothing had
+# measured (L11). It now says it could not compare the file and which step failed, in the same
+# words the mods comparison uses (#2673). The failures are made by a perl standing in front of the
+# real one on PATH, failing only the home path swap of the content it is told to, so the script
+# under test is unchanged.
+CCB="$WORK/cfgcmp-bare.git"; git init -q --bare -b main "$CCB"
+CCS="$WORK/cfgcmp-sender"; git clone -q "$CCB" "$CCS" 2>/dev/null
+mkdir -p "$CCS/payload/hooks"
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/demo.sh"}]}]}}\n' > "$CCS/payload/settings.hooks.json"
+printf '#!/bin/sh\n# lives at __CLAUDE_HOME__/hooks, version 1\n' > "$CCS/payload/hooks/demo.sh"
+printf '# rules\n' > "$CCS/payload/CLAUDE.md"
+git -C "$CCS" add -A; git -C "$CCS" -c user.name=t -c user.email=t@t commit -q -m "config v1"; git -C "$CCS" push -q origin HEAD:main 2>/dev/null
+CCR="$WORK/cfgcmp-repo"; git clone -q "$CCB" "$CCR" 2>/dev/null
+CCH="$WORK/cfgcmp-home"; mkdir -p "$CCH"; echo '{"hooks":{}}' > "$CCH/settings.json"
+CCAG="$WORK/cfgcmp-agents"; mkdir -p "$CCAG"
+ccenv(){ echo "CLAUDE_HOME=$CCH SYNC_REPO=$CCR SYNC_LAUNCHAGENTS=$CCAG SYNC_HOLD_FILE=$WORK/cfgcmp-hold SYNC_WATCH_PID_FILE=$WORK/cfgcmp-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_HOSTNAME=MacCfgCmp"; }
+env $(ccenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2682 the fixture: the pull applied the hooks block with this Mac's home path in it" \
+  "grep -qF '$CCH/hooks/demo.sh' '$CCH/settings.json'"
+check "#2682 the fixture: and the tokenized hook with this Mac's home path in it" \
+  "grep -qF '$CCH/hooks, version 1' '$CCH/hooks/demo.sh'"
+# The shared repo changes both, and this clone fetches that with plain git and never applies it.
+printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"__CLAUDE_HOME__/hooks/demo.sh --two"}]}]}}\n' > "$CCS/payload/settings.hooks.json"
+printf '#!/bin/sh\n# lives at __CLAUDE_HOME__/hooks, version 2\n' > "$CCS/payload/hooks/demo.sh"
+git -C "$CCS" add -A; git -C "$CCS" -c user.name=t -c user.email=t@t commit -q -m "config v2"; git -C "$CCS" push -q origin HEAD:main 2>/dev/null
+git -C "$CCR" pull -q --ff-only >/dev/null 2>&1
+check "#2682 the fixture: this clone holds the change and has not applied it" \
+  "grep -q -- '--two' '$CCR/payload/settings.hooks.json' && ! grep -q -- '--two' '$CCH/settings.json'"
+# THE NORMAL PATH, unchanged: both files really were compared, and both are said to be unapplied.
+rc_cc0=0; out_cc0="$(env $(ccenv) bash "$SCRIPT" status 2>&1)" || rc_cc0=$?
+dbg "#2682 status with nothing failing: $out_cc0"
+check "#2682 with nothing failing, settings.hooks.json is compared and said to be unapplied" \
+  "line_has \"\$out_cc0\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 and so is the tokenized hook" \
+  "line_has \"\$out_cc0\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+check "#2682 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_cc0\""
+CCSHIM="$WORK/cfgcmp-shim"; mkdir -p "$CCSHIM/perl-bin"
+cat > "$CCSHIM/perl-bin/perl" <<EOS
+#!/bin/sh
+# Fails a swap FROM the placeholder (claude-sync's detok) of any content holding CC_FAIL_ON, and is
+# the real perl for everything else.
+if [ "\${HT_FROM:-}" = "__CLAUDE_HOME__" ] && [ -n "\${CC_FAIL_ON:-}" ]; then
+  t="$CCSHIM/held-input.\$\$"; cat > "\$t"
+  if grep -qF -- "\$CC_FAIL_ON" "\$t"; then rm -f "\$t"; : > "$CCSHIM/perl-failed"; exit 2; fi
+  "$(command -v perl)" "\$@" < "\$t"; rc=\$?; rm -f "\$t"; exit \$rc
+fi
+exec "$(command -v perl)" "\$@"
+EOS
+chmod +x "$CCSHIM/perl-bin/perl"
+# THE ISSUE: the home path swap of settings.hooks.json fails.
+rc_cc1=0; out_cc1="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='"hooks"' bash "$SCRIPT" status 2>&1)" || rc_cc1=$?
+dbg "#2682 status with the hooks block's home path swap failing: $out_cc1"
+check "#2682 the fixture: the stand in perl did fail a home path swap" \
+  "[ -e '$CCSHIM/perl-failed' ]"
+check "#2682 a config file whose home path swap failed is named, with the step and its exit status" \
+  "line_has \"\$out_cc1\" 'could not compare settings\.hooks\.json' 'home path' 'exit 2'"
+check "#2682 under a heading saying how many files, in the words the mods comparison uses" \
+  "line_has \"\$out_cc1\" 'config not compared with the shared repo: status could not compare 1 file' 'applied'"
+check "#2682 and settings.hooks.json is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc1\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+check "#2682 while the file it could compare is still said to be unapplied" \
+  "line_has \"\$out_cc1\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+check "#2682 and status exits as it does when nothing failed" \
+  "[ $rc_cc1 -eq $rc_cc0 ]"
+# THE SAME CLASS, the other caller step: the tokenized hook's copy as this Mac should hold it.
+rm -f "$CCSHIM/perl-failed"
+out_cc2="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2682 status with the tokenized hook's home path swap failing: $out_cc2"
+check "#2682 a tokenized file whose copy for this Mac could not be made is named, with the step" \
+  "line_has \"\$out_cc2\" 'could not compare hooks/demo\.sh' 'exit 2'"
+check "#2682 and the tokenized hook is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc2\" 'hooks/demo\.sh: the shared repo changed it' 'not applied'"
+# AND THE JQ STEP: a settings.json jq cannot read is a comparison that failed, not a difference.
+cp "$CCH/settings.json" "$WORK/cfgcmp-settings.keep"
+printf 'not json\n' > "$CCH/settings.json"
+out_cc3="$(env $(ccenv) bash "$SCRIPT" status 2>&1 || true)"
+cp "$WORK/cfgcmp-settings.keep" "$CCH/settings.json"
+dbg "#2682 status with settings.json unreadable to jq: $out_cc3"
+check "#2682 a hooks block jq could not compare is named, with the step and its exit status" \
+  "line_has \"\$out_cc3\" 'could not compare settings\.hooks\.json' 'jq exit'"
+check "#2682 and a hooks block jq could not read is no longer said to be changed by the shared repo" \
+  "! line_has \"\$out_cc3\" 'settings\.hooks\.json: the shared repo changed it' 'not applied'"
+# THE SEND asks the same question to decide what to hold back. A file it could not compare is still
+# held back, but no longer said to be one the shared repo changed.
+out_cc4="$(env $(ccenv) PATH="$CCSHIM/perl-bin:$PATH" CC_FAIL_ON='version 2' bash "$SCRIPT" push 2>&1 || true)"
+dbg "#2682 a push with the tokenized hook's home path swap failing: $out_cc4"
+check "#2682 a send holds back a file it could not compare, naming the step" \
+  "line_has \"\$out_cc4\" 'NOT publishing hooks/demo\.sh' 'exit 2' 'could not be compared'"
+check "#2682 and does not say the shared repo changed it" \
+  "! line_has \"\$out_cc4\" 'NOT publishing' 'hooks/demo\.sh' 'because the shared repo has changed'"
+check "#2682 and this Mac's copy did not go up over the repo's" \
+  "[ \"\$(git -C '$CCB' show main:payload/hooks/demo.sh 2>/dev/null | grep -c 'version 2')\" = 1 ]"
+
+section "== status names a mod file its home path search could not read, rather than reading the failure as none (claude-config#2688) =="
+# The mods comparison finds the installed files holding this Mac's home path with grep, and read
+# grep's exit 2 (a file it could not read) as no match. A file the search missed got no hash with
+# the placeholder put back, so it matched no version the repo held and read as this Mac's own work,
+# dropped from the lag line with nothing said: the class #2673 fixed one step later. grep -r exits 2
+# when one file is unreadable and the rest matched, so a failed search is now named per file it
+# could not read, and the matches it did print are still used.
+MSB="$WORK/modsearch-bare.git"; git init -q --bare -b main "$MSB"
+MSS="$WORK/modsearch-sender"; git clone -q "$MSB" "$MSS" 2>/dev/null
+mscommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MSS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MSS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MSS/payload/mods/path-mod/hooks" "$MSS/payload/mods/lock-mod" "$MSS/payload/mods/plain-mod"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 1\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 1\n' > "$MSS/payload/mods/plain-mod/index.ts"
+printf '# rules\n' > "$MSS/payload/CLAUDE.md"
+git -C "$MSS" add -A; mscommit 864000 "mods v1"
+MSR="$WORK/modsearch-repo"; git clone -q "$MSB" "$MSR" 2>/dev/null
+MSH="$WORK/modsearch-home"; mkdir -p "$MSH"; echo '{"hooks":{}}' > "$MSH/settings.json"
+MSAG="$WORK/modsearch-agents"; mkdir -p "$MSAG"
+msenv(){ echo "CLAUDE_HOME=$MSH SYNC_REPO=$MSR SYNC_LAUNCHAGENTS=$MSAG SYNC_HOLD_FILE=$WORK/modsearch-hold SYNC_WATCH_PID_FILE=$WORK/modsearch-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(msenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#2688 the fixture: path-mod is installed with this Mac's home path in it" \
+  "grep -qF '$MSH/hooks' '$MSH/mods/path-mod/hooks/paths.ts'"
+# The shared repo changes all three two days ago, and this Mac receives none of it.
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MSS/payload/mods/path-mod/hooks/paths.ts"
+printf 'lock 2\n' > "$MSS/payload/mods/lock-mod/index.ts"
+printf 'plain 2\n' > "$MSS/payload/mods/plain-mod/index.ts"
+git -C "$MSS" add -A; mscommit 172800 "mods v2"
+git -C "$MSR" fetch -q origin 2>/dev/null
+# THE CONTROL: nothing is unreadable, so all three are compared and named, and no search failed.
+rc_ms0=0; out_ms0="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms0=$?
+dbg "#2688 status with nothing unreadable: $out_ms0"
+check "#2688 with nothing unreadable, all three lagging files are compared and their mods named" \
+  "line_has \"\$out_ms0\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and no file is said to be one status could not compare" \
+  "! grep -q 'could not compare' <<< \"\$out_ms0\""
+# ONE FILE UNREADABLE: grep exits 2 for it, and still prints path-mod, which it could read.
+chmod 000 "$MSH/mods/lock-mod/index.ts"
+rc_ms1=0; out_ms1="$(env $(msenv) bash "$SCRIPT" status 2>&1)" || rc_ms1=$?
+chmod 644 "$MSH/mods/lock-mod/index.ts"
+dbg "#2688 status with one mod file unreadable: $out_ms1"
+check "#2688 the file the search could not read is named, with the step and grep's exit status" \
+  "line_has \"\$out_ms1\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2'"
+check "#2688 and the match the search did print is still used: path-mod is still named as behind" \
+  "line_has \"\$out_ms1\" 'mods behind the shared repo: 2 file' 'path-mod' 'plain-mod'"
+check "#2688 and status exits as it does when nothing failed" \
+  "[ $rc_ms1 -eq $rc_ms0 ]"
+# THE HARM ITSELF: the search fails on the tokenized file, which every other step can read. A grep
+# standing in front of the real one runs the search and then drops path-mod from it with an error,
+# as an unreadable file does, so path-mod gets no hash with the placeholder put back.
+MSSHIM="$WORK/modsearch-shim"; mkdir -p "$MSSHIM/drop-bin" "$MSSHIM/none-bin"
+cat > "$MSSHIM/drop-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*)
+    "$(command -v grep)" "\$@" | "$(command -v grep)" -v 'path-mod/'
+    echo "grep: $MSH/mods/path-mod/hooks/paths.ts: Input/output error" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+cat > "$MSSHIM/none-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/drop-bin/grep" "$MSSHIM/none-bin/grep"
+out_ms2="$(env $(msenv) PATH="$MSSHIM/drop-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the search failing on the tokenized file: $out_ms2"
+check "#2688 a tokenized file the search failed on is named, with the reason grep gave" \
+  "line_has \"\$out_ms2\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' 'grep exit 2' 'Input/output error'"
+check "#2688 and it is not counted as behind, since it was never compared" \
+  "! line_has \"\$out_ms2\" 'mods behind the shared repo' 'path-mod'"
+check "#2688 while the files it could compare are still named as behind" \
+  "line_has \"\$out_ms2\" 'mods behind the shared repo: 2 file' 'lock-mod' 'plain-mod'"
+# A SEARCH THAT FAILED NAMING NO FILE: which files hold the home path is unknown, so a tokenized file
+# compared without the placeholder would read as this Mac's own work, or a plain one be counted
+# while status said it could not compare it. So each file is searched on its own, and a file that
+# search answers for is compared as usual.
+out_ms_none="$(env $(msenv) PATH="$MSSHIM/none-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with the whole search failing naming no file: $out_ms_none"
+check "#2688 when the whole search fails naming no file, each file is searched alone and path-mod is still compared" \
+  "line_has \"\$out_ms_none\" 'mods behind the shared repo: 3 file' 'lock-mod' 'path-mod' 'plain-mod'"
+check "#2688 and with every file answered for one by one, nothing is called uncomparable" \
+  "! grep -q 'could not compare' <<< \"\$out_ms_none\""
+# AND WHEN EVERY SEARCH FAILS: no file is known not to hold the home path, so each is named and none
+# is counted, neither as behind nor as this Mac's own work.
+mkdir -p "$MSSHIM/all-bin"
+cat > "$MSSHIM/all-bin/grep" <<EOS
+#!/bin/sh
+case "\$*" in
+  *"-rIlF --exclude-dir=types"*|*"-IlF -- $MSH "*) echo "grep: something went wrong" >&2; exit 2 ;;
+esac
+exec "$(command -v grep)" "\$@"
+EOS
+chmod +x "$MSSHIM/all-bin/grep"
+out_ms_all="$(env $(msenv) PATH="$MSSHIM/all-bin:$PATH" bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2688 status with every home path search failing: $out_ms_all"
+check "#2688 when every search fails, each file is named with grep's exit status and its words" \
+  "line_has \"\$out_ms_all\" 'could not compare lock-mod/index\.ts' 'searching it' 'grep exit 2' 'something went wrong' && line_has \"\$out_ms_all\" 'could not compare path-mod/hooks/paths\.ts' 'searching it' && line_has \"\$out_ms_all\" 'could not compare plain-mod/index\.ts' 'searching it'"
+check "#2688 under a heading counting all three files" \
+  "line_has \"\$out_ms_all\" 'mods not compared with the shared repo: status could not compare 3 file' 'neither as behind'"
+check "#2688 and none of them is in the lag line" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ms_all\""
 
 section "== a run asks each question once where the answer cannot change (claude-config#2472) =="
 # Most of what a sync or pull costs is the programs it starts: a profile on 2026-11-09 counted 266

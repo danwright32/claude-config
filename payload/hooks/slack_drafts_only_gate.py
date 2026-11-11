@@ -138,6 +138,19 @@ JS_TO_TS = {".js": (".ts", ".tsx"), ".mjs": (".mts",), ".cjs": (".cts",), ".jsx"
 # in a comment is an example, and following it refused every suite importing a harness that shows one
 # (#2397).
 IMPORT_SPEC = re.compile(r"""(?:\bfrom|\bimport\s*\(?|\brequire\s*\(|\bgetBuiltinModule\s*\()\s*(['"`])([^'"`\n]+)\1""")
+# A type only import statement, up to its from: `import type { A, B as C }`, `import type A`,
+# `import type * as ns` (claude-config#2526). The whole statement is erased before anything runs, so
+# the module it names is never loaded. Measured 2026-11-10 (bun 1.3.11, node 22.22.2, deno, with and
+# without verbatimModuleSyntax): a module that prints when loaded printed under none of them, and a
+# missing one stopped none of them. Nothing wider is matched, each because it loads the module or is
+# not seen unable to: `import { type A }` (node blanks the names and still loads the module,
+# measured the same day), `import type from` and `import type, { A }` (a value named type),
+# `import type A = require()`, `export type { A } from`.
+_JS_NAME = r"[A-Za-z_$][\w$]*"
+TYPE_ONLY_IMPORT = re.compile(r"(?<![\w$.])import\s+type\s+(?:\{[\w$\s,]*\}|(?!from\b)" + _JS_NAME +
+                              r"|\*\s*as\s+" + _JS_NAME + r")\s*\Z")
+# The declaration file such a statement may name without it being there.
+DECLARATION_EXT = ".d.ts"
 # What can stand before a / that opens a regex literal rather than divides: punctuation, or a keyword.
 JS_REGEX_AFTER = set("(,=:[!&|?{};+-*%<>~^")
 JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", "new", "delete", "void",
@@ -1021,7 +1034,8 @@ class Judge:
         because node or Python may still find it (package.json exports, a path alias, a loader) and
         run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules. An
         import whose path is assembled at run time (a template holding ${...}, importlib) is not
-        followed: no file is named to read."""
+        followed: no file is named to read. Nor is a type only import statement of a declaration
+        file that is not there, which loads nothing whatever resolves it (erased_import, #2526)."""
         for why, via, target, found in self.modules(start, origin, root, body, kind):
             if why:
                 return why
@@ -1107,7 +1121,8 @@ class Judge:
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
-        or a template's text is left out (claude-config#2484)."""
+        or a template's text is left out (claude-config#2484). A type only import statement of a
+        missing declaration file is left out too (erased_import, claude-config#2526)."""
         if kind == "js":
             code, quoted = js_scan(text)
             for m in IMPORT_SPEC.finditer(code):
@@ -1117,12 +1132,26 @@ class Judge:
                 if "${" in spec:
                     continue
                 target = self.resolve_import(spec, cur_dir)
+                if target is False and self.erased_import(code, m):
+                    continue  # a type only import of a missing declaration file loads nothing (#2526)
                 if target is not None:
                     yield spec, ([target] if target else False)
             return
         for level, module, names in self.py_imports(text):
             spec = "." * level + module + (f" import {', '.join(names)}" if level and not module else "")
             yield spec, self.resolve_py(level, module, names, cur_dir, root, inserts)
+
+    @staticmethod
+    def erased_import(code, m):
+        """Whether m, an IMPORT_SPEC match in a JavaScript or TypeScript file's code, is the from of a
+        type only import statement naming a declaration file (claude-config#2526): an import that is
+        erased whole, so no module is loaded for it. Asked only of an import whose file is not there;
+        one that is there is read and judged like any module. Both halves are required: the path as
+        written ends .d.ts, and everything from the statement's import to this from is
+        TYPE_ONLY_IMPORT, so a value import, a mixed one, `import { type A }`, a bare import, a
+        require, an import() and a re-export of the same missing file are each still refused."""
+        return (m.group(0).startswith("from") and m.group(2).split("?", 1)[0].endswith(DECLARATION_EXT)
+                and TYPE_ONLY_IMPORT.search(code, 0, m.start()) is not None)
 
     @staticmethod
     def py_imports(text):
@@ -3594,7 +3623,9 @@ def main():
         if judge.overran:
             raise judge.overran  # interrupted, and the walk answered all the same (Judge.interrupt)
     except OutOfTime as e:
-        print("refuse\n" + judge.out_of_time(e.doing))
+        # A verdict of its own, refused like any other, so the wrapper can say what to do instead
+        # for a merge (claude-config#2576).
+        print("outoftime\n" + judge.out_of_time(e.doing))
         return
     if reason:
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives

@@ -18,6 +18,9 @@ the major version it knows and ignores keys it does not, so an additive change n
   verification-rendered/1 <home>/receipts/<id>/rendered.jsonl, one line per record `record render`
                           wrote, so the merge check can refuse a record edited after render (#1572)
   verification-tally/1    <home>/merge-tally/<owner>/<name>.jsonl, the merge check's warn tally (#1529)
+  verification-screenshots/1  the `## Screenshots` block of a PR body, read by screenshots.py beside
+                          this file, which owns that one format (#2516); its `screens`, `seeds` and
+                          `screenshots` keys in areas.json are validated here with the rest
 
 The merge check (#1529) is merge_check.py beside this file: it judges a pull request through these
 readers and parses no format itself.
@@ -247,6 +250,14 @@ def parse_areas(text, root=None):
         p.append(("areas-bad-timeout", "timeouts.max_run_s (%s) must be longer than timeouts.ready_s (%s)"
                   % (timeouts["max_run_s"], timeouts["ready_s"])))
 
+    seeds = _parse_seeds(p, doc.get("seeds", {}))
+    shots = doc.get("screenshots", {})
+    if not isinstance(shots, dict):
+        p.append(("areas-wrong-type", "screenshots must be an object"))
+        shots = {}
+    if shots.get("mode", "warn") not in MODES:
+        p.append(("areas-bad-screenshots-mode", "screenshots.mode %r is not one of %s" % (shots.get("mode"), ", ".join(MODES))))
+
     names = set()
     for i, area in enumerate(doc.get("areas") if isinstance(doc.get("areas"), list) else []):
         where = "areas[%d]" % i
@@ -273,6 +284,7 @@ def parse_areas(text, root=None):
                 why = _glob_problem(g)
                 if why:
                     p.append(("areas-bad-glob", "%s owns %s" % (where, why)))
+        _check_screens(p, where, area.get("screens", []), seeds)
 
     exempt = doc.get("exempt", [])
     if not isinstance(exempt, list):
@@ -310,7 +322,63 @@ def parse_areas(text, root=None):
     doc["timeouts"] = timeouts
     doc.setdefault("exempt", [])
     doc["egress"] = dict(egress, allow=allow)
+    doc["seeds"] = seeds
+    # The screenshots block switch (claude-config#2516): present, and warn until it has been seen
+    # working on real pull requests for a week.
+    doc["screenshots"] = dict(shots, mode=shots.get("mode", "warn"))
+    for area in doc["areas"]:
+        area.setdefault("screens", [])
     return doc
+
+
+def _parse_seeds(p, seeds):
+    """The seeds screens are shot with, {name: {synthetic, why}} (claude-config#2516).
+
+    `synthetic` true declares the seed made up, which is the only case a public repository may hold
+    its pictures. The why is required either way, so a declaration always carries its reason (L540).
+    """
+    if not isinstance(seeds, dict):
+        p.append(("areas-wrong-type", "seeds must be an object"))
+        return {}
+    for name, seed in seeds.items():
+        if not AREA_NAME.match(name) or not isinstance(seed, dict) or not isinstance(seed.get("synthetic"), bool):
+            p.append(("areas-bad-seed", "seeds.%s must be {\"synthetic\": true or false, \"why\": <one line>}, with a"
+                      " lower case hyphenated name" % name))
+        elif not one_line(seed.get("why")):
+            p.append(("areas-seed-no-why", "seeds.%s needs a one line why: what the seed holds and where it comes from" % name))
+    return seeds
+
+
+def _check_screens(p, where, screens, seeds):
+    """An area's screens: the routes its pull requests are pictured at (claude-config#2516)."""
+    if not isinstance(screens, list):
+        p.append(("areas-wrong-type", "%s screens must be a list" % where))
+        return
+    seen = set()
+    for j, sc in enumerate(screens):
+        at = "%s screens[%d]" % (where, j)
+        if not isinstance(sc, dict):
+            p.append(("areas-wrong-type", "%s must be an object" % at))
+            continue
+        name = sc.get("name")
+        if not isinstance(name, str) or not AREA_NAME.match(name) or "__" in name:
+            p.append(("areas-bad-screen", "%s name %r must be lower case letters, digits and single hyphens" % (at, name)))
+        elif name in seen:
+            p.append(("areas-bad-screen", "%s name %r is used twice in this area" % (at, name)))
+        else:
+            seen.add(name)
+        path = sc.get("path")
+        if not isinstance(path, str) or not path.startswith("/") or not one_line(path) or " " in path:
+            p.append(("areas-bad-screen", "%s path %r must be a route on the served app, starting with /" % (at, path)))
+        seed = sc.get("seed")
+        if not isinstance(seed, str) or seed not in seeds:
+            p.append(("areas-unknown-seed", "%s seed %r is not declared in seeds" % (at, seed)))
+        rows, minimum = sc.get("rows"), sc.get("min_rows")
+        if (rows is None) != (minimum is None):
+            p.append(("areas-bad-screen", "%s gives rows and min_rows together or neither" % at))
+        elif rows is not None and (not one_line(rows) or isinstance(minimum, bool) or not isinstance(minimum, int)
+                                   or minimum < 1):
+            p.append(("areas-bad-screen", "%s rows must be a CSS selector and min_rows a whole number of at least 1" % at))
 
 
 def egress_host_ok(host):
