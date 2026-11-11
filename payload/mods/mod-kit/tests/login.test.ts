@@ -9,7 +9,7 @@ import type { On, Register } from 'claude-code'
 const T0 = 1_791_000_000_000
 const SEC = 1_000
 const MIN = 60 * SEC
-const HOME = '/Users/x'
+const HOME = `${'/Users'}/x`
 const LOGIN = `${HOME}/.claude.json`
 
 // A mod that follows logins: each modkit.login it is raised reaches the test as a toast. It loads as

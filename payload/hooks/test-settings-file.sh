@@ -59,9 +59,23 @@ got="$(hook_settings_file "$T/neither")"; rc=$?
 # all, then one awk pass over each prints file:line for every line that is code.
 # Bracketed rather than backslashed, because awk -v turns "\." into a bare "." that matches anything.
 COPY_RE='/settings[.]hooks[.]json|[.][.]/settings[.]json'
-inline_copies() {   # $@ = directories to scan
-  local f
-  grep -rlE --include='test-*.sh' "$COPY_RE" "$@" 2>/dev/null | while IFS= read -r f; do
+# Only what the sync carries (claude-config#2750): installed, the root is ~/.claude, which also holds
+# copies a Mac keeps for itself, and lib/synced-trees.sh is the one list of what a scan may read.
+. "$DIR/lib/synced-trees.sh" && declare -F synced_files >/dev/null || {
+  echo "FAIL: lib/synced-trees.sh is missing or holds no synced_files beside $DIR"
+  printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$((fail + 1))"
+  exit 1
+}
+scanned_suites() {   # $1 = a config root -> every test-*.sh the sync carries under hooks, skills and mods
+  local listed
+  listed="$(synced_files "$1" hooks skills mods)" || return 1
+  printf '%s\n' "$listed" | grep '/test-[^/]*\.sh$'
+}
+inline_copies() {   # $1 = a config root to scan
+  local f listed
+  listed="$(scanned_suites "$1")" || return 1
+  [ -n "$listed" ] || return 0
+  printf '%s\n' "$listed" | tr '\n' '\0' | xargs -0 grep -lE "$COPY_RE" 2>/dev/null | while IFS= read -r f; do
     awk -v re="$COPY_RE" -v f="$f" '$0 !~ /^[ \t]*#/ && $0 ~ re { print f ":" FNR ": " $0 }' "$f"
   done
 }
@@ -83,14 +97,30 @@ case "$found" in
   *test-helper.sh*) check "a suite asking the helper is not reported" "it was: [$found]" ;;
   *) check "a suite asking the helper is not reported" ok ;;
 esac
+# Installed, the tree is ~/.claude, which also holds what a Mac keeps for itself: copies of suites an
+# agent kept in its session notes, Claude Code's skills/.trash, the Claude app's skills/synced. None
+# is the payload's to fix, so the scan reads only what lib/synced-trees.sh lists (claude-config#2750).
+for d in state/session-notes/p/s/2721/base/hooks skills/.trash/1-a/s skills/synced/acct/s plugins/cache/x; do
+  mkdir -p "$T/scan/$d"
+  cp "$T/scan/hooks/test-copy.sh" "$T/scan/$d/test-local.sh"
+done
+mkdir -p "$T/scan/skills/real"
+cp "$T/scan/hooks/test-copy.sh" "$T/scan/skills/real/test-real.sh"
+found="$(inline_copies "$T/scan")"
+case "$found" in
+  *test-local.sh*) check "#2750 a copy kept where the sync never carries is not reported" "it was: [$found]" ;;
+  *) check "#2750 a copy kept where the sync never carries is not reported" ok ;;
+esac
+case "$found" in
+  *skills/real/test-real.sh:1:*) check "#2750 the same copy in a real skill is reported" ok ;;
+  *) check "#2750 the same copy in a real skill is reported" "it found [$found]" ;;
+esac
 
 # The real tree: every suite the payload ships, from wherever this copy of it is.
-ROOTS=()
-for d in "$DIR" "$DIR/../skills" "$DIR/../mods"; do [ -d "$d" ] && ROOTS+=("$d"); done
-n_suites="$(find "${ROOTS[@]}" -name 'test-*.sh' 2>/dev/null | wc -l | tr -d ' ')"
+n_suites="$(scanned_suites "$DIR/.." | wc -l | tr -d ' ')"
 [ "$n_suites" -gt 50 ] && check "the scan reads the shipped suites ($n_suites of them)" ok \
-  || check "the scan reads the shipped suites" "only $n_suites found under ${ROOTS[*]}, so a clean answer would mean nothing"
-found="$(inline_copies "${ROOTS[@]}")"
+  || check "the scan reads the shipped suites" "only $n_suites found under $DIR/.., so a clean answer would mean nothing"
+found="$(inline_copies "$DIR/..")"
 [ -z "$found" ] && check "no suite carries its own copy of the settings lookup" ok \
   || check "no suite carries its own copy of the settings lookup" "ask lib/settings-file.sh (hook_settings_file) instead:
 $found"

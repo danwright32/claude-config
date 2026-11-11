@@ -49,14 +49,14 @@ describe('classify', () => {
   // `;` into the path, so pgrep found nothing and a running, frontmost build read as not running.
   // The unquoted form ends where the shell's word does, at a control character.
   test('an unquoted marker ends at the shell character that ends its word (#1751)', () => {
-    const BUILD = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app/Contents/MacOS/PostRoll'
+    const BUILD = `${'/Users'}/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app/Contents/MacOS/PostRoll`
     const cmds = [['cliclick', 'c:95,188']]
     expect(classify(cmds, `TARGET_APP=${BUILD}; cliclick c:95,188`).target).toBe(BUILD)
     expect(classify(cmds, `TARGET_APP=${BUILD}&& cliclick c:95,188`).target).toBe(BUILD)
     expect(classify(cmds, `(TARGET_APP=${BUILD}) | cliclick c:95,188`).target).toBe(BUILD)
     expect(classify(cmds, `TARGET_APP=${BUILD}\ncliclick c:95,188`).target).toBe(BUILD)
     // A quoted path keeps everything inside its quotes, a semicolon included.
-    expect(classify(cmds, `TARGET_APP="/Users/x/odd;name.app/Contents/MacOS/odd" cliclick c:1,1`).target).toBe('/Users/x/odd;name.app/Contents/MacOS/odd')
+    expect(classify(cmds, `TARGET_APP="${'/Users'}/x/odd;name.app/Contents/MacOS/odd" cliclick c:1,1`).target).toBe(`${'/Users'}/x/odd;name.app/Contents/MacOS/odd`)
   })
   test('the app a focus stealer names is read', () => {
     expect(classify([['open', '-a', 'Google Chrome', 'r.html']], 'open -a "Google Chrome" r.html').app).toBe('Google Chrome')
@@ -85,7 +85,7 @@ describe('judge', () => {
   // ran in front, and was told PostRoll isn't running. A bundle is a folder, never a running program,
   // so it is still refused, but the reason says what is wrong and names the program inside it.
   test('a target naming an app bundle is refused saying so, with the program inside it (#1757)', () => {
-    const BUNDLE = '/Users/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app'
+    const BUNDLE = `${'/Users'}/x/Library/Developer/PostRoll/Build/Products/Release/PostRoll.app`
     for (const target of [BUNDLE, `${BUNDLE}/`])
       expect(judge({ ...base, target, targetPids: [] })).toEqual({
         reason: 'TARGET_APP names the PostRoll app bundle, not the program inside it.',

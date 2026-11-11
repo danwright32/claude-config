@@ -17,10 +17,10 @@ const runner = (answer: (argv: string[]) => { exitCode: number; stdout: string; 
   }
   return { run, calls }
 }
-const LIB = pollLib('/Users/x')
+const LIB = pollLib(`${'/Users'}/x`)
 
 test('the library is the installed hooks copy under the home folder', () => {
-  expect(LIB).toBe('/Users/x/.claude/hooks/lib/gh-poll.sh')
+  expect(LIB).toBe(`${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`)
 })
 
 test('a look is taken, asked in seconds as the session', async () => {

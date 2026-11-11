@@ -259,6 +259,8 @@ case "$*" in
   "api repos/acme/widget/actions/runs/"*"/jobs"*)
     fail_read jobs
     id="$(printf '%s\n' "$*" | sed -nE 's#.*actions/runs/([0-9]+)/jobs.*#\1#p')"
+    # jobsjson-<id> holds GitHub's whole answer, a recorded one, for the runner queue (#2714).
+    if [ -s "$ST/jobsjson-$id" ]; then cat "$ST/jobsjson-$id"; exit 0; fi
     n="$(rd "jobs-$id")"
     printf '{"total_count":%s,"jobs":[]}\n' "${n:-1}"
     ;;
@@ -266,6 +268,12 @@ case "$*" in
   "run rerun"*)
     fail_read rerun
     if [ -s "$ST/on-rerun" ]; then s="$(cat "$ST/on-rerun")"; : > "$ST/on-rerun"; eval "$s"; fi
+    ;;
+  # The repository's runs created in a window, read to count the jobs running while one waited for a
+  # runner (claude-config#2714): pool-runs holds GitHub's answer.
+  "api repos/acme/widget/actions/runs?created="*)
+    fail_read pool-runs
+    if [ -s "$ST/pool-runs" ]; then cat "$ST/pool-runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
     ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
@@ -3078,19 +3086,20 @@ check_eq "#2351 control: behind a line standing still the count of looks still e
 check "#2351 control: said as the most looks it makes" "the most it makes (MWR_MAX_POLLS)" "$out"
 check_eq "#2351 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
-# The shared polling budget (L24): in line, GitHub is read on a wait that grows to its ceiling, while
-# the turn is read locally at every base look, so a turn passing mid wait is taken at once. #9 leaves
+# The shared polling budget (L24): in line, GitHub is read only every MWR_LINE_LOOK_SECONDS
+# (claude-config#2715), while the turn is read locally at every base look, so a turn passing mid
+# wait is taken at once. #9 leaves
 # after twelve minutes of one minute looks.
 fresh "$OLD" 0 "$GREEN"
 "$BIN/take-turn" acme/widget 9
 for _ in $(seq 1 11); do printf ':\n' >> "$ST/on-sleep"; done
 leave 9 >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
 out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 run 7 --squash)"; rc=$?
-check_eq "#1697 a run in line on a growing wait still merges" "0" "$rc"
-check "#1697 taking the turn the look after it passed, not at the end of a grown wait" "after waiting 12m 00s for it" "$out"
+check_eq "#1697 a run in line, reading GitHub every ten minutes, still merges" "0" "$rc"
+check "#1697 taking the turn the look after it passed, not at its next ten minute look at GitHub" "after waiting 12m 00s for it" "$out"
 check_eq "#1697 never sleeping longer than a base look in line" "60" "$(sort -n "$ST/sleeps" | tail -1)"
 reads_in_line="$(awk '$1 < 1000720' "$ST/view-times" | wc -l | tr -d ' ')"
-check_eq "#1697 reading GitHub fewer times than once a minute while in line (5 reads in its 12 minutes in line, not 12)" "5" "$reads_in_line"
+check_eq "#1697 reading GitHub fewer times than once a minute while in line (2 reads in its 12 minutes in line, at its first look and ten minutes later, claude-config#2715; 5 on the growing wait before it, 12 at one a minute)" "2" "$reads_in_line"
 
 # A long line that keeps moving, at the default settings (claude-config#2351): each of twenty pull
 # requests ahead holds the turn for a look of 30m and is passed over, ten hours in all, past the nine
@@ -3642,6 +3651,320 @@ check_eq "#2629 control: as the active account" "active" "$(cat "$ST/merge-as" 2
 check_eq "#2629 control: its permission read once" "1" "$(count perm-asked .)"
 check_eq "#2629 control: the accounts never listed" "0" "$(count gh-calls '^auth status')"
 check "#2629 control: saying which account and why" "Merging as the active gh account: it has WRITE on acme/widget." "$out"
+
+# =================================================================================================
+# 29. What one look costs while it waits in line (claude-config#2694). On 2026-11-10 about 15 helpers
+#     waited at once on the personal MacBook, each looking about once a minute, while sessions there
+#     ran slow, and one look in a line of four started about 87 programs (29 sed, 16 cat, 12 jq), most
+#     of them a sed per field of every ticket in the line, so the cost grew with the line. Every common
+#     program is wrapped here to count what the helper itself starts; a fake's own programs are not
+#     counted (the bash wrapper takes the wrappers off the path for it), the fake's start is. One look
+#     is the difference between a run of 12 looks and one of 4, over 8, behind six live runs. The
+#     ceiling is a setting chosen from the measure on 2026-11-10 (109 a look here on the code before,
+#     about 22 after, the same behind 3 runs or 14), not a measured limit.
+# =================================================================================================
+PC_WRAP="$WORKDIR/pc-wrap"; PC_LOG="$WORKDIR/pc-spawns"; PC_BASH="$(command -v bash)"; mkdir -p "$PC_WRAP"
+for t in jq cat sed grep egrep mkdir date mv rm head tail awk git perl python3 mktemp wc tr cut sort uniq ls find stat touch ps sysctl dirname basename seq env sleep id hostname tee cp chmod ln readlink expr pgrep shasum xargs rmdir od; do
+  real="$(command -v "$t" 2>/dev/null)" || continue
+  case "$real" in /*) ;; *) continue ;; esac
+  printf '#!/bin/bash\nprintf "%%s\\n" %s >> "%s"\nexec "%s" "$@"\n' "$t" "$PC_LOG" "$real" > "$PC_WRAP/$t"
+done
+printf '#!/bin/bash\nprintf "bash\\n" >> "%s"\nw="%s:"; PATH="${PATH#"$w"}"\nexec "%s" "$@"\n' "$PC_LOG" "$PC_WRAP" "$(command -v bash)" > "$PC_WRAP/bash"
+chmod +x "$PC_WRAP"/*
+# pc_line <looks>: one run behind six live runs, who all leave after <looks> sleeps; sets out, rc,
+# pc_n (the programs it started) and pc_sleeps.
+pc_line(){
+  local p
+  fresh "$OLD" 0 "$GREEN"
+  for p in 101 102 103 104 105 106; do "$BIN/take-turn" acme/widget "$p"; done
+  for _ in $(seq 2 "$1"); do printf ':\n' >> "$ST/on-sleep"; done
+  for p in 101 102 103 104 105 106; do leave "$p"; printf '; '; done >> "$ST/on-sleep"; printf '\n' >> "$ST/on-sleep"
+  : > "$PC_LOG"
+  # The helper itself is started by the real bash, so the wrappers stay on its path.
+  out="$(cd "$REPO" && PATH="$PC_WRAP:$PATH" MWR_TURN_HOLD_SECONDS=100000 "$PC_BASH" "$HELPER" 7 --squash 2>&1)"; rc=$?
+  pc_n="$(wc -l < "$PC_LOG" | tr -d ' ')"; pc_sleeps="$(wc -l < "$ST/sleeps" | tr -d ' ')"
+}
+pc_line 4; pc4="$pc_n"; sl4="$pc_sleeps"
+check_eq "#2694 the run of 4 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 4 looks in line" "after waiting 2m 00s for it" "$out"
+pc_line 12; pc12="$pc_n"; sl12="$pc_sleeps"
+check_eq "#2694 the run of 12 looks in line merged" "0" "$rc"
+check "#2694 after waiting its 12 looks in line" "after waiting 6m 00s for it" "$out"
+check_eq "#2694 the two runs differ by 8 looks, one sleep each" "8" "$(( sl12 - sl4 ))"
+check_eq "#2694 the count saw the helper start programs at all" "yes" "$( [ "${pc4:-0}" -gt 50 ] && echo yes || echo no)"
+per_look=$(( (pc12 - pc4) / 8 ))
+check_eq "#2694 one look in a line of seven starts at most 40 programs (it started $per_look)" "yes" "$( [ "$per_look" -le 40 ] && echo yes || echo no)"
+
+# =================================================================================================
+# 30. A run waiting for its turn leaves GitHub to the run holding it (claude-config#2715). On
+#     2026-11-10 one session's 102 merge logs held 2,845 waits on the session's cap of looks a minute
+#     (GH_POLL_PER_MINUTE): 2,594 by helpers waiting in line, and 251 by the helper holding the turn,
+#     with a median of 8 helpers in line behind it, and the holder went a median of 120s between looks
+#     across those waits. A run in line learns its turn from the queue on this Mac, so it reads GitHub
+#     only every MWR_LINE_LOOK_SECONDS (600) to see its own pull request is still open, never because
+#     the line moved, and each of those looks leaves one of the minute's looks free for the holder.
+# =================================================================================================
+# One run behind three, each leaving in turn (at 5m, 15m and 30m): it says the line as it moves,
+# reads GitHub only at its first look and every ten minutes, and takes the turn the moment it is its.
+fresh "$OLD" 0 "$GREEN"
+for p in 9 10 11; do "$BIN/take-turn" acme/widget "$p"; done
+step="c=\$(cat \"\$ST/clock\"); [ \"\$c\" -lt 1000300 ] || { $(leave 9); }; [ \"\$c\" -lt 1000900 ] || { $(leave 10); }; [ \"\$c\" -lt 1001800 ] || { $(leave 11); }"
+for _ in $(seq 1 80); do printf '%s\n' "$step" >> "$ST/on-sleep"; done
+out="$(MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 MWR_LINE_SECONDS=3600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#2715 a run in a moving line still merges" "0" "$rc"
+check "#2715 taking the turn the moment it passes, from the queue on disk" "after waiting 30m 00s for it" "$out"
+check "#2715 saying the line as it moved, without reading GitHub for it" "which #10 holds (2 ahead of it in line)" "$out"
+check "#2715 and again when it moved on" "which #11 holds (1 ahead of it in line)" "$out"
+check_eq "#2715 reading GitHub in line only at its first look and every ten minutes" "1000000 1000600 1001200" "$(awk '$1 < 1001800' "$ST/view-times" | tr '\n' ' ' | sed 's/ $//')"
+check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+
+# A run not yet in line leaves the holder the last of the minute's looks too (claude-config#2749):
+# with #9's live run holding the turn and three of the minute's four looks taken, its first read
+# waits until a look is a minute old (#9 leaves while it waits, so it then merges).
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+for _ in 1 2 3; do CLAUDE_CODE_SESSION_ID=mwr-suite bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+printf '%s\n' "$(leave 9)" > "$ST/on-sleep"
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#2749 a run not yet in line still merges" "0" "$rc"
+check "#2749 it leaves the holder the minute's last look, naming it" "and #9 holds the turn to merge in acme/widget, so a run not yet in line behind it leaves it the last of the minute's looks" "$out"
+check_eq "#2749 its first read waits until a look is a minute old" "1000060" "$(head -1 "$ST/view-times")"
+# Control: a holder whose run is no longer running holds nothing back. Its place is passed over, and
+# the run takes the minute's last look and the turn at once.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9 99999999 "Thu Jan  1 00:00:00 1970"
+for _ in 1 2 3; do CLAUDE_CODE_SESSION_ID=mwr-suite bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#2749 control: a dead holder's line still merges" "0" "$rc"
+check_eq "#2749 control: its first read is not held back" "1000000" "$(head -1 "$ST/view-times")"
+check_not "#2749 control: and it leaves no look to the dead run" "so a run not yet in line" "$out"
+check "#2749 control: saying the dead run's place was passed over" "#9's place in line was passed over" "$out"
+
+# Several helpers in line at once, each a real run of this helper, on one injected clock that moves
+# only once every run is asleep, to the earliest time any of them wakes: a run's work between its
+# sleeps takes no time on the clock, as it takes next to none on a real one. Only one run is ever
+# awake at a time, and runs due at the same moment wake in the order listed (both orders, below), so
+# what the runs do depends on the clock alone and never on how the machine schedules them
+# (claude-config#2745, L290). #7 holds the turn, its
+# checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
+# four looks a minute. The line moves twice, as the first two in line are stopped at 10 and 20
+# minutes. Fixture settings, not measured, but eight, the median of the 2026-11-10 logs.
+SIM_DIR="$WORKDIR/sim"; SIMBIN="$WORKDIR/simbin"; mkdir -p "$SIMBIN"
+cat > "$SIMBIN/gh" <<EOS
+#!/usr/bin/env bash
+case "\$*" in "pr view "*) c=""; read -r c < "\$ST/clock"; printf '%s %s\n' "\$c" "\$3" >> "\$ST/sim-views" ;; esac
+exec "$BIN/gh" "\$@"
+EOS
+chmod +x "$SIMBIN/gh"
+# The sleep each run in the simulation is given: it marks when it wakes and waits, in real time, for
+# the clock to reach it. A run told to quit, and every run once the simulation ends, is stopped as a
+# person would stop it. Whether it was woken or stopped is read only AFTER its mark is gone
+# (claude-config#2745): the simulation writes the stop before it takes the mark away, so that read
+# always sees it. Read before, as it was, a run that looked for the stop just before it was written
+# and for its mark just after it went took the stop for a wake, and went on at the last time on the
+# clock while the others were being stopped: in CI on 2026-11-11, and in 7 of 10 copies run at once
+# here, a run in line then found the holder's place gone and took the turn.
+sim_sleep(){ (
+  set +e +u
+  { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+  c=""; read -r c < "$ST/clock"
+  printf '%s' "$(( c + $1 ))" > "$SIM_DIR/$SIM_ME.tmp" && mv -f "$SIM_DIR/$SIM_ME.tmp" "$SIM_DIR/$SIM_ME.wake"
+  while [ -e "$SIM_DIR/$SIM_ME.wake" ]; do sleep 0.01; done
+  { [ -e "$SIM_DIR/stop" ] || [ -e "$SIM_DIR/$SIM_ME.quit" ]; } && { kill -TERM "$$"; exit 0; }
+  exit 0
+) }
+export -f sim_sleep
+export SIM_DIR
+# Each run is given the defaults (a base look of 60s growing to 180s, four looks a minute: settings,
+# not measured), and a line budget the simulation never reaches, since its line stands still between
+# the two runs that leave it. The runs are this shell's children, kept in SIM_PIDS and reaped by
+# sim_run's wait once it has stopped them; nothing is printed between their start and that wait, so
+# whatever a run says goes to its own file, and what the simulation itself says to SIM_DIR/said.
+SIM_PIDS=""
+sim_start(){ # sim_start <pr>: starts a run, then waits until it first sleeps
+  ( export MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 GH_POLL_PER_MINUTE=4 MWR_LINE_SECONDS=100000
+    cd "$REPO" && SIM_ME="$1" MWR_SLEEP=sim_sleep PATH="$SIMBIN:$PATH" bash "$HELPER" "$1" --squash > "$SIM_DIR/$1.out" 2>&1
+    echo "$?" > "$SIM_DIR/$1.rc" ) &
+  SIM_PIDS="$SIM_PIDS $!"
+  hang_wait "[ -e '$SIM_DIR/$1.wake' ] || [ -e '$SIM_DIR/$1.rc' ]" 0.01 || echo "run $1 never slept" >> "$SIM_DIR/said"
+}
+# sim_asleep <pr>...: every run still going is asleep, and sim_min is the earliest any of them wakes
+# (empty once every run has ended).
+sim_asleep(){
+  local m w; sim_min=""
+  for m in "$@"; do
+    [ -e "$SIM_DIR/$m.rc" ] && continue
+    [ -e "$SIM_DIR/$m.wake" ] || return 1
+    w=""; read -r w < "$SIM_DIR/$m.wake"
+    { [ -z "$sim_min" ] || [ "$w" -lt "$sim_min" ]; } && sim_min="$w"
+  done
+  return 0
+}
+# sim_run <seconds> <pr>...: runs them all until the clock reaches the seconds given, then stops and
+# reaps them. SIM_QUIT lists <pr>@<seconds in>: that run is stopped once the clock would pass that
+# time, leaving the line.
+sim_run(){
+  local t0 end m w q quit p; t0="$(cat "$ST/clock")"; end=$(( t0 + $1 )); shift
+  while :; do
+    hang_wait "sim_asleep $*" 0.01 || { echo "the runs never all slept at $(cat "$ST/clock")" >> "$SIM_DIR/said"; break; }
+    [ -n "$sim_min" ] && [ "$sim_min" -lt "$end" ] || break
+    quit=""
+    for q in ${SIM_QUIT:-}; do
+      [ -e "$SIM_DIR/${q%@*}.quit" ] || [ "$sim_min" -lt $(( t0 + ${q#*@} )) ] || { quit="${q%@*}"; break; }
+    done
+    if [ -n "$quit" ]; then
+      : > "$SIM_DIR/$quit.quit"; rm -f "$SIM_DIR/$quit.wake"; continue
+    fi
+    printf '%s' "$sim_min" > "$ST/clock"
+    # The runs due now wake ONE at a time, in the order they are listed, each left to run until it
+    # sleeps again or ends before the next is woken (claude-config#2745). Woken together, as they
+    # were, the order they reached the session's looks and the queue was the machine's scheduling,
+    # not the clock: at a minute where the holder and runs not yet in line all woke, whichever ran
+    # first took the minute's looks. sim_case below runs both orders, the holder first and last.
+    for m in "$@"; do
+      [ -e "$SIM_DIR/$m.wake" ] || continue
+      w=""; read -r w < "$SIM_DIR/$m.wake"
+      [ "$w" -gt "$sim_min" ] && continue
+      rm -f "$SIM_DIR/$m.wake"
+      hang_wait "[ -e '$SIM_DIR/$m.wake' ] || [ -e '$SIM_DIR/$m.rc' ]" 0.01 || { echo "run $m never slept again at $sim_min" >> "$SIM_DIR/said"; break 2; }
+    done
+  done
+  : > "$SIM_DIR/stop"; rm -f "$SIM_DIR"/*.wake
+  for p in $SIM_PIDS; do wait "$p"; done
+  SIM_PIDS=""
+}
+# sim_case <how they wake> <pr>...: one simulation, with the runs due at the same moment woken in the
+# order given. It runs twice: the holder woken first, and the holder woken LAST, behind runs whose
+# first look comes before they know they are in line (claude-config#2749). Woken last, the helper of
+# #2740 made the holder wait on the cap once, at 60s (measured 2026-11-11): each of those first looks
+# took one of the minute's four, and none was left for it.
+LINE_PRS="21 22 23 24 25 26 27 28"
+sim_case(){
+  local how="$1" sim_out holder holder_looks holder_gaps line_looks p; shift
+  fresh "$OLD" 0 "$PENDING"; rm -rf "$SIM_DIR"; mkdir -p "$SIM_DIR"
+  sim_start 7
+  for p in $LINE_PRS; do sim_start "$p"; done
+  SIM_QUIT="21@600 22@1200" sim_run 1800 "$@"
+  sim_out="$(cat "$SIM_DIR/said" 2>/dev/null)"
+  holder="$(cat "$SIM_DIR/7.out")"
+  holder_looks="$(awk '$2 == 7 { print $1 }' "$ST/sim-views")"
+  holder_gaps="$(printf '%s\n' "$holder_looks" | awk 'NR > 1 { print $1 - p } { p = $1 }' | sort -n | tr '\n' ' ' | sed 's/ $//')"
+  line_looks="$(awk '$2 != 7' "$ST/sim-views" | wc -l | tr -d ' ')"
+  echo "#2715 measured, $how: the holder's gaps between looks (s): $holder_gaps; its waits on the session's cap: $(grep -c 'to look at GitHub again' <<<"$holder"); reads by the 8 in line: $line_looks"
+  check_eq "#2715 $how: the simulation ran its whole 30 minutes" "" "$sim_out"
+  check "#2715 $how: the holder held the turn" "Took the turn to merge in acme/widget" "$holder"
+  check_eq "#2715 $how: every run in line took a place behind it" "8" "$(grep -l 'waiting for its turn to merge in acme/widget, which #7 holds' "$SIM_DIR"/2?.out | wc -l | tr -d ' ')"
+  check_not "#2715 $how: the holder never waited on the session's cap with eight runs in line behind it" "to look at GitHub again" "$holder"
+  check "#2749 $how: a run not yet in line waited rather than take the holder's last look of a minute" "and #7 holds the turn to merge in acme/widget, so a run not yet in line behind it leaves it the last of the minute's looks (GH_POLL_PER_MINUTE)." "$(cat "$SIM_DIR"/2?.out)"
+  # Woken last, the runs in line due with the holder (three of them, at 12m) look before it and fit
+  # in the three looks they may take, so none waits (measured 2026-11-11); woken first, the third
+  # finds the holder's look taken and waits. Either way the runs not yet in line wait, checked above.
+  [ "$how" = "holder woken last" ] || check "#2715 $how: while a run in line waited rather than take the last look of a minute" "a run waiting for its turn leaves the last of the minute's looks (GH_POLL_PER_MINUTE) to the runs holding one" "$(cat "$SIM_DIR"/2?.out)"
+  check_eq "#2715 $how: the holder looked the whole 30 minutes, at least once every three minutes" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | grep -c .)" -ge 10 ] && echo yes || echo no)"
+  check_eq "#2715 $how: the holder looked at its own pace, never more than its 180s ceiling apart" "yes" "$( [ "$(printf '%s\n' "$holder_looks" | awk 'NR > 1 && $1 - p > 180 { bad = 1 } { p = $1 } END { print bad + 0 }')" = 0 ] && echo yes || echo no)"
+  check_eq "#2715 $how: the eight in line read GitHub at most once each every ten minutes (8 x 4 looks in 30 minutes)" "yes" "$( [ "$line_looks" -le 32 ] && echo yes || echo no)"
+  check_eq "#2715 $how: no run in line merged out of its turn" "0" "$(count gh-calls 'pr merge')"
+  check_eq "#2715 $how: every run in line was still waiting for its turn when the simulation ended" "" "$(for p in $LINE_PRS; do grep -q "It is #$p's turn\|Took the turn" "$SIM_DIR/$p.out" && printf '%s ' "$p"; done)"
+}
+# shellcheck disable=SC2086
+sim_case "holder woken first" 7 $LINE_PRS
+# shellcheck disable=SC2086
+sim_case "holder woken last" $LINE_PRS 7
+
+# =================================================================================================
+# 31. A run that waited for a runner says so (claude-config#2714). On 2026-11-10 the account's 20
+#     concurrent jobs were all in use at about 01:15 and 13:40 ET, and 15 jobs waited over a minute to
+#     start, up to 6.6 minutes, which read in the merge logs as slow tests. The answers below are
+#     GitHub's own, recorded that day and kept to the fields read: run 42877567710's job deal was
+#     created at 18:40:26 UTC and started at 18:47:00, 6m 34s later, while the five runs created in
+#     the half minute before it held 20 jobs between them; jobs-42877448181.json is one of those five,
+#     every job of which started within 2 seconds of being created.
+# =================================================================================================
+PW_FIX="$DIR/merge-when-ready-fixtures/pool-wait-2026-11-10"
+PW_RUN=42877567710
+pw_rollup(){ # pw_rollup <run id> <status> <conclusion>: the run's one check, as the rollup shows it
+  jq -nc --arg id "$1" --arg s "$2" --arg c "$3" \
+    '[{__typename:"CheckRun",name:"deal",workflowName:"tests",status:$s,conclusion:$c,startedAt:null,detailsUrl:("https://github.com/acme/widget/actions/runs/" + $id + "/job/130044844243")}]'
+}
+pw_fresh(){ # pw_fresh <run id>: that run's check queued at the first look, finished at the next
+  local f
+  fresh "$OLD" 0 "$(pw_rollup "$1" QUEUED "")"
+  for f in "$PW_FIX"/jobs-*.json; do cp "$f" "$ST/jobsjson-$(basename "$f" .json | sed 's/^jobs-//')"; done
+  cp "$PW_FIX/runs.json" "$ST/pool-runs"
+  printf '%s\n' "printf '%s' '$(pw_rollup "$1" COMPLETED SUCCESS)' > \"\$ST/rollup\"" > "$ST/on-sleep"
+}
+
+pw_fresh "$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run whose job waited for a runner still merges" "0" "$rc"
+check "#2714 it names the job and how long it waited" "job deal waited 6m 34s" "$out"
+check "#2714 and how many of the repository's jobs were running when it was queued" "20 of this repository's jobs were running" "$out"
+check "#2714 and that the runner pool was full" "the runner pool was full" "$out"
+check "#2714 the jobs running are counted from runs created up to two hours before it" "actions/runs?created=2026-11-10T16:40:26Z..2026-11-10T18:40:26Z" "$(cat "$ST/gh-calls")"
+check_eq "#2714 the waited run's own jobs are read once" "1" "$(count gh-calls "runs/$PW_RUN/jobs")"
+check_eq "#2714 each overlapping run's jobs are read once" "6" "$(count gh-calls '/jobs')"
+check_not "#2714 the job that started at once is not said" "job suites part 2 waited" "$out"
+
+# Under the limit: the same wait, with a plan that allows 40, is not called a full pool.
+pw_fresh "$PW_RUN"
+out="$(MWR_POOL_LIMIT=40 run 7 --squash)"; rc=$?
+check_eq "#2714 under the limit it merges" "0" "$rc"
+check "#2714 under the limit it still says the wait" "job deal waited 6m 34s" "$out"
+check "#2714 and says the count was under the limit" "under the 40" "$out"
+check_not "#2714 and never that the pool was full" "the runner pool was full" "$out"
+
+# Two runs waited on for one head, the first under the limit: each is judged on its own count, so
+# the second, the run recorded on 2026-11-10 with 20 running, is still called a full pool. Run 1001
+# is made up for this, not recorded: one job
+# that waited 2 minutes at a time no recorded run overlaps, so it counts 0 running.
+pw_fresh "$PW_RUN"
+jq -nc '[{__typename:"CheckRun",name:"lint",workflowName:"lint",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/1001/job/1"},{__typename:"CheckRun",name:"deal",workflowName:"tests",status:"QUEUED",conclusion:"",startedAt:null,detailsUrl:"https://github.com/acme/widget/actions/runs/42877567710/job/130044844243"}]' > "$ST/rollup"
+printf '%s\n' '{"total_count":1,"jobs":[{"id":1,"run_id":1001,"name":"lint","status":"completed","conclusion":"success","created_at":"2026-11-10T20:00:00Z","started_at":"2026-11-10T20:02:00Z","completed_at":"2026-11-10T20:03:00Z"}]}' > "$ST/jobsjson-1001"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 two waited runs merge" "0" "$rc"
+check "#2714 the first run is said under the limit" "job lint waited 2m 00s, and 0 of this repository's jobs" "$out"
+check "#2714 the second run is still called a full pool" "job deal waited 6m 34s, and 20 of this repository's jobs were running when it was queued. GitHub runs at most 20 jobs at once" "$out"
+
+# A third party status open beside it, whose link is no Actions run: still counted as open, so the
+# head waits for it, and the run beside it is still found and said.
+pw_fresh "$PW_RUN"
+jq -c '. + [{__typename:"StatusContext",context:"deploy/preview",state:"PENDING",targetUrl:"https://example.com/preview"}]' "$ST/rollup" > "$ST/rollup.tmp"; mv "$ST/rollup.tmp" "$ST/rollup"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 with a third party status beside it, it merges" "0" "$rc"
+check "#2714 the status was waited on as an open check" "checks still running (2 of 2)" "$out"
+check "#2714 and the run's wait is still said" "job deal waited 6m 34s" "$out"
+
+# A clean run says nothing, and reads nothing past its own jobs.
+pw_fresh 42877448181
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run with no wait merges" "0" "$rc"
+check_not "#2714 and says nothing about a runner" "waited" "$out"
+check_eq "#2714 its own jobs were read once" "1" "$(count gh-calls '/jobs')"
+check_eq "#2714 and no window of runs was read" "0" "$(count gh-calls 'runs?created=')"
+
+# A run that had finished before the helper looked was never waited on here, so nothing is read.
+fresh "$OLD" 0 "$(pw_rollup "$PW_RUN" COMPLETED SUCCESS)"
+cp "$PW_FIX/jobs-$PW_RUN.json" "$ST/jobsjson-$PW_RUN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 a run finished before the first look merges" "0" "$rc"
+check_eq "#2714 with no jobs read" "0" "$(count gh-calls '/jobs')"
+check_not "#2714 and nothing said" "waited" "$out"
+
+# The count unreadable: the wait is still said, with why the count is missing, and it merges.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/pool-runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 an unreadable count still merges" "0" "$rc"
+check "#2714 the wait is still said" "job deal waited 6m 34s" "$out"
+check "#2714 with why the count is missing" "could not count the jobs running" "$out"
+check "#2714 naming GitHub's answer" "HTTP 502" "$out"
+
+# The run's own jobs unreadable: said once, and it merges as before.
+pw_fresh "$PW_RUN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/jobs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#2714 unreadable jobs still merge" "0" "$rc"
+check "#2714 saying whether a job waited is unknown" "Could not read the jobs of workflow run $PW_RUN" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
