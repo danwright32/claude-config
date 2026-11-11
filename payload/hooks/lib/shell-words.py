@@ -66,11 +66,43 @@ def is_name(word):
     return bool(word) and (word[0].isalpha() or word[0] == "_") and all(ch.isalnum() or ch == "_" for ch in word)
 
 
+def join_continuations(s):
+    """s with every backslash newline the shell removes taken out: one outside single quotes is a line
+    continuation, gone before the words are read, and inside single quotes it is two characters the
+    shell keeps. shlex reads it as an escaped newline, a word of its own, so a command continued that
+    way had a newline for its first word and its assignments left in front (claude-config#2447)."""
+    if "\\\n" not in s:
+        return s
+    out, i, n, quote = [], 0, len(s), ""
+    while i < n:
+        c = s[i]
+        if quote == "'":
+            if c == "'":
+                quote = ""
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            if s[i + 1] == "\n":
+                i += 2
+                continue
+            out.append(s[i:i + 2])
+            i += 2
+            continue
+        if c == "'" and quote != '"':
+            quote = "'"
+        elif c == '"':
+            quote = "" if quote == '"' else '"'
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def split(s, limit=None):
     """(the leading NAME=value assignments of s, the text after them); at most limit of them when
     limit is given, so past_redirects can read one redirection's target as one value."""
     assigns = []
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     while limit is None or len(assigns) < limit:
         eq = s.find("=")
         if eq <= 0 or not is_name(s[:eq]):
@@ -285,6 +317,7 @@ def cd_target(text):
     A bare cd goes home. Only a leading tilde is expanded later; a variable stays as written, so
     the caller refuses it rather than guessing what it holds.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -654,6 +687,7 @@ def command_words(text):
     disagree about which word is the command. A command shlex cannot read (an unbalanced quote) is
     split on whitespace instead, the reading that still lets a push be seen.
     """
+    text = join_continuations(text)
     try:
         words = shlex.split(text, posix=True)
     except ValueError:
@@ -907,7 +941,7 @@ POSITIONALS = {"timeout": 1, "gtimeout": 1}
 
 def first_word(s):
     """(the first word of s with its quotes removed, the text after it as written), or (None, s)."""
-    s = s.lstrip()
+    s = join_continuations(s).lstrip()
     if not s:
         return None, s
     lex = shlex.shlex(s, posix=True)
@@ -1240,7 +1274,7 @@ def rtk_field(passed):
     passed over with it, as rtk itself passes over them."""
     if not passed or passed[-1][0] != "rtk":
         return ""
-    after = passed[-1][1]
+    after = join_continuations(passed[-1][1])
     try:
         words = shlex.split(after, posix=True)
     except ValueError:
@@ -1309,6 +1343,7 @@ ARRAY_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 def _script_run(word, rest):
     """(wrapper, None, why) for a command whose own word runs a script file, by its path or by
     source or `.`, else None (claude-config#1623)."""
+    rest = join_continuations(rest)
     if word in ("source", "."):
         try:
             operands = shlex.split(rest, posix=True)[1:]
@@ -1336,6 +1371,7 @@ def wrapped(rest):
     when it reads its input, `direct` or `source` for a script file run by its path or sourced);
     string is the command line it runs, None when there is none to read; why is "" when the string
     can be read, else the reason it cannot."""
+    rest = join_continuations(rest)
     name, _ = first_word(rest)
     if name is None:
         raw = rest.split(None, 1)
