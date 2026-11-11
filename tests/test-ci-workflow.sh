@@ -479,7 +479,8 @@ grep -qE 'HOOK_TESTS_DEAL:' <<< "$deal_job" \
   || check "#2463 the deal job deals with the runner itself" "no HOOK_TESTS_DEAL in it"
 
 # ---------------------------------------------------------------------------
-# #2690: a pull request run whose exact tree already passed reuses that run instead of running again.
+# #2690: a pull request run whose exact tree already passed reuses that run instead of running again,
+# and #2717: a push to main may stand on a pull request run of its exact tree (the deal passes the ref).
 # ---------------------------------------------------------------------------
 # Dan's choice, 2026-11-10: keep the merge gate as it is and make the repeat run cheap. The deal job
 # asks tools/ci-reuse-green-tree.sh (tested on its own in tools/test-ci-reuse-green-tree.sh); on a
@@ -565,6 +566,7 @@ r="$(reuse_gated "$REAL")"
 deal_raw="$(code_of "$REAL" | awk '/^  deal:[[:space:]]*$/ { s = 1; next } s && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { s = 0 } s { print }')"
 miss=""
 for want in 'bash tools/ci-reuse-green-tree\.sh' 'REUSE_EVENT:[[:space:]]*\$\{\{ github\.event_name \}\}' 'REUSE_REPO:[[:space:]]*\$\{\{ github\.repository \}\}' \
+  'REUSE_REF:[[:space:]]*\$\{\{ github\.ref \}\}' \
   'REUSE_RUN_ID:[[:space:]]*\$\{\{ github\.run_id \}\}' 'GH_TOKEN:[[:space:]]*\$\{\{ github\.token \}\}' 'reused-run:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.reused-run \}\}' \
   'tree:[[:space:]]*\$\{\{ steps\.reuse\.outputs\.tree \}\}' 'actions:[[:space:]]*read'; do
   grep -qE -- "$want" <<< "$deal_raw" || miss="$miss [$want]"

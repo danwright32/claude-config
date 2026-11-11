@@ -2027,7 +2027,9 @@ echo "slack drafts only: the merge helper's own line is judged inside the gate's
 # time before the changes below and 2.4 after; before them, at a load average of 110, that was 7.5
 # to 10.5 seconds on the wall against the 11 the gate has. So the ceiling sits at about one and a
 # half times today's walk: a helper that grows past it fails here, to be made cheaper to judge or
-# the ceiling raised on a new measurement.
+# the ceiling raised on a new measurement. Measured again on 2026-11-10: 7,975 steps, 12 files read
+# 35 times, the 76 more all from the helper (one more sourced file), none from the gate; and 8,132
+# later that day, once the helper had grown again.
 MWR="bash $DIR/lib/merge-when-ready.sh 123 --repo danwright32/claude-config --delete-branch"
 MWR_STEPS=12000
 run_budget "$MWR_STEPS" "$MWR"
@@ -2037,6 +2039,17 @@ allowed "the real merge helper, with everything it sources, is judged within $MW
 run_budget 2000 "$MWR"
 refused "the merge helper's line under a budget its walk passes is refused"
 says "that refusal says the gate ran out of time" "ran out of time"
+says "and says how to merge without the helper" "gh pr merge"
+says "and to leave the branch for the helper" "--delete-branch"
+run_budget "$TICKS" "bash $T/big/count.sh $T/big/session"
+refused "a call that is no merge still runs out of its budget"
+lacks "a call that is no merge gets no merge advice" "gh pr merge"
+# The advice belongs to running out of time only: a line the gate did judge, and refused for
+# posting, says nothing of merging however it names the helper.
+run_bash "curl -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi; echo merge-when-ready.sh"
+refused "a line that posts and names the merge helper is refused for the post"
+says "and that refusal is for the post" "posts to Slack:"
+lacks "and carries no merge advice" "gh pr merge"
 
 # A function of the script that calls others was followed once per path to it, so a chain of
 # functions each calling the next twice cost two to the power of its length: 16,383 walks for 14

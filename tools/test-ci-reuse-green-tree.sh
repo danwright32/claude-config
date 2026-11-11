@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# tools/ci-reuse-green-tree.sh decides whether a pull request run may stand on an earlier green run
-# of EXACTLY the same tree instead of running the suites again (claude-config#2690). It may only say
+# tools/ci-reuse-green-tree.sh decides whether a pull request run, or a push to main (which may stand
+# only on a pull request run, #2717), may stand on an earlier green run of EXACTLY the same tree
+# instead of running the suites again (claude-config#2690). It may only say
 # yes on proof (L312): an index artifact named for the tree, a completed green run of this
 # repository's own tests.yml that is not a fork's, and the commit that run tested, read by its own
 # sha from GitHub, holding exactly this tree and belonging to that run. Every other answer, an API
@@ -93,7 +94,7 @@ commit_json(){ # commit_json <sha> <tree> <parent>...
 decide(){ # decide [event] [tree] -> sets out, err, rc for the helper run against case $C
   : > "$C/calls"
   out="$(FAKE="$C" REUSE_GH="$TMPROOT/bin/gh" REUSE_REPO="$REPO" REUSE_TREE="${2:-$T}" REUSE_EVENT="${1:-pull_request}" REUSE_RUN_ID="$ME" \
-    bash "$HELPER" 2> "$C/err")"; rc=$?
+    REUSE_REF="${DECIDE_REF-refs/pull/7/merge}" bash "$HELPER" 2> "$C/err")"; rc=$?
   err="$(cat "$C/err")"
 }
 # A full suite: exit 0, no reuse line, and a log line saying the full suite runs and why.
@@ -182,10 +183,28 @@ full_because "#2690 an index whose run head differs from the run's own runs the 
 fresh; sed -i.bak "s/\"id\":$RUN,\"repository_id\"/\"id\":$ME,\"repository_id\"/" "$C/artifacts.json"; decide
 full_because "#2690 a run never stands on its own record" "this run"
 
-# 10. Only a pull request run reuses: pushes to main and runs by hand always run in full, and ask
-# GitHub nothing.
-for ev in push workflow_dispatch; do
-  fresh; decide "$ev"
+# 10. A push to main may stand on a pull request run that passed on exactly this tree, the run the
+# merge just followed (Dan, 2026-11-10, claude-config#2717). Nothing else reuses: a run by hand, a
+# push anywhere but main, and a push to main whose only proof is another push run all run in full.
+pr_proof(){ # pr_proof -> case $C's proof becomes a pull request run's merge commit with this tree
+  run_json pull_request "$HEAD" success completed "$REPO" ".github/workflows/tests.yml" > "$C/run-$RUN.json"
+  sed -i.bak "s/\"head_sha\":\"$S\"/\"head_sha\":\"$HEAD\"/" "$C/artifacts.json"
+  commit_json "$S" "$T" "$BASE" "$HEAD" > "$C/commit-$S.json"
+}
+fresh; pr_proof; DECIDE_REF=refs/heads/main decide push
+grep -qx "reused-run=$RUN" <<< "$out" && [ "$rc" -eq 0 ] \
+  && check "#2717 a push to main whose exact tree passed in a pull request run reuses that run" ok \
+  || check "#2717 a push to main whose exact tree passed in a pull request run reuses that run" "rc=$rc out=[$out] err=[$err]"
+fresh; DECIDE_REF=refs/heads/main decide push
+full_because "#2717 a push to main whose only proof is another push run runs the full suite" "pull request"
+fresh; pr_proof; DECIDE_REF=refs/heads/other decide push
+full_because "#2717 a push anywhere but main runs the full suite" "main"
+fresh; pr_proof; DECIDE_REF= decide push
+full_because "#2717 a push that names no ref runs the full suite" "main"
+fresh; pr_proof; DECIDE_REF=refs/heads/main decide push "$OTHER_T"
+full_because "#2717 a push to main whose tree differs from the pull request run's runs the full suite" "tree"
+for ev in workflow_dispatch schedule; do
+  fresh; pr_proof; DECIDE_REF=refs/heads/main decide "$ev"
   full_because "#2690 a $ev run runs the full suite" "pull request"
   [ ! -s "$C/calls" ] \
     && check "#2690 and a $ev run makes no API call" ok \
