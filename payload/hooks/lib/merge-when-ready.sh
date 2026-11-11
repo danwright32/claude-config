@@ -1282,8 +1282,9 @@ wait_key=""; wait_since=0
 #
 # $5, when given, is a check run between the sleeps of the wait at the base pace, which reads no
 # GitHub, and ends the wait early when it returns 0 (claude-config#1697): the wait for the
-# repository's turn grows, since nothing there needs GitHub read every minute, but the turn itself is
-# read locally every POLL, so a turn passing mid wait is taken at once, as before.
+# repository's turn runs until its next look at GitHub is due, MWR_LINE_LOOK_SECONDS apart
+# (claude-config#2715), but the turn itself is read locally every POLL, so a turn passing mid wait
+# is taken at once, as before.
 wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = grows, or the seconds to wait, $4 = what grows with the line, $5 = a local check that ends the wait
   local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi

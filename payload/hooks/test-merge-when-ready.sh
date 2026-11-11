@@ -3078,8 +3078,9 @@ check_eq "#2351 control: behind a line standing still the count of looks still e
 check "#2351 control: said as the most looks it makes" "the most it makes (MWR_MAX_POLLS)" "$out"
 check_eq "#2351 control: nothing merged" "0" "$(count gh-calls 'pr merge')"
 
-# The shared polling budget (L24): in line, GitHub is read on a wait that grows to its ceiling, while
-# the turn is read locally at every base look, so a turn passing mid wait is taken at once. #9 leaves
+# The shared polling budget (L24): in line, GitHub is read only every MWR_LINE_LOOK_SECONDS
+# (claude-config#2715), while the turn is read locally at every base look, so a turn passing mid
+# wait is taken at once. #9 leaves
 # after twelve minutes of one minute looks.
 fresh "$OLD" 0 "$GREEN"
 "$BIN/take-turn" acme/widget 9
