@@ -201,7 +201,7 @@ has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (lef
 # render must never put back a report that is missing the second note. Each wait is on a marker
 # the render drops, with a deadline, never a fixed sleep.
 PAUSE="$WORK/pause"; MARKS="$WORK/marks"; mkdir -p "$PAUSE" "$MARKS"
-# Each wait below polls every 0.05 s with the one hang ceiling (its 20 s ceiling was a setting a loaded Mac
+# Each wait below polls every 0.05 s (a setting, not a measurement) with the one hang ceiling (its old ceiling was a setting a loaded Mac
 # can reach, #1679). Each condition is written out at the call: one handed through a function of this
 # suite is a condition the Slack drafts gate cannot read (#2538).
 SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render A"}' >/dev/null 2>&1 &

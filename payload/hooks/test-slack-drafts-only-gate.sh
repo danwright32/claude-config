@@ -1417,8 +1417,9 @@ done
 # shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
 # posts, each would be refused; it is a path the gate cannot work out, so, with the refusal off, it
 # is let through unread. Turning the refusal on turns each of these red. (A loop or a function in
-# the string also leaves $1 unknown; with the refusal off no fixture can tell that apart, as any
-# loop that changes $1 really does source the other file.)
+# the string also leaves $1 unknown where a positional is used inside or after it, and only there;
+# with the refusal off no fixture can tell that apart, as any loop that changes $1 really does
+# source the other file. One placed after every use changes nothing, checked below.)
 P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
 # A sourced file shares the string's positionals, so one that sets them after an option changes $2.
 printf '%s\n' '# sets its caller'"'"'s positionals' "set -e -- $Q" > "$T/sv/quiet/lib/resets.sh"
