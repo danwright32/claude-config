@@ -1871,7 +1871,8 @@ class Judge:
         except OSError:
             return False
         body = re.sub(r"(?m)(^|\s)#.*$", r"\1", body)  # comments, which say "set" in prose
-        return not re.search(r"(?<![\w-])(shift|set\s+--|set\s+[^-+\s])", body)
+        # shift, or a set with an operand or -- after any options (set -e -- x sets them too).
+        return not re.search(r"(?<![\w-])(shift|set(?:\s+[-+][A-Za-z]+)*\s+(?:--|[^-+\s]))", body)
 
     def sh_home(self, name, text, v):
         """v, or for HOME unknown in a text that never binds it, the session's HOME: the command runs

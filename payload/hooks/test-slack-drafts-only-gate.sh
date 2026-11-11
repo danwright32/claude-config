@@ -1410,8 +1410,10 @@ done
 # the string also leaves $1 unknown; with the refusal off no fixture can tell that apart, as any
 # loop that changes $1 really does source the other file.)
 P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
+# A sourced file shares the string's positionals, so one that sets them after an option changes $2.
+printf '%s\n' '# sets its caller'"'"'s positionals' "set -e -- $Q" > "$T/sv/quiet/lib/resets.sh"
 for form in "bash -c 'shift; . \"\$1\"' _ $P $Q" "bash -c 'set -- $Q; . \"\$1\"' _ $P" \
-            "bash -c \". \\\"\$1\\\"\" _ $P"; do
+            "bash -c \". \\\"\$1\\\"\" _ $P" "bash -c '. \"\$1\"; . \"\$2\"' _ $T/sv/quiet/lib/resets.sh $P"; do
   run_bash "$form"
   allowed "the refusal is off: a bash -c string whose \$1 has changed is not read as the argument: $form"
 done
