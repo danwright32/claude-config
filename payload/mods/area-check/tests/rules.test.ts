@@ -661,8 +661,25 @@ test('a command whose file cannot be read may fold into an open structural issue
   expect(r).not.toContain('"decision": "restructure"')
   expect(r).toContain('Edit or Write')
   expect(r).toContain('Then send the Bash command again, unchanged.')
-  // The card Dan reads keeps its words.
-  expect(holdCard(LISTED)).toEqual(holdCard(UNREAD))
+})
+
+// The two messages a person reads name the fold the hold offers Claude (#2706 wording, Dan's
+// choice 2026-11-11), in the hold's words; with nothing listed each says what it always did.
+test('refusing restructure for a command whose file cannot be read names the fold into a listed issue (#2706)', () => {
+  const r = decideProblem({ decision: 'restructure' }, LISTED)
+  expect(r).toContain('no file to restructure')
+  expect(r).toContain('fold the structural fix for one of #41, #57 into this work')
+  expect(r).toContain('Edit or Write')
+  expect(r).not.toContain('no file to fold')
+  const none = decideProblem({ decision: 'restructure' }, UNREAD)
+  expect(none).toBe('This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.')
+})
+
+test('the card for a command whose file cannot be read names the fold into a listed issue (#2706)', () => {
+  const card = holdCard(LISTED)
+  expect(card.reason).toBe(holdCard(UNREAD).reason)
+  expect(card.safeWay).toBe('Claude proceeds with a reason, folds the structural fix for one of #41, #57 into this work, or makes the change with Edit or Write, which the area check can judge.')
+  expect(holdCard(UNREAD).safeWay).toBe('Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.')
 })
 
 test('the issues a command whose files cannot be named may fold into are the open structural ones naming a file, the session\'s own included (#2706)', () => {
