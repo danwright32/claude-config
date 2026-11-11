@@ -185,7 +185,7 @@ ghp_take(){
     printf '%s' "$keep" > "$s/polls.$$" && mv "$s/polls.$$" "$s/polls"
     # Until enough of the minute's looks have aged out to leave one for this look: the oldest when
     # the minute is just full, a later one when a look leaving others free finds more than its share.
-    [ "$n" -eq "$cap" ] || oldest="$(printf '%s' "$keep" | sort -n | sed -n "$(( n - cap + 1 ))p")"
+    [ "$n" -eq "$cap" ] || oldest="$(sort -n <<<"$keep" | awk -v k=$(( n - cap + 1 )) 'NF { i++ } i == k { print; exit }')"
     GHP_WAIT=$(( oldest + 60 - now )); [ "$GHP_WAIT" -ge 1 ] || GHP_WAIT=1
     GHP_WHY=cap
     ghp__unlock "$s"; return 1

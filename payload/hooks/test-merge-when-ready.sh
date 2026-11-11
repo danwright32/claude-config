@@ -3714,7 +3714,7 @@ check "#2715 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$ou
 # sleeps takes no time on the clock, as it takes next to none on a real one. #7 holds the turn, its
 # checks running the whole 30 minutes, with eight runs in line behind it and the session's own cap of
 # four looks a minute. The line moves twice, as the first two in line are stopped at 10 and 20
-# minutes. Fixture settings: the defaults, and eight, the median measured in line.
+# minutes. Fixture settings, not measured, but eight, the median of the 2026-11-10 logs.
 SIM_DIR="$WORKDIR/sim"; SIMBIN="$WORKDIR/simbin"; mkdir -p "$SIMBIN"
 cat > "$SIMBIN/gh" <<EOS
 #!/usr/bin/env bash
@@ -3737,54 +3737,63 @@ sim_sleep(){ (
 ) }
 export -f sim_sleep
 export SIM_DIR
-# Each run is given the defaults (a base look of 60s growing to 180s, four looks a minute), and a
-# line budget the simulation never reaches, since its line stands still the whole 30 minutes.
-sim_start(){ # sim_start <pr>: starts a run, then waits (in real time, bounded) until it first sleeps
-  local i=0
+# Each run is given the defaults (a base look of 60s growing to 180s, four looks a minute: settings,
+# not measured), and a line budget the simulation never reaches, since its line stands still between
+# the two runs that leave it. The runs are this shell's children, kept in SIM_PIDS and reaped by
+# sim_run's wait once it has stopped them; nothing is printed between their start and that wait, so
+# whatever a run says goes to its own file, and what the simulation itself says to SIM_DIR/said.
+SIM_PIDS=""
+sim_start(){ # sim_start <pr>: starts a run, then waits until it first sleeps
   ( export MWR_POLL_SECONDS=60 MWR_POLL_MAX_SECONDS=180 GH_POLL_PER_MINUTE=4 MWR_LINE_SECONDS=100000
     cd "$REPO" && SIM_ME="$1" MWR_SLEEP=sim_sleep PATH="$SIMBIN:$PATH" bash "$HELPER" "$1" --squash > "$SIM_DIR/$1.out" 2>&1
     echo "$?" > "$SIM_DIR/$1.rc" ) &
-  while [ ! -e "$SIM_DIR/$1.wake" ] && [ ! -e "$SIM_DIR/$1.rc" ] && [ "$i" -lt 3000 ]; do sleep 0.01; i=$((i + 1)); done
+  SIM_PIDS="$SIM_PIDS $!"
+  hang_wait "[ -e '$SIM_DIR/$1.wake' ] || [ -e '$SIM_DIR/$1.rc' ]" 0.01 || echo "run $1 never slept" >> "$SIM_DIR/said"
 }
-# sim_run <seconds> <pr>...: runs them all until the clock reaches the seconds given. SIM_QUIT lists
-# <pr>@<seconds in>: that run is stopped once the clock would pass that time, leaving the line.
+# sim_asleep <pr>...: every run still going is asleep, and sim_min is the earliest any of them wakes
+# (empty once every run has ended).
+sim_asleep(){
+  local m w; sim_min=""
+  for m in "$@"; do
+    [ -e "$SIM_DIR/$m.rc" ] && continue
+    [ -e "$SIM_DIR/$m.wake" ] || return 1
+    w=""; read -r w < "$SIM_DIR/$m.wake"
+    { [ -z "$sim_min" ] || [ "$w" -lt "$sim_min" ]; } && sim_min="$w"
+  done
+  return 0
+}
+# sim_run <seconds> <pr>...: runs them all until the clock reaches the seconds given, then stops and
+# reaps them. SIM_QUIT lists <pr>@<seconds in>: that run is stopped once the clock would pass that
+# time, leaving the line.
 sim_run(){
-  local t0 end m w min all limit=$(( SECONDS + 600 )) i=0 q quit; t0="$(cat "$ST/clock")"; end=$(( t0 + $1 )); shift
-  while [ "$SECONDS" -lt "$limit" ]; do
-    all=1; min=""
-    for m in "$@"; do
-      [ -e "$SIM_DIR/$m.rc" ] && continue
-      if [ -e "$SIM_DIR/$m.wake" ]; then
-        w=""; read -r w < "$SIM_DIR/$m.wake"
-        { [ -z "$min" ] || [ "$w" -lt "$min" ]; } && min="$w"
-      else all=0; break; fi
-    done
-    [ "$all" = 1 ] || { sleep 0.01; continue; }
-    [ -n "$min" ] && [ "$min" -lt "$end" ] || break
+  local t0 end m w q quit p; t0="$(cat "$ST/clock")"; end=$(( t0 + $1 )); shift
+  while :; do
+    hang_wait "sim_asleep $*" 0.01 || { echo "the runs never all slept at $(cat "$ST/clock")" >> "$SIM_DIR/said"; break; }
+    [ -n "$sim_min" ] && [ "$sim_min" -lt "$end" ] || break
     quit=""
     for q in ${SIM_QUIT:-}; do
-      [ -e "$SIM_DIR/${q%@*}.quit" ] || [ "$min" -lt $(( t0 + ${q#*@} )) ] || { quit="${q%@*}"; break; }
+      [ -e "$SIM_DIR/${q%@*}.quit" ] || [ "$sim_min" -lt $(( t0 + ${q#*@} )) ] || { quit="${q%@*}"; break; }
     done
     if [ -n "$quit" ]; then
       : > "$SIM_DIR/$quit.quit"; rm -f "$SIM_DIR/$quit.wake"; continue
     fi
-    printf '%s' "$min" > "$ST/clock"
+    printf '%s' "$sim_min" > "$ST/clock"
     for m in "$@"; do
       [ -e "$SIM_DIR/$m.wake" ] || continue
       w=""; read -r w < "$SIM_DIR/$m.wake"
-      [ "$w" -gt "$min" ] || rm -f "$SIM_DIR/$m.wake"
+      [ "$w" -gt "$sim_min" ] || rm -f "$SIM_DIR/$m.wake"
     done
   done
-  [ "$SECONDS" -lt "$limit" ] || echo "sim_run: the simulation did not reach its end in ten minutes of real time"
   : > "$SIM_DIR/stop"; rm -f "$SIM_DIR"/*.wake
-  for m in "$@"; do while [ ! -e "$SIM_DIR/$m.rc" ] && [ "$i" -lt 6000 ]; do sleep 0.01; i=$((i + 1)); done; done
-  wait
+  for p in $SIM_PIDS; do wait "$p"; done
+  SIM_PIDS=""
 }
 fresh "$OLD" 0 "$PENDING"; rm -rf "$SIM_DIR"; mkdir -p "$SIM_DIR"
 LINE_PRS="21 22 23 24 25 26 27 28"
 sim_start 7
 for p in $LINE_PRS; do sim_start "$p"; done
-sim_out="$(SIM_QUIT="21@600 22@1200" sim_run 1800 7 $LINE_PRS)"
+SIM_QUIT="21@600 22@1200" sim_run 1800 7 $LINE_PRS
+sim_out="$(cat "$SIM_DIR/said" 2>/dev/null)"
 holder="$(cat "$SIM_DIR/7.out")"
 holder_looks="$(awk '$2 == 7 { print $1 }' "$ST/sim-views")"
 holder_gaps="$(printf '%s\n' "$holder_looks" | awk 'NR > 1 { print $1 - p } { p = $1 }' | sort -n | tr '\n' ' ' | sed 's/ $//')"
