@@ -911,6 +911,16 @@ holding it back, and names the pull that settles it. It says nothing when every 
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
 
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
+
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
 push held those very paths back in silence. Measured on 2026-09-20: three lessons sat unpublished on
@@ -2351,6 +2361,21 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
   cannot read is let through with a notice.
 
+Reading an old checkout is the other half, and that one is said rather than refused:
+
+- `checkout-behind-notice.sh` (SessionStart and SubagentStart) tells a session, and every subagent
+  it starts, when the checkout it is in lacks commits that `origin`'s default branch has
+  (claude-config#2712). On 2026-11-10 a session on the work MacBook read a primary checkout on a
+  detached HEAD 279 commits behind main as current and told Dan twice that a shipped feature did not
+  exist. It speaks on a detached HEAD at any distance, or when the oldest missing commit is 8 hours
+  old, or 50 commits are missing (`CHECKOUT_BEHIND_HOURS`, `CHECKOUT_BEHIND_COMMITS`; measured on the
+  personal MacBook's checkouts, where worktrees in use lacked at most 5 hours of work and stale ones
+  at least 16). The session is told to read the current code with `git show origin/main:<path>` and
+  `git grep <pattern> origin/main`, since a shared checkout must not be switched; the hook itself
+  only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
+  says the checkout could not be checked, never that it is level. The person is told once per
+  session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+
 ### What a push actually waits on
 
 Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
@@ -3563,6 +3588,23 @@ distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse 
 the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
+
+When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
+to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
+with `gh pr merge` directly once every check is green, without deleting the branch (the helper
+deletes it only after moving the pull requests stacked on it), to confirm the state with
+`gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
+same merge seven times because the refusal named no other way. The reader prints a verdict of its
+own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
+bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
+refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
+for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
+seconds) is inferred, not measured.
 
 ## Read only queries are approved without asking
 
@@ -5499,6 +5541,15 @@ behind nor as this Mac's own work, and status exits as it would otherwise. Befor
 of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
 and read as unsent work here, dropping out of the lag line with nothing said; one failed
 placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
 
 <table>
 <thead>

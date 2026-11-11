@@ -74,15 +74,27 @@ mp_sweep(){
   return 0
 }
 
+# What one write worked out that the next, before every wait, would work out the same: the run's start
+# time (one ps a run rather than one a wait, before a turn has set TURN_PID_START) and the shortened
+# description of the same status (claude-config#2694). Kept per pid and per text, so a change of
+# either is worked out afresh.
+mp__start_pid=""; mp__start=""; mp__what_in=""; mp__what=""; mp__what_set=""
 mp_set(){   # $1 = phase (local, waiting or review), $2 = what, $3 = now, $4 = until (waiting, review) or empty
   local dir pid="${TURN_PID:-$$}" start="${TURN_PID_START:-}" f tmp="" what since="$3"
   dir="$(mp_dir)"; f="$dir/$pid"
-  [ -n "$start" ] || start="$(turn_proc_start "$pid")"
-  what="$(printf '%s' "$2" | tr '\n\t' '  ' | cut -c1-300)"
+  if [ -z "$start" ]; then
+    if [ "$mp__start_pid" = "$pid" ] && [ -n "$mp__start" ]; then start="$mp__start"
+    else start="$(turn_proc_start "$pid")"; mp__start_pid="$pid"; mp__start="$start"; fi
+  fi
+  if [ -n "$mp__what_set" ] && [ "$mp__what_in" = "$2" ]; then what="$mp__what"
+  else
+    what="$(printf '%s' "$2" | tr '\n\t' '  ' | cut -c1-300)"
+    mp__what_in="$2"; mp__what="$what"; mp__what_set=1
+  fi
   # A phase that goes on keeps the moment it began.
   [ "$(turn_field "$f" phase)" = "$1" ] && [ "$(turn_field "$f" pid)" = "$pid" ] && since="$(turn_field "$f" since)"
   case "$since" in ''|*[!0-9]*) since="$3" ;; esac
-  if mkdir -p "$dir" 2>/dev/null && [ -d "$dir" ]; then
+  if { [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null; } && [ -d "$dir" ]; then
     mp_sweep
     tmp="$dir/.phase.$pid.$RANDOM"
     if { printf 'pid %s\nstart %s\nphase %s\nwhat %s\nsince %s\nuntil %s\n' "$pid" "$start" "$1" "$what" "$since" "${4:-}" > "$tmp"; } 2>/dev/null \
