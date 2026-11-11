@@ -51,17 +51,28 @@ set -uo pipefail
 # checkout is shared by two sessions, so that is not a hypothetical: on 2026-09-20 a measurement
 # was thrown away for exactly this.
 #
-# MEASURE_SELF_HOME carries where the real file lives across the exec, because every default here
-# hangs off that directory and BASH_SOURCE after the exec names the copy. MEASURE_SELF_COPY is
-# both the guard against re-execing for ever and the path the copy is removed by.
+# Every default here hangs off the directory the real file lives in, and BASH_SOURCE after the exec
+# names the copy, so the copy's HERE line is written with that directory spelled out. It is not
+# handed over in the environment: a directory the environment chooses is one the Slack drafts gate
+# cannot work out, and the file sourced from under it is then left unread (claude-config#2538). In
+# this file HERE stays derived from where the file is. MEASURE_SELF_COPY is both the guard against
+# re-execing for ever and the path the copy is removed by.
 if [ -z "${MEASURE_SELF_COPY:-}" ] && [ -z "${MEASURE_NO_SELF_COPY:-}" ]; then
   _sc_home="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   _sc_copy="$(mktemp "${TMPDIR:-/tmp}/measure-section-time-self.XXXXXXXX")" || {
     printf 'measure-section-time: could not create a copy of this script to run from, so a run could be changed by an edit to it while it is in flight. Refusing rather than running exposed (claude-config#519).\n' >&2
     exit 2
   }
-  cat "${BASH_SOURCE[0]}" > "$_sc_copy" || { rm -f "$_sc_copy"; printf 'measure-section-time: could not write the copy of this script.\n' >&2; exit 2; }
-  MEASURE_SELF_COPY="$_sc_copy" MEASURE_SELF_HOME="$_sc_home" exec bash "$_sc_copy" "$@"
+  # Exactly one HERE line is rewritten, or the copy is not used: a rewrite that matched nothing
+  # would run the copy against the temporary directory's neighbours (L100). A directory whose name
+  # holds a quote cannot be spelled out inside one, so that is refused rather than mangled.
+  case "$_sc_home" in
+    *"'"*) rm -f "$_sc_copy"; printf 'measure-section-time: this script lives in a directory whose name holds a quote, which its copy cannot spell out. Move the checkout, or set MEASURE_NO_SELF_COPY=1.\n' >&2; exit 2 ;;
+  esac
+  SC_HOME="$_sc_home" awk '/^HERE=/ { n++; print "HERE=\047" ENVIRON["SC_HOME"] "\047"; next } { print } END { exit n != 1 }' \
+      "${BASH_SOURCE[0]}" > "$_sc_copy" \
+    || { rm -f "$_sc_copy"; printf 'measure-section-time: could not write the copy of this script with its HERE line naming where it lives.\n' >&2; exit 2; }
+  MEASURE_SELF_COPY="$_sc_copy" exec bash "$_sc_copy" "$@"
 fi
 
 # The copy goes when this ends, however it ends. Set before anything else can exit, and every
@@ -70,7 +81,7 @@ fi
 self_copy_clean(){ [ -z "${MEASURE_SELF_COPY:-}" ] || rm -f "$MEASURE_SELF_COPY"; }
 trap 'self_copy_clean' EXIT
 
-HERE="${MEASURE_SELF_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
 # Says which file this process is actually executing, and runs nothing. The only way to see that
@@ -145,7 +156,9 @@ if [ "${1:-}" = "--credible" ]; then
 fi
 
 for _k in RUNS LOAD_PROCS WAIT_SECONDS SAMPLE_SECONDS QUIET_MARGIN CAL_SAMPLES WAIT_MAX_SAMPLES RUN_MAX_SAMPLES; do
-  eval "_v=\$$_k"
+  # Read by name with bash's own indirect expansion rather than an eval, which would end what the
+  # Slack drafts gate can follow of this tool's variables (claude-config#2538).
+  _v="${!_k}"
   case "$_v" in ''|*[!0-9]*) die2 "MEASURE_${_k}='$_v' is not a whole number, and it decides what runs. Refusing rather than guessing." ;; esac
 done
 [ "$RUNS" -gt 0 ] || die2 "MEASURE_RUNS=0 would take no readings at all and report that as a clean measurement. Refusing (L98)."

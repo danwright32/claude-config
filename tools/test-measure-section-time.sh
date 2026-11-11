@@ -425,6 +425,13 @@ grep -q 'topcall1(' <<< "$o20" \
 o10="$(run_m MEASURE_RUNS=zero MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" 2>&1)"; c10=$?
 [ "$c10" -eq 2 ] && check "a run count that is not a number is refused" ok \
                  || check "a run count that is not a number is refused" "exit=$c10 out=$o10"
+# A run count is also refused by the check that it is above zero, so the case above passes even
+# with the whole number check gone. This knob is read by that check alone, and the message must
+# carry the value, which only a read of the knob BY NAME can put there (claude-config#2538).
+o10b="$(run_m MEASURE_RUNS=1 MEASURE_QUIET_MARGIN=lots MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" 2>&1)"; c10b=$?
+[ "$c10b" -eq 2 ] && grep -q "MEASURE_QUIET_MARGIN='lots' is not a whole number" <<< "$o10b" \
+  && check "a margin that is not a number is refused, naming the value given" ok \
+  || check "a margin that is not a number is refused, naming the value given" "exit=$c10b out=$o10b"
 o11="$(MEASURE_SUITE_SOURCE="$TMPROOT/not-there.sh" MEASURE_SLEEP_CMD="$SLEEPER" \
        MEASURE_SUITE_CMD="bash $S_OK" MEASURE_AMBIENT_CMD="$A_OK" bash "$M" 2>&1)"; c11=$?
 [ "$c11" -eq 2 ] && check "a missing suite source is refused, not defaulted" ok \
