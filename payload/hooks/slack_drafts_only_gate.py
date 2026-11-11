@@ -1032,6 +1032,7 @@ class Judge:
             out = None
         if out is None:
             out = [("unknown", None, label)]
+        files = []  # (raw target, its value, whether it takes the output, appending)
         for op, target in redirs:
             m = re.fullmatch(r"(\d*|&)(>>|>\||>&|>)", op)
             if not m or target is None:
@@ -1039,12 +1040,19 @@ class Judge:
             fd, kind = m.group(1), m.group(2)
             if kind == ">&" and (fd not in ("", "1") or re.fullmatch(r"\d+|-", self.sh_value(target, d) or "")):
                 continue  # a descriptor copied (2>&1, >&2), not a file
-            v = self.sh_value(target, d)
-            if fd in ("", "1", "&") or kind == ">&":
-                self.note_output(target, v, d, out, label, kind == ">>")
-                out = []
+            files.append((target, self.sh_value(target, d), fd in ("", "1", "&") or kind == ">&", kind == ">>"))
+        # Of several redirections of the output, the shell writes it to the last; each earlier one
+        # is only opened, emptied unless appended to (lessons review at 4949370: `> decoy > run.sh`).
+        last = max((k for k, f in enumerate(files) if f[2]), default=None)
+        for k, (target, v, takes, append) in enumerate(files):
+            if k == last:
+                self.note_output(target, v, d, out, label, append)
+            elif takes:
+                self.note_output(target, v, d, [], label, append)
             else:
                 self.note_unreadable(target, v, d, f"{label}'s errors")
+        if last is not None:
+            out = []
         if self.shell.get("outer", True):
             self.shell["last_out"] = out
 

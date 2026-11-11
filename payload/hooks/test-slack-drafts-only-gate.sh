@@ -1669,6 +1669,12 @@ for runs in "{ echo '$POST'; echo hi; } | tee run.sh && bash run.sh" "( printf '
   run_cp "$runs"
   refused "a compound command piped into a write is not read as its last command: $runs"
 done
+# Of several output redirections the shell writes to the last, and only empties the others (lessons
+# review at 4949370): the post lands in run.sh, not decoy.txt.
+run_cp "printf '$POST\n' > decoy.txt > run.sh && bash run.sh"
+refused "the text goes to the last of several output redirections"
+run_cp "printf '$POST\n' > run.sh > decoy.txt && bash run.sh"
+allowed "an earlier output redirection is only emptied, so running it runs nothing"
 # A data file is read when the script it is handed can act on it (claude-config#2362): one downloaded
 # in the same command cannot be read, so it is refused there, and passes where its text is known.
 printf '%s\n' "import sys, urllib.request" "urllib.request.urlopen(open(sys.argv[1]).read().strip())" > "$T/cp/send.py"
