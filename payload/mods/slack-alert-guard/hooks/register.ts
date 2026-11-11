@@ -86,7 +86,7 @@ const cannotCheck = (why: string) =>
 const HELD = cannotCheck('unknown failure')
 
 // from (#2637): for wording the edit adds none of and brings to a send, the files that hold it.
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string }
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; unwired?: true }
 type Verdict = { pass: true } | { own: true } | { unchecked: string } | { hold: Hold }
 const PASS: Verdict = { pass: true }
 
@@ -850,7 +850,9 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const copyHold = async (found: Found, added: string[]): Promise<Verdict> => {
       if (!('none' in found) || !found.unused || found.rel === undefined || !added.length) return PASS
       if (!copyModule(found.rel, after)) return PASS
-      return holdFor({ added, removed: [] })
+      // Named as copy nothing sends yet, so Dan can tell it from a live send (2026-11-11).
+      const held = await holdFor({ added, removed: [] })
+      return 'hold' in held ? { hold: { ...held.hold, unwired: true } } : held
     }
     // Wording Dan has not approved, in a file whose sends cannot be traced (a text template, a
     // workflow, a shell script, an edit that does not apply): held when its file is in a git
@@ -981,13 +983,13 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     await drawCard($, id, 'The Slack alert guard could not check this call, so it is held.', v.unchecked)
     return cannotCheck(v.unchecked)
   }
-  const { file, added, removed, keys, sender, literal, from } = v.hold
+  const { file, added, removed, keys, sender, literal, from, unwired } = v.hold
   if (id) {
-    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(literal ? { literal } : {}), ...(from ? { from } : {}), ...(agent ? { agent: true as const } : {}) }
+    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(sender ? { sender } : {}), ...(literal ? { literal } : {}), ...(from ? { from } : {}), ...(unwired ? { unwired } : {}), ...(agent ? { agent: true as const } : {}) }
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
-    await drawCard($, id, `${heldText(file, added, removed, sender, from)}.`, agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.')
+    await drawCard($, id, `${heldText(file, added, removed, sender, from, unwired)}.`, agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.')
   }
-  return agent ? agentRefusal(id, file, added, removed, sender, from) : refusal(id, file, added, removed, sender, from)
+  return agent ? agentRefusal(id, file, added, removed, sender, from, unwired) : refusal(id, file, added, removed, sender, from, unwired)
 }
 
 type AskInput = { questions?: unknown[]; answers?: unknown; metadata?: Record<string, unknown> }
@@ -1041,7 +1043,7 @@ export const register: Register = on => {
       const problem = renderedProblem(ask.metadata?.rendered, waiting.added, waiting.literal ?? [])
       if (problem !== undefined) return { deny: problem }
       const rendered = String(ask.metadata?.rendered).trim()
-      const q = question(waiting.file, rendered, waiting.from)
+      const q = question(waiting.file, rendered, waiting.from, waiting.unwired)
       const options = [
         { label: APPROVE, description: 'The wording is right. Only the edit to the file goes ahead.' },
         { label: CHANGE, description: 'Hold the edit, and say what it should say instead.' },

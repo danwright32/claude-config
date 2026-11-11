@@ -18,6 +18,8 @@ export type SlackAlertPending = {
   literal?: string[]
   /** For wording the edit adds none of and brings to a Slack send from the files it imports (#2637): those files, named on the card, refusal and question. */
   from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one on the card, refusal and question. */
+  unwired?: true
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }

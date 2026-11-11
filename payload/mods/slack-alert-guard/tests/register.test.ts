@@ -1676,9 +1676,14 @@ test('a new copy module is held as it is written, though nothing sends it yet, n
   expect(held).not.toContain(MONITOR)
   expect(w.ran).toEqual([])
   expect(w.cards.length).toBe(1)
+  // The refusal, the card and the question say it is copy nothing sends yet, not a live send.
+  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
+  expect(held).toContain(UNWIRED)
+  expect(String(w.cards[0]?.reason)).toContain(UNWIRED)
   await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
   // The question names the file that holds the wording.
   expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
+  expect(w.asked[0]?.questions[0]?.question).toContain(`defined in ${QUIET}, a module of message copy not yet wired to Slack?`)
   // Approving posts nothing (#2284), so the question above the message never reads as a send.
   expect(readsAsSend((w.asked[0]?.questions[0]?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
   expect(refusalOf(await call($, write))).toBe('')
@@ -1756,6 +1761,8 @@ test('a new module that is no copy module passes while nothing sends it; the edi
   expect(w.cards.length).toBe(1)
   await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
   expect(w.asked[0]?.questions[0]?.question).toContain(FEEDS)
+  // A send that is wired is never named as copy not yet wired (#2720).
+  for (const t of [held, String(w.cards[0]?.reason), w.asked[0]?.questions[0]?.question ?? '']) expect(t).not.toContain('not yet wired')
   expect(refusalOf(await call($, send))).toBe('')
   expect(w.ran.length).toBe(3)
 })
