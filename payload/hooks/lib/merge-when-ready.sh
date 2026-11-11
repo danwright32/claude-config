@@ -212,7 +212,11 @@
 # is asked, claude-config#2558) and MWR_GATE_TIMEOUT_RETRY_SECONDS (30: the wait between; settings, not measurements), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
-# measurement), and the commands and scripts it runs, each honoured only with
+# measurement), MWR_POOL_LIMIT (20: the concurrent jobs the account's plan allows on GitHub hosted
+# runners, the Free plan's figure, claude-config#2714, see pool_note), MWR_POOL_WAIT_SECONDS (60: how
+# long a job must have waited for a runner before it is said) and MWR_POOL_LOOKBACK_SECONDS (7200: how
+# far before a waiting job the runs counted as holding runners may have been created; settings, not
+# measurements), and the commands and scripts it runs, each honoured only with
 # HOOK_TESTS_RUNNING=1 (claude-config#2231, #2317, #2399, see mwr_script): MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE,
 # MWR_CHANGELOG_GATE, MWR_DESIGN_GATE, MWR_VERIFY_GATE, MWR_CLOSING_GATE, MWR_WORK_NAMES_GATE,
 # MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
@@ -268,6 +272,10 @@ LINE_LOOK="$(num_or "${MWR_LINE_LOOK_SECONDS:-}" 600)"; [ "$LINE_LOOK" -ge "$POL
 # A merge GitHub answers "Something went wrong" is tried again (claude-config#2289, see the merge).
 MERGE_TRIES="$(num_or "${MWR_MERGE_TRIES:-}" 3)"; [ "$MERGE_TRIES" -ge 1 ] || MERGE_TRIES=1
 MERGE_WAIT="$(num_or "${MWR_MERGE_RETRY_SECONDS:-}" 120)"
+# A job that waited for a runner is said (claude-config#2714, see pool_note).
+POOL_LIMIT="$(num_or "${MWR_POOL_LIMIT:-}" 20)"
+POOL_WAIT="$(num_or "${MWR_POOL_WAIT_SECONDS:-}" 60)"
+POOL_LOOKBACK="$(num_or "${MWR_POOL_LOOKBACK_SECONDS:-}" 7200)"
 wrong_head=""; wrong_tries=0
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
@@ -732,6 +740,106 @@ rerun_failed_start(){
     return 0
   done <<< "$runs_failed"
   return 1
+}
+# A JOB THAT WAITED FOR A RUNNER (claude-config#2714). GitHub runs at most a fixed number of jobs at
+# once on its hosted runners for an account's plan (20 on the Free plan, "Total concurrent jobs" on
+# docs.github.com/en/actions/reference/limits), and a job asked for past that waits in a queue. On
+# 2026-11-10 that pool was full at about 01:15 and 13:40 ET and 15 jobs waited over a minute, up to
+# 6.6 minutes, which read in the merge logs as slow tests. So once a head's checks have all finished,
+# each workflow run this helper saw a check of still open, for that head, has its jobs read once, and
+# any job that waited more than POOL_WAIT between being created and starting is said: how long, and
+# how many of this repository's jobs were running when it was created. Those are counted from the jobs
+# of the runs created up to POOL_LOOKBACK before it and not finished by then. Only this repository's
+# can be counted, since GitHub has no read of an account's running jobs, so the line says whose they
+# are and calls the pool full only when the count reaches POOL_LIMIT. A run that finished before this
+# helper first looked was never waited on here and is not read. A run with no wait costs one read and
+# says nothing; the count costs one read of the runs and one per run overlapping the wait, only when a
+# job waited, and a finished run's jobs are kept for the next count rather than read again. A read
+# that fails is said and changes nothing else: this is a note about the wait, never a gate.
+pool_head=""; pool_open=""; pool_done=""; pool_cache=""; pool_got=""; pool_err=""
+pool_seen(){   # $1 = the ids of the runs with a check still open at this look, space separated
+  local id
+  [ "$pool_head" = "$head" ] || { pool_head="$head"; pool_open=""; }
+  for id in $1; do
+    case " $pool_open " in *" $id "*) ;; *) pool_open="$pool_open $id" ;; esac
+  done
+  return 0
+}
+# pool_jobs <run id> <1 when the run has finished>: sets pool_got to its jobs, kept to the four fields
+# read, from what was kept or from GitHub; sets pool_err and returns 1 when it cannot.
+pool_jobs(){
+  local rid jobs out rc
+  while IFS=$'\t' read -r rid jobs; do
+    [ "$rid" = "$1" ] && { pool_got="$jobs"; return 0; }
+  done <<< "$pool_cache"
+  out="$(gh_as api "repos/$slug/actions/runs/$1/jobs?per_page=100" 2>&1 </dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ] || ! jobs="$(printf '%s' "$out" | jq -c 'if (.jobs | type) != "array" then error("no list of jobs") else [.jobs[] | {name, created_at, started_at, completed_at}] end' 2>/dev/null)"; then
+    pool_err="${out:0:200}, exit $rc"; return 1
+  fi
+  [ "${2:-}" = 1 ] && pool_cache="$pool_cache"$'\n'"$1"$'\t'"$jobs"
+  pool_got="$jobs"
+}
+POOL_WAITED_JQ='[.[] | select((.created_at | type) == "string" and (.started_at | type) == "string")
+  | {name, at: (.created_at | fromdateiso8601), d: ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601))}
+  | select(.d > $w)]'
+# Each waited job with how many jobs were running when it was created: started by then, not finished.
+POOL_COUNT_JQ='[.[][]] as $all | $waited[] | . as $j
+  | [$all[] | select((.started_at | type) == "string" and (.started_at | fromdateiso8601) <= $j.at
+      and ((.completed_at | type) != "string" or (.completed_at | fromdateiso8601) > $j.at))] | length
+  | [$j.name, $j.d, .] | @tsv'
+pool_note(){
+  local id waited range runs out rc rid fin all counts name d n items under least
+  [ "$pool_head" = "$head" ] || return 0
+  for id in $pool_open; do
+    case " $pool_done " in *" $id "*) continue ;; esac
+    pool_done="$pool_done $id"
+    if ! pool_jobs "$id" 1; then
+      say "Could not read the jobs of workflow run $id ($pool_err), so whether any of them waited for a runner is not known."
+      continue
+    fi
+    waited="$(printf '%s' "$pool_got" | jq -c --argjson w "$POOL_WAIT" "$POOL_WAITED_JQ" 2>/dev/null)"
+    case "$waited" in ''|'[]') continue ;; esac
+    # Each run is judged on its own counts: nothing carries over from the run before (#2714).
+    all="$pool_got"; counts=""; pool_err=""; under=0; least=""
+    range="$(printf '%s' "$waited" | jq -r --argjson b "$POOL_LOOKBACK" '"\((map(.at) | min) - $b | todate)..\(map(.at) | max | todate)"' 2>/dev/null)"
+    out="$(gh_as api "repos/$slug/actions/runs?created=$range&per_page=100" 2>&1 </dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ] || ! runs="$(printf '%s' "$out" | jq -r --argjson waited "$waited" --arg own "$id" '
+        if (.workflow_runs | type) != "array" then error("no list of runs") else
+        ($waited | map(.at) | min) as $lo | ($waited | map(.at) | max) as $hi
+        | (if (.total_count // 0) > (.workflow_runs | length) then "more\t0" else empty end),
+          (.workflow_runs[] | select((.id | tostring) != $own and (.created_at | fromdateiso8601) <= $hi
+            and (.status != "completed" or (.updated_at | fromdateiso8601) >= $lo))
+          | [(.id | tostring), (if .status == "completed" then "1" else "0" end)] | @tsv) end' 2>/dev/null)"; then
+      pool_err="${out:0:200}, exit $rc"
+    else
+      while IFS=$'\t' read -r rid fin; do
+        [ -n "$rid" ] || continue
+        [ "$rid" = more ] && { least="at least "; continue; }
+        pool_jobs "$rid" "$fin" || break
+        all="$all"$'\n'"$pool_got"
+      done <<< "$runs"
+    fi
+    [ -n "$pool_err" ] || counts="$(printf '%s\n' "$all" | jq -s -r --argjson waited "$waited" "$POOL_COUNT_JQ" 2>/dev/null)"
+    items=""
+    if [ -n "$counts" ]; then
+      while IFS=$'\t' read -r name d n; do
+        items="${items:+$items; }job $name waited $(dur "$d"), and $least$n of this repository's jobs were running when it was queued"
+        [ "$n" -ge "$POOL_LIMIT" ] || under=$((under + 1))
+      done <<< "$counts"
+      if [ "$under" -eq 0 ]; then
+        say "Workflow run $id waited for a runner: $items. GitHub runs at most $POOL_LIMIT jobs at once for the account's plan (MWR_POOL_LIMIT), so the runner pool was full, and that time was GitHub's queue, not the tests."
+      else
+        say "Workflow run $id waited for a runner: $items. Where that is under the $POOL_LIMIT jobs the account's plan runs at once (MWR_POOL_LIMIT), the other runners were held by the account's other repositories, or GitHub was slow to start the job; either way that time was GitHub's queue, not the tests."
+      fi
+    else
+      [ -n "$pool_err" ] || pool_err="the jobs read could not be counted"
+      while IFS=$'\t' read -r name d; do
+        [ -n "$name" ] && items="${items:+$items; }job $name waited $(dur "$d")"
+      done <<< "$(printf '%s' "$waited" | jq -r '.[] | [.name, .d] | @tsv' 2>/dev/null)"
+      say "Workflow run $id waited for a runner: $items. This could not count the jobs running when it was queued ($pool_err), so whether all $POOL_LIMIT runners the account's plan allows were in use is not known."
+    fi
+  done
+  return 0
 }
 read_compare(){   # sets compare, crc, behind, base_tip
   local rc
@@ -1870,8 +1978,14 @@ EOF_VIEW
   fi
 
   waiting=""
-  checks_total="$(printf '%s' "$view" | jq '[.statusCheckRollup[]?] | length')"
-  checks_open="$(printf '%s' "$view" | jq '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_upcase) | select(IN("", "PENDING", "EXPECTED"))] | length')"
+  # One read of the rollup for how many checks there are, how many are still open, and the workflow
+  # runs the open ones belong to, from each check's details link (claude-config#2714, see pool_note).
+  checks_total=""; checks_open=""; pool_now=""
+  read -r checks_total checks_open pool_now <<< "$(printf '%s' "$view" | jq -r '[.statusCheckRollup[]?] as $c
+    | [$c[] | select((.conclusion // .state // "") | ascii_upcase | IN("", "PENDING", "EXPECTED"))] as $o
+    | "\($c | length) \($o | length) \([$o[] | (.detailsUrl // "") | select(test("/actions/runs/[0-9]+/")) | capture("/actions/runs/(?<id>[0-9]+)/").id] | unique | join(" "))"')"
+  checks_total="$(num_or "$checks_total" 0)"; checks_open="$(num_or "$checks_open" 0)"
+  pool_seen "$pool_now"
   if [ "$checks_open" -gt 0 ]; then
     waiting="checks still running ($checks_open of $checks_total)"
   else
@@ -1892,6 +2006,8 @@ EOF_VIEW
     elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
       waiting="checks still running (none reported yet)"
     fi
+    # Every run of the head has finished: say any of its jobs that waited for a runner.
+    [ -n "$waiting" ] || pool_note
   fi
   phase_local "asking the lessons review of ${head:0:7}"
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
