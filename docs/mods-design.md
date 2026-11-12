@@ -3631,6 +3631,12 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   one. Before the
   relative rule, seven commands were held, every one usage text, a docstring or a scratch repository
   fixture (make-switcher.py's `<out.html>`, an end to end test's `site/invoices/index.html`).
+- **A write it could not follow says so (L11, folded in by Dan).** rules.ts `unsure` and
+  `unsureCard` said "could not tell which issue or branch it belongs to" for every hold of that
+  kind, a write the guard could not follow included (a folder git cannot list, a name a variable,
+  pattern or command's output fills in, a script's write that cannot be placed). Those now say the
+  guard could not check where the call writes, why, and to name each file where it can be read
+  (the verdict's `unfollowed`); a checkout the disk cannot answer for keeps the branch sentence.
 - **Not read.** A shell script's own commands, a script named through a variable or a command's
   output, a relative script name where the folder cannot be followed, a script written by the same
   command (it is read as it stands on disk), and a module a script imports.

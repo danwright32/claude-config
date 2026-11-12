@@ -808,7 +808,9 @@ test('nothing Claude writes itself records a no or a settlement', withKit, async
 test('a write the reader cannot follow is held when the command names a look changing file, and runs when it names none', withKit, async ($, on) => {
   const w = world($, on)
   const why = refusalOf(await call($, { tool: 'Bash', command: `OUT=$(ls /w/slate/app/*.tsx | head -1); echo x > "$OUT"` }))
-  expect(why).toContain('could not tell which issue or branch')
+  // Said as the write it could not follow since #2847, never an issue or branch it could not tell.
+  expect(why).toContain('the design round guard could not check where this call writes')
+  expect(why).not.toContain('could not tell which issue or branch')
   expect(why).toContain('/w/slate/app/*.tsx')
   expect(refusalOf(await call($, { tool: 'Bash', command: `T=$(mktemp); echo x > "$T"` }))).toBe('')
   expect(w.ran.length).toBe(1)
@@ -3529,6 +3531,35 @@ test('#2847: a script whose own code names a screen file where it cannot be foll
   const locked = refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/locked.py` }))
   expect(locked).toContain('Blocked')
   expect(locked).toContain(`${NOTES}/locked.py could not be read for the files its own code writes`)
+  expect(w.ran).toEqual([])
+})
+
+// #2847 (folded in, Dan 2026-11-12): a write the guard could not follow was refused saying it "could
+// not tell which issue or branch it belongs to", the words of a different cause (L11). Each such
+// cause now says it could not check the call and why, and asks for the file named where it can be
+// read; only a checkout the disk cannot answer for, or an issue or branch that cannot be told, keeps
+// the issue or branch sentence.
+const UNFOLLOWED = 'the design round guard could not check'
+test('#2847: a write the guard could not follow is refused for that, never as an issue or branch it could not tell', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/docs/notes/a.md': 'notes\n', [`${NOTES}/rel.py`]: "open('app/page.tsx', 'w').write('<main/>')\n", [`${NOTES}/locked.py`]: 'UNREADABLE' } })
+  w.ctl.lsFilesFails = true
+  const causes: [string, string][] = [
+    // A folder whose files git cannot list (#2395).
+    ["cd /w/slate && find docs/notes -type f -exec sed -i '' 's/a/b/' {} +", 'cannot be listed'],
+    // A destination named by a pattern, a variable's value or a command's output.
+    ['python3 scripts/gen.py "$TARGET"', "a shell variable's value"],
+    ['npx prettier --write $(git ls-files src)', "a command's output"],
+    // A script whose code names a file where it cannot be placed, and one that cannot be read (#2847).
+    [`cd "$X" && python3 ${NOTES}/rel.py`, 'where that file is could not be followed'],
+    [`python3 ${NOTES}/locked.py`, 'could not be read for the files its own code writes'],
+  ]
+  for (const [command, cause] of causes) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, cause: why.includes(cause), unfollowed: why.includes(UNFOLLOWED), branch: why.includes('could not tell which issue or branch') }).toEqual({ command, cause: true, unfollowed: true, branch: false })
+  }
+  expect(w.cards.every(c => !String(c.reason).includes('could not tell which issue or branch'))).toBe(true)
+  // The issue or branch sentence stays for a checkout the disk cannot answer for.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/locked/x.css', content: '' }))).toContain('could not tell which issue or branch')
   expect(w.ran).toEqual([])
 })
 

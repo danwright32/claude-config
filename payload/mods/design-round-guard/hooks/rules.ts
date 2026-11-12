@@ -3185,11 +3185,21 @@ export const card = (files: readonly string[], subjects: readonly DesignRoundSub
   safeWay: `Claude tells you in plain words what would change, then starts /design-rounds or asks whether to skip them for this issue, or whether this edit changes the look at all.`,
 })
 
-/** The card when the issue or branch cannot be told. */
-export const unsureCard = (files: readonly string[]) => ({
-  reason: `${CARD_LEAD}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
-  safeWay: 'Claude checks out the issue branch, or asks you.',
-})
+/**
+ * The card when the issue or branch cannot be told, or, with `unfollowed` (#2847), when a file the
+ * call writes could not be followed (a folder git cannot list, a name a pattern, variable or command's
+ * output fills in, a script's own write that cannot be placed or a script that cannot be read).
+ */
+export const unsureCard = (files: readonly string[], unfollowed = false) =>
+  unfollowed
+    ? {
+        reason: `${CARD_LEAD}, and the design round guard could not check where it writes. The file is ${listed(files)}.`,
+        safeWay: 'Claude names each file the command writes where the guard can read it, or asks you.',
+      }
+    : {
+        reason: `${CARD_LEAD}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
+        safeWay: 'Claude checks out the issue branch, or asks you.',
+      }
 
 /** The card when the record of Dan's answers cannot be read. */
 export const unreadableCard = (files: readonly string[]) => ({
@@ -3197,10 +3207,18 @@ export const unreadableCard = (files: readonly string[]) => ({
   safeWay: 'Claude tries again, or tells you.',
 })
 
-/** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
-export const unsure = (files: readonly string[], why: string): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
-  `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
+/**
+ * Failing closed when the issue or branch cannot be told (#978: "saying so"), or, with `unfollowed`
+ * (#2847), when a file the call writes could not be followed, which until #2847 was worded as the
+ * issue or branch it could not tell (L11).
+ */
+export const unsure = (files: readonly string[], why: string, unfollowed = false): string =>
+  unfollowed
+    ? `Blocked: ${UNFOLLOWED_LEAD} ${listed(files)} (${why}), so it cannot tell whether this call changes how the screen looks. ` +
+      `Name each file the command writes where the guard can read it (a full path, or after a cd it can follow, never through a variable, a pattern or a command's output; a script readable, run from a folder it can follow) and try again, or ask Dan. ${ROUND_FILES}`
+    : `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
+      `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
+const UNFOLLOWED_LEAD = 'the design round guard could not check where this call writes'
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
 export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>

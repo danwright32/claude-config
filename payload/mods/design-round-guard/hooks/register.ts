@@ -166,8 +166,8 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   passes, recorded naming those words (below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
-//   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
-//   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
+//   passes; one git cannot read, or one beside a command that may change what it puts back
+//   (restoreAlone, since #2830; until then any other command), is judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
 // - Since #1191: a design round's working files go in the session's scratchpad (rules.ts
 //   inScratchpad: Claude Code's temp folder, the session's id), in no checkout, so never held and
 //   needing no issue or branch; a name a program only mentions and only joins onto a folder is read
@@ -1182,7 +1182,8 @@ type Verdict =
   | { pass: true; watch?: Watched[]; auto?: Auto }
   | { forged: string }
   | { stale: string }
-  | { unsure: string[]; why: string }
+  // `unfollowed` (#2847): `why` is a write the guard could not follow, never an issue or branch it could not tell.
+  | { unsure: string[]; why: string; unfollowed?: true }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
   // `unrecorded`: why an automatic pass could not be recorded, for a change held only for that (#2845, L11).
   | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; unrecorded?: string } }
@@ -1291,11 +1292,19 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const logicOnly = new Set<string>()
   let read: { logic?: boolean } = {}
   let why = ''
+  // Whether `why` is a write the guard could not follow (#2847), so the refusal says that rather than
+  // an issue or branch it could not tell (L11); set with `why`, by the cause that first set it.
+  let unfollowed = false
+  const notFollowed = (said: string) => {
+    if (!why) unfollowed = true
+    why ||= said
+  }
   for (const t of targets) {
-    // A whole folder whose files cannot be listed (#2395) may hold a look changing file: held, saying why.
+    // A whole folder whose files cannot be listed (#2395), and a script's own write that cannot be
+    // placed or a script that cannot be read (#2847), may hold a look changing file: held, saying why.
     if (t.unread !== undefined) {
       unsureFiles.push(t.word)
-      why ||= t.unread
+      notFollowed(t.unread)
       continue
     }
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
@@ -1343,14 +1352,15 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         continue
       }
       unsureFiles.push(t.word)
-      why ||=
+      notFollowed(
         output
           ? `where the command writes ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
           : variable
           ? `where the command writes ${t.word} could not be followed, and its name is a shell variable's value, which the design round guard cannot read before it runs, so it may name a look changing file`
           : may === 'unread'
           ? `where the command writes ${t.word} could not be followed, and its name is a pattern the design round guard cannot read, so it may name a look changing file`
-          : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
+          : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`,
+      )
       continue
     }
     const kind = shapeKind(t.path ?? t.word)
@@ -1369,13 +1379,13 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {
         unsureFiles.push(t.word)
-        why ||= `where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`
+        notFollowed(`where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`)
       }
       continue
     }
     if (!t.path) {
       unsureFiles.push(t.word)
-      why ||= `where the command writes ${t.word} could not be followed`
+      notFollowed(`where the command writes ${t.word} could not be followed`)
       continue
     }
     let tree: string | null
@@ -1565,7 +1575,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (now !== undefined && editWouldNotApply(now, tool, input)) return { stale: relTo(path, tree) }
     }
   }
-  if (unsureFiles.length) return { unsure: unsureFiles, why }
+  if (unsureFiles.length) return { unsure: unsureFiles, why, ...(unfollowed ? { unfollowed: true as const } : {}) }
   // #2294: a call waiting on Dan only for files the guard's own reading found change only logic goes
   // ahead unasked, for judge to record. Anything else waiting, a checkout or issue that could not be
   // read (unsure, above), or a note on what could not be read, keeps the whole call held as before.
@@ -1594,9 +1604,9 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
   // An edit that would not apply asks nothing of Dan (#1954): no card, nothing left waiting.
   if ('stale' in v) return stale(v.stale)
   if ('unsure' in v) {
-    const c = unsureCard(v.unsure)
+    const c = unsureCard(v.unsure, v.unfollowed === true)
     await drawCard($, call.id, c.reason, c.safeWay)
-    return unsure(v.unsure, v.why)
+    return unsure(v.unsure, v.why, v.unfollowed === true)
   }
   if ('unreadable' in v) {
     const u = v.unreadable
@@ -1833,7 +1843,7 @@ const afterShell = async (
 const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   if ('forged' in v) return forged(v.forged)
   if ('stale' in v) return stale(v.stale)
-  if ('unsure' in v) return unsure(v.unsure, v.why)
+  if ('unsure' in v) return unsure(v.unsure, v.why, v.unfollowed === true)
   if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why)
   return checked(v.missing.files, v.missing.subjects, v.missing.unread, v.missing.unrecorded)
 }
