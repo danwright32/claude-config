@@ -928,6 +928,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # The compilers run earlier in this call, each the outputs it builds and their sources
         # (note_build in lib/program-runs.py, claude-config#2844).
         self.made_built = []
+        self.building = set()  # the sources script() is reading as a build's output, so a cycle ends
         # The remotes a git fetch earlier in this call fetched, "*" for all (note_fetch, #2844).
         self.git_fetched = set()
 
@@ -1570,9 +1571,19 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # (the compiler, or the launcher in front of it, npx tsc), whose own naming of its input is not
         # a write (it writes only its outputs).
         for src, how, writer in self.built_from(path) if self.made_built else ():
+            # Two builds of each other's output (esbuild a.js --outfile=b.js && esbuild b.js
+            # --outfile=a.js) would read each other for ever: a file already being read as a source
+            # is not read again inside that reading.
+            key = os.path.realpath(src)
+            if key in self.building:
+                continue
             shown = os.path.relpath(src, d) if d and src.startswith(os.path.abspath(d) + os.sep) else src
-            reason = self.script(src, d, depth, shell_hint, lang, f"{label} (which {how} builds from {shown})",
-                                 built=writer)
+            self.building.add(key)
+            try:
+                reason = self.script(src, d, depth, shell_hint, lang, f"{label} (which {how} builds from {shown})",
+                                     built=writer)
+            finally:
+                self.building.discard(key)
             if reason:
                 return reason
         if not self.is_file(path):

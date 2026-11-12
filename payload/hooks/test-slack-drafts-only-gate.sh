@@ -3719,6 +3719,16 @@ for runs in "esbuild esrc/quiet.ts --bundle --outfile=out.js && node out.js" \
   run_c "$runs"
   allowed "a build whose output is quiet, or that nothing in the command runs, passes: $runs"
 done
+# Two builds of each other's output end, rather than reading each other until the gate crashes.
+printf '%s\n' "console.log('x');" > "$C/esrc/x.js"
+printf '%s\n' "console.log('y');" > "$C/esrc/y.js"
+run_c "esbuild esrc/x.js --outfile=esrc/y.js && esbuild esrc/y.js --outfile=esrc/x.js && node esrc/x.js"
+allowed "two builds of each other's quiet output pass, judged rather than crashed"
+# tsc --outFile bundles into one file this does not follow, so what it names keeps the mark #2772 gave
+# any program's named file: running that bundle is refused as unreadable, however quiet its source.
+run_c "tsc --outFile bundle.js qsrc/main.ts && node bundle.js"
+read_refused "a bundle tsc --outFile writes is not followed, so it stays unreadable"
+says "the refusal says the bundle may be written by tsc" "may be written earlier in this command by tsc"
 
 P="$T/p2844"
 mkdir -p "$P/tp" "$P/tq" "$P/tc" "$P/deep/pkg"
@@ -3862,6 +3872,14 @@ for runs in "git fetch quiet && git checkout quiet/main && bash other.sh" "git c
   run_l "$runs"
   allowed "a branch fetched quiet, or one no fetch in the command touches, is read as it is held: $runs"
 done
+# A local branch with a slash in its name is not a remote's: after a fetch it is read as it is held.
+git -C "$L" branch local2844/posting origin/main >/dev/null 2>&1
+git -C "$T/u2844" push -q "$L" "main:refs/heads/local2844/posting" 2>/dev/null
+L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
+run_l "git fetch && git checkout local2844/posting && bash other.sh"
+read_refused "a local branch with a slash in its name, which posts, is read as it is held after a fetch"
+run_l "git fetch && git checkout local2844/quiet && bash other.sh"
+allowed "a local branch name that holds nothing is left as it is on disk after a fetch"
 L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
 if [ "$L_AFTER" = "$L_BEFORE" ]; then check "a pull read leaves the repository's refs and files as they were" ok
 else check "a pull read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
