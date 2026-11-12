@@ -194,6 +194,56 @@ JS_REGEX_WORDS = {"return", "typeof", "case", "do", "else", "in", "instanceof", 
                   "throw", "yield", "await", "of"}
 
 
+RE_PATTERN_CALLS = frozenset({"compile", "search", "match", "fullmatch", "findall", "finditer", "sub", "subn",
+                              "split"})
+
+
+def py_marker(text):
+    """MARKER's first hit in Python text outside the pattern of a regular expression, or None
+    (claude-config#2844). re.compile(r"slack_webhook|chat.postMessage") looks for the endpoint, as
+    this gate's own rules do; it posts nothing, and naming it refused the script as one that posts
+    (found by the #2847 builder on 2026-11-12, Dan chose to stop it). Only the pattern, the first
+    argument (or pattern=) of re.<one of RE_PATTERN_CALLS>, written as a string literal, is left out:
+    the replacement re.sub writes, a string built elsewhere and every other string are read as
+    before. Text Python cannot parse is read whole, as before."""
+    hit = MARKER.search(text)
+    if not hit:
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return hit
+    lines = text.splitlines(keepends=True)
+    starts, at = [], 0
+    for ln in lines:
+        starts.append(at)
+        at += len(ln)
+
+    def offset(line, col):  # ast's column is a UTF-8 byte offset into its line
+        raw = lines[line - 1].encode("utf-8")
+        return starts[line - 1] + len(raw[:col].decode("utf-8", "replace"))
+    spans = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "re"
+                and node.func.attr in RE_PATTERN_CALLS):
+            continue
+        pat = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "pattern"), None)
+        if isinstance(pat, ast.Constant) and isinstance(pat.value, (str, bytes)) and pat.end_lineno:
+            spans.append((offset(pat.lineno, pat.col_offset), offset(pat.end_lineno, pat.end_col_offset)))
+    if not spans:
+        return hit
+    out, last = [], 0
+    for a, b in sorted(spans):
+        if a < last:
+            continue
+        out += [text[last:a], " " * (b - a)]
+        last = b
+    return MARKER.search("".join(out) + text[last:])
+
+
 def js_code(text):
     """js_scan's code alone: the text with its comments blanked."""
     return js_scan(text)[0]
@@ -205,7 +255,8 @@ def js_scan(text):
     (claude-config#2397, the rule the alert guard got in #2368: a script is read by the code it runs,
     never a comment); and, for each index of the text, whether it lies inside a string literal or a
     template literal's text (its quotes included, the code inside each ${...} not), so an import
-    written inside a string can be told from one written as code (claude-config#2484).
+    written inside a string can be told from one written as code (claude-config#2484): 1 there, and 2
+    inside a regex literal (claude-config#2844), which js_acts leaves out when it looks for what runs.
 
     Strings, template literals (with the code inside each ${...}) and regex literals are stepped
     over, so a // or /* inside one (a URL, a pattern) opens nothing. Every misreading is bounded on
@@ -299,6 +350,7 @@ def js_scan(text):
                     break
                 k += 1
             if k < n and text[k] == "/":
+                quoted[i:k + 1] = b"\x02" * (k + 1 - i)  # a regex literal: 2, apart from a string's 1
                 i = k + 1
                 last = "/regex"
                 continue
@@ -379,6 +431,9 @@ PY_INERT = frozenset({
     "fractions", "functools", "glob", "hashlib", "heapq", "html", "itertools", "json", "math", "numbers",
     "os.path", "pathlib", "pprint", "random", "re", "shlex", "statistics", "string", "struct", "sys",
     "textwrap", "time", "typing", "unicodedata", "warnings", "zoneinfo"})
+# Modules unable to send a request or run code unless the code names what turns that on: each module,
+# with the pattern that names it (py_inert_unless, claude-config#2844).
+PY_INERT_UNLESS = {"sqlite3": re.compile(r"load_extension")}
 # Builtins that run code, start a program (help's pager) or reach a namespace the script never
 # imported. Used at all, not only called, so `f = exec` counts too; re.compile, an attribute, does not.
 PY_RUNS = frozenset({"exec", "eval", "compile", "execfile", "__import__", "breakpoint", "help", "getattr",
@@ -413,6 +468,8 @@ JS_INERT = frozenset({
 JS_RUNS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon|eval|Function|Worker|SharedWorker|"
                      r"importScripts|Deno|Bun|WebAssembly)\b|\.\s*(constructor|binding|_linkedBinding|dlopen|"
                      r"mainModule)\b")
+# JS_ACTS's quoted module names, read in strings too (js_acts blanks strings for the rest).
+JS_ACTS_MODULE = re.compile(r"""['"](node:)?(https?|net|tls|http2|dgram)['"]""")
 JS_DYNAMIC = re.compile(r"""\b(require|getBuiltinModule)\b(?!\s*\(\s*['"`])|\bimport\s*\(\s*(?!['"`])""")
 # What can run a string as code, so that import text inside a string is an import after all
 # (claude-config#2484, signed off by Dan on 2026-11-09: import text in an ordinary string literal is not
@@ -436,10 +493,13 @@ JS_SINK = re.compile(r"\b(eval|Function|Worker|SharedWorker|importScripts|Shadow
                      r"\b(globalThis|global|self|window)\s*(\?\.\s*)?\[|\b(data|blob):(?:[A-Za-z]+/|['\"`,;])|"
                      r"\$\s*`")
 SINK = object()  # what Judge.walk gives on reaching a file that names a JS_SINK
-# The hand list this replaced, still read from the text as before, so nothing it refused passes now: a
-# word like got or ky refuses a script however it is used, as it did (measured 2026-11-07, 13 of 268
-# real scripts were refused only by one of these words).
-JS_ACTS = re.compile(r"\b(fetch|axios|got|undici|XMLHttpRequest|WebSocket|ky|superagent|node-fetch|"
+# The hand list this replaced, still read from the code. Until 2026-11-12 a package's name (got, ky,
+# axios) refused a script however it was used (measured 2026-11-07: 13 of 268 real scripts were refused
+# only by one of these words); mod-kit's writes.ts names a variable got, which refused every script
+# importing it, and Dan chose to stop that (#2844). A package is loaded only by an import or a
+# require, which IMPORT_SPEC reads (none of them is in JS_INERT) and JS_DYNAMIC catches when its name
+# is not written out, so the bare words are no longer read here.
+JS_ACTS = re.compile(r"\b(fetch|XMLHttpRequest|WebSocket|"
                      r"https?\.(request|get)|child_process|execSync|execFileSync|spawnSync|execFile|spawn|"
                      r"eval|Function|vm|Deno\.(run|Command)|Bun\.(spawn|\$))\b|"
                      r"""\b(require|import)\s*\(\s*[^'"`\s)]|['"](node:)?(https?|net|tls|http2|dgram)['"]""")
@@ -1645,9 +1705,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
             return f"{label} runs a command that posts: {inner}" if inner else None
+        kind = self.language(real, first, lang)
+        if hit and kind == "py":
+            hit = py_marker(body)  # a regular expression's pattern names what it looks for (#2844)
         if hit:
             return f"{label} posts to Slack (it names {hit.group(0)})"
-        kind = self.language(real, first, lang)
         if kind:
             return self.imports(label, real, os.path.dirname(real), body, kind)
         return None
@@ -1683,7 +1745,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         for why, via, target, found in self.modules(start, origin, root, body, kind):
             if why:
                 return why
-            hit = MARKER.search(found)
+            hit = py_marker(found) if kind == "py" else MARKER.search(found)
             if hit:
                 return f"{via} ({target}), which posts to Slack (it names {hit.group(0)})"
         return None
@@ -1845,7 +1907,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if kind == "js":
             code, quoted = js_scan(text)
             for m in IMPORT_SPEC.finditer(code):
-                if not strings and quoted[m.start()]:
+                if not strings and quoted[m.start()] == 1:
                     continue
                 spec = m.group(2)
                 if "${" in spec:
@@ -4509,9 +4571,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
         judges it with this same reading, and one that is not there is refused there. writes is False
         for code a shell script writes inline, where JS_WRITES is not counted (claude-config#2446)."""
-        code = js_code(text)
+        code, quoted = js_scan(text)
         uses_fs = False
         for m in IMPORT_SPEC.finditer(code):
+            if quoted[m.start()]:
+                # The keyword is inside a string ('--files-from', ', '), which loads nothing; a string
+                # run as code is JS_RUNS and JS_DYNAMIC's, below (claude-config#2844, as #2484 for the walk).
+                continue
             spec = m.group(2)
             bare = spec.split("?", 1)[0]
             if "${" not in spec and (bare.startswith(("./", "../", "/", "file://")) or bare in (".", "..")):
@@ -4520,14 +4586,45 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if "${" in spec or name not in JS_INERT:
                 return f"imports a module the gate does not know to be unable to send a request, run code or write a file ({spec})"
             uses_fs = uses_fs or name in JS_FS
-        hit = JS_RUNS.search(text) or JS_DYNAMIC.search(code) or JS_ACTS.search(text)
+        # What runs is looked for in the code: a comment, a regex literal or a string naming eval or
+        # fetch runs neither (mod-kit's code.ts lists /eval\s*\(/ and { seen: 'eval' } among what it
+        # matches, which refused any script importing it, claude-config#2844). A string that is a
+        # property's name in brackets is still read (globalThis['eval']), and so is a quoted module
+        # name, as JS_ACTS reads one.
+        parts, at = [], 0
+        for r in re.finditer(rb"\x02+|\x01+", quoted):
+            a, b = r.start(), r.end()
+            before = code[max(0, a - 40):a].rstrip()
+            if quoted[a] == 1 and before.endswith("[") and code[b:b + 40].lstrip().startswith("]") \
+                    and re.search(r"[\w$)\]?.]$", before[:-1].rstrip()):
+                continue  # obj['name'], obj?.['name']: a property access, not an array literal
+            # A string keeps its quotes, so require('x') still reads as a written out name (JS_DYNAMIC).
+            blank = " " * (b - a) if quoted[a] == 2 else re.sub(r"[^'\"`]", " ", code[a:b])
+            parts += [code[at:a], blank]
+            at = b
+        acting = "".join(parts) + code[at:]
+        hit = (JS_RUNS.search(acting) or JS_DYNAMIC.search(acting) or JS_ACTS.search(acting)
+               or JS_ACTS_MODULE.search(code))
         if hit:
             return f"can send a request or run code ({hit.group(0).strip()})"
-        hit = writes and (JS_WRITES.search(code) or JS_WRITES_METHOD.search(code) or
-                          (JS_WRITES_SHORT.search(code) if uses_fs else None))
+        # An fs method's name written as an object's key (`{ chmod: ... }`, as a table of programs has
+        # it) writes nothing; every other use of it is still read (claude-config#2844).
+        keyed = next((m for m in JS_WRITES.finditer(acting) if not re.match(r"\s*:(?!:)", acting[m.end():m.end() + 8])
+                      or re.search(r"\?\s*$", acting[max(0, m.start() - 8):m.start()])), None)
+        hit = writes and (keyed or JS_WRITES_METHOD.search(acting) or
+                          (JS_WRITES_SHORT.search(acting) if uses_fs else None))
         if hit:
             return f"can write a file ({hit.group(0).strip(' (.')})"
         return None
+
+    @staticmethod
+    def py_inert_unless(module, text):
+        """Whether module is one PY_INERT_UNLESS holds and text never names the one thing that lets it
+        run code: sqlite3 cannot send a request or run code unless extension loading is turned on
+        (enable_load_extension, load_extension, or SQL's load_extension()), and every spelling of that
+        names load_extension. Dan chose this on 2026-11-12 (#2844), after a read only Lightroom
+        catalog query handed a file sqlite3 wrote to code importing sqlite3 was refused."""
+        return module in PY_INERT_UNLESS and not PY_INERT_UNLESS[module].search(text)
 
     def py_acts(self, text, cur, root, writes=True, ran=frozenset()):
         """acts() for one Python file's text (cur its file, root the script's folder): how it can act
@@ -4575,6 +4672,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         continue
                     if not writes and a.name in PY_FILES:
                         continue
+                    if self.py_inert_unless(a.name, text):
+                        continue
                     if a.name not in PY_INERT and top not in PY_INERT:
                         return f"imports {a.name}, {unknown}"
                     if not a.asname and top not in PY_INERT:
@@ -4593,7 +4692,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 if not writes and (module in PY_FILES or (module == "os" and all(n in OS_FILES for n in names))):
                     continue
                 if module not in PY_INERT and module.split(".")[0] not in PY_INERT and \
-                        not all(f"{module}.{n}" in PY_INERT for n in names):
+                        not all(f"{module}.{n}" in PY_INERT for n in names) and not self.py_inert_unless(module, text):
                     return f"imports {module}, {unknown}"
         # A module's namespace holds the modules it imported (pathlib.os, os.path.os, json.codecs), so
         # an attribute chain from an imported name may not name a standard library module off the list.

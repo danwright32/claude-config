@@ -3685,6 +3685,13 @@ scratch repository that borrows the repository's objects, so the repository itse
 was). A clone of a remote makes files the gate cannot read, refused when the same command runs one,
 as a downloaded script is.
 
+Three more false refusals Dan chose to stop in #2844: Python code importing `sqlite3` counts as
+unable to post unless it names `load_extension`; a Python script naming an endpoint only in a
+regular expression's pattern (`re.compile`, `re.search` and the like) is not refused for it; and a
+JavaScript file naming `eval`, `chmod` or a package such as got only in a string, a regex literal or
+an object's key is not read as running or writing anything. A package is still read where it is
+imported or required.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite

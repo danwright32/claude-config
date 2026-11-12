@@ -1237,9 +1237,11 @@ printf '%s\n' "$J" 'const c = process.getBuiltinModule("cluster");' 'c.fork({ U:
 printf '%s\n' "$J" 'const i = process[`getBuiltinModule`](`inspector`);' 'i.open(9229);' > "$T/dj/gbm-inspector.js"
 printf '%s\n' "$J" 'const mod = process.getBuiltinModule(m.text);' 'mod.request(m.url);' > "$T/dj/gbm-dyn.js"
 printf '%s\n' "$J" 'const load = process.getBuiltinModule;' 'load(m.text).request(m.url);' > "$T/dj/gbm-alias.js"
-# A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
-# 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
-printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
+# A package the old hand list named (got, ky, axios) refuses where it is loaded. Until 2026-11-12 the
+# bare word refused a script however it was used (13 of 268 real scripts measured on 2026-11-07 were
+# refused only by one); Dan chose to stop that in #2844, after a variable named got in mod-kit's
+# writes.ts refused every script importing it. A variable of that name is a control in the #2844 block.
+printf '%s\n' 'const got = require("got");' "$J" 'got.post(m.url);' > "$T/dj/words.js"
 printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
   'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
 for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
@@ -3775,6 +3777,63 @@ for runs in "python3 -m runpy quietmod" "python3 -m pdb plain.py" "python3 -m pd
 done
 run_p "python3 -m cProfile post.py"
 says "the refusal names the runner" "cProfile"
+# sqlite3 cannot send a request or run code unless the code turns on extension loading (Dan chose
+# this on 2026-11-12, #2844, after a read only Lightroom catalog query was refused): code importing it
+# may be handed a file written earlier in the command, whose text cannot be read, as code importing
+# json may. The shape below is the one refused that day, its paths shortened.
+SQ_READ="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect('file:' + sys.argv[2] + '?mode=ro&immutable=1', uri=True)
+print(len(ids), con.execute('select count(*) from t').fetchone())"
+SQ_EXT="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect(sys.argv[2])
+con.enable_load_extension(True)
+print(len(ids))"
+SQ_SQL_EXT="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect(sys.argv[2])
+con.execute('select load_extension(?)', ('x',))
+print(len(ids))"
+SQ_POST="import urllib.request, sys
+urllib.request.urlopen(open(sys.argv[1]).read().strip())"
+SQ_FIRST="sqlite3 -readonly 'file:cat.lrcat?mode=ro' 'select id_local from Adobe_images' > ids.txt"
+run_p "$SQ_FIRST && python3 -I -c \"$SQ_READ\" ids.txt other.db"
+allowed "code importing sqlite3, handed a file sqlite3 wrote earlier in the command, passes"
+for code in "$SQ_EXT" "$SQ_SQL_EXT" "$SQ_POST"; do
+  run_p "$SQ_FIRST && python3 -I -c \"$code\" ids.txt other.db"
+  read_refused "code that can load an extension or send a request, handed a file written earlier, is refused: ${code:0:60}"
+done
+# Two false refusals the #2847 builder found on 2026-11-12, which Dan chose to stop (#2844). A script
+# importing mod-kit's writes.ts, handed a file naming an endpoint, was refused: the word from inside
+# the string '--files-from' read as an import of ', ', and eval, got and chmod written as strings, in
+# regular expressions and as an object's keys read as code that runs or writes. And a Python script
+# naming an endpoint in a regular expression's pattern, which looks for it and posts nothing.
+printf "import { readWrites } from '%s'\nconsole.log(readWrites)\n" "$(cd "$DIR/../mods/mod-kit/hooks" && pwd)/writes.ts" > "$P/usewrites.mjs"
+printf '%s\n' "const table = new Set(['--files-from', '--include-from'])" "export const f = () => fetch(process.argv[2])" > "$P/fromfetch.mjs"
+printf '%s\n' "const keys = { chmod: 1, run: ['eval'], re: /eval\\s*\\(|require\\(/ }" "console.log(keys)" > "$P/keys.mjs"
+printf '%s\n' "const k = { chmod: 1 }" "globalThis['eval'](process.argv[2])" > "$P/subscript.mjs"
+run_p "node usewrites.mjs hook.txt"
+allowed "a script importing mod-kit's writes.ts, handed a file naming an endpoint, passes"
+run_p "node keys.mjs hook.txt"
+allowed "words naming a write or eval as keys, strings or a regex literal run nothing"
+for runs in "node fromfetch.mjs hook.txt" "node subscript.mjs hook.txt"; do
+  run_p "$runs"
+  read_refused "a script that fetches, or runs eval by a bracketed name, handed a file naming an endpoint, is refused: $runs"
+done
+printf '%s\n' "import re, sys" "MARK = re.compile(r'chat[._]postMessage|slack_webhook|hooks\\.slack\\.com')" \
+  "print(bool(MARK.search(open(sys.argv[1]).read())))" > "$P/regex_ok.py"
+printf '%s\n' "import re, sys" "print(re.findall(pattern='slack_webhook', string=sys.argv[1]))" > "$P/regex_kw.py"
+printf '%s\n' "import re, urllib.request" "MARK = re.compile(r'slack_webhook')" "$PY_POST_2844" > "$P/regex_post.py"
+printf '%s\n' "import re, sys" "print(re.sub(r'x', 'https://hooks.slack.com/services/T/B/C', sys.argv[1]))" > "$P/regex_repl.py"
+for runs in "python3 regex_ok.py hook.txt" "python3 regex_kw.py x"; do
+  run_p "$runs"
+  allowed "a Python script naming an endpoint only in a regular expression's pattern passes: $runs"
+done
+for runs in "python3 regex_post.py" "python3 regex_repl.py x"; do
+  run_p "$runs"
+  read_refused "a Python script naming an endpoint outside a pattern is still refused: $runs"
+done
 # A project whose pytest config puts its root on the import path (pythonpath) and names its tests
 # (testpaths), as PostRoll's does: its tests import the project's own modules, which bare pytest
 # finds only through that setting, and an import the gate cannot find is refused as unfollowable.
