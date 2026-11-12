@@ -39,10 +39,12 @@ the methods use the Judge's own state (made, made_maybe, made_code, shell) and r
 note_file, note_output, pieces_of, unknown_patterns, resolve, made_from).
 """
 import fnmatch
+import lzma
 import os
 import re
 import tarfile
 import zipfile
+import zlib
 
 NON_WRITERS = frozenset({
     "cd", "pushd", "popd", "chmod", "chown", "chgrp", "chflags", "xattr", "touch", "ls", "stat", "file",
@@ -160,7 +162,8 @@ def make(interpreter, shells, awks, senders):
                 ops = [(a, v) for a, v in zip(args[1:], vals[1:]) if v is None or not v.startswith("-")]
                 if ops:
                     self.note_tree(*ops[-1], d, name)
-            elif name in DECOMPRESSORS or (name in COMPRESSORS and self.decompresses(vals)):
+            elif (name in DECOMPRESSORS or name in COMPRESSORS) and \
+                    self.decompresses(vals + (["-d"] if name in DECOMPRESSORS else [])):
                 for a, v in zip(args[1:], vals[1:]):
                     if v and not v.startswith("-") and COMPRESSED.search(v):
                         stem = COMPRESSED.sub("", v) + (".tar" if v.endswith(".tgz") else "")
@@ -296,8 +299,9 @@ def make(interpreter, shells, awks, senders):
 
         @staticmethod
         def decompresses(vals):
-            if any(v in ("-c", "--stdout", "--to-stdout") for v in vals[1:]):
-                return False
+            if any(v and (v in ("--stdout", "--to-stdout") or re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", v))
+                   for v in vals[1:]):
+                return False  # -c, alone or bundled (gzip -dc): to its output, no file written
             return any(v and (v in ("-d", "--decompress", "--uncompress") or re.fullmatch(r"-[a-zA-Z]*d[a-zA-Z]*", v))
                        for v in vals[1:])
 
@@ -515,8 +519,9 @@ def make(interpreter, shells, awks, senders):
                                 return None
                             f = t.extractfile(m)
                             out.append((m.name, f.read().decode("utf-8", "replace") if f else ""))
-            except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError, ValueError, RuntimeError):
-                return None
+            except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError, ValueError, RuntimeError,
+                    zlib.error, lzma.LZMAError, NotImplementedError):
+                return None  # a corrupt or unsupported archive: every file it unpacks into is unreadable
             for member, _ in out:
                 if os.path.isabs(member) or ".." in member.replace("\\", "/").split("/"):
                     return None

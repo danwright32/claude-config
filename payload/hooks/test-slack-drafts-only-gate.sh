@@ -1972,7 +1972,8 @@ for runs in "sed -i '' 's/hello/x/' plain.txt && bash plain.txt" "sed -i.bak -e 
   "sed -i '' \"s/hello/\\\${MT:-b}/\" plain.txt && bash plain.txt" "perl -pi -e 's/hello/x/' plain.txt && bash plain.txt" \
   "python3 gen.py run.sh && bash run.sh" "printf 'echo hi\n' > t.sh && python3 gen.py t.sh; bash t.sh" \
   "mk() { python3 -c 'import sys; print(sys.argv[1])' \"\$1\"; }; mk a > out.json; bash plain.txt" \
-  "sed -i '' 's/old.sh/run2.sh/' tools/post.sh; bash run2.sh"; do
+  "sed -i '' 's/old.sh/run2.sh/' tools/post.sh; bash run2.sh" \
+  "gzip -dc run.sh.gz > out.txt; bash run.sh" "gunzip -c run.sh.gz > out.txt; bash run.sh"; do
   run_cp "$runs"
   allowed "a script edited by code that only reads and writes files is judged by that code: ${runs:0:120}"
 done
