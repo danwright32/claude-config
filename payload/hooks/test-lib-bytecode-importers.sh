@@ -255,8 +255,9 @@ ASSIGN_B = re.compile(rb"^[ \t]*(?:(?:export|local|readonly|declare(?:[ \t]+-\w+
 
 
 def held_programs(b, rows):
-    """Every value the shell file gives each variable, as {name: [(program, line it is set on)]}:
-    a heredoc read into it, and a quoted assignment (BUDGET_PY='...' in test-work-names.sh)."""
+    """Every value the shell file gives each variable, as {name: [(program, line it is set on, line
+    the program's first line is on)]}: a heredoc read into it, and a quoted assignment (BUDGET_PY='...'
+    in test-work-names.sh)."""
     out = {}
     for i, (n, line, kind, _, ops) in enumerate(rows):
         if kind != "code" or not ops:
@@ -269,14 +270,14 @@ def held_programs(b, rows):
             if bk != "heredoc":
                 break
             body.append(bl)
-        out.setdefault(m.group(1), []).append(("\n".join(body), n))
+        out.setdefault(m.group(1), []).append(("\n".join(body), n, n + 1))
     for m in ASSIGN_B.finditer(b):
         if b[m.end():m.end() + 1] not in (b"'", b'"'):
             continue
         value, _ = shell_word(b, m.end())
         if value is not None and not value.startswith(b"$"):
-            out.setdefault(m.group(1).decode(), []).append(
-                (value.decode("utf-8", "replace"), b.count(b"\n", 0, m.start()) + 1))
+            n = b.count(b"\n", 0, m.start()) + 1
+            out.setdefault(m.group(1).decode(), []).append((value.decode("utf-8", "replace"), n, n))
     return out
 
 
@@ -347,7 +348,7 @@ for rel in paths:
             held = held_programs(b, rows) if held is None else held
             bodies = held.get(ref.group(1).decode(), [])
         else:
-            bodies = [(prog.decode("utf-8", "replace"), None)]
+            bodies = [(prog.decode("utf-8", "replace"), None, line)]
         ls = b.rfind(b"\n", 0, start) + 1
         head = b[ls:start].decode("utf-8", "replace")
         le = end
@@ -364,7 +365,7 @@ for rel in paths:
         flags = (m.group(1) + " " + m.group(2)) if m else ""
         how = "python3 -B" if re.search(r"-[A-Za-z]*B", flags) else \
             ("PYTHONDONTWRITEBYTECODE" if ENV_OFF.search(head) else None)
-        for body, set_on in bodies:
+        for body, set_on, starts in bodies:
             progs += 1
             res = judge(body, None, expand(tail, assigned))
             if not res:
@@ -372,7 +373,8 @@ for rel in paths:
             if set_on is None:
                 report(rel, line, "the python3 -c program", res, how)
             else:
-                report(rel, line, "the python3 -c program held in $%s (set on line %d)" % (ref.group(1).decode(), set_on),
+                # Lines inside the program count from where it starts; the finding names the run.
+                report(rel, starts, "the python3 -c program held in $%s (set on line %d)" % (ref.group(1).decode(), set_on),
                        res, how, at=line)
     for i, (n, line, kind, bare, ops) in enumerate(rows):
         if kind != "code" or not ops:
@@ -468,21 +470,23 @@ printf 'import importlib.util\ns = importlib.util.spec_from_file_location("g", "
   printf "out=\"\$($P -I -B -c \"\$HELDV\" \"\$D/lib/shell-words.py\")\"\n"                                       # 30: held, -B
   printf "ASSIGNV='import sys\nsys.path.insert(0, sys.argv[1])\nimport ratchet'\n"                                 # 31 to 33: the assignment
   printf "$P -c \"\$ASSIGNV\" \"\$D/lib\"\n"                                                                        # 34: held, no -B
+  printf "IFS= read -r -d '' LATEV <<'EOF' || true\nimport ratchet\nimport sys; sys.dont_write_bytecode = True\nEOF\n"   # 35 to 38: set too late
+  printf "$P -c \"\$LATEV\"\n"                                                                                      # 39: held, the setting after
 } > "$PROBE/payload/hooks/probe.sh"
 ( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py ) > "$TMPROOT/probe.list"
 probe="$(scan "$PROBE" "$TMPROOT/probe.list" --list)"
 hits="$(printf '%s\n' "$probe" | sed -n 's/^HIT \([^:]*:[0-9]*\):.*/\1/p' | sort | tr '\n' ' ')"
-want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 "
-# Twenty three importers: seven Python files (by-name, late, early, by-path, sibling, scoped,
-# scoped-ok) and sixteen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34).
+want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 "
+# Twenty four importers: seven Python files (by-name, late, early, by-path, sibling, scoped,
+# scoped-ok) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34, 39).
 # prose.py, local.py, not-lib.py and lines 6 and 24 load nothing from lib.
 [ "$hits" = "$want" ] \
   && check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" ok \
   || check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" "it found [$hits], wanted [$want]: $probe"
 nimp="$(printf '%s\n' "$probe" | grep -c '^IMPORTER ' || true)"
-[ "$nimp" = 23 ] \
+[ "$nimp" = 24 ] \
   && check "the scan lists every importer in the probe, the ones that turn bytecode off too" ok \
-  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 23: $probe"
+  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 24: $probe"
 case "$probe" in
   *"HIT payload/hooks/scoped.py:6: the file loads code by path"*"(it is set on line 3, inside a function this load is not in)"*)
     check "#2840 a setting inside another function does not count for a load outside it, and the finding says so" ok ;;
@@ -492,6 +496,11 @@ case "$probe" in
   *"HIT payload/hooks/probe.sh:29: the python3 -c program held in \$HELDV (set on line 25) loads"*)
     check "#2840 a program held in a variable is read where the variable is set, and found where it runs" ok ;;
   *) check "#2840 a program held in a variable is read where the variable is set, and found where it runs" "it said: $probe" ;;
+esac
+case "$probe" in
+  *"HIT payload/hooks/probe.sh:39: the python3 -c program held in \$LATEV (set on line 35)"*"(it is set on line 37, after the import)"*)
+    check "#2840 a late setting inside a held program is named by its own line in the file" ok ;;
+  *) check "#2840 a late setting inside a held program is named by its own line in the file" "it said: $probe" ;;
 esac
 case "$probe" in
   *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave payload/hooks/lib/__pycache__ behind (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
