@@ -2519,7 +2519,7 @@ test('#2223: four times as much mod hook code takes under six times as long to r
     expect(small).toBeGreaterThan(0)
     ratios.push(large / small)
   }
-  const middle = [...ratios].sort((a, b) => a - b)[3]
+  const middle = [...ratios].sort((a, b) => a - b)[3] ?? Infinity
   expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
 })
 
