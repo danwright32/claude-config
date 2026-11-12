@@ -10180,13 +10180,24 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # and not a stopped run: nothing checked the config, and the next pull runs it again. No
   # notification: it is the expected outcome while builders hold the slot, the next pull repairs
   # it, and status carries it until then.
+  # The runner refuses in two forms (claude-config#2835): the whole wait reached the bound handed
+  # down above (HOOK_TESTS_SLOT_WAIT), or the line stood still for HOOK_TESTS_SLOT_STILL first. Each
+  # is read in its own words, so a refusal for the line standing still is never reported as this
+  # pull's whole bound, naming nobody.
   if [ "$rc" -eq 75 ] && grep -q "^run-all-tests: REFUSED: waited .* for this Mac's full suite slot" "$out" 2>/dev/null; then
-    local slot_who slot_for
-    slot_for="$(sed -n "s/^run-all-tests: REFUSED: waited \(.*\) for this Mac's full suite slot, the most HOOK_TESTS_SLOT_WAIT allows.*/\1/p" "$out" 2>/dev/null | tail -1)"
-    slot_who="$(sed -n "s/^run-all-tests: REFUSED: waited .* the most HOOK_TESTS_SLOT_WAIT allows, and \(.*\)\. Nothing was run\..*/\1/p" "$out" 2>/dev/null | tail -1)"
+    local slot_who slot_for slot_still slot_why
+    slot_for="$(sed -n "s/^run-all-tests: REFUSED: waited \([^,]*\) for this Mac's full suite slot, .*/\1/p" "$out" 2>/dev/null | tail -1)"
+    slot_still="$(sed -n "s/^run-all-tests: REFUSED: waited .* the line stood still for the last \(.*\), the most HOOK_TESTS_SLOT_STILL allows.*/\1/p" "$out" 2>/dev/null | tail -1)"
+    if [ -n "$slot_still" ]; then
+      slot_who="$(sed -n "s/^run-all-tests: REFUSED: waited .* the most HOOK_TESTS_SLOT_STILL allows, with no run ahead of this one finishing or leaving: \(.*\)\. Nothing was run\..*/\1/p" "$out" 2>/dev/null | tail -1)"
+      slot_why=", and the line stood still for the last $slot_still with no run ahead of it finishing or leaving, the most the slot allows"
+    else
+      slot_who="$(sed -n "s/^run-all-tests: REFUSED: waited .* the most HOOK_TESTS_SLOT_WAIT allows, and \(.*\)\. Nothing was run\..*/\1/p" "$out" 2>/dev/null | tail -1)"
+      slot_why=", the most this pull allows"
+    fi
     record_hook_suite_result slotwait 75 "$out" "?" "?" "$took"
-    printf ', and the hook suite did NOT run here: it waited %s for this Mac'"'"'s full suite slot, the most this pull allows%s, so it ran nothing and nothing that just landed has been verified. The next pull runs it again, or run  claude-sync recheck  once that run ends' \
-      "${slot_for:-its whole bound}" "${slot_who:+, and $slot_who}"
+    printf ', and the hook suite did NOT run here: it waited %s for this Mac'"'"'s full suite slot%s%s, so it ran nothing and nothing that just landed has been verified. The next pull runs it again, or run  claude-sync recheck  once that run ends' \
+      "${slot_for:-its whole bound}" "$slot_why" "${slot_who:+, and $slot_who}"
     return 0
   fi
   if [ "$rc" -eq 0 ]; then

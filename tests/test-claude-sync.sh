@@ -25414,6 +25414,23 @@ check "#2758 a slot wait that is not a number is named, and half the deadline us
 check "#2758 (fixture) none of those runs reached the suite while the slot was held" \
   "[ ! -f '$SWT/ran5' ] && [ ! -f '$SWT/ran6' ] && [ ! -f '$SWT/ran7' ]"
 
+# ---- the runner's other refusal: the line stood still (claude-config#2835) ----
+# Since #2835 the runner also refuses, exit 75, once the line has not moved for
+# HOOK_TESTS_SLOT_STILL, in its own words. Set here below the pull's own bound, that refusal comes
+# first, and the pull must report it as what it was (how long the line stood still, and who held
+# the slot), not as a wait of "its whole bound" naming nobody. The clock moves 120 seconds a look, so
+# a 240 second bound is reached on the third look, at 4 minutes.
+out_sw8="$(sw_pull HOOK_TESTS_SLOT_STILL=240 SYNC_HOOK_TESTS_SLOT_WAIT=600 SW_RAN="$SWT/ran8")"
+dbg "#2835 a pull whose run refused because the line stood still: $out_sw8"
+check "#2835 the pull says the line stood still, for how long, and that the suite ran nothing" \
+  "line_has \"\$out_sw8\" 'hook suite did NOT run here' 'waited 4m for' 'the line stood still for the last 4m' 'ran nothing'"
+check "#2835 and it names the run holding the slot" \
+  "line_has \"\$out_sw8\" 'hook suite did NOT run here' \"pid $SWHP\""
+check "#2835 and it never says the run waited its whole bound" \
+  "! grep -q 'its whole bound' <<< \"\$out_sw8\""
+check "#2835 it is recorded as a run that waited for the slot, and the suite did not run" \
+  "[ ! -f '$SWT/ran8' ] && grep -q '^outcome=slotwait' '$SWR/.hook-tests'"
+
 # ---- the next pull reruns it although no hook arrived, and the record is replaced ----
 kill "$SWHP" 2>/dev/null || true
 out_sw2="$(sw_pull SW_RAN="$SWT/ran2")"
