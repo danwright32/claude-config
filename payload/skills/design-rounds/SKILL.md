@@ -235,8 +235,10 @@ stylesheet or swapped import) goes ahead with nothing asked, and is recorded und
 `auto:<the call's key>` with why. Dan, 2026-11-05: "If you're confident that nothing on screen
 changes don't ask me to make a decision and just skip design rounds automatically". Your own
 sentence that nothing changes never lets an edit through: on 2026-11-05 one said so of an edit
-adding a refusal message Dan reads. So any edit the guard still refuses is one it could not show
-changes nothing, and is asked about as above, with an honest `onScreen`.
+adding a refusal message Dan reads (claude-config#2173). So any edit the guard still refuses is
+one it could not show leaves the look unchanged, and is asked about as above, with an honest
+`onScreen`. Since claude-config#2845 the guard itself passes an edit to a mod hook file that
+changes only a message's words (below), so that edit would now go through, recorded.
 
 ## What Dan reads first: what changes on screen
 
@@ -262,8 +264,11 @@ A Claude Code mod's own hook file (`mods/<mod>/hooks/<file>.tsx`) counts as a sc
 it draws Claude Code's panels, but an edit to one that touches none of its JSX and names none of
 the words a mod draws with (a colour, a frame, a border, a row) is logic and goes through unasked.
 So does an Edit, MultiEdit or Write to any mod hook file, `.ts` included, that changes only its
-comments (claude-config#1341), and one to a `.ts` hook file changing only the words a guard's
-blocked card says, its refusal, which is copy in a tool result row (claude-config#1756). A shell command writing one that draws is still held whole, since
+comments (claude-config#1341), and, since claude-config#2845, any edit to a mod hook file that
+adds, rewords or removes only the words of a message (a toast, a notification, a refusal's
+reason, a tool's result, a picker's question or answers), recorded as an automatic pass naming
+those words. Dan, 2026-11-12: "any words". Words inside what the mod draws (a band row, a pane, a
+card's text) are part of the look and still held. A shell command writing one that draws is still held whole, since
 what it leaves cannot be read before it runs: make a comment only change there with the Edit tool.
 
 ## The last step: is this design settled?

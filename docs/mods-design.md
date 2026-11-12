@@ -3450,8 +3450,8 @@ before saving, the overnight LESSONS.md check, the collision guard, the design r
 - **What it costs.** A test runner handed a test file (`npx vitest run x.test.ts`, the commonest
   form) is now, to the collision guard, a possible edit of that file, as a script handed one has been
   since #1592; to the design round guard a test passes. A read only tool handed a screen file (`npx
-  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look or
-  wording change lets it through. No list of tools that only read was added: such a list exempts whatever it
+  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look
+  change lets it through. No list of tools that only read was added: such a list exempts whatever it
   misses (L96), and an exemption is Dan's to sign off.
 - **Still unread.** A file a run writes that no argument names (a path in a script's own text), what
   is under a folder a run is handed (`npx codemod app/`, judged as the folder alone, which is no look

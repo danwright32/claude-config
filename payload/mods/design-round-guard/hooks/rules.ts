@@ -3149,7 +3149,7 @@ export const caughtCall = <R>(call: { tool: string; agentId?: string }, input: R
 
 /**
  * What became of a shell write the guard judged once it ran (#1296): a change to a mod's .ts hook file
- * that made it draw, or since #1859 that changed only a message's words, put back with what the
+ * that made it draw (from #1859 until #2845, also one that changed only a message's words), put back with what the
  * command wrote kept first (`undone`, where it is kept), or not put back, and why: no copy could be
  * kept (`unkept`), the file changed again after the command wrote it (`changed`, where the copy is),
  * putting it back failed (`failed`), or the file could not be read after the command (`unread`).

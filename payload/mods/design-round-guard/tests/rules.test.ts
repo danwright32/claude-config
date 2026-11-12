@@ -1101,7 +1101,7 @@ test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts
   const judged = (from: string, to: string) => changeOf([], 'register.ts', SECRET_TS, edit(from, to))
   // drawsChange, all a .ts hook file was judged by, lets the toast's new words through.
   expect(drawsChange([], 'register.ts', SECRET_TS, edit('Blocked a command that', 'Stopped a command that'))).toBe(false)
-  // A toast's words, a refusal's reason, and a tool's result, each held for its wording.
+  // A toast's words, a refusal's reason, and a tool's result, each named as words, never held (#2845).
   expect(judged('Blocked a command that', 'Stopped a command that')).toBe('words')
   expect(judged('Blocked: this would print', 'Stopped: this would show')).toBe('words')
   expect(judged('Kept the job running.', 'The job stays up.')).toBe('words')
@@ -2292,7 +2292,7 @@ test('#2038, #2845: a hook moved into a named const and registered with on(...).
   expect(changeOf([], 'register.ts', listed, edited(listed, 'Saved the note.', 'Stored the note.'))).toBe('words')
   // Only the engine's `on`, register's first parameter, is read so (Dan, 2026-11-01, narrowing
   // #2043): a callback on what any other function handed in returns is still read through the words
-  // handed to it, so those words, said in a toast, are held.
+  // handed to it, so those words, said in a toast, are named.
   const handed = [
     "import type { EngineInterface, Register } from 'claude-code'",
     'const tell = ($: EngineInterface, say: (w: string) => Promise<string>) => {',

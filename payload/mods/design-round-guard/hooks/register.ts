@@ -152,8 +152,9 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   in it reaches what the mod draws (rules.ts drawsChange), read beside the mod's other hook files: a
 //   line builder making mod-kit's text runs, dividers or buttons (manual steps' cardLines, where the
 //   #1263 divider passed unasked), anything handed to a drawing call or used in JSX, and every name
-//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing,
-//   unless it changes the words of a message a person reads (since #1841, below).
+//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing; one
+//   changing the words of a message a person reads was held from #1841 until #2845, and since then
+//   passes, recorded naming those words (below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
