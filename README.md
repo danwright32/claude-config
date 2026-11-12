@@ -6850,7 +6850,9 @@ refusal's reason, a tool's result, a picker's question or answers) passes with n
 kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
 returning `{ words }`; a record that cannot be kept holds the call, a shell write's file put back,
 and the refusal and card say the guard read it as leaving the look unchanged but could not record
-that, never that it changes the look, for #2294's logic only pass alike, L11).
+that, never that it changes the look, for #2294's logic only pass alike, L11; a shell command also
+changing a file that is held and undone has its words only files put back too, recording nothing,
+so a refused command leaves nothing behind, Dan 2026-11-12).
 Only a change to how the mod looks is held: a drawing call, JSX, a line builder, a colour or frame,
 and the words inside what the mod draws (a band row, a pane, a card's text), which are drawing. This
 reverses the wording holds of #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's

@@ -3176,20 +3176,26 @@ export type ShellOutcome =
 // `record`, for a settled design under docs/design a script run was handed (#1593): what the change
 // did is said as the page no longer being sealed, never as a mod's drawing (L11). A file that could
 // not be read after says it cannot tell which.
-// `unrecorded`, for a change the guard read as leaving the look unchanged whose automatic pass could
-// not be recorded (#2845): said as that, never as a change to what the mod draws (L11).
-export const shellOutcome = (o: ShellOutcome, record = false, unrecorded = false): string => {
+// `as`, for a mod hook file changed in what it draws (`draws`); one the guard read as leaving the look
+// unchanged whose automatic pass could not be recorded (`unrecorded`, #2845); or one changed only in a
+// message's words, put back beside a change the guard refused so a refused command leaves nothing
+// behind (`beside`, Dan 2026-11-12 for #2845). Each said as what the guard found, never as another (L11).
+export const shellOutcome = (o: ShellOutcome, record = false, as: 'draws' | 'unrecorded' | 'beside' = 'draws'): string => {
   const did = record
     ? `left ${o.file} no settled design exactly as make-settled.py wrote it`
-    : unrecorded
+    : as === 'unrecorded'
       ? `changed ${o.file} in a way the guard read ${AS_UNRECORDED}`
-      : `changed what the mod draws in ${o.file}`
+      : as === 'beside'
+        ? `changed only the words of a message in ${o.file}`
+        : `changed what the mod draws in ${o.file}`
   const notUndone = `The command ran and ${did}, and that change was NOT undone:`
   const why = record
     ? 'it left no settled design exactly as make-settled.py wrote it'
-    : unrecorded
+    : as === 'unrecorded'
       ? `the guard read it ${AS_UNRECORDED}`
-      : 'it changed what the mod draws on screen'
+      : as === 'beside'
+        ? 'it changed only the words of a message, which pass, but the rest of the command was refused, so it is put back with it, to pass when the command runs again'
+        : 'it changed what the mod draws on screen'
   if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: ${why}. What the command wrote there is kept at ${o.undone}.`
   if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
   if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`

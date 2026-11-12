@@ -3590,6 +3590,10 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   A words change is never held: register.ts records it under `auto:<the call's key>` with the
   words in `why` (`autoPassWhy`, citing #2845), by an Edit, MultiEdit, Write, git put back or shell
   write alike. A shell write whose record cannot be kept is put back and held, as a look change is.
+- **A refused command leaves nothing behind.** Dan, 2026-11-12: a shell command that changes a file
+  the guard holds and undoes, and also a mod file only in a message's words, has the words file put
+  back too, with nothing recorded (register.ts afterShell, `shellOutcome` `beside`). Run again once
+  Dan answers, the words pass and are recorded then.
 - **A pass that cannot be recorded says so (L11).** Held because its record failed, for #2294's
   logic only pass and this words pass alike, the call's refusal, card and shell outcome say the
   guard read it as leaving the look unchanged but could not record that (rules.ts `heldAs`,

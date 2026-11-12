@@ -1664,7 +1664,15 @@ const afterShell = async (
   for (const c of held) {
     const file = relTo(c.w.path, c.w.tree)
     if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }, c.w.record))
-    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record, unrecorded !== undefined))
+    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record, unrecorded === undefined ? 'draws' : 'unrecorded'))
+  }
+  // Dan, 2026-11-12, for #2845: a refused command leaves nothing behind, so a file it changed only in a
+  // message's words is put back beside those refused, and recorded nowhere; when the command runs
+  // again once Dan answers, its words pass and are recorded then.
+  for (const c of changed) {
+    if (c.words === undefined || held.includes(c)) continue
+    const file = relTo(c.w.path, c.w.tree)
+    said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record, 'beside'))
   }
   const files = held.map(c => relTo(c.w.path, c.w.tree))
   const whys = held.flatMap(c => (c.why === undefined ? [] : [c.why]))

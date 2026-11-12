@@ -2149,6 +2149,21 @@ test("#2845: a mod hook edit that only changes a message's words passes unasked 
   expect(w.files[LINES]).toBe(LINES_TEXT)
 })
 
+// Dan, 2026-11-12, for #2845: a refused command leaves nothing behind, so a file it changed only in a
+// message's words is put back beside the one it changed the look of, and nothing is recorded; run
+// again once Dan answers, the words pass and are recorded then.
+test('#2845: a shell write changing a look and a message\'s words is refused, both files put back, nothing recorded', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.shell = { [GUARD_HOOK]: GUARD_TEXT.replace('Blocked a command that', 'Halted a command that'), [LINES]: LINES_TEXT.replace('bold: true', 'bold: false') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' -e 's/Blocked a command/Halted a command/' -e 's/bold: true/bold: false/' payload/mods/demo/hooks/guard.ts payload/mods/demo/hooks/card.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/guard.ts was undone')
+  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  expect(w.files[LINES]).toBe(LINES_TEXT)
+  expect(autosOf(w)).toEqual([])
+  w.ctl.shell = {}
+})
+
 // The refusal for a pass that could not be recorded says what the guard found, never that the edit
 // changes the look (L11; Dan folded this into #2845, 2026-11-12).
 const UNRECORDED = 'as leaving the look unchanged, but its automatic pass could not be recorded ('
