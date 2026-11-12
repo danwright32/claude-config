@@ -3206,6 +3206,12 @@ for shape in cpdst cpdst-opt cpdst-gone cpdst-t; do
   says "a file that may be the target of a copy from a word the gate cannot work out is refused unread ($shape, #2683)" \
     "what wrote it could not be told"
 done
+# The second reading (#2678) of code fed in a heredoc, its argument written through a variable, finds
+# the heredoc by the command as the script writes it, so the file after - is judged as the same
+# command with a literal path is, and not against the whole script taken as the code's input.
+ur_plain heredoc-arg 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'print(len(open(sys.argv[1]).read()))' 'EOF'
+run_bash "bash $UR/posts/tests/heredoc-arg.sh"
+says "a heredoc's argument written through a variable is judged as the literal path is (#2683)" "act.py posts to Slack"
 for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
   run_ur refuse "bash $UR/quiet/tests/$shape.sh"
   says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \

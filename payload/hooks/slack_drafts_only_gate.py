@@ -3936,7 +3936,7 @@ class Judge(WrittenPaths, ProgramWrites):
                 # The files after it are the code's arguments, judged as a script's are: a data file
                 # is read when the code can act on it, and any other file is read as code (#2439).
                 return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
-            fed, is_body = self.fed(text, whole) if operand == "-" else (None, False)
+            fed, is_body = self.fed(fed_by, whole) if operand == "-" else (None, False)
             if is_body and "-m" not in words[1:]:
                 # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
                 # arguments, judged as those of code given by -c are, against what that code can do
