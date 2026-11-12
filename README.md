@@ -7808,11 +7808,13 @@ sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge he
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
 chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
 not check.
-In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
-next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
+In the morning the session that chose it (once that one has ended, a session working in the
+repository it was made in, never one in another, #2833; any session when that repository cannot be
+read) is told at Dan's next message to ask with metadata
+`{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
-unanswered for three days expires: said once in each session, still held from merging, and no longer
+unanswered for three days expires: said once in each such session, held from merging, and no longer
 letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
 overnight). In any mode, taking away wording that origin's copy of the file on its default branch
 (named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
@@ -7820,7 +7822,7 @@ live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833
 
 </td></tr>
 </tbody>

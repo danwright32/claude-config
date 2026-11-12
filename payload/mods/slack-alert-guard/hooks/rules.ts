@@ -218,8 +218,8 @@ export const testFile = (rel: string): boolean => {
 }
 const TEST_DIRS = new Set(['__tests__', '__mocks__', '__fixtures__', 'test', 'tests', 'spec', 'specs', 'e2e'])
 
-/** A word escaped for an extended regular expression, as git grep -E reads one. */
-export const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** A word escaped for a regular expression, as nameRe matches a name. */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 // The extensions one JavaScript or TypeScript import may name the same file by.
 const JS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'])
