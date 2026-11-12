@@ -79,7 +79,7 @@ MAX_MEMBERS = 2000
 MAX_UNPACKED = 8 * 1024 * 1024
 # The files a sed program writes (w, W, the w flag of s) and an awk program prints into (> and >>).
 # Read liberally: a name taken from elsewhere in the program only reads one more file as the program.
-SED_WRITES = re.compile(r"(?:^|[;\n{}0-9$/])\s*[wW]\s+([^\s;}'\"]+)")
+SED_WRITES = re.compile(r"(?:^|[;\n{}0-9$]|/[gpIiMme0-9]*)\s*[wW]\s+([^\s;}'\"]+)")
 AWK_WRITES = re.compile(r">>?\s*\"([^\"]+)\"|>>?\s*([^\s;}'\"()]+)")
 # Perl or Ruby code that can fetch, run or load something, or names a module or file handle at all.
 PERL_ACTS = re.compile(r"`|%x|\b(system|exec|qx|open|popen|sysopen|require|use|do|eval|fork|socket|syscall|"
@@ -606,6 +606,10 @@ def make(interpreter, shells, awks, senders):
                         if k + 1 < len(vals):
                             dest_raw, dest = args[k + 1], vals[k + 1]
                         k += 2
+                        continue
+                    if v.startswith("-d"):  # the folder glued on, -dsub
+                        dest_raw, dest = v[2:], v[2:]
+                        k += 1
                         continue
                     if v == "-x":
                         break  # the rest are names left out
