@@ -336,6 +336,10 @@ IMPORT_MAX_FILES = 300
 # a node script; each named chat.postMessage in text nobody runs.
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
+# A redirection word that only WRITES, with its target in the next word: >, >>, >|, >&, &>, &>>, each
+# with an optional descriptor number (claude-config#2771). Never <, <> or <&, whose target the program
+# reads. A target glued to the operator is one word, which REDIRECT_WORD already passes over.
+OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # What lets a script act on a data file as more than data: sending a request (whose address the file
 # can hold), running code (which the file can be), or writing it somewhere that runs later.
 #
@@ -3788,11 +3792,23 @@ class Judge(WrittenPaths, ProgramWrites):
         held = self.held_slot(words, d) if slot and not empty else None
         past = after_held = False
         prog = os.path.basename(words[0])
+        # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
+        # is opened for writing by the shell before the program starts and is never handed to it, so
+        # it is not read (claude-config#2771): reading it refused rerunning a suite whose earlier output
+        # named an endpoint. A file fed with < or <> is the program's input and is still read, as is
+        # every argument, and a file written here and run by a later command is judged there.
+        written = False
         for w in words[1:]:
+            if written:
+                written = False
+                continue
             if empty and w == empty:
                 past = True
                 continue
-            if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
+            if self.sw.REDIRECT_WORD.match(w):
+                written = bool(OUTPUT_REDIRECT.match(w))
+                continue
+            if w.startswith("-") or w.startswith("+"):
                 continue
             path = self.resolve(w, d)
             if not self.is_file(path):

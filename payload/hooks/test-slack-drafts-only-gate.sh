@@ -2213,6 +2213,50 @@ says "a writer parsed from the command line is still named" "is written earlier 
 run_df "printf '%s' 'echo hi' > made.sh; cp made.sh copy.sh; sh made.sh"
 allowed "a file made by printf from the command line and then run still passes"
 
+echo "slack drafts only: an output redirect target is written, not read (claude-config#2771)"
+
+# every_file read the word after a separate > as a file handed to the script, so rerunning a suite
+# whose earlier output named chat.postMessage was refused (`bash runner.sh > out.txt`), and since
+# #2721 a target written earlier in the same command was judged as a script nobody could read. The
+# shell opens that word for writing before the program starts, and never hands it to the program.
+# A file the program really reads, an argument or one fed with <, is still judged, as is a file
+# written by one command and run by a later one.
+mkdir -p "$T/rd"
+printf '%s\n' 'for f in "$@"; do bash "$f"; done' > "$T/rd/runner.sh"
+printf '%s\n' '#!/bin/bash' 'for f in "$@"; do bash "$f"; done' > "$T/rd/tool.sh"
+chmod +x "$T/rd/tool.sh"
+printf '%s\n' 'import sys' 'for f in sys.argv[1:]: exec(open(f).read())' > "$T/rd/runner.py"
+printf '%s\n' 'echo ok' > "$T/rd/suite.sh"
+printf '%s\n' 'FAIL: expected this to be refused:' "$POST" > "$T/rd/out.txt"
+printf '%s\n' 'FAIL: expected this to be refused:' "$POST" > "$T/rd/out"
+run_rd() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/rd")"; }
+
+for prog in "bash runner.sh" "sh runner.sh" "python3 runner.py" "./tool.sh"; do
+  for op in ">" ">>" "1>" "2>" "2>>" "&>" "&>>" ">&" ">|"; do
+    for target in out.txt out; do
+      run_rd "$prog $op $target"
+      allowed "an output redirect target is not read as the program's input: $prog $op $target"
+    done
+  done
+done
+for runs in "bash runner.sh >out.txt" "bash runner.sh 2>out" "bash runner.sh &>>out" "python3 runner.py >|out" \
+  "bash runner.sh > out.txt 2>&1" "bash runner.sh 2> out > out.txt" \
+  "bash suite.sh > out 2>&1; bash runner.sh > out" "bash runner.sh > out.txt 2>&1; bash runner.sh > out.txt"; do
+  run_rd "$runs"
+  allowed "an output redirect target, glued, repeated or written earlier, is not read: $runs"
+done
+
+# What is still judged: an argument (also beside a redirect, and after its target, where the shell
+# still hands it over), a file fed with < or <>, and a file written earlier and then run.
+for runs in "bash runner.sh out.txt" "bash runner.sh out" "bash runner.sh out.txt > log.txt" \
+  "bash runner.sh > log.txt out" "bash runner.sh 2> log.txt out.txt" "bash runner.sh < out" "bash runner.sh 0< out" \
+  "bash runner.sh <> out" "bash out > log.txt" "python3 runner.py out > log.txt" "./tool.sh > log.txt out.txt" \
+  "printf '%s\n' '$POST' > p.sh; bash p.sh > o.txt" "bash suite.sh > made.sh; bash made.sh" \
+  "bash suite.sh > made.sh; bash runner.sh made.sh > o.txt"; do
+  run_rd "$runs"
+  refused "a file the program reads, or runs after it is written, is still judged: $runs"
+done
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
