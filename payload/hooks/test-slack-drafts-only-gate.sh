@@ -34,6 +34,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/slack-drafts-only-gate.sh"
+# The gate's switched off refusal (#2683) is switched on only where run_ur asks for it, never by
+# whatever the caller's environment holds.
+unset SLACK_GATE_UNWORKED_PATHS
 NUDGE="$(cd "$DIR/.." && pwd)/skills/nudge/nudge.py"
 
 pass=0
@@ -2711,6 +2714,128 @@ PY
 )"
   check "the gate is registered under PreToolUse for Bash and every Slack tool, to block" "$wiring"
 fi
+
+# ---- #2683: a file run or sourced by a path the gate cannot work out, refused only when switched on ----
+# #2678's probe found every way of running a file allowed once the gate could not work out its path:
+# after an eval, after a wait on a condition it cannot read, through a variable nothing sets. Refusing
+# that is built behind a switch that ships off (Dan, 2026-11-10: measure first, as #2538 does for
+# sourcing), so with it off every verdict is what it was, and the measurement turns it on through
+# SLACK_GATE_UNWORKED_PATHS=refuse. Each shape is in a tree whose files all post, so a pass with the
+# switch off is the file left unread, exactly as before.
+run_ur() { # run_ur <switch value> <command>: run_bash with SLACK_GATE_UNWORKED_PATHS set to that value
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | SLACK_GATE_UNWORKED_PATHS="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+UR="$T/ur"
+for tree in posts quiet; do
+  mkdir -p "$UR/$tree/tests" "$UR/$tree/tools/lib"
+done
+printf '%s\n' 'import json, urllib.request' \
+  'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' \
+  > "$UR/posts/tools/lib/act.py"
+printf '%s\n' '#!/bin/bash' 'curl -s -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi' \
+  > "$UR/posts/tools/lib/act.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: "{}" });' > "$UR/posts/tools/lib/act.js"
+printf '%s\n' 'print("hi")' > "$UR/quiet/tools/lib/act.py"
+printf '%s\n' '#!/bin/bash' 'echo hi' > "$UR/quiet/tools/lib/act.sh"
+printf '%s\n' 'console.log("hi");' > "$UR/quiet/tools/lib/act.js"
+chmod +x "$UR/posts/tools/lib/act.sh" "$UR/quiet/tools/lib/act.sh"
+UR_TOP='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+UP=..'
+# The ways the walk loses ROOT (#2678's probe): an eval, a wait whose condition it cannot read
+# (lib/hang-wait.sh evaluates it in the caller's shell), and a variable nothing in the script sets.
+ur_lose() { case "$1" in
+  evald) printf '%s\n' 'eval "$1"' ;;
+  hang) printf '%s\n' ". \"$DIR/lib/hang-wait.sh\" || exit 1" 'hang_wait "$cond" 1 || exit 1' ;;
+  unset) : ;;
+esac; }
+# The ways of running a file: <name>:<line, with @V@ for the folder holding the tools, and @U@ for
+# the way up to it from the script's own, spelt from BASH_SOURCE>.
+UR_FORMS=('python3:python3 "@V@/tools/lib/act.py"' 'python3B:python3 -B "@V@/tools/lib/act.py"'
+  'bash:bash "@V@/tools/lib/act.sh"' 'sh:sh "@V@/tools/lib/act.sh"' 'node:node "@V@/tools/lib/act.js"'
+  'source:source "@V@/tools/lib/act.sh"' 'dot:. "@V@/tools/lib/act.sh"' 'direct:"@V@/tools/lib/act.sh"'
+  'subst:out="$(python3 "@V@/tools/lib/act.py" 2>&1)"' 'bsource:python3 "${BASH_SOURCE[0]%/*}/@U@/tools/lib/act.py"')
+for tree in posts quiet; do
+  for lose in evald hang unset; do
+    v='$ROOT' u='$UP'; [ "$lose" = unset ] && v='$NOT_SET_2683' u='$NOT_SET_2683'
+    for form in "${UR_FORMS[@]}"; do
+      line="${form#*:}"; line="${line//@V@/$v}"; line="${line//@U@/$u}"
+      { printf '%s\n' '#!/bin/bash' "$UR_TOP"; ur_lose "$lose"; printf '%s\n' "$line"; } > "$UR/$tree/tests/$lose-${form%%:*}.sh"
+    done
+  done
+done
+for lose in evald hang unset; do
+  for form in "${UR_FORMS[@]}"; do
+    f="$UR/posts/tests/$lose-${form%%:*}.sh"
+    run_bash "bash $f"
+    allowed "switched off by default: a file run by a path the gate cannot work out is let through unread ($lose, ${form%%:*})"
+    run_ur refuse "bash $f"
+    refused "switched on: a file run by a path the gate cannot work out is refused ($lose, ${form%%:*})"
+    says "it says it could not check, not that it found a post ($lose, ${form%%:*})" "REFUSED: the gate could not check whether this command posts to Slack"
+    says "it names the path it could not work out ($lose, ${form%%:*})" "a path the gate cannot work out"
+  done
+done
+# Not only a file that posts: the gate cannot read it, so it cannot tell one that does not.
+run_ur refuse "bash $UR/quiet/tests/unset-python3.sh"
+refused "switched on: a file that does not post, run by a path the gate cannot work out, is refused too"
+# The reason names the script, its line, and the variable.
+run_ur refuse "bash $UR/posts/tests/unset-bash.sh"
+says "it names the script and line it stopped at" "the script $UR/posts/tests/unset-bash.sh, line 5, runs"
+says "it names the variable that is not certain" "\$NOT_SET_2683 is not certain there"
+says "it says what to do" "Write the path so it can be worked out"
+run_ur refuse "bash $UR/posts/tests/evald-node.sh"
+says "past an eval it names the line where the walk stopped" "since the gate stops following the script's variables at line 5: eval \"\$1\""
+run_ur refuse "bash $UR/posts/tests/evald-source.sh"
+says "a sourced file is named as sourced" "line 6, sources \"\$ROOT/tools/lib/act.sh\", a path the gate cannot work out"
+# As a command typed: a variable the command never sets.
+run_bash "python3 \"\$NOT_SET_2683/act.py\""
+allowed "switched off: a command running a file through a variable it never sets is let through"
+run_ur refuse "python3 \"\$NOT_SET_2683/act.py\""
+refused "switched on: a command running a file through a variable it never sets is refused"
+says "and says so of this command" "this command runs \"\$NOT_SET_2683/act.py\", a path the gate cannot work out"
+# A program named by a variable alone is how a function runs the command it is handed, and a suite its
+# stand in; refusing it newly refused 261 more of this repository's scripts (2026-11-12), so it is
+# left as it was, as is the string an eval runs. A path holding a slash is a file run, and is refused.
+printf '%s\n' '#!/bin/bash' 'run() { local cmd="$1"; $cmd 2>/dev/null; }' 'run "$NOT_SET_2683"' \
+  '"$NOT_SET_2683" --version' 'A=1 "$NOT_SET_2683"' 'eval "$NOT_SET_2683"' > "$UR/posts/tests/bare.sh"
+run_ur refuse "bash $UR/posts/tests/bare.sh"
+allowed "switched on: a program named by a variable alone, or the string an eval runs, is left as before"
+printf '%s\n' '#!/bin/bash' 'eval "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/eval-path.sh"
+run_ur refuse "bash $UR/posts/tests/eval-path.sh"
+refused "switched on: an eval running a file by a path it cannot work out is refused"
+# An assignment is not a program, however the shared reader splits it; a program past env's is found.
+printf '%s\n' '#!/bin/bash' 'A+="$NOT_SET_2683/x.sh"' 'a[1]="$NOT_SET_2683/x.sh"' 'a+=("$NOT_SET_2683/x.sh")' \
+  'b=("$NOT_SET_2683/x.sh" y)' 'case "$1" in /*) a+=("${1#/}") ;; esac' > "$UR/posts/tests/assigns.sh"
+run_ur refuse "bash $UR/posts/tests/assigns.sh"
+allowed "switched on: appends and array assignments built from a variable are not read as runs"
+printf '%s\n' '#!/bin/bash' 'env "PATH=$NOT_SET_2683/bin:$PATH" "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/env-path.sh"
+run_bash "bash $UR/posts/tests/env-path.sh"
+allowed "switched off: a file run past env's assignment by a path it cannot work out is let through"
+run_ur refuse "bash $UR/posts/tests/env-path.sh"
+says "switched on: the file run past env's quoted assignment is the one named" "runs \"\$NOT_SET_2683/tools/lib/act.sh\", a path the gate cannot work out"
+# Any other value, or none, is off.
+for value in "" 0 off yes 1; do
+  run_ur "$value" "bash $UR/posts/tests/unset-python3.sh"
+  allowed "only the value refuse switches it on (SLACK_GATE_UNWORKED_PATHS='$value')"
+done
+# What the switch leaves alone, with it on: a path it can work out, a file it can read, and code that
+# names no file to run.
+run_ur refuse "ROOT=$UR/quiet; python3 \"\$ROOT/tools/lib/act.py\""
+allowed "switched on: a path built from a variable the command sets is worked out, not refused"
+run_ur refuse "bash $UR/quiet/tests/hang-python3.sh"
+refused "switched on: a wait on a condition it cannot read loses the path, so it is refused"
+run_ur refuse "python3 $UR/posts/tools/lib/act.py"
+says "switched on: a literal path to a file that posts is refused as the post it is" "REFUSED: this command posts to Slack"
+run_ur refuse "python3 $UR/quiet/tools/lib/act.py"
+allowed "switched on: a literal path to a file that does not post is allowed"
+for cmd in "python3 -m json.tool \"\$NOT_SET_2683/x.json\"" "bash -c 'echo hi' _ \"\$NOT_SET_2683\"" \
+           "python3 $UR/quiet/tools/lib/act.py \"\$NOT_SET_2683/data.json\"" "echo \"\$NOT_SET_2683/x.sh\"" \
+           "bash < \"$UR/quiet/tools/lib/act.sh\"" "cat \"\$NOT_SET_2683/x.sh\" | wc -l"; do
+  run_ur refuse "$cmd"
+  allowed "switched on: a variable in a word that is not the file run is left alone: $cmd"
+done
 
 # ---- #2569: the patterns sh_binds builds are compiled once per name ----
 # The merge helper's own script has a few thousand names, and sh_binds built three patterns per name
