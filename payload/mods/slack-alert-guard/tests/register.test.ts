@@ -119,8 +119,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitTruncated: git's listing comes back cut short. stdoutCap: as $.process.run keeps only the first
   // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
-  // after #2481).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  // after #2481). lsFilesFails: git ls-files alone exits nonzero with this on stderr, every other git
+  // call answering as usual (#2773).
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app', lsFilesFails: '' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -210,6 +211,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       // git ls-files, listing the files a pathspec names (#2637): tracked or not, each ending in a NUL.
       if (argv[3] === 'ls-files') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
+        if (ctl.lsFilesFails) return { value: { exitCode: 128, stdout: '', stderr: `${ctl.lsFilesFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
         const named = argv.slice(argv.indexOf('--') + 1).filter(s => s.startsWith(':(glob,icase)')).map(s => s.slice(':(glob,icase)'.length))
         const asGlob = (g: string) =>
           new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
@@ -2056,6 +2058,72 @@ test('a copy the guard does not read, a video or a key, never has its source rea
   w.ctl.unreadable = '/w/app/media/big.mov'
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp /w/app/media/big.mov /w/app/out/clip.mov' }))).toBe('')
   expect(w.ran.length).toBe(2)
+})
+
+// claude-config#2773: a cp -R into a folder (a hooks folder copied into a scratch folder in session
+// notes) was held as could not check, since the guard read the folder as a file. A copy is judged by
+// where it lands: a folder in no repository, or one no Slack sender reads, is not a send.
+test('a cp -R into a folder is judged by where it lands: one in no repository, or one no Slack sender reads, passes; one holding or read by a sender is held as a shell write (#2773)', withKit, async ($, on) => {
+  const NOTES = `${HOME}/.claude/state/session-notes/p/s/scratch`
+  const PY = '/w/app/jobs/late.py'
+  const w = world($, on, {
+    files: {
+      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
+      [`${NOTES}/hooks/old.sh`]: '#!/bin/bash\nexit 1\n',
+      '/w/app/backup/old.sh': '#!/bin/bash\nexit 1\n',
+      '/w/app/templates/late.txt': 'Booking is late\n',
+      [PY]: 'from slack_sdk import WebClient\nbody = open("templates/late.txt").read()\n',
+    },
+  })
+  // Into a scratch folder in session notes, in no repository: as a copy into the folder and of the
+  // folder's contents.
+  const notes = refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks ${NOTES}/` }))
+  expect(notes).not.toContain('could not check')
+  expect(notes).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks/ ${NOTES}/hooks` }))).toBe('')
+  // Into a folder in the repository that no Slack sender reads.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup' }))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // Into a folder holding a file that posts to Slack, which the copy may overwrite.
+  const over = refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/lib' }))
+  expect(over).toContain('shell command writes to /w/app/lib, which posts to Slack')
+  expect(idIn(over)).toBeDefined()
+  // Into a folder a sender reads its message from.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/templates' }))).toContain(`shell command writes to /w/app/templates, which ${PY} sends to Slack`)
+  // A search that cannot run is still could not check, never a pass.
+  w.ctl.gitFails = 'git was killed'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup/more' }))).toContain('could not check')
+  expect(w.ran.length).toBe(3)
+})
+
+test('a cp -R into a folder a sender imports from through a tsconfig paths alias, never naming the folder, is held naming that sender (#2773)', withKit, async ($, on) => {
+  const JOB = '/w/app/jobs/notify-late.ts'
+  const w = world($, on, {
+    files: {
+      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
+      '/w/app/tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*"] } } }\n',
+      '/w/app/src/lib/alert-copy.ts': 'export const late = (id: string) => `Booking ${id} is late`\n',
+      [JOB]: "import { late } from '@/lib/alert-copy'\nexport const run = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: late('1') }) })\n",
+    },
+  })
+  // The sender lives outside src and names lib, never src: only the alias brings src's files to it.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/src' }))).toContain(`shell command writes to /w/app/src, which ${JOB} sends to Slack`)
+  // A folder it imports nothing from still passes.
+  const elsewhere = { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/payload' }
+  expect(refusalOf(await call($, elsewhere))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Listing what the sender imports fails: could not check, naming the listing, never a pass.
+  w.ctl.lsFilesFails = 'fatal: index file corrupt'
+  const failed = refusalOf(await call($, elsewhere))
+  expect(failed).toContain('could not check')
+  expect(failed).toContain(`git could not list the files ${JOB} imports (exit 128: fatal: index file corrupt)`)
+  // It fails after the search's time ran out: said as out of time, never a pass.
+  w.ctl.gitSlow = SCAN_MS + 1000
+  w.ctl.gitSlowWhen = 'no grep holds this'
+  const late = refusalOf(await call($, elsewhere))
+  expect(late).toContain('could not check')
+  expect(late).toContain(`were not searched within ${SCAN_MS / 1000} seconds`)
+  expect(w.ran.length).toBe(1)
 })
 
 // The send edit judged for what it brings in (#2637), from a module that is not one of message copy:

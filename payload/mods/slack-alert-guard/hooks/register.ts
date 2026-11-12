@@ -20,6 +20,7 @@ import {
   ciWorkflow,
   codeOf,
   copyModule,
+  escapeRe,
   type Decl,
   type Foreign,
   type ModelReading,
@@ -668,6 +669,24 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
 }
 
 /**
+ * The files in the repository at `top` that the file `rel`, holding `text`, imports (#2371): found by
+ * the paths its imports name, aliased ones included, then kept where the import refers to them, as
+ * a send helper is found. `left` gives the milliseconds left; none left, before or after a listing
+ * that failed, is late. A listing that fails or is cut short otherwise is could not check.
+ */
+const importedFiles = async ($: EngineInterface, top: string, rel: string, text: string, left: () => Promise<number>): Promise<{ rels: string[] } | { late: true } | { failed: Unchecked }> => {
+  const specs = importSpecs(text)
+  if (!specs.length) return { rels: [] }
+  const ms = await left()
+  if (ms <= 0) return { late: true }
+  const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
+  if (out.exitCode !== 0 && (await left()) <= 0) return { late: true }
+  if (out.exitCode !== 0 || out.isStdoutTruncated)
+    return { failed: { unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` } }
+  return { rels: [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r)) }
+}
+
+/**
  * What an edit brings to a Slack send from the files the edited one imports (#2637). On 2026-11-10
  * a new copy module of four alert messages was written while nothing sent it, so it passed; the
  * edits that made a monitor route import it and post it added no text of their own, so they passed
@@ -732,19 +751,11 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     const key = `${rel}\u0000${text}`
     const known = lists.get(key)
     if (known) return known
-    const specs = importSpecs(text)
-    let rels: string[] = []
-    if (specs.length) {
-      const ms = await left()
-      if (ms <= 0) late()
-      const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
-      if (out.exitCode !== 0 && (await left()) <= 0) late()
-      if (out.exitCode !== 0 || out.isStdoutTruncated)
-        end({ unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` })
-      rels = [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r))
-    }
-    lists.set(key, rels)
-    return rels
+    const got = await importedFiles($, top, rel, text, left)
+    if ('late' in got) return late()
+    if ('failed' in got) return end(got.failed)
+    lists.set(key, got.rels)
+    return got.rels
   }
   // sent: by imported file, its wording a send reaches. cut: by file, the names still handed on
   // where the guard stops following.
@@ -1088,6 +1099,87 @@ const writtenBy = async ($: EngineInterface, f: { sources?: string[] }, command:
   return cut < 0 ? '' : command.slice(cut + 1)
 }
 
+/** Whether a shell write lands in a folder (#2773): a copy of a folder's contents, a folder already there, or a copy of a folder to a new name. */
+const isFolder = async ($: EngineInterface, f: { path?: string; sources?: string[]; tree?: true }, exists: boolean): Promise<boolean> => {
+  if (f.tree) return true
+  if (exists) return (await $.fs.stat(f.path as string)).kind === 'dir'
+  for (const s of f.sources ?? []) if ((await $.fs.exists(s)) && (await $.fs.stat(s)).kind === 'dir') return true
+  return false
+}
+
+/**
+ * What a copy into the folder at `path` can bring to a Slack send (#2773). A folder in no repository,
+ * as a scratch folder in session notes is, has nothing that sends it: none. In a repository, a file
+ * under the folder that posts to Slack may be overwritten by the copy, so the folder posts; a file
+ * elsewhere that posts to Slack and names the folder in its code reads what lands there, so it is the
+ * folder's sender. Neither is none. A search that fails or runs late is could not check, never none;
+ * more files to read than MOST_READ is maybe.
+ */
+const landsIn = async ($: EngineInterface, path: string, deadline: number): Promise<Found> => {
+  const late: Found = { unchecked: `the files that could send what lands in ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
+  const left = async () => Math.floor(deadline - (await $.clock.now()))
+  const target = path.replace(/\/+$/, '') || '/'
+  let dir = target
+  while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+  let ms = await left()
+  if (ms <= 0) return late
+  const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
+  if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return NONE
+  if (where.exitCode !== 0 || where.isStdoutTruncated)
+    return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
+  const [top = '', prefix = ''] = where.stdout.split('\n')
+  if (!top) return { unchecked: `git named no repository for ${path}` }
+  // The folder below the top, '' when it is the top itself.
+  const folder = `${prefix}${target.slice(dir === '/' ? 1 : dir.length + 1)}`.replace(/\/+$/, '')
+  const listed = async (what: string, args: string[]): Promise<string[]> => {
+    ms = await left()
+    if (ms <= 0) throw new Ended(late)
+    const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--no-color', '-E', ...args], { timeoutMs: ms })
+    if (hits.exitCode === 1) return []
+    if (hits.exitCode !== 0) throw new Ended({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+    if (hits.isStdoutTruncated) throw new Ended({ unchecked: `git grep listing the names of the files that ${what} printed more than the ${STDOUT_KEPT_MIB} MiB Claude Code keeps of a command's output, so it could not be read whole` })
+    return hits.stdout.split('\u0000').filter(r => r && !testFile(r) && !isProseFile(r))
+  }
+  try {
+    const what = `could post what lands in ${path} to Slack`
+    const words = await listed(what, ['-e', SENDER_PREFILTER, '--', '.'])
+    const marked: string[] = []
+    for (const group of pathspecGroups(words)) marked.push(...(await listed(what, ['-e', MARKER_PREFILTER, '--', ...group.map(r => `:(literal)${r}`)])))
+    if (marked.length > MOST_READ) return MAYBE
+    const name = folder.slice(folder.lastIndexOf('/') + 1)
+    // The folder's name as a path segment, never inside a longer name or a host name such as a webhook's (hooks, then a dot).
+    const names = name ? new RegExp(`(^|[^\\w.-])${escapeRe(name)}([^\\w.-]|$)`, 'i') : undefined
+    const texts = new Map<string, string>()
+    const senders: Sender[] = []
+    for (const rel of marked) {
+      if ((await left()) <= 0) return late
+      let text = ''
+      try {
+        text = String(await $.fs.read(`${top}/${rel}`))
+      } catch (err) {
+        return { unchecked: `${top}/${rel}, which ${what}, could not be read: ${message(err)}` }
+      }
+      texts.set(rel, text)
+      if (!isSender(rel, text)) continue
+      if (!folder || rel.startsWith(`${folder}/`)) return POSTS
+      if (names?.test(codeOf(rel, text))) {
+        senders.push({ rel, chain: [] })
+        continue
+      }
+      // Or it imports a file under the folder through an alias that never names the folder (#2773),
+      // found as the files an edit brings in are.
+      const got = await importedFiles($, top, rel, text, left)
+      if ('late' in got) return late
+      if ('failed' in got) return got.failed
+      if (got.rels.some(r => r.startsWith(`${folder}/`))) senders.push({ rel, chain: [] })
+    }
+    return senders.length ? { senders, top, texts, complete: true } : NONE
+  } catch (err) {
+    if (err instanceof Ended) return err.found
+    return { unchecked: `the files that could send what lands in ${path} to Slack could not be searched: ${message(err)}` }
+  }
+}
+
 const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): Promise<Verdict> => {
   const command = typeof input.command === 'string' ? input.command : ''
   if (!command) return PASS
@@ -1105,6 +1197,17 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
       const exists = await $.fs.exists(f.path)
+      // A copy into a folder (#2773) is judged by where it lands, never read as a file.
+      if (await isFolder($, f, exists)) {
+        const keys = await unapproved($, [key])
+        if (!keys.length) return PASS
+        deadline ??= (await $.clock.now()) + SCAN_MS
+        const found = await landsIn($, f.path, deadline)
+        if ('unchecked' in found) return found
+        if ('posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
+        if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }
+        continue
+      }
       // What the command puts in the file cannot be read until it runs (#2773), so it is read from
       // the one file it copies, or else from the command's lines after its first, where a heredoc's
       // body is. A file the command makes is judged by that as a Write of it is, never skipped.
