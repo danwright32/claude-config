@@ -186,6 +186,13 @@ const indexOf = (r: Reading): Index => {
 
 const lineOf = (ix: Index, at: number): number => atLeast(ix.newlines, at) + 1
 
+// The searching matchesAt has done (#2719): a whole text or slice searched counts its length, and
+// each start tried counts one. The searches for names are where tracing a file grew with its square,
+// so the count measures that work on any machine, however loaded.
+let scanned = 0
+/** The searching done so far: characters searched whole, plus starts tried (#2719). */
+export const scanWork = (): number => scanned
+
 /**
  * The matches a global search of `text` for `source` finds, as matchAll finds them, tried only at
  * `starts` (ascending), every place one can begin: a match starting inside the one before it is
@@ -195,15 +202,8 @@ const lineOf = (ix: Index, at: number): number => atLeast(ix.newlines, at) + 1
  *
  * `tail`, for a pattern that is a whole word name then the rest: every start is already that name as
  * a whole word (`skip` long), so only the rest is tried, after it, by one sticky pattern made once,
- * rather than one pattern made for every name in the file.
- *
- * Every search here is counted in `scanned` (#2719): a whole text or slice searched counts its
- * length, and each start tried counts one. The searches for names are where tracing a file grew with
- * its square, so the count measures that work on any machine, however loaded.
+ * rather than one pattern made for every name in the file. Every search is counted in `scanned`.
  */
-let scanned = 0
-/** The searching done so far: characters searched whole, plus starts tried (#2719). */
-export const scanWork = (): number => scanned
 const matchesAt = (
   text: string,
   source: string,
