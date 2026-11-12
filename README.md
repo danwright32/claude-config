@@ -3675,12 +3675,15 @@ missing or crashes, or a payload it cannot read that names a send route, is refu
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,
 cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect,
-each with every local module it imports; and a file tsc or esbuild builds earlier in the same
-command, read as the source it is built from. A file a revert, a stash, a new linked worktree or a
-clone of a local repository writes is read as git holds it, and a pull's as its fetch brings it
-(fetched into a scratch repository that borrows the repository's objects, so the repository itself
-is left as it was). A clone of a remote makes files the gate cannot read, refused when the same
-command runs one, as a downloaded script is.
+each with every local module it imports; and a file tsc, esbuild or bun build builds earlier in the
+same command, read as the source it is built from. A build that nothing in the command runs is not
+refused, whatever it builds (Dan's choice, 2026-11-12: bun build's entries were read as a script it
+runs, and esbuild's `--outfile=` refused even a quiet build). A file a revert, a stash, a new linked
+worktree or a clone of a local repository writes is read as git holds it, and a pull's, or a remote
+branch's a `git fetch` earlier in the command fetched, as that fetch brings it (fetched into a
+scratch repository that borrows the repository's objects, so the repository itself is left as it
+was). A clone of a remote makes files the gate cannot read, refused when the same command runs one,
+as a downloaded script is.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same

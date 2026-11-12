@@ -3701,6 +3701,24 @@ for runs in "tsc -p tsconfig.quiet.json && node qdist/main.js" "tsc --outDir out
 done
 run_c "tsc && node dist/main.js"
 says "the refusal names the source the compiler builds from" "src/main.ts"
+# Dan chose on 2026-11-12 (#2844) to stop two false refusals: esbuild's --outfile= was refused as a
+# file it may write whatever its source held, and bun build's entries were read as a script bun runs,
+# so building code that names an endpoint was refused though nothing ran it. Both are now read by
+# what they build, and only where the same command runs it.
+for runs in "esbuild esrc/post.ts --bundle --outfile=out.js && node out.js" \
+  "npx esbuild esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outfile out.js && node out.js" \
+  "bun build esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outdir bout && node bout/post.js" \
+  "bun build --compile esrc/post.ts --outfile app2844 && ./app2844" "bun build src/main.ts --outdir bout && bun bout/main.js"; do
+  run_c "$runs"
+  read_refused "a file esbuild or bun builds from a source that posts, and the command runs, is read as that source: $runs"
+done
+for runs in "esbuild esrc/quiet.ts --bundle --outfile=out.js && node out.js" \
+  "npx esbuild esrc/quiet.ts --outfile=out.js && node out.js" "bun build esrc/quiet.ts --outfile out.js && node out.js" \
+  "bun build esrc/post.ts" "bun build esrc/post.ts --outfile out.js" "bun build esrc/post.ts --outdir bout" \
+  "bun build --compile esrc/quiet.ts --outfile app2844 && ./app2844" "bun build qsrc/main.ts --outdir bout && node bout/main.js"; do
+  run_c "$runs"
+  allowed "a build whose output is quiet, or that nothing in the command runs, passes: $runs"
+done
 
 P="$T/p2844"
 mkdir -p "$P/tp" "$P/tq" "$P/tc" "$P/deep/pkg"
@@ -3829,6 +3847,20 @@ done
 for runs in "git pull quiet main && bash other.sh" "git pull && bash run.sh" "git fetch && bash other.sh"; do
   run_l "$runs"
   allowed "a pull that brings nothing that posts passes: $runs"
+done
+# A fetch and then a checkout, reset or merge of the branch it fetched (Dan, 2026-11-12, on #2844):
+# the branch is read as the fetch leaves it, not as it was last fetched.
+for runs in "git fetch && git checkout origin/main && bash other.sh" \
+  "git fetch origin && git reset --hard origin/main && bash other.sh" \
+  "git fetch -q origin main && git merge origin/main && bash other.sh" \
+  "git fetch --all; git switch --detach origin/main && bash other.sh"; do
+  run_l "$runs"
+  read_refused "a branch a fetch brings, which posts, is read as the fetch leaves it: $runs"
+done
+for runs in "git fetch quiet && git checkout quiet/main && bash other.sh" "git checkout origin/main && bash other.sh" \
+  "git fetch origin && git checkout origin/main && bash run.sh" "git fetch quiet && git checkout origin/main && bash other.sh"; do
+  run_l "$runs"
+  allowed "a branch fetched quiet, or one no fetch in the command touches, is read as it is held: $runs"
 done
 L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
 if [ "$L_AFTER" = "$L_BEFORE" ]; then check "a pull read leaves the repository's refs and files as they were" ok

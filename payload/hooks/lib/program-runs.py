@@ -15,8 +15,11 @@ Before #2844 two routes ran a file the gate never read:
   * A file a compiler writes and the same command then runs (tsc && node dist/x.js, esbuild
     src/x.ts --outdir=build && node build/x.js): read as it was on disk, or not at all where the build
     had not run yet. Each output is now read as the source it is built from (note_build, built_from),
-    at the source's own place, so its imports resolve as the compiler resolves them. bun build is not
-    noted: the gate already reads the entries it is handed as bun's script.
+    at the source's own place, so its imports resolve as the compiler resolves them. bun build is a
+    compiler too: its entries were read as a script bun runs, and esbuild's --outfile= marked as a file
+    it may write, so building code that names an endpoint was refused though nothing ran it, and a
+    quiet --outfile= build was refused when run. Dan chose on 2026-11-12 (#2844) to read both only by
+    what they build, where the same command runs it.
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/program-writes.py's, so the methods use the Judge's own readers (resolve, resolve_py,
@@ -57,7 +60,11 @@ IDENT = re.compile(r"[A-Za-z_]\w*$")
 DOTTED = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 
 # Compilers whose outputs are read as their sources (note_build). LAUNCHERS run the word after them.
-BUILDERS = frozenset({"tsc", "esbuild"})
+BUILDERS = frozenset({"tsc", "esbuild", "bun build"})
+# bun build's options that take the next word as their value (esbuild's are all written with =).
+BUN_VALUED = frozenset({"--outfile", "--outdir", "--target", "--format", "--root", "--entry-naming",
+                        "--chunk-naming", "--asset-naming", "--public-path", "-e", "--external", "--define",
+                        "--loader", "--env", "--conditions", "--banner", "--footer", "--packages", "--drop"})
 LAUNCHERS = frozenset({"npx", "bunx", "pnpx"})
 # The source extensions each output extension is built from, as tsc and esbuild name outputs.
 BUILT_FROM = {".js": (".ts", ".tsx", ".js", ".jsx"), ".mjs": (".mts", ".mjs"), ".cjs": (".cts", ".cjs"),
@@ -414,7 +421,12 @@ def make():
         def note_build(self, name, vals, d):
             """A compiler run (BUILDERS, or one a launcher runs): its outputs are read as the sources
             they are built from, when a later command of this call runs one (built_from). vals are its
-            words as worked out, None for one that cannot be."""
+            words as worked out, None for one that cannot be.
+
+            True for an esbuild or bun build whose every word is worked out: what it writes is then
+            known (its outputs, or nothing but what it prints), so note_program does not also mark the
+            files it names as ones it may write (Dan, 2026-11-12, #2844). tsc keeps that mark on the
+            files it is handed, as before; script() skips it only where it reads one as a source."""
             words, writer = list(vals), name  # the program the command runs, a launcher included
             if name in LAUNCHERS:
                 k = 1
@@ -422,14 +434,20 @@ def make():
                     k += 1
                 words = words[k:]
                 if not words or words[0] is None:
-                    return
+                    return False
                 name = os.path.basename(words[0])
+            if name == "bun" and len(words) > 1 and words[1] == "build":
+                name, words = "bun build", words[1:]
             if name not in BUILDERS or any(w is None for w in words):
-                return  # a word that cannot be worked out: what it builds is not known
-            entry = self.tsc_entry(words[1:], d) if name == "tsc" else self.esbuild_entry(words[1:], d)
+                return False  # a word that cannot be worked out: what it builds is not known
+            if name == "tsc":
+                entry = self.tsc_entry(words[1:], d)
+            else:
+                entry = self.esbuild_entry(words[1:], d, BUN_VALUED if name == "bun build" else frozenset())
             if entry:
                 entry["label"], entry["writer"] = name, writer
                 self.made_built.append(entry)
+            return name != "tsc"
 
         def tsc_entry(self, words, d):
             """What tsc builds: the files it is handed, or the project its config names."""
@@ -451,6 +469,8 @@ def make():
                     continue
                 files.append(w)
                 k += 1
+            if opts.get("--outFile") or opts.get("--out"):
+                return None  # one bundled file: not followed, so the files it names stay as before
             if any(opts.get(o) for o in ("--noEmit", "--emitDeclarationOnly", "--watch", "-w", "--help", "-h",
                                          "--version", "-v", "--init", "--showConfig", "--listFilesOnly")):
                 return None
@@ -572,17 +592,23 @@ def make():
                         out.append(p)
             return out
 
-        def esbuild_entry(self, words, d):
-            """What esbuild builds: each entry point, to the file --outfile names or, under --outdir,
-            to the name esbuild gives it there."""
-            entries, opts = [], {}
-            for w in words:
+        def esbuild_entry(self, words, d, valued=frozenset()):
+            """What esbuild or bun build builds: each entry point, to the file --outfile names or,
+            under --outdir, to the name it is given there (bun's --root is esbuild's --outbase).
+            valued holds the options whose value is the next word (bun's; esbuild's take =)."""
+            entries, opts, k = [], {}, 0
+            while k < len(words):
+                w = words[k]
                 if w.startswith("-"):
                     key, eq = (w.split("=", 1) + [None])[:2]
-                    opts[key] = eq if eq is not None else True
+                    if eq is None and key in valued and k + 1 < len(words):
+                        eq, k = words[k + 1], k + 1
+                    opts["--outbase" if key == "--root" else key] = eq if eq is not None else True
+                    k += 1
                     continue
-                out, src = w.split("=", 1) if "=" in w else (None, w)
+                out, src = w.split("=", 1) if "=" in w and not valued else (None, w)
                 entries.append((out, self.resolve(src, d)))
+                k += 1
             if not entries or not (isinstance(opts.get("--outfile"), str) or isinstance(opts.get("--outdir"), str)):
                 return None
             outdir = self.resolve(opts["--outdir"], d) if isinstance(opts.get("--outdir"), str) else None
@@ -600,10 +626,10 @@ def make():
             the one whose naming of the source script() skips as a write."""
             real = os.path.realpath(path)
             stem, ext = os.path.splitext(real)
-            if ext not in BUILT_FROM:
-                return []
             out = []
             for e in self.made_built:
+                if ext not in BUILT_FROM and ("configs" in e or not e["outfile"]):
+                    continue  # only a named output file may be anything (bun build --compile's program)
                 if "configs" in e:
                     out += [(src, e["label"], e["writer"]) for src in self.tsc_built(e, real, stem, ext)]
                     continue

@@ -189,14 +189,20 @@ def make(interpreter, shells, awks, senders):
                 return self.note_dd(args, vals, d, stdin)
             # git's subcommand by the shared reader, never by word position (test-gh-reader.sh).
             found = self.sw.git_read([v if v is not None else a for a, v in zip(args, vals)])
+            if found and found[0] == "fetch":
+                self.note_fetch([v if v is not None else "\0" for v in vals[1:]])
             if found and found[0] in GIT_READS:
                 return None
             if found and found[0] in GIT_TREE_WRITERS:
                 # A revision bash leaves as written (GIT_REV_WORD) is read as written.
                 self.note_git([v if v is not None else a if GIT_REV_WORD.fullmatch(a) else "\0"
                                for a, v in zip(args[1:], vals[1:])], d)
-            # A compiler's outputs, read as their sources when run (lib/program-runs.py, #2844).
-            self.note_build(name, vals, d)
+            # A compiler's outputs, read as their sources when run (lib/program-runs.py, #2844). A build
+            # whose outputs are all known writes nothing else a command runs, so the files it names
+            # are not marked as ones it may write (Dan chose this on 2026-11-12, #2844: an esbuild
+            # --outfile= and a bun build were refused however quiet what they built).
+            if self.note_build(name, vals, d):
+                return None
             if name in TARS or name == "unzip":
                 self.note_unpack(name, args, vals, d)
             elif name in UNPACKERS:
@@ -276,6 +282,31 @@ def make(interpreter, shells, awks, senders):
             self.made_maybe.append((glob_escape(real.rstrip("/")) + "/*", label))
             if not os.path.isdir(real):
                 self.note_file(value, d, [("maybe", None, label)], append=True)
+
+        def note_fetch(self, words):
+            """A git fetch: the remotes whose branches a later checkout, switch, reset, merge, rebase
+            or cherry pick in this call reads as the fetch leaves them (note_git, git_fetch), "*" for
+            every remote (--all, or no remote named, whose default the gate does not work out). Dan
+            chose this on 2026-11-12 (#2844): `git fetch && git checkout origin/x && bash run.sh`
+            read origin/x as last fetched."""
+            sub, front, after = self.sw.git_path(list(words))
+            valued = {"--depth", "--deepen", "--shallow-since", "--shallow-exclude", "-j", "--jobs",
+                      "--upload-pack", "-o", "--server-option", "--negotiation-tip", "--refmap", "--filter",
+                      "--recurse-submodules-default"}
+            positional, k, every = [], 0, False
+            while k < len(after):
+                w = after[k]
+                if w == "--":
+                    positional += after[k + 1:]
+                    break
+                if w.startswith("-"):
+                    every = every or w == "--all"
+                    k += 2 if w in valued else 1
+                    continue
+                positional.append(w)
+                k += 1
+            remote = "*" if every or not positional or "\0" in positional[0] else positional[0]
+            self.git_fetched.add(remote)
 
         def note_git(self, words, d):
             """A git subcommand that writes tracked files without naming them (GIT_TREE_WRITERS,
@@ -430,7 +461,20 @@ def make(interpreter, shells, awks, senders):
                 label = f"git {sub} {ref}" if ref in positional or ref in onto else f"git {sub}"
                 if sub == "stash":
                     label = f"git stash {positional[0] if positional else 'push'}" + (f" {positional[1]}" if len(positional) > 1 else "")
-                self.made_git.append(self.git_entry(where, "@{-1}" if ref == "-" else ref, mode, label, **entry))
+                fetched = self.fetched_ref(ref) if "fetch" not in entry else None
+                self.made_git.append(self.git_entry(where, "@{-1}" if ref == "-" else ref, mode, label,
+                                                    **dict(entry, fetch=fetched) if fetched else entry))
+
+        def fetched_ref(self, ref):
+            """(the remote, its branch) where ref names a remote branch a git fetch earlier in this call
+            fetched (note_fetch), so it is read as that fetch leaves it; None otherwise."""
+            name = ref[len("refs/remotes/"):] if ref.startswith("refs/remotes/") else ref
+            if "/" not in name or not self.git_fetched:
+                return None
+            remote, branch = name.split("/", 1)
+            if remote not in self.git_fetched and "*" not in self.git_fetched or not branch:
+                return None
+            return remote, "refs/heads/" + branch
 
         @staticmethod
         def git_entry(where, spec, mode, label, at=None, fetch=None, parent=None):
@@ -518,7 +562,12 @@ def make(interpreter, shells, awks, senders):
             if not remote or remote == "." or not ref or "\0" in remote + ref:
                 return None
             url = self.git_out(root, ["remote", "get-url", "--", remote])
-            url = url.decode("utf-8", "replace").strip() if url else remote
+            if url:
+                url = url.decode("utf-8", "replace").strip()
+            elif re.match(r"[A-Za-z][\w+.-]*://|[^/]+:", remote) or os.path.exists(os.path.join(root, remote)):
+                url = remote
+            else:
+                return None  # names no remote: a local branch with a slash in its name (feature/x)
             if not re.match(r"[A-Za-z][\w+.-]*://|[^/]+:", url) and os.path.exists(os.path.join(root, url)):
                 url = os.path.realpath(os.path.join(root, url))
             common = self.git_out(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"])

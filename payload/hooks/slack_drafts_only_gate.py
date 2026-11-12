@@ -54,13 +54,13 @@ shell script's writes are not counted as acting on a data file; a file written i
 is followed through the shell's own writes (a redirection, tee, a copy, a download), dd and an
 archive that can be read, and is otherwise unreadable once a program names it (claude-config#2772),
 so one written by a name the program builds at run time, or by a program the gate counts as never
-writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk; a file tsc or
-esbuild builds is read as the source it is built from (lib/program-runs.py, claude-config#2844), and
-one any other compiler writes without naming it as it was on disk; a file a git checkout, switch,
-hard reset, merge, pull, rebase, cherry pick, revert, stash, new linked worktree or clone of a local
-repository writes is read as git holds it as well as on disk (claude-config#2827, #2844), a pull's as
-its fetch brings it where that fetch answers within FETCH_TIMEOUT (else as its branch was last
-fetched), and the files a clone of a remote writes are unreadable, as a download's are; a build or git
+writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk; a file tsc,
+esbuild or bun build builds is read as the source it is built from (lib/program-runs.py,
+claude-config#2844), and one any other compiler writes without naming it as it was on disk; a file a
+git checkout, switch, hard reset, merge, pull, rebase, cherry pick, revert, stash, new linked worktree
+or clone of a local repository writes is read as git holds it as well as on disk (claude-config#2827,
+#2844), a pull's, and a remote branch's a fetch earlier in the command fetched, as that fetch brings
+it where it answers within FETCH_TIMEOUT (else as last fetched), and the files a clone of a remote writes are unreadable, as a download's are; a build or git
 command inside a script on disk, or in a package script, is not followed; a write to a path in a variable inside a
 script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
 assembled from pieces, an import path built at run time) is not the threat this answers.
@@ -928,6 +928,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # The compilers run earlier in this call, each the outputs it builds and their sources
         # (note_build in lib/program-runs.py, claude-config#2844).
         self.made_built = []
+        # The remotes a git fetch earlier in this call fetched, "*" for all (note_fetch, #2844).
+        self.git_fetched = set()
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -3913,6 +3915,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             name = os.path.basename(words[0])
         if name in PACKAGERS:
             return self.package(name, words, d, depth)
+        if name == "bun" and words[1:2] == ["build"]:
+            # A build runs nothing it is handed: what it builds is read where this call runs it
+            # (note_build in lib/program-runs.py). Its entries were read as a script bun runs, which
+            # refused building code that names an endpoint (Dan chose to stop that, 2026-11-12, #2844).
+            return None
         if name in _program_runs.PYTESTS:
             # pytest run by its own name: the test files it collects (claude-config#2844).
             return self.py_runner(words[0], name, "pytest", words[1:], d, depth, os.path.abspath(d or os.getcwd()),
