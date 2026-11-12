@@ -345,7 +345,14 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
       }
       if (repos.includes(prRepo)) held.push(x)
     }
-    if (held.length) return { merge: mergeRefusal(held, unreadFiles) }
+    if (!held.length) continue
+    // A choice this session may not ask about (askedHere, #2833) is said to be asked in its own
+    // repository, never put to Dan from here.
+    const self = await $.session.id()
+    const mine = new Set((await askedHere($, held, self)).map(x => x.id))
+    const away: Record<string, string> = {}
+    for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x)).repos[0] ?? ''
+    return { merge: mergeRefusal(held, unreadFiles, away) }
   }
   return PASS
 }

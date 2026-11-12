@@ -1595,6 +1595,16 @@ test('a choice is put to Dan in the session that made it or in its own repositor
   expect(await promptLines($)).not.toContain(`chosen:${id}`)
   w.ctl.cwd = `${REPO}/lib`
   expect(await promptLines($)).toContain(`chosen:${id}`)
+  // A's pull request merged from a session in B is still held, and B is told it is asked in A,
+  // never to ask Dan itself; merged from A, the refusal says to ask, as before.
+  w.ctl.cwd = SITE
+  const away = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))
+  expect(away).toContain('chosen overnight')
+  expect(away).toContain(' The wording chosen in danwright32/app is put to Dan in a session working in danwright32/app, never in this one: leave the pull request open until he approves it there.')
+  expect(away).not.toContain(`chosen:${id}`)
+  expect(away).not.toContain('AskUserQuestion')
+  w.ctl.cwd = REPO
+  expect(refusalOf(await call($, MERGE))).toContain(`Put it to him: call AskUserQuestion with one question and metadata {"source": "slack-alert-guard:chosen:${id}"}`)
   // Expired, it is said only in its own repository, and saying nothing in B does not use up A's telling.
   await w.clock.advance(3 * 24 * 60 * 60_000)
   w.ctl.cwd = SITE

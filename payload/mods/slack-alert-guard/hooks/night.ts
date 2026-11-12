@@ -148,7 +148,14 @@ export const carried = (diff: string, choices: readonly SlackAlertChoice[]): Sla
 
 /**
  * The refusal of a merge carrying chosen wording. `unread` names each file whose repository could not
- * be read (#2833), so its wording held the merge wherever the pull request is.
+ * be read (#2833), so its wording held the merge wherever the pull request is. `away` gives, by
+ * choice id, the repository a choice is asked about in when the merging session neither made it nor
+ * works there (#2833): that session is never told to ask Dan, only that the question is put there.
  */
-export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = []): string =>
-  `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it. ${held.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
+export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = [], away: Readonly<Record<string, string>> = {}): string => {
+  const here = held.filter(c => away[c.id] === undefined)
+  const there = [...new Set(held.flatMap(c => away[c.id] ?? []))]
+  const ask = here.length ? ` ${here.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.` : ''
+  const elsewhere = there.map(r => ` The wording chosen in ${r} is put to Dan in a session working in ${r}, never in this one: leave the pull request open until he approves it there.`).join('')
+  return `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it.${ask}${elsewhere}${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
+}
