@@ -113,6 +113,36 @@ check "#2490 no brief part still names the scratchpad as the working folder" "$(
 check "#2490 agents write working files in the notes folder" "$(has "$RULES" 'never in the scratchpad under `/private/tmp`')"
 check "#2490 agents never put a worktree in the temp folder" "$(has "$RULES" 'Never put a worktree under `/tmp`')"
 
+# claude-config#2563: the merge command written in the skill and in the global rules must carry
+# every argument the helper's usage marks required, say it runs from inside a checkout, and say how
+# the merge method is chosen. Required is read from the helper's own usage line: a token outside [].
+HELPER="${MERGE_HELPER:-$DIR/../../hooks/lib/merge-when-ready.sh}"
+GLOBAL_RULES="${GLOBAL_RULES_FILE:-$DIR/../../CLAUDE.md}"
+usage_line="$(grep -m1 'echo "usage: ' "$HELPER")"
+required="$(printf '%s' "$usage_line" | sed 's/.*\$SELF //; s/".*//; s/\[[^]]*\]//g')"
+case "$required" in
+  *[![:space:]]*) parsed=ok ;;
+  *) parsed="none parsed from: $usage_line" ;;
+esac
+check "#2563 the helper's usage names a required argument" "$parsed"
+# ok when the text holds the words, else the reason given. Matched with case, never a pipe into
+# grep -q, which can stop reading early and fail the pipeline under pipefail.
+holds() { case "$1" in *"$2"*) echo ok ;; *) echo "$3" ;; esac; }
+for f in "$SKILL" "$GLOBAL_RULES"; do
+  cmd_line="$(grep -m1 -F 'merge-when-ready.sh' "$f")"
+  for tok in $required; do
+    case "$tok" in
+      "<pr>") want='merge-when-ready.sh <' ;;
+      *) want="$tok" ;;
+    esac
+    check "#2563 $(basename "$(dirname "$f")")/$(basename "$f") command carries required $tok" "$(holds "$cmd_line" "$want" "missing $want")"
+  done
+  check "#2563 $(basename "$f") says it runs from inside a checkout" "$(holds "$cmd_line" 'inside a checkout' 'no checkout requirement')"
+  method="$(holds "$cmd_line" '--squash' 'no merge method rule')"
+  [ "$method" = ok ] && method="$(holds "$cmd_line" 'its history uses' 'no merge method rule')"
+  check "#2563 $(basename "$f") names the merge method and how it is chosen" "$method"
+done
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

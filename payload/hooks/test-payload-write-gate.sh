@@ -483,6 +483,73 @@ runbash "tee $FIX/elsewhere/notes.md $FIX/dev/payload/LESSONS.md <<'EOF'
 text
 EOF" "$FIX/dev"
 refused "#2722 a tee writing into payload is refused"
+# Every way an append by cat or tee is written is the same copy (claude-config#2789). On 2026-11-11
+# a subagent's `cat >> <notes>/evidence.md <<'EOF'` was refused for a payload path its body named:
+# the form was one already narrowed, and what stopped it was the word "function" in the body text,
+# which the check for a function, alias, hash or PATH change read as one. Text a quoted body copies
+# defines nothing, so those words in it no longer stop the copy being read as one.
+WORD_BODY="$NOTE_BODY
+- the wrapper function, an alias, the hash table and PATH=/x/bin are only words in a note"
+for form in "cat >> $FIX/elsewhere/notes.md <<'EOF'" "cat <<'EOF' >> $FIX/elsewhere/notes.md" \
+            "tee -a $FIX/elsewhere/notes.md <<'EOF'" "cat <<'EOF' >>$FIX/elsewhere/notes.md" \
+            "cat >>$FIX/elsewhere/notes.md <<'EOF'" "tee -a $FIX/elsewhere/notes.md >/dev/null <<'EOF'" \
+            "cat <<\"EOF\" >> $FIX/elsewhere/notes.md" "cat << 'EOF' >> $FIX/elsewhere/notes.md"; do
+  runbash "$form
+$NOTE_BODY
+EOF" "$FIX/dev"
+  allowed "#2789 an append written as $form, its body naming payload paths, is allowed"
+  runbash "$form
+$WORD_BODY
+EOF" "$FIX/dev"
+  allowed "#2789 and so is one written as $form whose body also says function, alias, hash and PATH="
+done
+PLAIN_BODY="- the gate read cp /tmp/x $FIX/dev/payload/LESSONS.md as a copy
+- and echo hi > $FIX/dev/payload/LESSONS.md as a write"
+runbash "cat <<EOF >> $FIX/elsewhere/notes.md
+$PLAIN_BODY
+EOF" "$FIX/dev"
+allowed "#2789 an append with its end marker unquoted and no substitution in its body is allowed"
+# Kept: the words are read wherever they could be shell, and every other consumer is read as ever.
+runbash "cat <<EOF >> $FIX/elsewhere/notes.md
+$PLAIN_BODY
+- the wrapper function
+EOF" "$FIX/dev"
+refused "#2789 with its end marker unquoted the shell expands the body, so a function word there is still read, and refused"
+runbash "bash <<'EOF'
+$WORD_BODY
+EOF" "$FIX/dev"
+refused "#2789 the same body through bash is still read, and refused"
+runbash "python3 - <<'EOF'
+$WORD_BODY
+EOF" "$FIX/dev"
+refused "#2789 through python - too"
+runbash "mytool <<'EOF'
+$WORD_BODY
+EOF" "$FIX/dev"
+refused "#2789 and through a command the gate does not recognise"
+runbash "tee -a $FIX/elsewhere/notes.md <<'EOF' | sh
+$WORD_BODY
+EOF" "$FIX/dev"
+refused "#2789 a tee append piped on to sh has its body read"
+runbash "cat <<'EOF' >> $FIX/dev/payload/LESSONS.md
+$WORD_BODY
+EOF" "$FIX/dev"
+refused "#2789 an append into payload is refused"
+runbash "alias cat=bash; cat <<'EOF' >> $FIX/elsewhere/notes.md
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2789 an alias outside the body still stops the copy being read as one"
+runbash "PATH=$FIX/elsewhere:\$PATH; tee -a $FIX/elsewhere/notes.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2789 and so does a PATH change outside it"
+runbash "eval \"\$(cat <<'EOF'
+cat(){ bash; }
+EOF
+)\"; cat >> $FIX/elsewhere/notes.md <<'EOF'
+$NOTE_BODY
+EOF" "$FIX/dev"
+refused "#2789 a function defined by a body the shell runs is still seen, so the append after it is read"
 runbash "cat LESSONS.md 2>/dev/null" "$FIX/dev/payload"
 allowed "a read run from inside payload, stderr thrown away, is allowed"
 runbash "cd payload && grep -n needle LESSONS.md 2>/dev/null | head" "$FIX/dev"
