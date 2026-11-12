@@ -45,7 +45,7 @@ import {
   wordingKey,
   wordingOf,
 } from './rules.ts'
-import { type Reading, docstrings, jsSpans, pySpans, readingOf, sentAt, trace } from './sends.ts'
+import { type Reading, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
@@ -257,6 +257,33 @@ const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice): Promise<{ r
 }
 
 /**
+ * The choices this session may put to Dan (#2833): its own, and any other only where this session
+ * works in a repository the choice was made in, so another project's wording is never asked about
+ * beside work it has nothing to do with. A choice whose repository cannot be read is asked anywhere,
+ * as before, so it is never left unasked; a session whose own repository cannot be read asks only
+ * its own. The session's repository is read only when some choice is not its own.
+ */
+const askedHere = async ($: EngineInterface, all: readonly SlackAlertChoice[], self: string): Promise<SlackAlertChoice[]> => {
+  const out: SlackAlertChoice[] = []
+  let here: string | null | undefined
+  for (const c of all) {
+    if (c.session === self) {
+      out.push(c)
+      continue
+    }
+    const { repos, unread } = await choiceRepos($, c)
+    if (unread.length) {
+      out.push(c)
+      continue
+    }
+    // A path inside the folder, since repoOf asks git from the folder holding the path it is given.
+    if (here === undefined) here = await repoOf($, `${(await $.session.cwd()).replace(/\/+$/, '')}/.`)
+    if (here !== null && repos.includes(here)) out.push(c)
+  }
+  return out
+}
+
+/**
  * Asleep, wording a choice lets through in a file is held against merges there too (#2833): the
  * file and its repository are added to each such choice's places, so a pull request in another
  * repository carrying it is still held.
@@ -318,7 +345,14 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
       }
       if (repos.includes(prRepo)) held.push(x)
     }
-    if (held.length) return { merge: mergeRefusal(held, unreadFiles) }
+    if (!held.length) continue
+    // A choice this session may not ask about (askedHere, #2833) is said to be asked in its own
+    // repository, never put to Dan from here.
+    const self = await $.session.id()
+    const mine = new Set((await askedHere($, held, self)).map(x => x.id))
+    const away: Record<string, string> = {}
+    for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x)).repos[0] ?? ''
+    return { merge: mergeRefusal(held, unreadFiles, away) }
   }
   return PASS
 }
@@ -459,7 +493,11 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
     if (edited === undefined || !(python || (lang === 'c' && isJs(path)))) return holdFor(change)
-    const [tBefore, tAfter] = [trace(await readFor($, before, python)), trace(await readFor($, after, python))]
+    const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
+    const was = scanWork()
+    const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
+    // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
+    $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
     // A file that posts to Slack by a send the guard cannot find is held for all of it.
     if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(change)
     // Only wording one of its own sends carries is held (#2570): a log line, an error or a route's
@@ -719,8 +757,9 @@ export const register: Register = on => {
   })
 
   // Dropped at session end, a /clear included: a held call waits on Dan only in its own session.
-  // Wording this session chose overnight is handed to whichever session Dan writes in next (#2628),
-  // so a choice never goes unasked because the session that made it ended.
+  // Wording this session chose overnight is handed to whichever session Dan writes in next in the
+  // repository it was made in (#2628, #2833), so a choice never goes unasked because the session that
+  // made it ended.
   on('session.end', async ($, e, next) => {
     await $.state.set(pendingRef, [])
     try {
@@ -784,8 +823,8 @@ export const register: Register = on => {
   }).catch(($, e, next) => neverThrows(() => ({ deny: `The Slack alert guard could not record the choice (${message(next.error)}), so the edit stays held.` }), () => ({ deny: HELD }), { deny: HELD }))
 
   // In the morning (#2628): each choice waiting on Dan is put to him by the session that made it, or
-  // by any session once that one ended; one past its time is marked expired, said once in every
-  // session, and stays held.
+  // once that one ended, by a session working in the repository it was made in (#2833); one past its
+  // time is marked expired, said once in each such session, and stays held.
   on('prompt.submit', async ($, e, next) => {
     const r = await next(e)
     if (r.drop !== undefined) return r
@@ -799,8 +838,10 @@ export const register: Register = on => {
         c.expired = now
       }
       const told = (await $.state.get(toldRef)).value ?? []
-      const lines = morningLines(all, await $.session.id(), told)
-      const fresh = all.filter(c => c.expired !== undefined && !told.includes(c.id)).map(c => c.id)
+      const self = await $.session.id()
+      const mine = await askedHere($, all, self)
+      const lines = morningLines(mine, self, told)
+      const fresh = mine.filter(c => c.expired !== undefined && !told.includes(c.id)).map(c => c.id)
       if (fresh.length) await $.state.set(toldRef, [...told, ...fresh])
       return lines.length ? { ...r, context: [...(r.context ?? []), ...lines] } : r
     } catch (err) {

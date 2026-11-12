@@ -11,10 +11,12 @@ import { APPROVE, CHANGE, SOURCE, fixedParts } from './rules.ts'
 //      a choice holds pull requests only in the repositories it was made in or let wording through
 //      in (#2833), and one whose repository cannot be read holds them in every repository;
 //   2. it lets wording through only while sleep mode is on, so a day session asks him as before;
-//   3. in the morning the session that chose it puts it to him in the guard's own picker, and only
+//   3. in the morning the session that chose it (once that one ended, a session working in the
+//      repository it was made in, #2833) puts it to him in the guard's own picker, and only
 //      his Approve wording there records an approval; Change wording, a dialog closed by itself, or
 //      no answer leaves it held and asked again;
-//   4. one unanswered for CHOICE_MS expires, said once in every session, and stays held: expiry
+//   4. one unanswered for CHOICE_MS expires, said once in each session that may ask it (a session in
+//      the repository it was made in, #2833), and stays held: expiry
 //      stops nothing being asked for, it never lets anything merge.
 // Pure; register.ts reads the store, runs gh, and asks.
 
@@ -73,7 +75,8 @@ const asking = (c: SlackAlertChoice) =>
 /**
  * What a session is told at Dan's message while he is awake (never while asleep, when no question
  * reaches him): each choice still waiting that this session made, or that a session since ended made,
- * put to him now; each expired one, once per session, named as expired and still held.
+ * put to him now; each expired one, once per session, named as expired and still held. Given only the
+ * choices this session may ask (register.ts askedHere, #2833): its own, or ones made in its repository.
  */
 export const morningLines = (choices: readonly SlackAlertChoice[], session: string, told: readonly string[]): string[] => {
   const lines: string[] = []
@@ -145,7 +148,14 @@ export const carried = (diff: string, choices: readonly SlackAlertChoice[]): Sla
 
 /**
  * The refusal of a merge carrying chosen wording. `unread` names each file whose repository could not
- * be read (#2833), so its wording held the merge wherever the pull request is.
+ * be read (#2833), so its wording held the merge wherever the pull request is. `away` gives, by
+ * choice id, the repository a choice is asked about in when the merging session neither made it nor
+ * works there (#2833): that session is never told to ask Dan, only that the question is put there.
  */
-export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = []): string =>
-  `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it. ${held.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
+export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = [], away: Readonly<Record<string, string>> = {}): string => {
+  const here = held.filter(c => away[c.id] === undefined)
+  const there = [...new Set(held.flatMap(c => away[c.id] ?? []))]
+  const ask = here.length ? ` ${here.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.` : ''
+  const elsewhere = there.map(r => ` The wording chosen in ${r} is put to Dan in a session working in ${r}, never in this one: leave the pull request open until he approves it there.`).join('')
+  return `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it.${ask}${elsewhere}${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
+}
