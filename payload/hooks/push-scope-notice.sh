@@ -44,6 +44,13 @@
 # is unchanged. Measured on the personal MacBook on 2026-11-03: the 5 repositories that set the key
 # each point at a folder holding an executable pre-push, and none sets /dev/null (global and system
 # unset), so no agent push there is refused by this.
+#
+# measure-hooks-path.sh, beside this file, asks this gate about every working tree under the folders
+# it is given, so either Mac can measure itself (claude-config#2098). On the personal MacBook on
+# 2026-11-12: 36 working trees, 7 setting core.hooksPath, every one a folder with a runnable hook,
+# /dev/null set nowhere (global, system or local), no push refused. The work MacBook is still
+# unmeasured, so whether /dev/null anywhere is hooks off on purpose remains unseen, and the main
+# session's pass for it stands until it is.
 set -uo pipefail
 
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).

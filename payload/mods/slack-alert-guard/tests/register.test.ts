@@ -120,7 +120,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
   // after #2481).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -196,6 +196,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       gits.push({ argv, timeoutMs: e.init?.timeoutMs })
       if (ctl.gitThrows) throw new Error('git could not be started')
+      // gitKilledLate (#2796): git is killed at its timeout, the time the search had left, so the clock
+      // has passed the deadline when it answers.
+      if (ctl.gitKilledLate) await clock.advance(SCAN_MS + 1)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const inRepo = dir === REPO || dir.startsWith(`${REPO}/`)
@@ -1230,6 +1233,16 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   const failed = refusalOf(await call($, RETEMPLATE))
   expect(failed).toContain('could not check')
   expect(failed).toContain('timed out after 3000ms')
+  // git failing with time still left may pass on another try, so says to try again (#2796).
+  expect(failed).toContain('Try it again')
+  // git killed at its timeout once no time was left ran out of time, and is put to Dan (#2796).
+  w.ctl.gitKilledLate = true
+  const killed = refusalOf(await call($, RETEMPLATE))
+  expect(killed).toContain('could not trace')
+  expect(killed).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(killed).not.toContain('Try it again')
+  expect(idIn(killed)).toBeDefined()
+  w.ctl.gitKilledLate = false
   w.ctl.gitFails = ''
   w.ctl.gitThrows = true
   const unrun = refusalOf(await call($, RETEMPLATE))
@@ -1237,9 +1250,12 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(unrun).toContain('could not be searched')
   w.ctl.gitThrows = false
   w.ctl.gitSlow = SCAN_MS + 1
+  // Out of time, it is held for Dan with an id (#2796), never left with nothing he can answer.
   const late = refusalOf(await call($, RETEMPLATE))
-  expect(late).toContain('could not check')
+  expect(late).toContain('could not trace')
   expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(late).not.toContain('Try it again')
+  expect(idIn(late)).toBeDefined()
   w.ctl.gitSlow = 0
   w.ctl.unreadable = SENDER
   const unread = refusalOf(await call($, RETEMPLATE))
@@ -1632,8 +1648,9 @@ test('a search over a widely imported module that runs late, or whose listing is
   const w = world($, on, { files: widelyImported(60, 0) })
   w.ctl.gitSlow = SCAN_MS / 2
   const late = refusalOf(await call($, REHTTP))
-  expect(late).toContain('could not check')
+  expect(late).toContain('could not trace')
   expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(idIn(late)).toBeDefined()
   w.ctl.gitSlow = 0
   w.ctl.gitTruncated = true
   const cut = refusalOf(await call($, REHTTP))
@@ -2689,6 +2706,108 @@ test('a search for what an edit brings to a send that runs out of time says so, 
   expect(late).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
   expect(late).not.toContain('could not name the repository')
   expect(w.ran).toEqual([])
+})
+
+// claude-config#2796: a search that ran out of its time was refused as could not check, "Try it
+// again", with no id, so nothing could be put to Dan, and the same import edit ran out again on every
+// try. It is now held as an edit the guard could not trace is (#2709): the lines shown, an id Dan can
+// approve, and his approval lets that one edit through and no other.
+test('names added to an import whose search runs out of time are held with the line shown and an id; Dan approving lets that one edit through and no other (#2796)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const LINE = "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'"
+  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: `${LINE}\n` }
+  w.ctl.gitSlow = SCAN_MS + 1
+  w.ctl.gitSlowWhen = ':(glob,icase)'
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('could not trace')
+  expect(why).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
+  expect(why).toContain(LINE)
+  expect(why).toContain('can run out of time again')
+  expect(why).not.toContain('Try it again')
+  expect(idIn(why)).toBeDefined()
+  expect(w.ran).toEqual([])
+  expect(w.cards.length).toBe(1)
+  // A subagent is told to stop and report, never to ask or to try again.
+  const agent = refusalOf(await call($, { ...edit, agentId: 'agent-a1' }))
+  expect(agent).toContain('Stop and report to the main session')
+  expect(agent).not.toContain('Try it again')
+  // Dan is asked with the line shown, and his approval lets that exact edit through, still out of time.
+  await ask($, w, why, APPROVE, {})
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toContain(LINE)
+  expect(q?.question).toContain(`not searched within ${SCAN_MS / 1000} seconds`)
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Any other edit to the same file is asked about again.
+  const other = refusalOf(await call($, { ...edit, new_string: "import { quietPage, quietClear, allClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }))
+  expect(other).toContain('could not trace')
+  expect(idIn(other)).not.toBe(idIn(why))
+  expect(w.ran.length).toBe(1)
+})
+
+// A git that fails with time still left, or a file that cannot be read, may pass on another try, so it
+// is still could not check, told to try again, with no approval route (#2796).
+test('names added to an import whose search fails with time left are refused as could not check, told to try again (#2796)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }
+  w.ctl.unreadable = QUIET
+  const unread = refusalOf(await call($, edit))
+  expect(unread).toContain('could not check')
+  expect(unread).toContain('Try it again')
+  expect(unread).not.toContain('could not trace')
+  expect(w.ran).toEqual([])
+  // Readable, the same edit passes, since the name it adds is sent nowhere.
+  w.ctl.unreadable = ''
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2796: on 2026-11-11, in a work repository, an edit adding names to an existing
+// import in a 5,500 line module that sends the alerts ran out of the search time on every try, about
+// 20 tries across four builders. Each file that sends the module is a sender of it, and for each one
+// the module was traced again as it was and as the edit leaves it, every trace working out afresh
+// which of the module's calls send (the same answer each time, since it does not depend on what the
+// sender sends) and reading every followed stretch's names again. Measured on the personal MacBook
+// at load 16: 40 senders of a 5,500 line module, 3.5 s an edit, half of it finding the same sends 82
+// times over; at 11,000 lines, 7.0 s. And the search never looked at its deadline between senders,
+// so on the wall it ran on past it. Judged on the wall at 11,000 lines and 80 senders, where the guard
+// before the fix runs out of time.
+const LIB = '/w/app/src/lib/monitor/alerts.ts'
+const DB_FILE = '/w/app/src/lib/db.ts'
+const dbModule = (helpers: number) =>
+  [
+    "import { Pool } from 'pg'\n",
+    'export type Db = { query: (q: string, p?: unknown[]) => Promise<Row[]> }\n',
+    'export type Row = Record<string, unknown>\n',
+    ...Array.from({ length: helpers }, (_, i) => `export const helper${i} = async (db: Db, id: string) => {\n  const rows = await db.query('select * from t${i} where id = $1', [id])\n  if (!rows.length) throw new Error('row ${i} not found')\n  return rows[0]\n}\n`),
+    'export const getDb = async (): Promise<Db> => new Pool() as never\nexport const withTx = async () => undefined\n',
+  ].join('')
+const DB_IMPORT = "import { getDb, type Db, type Row } from '@/lib/db'\n"
+const jobSending = (i: number) =>
+  `import { check${i} } from '@/lib/monitor/alerts'\nimport { postSlackAlert } from '@/lib/notify/slack'\nexport const run = async () => {\n  const r = await check${i}({} as never, new Date())\n  if (!r.ok) await postSlackAlert(\`Job ${i} failed: \${r.detail}\`)\n}\n`
+
+test('names added to an existing import in an 11,000 line module that 80 files send are judged inside the search time (#2796)', withKit, async ($, on) => {
+  const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
+  const files: Record<string, string> = {
+    [SLACK_POST]: POST_TEXT.replace('postAlert', 'postSlackAlert'),
+    [LIB]: bigRoute(BIG_LINES),
+    [DB_FILE]: dbModule(60),
+    '/w/app/src/lib/logger.ts': 'export const logger = { info: (m: string, x?: unknown) => console.log(m, x) }\n',
+  }
+  for (let i = 0; i < 80; i++) files[`/w/app/src/app/api/jobs/job${i}/route.ts`] = jobSending(i)
+  const w = world($, on, { files })
+  // The test clock moves only at the guard's calls to the world, and tracing the senders makes none,
+  // so the real time the call took is read as well: it must fit the search time too.
+  const started = performance.now()
+  expect(await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: DB_IMPORT, new_string: "import { getDb, withTx, helper3, type Db, type Row } from '@/lib/db'\n" })).toBe('')
+  expect(performance.now() - started).toBeLessThan(SCAN_MS)
+  expect(w.ran.length).toBe(1)
+  // Wording the module newly sends is still held, so the pass above was the search finishing, never a
+  // search that judged nothing.
+  const reworded = await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: "  if (!rows3.length) return { name: 'check3', ok: true }", new_string: "  if (!rows3.length) return { name: 'check3', ok: false, detail: 'Nothing has arrived for kind 3 today' }" })
+  expect(reworded).toContain('Nothing has arrived for kind 3 today')
+  expect(reworded).not.toContain('not searched within')
+  expect(w.ran.length).toBe(1)
 })
 
 test('the test clock charges computing time to a clock read: work between calls to the world moves it once the wall is started (#2805)', withKit, async ($, on) => {

@@ -42,8 +42,11 @@ with `python3 -m`, and an import of another language's files are
 not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
 program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
 shell script's writes are not counted as acting on a data file; a file written in the same command
-is followed only through the shell's own writes (a redirection, tee, a copy, a download), never one a
-program writes by name (python3 -c "open(...)", sed -i), and a write to a path in a variable inside a
+is followed through the shell's own writes (a redirection, tee, a copy, a download), dd and an
+archive that can be read, and is otherwise unreadable once a program names it (claude-config#2772),
+so one written by a name the program builds at run time, or by a program the gate counts as never
+writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk, as is a file a
+compiler or a git checkout writes without naming it; a write to a path in a variable inside a
 script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
 assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
@@ -68,6 +71,17 @@ import warnings
 sys.dont_write_bytecode = True
 HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ISSUE = "claude-config#2302"
+
+# Refusing a file run or sourced by a path the gate cannot work out (Judge.unworked_path), OFF until
+# Dan decides from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10:
+# "measure first", as #2538 does for sourcing). It only ever adds refusals, so the environment may
+# switch it on anywhere (SLACK_GATE_UNWORKED_PATHS=refuse, as the measurement and the suite do), and
+# nothing switches it off once this is True.
+REFUSE_UNWORKED_PATHS = False
+
+
+def unworked_paths_refused():
+    return REFUSE_UNWORKED_PATHS or os.environ.get("SLACK_GATE_UNWORKED_PATHS") == "refuse"
 
 # The endpoints and names that post: Slack's Web API methods that put a message in front of people,
 # an incoming webhook's host, and the variable name projects keep a webhook in.
@@ -648,6 +662,8 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
 SH_UNKNOWN_DIR = "${unknown directory}"
+# An assignment, as raw_words steps past it: plain, an append, or an array element.
+SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # The builtins that cannot change a shell variable, the only commands a `local` value is taken across
 # (claude-config#2465): any other command can be a function, and a function can set its caller's
 # local. printf is one only without -v.
@@ -724,6 +740,9 @@ def load_reader():
 
 # What a write to a path that cannot be worked out can name (claude-config#2785): Judge's base.
 WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
+# The files any other program writes by name (claude-config#2772): note_program and its readers.
+_program_writes = load_lib("program_writes", "program-writes.py")
+ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
 
 
 def draft_advice(where):
@@ -780,7 +799,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths):
+class Judge(WrittenPaths, ProgramWrites):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -826,6 +845,11 @@ class Judge(WrittenPaths):
         # [(a pattern, what wrote it)] for files written where the path cannot be worked out
         # (claude-config#2721): every path it matches is unreadable from then on.
         self.made_unknown = []
+        # The same for files another program may write (kind "maybe", claude-config#2772, read in
+        # lib/program-writes.py): [(a pattern, the program)], and [(code it was given, the program)],
+        # which may write any file the code names.
+        self.made_maybe = []
+        self.made_code = []
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -953,13 +977,21 @@ class Judge(WrittenPaths):
         """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
         None when nothing did. A file under a directory copied earlier is the same file under the
         directory it was copied from, followed MADE_DEPTH copies deep."""
-        if not (self.made or self.made_dirs or self.made_unknown):
+        if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code):
+            return None
+        if "\0" in path and not (self.made or self.made_dirs or self.made_unknown):
+            # Names no file. Only code a program was given is noted, and before #2772 this returned
+            # above, so a path os.path refuses passes as it did; with a write noted it raises, and the
+            # wrapper refuses, as before (a replay crash, 2026-11-12).
             return None
         real = os.path.realpath(path)
         found = self.made_from_known(real, depth)
-        # A file written where the path could not be worked out may be this one (claude-config#2721).
+        # A file written where the path could not be worked out may be this one (claude-config#2721),
+        # and so may one another program writes under a folder or names in its code (#2772).
         guessed = [("unknown", None, label) for pat, label in self.made_unknown
                    if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
+        if self.made_maybe or self.made_code:
+            guessed += self.program_guesses(path, real)
         return (list(found or []) + guessed) if guessed else found
 
     def made_from_known(self, real, depth):
@@ -997,8 +1029,8 @@ class Judge(WrittenPaths):
         real = os.path.realpath(path)
         made = []
         for kind, value, _ in pieces:
-            if kind == "unknown":
-                continue  # nothing to read: script() refuses a file holding one (unread)
+            if kind in ("unknown", "maybe", "code"):
+                continue  # nothing to read: script() refuses a file holding one (unread, code_names)
             if kind == "text":
                 made.append(value.encode("utf-8", "replace"))
                 continue
@@ -1016,30 +1048,38 @@ class Judge(WrittenPaths):
                 pass
         return out[:limit]
 
-    def unread(self, path):
+    def unread(self, path, with_maybe=True):
         """For a file written earlier in this command with text that cannot be worked out
-        (claude-config#2721), why it cannot be judged; None for any other file."""
-        names, found = [], False
+        (claude-config#2721), why it cannot be judged; None for any other file. with_maybe False
+        leaves out a file a program only may have written (lib/program-writes.py)."""
+        names, maybe, found = [], [], False
         for kind, _, label in self.made_from(path) or ():
             if kind == "unknown":
                 found = True
                 # "" is a word of a script read as commands, not a command this call ran (#2793).
                 if label and label not in names:
                     names.append(label)
-        if not found:
-            return None
-        if not names:
+            elif kind == "maybe" and with_maybe and label not in maybe:
+                maybe.append(label)
+        if found and not names:
             return ("is written earlier in this command, but what wrote it could not be told, so what it "
                     "holds cannot be read, and whether it posts cannot be checked")
-        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-        return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
-                f"whether it posts cannot be checked")
+        if names:
+            listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
+                    f"whether it posts cannot be checked")
+        if not maybe:
+            return None
+        # A program that names the file, or unpacks into its folder, may have written it (#2772).
+        listed = maybe[0] if len(maybe) == 1 else ", ".join(maybe[:-1]) + " and " + maybe[-1]
+        return (f"may be written earlier in this command by {listed}, in a way this gate does not follow, "
+                f"so what it holds cannot be read, and whether it posts cannot be checked")
 
     def made_note(self, path, word):
         """For a refusal: which files (or heredoc) word was made from, or None when it was not made."""
         names = []
         for kind, _, label in self.made_from(path) or ():
-            if kind == "unknown":
+            if kind in ("unknown", "maybe"):
                 continue
             if label and label not in names:
                 names.append(label)
@@ -1126,7 +1166,8 @@ class Judge(WrittenPaths):
         else:
             for a, v in self.downloads(name, args, vals):
                 self.note_unreadable(a, v, d, f"{name}, which downloads it")
-            out = None
+            # Any other program, by the files it names or unpacks (lib/program-writes.py, #2772).
+            out = self.note_program(name, args, vals, d, stdin)
         if out is None:
             out = [("unknown", None, label)]
         files = []  # (raw target, its value, whether it takes the output, appending)
@@ -1393,6 +1434,9 @@ class Judge(WrittenPaths):
         unread = self.unread(path)
         if unread:
             return f"{label} {unread}"
+        edited = self.code_names(path, MARKER) if self.made_code else None
+        if edited:
+            return f"{label} is edited earlier in this command by {edited[0]}, whose code names {edited[1]}"
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge and not self.made_from(real):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
@@ -3525,7 +3569,9 @@ class Judge(WrittenPaths):
             if reason:
                 return reason
             if operand and operand != "-":
-                return None  # read above with every other word naming a file
+                # Read above with every other word naming a file; one whose path cannot be worked
+                # out is unread, and refused with the switch on (claude-config#2683).
+                return self.unworked_path(text, "operand", d, "runs")
             fed, is_body = self.fed(text, whole)
             if is_body and depth < MAX_DEPTH:
                 try:
@@ -3577,7 +3623,8 @@ class Judge(WrittenPaths):
                 if reason:
                     return reason
             if operand and operand != "-":
-                return None  # read above with every other word naming a file
+                # Read above, or unread where its path cannot be worked out (claude-config#2683).
+                return self.unworked_path(text, "operand", d, "runs")
             if stdin:
                 fed = self.fed(text, whole)[0]
                 hit = MARKER.search(fed)
@@ -3598,7 +3645,11 @@ class Judge(WrittenPaths):
             if bad:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
-                return self.script(words[1], d, depth, True) if raw and not re.search(r"[$`]", raw) else None
+                # One built from what cannot be worked out is unread, and refused with the switch on
+                # (claude-config#2683).
+                if raw and not re.search(r"[$`]", raw):
+                    return self.script(words[1], d, depth, True)
+                return self.unworked_path(text, 1, d, "sources")
             return self.script(v, d, depth, True) if v is not None else None
         if "/" in words[0]:
             if hit:
@@ -3616,10 +3667,84 @@ class Judge(WrittenPaths):
                 first = ""
             shell = path.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
             if not (shell or first.startswith("#!")):
-                return self.script(words[0], d, depth, False)
+                # Nothing there, or no script: a path it cannot work out is refused with the switch on.
+                return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
-            return self.every_file([words[0]] + words, d, depth, shell, lang)
+            return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+        # A program named by a variable alone (`$cmd`, `"$gh" pr view`) is left as it was: it is how a
+        # function runs the command it is handed and a suite its stand in, and refusing it too newly
+        # refused 261 more of this repository's 546 scripts on 2026-11-12 (claude-config#2683).
         return None
+
+    def unworked_path(self, text, slot, d, verb):
+        """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
+        sourced (verb) by a path the gate cannot work out: the word in slot of the command as written
+        ("operand", the program's script by its option table; or a position), where it is built from a
+        variable or a substitution whose value is not certain. That file is never read, so one that
+        posts could hide behind it. None with the switch off, for a word with no variable or
+        substitution in it (read as written, as before), and for one whose value is worked out. Says
+        which path, in which script and on which line, and what the gate could not follow, so whoever
+        wrote the script can tell which line to make plain (the wording #2538's measurement used for a
+        sourced path)."""
+        if not unworked_paths_refused():
+            return None
+        words = self.raw_words(text)
+        if slot == "operand":
+            raw = self.operands(words)[0] if words else None
+        else:
+            raw = words[slot] if slot < len(words) else None
+        if not raw or raw == "-" or not re.search(r"[$`]", raw):
+            return None
+        ctx = self.shell
+        v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, ctx["script"], False)
+        if v is not None and not splits:
+            return None
+        at = ctx["at"]
+        where = f"the script {ctx['script']}" if ctx["script"] else "this command"
+        if at is not None and ctx["script"]:
+            where += f", line {ctx['text'].count(chr(10), 0, at) + 1},"
+        names = [a or b for a, b in SH_PARAM.findall(raw)]
+        unknown = sorted({n for n in (re.split(r"[^A-Za-z0-9_]", n)[0] for n in names)
+                          if n and n != "BASH_SOURCE" and self.sh_source_var(n) is None})
+        if re.search(r"\$\(|`", raw):
+            why = "it is built from a command's output"
+        elif unknown:
+            why = ", ".join("$" + n for n in unknown) + (" is" if len(unknown) == 1 else " are") + " not certain there"
+        elif self.sh_cwd(d) == SH_UNKNOWN_DIR:
+            why = "the directory it runs in is not certain"
+        else:
+            why = None
+        known = self.sh_ctx_known() if at is not None else None
+        if why and known and at >= known["top"] and known["top"] < len(ctx["text"]):
+            n = ctx["text"].count("\n", 0, known["top"]) + 1
+            line = ctx["text"][ctx["text"].rfind("\n", 0, known["top"]) + 1:].split("\n", 1)[0].strip()[:120]
+            why += f", since the gate stops following the script's variables at line {n}: {line}"
+        why = f" ({why})" if why else ""
+        # Through unfollow, so main() says the check could not be made rather than claiming a post (L11).
+        return self.unfollow(f"{where} {verb} {raw}, a path the gate cannot work out{why}, so the file it "
+                             "names cannot be read. Write the path so it can be worked out: a literal path, "
+                             "or one built from variables the script sets plainly before it")
+
+    def raw_words(self, text):
+        """One command's words as written, quotes and expansions kept, lined up with the words judge()
+        reads: past any reserved word, and past a launcher and its options as judge() steps past them
+        (claude-config#2683). A redirection is kept as a word of its own, as operands() expects."""
+        rest = self.sw.join_continuations(self.sw.command_rest(text)[0])
+        toks = self.sh_tokens(rest)
+        if len(toks) > 1 and toks[1] == ("op", "(") and SH_ASSIGN_LIKE.fullmatch(toks[0][1]):
+            return []  # an array assignment, `a=(x y)` or `a+=("$x")`: it runs nothing
+        words = [t for kind, t in toks if kind == "word" or SH_REDIRECT.fullmatch(t)]
+        # Past reserved words and assignments, quoted or not: the shared reader takes only a bare `A=x`
+        # for one, so `A+=x`, `a[i]=x` and env's `"PATH=$X/bin"` would read as the program.
+        while words and (words[0] in self.sw.RESERVED or SH_ASSIGN_LIKE.match(words[0].lstrip("\"'"))):
+            words = words[1:]
+        name = os.path.basename(words[0]) if words else ""
+        if name in LAUNCHERS or (name == "uv" and len(words) > 1 and words[1] == "run"):
+            k = 2 if name == "uv" else 1
+            while k < len(words) and words[k].startswith("-"):
+                k += 1
+            words = words[k:]
+        return words
 
     def every_file(self, words, d, depth, shell_hint, lang=None, inline=None):
         """The reason any word after the program that names a file posts, or None.
@@ -3677,7 +3802,9 @@ class Judge(WrittenPaths):
             code.append((label or f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
         for w, path in data:
             self.tick(path)
-            unread = self.unread(path)
+            # A data file another program only MAY have written is read as it is on disk (#2772):
+            # read as unreadable, every analysis handing a file it named to a script refused.
+            unread = self.unread(path, with_maybe=False)
             if unread:
                 what = f"{w}, which {unread}"
             else:
