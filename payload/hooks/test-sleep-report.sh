@@ -92,6 +92,9 @@ record(){   # $1 = generation, $2 = workers as a JSON list, $3 = where (current 
     "$1" "$SINCE" "$((SINCE + 86400000))" "$DL" "$1" "$STAMP" "$2" > "$3"
 }
 report_of(){ cat "$DL/Sleep report $1.md" 2>/dev/null; }
+section_rows(){   # $1 = the report, $2 = a section's title: its rows, without the dash
+  printf '%s\n' "$1" | sed -n "/^## $2\$/,/^## /p" | sed -n 's/^- //p'
+}
 notes_of(){ cat "$SLEEPDIR/notes/$1.jsonl" 2>/dev/null; }
 py(){ HOME="$WORK/hm" SLEEP_REPORT_NOW_MS="${NOW:-$SINCE}" python3 "$PY" "$@"; }
 
@@ -360,6 +363,8 @@ mkdir -p "$SLEEPDIR/notes"
   echo '{"v":1,"kind":"done","at":1791445200000,"by":"aaaa1111","repo":"o/r","issue":23,"text":"finished it later","generation":"g6"}'
   # Noted done overnight, but merged only after wake (#1167).
   echo '{"v":1,"kind":"done","at":1791445300000,"by":"aaaa1111","repo":"o/r","pr":42,"text":"Merged in the morning","generation":"g6"}'
+  # Noted done overnight, but merged before sleep began, while the merge was under way (#2766).
+  echo '{"v":1,"kind":"done","at":1791445400000,"by":"aaaa1111","repo":"o/r","pr":43,"text":"Merged as sleep began","generation":"g6"}'
   echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"eeee5555","generation":"g6"}'
 } > "$N"
 echo '[{"number":34,"title":"Split cache","url":"https://github.com/o/r/pull/34","mergedAt":"2026-10-08T07:05:00Z"},{"number":35,"title":"Nobody noted","url":"https://github.com/o/r/pull/35","mergedAt":"2026-10-08T08:00:00Z"},{"number":30,"title":"Before sleep","url":"https://github.com/o/r/pull/30","mergedAt":"2026-10-07T20:00:00Z"},{"number":41,"title":"After wake","url":"https://github.com/o/r/pull/41","mergedAt":"2026-10-08T12:32:00Z"}]' > "$FAKE/gh-pr-o_r"
@@ -368,6 +373,7 @@ echo '{"number":36,"title":"Not merged","mergedAt":null}' > "$FAKE/gh-pr-view-o_
 echo '{"number":38,"title":"Lagging search","mergedAt":"2026-10-08T07:30:00Z"}' > "$FAKE/gh-pr-view-o_r-38"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-view-o_r-39.fail"
 echo '{"number":42,"title":"Morning merge","mergedAt":"2026-10-08T12:40:00Z"}' > "$FAKE/gh-pr-view-o_r-42"
+echo '{"number":43,"title":"Under way at bedtime","mergedAt":"2026-10-08T03:30:00Z"}' > "$FAKE/gh-pr-view-o_r-43"
 echo '[{"number":5,"title":"Half","url":"u","mergedAt":"2026-10-08T03:40:00.123-04:00"}]' > "$FAKE/gh-pr-o_q"
 echo 'HTTP 500' > "$FAKE/gh-issue-o_q.fail"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-o_s.fail"
@@ -382,7 +388,13 @@ has "a merged PR a note named is done" "o/r PR #34 Split cache" "$r"
 has "a closed issue is done" "o/r issue #12 Cache per account" "$r"
 lacks "a PR merged before sleep is not done tonight" "PR #30" "$r"
 has "a PR merged with no note is flagged" "o/r PR #35 merged with no session accounting for it" "$r"
-has "a note saying done that GitHub does not show is flagged" "o/r PR #36 was noted done, but GitHub does not show it merged since sleep began" "$r"
+has "a note saying done that GitHub does not show merged at all is flagged" "o/r PR #36 was noted done, but GitHub does not show it merged." "$r"
+# #2766: on 2026-11-11 two pull requests merged 46 and 32 minutes before sleep began were put to Dan
+# as not merged. A noted done is checked for merged at any time, and listed only when it is not.
+has "a PR noted done that merged before sleep began is said under Done (#2766)" "o/r PR #43 was noted done and merged 11:30 PM ET, before sleep began" "$(section_rows "$r" 'Done')"
+lacks "and is never put to Dan as not merged (#2766)" "PR #43 was noted done, but" "$r"
+lacks "no flag says since sleep began any more (#2766)" "since sleep began" "$r"
+has "the missed run of the overnight check is said when it left no record (#2766)" "The overnight check left no record that it ran, so what was done on GitHub overnight was not read." "$(section_rows "$r" 'Needs a look')"
 has "only after reading that PR by its number" "[pr] [view] [36] [-R] [o/r]" "$(cat "$FAKE/calls")"
 has "a noted PR the search missed but its own read shows merged is done, not accused (L1014)" "o/r PR #38 Lagging search, merged 3:30 AM ET (found by its number" "$r"
 lacks "and is not flagged" "PR #38 was noted done" "$r"
@@ -406,8 +418,9 @@ has "and closed issues the same way" "[closed:2026-10-08T03:42:00Z..2026-10-08T1
 # stand in answers past the search, so the script's own predicate is what is tested (L1014).
 lacks "a PR merged after wake is not the night's" "PR #41" "$r"
 lacks "nor an issue closed after wake" "issue #24" "$r"
-has "a PR noted done but merged only after wake is said as such" "o/r PR #42 was noted done, but GitHub shows it merged 8:40 AM ET, after the night ended at 7:05 AM ET" "$r"
+has "a PR noted done but merged only after wake is said as such, under Done (#2766)" "o/r PR #42 was noted done and merged 8:40 AM ET, after the night ended at 7:05 AM ET" "$(section_rows "$r" 'Done')"
 lacks "and is never listed as done overnight" "PR #42 Morning merge" "$r"
+lacks "nor put to Dan, since it merged (#2766)" "PR #42 was noted done, but" "$r"
 check_eq "GitHub is asked about exactly the repos the notes name, no other" "o/q o/r o/s" \
   "$(printf '%s\n' "$calls" | grep '\[list\]' | sed -n 's/.*\[-R\] \[\([^]]*\)\].*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 # Heartbeats and claims (L13, L98).
@@ -448,9 +461,6 @@ has "a line that cannot be read is counted, never dropped" "1 line of the notes 
 # and folder it came from, so the morning hands each one to the session it belongs to.
 needs_rows(){   # $1 = the needs file: one line per row, section|by|repo|text
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print("%s|%s|%s|%s" % (r["section"], r.get("by") or "", r.get("repo") or "", r["text"])) for r in d["rows"]]' "$1" 2>&1
-}
-section_rows(){   # $1 = the report, $2 = a section's title: its rows, without the dash
-  printf '%s\n' "$1" | sed -n "/^## $2\$/,/^## /p" | sed -n 's/^- //p'
 }
 NEEDS="$SLEEPDIR/notes/g6.needs.json"
 check_eq "the final render writes what needs Dan beside the notes, marked final" "True" \
@@ -676,6 +686,8 @@ record g7 '["aaaa1111"]' "$SLEEPDIR/ended/g7.json"
 {
   echo '{"v":1,"kind":"heartbeat","at":1791456900000,"by":"aaaa1111","generation":"g7"}'
   echo '{"v":1,"kind":"stopped","at":1791457000000,"by":"aaaa1111","text":"done","generation":"g7"}'
+  # The overnight check's one line, written every time it runs (#2766): what it read and left out.
+  echo '{"v":1,"kind":"checked","at":1791457100000,"by":"aaaa1111","text":"The overnight check read 3 repositories on GitHub; left out as healthy: 27 scheduled runs passed, 4 scheduled runs skipped.","generation":"g7"}'
   echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"aaaa1111","generation":"g7"}'
 } > "$SLEEPDIR/notes/g7.jsonl"
 NOW=$WOKE py render --record "$SLEEPDIR/ended/g7.json" --final >/dev/null 2>&1
@@ -683,6 +695,13 @@ r="$(report_of g7)"
 has "no reading at all is not measurable, said only then" "Paid usage: not measurable, since no session reported a cost reading" "$r"
 has "a night with nothing wrong says so" "Nothing needs a look." "$r"
 check_eq "and hands the morning no row, never the words that say so as one (#1665)" "" "$(needs_rows "$SLEEPDIR/notes/g7.needs.json")"
+# #2766: silence must still mean healthy, so the count of what the check read and left out is said
+# under Needs a look, as a sentence, never a row the morning puts to Dan.
+look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
+has "a healthy night still says what the overnight check read and left out (#2766)" "The overnight check read 3 repositories on GitHub; left out as healthy: 27 scheduled runs passed, 4 scheduled runs skipped." "$look"
+lacks "and never as a row (#2766)" "- The overnight check read" "$r"
+lacks "a night whose check left its line is not said to have missed it (#2766)" "left no record that it ran" "$r"
+lacks "and the line is never left for Other notes (#2766)" "## Other notes" "$r"
 has "and a night with nothing done says so" "Nothing was merged or closed in a repo worked tonight." "$r"
 
 # An ended record (by limit) says so in the header.
@@ -700,6 +719,7 @@ look="$(printf '%s\n' "$r" | sed -n '/^## Needs a look/,/^## /p')"
 has "an overnight check hit is under Needs a look" "Done overnight, check it: Issue created overnight: o/r#9" "$look"
 has "a read it could not make is under Needs a look too" "Not checked overnight: deploy runs in o/r were not checked" "$look"
 lacks "neither is left for Other notes" "## Other notes" "$r"
+lacks "a check that wrote what it found is not said to have missed its run (#2766)" "left no record that it ran" "$r"
 
 # ---- each worker's goal (#1242) ----
 # Sleep mode works only a goal Dan set, kept per worker in the record's goals. A worker left without

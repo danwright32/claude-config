@@ -21,8 +21,16 @@ call without signing in.
   named_as_database_call(tool)           whether a tool's name alone says it runs statements or
                                          is one of SUPABASE_CHANGES
   named_as_function_deploy(tool)         whether a tool's name alone says it deploys an edge function
-  bash_findings(command, judge, sw)      one Bash command; sw is lib/shell-words.py, loaded
+  bash_findings(command, judge, sw, cwd) one Bash command; sw is lib/shell-words.py, loaded; cwd
+                                         the session's directory, from the hook payload
   is_function_deploy(finding)            whether a finding is about a deploy and not a database
+  is_applicable(finding)                 whether a finding is one Dan's /db-apply Apply can cover
+                                         (claude-config#2763): a `db push`, or a `db query` write
+                                         from a -f file; it carries .workdir, .flags and .file for
+                                         lib/db-apply-approval.py
+  cli_read_approval(command, cwd, judge, sw)
+                                         (True, why) when a Bash command is one Supabase CLI read,
+                                         for read-only-query-allow.sh; else (False, why not)
   asked_words()                          every word a call must hold for this file to ask about it
 
 Each finding is (why the call is asked about, the statement it is about or None).
@@ -106,6 +114,16 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
     is not the way round the other (L450). No transcript on the personal MacBook had run one.
   - UNREAD_CLIENTS (pgcli, pg_restore, dropdb, mongosh and the rest): asked about whenever one
     runs, since this file does not read their statements.
+  - ONE SUPABASE RUN, since #2763. When the whole Bash command is one Supabase CLI run, with
+    nothing before it but cd (plain_supabase()), nothing in the command can write a file before
+    that run reads it, so its `db query -f` file IS read and each statement judged, the same as
+    execute_sql; L64 is why a file is read in no other command. A file that cannot be read
+    (missing, a folder, not a regular file, not UTF-8, too large, named relative to a --workdir)
+    is asked about. Such a `db push`, and such a `db query` write from a file it read, is
+    Applicable, which db-write-ask.sh lets through when Dan's /db-apply Apply covers it
+    (lib/db-apply-approval.py). cli_read_approval() is what
+    read-only-query-allow.sh approves a CLI call by: a `db query` whose every statement judge()
+    shows to be read only, or a `db push --dry-run`.
   - a client run through CARRIERS (docker exec, ssh, npx, a secret runner) is read from the
     client's own name on, or from the quoted command line handed over.
 
@@ -119,7 +137,9 @@ API (curl, a script). The setting in supabase/config.toml is never read; the she
 would apply it is asked about whatever its flags.
 """
 import json
+import os
 import re
+import stat
 
 SUPABASE = "mcp__claude_ai_Supabase__"
 # Asked about whatever the call holds: its statements are not in it.
@@ -172,6 +192,9 @@ DB_WORDS = {
     "aurora", "rds",
 }
 MAX_DEPTH = 4
+# The largest `db query -f` file read (#2763); a larger one is asked about unread. A read back is a
+# line or two; the hook has ten seconds in all.
+STATEMENT_FILE_MAX = 1 << 20
 NO_STATEMENT = "its statements are not in the command, so it reads them from its input"
 SHELL_VALUE = "it holds a shell variable or a substitution, known only as it runs"
 # A psql variable (:name, :'name', :"name"), which psql fills in before the statement runs. A cast
@@ -213,6 +236,23 @@ def is_function_deploy(finding):
     """Whether one of bash_findings()'s findings is about an edge function deploy, and so not
     about a database."""
     return isinstance(finding, FunctionDeploy)
+
+
+class Applicable(tuple):
+    """A finding about a Supabase CLI run that is the whole of its command (claude-config#2763),
+    which Dan's /db-apply Apply can cover: a `db push` (.file None) or a `db query` running the
+    statements of one -f file (.file its absolute path). It carries the directory the run works in
+    (.workdir) and its flags (.flags), so db-write-ask.sh can ask lib/db-apply-approval.py."""
+
+    def __new__(cls, finding, workdir, flags, file=None):
+        self = tuple.__new__(cls, finding)
+        self.workdir, self.flags, self.file = workdir, list(flags), file
+        return self
+
+
+def is_applicable(finding):
+    """Whether one of bash_findings()'s findings is one an Apply can cover."""
+    return isinstance(finding, Applicable)
 
 
 def _open_to_all(several=False):
@@ -668,21 +708,28 @@ def _supabase_words(words, valued):
     return path, flags
 
 
-def _supabase(words, judge):
-    """The findings for one run of the Supabase CLI: its db and migration subcommands, the
-    branches and projects ones that change a database with no statement, and a functions deploy
-    that turns JWT verification off."""
-    path, flags = _supabase_words(words, SUPABASE_VALUED)
-    # A dry run only while every --dry-run is bare or =true: --dry-run=false is a real push, and so
-    # is a dry run undone by a later false. Any value but true counts as not dry.
+def _dry(flags):
+    """Whether a push's flags make it a dry run: only while every --dry-run is bare or =true.
+    --dry-run=false is a real push, and so is a dry run undone by a later false. Any value but true
+    counts as not dry."""
     dry = None
     for name, eq, value in flags:
         if name == "--dry-run":
             dry = dry is not False and (not eq or value.lower() == "true")
+    return bool(dry)
+
+
+def _supabase(words, judge, here=None):
+    """The findings for one run of the Supabase CLI: its db and migration subcommands, the
+    branches and projects ones that change a database with no statement, and a functions deploy
+    that turns JWT verification off. here is the directory it runs in when it is the whole of its
+    command (plain_supabase()), else None."""
+    path, flags = _supabase_words(words, SUPABASE_VALUED)
     files = [value for name, _, value in flags if name in ("-f", "--file")]
     if {name for name, _, _ in flags} & {"--help", "-h"} or path[:1] == ["help"]:
         return []
-    return _supabase_state(path) + _supabase_db(path, files, dry, judge) + _supabase_deploy(words)
+    return (_supabase_state(path) + _supabase_db(path, files, _dry(flags), judge, here, flags)
+            + _supabase_deploy(words))
 
 
 def _supabase_deploy(words):
@@ -751,7 +798,66 @@ def _supabase_state(path):
              "not be told", None)]
 
 
-def _supabase_db(path, files, dry, judge):
+def _workdir(here, flags):
+    """The directory a plain Supabase run works in: its last --workdir, read against here, or
+    here itself; None when that cannot be told."""
+    given = [value for name, _, value in flags if name == "--workdir"]
+    if not given:
+        return here
+    w = given[-1]
+    if not w or "$" in w or "`" in w or w.startswith("~"):
+        return None
+    return os.path.normpath(os.path.join(here, w))
+
+
+def read_statement_file(here, name, flags):
+    """(the text of a `db query -f` file, None), or (None, the clause saying why it could not be
+    read). Read only for a plain Supabase run, where nothing in the command writes it first."""
+    if not name or "$" in name or "`" in name:
+        return None, "its name is filled in only as the command runs"
+    if not os.path.isabs(name):
+        if any(n == "--workdir" for n, _, _ in flags):
+            return None, "it is named relative to a --workdir, which this hook does not resolve"
+        name = os.path.join(here, name)
+    try:
+        if not stat.S_ISREG(os.stat(name).st_mode):
+            return None, "it is not a regular file"
+        with open(name, "rb") as f:
+            data = f.read(STATEMENT_FILE_MAX + 1)
+    except OSError as e:
+        return None, "it could not be read (" + type(e).__name__ + ")"
+    if len(data) > STATEMENT_FILE_MAX:
+        return None, "it is larger than " + str(STATEMENT_FILE_MAX) + " bytes"
+    try:
+        # A file that is not UTF-8 is asked about rather than judged: refusing is the decision.
+        return data.decode("utf-8", "strict"), None
+    except UnicodeDecodeError:
+        return None, "it is not UTF-8 text"
+
+
+def _file_statements(name, files, here, flags, judge):
+    """The findings for the files of one `db query`: each read and its statement judged when the
+    run is plain (here is its directory), else asked about unread."""
+    if here is None:
+        return [(name + " runs the statements in a file (" + ", ".join(files) + "), which this hook "
+                 "does not read, so the call could not be classified as read only. It reads one only "
+                 "when the command is that one Supabase run and nothing else", None)]
+    out = []
+    for f in files:
+        text, why = read_statement_file(here, f, flags)
+        if text is None:
+            out.append((name + " runs the statements in a file (" + f + "), which " + why
+                        + ", so the call could not be classified as read only", None))
+        else:
+            # A write from a file Dan's Apply can cover, the skill's ad hoc write path (#2763).
+            workdir = _workdir(here, flags)
+            full = os.path.normpath(f if os.path.isabs(f) else os.path.join(here, f))
+            out.extend(x if workdir is None else Applicable(x, workdir, flags, full)
+                       for x in _judged(name + " -f " + f, [text], judge))
+    return out
+
+
+def _supabase_db(path, files, dry, judge, here=None, flags=()):
     """The findings for the db or migration subcommand among a Supabase CLI run's words."""
     at = next((k for k, w in enumerate(path) if w in ("db", "migration", "migrations")), None)
     if at is None or at + 1 >= len(path):
@@ -769,28 +875,33 @@ def _supabase_db(path, files, dry, judge):
     if sub in SUPABASE_DB_READS:
         return []
     if sub == "push":
-        return [] if dry else [(name + " applies the pending migrations to the database", None)]
+        if dry:
+            return []
+        finding = (name + " applies the pending migrations to the database", None)
+        workdir = None if here is None else _workdir(here, flags)
+        # Only a push that is the whole of its command can be covered by an Apply (#2763).
+        return [finding if workdir is None else Applicable(finding, workdir, flags)]
     if sub == "reset":
         return [(name + " drops the database and builds it again from the migrations", None)]
     if sub != "query":
         return unknown
     if files:
-        return [(name + " runs the statements in a file (" + ", ".join(files) + "), which this hook "
-                 "does not read, so the call could not be classified as read only", None)]
+        return _file_statements(name, files, here, flags, judge) + _judged(name, rest, judge, shell=True)
     if not rest:
         return [(name + " is not provably read only (" + NO_STATEMENT + ")", None)]
     return _judged(name, rest, judge, shell=True)
 
 
-def _run(words, judge, sw, depth):
-    """The findings for one command's words, from the word that is its program on."""
+def _run(words, judge, sw, depth, here=None):
+    """The findings for one command's words, from the word that is its program on. here is the
+    directory a plain Supabase run works in (plain_supabase()), else None."""
     if not words:
         return []
     prog = _base(words[0])
     if prog in STATEMENT_CLIENTS:
         return _shell_client(prog, words, judge)
     if prog == "supabase":
-        return _supabase(words, judge)
+        return _supabase(words, judge, here)
     if prog in UNREAD_CLIENTS:
         # Only a call that is nothing but a help or version request runs nothing. In these clients -h
         # is the host and -V can be anything, so a short flag never counts, and a help word beside a
@@ -815,7 +926,7 @@ def _run(words, judge, sw, depth):
     return out
 
 
-def _line(command, judge, sw, depth):
+def _line(command, judge, sw, depth, plain=None):
     out = []
     for _, text, wrapper, why, _ in sw.every_command(command):
         if why:
@@ -833,13 +944,78 @@ def _line(command, judge, sw, depth):
         # `command -v psql` asks whether psql is installed and runs nothing.
         if any(name == "command" for name, _ in passed) and re.search(r"(?:^|\s)command\s+-[A-Za-z]*[vV]", text):
             continue
-        out.extend(_run(sw.command_words(strip_redirects(rest)), judge, sw, depth))
+        here = plain[0] if plain is not None and depth == 0 and text == plain[1] else None
+        out.extend(_run(sw.command_words(strip_redirects(rest)), judge, sw, depth, here))
     return out
 
 
-def bash_findings(command, judge, sw):
+def plain_supabase(command, sw, cwd):
+    """(the directory it runs in, its text) when the whole Bash command is one Supabase CLI run
+    with nothing before it but cd, else None (claude-config#2763). Then nothing in the command can
+    write a file before the run reads it, or run anything else an approval would let through. A cd
+    to a directory held in a variable or to `-`, a redirection anywhere, a wrapper, a shell variable
+    or substitution in the run's words, and a session directory that is not absolute all make it
+    None, as does a reading of the command that fails."""
+    if not isinstance(cwd, str) or not cwd.startswith("/"):
+        return None
+    try:
+        records = sw.every_command(command, cwd)
+    except Exception:
+        return None
+    found = None
+    for d, text, wrapper, why, depth in records:
+        if why or wrapper or depth or REDIRECT.search(text):
+            return None
+        if sw.cd_target(text) is not None:
+            continue
+        words = sw.command_words(text)
+        if (found is not None or not words or _base(words[0]) != "supabase"
+                or any("$" in w or "`" in w for w in words)
+                or not d.startswith("/") or "$" in d or "`" in d):
+            return None
+        found = (os.path.normpath(d), text)
+    return found
+
+
+# The flags a CLI read may carry and still be approved by read-only-query-allow.sh (#2763): where to
+# send it, how to print it, and the confirmation a hosted database asks for. Any other (a password,
+# a connection string, a support ticket) leaves it to the usual check.
+READ_QUERY_FLAGS = {"--linked", "--remote", "--local", "--yes", "-f", "--file", "-o", "--output",
+                    "--workdir", "--debug", "--read-only"}
+DRY_PUSH_FLAGS = {"--dry-run", "--linked", "--local", "--yes", "--workdir", "--debug", "--include-all",
+                  "--include-roles", "--include-seed"}
+
+
+def cli_read_approval(command, cwd, judge, sw):
+    """(True, why) when the whole Bash command is one Supabase CLI run that changes nothing: a `db
+    query` whose every statement, in its words or its -f files, judge() shows to be read only, or a
+    `db push --dry-run`. Else (False, why not). db-write-ask.sh asks about neither, by the same
+    reading (bash_findings()), so the two hooks cannot disagree about one (L342)."""
+    plain = plain_supabase(command, sw, cwd)
+    if plain is None:
+        return False, "the command is not one Supabase CLI run"
+    here, text = plain
+    path, flags = _supabase_words(sw.command_words(text), SUPABASE_VALUED)
+    names = {name for name, _, _ in flags}
+    if path == ["db", "push"]:
+        if _dry(flags) and names <= DRY_PUSH_FLAGS:
+            return True, "supabase db push --dry-run prints the migrations it would apply and applies none"
+        return False, "it is not a dry run with flags this hook knows"
+    if path[:2] != ["db", "query"] or not names <= READ_QUERY_FLAGS:
+        return False, "it is not a supabase db query with flags this hook knows"
+    files = [value for name, _, value in flags if name in ("-f", "--file")]
+    if not files and len(path) < 3:
+        return False, NO_STATEMENT
+    found = _supabase_db(path, files, False, judge, here, flags)
+    if found:
+        return False, found[0][0]
+    return True, "supabase db query runs only statements that read"
+
+
+def bash_findings(command, judge, sw, cwd=""):
     """Every (why, statement) one Bash command is asked about, in the order it runs them; [] when it
-    runs no database client, or only statements judge() shows to be read only."""
+    runs no database client, or only statements judge() shows to be read only. cwd is the session's
+    directory, which a plain Supabase run is read against."""
     if not CLIENT_WORD.search(command):
         return []
-    return _line(command, judge, sw, 0)
+    return _line(command, judge, sw, 0, plain_supabase(command, sw, cwd))

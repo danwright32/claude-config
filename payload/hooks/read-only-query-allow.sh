@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # read-only-query-allow.sh
-# Claude Code PreToolUse(mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)) hook: approve a read only query by itself, so auto mode does not refuse it (claude-config#2343).
+# Claude Code PreToolUse(mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)|Bash) hook: approve a read only query by itself, so auto mode does not refuse it (claude-config#2343).
 #
 # On 2026-11-05 auto mode's classifier refused a plain select against a production database, with
 # the reason "[Production Reads]": its default soft deny list carries that category, and nothing
@@ -34,6 +34,13 @@
 #          name, or a schema qualified name: a call to a function that may write.
 #      The text is never parsed, so a string or a name that merely looks like a write can only cost
 #      an approval, never win one.
+#   3. Since #2763, a Bash command that is one Supabase CLI run and nothing else but cd, when it
+#      changes nothing: a `supabase db query` whose every statement, in its words or in a -f file
+#      it reads, the same judge() shows to be a read, or a `supabase db push --dry-run`. Which
+#      commands those are is cli_read_approval() in lib/db-write-calls.py, the library
+#      db-write-ask.sh reads the same command with, so a call approved here is never asked about
+#      there. A command holding anything else (a pipe, a redirection, a second command, a flag this
+#      does not know) is left to the usual check.
 #
 # WHAT IT CANNOT SEE: the database's own definitions. A select that reads a view whose definition
 # calls a function that writes, uses an operator or cast the database defined, calls a function on
@@ -47,6 +54,15 @@
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
+
+# It runs on every Bash call since #2763, and approves only a Supabase CLI read, so a Bash payload
+# that never names supabase leaves before anything is loaded. Matched under LC_ALL=C too, so a byte
+# that is not UTF-8 hides no word after it (claude-config#1885).
+payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }
+if payload_match "$payload" '"tool_name"[[:space:]]*:[[:space:]]*"Bash"' && ! payload_match "$payload" 'supabase'; then
+  exit 0
+fi
+
 # Its own folder cut from its path in bash, never by dirname (claude-config#2081, #2130).
 case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac
 HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"
@@ -72,14 +88,32 @@ if not isinstance(d, dict):
 tool = d.get("tool_name")
 if not isinstance(tool, str):
     print("leave\t"); sys.exit()
+def load(name, file):
+    """A library beside the hook, loaded by its path, never by name."""
+    spec = importlib.util.spec_from_file_location(name, sys.argv[1] + "/lib/" + file)
+    lib = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lib)
+    return lib
 # The one predicate for "read only", shared with db-write-ask.sh, which asks Dan about every
-# database call this does not approve (claude-config#2521). Loaded by its path, never by name.
+# database call this does not approve (claude-config#2521).
 try:
-    spec = importlib.util.spec_from_file_location("sql_read_only_shared", sys.argv[1] + "/lib/sql-read-only.py")
-    ro = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ro)
+    ro = load("sql_read_only_shared", "sql-read-only.py")
 except Exception as e:
-    print("nolib\t" + type(e).__name__); sys.exit()
+    print("nolib\tsql-read-only.py, " + type(e).__name__); sys.exit()
+if tool == "Bash":
+    # A read through the Supabase CLI (claude-config#2763), read by the library db-write-ask.sh
+    # reads it with, so a call approved here is one that hook does not ask about.
+    ti = d.get("tool_input")
+    command = ti.get("command") if isinstance(ti, dict) else None
+    if not isinstance(command, str):
+        print("leave\t"); sys.exit()
+    try:
+        calls = load("db_write_calls_shared", "db-write-calls.py")
+        sw = load("shell_words_shared", "shell-words.py")
+    except Exception as e:
+        print("nolib\tdb-write-calls.py or shell-words.py, " + type(e).__name__); sys.exit()
+    ok, why = calls.cli_read_approval(command, d.get("cwd"), ro.judge, sw)
+    print(("allow\t" if ok else "leave\t") + why); sys.exit()
 ok, why = ro.read_only_approval(tool, d.get("tool_input"))
 print(("allow\t" if ok else "leave\t") + why)
 ' "$HOOK_DIR" 2>&1)"
@@ -97,7 +131,7 @@ case "$verdict" in
     hook_allow_notice "READ ONLY QUERY APPROVAL DID NOT RUN: read-only-query-allow.sh could not read the hook payload (${verdict#*$'\t'}), so this call goes to the usual permission check instead of being approved as a read."
     ;;
   nolib$'\t'*)
-    hook_allow_notice "READ ONLY QUERY APPROVAL DID NOT RUN: read-only-query-allow.sh could not load lib/sql-read-only.py beside it (${verdict#*$'\t'}), so this call goes to the usual permission check instead of being approved as a read."
+    hook_allow_notice "READ ONLY QUERY APPROVAL DID NOT RUN: read-only-query-allow.sh could not load a library beside it (lib/${verdict#*$'\t'}), so this call goes to the usual permission check instead of being approved as a read."
     ;;
   *)
     hook_allow_notice "READ ONLY QUERY APPROVAL DID NOT RUN: read-only-query-allow.sh failed (${verdict//$'\n'/ }), so this call goes to the usual permission check instead of being approved as a read."

@@ -93,7 +93,10 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 # reads was taken for the script and refused. A code option a family lacks is the dangerous mistake
 # (its script goes unread), so each family lists only its own. A valued option it lacks is not: the
 # value is then taken for the script, and every word naming a file is read anyway (every_file), so
-# every family but Python, whose options are fixed and few, keeps the shared VALUED.
+# every family but Python, whose options are fixed and few, keeps the shared VALUED. Python's table is
+# relied on as complete by empty_slot (claude-config#2786): a script word it places that names no file
+# lets the data files after it go unread as code, so a valued Python option missing here would let
+# the file after its value run unread. Any other family's table is not relied on that way.
 OPTIONS = {
     "shell": ({"-c"}, "c", VALUED),
     "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
@@ -656,11 +659,10 @@ SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf",
 SH_EXPANSION = re.compile(r"(BASH_SOURCE(?:\[0\])?|[A-Za-z_]\w*|[0-9]+)(?:(:?-)(.*)|(%%?|##?)(.*))?", re.S)
 
 
-def load_reader():
-    spec = importlib.util.spec_from_file_location("shell_words", os.path.join(HERE, "lib", "shell-words.py"))
+def load_lib(name, file):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, "lib", file))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    remember_readings(mod)
     return mod
 
 
@@ -712,6 +714,16 @@ def remember_readings(mod):
         return rests[text]
 
     mod.commands, mod.command_rest = commands, command_rest
+
+
+def load_reader():
+    mod = load_lib("shell_words", "shell-words.py")
+    remember_readings(mod)
+    return mod
+
+
+# What a write to a path that cannot be worked out can name (claude-config#2785): Judge's base.
+WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
 
 
 def draft_advice(where):
@@ -768,7 +780,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge:
+class Judge(WrittenPaths):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -1039,8 +1051,8 @@ class Judge:
         here-string, and tee or cat fed by one of those through a pipe. Anything else, the output of
         any other program, a download, or a word built from a variable or a substitution the resolver
         cannot work out, is noted as unreadable, and a file that is run with an unreadable piece is
-        refused (script). A path that cannot be worked out is noted as a pattern (unknown_pattern), and
-        every file it can match is unreadable from there on.
+        refused (script). A path that cannot be worked out is noted as patterns (unknown_patterns, in
+        lib/written-paths.py), and every file they can match is unreadable from there on.
 
         Also keeps what this command prints, for a tee or cat the next command of a pipeline feeds
         (shell "last_out"), from the commands the line reads itself, not a wrapper's."""
@@ -1075,7 +1087,8 @@ class Judge:
                 # naming a file may be either, so each is unreadable from here on.
                 for a, v in zip(args[1:], vals[1:]):
                     if v is None or not v.startswith("-"):
-                        self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out")
+                        self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out",
+                                             copier=True)
             else:
                 self.note_copy(name, vals[1:], d)
             out = []
@@ -1124,11 +1137,11 @@ class Judge:
         last = max((k for k, f in enumerate(files) if f[2]), default=None)
         for k, (target, v, takes, append) in enumerate(files):
             if k == last:
-                self.note_output(target, v, d, out, label, append)
+                self.note_output(target, v, d, out, label, append, redirect=True)
             elif takes:
-                self.note_output(target, v, d, [], label, append)
+                self.note_output(target, v, d, [], label, append, redirect=True)
             else:
-                self.note_unreadable(target, v, d, f"{label}'s errors")
+                self.note_unreadable(target, v, d, f"{label}'s errors", redirect=True)
         if last is not None:
             out = []
         if self.shell.get("outer", True):
@@ -1175,10 +1188,11 @@ class Judge:
                 stdin = None
         return stdin
 
-    def note_output(self, raw, value, d, pieces, label, append=False):
-        """A file written with pieces (None or an unreadable piece where the text is not known)."""
+    def note_output(self, raw, value, d, pieces, label, append=False, redirect=False):
+        """A file written with pieces (None or an unreadable piece where the text is not known);
+        redirect where raw is a redirection's target, which the shell does not split."""
         if value is None:
-            self.note_unreadable(raw, None, d, label)
+            self.note_unreadable(raw, None, d, label, redirect=redirect)
             return
         if value.startswith("/dev/") and value not in ("/dev/stdin",):
             return
@@ -1186,9 +1200,9 @@ class Judge:
             pieces = [("unknown", None, label)]
         self.note_file(value, d, list(pieces), append)
 
-    def note_unreadable(self, raw, value, d, label):
-        """A file whose text cannot be worked out: by its path, or by a pattern every path it can be
-        matches, where the path is not known either."""
+    def note_unreadable(self, raw, value, d, label, redirect=False, copier=False):
+        """A file whose text cannot be worked out: by its path, or by patterns every path it can be
+        matches, where the path is not known either (lib/written-paths.py)."""
         if value is not None:
             if not value.startswith("/dev/"):
                 self.note_file(value, d, [("unknown", None, label)], True)
@@ -1201,16 +1215,8 @@ class Judge:
         # assembled-from-pieces case the module docstring already puts outside what this gate answers.
         if self.shell.get("on_disk"):
             return
-        self.made_unknown.append((self.unknown_pattern(raw), label))
-
-    @staticmethod
-    def unknown_pattern(raw):
-        """A pattern for a path written as raw that cannot be worked out: any file with its last part's
-        name, where that part is plain text, else any file at all."""
-        base = raw.rstrip("/").rsplit("/", 1)[-1].strip("'\"")
-        if re.fullmatch(r"[A-Za-z0-9._+,%@=:-]+", base) and "/" in raw:
-            return "*/" + base
-        return "*"
+        for pat in self.unknown_patterns(raw, d, redirect, copier):
+            self.made_unknown.append((pat, label))
 
     @staticmethod
     def downloads(name, args, vals):
@@ -1368,28 +1374,30 @@ class Judge:
         if pieces:
             self.made[real] = pieces
 
-    def script(self, word, d, depth, shell_hint, lang=None):
+    def script(self, word, d, depth, shell_hint, lang=None, label=None):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
-        program running it, taken for a file with no extension of its own."""
+        program running it, taken for a file with no extension of its own. label names the file in
+        the reason, "the script <word>" unless its role is otherwise (every_file, claude-config#2786)."""
+        label = label or f"the script {word}"
         path = self.resolve(word, d)
         if not self.is_file(path):
             return None  # nothing there to run
         unread = self.unread(path)
         if unread:
-            return f"the script {word} {unread}"
+            return f"{label} {unread}"
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge and not self.made_from(real):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
         self.tick(path)
         walking, self.walking = self.walking, path
         try:
-            reason = self.script_body(word, path, real, d, depth, shell_hint, lang)
+            reason = self.script_body(word, path, real, d, depth, shell_hint, lang, label)
         finally:
             self.walking = walking  # once read, back to the commands of the file that ran it
         note = self.made_note(path, word) if reason else None
         return f"{reason} ({note})" if note else reason
 
-    def script_body(self, word, path, real, d, depth, shell_hint, lang):
+    def script_body(self, word, path, real, d, depth, shell_hint, lang, label):
         """script() for a file that is there and is not /nudge."""
         try:
             body = self.content(real).decode("utf-8", "replace")
@@ -1412,12 +1420,12 @@ class Judge:
                 inner = self.line(body, d, depth + 1, body)
             except self.sw.Unreadable:
                 inner = f"it names {hit.group(0)} and could not be read as commands" if hit else None
-            return f"the script {word} runs a command that posts: {inner}" if inner else None
+            return f"{label} runs a command that posts: {inner}" if inner else None
         if hit:
-            return f"the script {word} posts to Slack (it names {hit.group(0)})"
+            return f"{label} posts to Slack (it names {hit.group(0)})"
         kind = self.language(real, first, lang)
         if kind:
-            return self.imports(f"the script {word}", real, os.path.dirname(real), body, kind)
+            return self.imports(label, real, os.path.dirname(real), body, kind)
         return None
 
     @staticmethod
@@ -3545,7 +3553,18 @@ class Judge:
                 # The files after it are the code's arguments, judged as a script's are: a data file
                 # is read when the code can act on it, and any other file is read as code (#2439).
                 return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
-            if "-m" not in words[1:]:
+            fed, is_body = self.fed(text, whole) if operand == "-" else (None, False)
+            if is_body and "-m" not in words[1:]:
+                # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
+                # arguments, judged as those of code given by -c are, against what that code can do
+                # with them (claude-config#2786); the files before it are read as code, as before.
+                at = words.index("-")
+                reason = (self.every_file(words[:at], d, depth, False, lang)
+                          or self.every_file([words[0]] + words[at + 1:], d, depth, False, lang,
+                                             inline=(f"the code {name} reads from its input", fed, here)))
+                if reason:
+                    return reason
+            elif "-m" not in words[1:]:
                 reason = self.every_file(words, d, depth, False, lang)
                 if reason:
                     return reason
@@ -3618,19 +3637,36 @@ class Judge:
         if inline:
             label, text, here = inline
             code.append((label, lambda: self.acts_inline(text, here, lang)))
+        # The word the program runs as its script (operands), and whether it is certain to name no
+        # file (empty_slot, claude-config#2786): a program whose script is not there runs nothing,
+        # so a data file after that word is an argument, judged as data even with no script to act.
+        slot = None if inline else self.operands(words)[0]
+        empty = self.empty_slot(words, d) if slot else None
+        past = False
+        prog = os.path.basename(words[0])
         for w in words[1:]:
+            if empty and w == empty:
+                past = True
+                continue
             if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
                 continue
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
-            if code and self.data_shaped(path):
+            if (code or past) and self.data_shaped(path):
                 data.append((w, path))
                 continue
-            reason = self.script(w, d, depth, shell_hint, lang)
+            # A file read as code in the place of a script word that names no file is named by that
+            # role, not called the script (claude-config#2786).
+            label = None
+            if not code and slot == "-":
+                label = f"{w}, handed to the code {prog} reads from its input,"
+            elif not code and slot and slot != w and not self.is_file(self.resolve(slot, d)):
+                label = f"{w}, which {prog} may run as its script ({slot} names no file),"
+            reason = self.script(w, d, depth, shell_hint, lang, label)
             if reason:
                 return reason
-            code.append((f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
+            code.append((label or f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
         for w, path in data:
             self.tick(path)
             unread = self.unread(path)
@@ -3650,6 +3686,30 @@ class Judge:
                     return f"{script_label} {acts}, and is handed {what}"
             # Data every script beside it only reads; none sends or runs what it is handed.
         return None
+
+    def empty_slot(self, words, d):
+        """The word the program certainly runs as its script when that word certainly names no file,
+        else None (claude-config#2786). The program then fails to open it and runs nothing, so no
+        file after it is run as code. Certain only where nothing else could be the script: the word
+        stands in the slot by the family's option table, with no option before it the table does not
+        know (only Python's table is complete; for any other family an option it lacks may take the
+        word as its value, as bash --rcfile would, and the next file is the script); it is shaped
+        like a script (CODE_EXT), not built from a variable or a pattern, and not on disk or written
+        earlier in this command; and where it is relative, the directory it runs in is certain."""
+        skipped = []
+        slot = self.operands(words, skipped)[0]
+        if not slot or slot == "-" or re.search(r"[$`*?\[{]", slot) or words.count(slot) != 1:
+            return None
+        if skipped and self.family(os.path.basename(words[0])) != "py":
+            return None
+        if os.path.splitext(slot)[1].lower() not in CODE_EXT:
+            return None
+        if not os.path.isabs(os.path.expanduser(slot)) and self.sh_dir(d) == SH_UNKNOWN_DIR:
+            return None
+        path = self.resolve(slot, d)
+        if os.path.lexists(path) or self.is_file(path):
+            return None
+        return slot
 
     def data_shaped(self, path):
         """Whether a file is shaped like data rather than a script: an extension none of the programs
@@ -4359,8 +4419,11 @@ class Judge:
             return name
         return "js" if JS_RUNTIME.match(name) else None
 
-    def operands(self, words):
+    def operands(self, words, skipped=None):
         """(the script operand or None, the inline code or None, whether it reads its input).
+
+        skipped, a list when given, collects each option word passed over as taking no value
+        (empty_slot asks whether the table could have misplaced the operand, claude-config#2786).
 
         The inline code, where the program is given code by one of its own options (OPTIONS), is
         (the words before that option, the code, the words after the code): the words before can
@@ -4403,6 +4466,8 @@ class Judge:
                 k += 2
                 continue
             if w.startswith("-") or w.startswith("+"):
+                if skipped is not None:
+                    skipped.append(w)
                 k += 1
                 continue
             break

@@ -2410,7 +2410,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2891,6 +2891,17 @@ anything
 2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
 average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
 before python3 starts
+
+</td></tr>
+<tr><td>
+
+`read-only-query-allow.sh` (#2763)
+
+</td><td>
+
+2026-11-11: 0.015 to 0.047 seconds, five readings of the hook alone on a plain `git push` at load
+averages of 24 to 28, so mostly the machine; it reads every Bash call since #2763, and one that never
+names supabase leaves after reading its input, before loading anything
 
 </td></tr>
 </tbody>
@@ -3692,6 +3703,11 @@ What it approves:
   never is, its query tool included.
 - The claude.ai Supabase `execute_sql` when its query is one statement starting with `select`, `with`,
   `explain` or `show`, against any project.
+- Since #2763, a Bash command that is one Supabase CLI run and nothing else but a `cd`: a `supabase db
+  query` whose every statement, in its words or in the `-f` file it names (which the hook reads), passes
+  the same rule, or a `supabase db push --dry-run`. A pipe, a redirection, a second command or a flag
+  it does not know leaves the call to the usual check. `db-write-ask.sh` reads the same command with
+  the same library, so a call approved here is never asked about there.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
 comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
@@ -3812,6 +3828,26 @@ rule lets those writes skip auto mode entirely, and the work MacBook's file held
 2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
 on that Mac. The message comes on each call of one of those tools and on every database question,
 never on a read it passes.
+
+One Apply covers one migration (#2763). Applying a migration through `/db-apply` was a dry run, a push
+and a read back, each asked about after Dan had answered the skill's own Apply or Cancel picker, so one
+decision reached him up to four times. Now a `supabase db push` that is the whole of its command (a
+`cd` before it aside) is let through, answered "allow", when Dan answered Apply in a picker carrying
+the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256, the project
+ref, and `pending`, the list of migrations the skill's dry run said the push would apply) in the same
+session. `hooks/lib/db-apply-approval.py` reads his answer from the session
+transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
+to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
+`--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
+is asked about, the question saying why no Apply covers it. The skill's ad hoc write, `supabase db
+query --linked --yes -f <file>` alone in its command, is let through the same way when the Apply named
+that file and project and the file is unchanged (Dan, 2026-11-11). A push sends every migration the
+database has not had, so the skill copies the dry run's list onto the picker and shows it in the
+question, and the push is let through only when that list is exactly the one migration Dan applied:
+a missing, empty or longer list, or one naming another file, is asked about, the question naming the
+other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
+What it cannot see: a change on the database between the dry run and the push, or a migration file
+added after the dry run under an older version than the applied one.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -7032,7 +7068,12 @@ morning otherwise); git in a throwaway repository under the temp folder (a path 
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
 refused for git only where it would run git, never for the word in prose (#1124). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. What may merge and
+and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
+passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
+in one line it writes every time it runs, so a final report with no note of the check says it did
+not run. A failed, cancelled or timed out run is listed. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
