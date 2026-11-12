@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, MOST_READ, SCAN_MS, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, SCAN_MS, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -722,16 +722,6 @@ test('the real shapes that were over the limit: a page gaining a metadata title 
   expect(w.ran.length).toBe(2)
 })
 
-// claude-config#2371, Dan's item 3: a template with a common short name. The name is a piece of many
-// words (et in let, get and settings; memory in "kept in memory"), so a search for the bare word
-// listed a crowd of files, and reading every one ran past the deadline: the write was held as could
-// not check, with nothing Dan could approve.
-const crowd = (n: number) => {
-  const many: Record<string, string> = {}
-  for (let i = 0; i < n; i++)
-    many[`/w/app/src/app/area${i}/page.tsx`] = `import { getSettings } from '@/lib/get-settings'\n// the digest is kept in memory, then posted to slack\nexport const let${i} = getSettings()\n`
-  return many
-}
 const MEMORY = '/w/app/src/lib/memory.ts'
 const LABEL = 'export const nowEt = () => new Date()\nexport const label = "Eastern time"\n'
 const relabel = (file: string) => ({ tool: 'Edit', file_path: file, old_string: '"Eastern time"', new_string: '"Eastern time, as Dan reads it"' })
@@ -1091,8 +1081,6 @@ test('a sentence moved out of a Slack posting file unchanged passes, as one move
   expect(refusalOf(await call($, { tool: 'Write', file_path: BOOK, content: within }))).toBe('')
   expect(w.ran.length).toBe(2)
 })
-
-const LATE = '/w/app/src/lib/notify/late.ts'
 
 test('a file that posts to Slack in a way the guard cannot trace is held as before', withKit, async ($, on) => {
   const CONFIG = '/w/app/src/lib/digest-config.ts'
@@ -1589,6 +1577,42 @@ test('a choice whose session ended is put to Dan by the next session he writes i
   expect(await promptLines($)).toContain(`chosen:${id}`)
 })
 
+test('a choice is put to Dan in the session that made it or in its own repository, never in a session in another (#2833)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  const id = await chooseReword($, w)
+  night.asleep = false
+  // The session that made it asks, wherever it is working now.
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  // Once it ends, a session in repository B is never told to ask; one in repository A is.
+  await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
+  w.night.session = 's2'
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.ctl.cwd = `${REPO}/lib`
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+  // Expired, it is said only in its own repository, and saying nothing in B does not use up A's telling.
+  await w.clock.advance(3 * 24 * 60 * 60_000)
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).not.toContain(`chosen:${id}`)
+  w.ctl.cwd = REPO
+  const expired = await promptLines($)
+  expect(expired).toContain('expired unanswered')
+  expect(expired).toContain(`chosen:${id}`)
+})
+
+test('a choice whose repository cannot be read is put to Dan in any session, as before (#2833)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  w.night.originFails = true
+  const id = await chooseReword($, w)
+  night.asleep = false
+  await ($ as unknown as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'other' } as never)
+  w.night.session = 's2'
+  w.ctl.cwd = SITE
+  expect(await promptLines($)).toContain(`chosen:${id}`)
+})
+
 test('taking away unapproved wording that is not on origin passes in any mode; wording origin holds is still held (#2628)', withNight, async ($, on) => {
   nightFresh(false)
   const w = world($, on)
@@ -1681,7 +1705,7 @@ const importBig = async ($: Caller, w: W, text: string) => {
 // An edit sending the quiet feed page through the route's send helper.
 const sendQuiet = (helper: string) => ({ tool: 'Edit', file_path: BIG, old_string: '  if (!rows7.length) return', new_string: `  if (!rows7.length) await ${helper}(quietPage('orders', 45))\n  if (!rows7.length) return` })
 
-test('an 11,000 line route posting through a Slack send helper is judged inside the search time: an import and a send of another module\'s wording pass, and rewording its own message is still held (#2719, #2837)', withKit, async ($, on) => {
+test('an 11,000 line route posting through a Slack send helper is judged inside the time the guard has: an import and a send of another module\'s wording pass, and rewording its own message is still held (#2719, #2837)', withKit, async ($, on) => {
   const text = bigRoute(BIG_LINES)
   expect(text.split('\n').length).toBeGreaterThanOrEqual(BIG_LINES - 20)
   const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
@@ -1695,7 +1719,7 @@ test('an 11,000 line route posting through a Slack send helper is judged inside 
   // Rewording a message the route sends itself is held for the new wording.
   const rewording = { tool: 'Edit', file_path: BIG, old_string: "Look at the queue before the next run.`)\n  }\n  return { name: 'check12'", new_string: "Somebody must clear the queue before the next run.`)\n  }\n  return { name: 'check12'" }
   const reworded = await onWall($, w, rewording)
-  expect(reworded).not.toContain('not searched within')
+  expect(reworded).not.toContain('could not check')
   expect(reworded).toContain('Somebody must clear the queue before the next run')
   expect(w.ran.length).toBe(2)
 })
@@ -1707,9 +1731,10 @@ test('an 11,000 line route posting through a Slack send helper is judged inside 
 // which of the module's calls send (the same answer each time, since it does not depend on what the
 // sender sends) and reading every followed stretch's names again. Measured on the personal MacBook
 // at load 16: 40 senders of a 5,500 line module, 3.5 s an edit, half of it finding the same sends 82
-// times over; at 11,000 lines, 7.0 s. And the search never looked at its deadline between senders,
-// so on the wall it ran on past it. Judged on the wall at 11,000 lines and 80 senders, where the guard
-// before the fix runs out of time.
+// times over; at 11,000 lines, 7.0 s. #2850 removed that search, so the 80 senders are never read
+// and nothing here is judged on the wall: a real time budget measured only the machine's load
+// (L290), and failed at load 17. What still holds is that the edit passes and new wording is held;
+// the cost of tracing an 11,000 line file of its own is judged on the wall by the #2719 test above.
 const LIB = '/w/app/src/lib/monitor/alerts.ts'
 const DB_FILE = '/w/app/src/lib/db.ts'
 const dbModule = (helpers: number) =>
@@ -1724,7 +1749,7 @@ const DB_IMPORT = "import { getDb, type Db, type Row } from '@/lib/db'\n"
 const jobSending = (i: number) =>
   `import { check${i} } from '@/lib/monitor/alerts'\nimport { postSlackAlert } from '@/lib/notify/slack'\nexport const run = async () => {\n  const r = await check${i}({} as never, new Date())\n  if (!r.ok) await postSlackAlert(\`Job ${i} failed: \${r.detail}\`)\n}\n`
 
-test('names added to an existing import in an 11,000 line module that 80 files send are judged inside the search time (#2796)', withKit, async ($, on) => {
+test('names added to an existing import in an 11,000 line module that 80 files send pass, and wording it newly sends is still held (#2796, #2850)', withKit, async ($, on) => {
   const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
   const files: Record<string, string> = {
     [SLACK_POST]: POST_TEXT.replace('postAlert', 'postSlackAlert'),
@@ -1734,17 +1759,13 @@ test('names added to an existing import in an 11,000 line module that 80 files s
   }
   for (let i = 0; i < 80; i++) files[`/w/app/src/app/api/jobs/job${i}/route.ts`] = jobSending(i)
   const w = world($, on, { files })
-  // The test clock moves only at the guard's calls to the world, and tracing the senders makes none,
-  // so the real time the call took is read as well: it must fit the search time too.
-  const started = performance.now()
-  expect(await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: DB_IMPORT, new_string: "import { getDb, withTx, helper3, type Db, type Row } from '@/lib/db'\n" })).toBe('')
-  expect(performance.now() - started).toBeLessThan(SCAN_MS)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LIB, old_string: DB_IMPORT, new_string: "import { getDb, withTx, helper3, type Db, type Row } from '@/lib/db'\n" }))).toBe('')
   expect(w.ran.length).toBe(1)
-  // Wording the module newly sends is still held, so the pass above was the search finishing, never a
-  // search that judged nothing.
-  const reworded = await onWall($, w, { tool: 'Edit', file_path: LIB, old_string: "  if (!rows3.length) return { name: 'check3', ok: true }", new_string: "  if (!rows3.length) return { name: 'check3', ok: false, detail: 'Nothing has arrived for kind 3 today' }" })
+  // Wording the module newly sends is still held, so the pass above was the module judged, never a
+  // check that judged nothing.
+  const reworded = refusalOf(await call($, { tool: 'Edit', file_path: LIB, old_string: "  if (!rows3.length) return { name: 'check3', ok: true }", new_string: "  if (!rows3.length) return { name: 'check3', ok: false, detail: 'Nothing has arrived for kind 3 today' }" }))
   expect(reworded).toContain('Nothing has arrived for kind 3 today')
-  expect(reworded).not.toContain('not searched within')
+  expect(reworded).not.toContain('could not check')
   expect(w.ran.length).toBe(1)
 })
 

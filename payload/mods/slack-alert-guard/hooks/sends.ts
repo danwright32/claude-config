@@ -446,37 +446,23 @@ export type Traced = {
   sends: Send[]
   /** The stretches whose strings reach a send, each with the send it reaches. */
   spans: (Range & { send: Send })[]
-  /** Every name the reached stretches use, with the send it reaches: what a file below this one is followed by. */
-  names: Map<string, Send>
-  /** The file's functions whose bodies send, so a call to one is a send. */
-  fns: Set<string>
 }
 
-/**
- * What in a file reaches a Slack send: its own sends, `seeds` (names a file above it sends, so its
- * declarations of them are followed), and calls to `imported`, send functions it imports from a send
- * helper module.
- */
-export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported: Set<string> = new Set()): Traced => {
-  const { defsFor, changesFor, sendsWith, namesAt, renames } = analysisOf(r)
-  // Which calls send does not depend on the seeds, so it is worked out once for each set of imported
-  // send functions (#2796); copies are used here, so no caller changes the ones kept.
-  const found = sendsWith(imported)
-  const sending = new Set(found.sending)
-  const sendFns = new Set(found.sendFns)
+/** What in a file reaches a Slack send: its own sends, and the stretches whose strings they carry. */
+export const trace = (r: Reading): Traced => {
+  const { defsFor, changesFor, sendCalls, namesAt } = analysisOf(r)
+  // Which calls send is worked out once for each text (#2796) and only read here.
+  const { sending } = sendCalls()
 
   const ix = indexOf(r)
   const send = (c: Call): Send => ({ callee: c.callee, line: lineOf(ix, c.at) })
   const spans: Traced['spans'] = []
-  const names = new Map<string, Send>()
   const done = new Set<string>()
   const todo: (Range & { send: Send })[] = [...sending].map(c => ({ from: c.open + 1, to: c.close, send: send(c) }))
   const follow = (name: string, at: number, s: Send) => {
-    if (!names.has(name)) names.set(name, s)
     for (const d of defsFor(name)) {
-      // A declaration counts where it can be seen from the use: its block holds the use. A name sent
-      // from another file (at -1) is followed into every declaration of it.
-      if (at >= 0 && !(at >= d.scope.from && at < d.scope.to)) continue
+      // A declaration counts where it can be seen from the use: its block holds the use.
+      if (!(at >= d.scope.from && at < d.scope.to)) continue
       const key = `${name}@${d.at}`
       if (done.has(key)) continue
       done.add(key)
@@ -484,7 +470,6 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
       for (const ch of changesFor(name, d.scope)) todo.push({ ...ch, send: s })
     }
   }
-  for (const [name, s] of seeds) follow(name, -1, s)
   // Whether a stretch lies inside one already followed, asked of every stretch: the furthest end of
   // any followed stretch starting at or before it, kept in a tree by where each starts (#2719).
   const furthest = new Int32Array(r.skel.length + 3).fill(-1)
@@ -503,30 +488,21 @@ export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported
     followed(span)
     for (const u of namesAt(span)) follow(u.name, u.at, span.send)
   }
-  // A name renamed on import or export (import { A as B }, export { A as B }, import a as b) is known
-  // to the file below by its first name.
-  for (const [first, given] of renames) {
-    const s = names.get(given)
-    if (s && !names.has(first)) names.set(first, s)
-  }
-  return { sends: [...sending].map(send), spans, names, fns: sendFns }
+  return { sends: [...sending].map(send), spans }
 }
 
 /**
- * Everything trace reads of a file that does not depend on what it is asked to follow, worked out
- * once for each text (#2719): one edit's check traces the same file as it was and as it will be up to
- * three times each, with and without a send helper's functions and a sender's names. Kept for the
- * last ANALYSED texts, by the text and its reading, so it is only ever reused for the same file.
+ * Everything trace reads of a file, worked out once for each text (#2719), so a text traced again
+ * reuses it. Kept for the last ANALYSED texts, by the text and its reading, so it is only ever
+ * reused for the same file.
  */
 type Analysis = {
   defsFor: (name: string) => Def[]
   changesFor: (name: string, within: Range) => Range[]
-  /** The calls that send, in the order found, and the functions that send, given the send functions imported. */
-  sendsWith: (imported: ReadonlySet<string>) => { sending: ReadonlySet<Call>; sendFns: ReadonlySet<string> }
+  /** The calls that send, in the order found. */
+  sendCalls: () => { sending: ReadonlySet<Call> }
   /** The names a stretch of the skeleton uses, read once for each stretch (#2796). */
   namesAt: (span: Range) => { name: string; at: number }[]
-  /** Each name renamed on import or export (A as B), as its first name and the name given, in file order. */
-  renames: [string, string][]
 }
 const ANALYSED = 8
 const analyses = new Map<string, { r: Reading; a: Analysis }>()
@@ -603,16 +579,13 @@ const analyse = (r: Reading): Analysis => {
 
   // Which calls send, grown until nothing more is found: a call to a Slack marker, a send function
   // or a marked name; a call holding a marker; a function whose own body sends, written as a function
-  // or as an arrow given to a name. Every sender of a file traces it with its own seeds and the same
-  // imported send functions, so this, the same each time, is kept for each set of them (#2796): on
-  // 2026-11-11, 40 senders of a 5,500 line module worked it out 82 times, half of a 3.5 s search.
-  const sendSets = new Map<string, { sending: ReadonlySet<Call>; sendFns: ReadonlySet<string> }>()
-  const sendsWith = (imported: ReadonlySet<string>) => {
-    const key = [...imported].sort().join('\u0000')
-    const known = sendSets.get(key)
-    if (known) return known
+  // or as an arrow given to a name. Worked out once for each text and kept (#2796): on 2026-11-11 the
+  // same answer was worked out 82 times over, half of a 3.5 s check.
+  let found: { sending: ReadonlySet<Call> } | undefined
+  const sendCalls = () => {
+    if (found) return found
     const sending = new Set<Call>()
-    const sendFns = new Set(imported)
+    const sendFns = new Set<string>()
     const last = (callee: string) => callee.split(/\??\./).pop() as string
     const head = (callee: string) => callee.split(/\??\./)[0] as string
     const sendCallee = (callee: string) => MARKERS.some(m => m.test(`${callee}(`)) || sendFns.has(callee) || sendFns.has(last(callee)) || marked.has(head(callee))
@@ -642,12 +615,11 @@ const analyse = (r: Reading): Analysis => {
           grew = true
         }
     }
-    const found = { sending, sendFns }
-    sendSets.set(key, found)
+    found = { sending }
     return found
   }
-  // A followed stretch's names, read once for each stretch, since every sender's trace follows the
-  // same stretches of its sends' arguments and declarations (#2796).
+  // A followed stretch's names, read once for each stretch, since the file as it was and as the edit
+  // leaves it follow the same stretches of their sends' arguments and declarations (#2796).
   const spanNames = new Map<string, { name: string; at: number }[]>()
   const namesAt = (span: Range) => {
     const key = `${span.from}:${span.to}`
@@ -655,8 +627,7 @@ const analyse = (r: Reading): Analysis => {
     if (!n) spanNames.set(key, (n = namesIn(r, span)))
     return n
   }
-  const renames = [...r.skel.matchAll(/([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)/g)].map(m => [m[1] as string, m[2] as string] as [string, string])
-  return { defsFor, changesFor, sendsWith, namesAt, renames }
+  return { defsFor, changesFor, sendCalls, namesAt }
 }
 
 /**
