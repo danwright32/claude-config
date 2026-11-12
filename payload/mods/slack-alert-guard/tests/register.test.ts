@@ -298,6 +298,14 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     await wall()
     return { value: files[e.path] !== undefined || Object.keys(files).some(p => p.startsWith(`${e.path}/`)) } as never
   })
+  // A file is one the world holds; a folder, as fs.exists reads one, any path a file is under.
+  on('fs.stat', async ($, e) => {
+    await wall()
+    const path = (e as unknown as { path: string }).path
+    if (files[path] !== undefined) return { value: { kind: 'file', size: files[path].length, mtimeMs: 0, isLink: false } } as never
+    if (Object.keys(files).some(p => p.startsWith(`${path}/`))) return { value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false } } as never
+    throw new Error(`ENOENT: ${path}`)
+  })
   on('fs.read', async ($, e) => {
     await wall()
     if (ctl.unreadable === e.path) throw new Error(`EACCES: ${e.path}`)
@@ -1981,7 +1989,7 @@ test('a copy module in no repository, in a test, or already used by a screen or 
 // claude-config#2773: a shell command putting wording into a module of message copy, by a heredoc
 // or an append, passed where the same Write or Edit is held (#2720); and a shell command creating a
 // new file was not judged at all, since the file was not there to read.
-const UNWIRED_SHELL = (file: string) => `This shell command writes to ${file}, a module of message copy not yet wired to Slack, and the wording it leaves cannot be read until it runs`
+const UNWIRED_SHELL = (file: string) => `shell command writes to ${file}, a module of message copy not yet wired to Slack, and the wording it leaves cannot be read until it runs`
 test('a shell command writing a module of message copy nothing sends yet is held as the Write would be: a heredoc making one, an append to one, a copy of one (#2773)', withKit, async ($, on) => {
   const SCRATCH_QUIET = '/private/tmp/scratch/quiet.ts'
   const LATE = '/w/app/src/lib/ops/late-copy.ts'
@@ -2011,7 +2019,7 @@ test('a shell command creating a new file is judged as a Write of it is: one pos
   // A new script that posts to Slack by itself.
   const NOTIFY = '/w/app/scripts/notify-late.ts'
   const posts = refusalOf(await call($, { tool: 'Bash', command: `cat > ${NOTIFY} <<'EOF'\n${ALERT_TEXT}EOF` }))
-  expect(posts).toContain(`This shell command writes to ${NOTIFY}, which posts to Slack`)
+  expect(posts).toContain(`shell command writes to ${NOTIFY}, which posts to Slack`)
   // A new text template a sender already reads.
   const TXT = '/w/app/templates/late.txt'
   expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'Booking is late\\n' > ${TXT}` }))).toContain(`which ${PY} sends to Slack`)

@@ -1301,7 +1301,7 @@ export const heldText = (file: string, added: string[], removed: string[], sende
     ? `This edit to ${file} makes ${sender && sender !== file ? sender : 'it'} send Slack message text from ${from} that Dan has not approved: ${listed(added)}`
     : added.length || removed.length
     ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : unwired ? `, ${UNWIRED},` : ''} ${changeText(added, removed)}`
-    : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
+    : `This shell command writes to ${file}, ${sender ? `which ${sender} sends to Slack` : unwired ? UNWIRED : 'which posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
 export const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
   `Blocked: t${heldText(file, added, removed, sender, from, unwired).slice(1)}`
