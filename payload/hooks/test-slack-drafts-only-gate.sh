@@ -1996,6 +1996,19 @@ run_df "$GET; python3 - rows.jsonl <<'EOF'
 $HD_EXEC"
 says "a data file handed to code in a heredoc names that code" "the code python3 reads from its input can run code"
 
+# A word of a log line read as commands is not a program the call ran: the refusal must not name it as
+# the writer of a file (claude-config#2793). Only a command parsed from the command line itself is named.
+printf '%s\n' 'FAIL: a check wrote > made.sh' 'sh made.sh' > "$T/df/run.log"
+run_df "bash run.log"
+refused "a log read as a script, writing a file it then runs, is still refused"
+case "$ERR" in *"by FAIL:"*) check "a log line's first word is not named as the writer" "stderr said it: ${ERR:0:400}" ;;
+  *) check "a log line's first word is not named as the writer" ok ;; esac
+says "and the refusal says the writer could not be told" "could not be told"
+run_df "$GET; python3 runs.py rows.jsonl"
+says "a writer parsed from the command line is still named" "is written earlier in this command by curl"
+run_df "printf '%s' 'echo hi' > made.sh; cp made.sh copy.sh; sh made.sh"
+allowed "a file made by printf from the command line and then run still passes"
+
 echo "slack drafts only: /nudge is the one script let through"
 
 if [ -f "$NUDGE" ]; then check "nudge.py is where the gate expects it, beside the hooks" ok
