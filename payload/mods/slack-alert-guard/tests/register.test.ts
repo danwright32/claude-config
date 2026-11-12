@@ -2048,6 +2048,16 @@ test('a shell command creating a new file is judged as a Write of it is: one pos
   expect(w.ran.length).toBe(3)
 })
 
+test('a copy the guard does not read, a video or a key, never has its source read, so an unreadable one passes rather than being held as could not check (#2773)', withKit, async ($, on) => {
+  const KEY = '/w/app/certs/secret.pem'
+  const w = world($, on, { files: { [KEY]: '-----BEGIN KEY-----\n', '/w/app/media/big.mov': 'x' } })
+  w.ctl.unreadable = KEY
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${KEY} /w/app/certs/dest.pem` }))).toBe('')
+  w.ctl.unreadable = '/w/app/media/big.mov'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp /w/app/media/big.mov /w/app/out/clip.mov' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
 // The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
 // one message among other values, so only the send asks.
 const FEEDS = '/w/app/src/lib/monitor/feeds.ts'

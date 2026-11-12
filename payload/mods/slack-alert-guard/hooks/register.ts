@@ -1108,7 +1108,9 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       // What the command puts in the file cannot be read until it runs (#2773), so it is read from
       // the one file it copies, or else from the command's lines after its first, where a heredoc's
       // body is. A file the command makes is judged by that as a Write of it is, never skipped.
-      const written = await writtenBy($, f, command)
+      // Only for a file the guard could read: a code file, a script with no extension (inScope with a
+      // shebang), or a text template. A copy of a video or a key is never read.
+      const written = inScope(f.path, '#!') || textTemplate(f.path) ? await writtenBy($, f, command) : ''
       const text = exists ? String(await $.fs.read(f.path)) : written
       const code = inScope(f.path, text)
       // A code file or a text template (#2248), in a git repository and no test: held when it posts to
