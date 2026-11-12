@@ -1019,12 +1019,18 @@ class Judge(WrittenPaths):
     def unread(self, path):
         """For a file written earlier in this command with text that cannot be worked out
         (claude-config#2721), why it cannot be judged; None for any other file."""
-        names = []
+        names, found = [], False
         for kind, _, label in self.made_from(path) or ():
-            if kind == "unknown" and label not in names:
-                names.append(label)
-        if not names:
+            if kind == "unknown":
+                found = True
+                # "" is a word of a script read as commands, not a command this call ran (#2793).
+                if label and label not in names:
+                    names.append(label)
+        if not found:
             return None
+        if not names:
+            return ("is written earlier in this command, but what wrote it could not be told, so what it "
+                    "holds cannot be read, and whether it posts cannot be checked")
         listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
         return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
                 f"whether it posts cannot be checked")
@@ -1289,6 +1295,8 @@ class Judge(WrittenPaths):
 
     def note_file(self, target, d, pieces, append=False):
         real = os.path.realpath(self.resolve(target, d))
+        if self.shell.get("on_disk"):
+            pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
         if append:
             pieces = self.pieces_of(target, d) + pieces
         self.made[real] = pieces
