@@ -969,7 +969,7 @@ dry_case "the same dry run stamp with nothing changed after it is let through" a
 # A dry run reader that fails is asked about, and the question says it could not be read rather
 # than that no dry run ran (L11).
 APPROVAL_LIB="${APPROVAL_LIB:-$DIR/lib/db-apply-approval.py}"
-unread="$(python3 - "$APPROVAL_LIB" "$P_CTL" "$DRY_LAST_T" <<'PY'
+unread="$(python3 -I -B - "$APPROVAL_LIB" "$P_CTL" "$DRY_LAST_T" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("db_apply_approval_probe", sys.argv[1])
 ap = importlib.util.module_from_spec(spec)
