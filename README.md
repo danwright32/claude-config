@@ -3886,8 +3886,13 @@ database has not had, so the skill copies the dry run's list onto the picker and
 question, and the push is let through only when that list is exactly the one migration Dan applied:
 a missing, empty or longer list, or one naming another file, is asked about, the question naming the
 other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
-What it cannot see: a change on the database between the dry run and the push, or a migration file
-added after the dry run under an older version than the applied one.
+That list holds only while the folder is as the dry run found it, so since #2829 the session must
+also hold a successful dry run of that same project directory before the Apply, as its own Bash call,
+and no `.sql` file in `supabase/migrations` may have changed since that call was sent (its status
+change time against the transcript entry's timestamp). A migration edited, renamed or added after the
+dry run, an older version included, and a dry run of another project's folder are asked about.
+What it cannot see: a change on the database between the dry run and the push, or a `supabase link`
+to another project in the same directory between the dry run and the Apply.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

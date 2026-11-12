@@ -774,9 +774,15 @@ sha_of() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1
 # choice in toolUseResult.answers on the user entry that carries its tool_result). The picker's
 # "pending" is the dry run's list of migrations it would push: by default the one migration named,
 # PENDING="a.sql,b.sql" sets another list, and PENDING=none leaves the key out.
+# Before the picker it holds the dry run the skill runs first (#2829), as its own Bash call with a
+# tool_use entry stamped as it was sent and a tool_result: by default the skill's own dry run, run
+# in $PROJ, stamped as the transcript is written. DRY_CWD, DRY_CMD and DRY_AT (an ISO time, from
+# now_iso) set its directory, command and stamp; DRY_ERR=1 makes it fail, DRY=none leaves it out,
+# and DRY=after puts it after Dan's answer instead.
+now_iso() { python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"))'; }
 transcript() {
-  python3 - "$@" <<'PY'
-import json, os, sys
+  DRY_CWD="${DRY_CWD-$PROJ}" python3 - "$@" <<'PY'
+import datetime, json, os, sys
 path, sid, mig, sha, ref, answer = sys.argv[1:7]
 prefilled = len(sys.argv) > 7
 q = "Apply migration 002_note.sql to project " + ref + "?"
@@ -790,6 +796,17 @@ elif pending != "none":
     ask["metadata"]["pending"] = [p for p in pending.split(",") if p]
 if prefilled:
     ask["answers"] = {q: "Apply"}
+stamp = os.environ.get("DRY_AT") or datetime.datetime.now(datetime.timezone.utc).isoformat(
+    timespec="milliseconds").replace("+00:00", "Z")
+dry_cmd = os.environ.get("DRY_CMD") or "supabase db push --dry-run"
+dry = [
+    {"type": "assistant", "sessionId": sid, "timestamp": stamp, "cwd": os.environ["DRY_CWD"], "message": {
+        "role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_dry1", "name": "Bash", "input": {"command": dry_cmd, "description": "d"}}]}},
+    {"type": "user", "sessionId": sid, "timestamp": stamp, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_dry1", "content": "Would push these migrations:\n 002_note.sql",
+         "is_error": os.environ.get("DRY_ERR") == "1"}]}},
+]
 lines = [
     {"type": "user", "sessionId": sid, "message": {"role": "user", "content": "apply the migration"}},
     {"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
@@ -798,6 +815,11 @@ lines = [
         {"type": "tool_result", "tool_use_id": "toolu_apply1", "content": "answered"}]},
      "toolUseResult": {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}},
 ]
+where = os.environ.get("DRY")
+if where == "after":
+    lines += dry
+elif where != "none":
+    lines[1:1] = dry
 with open(path, "w") as f:
     for l in lines:
         f.write(json.dumps(l) + "\n")
@@ -883,6 +905,67 @@ both "a push whose recorded pending migration is not the one applied is asked ab
 PATHLIST_T="$APPLY/path-pending.jsonl"
 PENDING="$MIG" transcript "$PATHLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
 both "a pending list naming the applied migration by its full path covers the push" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$PATHLIST_T")"
+
+# The pending list is only what the dry run printed when it ran, so the Apply covers the push only
+# while the migrations folder is as that dry run found it (#2829): the dry run ran in this session
+# before the Apply, as its own call, on this project's folder, and succeeded, and no migration in
+# the folder has been written, renamed or added since. Each case is in a project of its own, so
+# what it changes reaches nothing else in this file.
+fresh_proj() {  # fresh_proj <dir> <ref>: a linked project holding 001_first.sql and 002_note.sql
+  mkdir -p "$1/supabase/migrations" "$1/supabase/.temp"
+  printf 'create table a (id int);\n' > "$1/supabase/migrations/001_first.sql"
+  printf 'alter table a add column note text;\n' > "$1/supabase/migrations/002_note.sql"
+  printf '%s' "$2" > "$1/supabase/.temp/project-ref"
+}
+dry_case() {  # dry_case <label> <want> <project> [transcript env...]: an Apply for <project>'s 002_note.sql
+  local label="$1" want="$2" p="$3" t="$APPLY/dry-$RANDOM$RANDOM.jsonl" sha
+  shift 3
+  sha="$(sha_of "$p/supabase/migrations/002_note.sql")"
+  ( if [ $# -gt 0 ]; then export "$@"; fi; PROJ="$p"; transcript "$t" s1 "$p/supabase/migrations/002_note.sql" "$sha" exampleprojectref000 Apply )
+  both "$label" none "$want" "$(apply_payload "$PUSH" "$p" s1 "$t")"
+  DRY_LAST_T="$t"
+}
+P_SAME="$APPLY/dry-same"; fresh_proj "$P_SAME" exampleprojectref000
+dry_case "an unchanged migration whose dry run came before the Apply is let through" allow "$P_SAME"
+dry_case "a dry run named by a cd to the project counts" allow "$P_SAME" DRY_CWD="$APPLY/elsewhere" DRY_CMD="cd $P_SAME && supabase db push --linked --dry-run"
+dry_case "an Apply with no dry run before it in the session is asked about" ask "$P_SAME" DRY=none
+dry_case "an Apply whose dry run came only after it is asked about" ask "$P_SAME" DRY=after
+dry_case "an Apply whose dry run failed is asked about" ask "$P_SAME" DRY_ERR=1
+dry_case "a dry run of the local database does not count for the linked project" ask "$P_SAME" DRY_CMD="supabase db push --local --dry-run"
+# Another project: the dry run Dan saw listed what project B would get, and the push goes to A.
+P_B="$APPLY/dry-other-b"; fresh_proj "$P_B" otherprojectref00000
+P_A="$APPLY/dry-other-a"; fresh_proj "$P_A" exampleprojectref000
+dry_case "an Apply whose dry run ran on another project is asked about" ask "$P_A" DRY_CWD="$P_B"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$P_A" s1 "$DRY_LAST_T")")" reason)"
+case "$reason" in *"dry run"*) check "the question says no dry run of this project came before the Apply" ok ;; *) check "the question says no dry run of this project came before the Apply" "reason: ${reason:0:400}" ;; esac
+# Edited after the dry run, before the Apply: the Apply names the edited file's sha256, so the
+# sha256 check alone passes it, but the dry run never saw that content.
+P_EDIT="$APPLY/dry-edited"; fresh_proj "$P_EDIT" exampleprojectref000
+at="$(now_iso)"
+printf 'alter table a add column note text;\ndrop table a;\n' > "$P_EDIT/supabase/migrations/002_note.sql"
+dry_case "a migration edited after the dry run is asked about" ask "$P_EDIT" DRY_AT="$at"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$P_EDIT" s1 "$DRY_LAST_T")")" reason)"
+case "$reason" in *002_note.sql*"after the dry run"*) check "the question names the migration changed after the dry run" ok ;; *) check "the question names the migration changed after the dry run" "reason: ${reason:0:400}" ;; esac
+# Renamed after the dry run: an applied migration given a new name is a new version the database
+# never had, and the push would send it again.
+P_REN="$APPLY/dry-renamed"; fresh_proj "$P_REN" exampleprojectref000
+at="$(now_iso)"
+mv "$P_REN/supabase/migrations/001_first.sql" "$P_REN/supabase/migrations/001a_first.sql"
+dry_case "a migration renamed after the dry run is asked about" ask "$P_REN" DRY_AT="$at"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$P_REN" s1 "$DRY_LAST_T")")" reason)"
+case "$reason" in *001a_first.sql*"after the dry run"*) check "the question names the migration renamed after the dry run" ok ;; *) check "the question names the migration renamed after the dry run" "reason: ${reason:0:400}" ;; esac
+# Added after the dry run under an older version than the applied one: not the newest, so the
+# newest file rule cannot see it, and not on the dry run's list (the gap #2800 recorded).
+P_OLD="$APPLY/dry-older"; fresh_proj "$P_OLD" exampleprojectref000
+at="$(now_iso)"
+printf 'drop table a;\n' > "$P_OLD/supabase/migrations/001b_extra.sql"
+dry_case "a migration added after the dry run with an older version is asked about" ask "$P_OLD" DRY_AT="$at"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$P_OLD" s1 "$DRY_LAST_T")")" reason)"
+case "$reason" in *001b_extra.sql*) check "the question names the migration added after the dry run" ok ;; *) check "the question names the migration added after the dry run" "reason: ${reason:0:400}" ;; esac
+# The control for the three above: the same stamp, taken before nothing changed, lets it through.
+P_CTL="$APPLY/dry-control"; fresh_proj "$P_CTL" exampleprojectref000
+at="$(now_iso)"
+dry_case "the same dry run stamp with nothing changed after it is let through" allow "$P_CTL" DRY_AT="$at"
 mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
 both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
 mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
