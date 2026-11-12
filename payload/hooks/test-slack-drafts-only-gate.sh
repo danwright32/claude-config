@@ -1650,8 +1650,13 @@ printf '%s\n' 'import runpy, sys' 'runpy.run_path(sys.argv[1])' > "$T/ds/runner.
 printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage")' > "$T/ds/job.txt"
 run_bash "python3 $T/ds/runner.py $T/ds/job.txt"
 refused "a Python script that runs the file it is handed, which posts"
+# A script file handed to a script on disk is that script's argument (claude-config#2797): read as code
+# only where the script can run what it is handed. Before #2797 it was read whatever the script did.
 run_bash "python3 $T/ds/count.py $T/alert.py"
-refused "a script file handed to another script is still read, since a wrapper may run it"
+allowed "a script file handed to a script that only reads it is its argument, not code it runs"
+run_bash "python3 $T/ds/runner.py $T/alert.py"
+refused "a script file handed to a script that runs what it is handed is still read"
+says "that refusal names the runner and the file it is handed" "the script $T/ds/runner.py"
 # A script run by its own path has the files it is handed read as one run through its interpreter
 # does, the interpreter taken from its #! line (claude-config#2400): `./post.mjs msg.json` was let
 # through while `node post.mjs msg.json` was refused.
@@ -2202,6 +2207,75 @@ run_df "$GET; python3 - rows.jsonl <<'EOF'
 $HD_EXEC"
 says "a data file handed to code in a heredoc names that code" "the code python3 reads from its input can run code"
 
+echo "slack drafts only: a source file handed to a script on disk is its argument, not the script (claude-config#2797)"
+
+# 2026-11-11, in a work repository: `node <helper>.mjs <source file> <old text file> <new text
+# file>`, where the helper replaces one exact string in the source file, was refused as though the
+# source file were the script, because that file imports the alert sender, which names
+# chat.postMessage. node runs the helper, the first word after its options; the files after it are
+# the helper's arguments. A code shaped argument is read as a script only where something the
+# program runs can run what it is handed; its own text is judged as any data file's is. The names
+# are made up; nothing here is run.
+mkdir -p "$T/rs"
+printf '%s\n' 'export async function send(text) {' \
+  '  await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: text });' '}' > "$T/rs/slack.ts"
+printf '%s\n' 'import { send } from "./slack";' 'export const limit = 3;' > "$T/rs/alert.ts"
+printf '%s\n' 'import json' 'from slack_send import send' 'LIMIT = 3' > "$T/rs/notify.py"
+printf '%s\n' 'def send(text):' '    return "https://slack.com/api/chat.postMessage"' > "$T/rs/slack_send.py"
+printf '%s\n' 'export const limit = 3;' > "$T/rs/old.txt"
+printf '%s\n' 'export const limit = 4;' > "$T/rs/new.txt"
+printf '%s\n' 'import { readFileSync, writeFileSync } from "node:fs";' \
+  'const [file, from, to] = process.argv.slice(2);' \
+  'const text = readFileSync(file, "utf8");' \
+  'writeFileSync(file, text.replace(readFileSync(from, "utf8"), readFileSync(to, "utf8")));' > "$T/rs/replace.mjs"
+printf '%s\n' 'import sys' 'from pathlib import Path' 'f, a, b = (Path(p) for p in sys.argv[1:4])' \
+  'f.write_text(f.read_text().replace(a.read_text(), b.read_text()))' > "$T/rs/replace.py"
+printf '%s\n' 'const [file] = process.argv.slice(2);' 'await import(file);' > "$T/rs/load.mjs"
+printf '%s\n' 'import { execFileSync } from "node:child_process";' \
+  'execFileSync("node", [process.argv[2]]);' > "$T/rs/spawn.mjs"
+printf '%s\n' 'import { readFileSync } from "node:fs";' \
+  'await fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: readFileSync(process.argv[2]) });' \
+  > "$T/rs/post.mjs"
+printf '%s\n' 'require(process.argv[2]);' > "$T/rs/pre.cjs"
+printf '%s\n' 'const [file] = process.argv.slice(2);' 'await import(file);' > "$T/rs/hook.mjs"
+run_rs() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/rs")"; }
+
+for runs in "node replace.mjs alert.ts old.txt new.txt" "node ./replace.mjs ./alert.ts old.txt new.txt" \
+  "node -- replace.mjs alert.ts old.txt new.txt" "python3 replace.py notify.py old.txt new.txt" \
+  "python3 -I replace.py notify.py old.txt new.txt" "node replace.mjs alert.ts old.txt new.txt && git diff alert.ts"; do
+  run_rs "$runs"
+  allowed "a source file handed to a helper on disk that only rewrites text passes: $runs"
+done
+
+# Still refused: a helper that posts, one that imports or runs the file it is handed, a preload that
+# does, an option the table does not know (it may
+# take the helper as its value), and a source file whose own text names an endpoint, handed to a
+# helper that writes it (judged as any data file is, #2362).
+for runs in "node post.mjs alert.ts old.txt new.txt" "node load.mjs alert.ts old.txt new.txt" \
+  "node spawn.mjs alert.ts old.txt new.txt" "node -r ./pre.cjs replace.mjs alert.ts old.txt new.txt" \
+  "node --require ./pre.cjs replace.mjs alert.ts old.txt new.txt" \
+  "node --import ./hook.mjs replace.mjs alert.ts old.txt new.txt" \
+  "node --experimental-loader replace.mjs alert.ts old.txt new.txt" \
+  "node replace.mjs slack.ts old.txt new.txt" "node alert.ts old.txt new.txt" \
+  "node -r ./replace.mjs ./replace.mjs alert.ts old.txt new.txt"; do
+  run_rs "$runs"
+  refused "a source file something can run, or that may be the script, is still read: $runs"
+done
+run_rs "node load.mjs alert.ts old.txt new.txt"
+says "a source file refused for the helper it is handed to names the helper" "the script load.mjs"
+says "and the source file by its role, with the import that posts" "is handed alert.ts, which imports ./slack"
+
+# A helper on disk that this same command first replaces is judged as the command leaves it, not as
+# it is on disk now: a harmless replace.mjs overwritten by a loader that imports what it is handed
+# still has the source file read as code (lessons review of the #2797 merge, 2026-11-12).
+for runs in "cp load.mjs replace.mjs && node replace.mjs alert.ts old.txt new.txt" \
+  "cat load.mjs > replace.mjs; node replace.mjs alert.ts old.txt new.txt" \
+  "cp spawn.mjs replace.mjs && node replace.mjs alert.ts old.txt new.txt"; do
+  run_rs "$runs"
+  refused "a helper the command replaces first is judged as replaced: $runs"
+  says "and the handed source file is read for the import that posts: $runs" "is handed alert.ts, which imports ./slack"
+done
+
 # A word of a log line read as commands is not a program the call ran: the refusal must not name it as
 # the writer of a file (claude-config#2793). Only a command parsed from the command line itself is named.
 printf '%s\n' 'FAIL: a check wrote > made.sh' 'sh made.sh' > "$T/df/run.log"
@@ -2214,6 +2288,50 @@ run_df "$GET; python3 runs.py rows.jsonl"
 says "a writer parsed from the command line is still named" "is written earlier in this command by curl"
 run_df "printf '%s' 'echo hi' > made.sh; cp made.sh copy.sh; sh made.sh"
 allowed "a file made by printf from the command line and then run still passes"
+
+echo "slack drafts only: an output redirect target is written, not read (claude-config#2771)"
+
+# every_file read the word after a separate > as a file handed to the script, so rerunning a suite
+# whose earlier output named chat.postMessage was refused (`bash runner.sh > out.txt`), and since
+# #2721 a target written earlier in the same command was judged as a script nobody could read. The
+# shell opens that word for writing before the program starts, and never hands it to the program.
+# A file the program really reads, an argument or one fed with <, is still judged, as is a file
+# written by one command and run by a later one.
+mkdir -p "$T/rd"
+printf '%s\n' 'for f in "$@"; do bash "$f"; done' > "$T/rd/runner.sh"
+printf '%s\n' '#!/bin/bash' 'for f in "$@"; do bash "$f"; done' > "$T/rd/tool.sh"
+chmod +x "$T/rd/tool.sh"
+printf '%s\n' 'import sys' 'for f in sys.argv[1:]: exec(open(f).read())' > "$T/rd/runner.py"
+printf '%s\n' 'echo ok' > "$T/rd/suite.sh"
+printf '%s\n' 'FAIL: expected this to be refused:' "$POST" > "$T/rd/out.txt"
+printf '%s\n' 'FAIL: expected this to be refused:' "$POST" > "$T/rd/out"
+run_rd() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/rd")"; }
+
+for prog in "bash runner.sh" "sh runner.sh" "python3 runner.py" "./tool.sh"; do
+  for op in ">" ">>" "1>" "2>" "2>>" "&>" "&>>" ">&" ">|"; do
+    for target in out.txt out; do
+      run_rd "$prog $op $target"
+      allowed "an output redirect target is not read as the program's input: $prog $op $target"
+    done
+  done
+done
+for runs in "bash runner.sh >out.txt" "bash runner.sh 2>out" "bash runner.sh &>>out" "python3 runner.py >|out" \
+  "bash runner.sh > out.txt 2>&1" "bash runner.sh 2> out > out.txt" \
+  "bash suite.sh > out 2>&1; bash runner.sh > out" "bash runner.sh > out.txt 2>&1; bash runner.sh > out.txt"; do
+  run_rd "$runs"
+  allowed "an output redirect target, glued, repeated or written earlier, is not read: $runs"
+done
+
+# What is still judged: an argument (also beside a redirect, and after its target, where the shell
+# still hands it over), a file fed with < or <>, and a file written earlier and then run.
+for runs in "bash runner.sh out.txt" "bash runner.sh out" "bash runner.sh out.txt > log.txt" \
+  "bash runner.sh > log.txt out" "bash runner.sh 2> log.txt out.txt" "bash runner.sh < out" "bash runner.sh 0< out" \
+  "bash runner.sh <> out" "bash out > log.txt" "python3 runner.py out > log.txt" "./tool.sh > log.txt out.txt" \
+  "printf '%s\n' '$POST' > p.sh; bash p.sh > o.txt" "bash suite.sh > made.sh; bash made.sh" \
+  "bash suite.sh > made.sh; bash runner.sh made.sh > o.txt"; do
+  run_rd "$runs"
+  refused "a file the program reads, or runs after it is written, is still judged: $runs"
+done
 
 echo "slack drafts only: /nudge is the one script let through"
 
@@ -2292,9 +2410,11 @@ with open(sys.argv[1], "w") as f:
         i += 1
 PY
 printf '%s\n' '{"keys":{}}' > "$T/big/claude-issue-findings.session.manifest"
-# The same bytes with no extension: a file the gate cannot tell from a script, so it reads it as one.
+# The same bytes with no extension, handed to a script that sources what it is handed: a file the
+# gate cannot tell from a script, which the script runs, so it reads it as one. (Handed to a script
+# that only counts its lines, it is that script's argument and is not read as code, #2797.)
 cp "$T/big/session.jsonl" "$T/big/session"
-printf '%s\n' '#!/usr/bin/env bash' 'wc -l "$1"' > "$T/big/count.sh"
+printf '%s\n' '#!/usr/bin/env bash' '. "$1"' > "$T/big/count.sh"
 
 run_budget() { # run_budget <tick budget> <command>: run_bash under a test run with the step clock
   local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
