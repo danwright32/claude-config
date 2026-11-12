@@ -783,8 +783,13 @@ printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://hooks.sla
 chmod 000 "$T/probe/unread/unread_probe_2631.py" "$T/probe/locked"
 run_bash "cd $T/probe/unread && python3 -c 'import unread_probe_2631'"
 refused "a first statement importing a module beside it the gate cannot read"
-run_bash "PYTHONPATH=$T/probe/locked python3 -c 'import no_such_probe_2631'"
-refused "a first statement importing a module placed nowhere, with a folder on PYTHONPATH the gate cannot list"
+# Run as root, mode 000 still lets the folder be listed, so the case cannot be set up here (L411).
+if ls "$T/probe/locked" >/dev/null 2>&1; then
+  echo "UNMEASURED: a folder on PYTHONPATH the gate cannot list: mode 000 does not stop this user listing it"
+else
+  run_bash "PYTHONPATH=$T/probe/locked python3 -c 'import no_such_probe_2631'"
+  refused "a first statement importing a module placed nowhere, with a folder on PYTHONPATH the gate cannot list"
+fi
 chmod 755 "$T/probe/locked"
 chmod 644 "$T/probe/unread/unread_probe_2631.py"
 mkdir -p "$T/probe/fakebin"
