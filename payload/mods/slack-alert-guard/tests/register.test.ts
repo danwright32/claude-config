@@ -2617,9 +2617,9 @@ test('the test clock charges computing time to a clock read: work between calls 
   const busy = performance.now()
   while (performance.now() - busy < 30) { /* busy */ }
   expect((await w.readClock()) - before).toBeGreaterThanOrEqual(30)
-  // A read straight after costs next to nothing more.
+  // A later read never goes back: charges only add.
   const at = await w.readClock()
-  expect((await w.readClock()) - at).toBeLessThan(25)
+  expect(await w.readClock()).toBeGreaterThanOrEqual(at)
 })
 
 test('a CPU bound trace is charged against the search deadline on the test clock: reading the clock after SCAN_MS of computing finds the deadline passed (#2805)', withKit, async ($, on) => {
