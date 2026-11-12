@@ -1018,6 +1018,88 @@ for sw_suite in hooks/test-context-size-notice.sh hooks/test-pr-review.sh hooks/
     echo "SUITE-PART-UNMEASURED #2668 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that suite was not judged here"
   fi
 done
+# The scripts a sweep of every tracked shell script found refused once a file run through a variable
+# was read (claude-config#2678, 530 scripts on 2026-11-10), each fixed in the script and never in the
+# gate: the tally notice handed its inline python a folder that started from an environment variable,
+# the replay suite's fixture maker spelt a module path inside two strings it writes, and the README
+# table suite handed README.md, which names an endpoint, to a script that can act. As a session runs
+# them, so a change to one of them, or to the walk, that gets it refused again fails here (L48). The
+# first two are in the installed copy too; the last two live only in the repository (L411).
+for sw_suite in hooks/verification-tally-notice.sh hooks/test-require-verification-run.sh; do
+  if [ -f "$sw_from/$sw_pre$sw_suite" ]; then
+    run_bash "cd $sw_from && bash $sw_pre$sw_suite"
+    allowed "a script of this repository is not refused when a session runs it: bash $sw_pre$sw_suite (claude-config#2678)"
+  else
+    echo "SUITE-PART-UNMEASURED #2678 the gate allows bash $sw_pre$sw_suite: $sw_from/$sw_pre$sw_suite is not there, so that script was not judged here"
+  fi
+done
+for sw_suite in tests/test-readme-mods-table.sh tools/test-area-check-replay.sh; do
+  if [ -n "$MODS_REPO" ] && [ -f "$MODS_REPO/$sw_suite" ]; then
+    run_bash "cd $MODS_REPO && bash $sw_suite"
+    allowed "a suite of this repository is not refused when a session runs it: bash $sw_suite (claude-config#2678)"
+  else
+    echo "SUITE-PART-UNMEASURED #2678 the gate allows bash $sw_suite: $DIR is not in a claude-config checkout holding $sw_suite (the installed copy of the hooks is not), so that suite was not judged here"
+  fi
+done
+
+# A file a script runs by a path the gate can work out is read as one run by a literal path is
+# (claude-config#2678). Measured through this wrapper on 2026-11-10, in a script whose first lines
+# set ROOT from BASH_SOURCE: `python3 /the/tree/tools/lib/act.py` was refused where act.py posts,
+# and `python3 "$ROOT/tools/lib/act.py"` was allowed, as the same file was with python3 -B, bash,
+# sh and node, run by its own path, through $DIR/.., by a path spelt from BASH_SOURCE, and in a
+# command that sets the variable itself. A word holding a variable or a substitution was never
+# worked out where the program runs a file, so there was no file to read. Each shape in both trees:
+# allowed where the file only saves a draft, refused where it posts, naming the file.
+rv_top='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"'
+rv_shapes=(
+  'py:python3 "$ROOT/tools/lib/act.py"'
+  'pyb:python3 -B "$ROOT/tools/lib/act.py" 2>&1'
+  'bash:bash "$ROOT/tools/lib/act.sh"'
+  'sh:sh "$ROOT/tools/lib/act.sh"'
+  'node:node "$ROOT/tools/lib/act.js"'
+  'own:"$ROOT/tools/lib/act.sh"'
+  'dir:python3 "$DIR/../tools/lib/act.py"'
+  'spelt:python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/lib/act.py"'
+)
+for tree in ok posts; do
+  mkdir -p "$T/rv/$tree/tests" "$T/rv/$tree/tools/lib"
+  printf '%s\n' 'wait_on(){ until eval "$1"; do sleep 1; done; }' > "$T/rv/$tree/tools/waits.sh"
+  for shape in "${rv_shapes[@]}"; do
+    printf '%s\n' '#!/bin/bash' "$rv_top" "${shape#*:}" > "$T/rv/$tree/tests/${shape%%:*}.sh"
+  done
+  # Its function called with a condition held in a variable, which since #2538 is where the name is
+  # lost (sourcing the file alone binds nothing).
+  printf '%s\n' '#!/bin/bash' "$rv_top" '. "$ROOT/tools/waits.sh"' 'wait_on "$c"' 'python3 "$ROOT/tools/lib/act.py"' \
+    > "$T/rv/$tree/tests/waited.sh"
+  printf '%s\n' '#!/bin/bash' 'python3 "$NOT_SET_2678/tools/lib/act.py"' > "$T/rv/$tree/tests/unset.sh"
+done
+printf '%s\n' 'from pathlib import Path' 'Path("drafts/out.md").write_text("hi")' > "$T/rv/ok/tools/lib/act.py"
+printf '%s\n' "printf '%s\\n' hi > drafts/out.md" > "$T/rv/ok/tools/lib/act.sh"
+printf '%s\n' 'console.log("hi");' > "$T/rv/ok/tools/lib/act.js"
+printf '%s\n' 'import json, urllib.request' \
+  'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' > "$T/rv/posts/tools/lib/act.py"
+printf '%s\n' 'curl -s -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi' > "$T/rv/posts/tools/lib/act.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: JSON.stringify({ text: "hi" }) });' > "$T/rv/posts/tools/lib/act.js"
+for shape in "${rv_shapes[@]}"; do
+  run_bash "bash $T/rv/ok/tests/${shape%%:*}.sh"
+  allowed "a file run by a path the gate works out, where it only saves a draft: ${shape#*:}"
+  run_bash "bash $T/rv/posts/tests/${shape%%:*}.sh"
+  refused "the same where the file posts: ${shape#*:}"
+  says "that refusal names the file: ${shape#*:}" "/tools/lib/act."
+done
+run_bash "V=$T/rv/ok/tools/lib; python3 \"\$V/act.py\""
+allowed "a command that sets a variable and runs a file through it, where the file only saves a draft"
+run_bash "V=$T/rv/posts/tools/lib; python3 \"\$V/act.py\""
+refused "the same command where the file posts"
+says "that refusal names the file" "/tools/lib/act.py"
+# A path the gate cannot work out is not read, and NOT refused with #2683's switch off: past a call
+# to a sourced function that runs its argument by eval (the #2668 shape), and through a variable
+# the script never sets. Pinned here so that turning it on is a change somebody makes on purpose.
+run_bash "bash $T/rv/posts/tests/waited.sh"
+allowed "a posting file run through a variable the gate is no longer sure of is not read, as before"
+run_bash "bash $T/rv/posts/tests/unset.sh"
+allowed "a posting file run through a variable the script never sets is not read, as before"
 
 # Code given inline or fed on standard input imports from the directory it runs in.
 run_bash "cd $T/py && python3 -c 'import notify_helper; notify_helper.go()'"
@@ -3033,6 +3115,109 @@ for cmd in "python3 -m json.tool \"\$NOT_SET_2683/x.json\"" "bash -c 'echo hi' _
   allowed "switched on: a variable in a word that is not the file run is left alone: $cmd"
 done
 
+# ---- #2683: what the switch refused that a script sets plainly ----
+# Switched on across every tracked script on 2026-11-12 it refused 185, 64 of them where the script
+# sets the path plainly from its own folder. These are the shapes of those, each in the posting tree
+# (where reading the file refuses it as the post it is) and the quiet one (where reading it lets it
+# through), and each beside the one change that really makes the value uncertain, which stays refused.
+# Taken from the scripts, not copied: every suite ends `printf 'SUITE-RESULT passed=...'`, read as
+# printf binding SUITE (test-sleep-claim-notes-clock.sh, test-project-list-nudge-wiring.sh);
+# lib/ai-review-common.sh prints a quoted `make-settled.py` beside its `local py`; and a comment
+# saying what a test reads.
+ur_plain() { # ur_plain <name> <line>...: a script in both trees, its first lines UR_TOP
+  local name="$1" tree; shift
+  for tree in posts quiet; do
+    printf '%s\n' '#!/bin/bash' "$UR_TOP" "$@" > "$UR/$tree/tests/$name.sh"
+  done
+}
+ur_plain suite 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' 'run' \
+  "printf 'SUITE-RESULT passed=%d failed=%d\\n' 0 0"
+ur_plain sealed 'sealed() {' '  local py="$ROOT/tools/lib/act.py" out' '  [ -f "$py" ] || return 1' \
+  '  out="$(echo x | python3 -I "$py" 2>/dev/null)" || return 1' '}' 'sealed' "printf '%s\\n' 'sealed by make-settled.py'"
+ur_plain comment 'HOOK="$ROOT/tools/lib/act.sh"' '# Each case read HOOK for its verdict.' 'check() {' '  bash "$HOOK"' '}' 'check'
+# `declare -F f >/dev/null`, asking whether a sourced file defined a function, binds nothing
+# (pr-review-push-gate.sh, test-push-scope.sh, test-bad-byte-locale.sh).
+ur_plain declf 'HOOK="$ROOT/tools/lib/act.sh"' 'for f in check run; do' '  declare -F "$f" >/dev/null || echo "$f"' 'done' \
+  'bash "$HOOK"'
+# A builtin's name in a sentence (test-project-list-nudge-wiring.sh: "and does not declare itself
+# unrunnable" beside "SUITE-NOT-RUN"), and a case pattern named like one (this suite's own ur_lose).
+ur_plain prose 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' 'run' \
+  'echo "and does not declare itself unrunnable" "it printed SUITE-NOT-RUN"'
+ur_plain casepat 'SUITE="$DIR/../tools/lib/act.sh"' 'lose() { case "$1" in' "  evald) printf '%s\\n' x ;;" '  unset) : ;;' 'esac; }' 'run() {' '  bash "$SUITE"' '}' 'run'
+# A local kept past a sourced file that binds nothing (plan-council's post-discussion.sh).
+for tree in posts quiet; do
+  printf '%s\n' 'CATCH_ALL=Ungrouped' > "$UR/$tree/tools/lib/names.sh"
+  printf '%s\n' 'ensure=/nowhere/else.sh' > "$UR/$tree/tools/lib/rebinds.sh"
+done
+ur_plain localsrc 'fields() {' '  local ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/names.sh"' '  bash "$ensure"' '}' 'fields'
+# The same shapes where the name really is bound again, so its value is not certain.
+ur_plain suite-read 'SUITE="$DIR/../tools/lib/act.sh"' 'read -r SUITE < /dev/null' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain suite-printfv 'SUITE="$DIR/../tools/lib/act.sh"' 'printf -v SUITE %s "$1"' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain sealed-read 'sealed() {' '  local py="$ROOT/tools/lib/act.py"' '  read -r py < /dev/null' '  python3 "$py"' '}' 'sealed'
+ur_plain localsrc-rebinds 'fields() {' '  local ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/rebinds.sh"' '  bash "$ensure"' '}' 'fields'
+ur_plain declf-assign 'HOOK="$ROOT/tools/lib/act.sh"' 'declare HOOK="$1"' 'bash "$HOOK"'
+ur_plain read-ifs 'SUITE="$DIR/../tools/lib/act.sh"' 'IFS= read -r SUITE < /dev/null' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain read-chained 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' '[ -n "$1" ] && read -r SUITE < /dev/null' 'run'
+ur_plain read-case 'SUITE="$DIR/../tools/lib/act.sh"' 'case "$1" in' '  x) read -r SUITE < /dev/null ;;' 'esac' 'run() {' '  bash "$SUITE"' '}' 'run'
+for shape in suite sealed comment declf localsrc prose casepat; do
+  run_ur refuse "bash $UR/posts/tests/$shape.sh"
+  says "switched on: a path the script sets plainly is read, and a file that posts refused as the post ($shape)" \
+    "REFUSED: this command posts to Slack"
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  allowed "switched on: the same path to a file that does not post is read and let through ($shape)"
+  run_bash "bash $UR/posts/tests/$shape.sh"
+  says "switched off: the file is read too, so one that posts is refused ($shape)" "REFUSED: this command posts to Slack"
+done
+# #2832: the first command of a function body on the opener's own line was never judged, so
+# `run() { bash post.sh; }` then `run` went through where the same body on its own lines was refused.
+for tree in posts quiet; do
+  printf '%s\n' '#!/bin/bash' "run() { bash $UR/$tree/tools/lib/act.sh; }" 'run' > "$UR/$tree/tests/oneline.sh"
+  printf '%s\n' '#!/bin/bash' "function run { python3 $UR/$tree/tools/lib/act.py; }" 'run' > "$UR/$tree/tests/oneline-kw.sh"
+  printf '%s\n' '#!/bin/bash' "$UR_TOP" 'run() { bash "$ROOT/tools/lib/act.sh"; }' 'run' > "$UR/$tree/tests/oneline-var.sh"
+  printf '%s\n' '#!/bin/bash' "run() { echo hi; bash $UR/$tree/tools/lib/act.sh; }" 'run' > "$UR/$tree/tests/oneline-second.sh"
+done
+for shape in oneline oneline-kw oneline-var oneline-second; do
+  run_bash "bash $UR/posts/tests/$shape.sh"
+  says "the first command of a one line function body is judged: one that runs a posting file is refused ($shape, #2832)" \
+    "REFUSED: this command posts to Slack"
+  run_bash "bash $UR/quiet/tests/$shape.sh"
+  allowed "and one that runs a file that does not post is allowed ($shape, #2832)"
+done
+# A copy writes its target, never what it copies from. With the target a word the gate cannot work
+# out, every word was taken for a possible target, so a suite copying the hook it tests into a temp
+# folder (`cp "$CHECK" "$NOLIB/check-home-paths.sh"`) and then running "$CHECK" was refused as posting
+# once #2678 read files run through a variable: 25 scripts, switch off (measured 2026-11-12, #2683). A word stays a possible
+# target where it is last, where every word after it can expand to nothing, or where the word before it
+# may be an option that takes it as a value (-t, or a word the gate cannot work out).
+ur_plain cpsrc 'T="$(mktemp -d)"' 'cp "$ROOT/tools/lib/act.sh" "$T/act.sh"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpsrc-mv 'T="$(mktemp -d)"' 'mv -f "$ROOT/tools/lib/act.sh" "$T/x/"' 'bash "$ROOT/tools/lib/act.sh"'
+run_bash "bash $UR/quiet/tests/cpsrc.sh"
+allowed "a file copied from into a folder the gate cannot work out is still read as it is (cp, #2683)"
+run_bash "bash $UR/quiet/tests/cpsrc-mv.sh"
+allowed "a file moved from into a folder the gate cannot work out is still read as it is (mv, #2683)"
+run_bash "bash $UR/posts/tests/cpsrc.sh"
+says "and the same file that posts is refused as the post (#2683)" "REFUSED: this command posts to Slack"
+ur_plain cpdst 'T="$(mktemp -d)"' 'cp "$T/x" "$ROOT/tools/lib/act.sh"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-opt 'T="$(mktemp -d)"' 'cp $OPTS "$ROOT/tools/lib/act.sh" "$T/x"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-gone 'T="$(mktemp -d)"' 'cp "$T/x" "$ROOT/tools/lib/act.sh" $MORE' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-t 'T="$(mktemp -d)"' 'cp -t "$ROOT/tools/lib/act.sh" "$T/x"' 'bash "$ROOT/tools/lib/act.sh"'
+for shape in cpdst cpdst-opt cpdst-gone cpdst-t; do
+  run_bash "bash $UR/quiet/tests/$shape.sh"
+  says "a file that may be the target of a copy from a word the gate cannot work out is refused unread ($shape, #2683)" \
+    "what wrote it could not be told"
+done
+# The second reading (#2678) of code fed in a heredoc, its argument written through a variable, finds
+# the heredoc by the command as the script writes it, so the file after - is judged as the same
+# command with a literal path is, and not against the whole script taken as the code's input.
+ur_plain heredoc-arg 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'print(len(open(sys.argv[1]).read()))' 'EOF'
+run_bash "bash $UR/posts/tests/heredoc-arg.sh"
+says "a heredoc's argument written through a variable is judged as the literal path is (#2683)" "act.py posts to Slack"
+for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \
+    "a path the gate cannot work out"
+done
+
 # ---- #2569: the patterns sh_binds builds are compiled once per name ----
 # The merge helper's own script has a few thousand names, and sh_binds built three patterns per name
 # on every call. re keeps only 512 compiled patterns, so a profile of the gate judging
@@ -3259,23 +3444,38 @@ again = sorted(n for n in rests.values() if n > 1)
 if again:
     wrong.append("one command's words were read %d times" % again[-1])
 # sh_binds answers as the patterns it had did, over every name claude-sync binds or reads, on a
-# piece of it and on texts placed to catch a line's edges.
-SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
-              r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# piece of it and on texts placed to catch a line's edges. Each pattern here runs over the whole text;
+# sh_binds reads only the lines holding the name. Since #2683 the rules are: printf binds only through
+# -v, a line that is only a comment binds nothing, and a builtin binds only in command position.
+SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let)\b"
+              r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
+def comment(t, at):
+    s = t.rfind("\n", 0, at) + 1
+    return t[s:at + 1].lstrip(" \t").startswith("#")
 def before(name, t, allowed=0):
     if name not in t:
         return False
     n = re.escape(name)
-    if len(re.findall(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t)) > allowed:
+    if sum(1 for m in re.finditer(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t) if not comment(t, m.start())) > allowed:
         return True
-    if re.search(r"\(\([^()]*(?<![\w$])" + n + r"\b", t):
+    if any(not comment(t, m.start()) for m in re.finditer(r"\(\([^()]*(?<![\w$])" + n + r"\b", t)):
         return True
-    return any(not re.match(r"(?:export|readonly)\b", m.group(0)) for m in re.finditer(SH_BINDERS.format(n), t))
+    pat, pos = re.compile(SH_BINDERS.format(n)), 0
+    while True:
+        m = pat.search(t, pos)
+        if not m:
+            return False
+        w = m.group(0)
+        if not comment(t, m.start()) and not re.match(r"(?:export|readonly)\b", w) and (
+                w.startswith("$") or gate.sh_command_at(t, t.rfind("\n", 0, m.start()) + 1, m.start())):
+            return True
+        pos = m.start() + 1
 piece = text[200000:260000]
 names = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", piece)))
 edges = ["x=1", "\nx=1", "$x=1", "ax=1", "x[1]=a\n", "local\nx", "read -r a x", "export x", "export x=1",
          "(( y +\n x ))", "((a)) x", "echo ${x:=d}", "for x in a", "a; read x", "x", "local y x\nexport x",
-         "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2"]
+         "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2", "# read x", "  # x=1", "printf 'x %s'",
+         'echo "now read x"', "IFS= read -r x", "if read x", "a # read x\nread x", "f() { local x; }"]
 bad = []
 for t in [piece] + edges:
     for name in (names if t is piece else ["x"]):

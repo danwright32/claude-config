@@ -3649,10 +3649,24 @@ refused. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
+A file a command runs through a variable or a substitution is read where its value is certain
+(#2678). `python3 "$ROOT/tools/post.py"`, in a script whose first lines set `ROOT` from `BASH_SOURCE`,
+named no file as written, so a script that posts was never read there, where the same file run by a
+literal path was refused. The gate judges each command as it is written and then, only where that
+found nothing, once more with each such word written out, so the second reading can refuse a command
+the first let through and never the reverse. A word whose value is not certain stays as written and
+names no file, as before: refusing it is measured separately first. Cost, in processor seconds,
+medians of five alternated readings on 2026-11-10 at load averages of 26 to 55: the merge helper's
+own line takes 2.61 with the second reading off and 2.46 with it on, the reader's answers now being
+kept for each command's text; `bash payload/hooks/test-merge-when-ready.sh` takes 1.23 and 4.71,
+since judging that suite now reads the helper it runs through a variable. On the wall that suite's
+median was 5.59 s and one reading of five was 10.22 s, against the 11 second budget below.
+
 What it does not see, so a pass is not read as more than it measured: an import of a package or
 through a path alias (`@/lib/x`), a Python import placed through a `.pth` file or a `sys.path` change
 it cannot evaluate (refused, not passed, unless the module is also installed), a module run with
-`python3 -m`, an import path built at run time, a program run by bare name from the PATH, and an
+`python3 -m`, an import path built at run time, a program run by bare name from the PATH, a file run
+through a variable or a substitution whose value it cannot work out, and an
 endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
 post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
 send route, is refused with the reason.
@@ -3886,8 +3900,13 @@ database has not had, so the skill copies the dry run's list onto the picker and
 question, and the push is let through only when that list is exactly the one migration Dan applied:
 a missing, empty or longer list, or one naming another file, is asked about, the question naming the
 other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
-What it cannot see: a change on the database between the dry run and the push, or a migration file
-added after the dry run under an older version than the applied one.
+That list holds only while the folder is as the dry run found it, so since #2829 the session must
+also hold a successful dry run of that same project directory before the Apply, as its own Bash call,
+and no `.sql` file in `supabase/migrations` may have changed since that call was sent (its status
+change time against the transcript entry's timestamp). A migration edited, renamed or added after the
+dry run, an older version included, and a dry run of another project's folder are asked about.
+What it cannot see: a change on the database between the dry run and the push, or a `supabase link`
+to another project in the same directory between the dry run and the Apply.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
