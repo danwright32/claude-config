@@ -3878,6 +3878,8 @@ git -C "$T/u2844" push -q "$L" "main:refs/heads/local2844/posting" 2>/dev/null
 L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
 run_l "git fetch && git checkout local2844/posting && bash other.sh"
 read_refused "a local branch with a slash in its name, which posts, is read as it is held after a fetch"
+run_l "git fetch && git revert --no-edit origin/main && bash other.sh"
+allowed "a revert of a fetched branch reads what its parent held (quiet), judged rather than crashed"
 run_l "git fetch && git checkout local2844/quiet && bash other.sh"
 allowed "a local branch name that holds nothing is left as it is on disk after a fetch"
 L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"

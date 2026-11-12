@@ -517,11 +517,10 @@ def make(interpreter, shells, awks, senders):
             head = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
             e["head"] = head.decode("utf-8", "replace").strip() if head else ""
             fetched = self.git_fetch(e) if e["fetch"] else None
+            e["sha"] = ""
             if fetched:
                 e["git"], e["sha"] = fetched
-                return
-            e["sha"] = ""
-            for spec in e["spec"] if isinstance(e["spec"], list) else [e["spec"]]:
+            for spec in [] if fetched else e["spec"] if isinstance(e["spec"], list) else [e["spec"]]:
                 sha = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet", "--end-of-options",
                                               spec + "^{commit}"])
                 if sha:
