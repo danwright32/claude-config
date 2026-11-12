@@ -17,7 +17,7 @@
 // A file that only names what it matches, as a gate naming the endpoints it refuses does, holds no
 // send at all (rules.ts, sendMarks, #2662), so the pattern it matches by is never read as one.
 
-import { MARKERS, type Range, moduleSpecs, sendMarks, tokenRanges } from './rules.ts'
+import { MARKERS, type Range, sendMarks, tokenRanges } from './rules.ts'
 
 /** The text spans of a file: its strings (formatted: a template literal or an f-string, whose fields are code) and its comments. */
 export type Spans = { strings: (Range & { formatted?: boolean })[]; comments: Range[] }
@@ -660,27 +660,6 @@ const analyse = (r: Reading): Analysis => {
 }
 
 /**
- * The names a file gives a whole module (import * as m, import m from, require, python import m),
- * each with the statement that names the module, for the caller to place.
- */
-export const moduleBindings = (r: Reading): { name: string; statement: string }[] => {
-  const out: { name: string; statement: string }[] = []
-  const forms = r.python
-    ? [/^[ \t]*import[ \t]+([\w.]+)(?:[ \t]+as[ \t]+(\w+))?/gm, /^[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(\w+)(?:[ \t]+as[ \t]+(\w+))?/gm]
-    : [/\bimport\s+\*\s+as\s+([\w$]+)\s+from\s+["'][^"']+["']/g, /\bimport\s+([\w$]+)\s*(?:,\s*\{[^}]*\})?\s+from\s+["'][^"']+["']/g, /\b(?:const|let|var)\s+([\w$]+)\s*=\s*require\(\s*["'][^"']+["']\s*\)/g]
-  for (const f of forms)
-    for (const m of r.code.matchAll(f)) {
-      const name = (m[2] ?? (m[1] as string).split('.')[0]) as string
-      if (name !== 'type') out.push({ name, statement: m[0] })
-    }
-  return out
-}
-
-/** Whether a send reaches a whole module's name used whole (copy[key], render(copy)), rather than one of its names through it (copy.title). */
-export const usedWhole = (r: Reading, t: Traced, name: string): boolean =>
-  t.spans.some(s => [...r.skel.slice(s.from, s.to).matchAll(new RegExp(`${word(name)}(?!\\s*\\??\\.\\s*[A-Za-z_$])`, 'g'))].length > 0)
-
-/**
  * The python strings that are docstrings (#2574): a string standing alone as the first statement of
  * the module, or of a def's or class's body. It documents the code and is never sent anywhere, so it
  * is never message text, even where the guard cannot trace a file's sends.
@@ -718,48 +697,3 @@ export const docstrings = (r: Reading, strings: Range[]): Set<number> => {
 
 /** The send the string whose text starts at `start` reaches, if any. */
 export const sentAt = (t: Traced, start: number): Send | undefined => t.spans.find(s => start >= s.from && start < s.to)?.send
-
-/**
- * The names a file's import and re-export statements bind or hand on (#2637): named, default and
- * whole module imports, a require or awaited import given to names, python's from and import lines.
- * A statement read too widely only adds names, which makes mayBringIn look more often, never less.
- * The names of a bare package ('react') are left out, in JavaScript and TypeScript: its text is in
- * no file of the repository the guard follows an import to (rules.ts, importTerms), and counting
- * them would run the search on every edit that calls a library once more.
- */
-export const importedNames = (r: Reading): Set<string> => {
-  const out = new Set<string>()
-  const add = (clause: string) => {
-    for (const m of clause.matchAll(/[A-Za-z_$][\w$]*/g)) if (!KEYWORDS.has(m[0]) && m[0] !== 'type') out.add(m[0])
-  }
-  const forms = r.python
-    ? [/^[ \t]*from[ \t]+[\w.]+[ \t]+import[ \t]+(\([^)]*\)|[^\n]*)/gm, /^[ \t]*import[ \t]+([^\n]+)/gm]
-    : [/(?<![\w$.])(?:import|export)\s+(?:type\s+)?([\w$\s,{}*]*?)\s*from(?=\s*["'`])/g, /(?<![\w$.])(?:const|let|var)\s+([\w$]+|\{[^}=]*\})\s*=\s*(?:await\s+)?(?:require|import)\s*\(/g]
-  for (const f of forms)
-    for (const m of r.skel.matchAll(f)) {
-      // The module named, read from the code, since the skeleton blanks it. Anything but a quoted
-      // bare package counts: a path, an alias, or a name worked out at run time.
-      const named = r.python ? null : /^\s*(["'`])([^"'`\n]*)\1/.exec(r.code.slice((m.index ?? 0) + m[0].length))
-      if (named && !(named[2] as string).startsWith('.') && !(named[2] as string).includes('/')) continue
-      add(m[1] as string)
-    }
-  return out
-}
-
-/**
- * Whether an edit could bring another file's text to a Slack send that did not carry it before
- * (#2637), told from the edited file alone, before anything is searched: it imports a module it did
- * not, imports or hands on a name it did not, uses an imported name more often, or, in a file that
- * posts by itself, a send reaches a name it did not. An edit that only rewords a string, adds a
- * comment or changes code that touches no import brings nothing in, so no search is run for it.
- */
-export const mayBringIn = (before: Reading, after: Reading): boolean => {
-  const had = new Set(moduleSpecs(before.text))
-  if (moduleSpecs(after.text).some(s => !had.has(s))) return true
-  const uses = (r: Reading, name: string) => [...r.skel.matchAll(new RegExp(word(name), 'g'))].length
-  const old = importedNames(before)
-  for (const n of importedNames(after)) if (!old.has(n) || uses(after, n) > uses(before, n)) return true
-  if (!markerPositions(after).length) return false
-  const sent = trace(before).names
-  return [...trace(after).names.keys()].some(n => !sent.has(n))
-}

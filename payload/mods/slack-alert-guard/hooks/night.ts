@@ -1,5 +1,5 @@
 import type { SlackAlertChoice } from '../types/index.d.ts'
-import { APPROVE, CHANGE, SOURCE, UNWIRED, fixedParts } from './rules.ts'
+import { APPROVE, CHANGE, SOURCE, fixedParts } from './rules.ts'
 
 // Alert wording chosen in sleep mode (claude-config#2628). Dan, 2026-11-09: "Don't let alerts stop
 // you in sleep mode. Just keep working and if I don't like them we'll change them tomorrow. You
@@ -47,10 +47,10 @@ export const asleepRefusal = (blocked: string, id: string): string =>
 
 /**
  * The morning question: the message chosen overnight, put to Dan to keep or change. Approving sends
- * nothing. A module of message copy no file uses yet (#2720) is named as one, as the day question does.
+ * nothing. The file named is the one that posts it, the only kind the guard holds (#2837).
  */
-export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'from' | 'rendered' | 'unwired'>): string =>
-  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.from ?? c.file}${!c.from && c.unwired ? `, ${UNWIRED}` : ''}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
+export const morningQuestion = (c: Pick<SlackAlertChoice, 'file' | 'rendered'>): string =>
+  `Overnight, while you were asleep, Claude chose this wording for an automated Slack alert defined in ${c.file}. Approve it? Approving sends nothing: it only lets a pull request carrying it merge.\n\n${c.rendered}`
 
 export const MORNING_OPTIONS = [
   { label: APPROVE, description: 'Keep the wording chosen overnight. Only the pull request carrying it may merge.' },
