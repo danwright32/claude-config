@@ -125,3 +125,4 @@ which is NOT loaded into the session.
 - L822. Before narrowing who may use a shared resource, list its current users from its own usage record: one left out often just waits, silently.
 - L829. Parallel branches can reuse a migration version, and the second is skipped as applied; check versions before applying, and fail CI on a duplicate.
 - L836. Close a PR as contained in main only if its CURRENT head is inside a merged PR; one that says it carried the branch names an older head.
+- L852. A call you stop waiting for may still land, so release the lock, lease or claim its late answer took, or have it expire before the work it guards.
