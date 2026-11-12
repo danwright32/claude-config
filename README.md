@@ -3635,7 +3635,17 @@ package, `worker_threads`, `dns` and every program off the list of senders. A sh
 are not counted, since every shell script that keeps state writes (`issue-spool.sh clear` moves its
 spool files into place), and neither are its data reaching a program through a pipe or code written
 into the script itself (a heredoc fed to `python3 -`). A later file with a script's extension, a `#!`
-or no extension at all is read as before, since a wrapper may run it. Cost: the clear line takes about 0.21 s
+or no extension at all is read as code where the gate cannot be certain which word is the script. Where
+it can (#2797: the word the program's option table places as its script names a file on disk, no
+option the table does not know comes before it except for Python, whose table is complete, and the
+word is not built from a variable or a pattern), every later file is that script's argument: read as
+a script, its imports followed, only where the script or a file loaded before it (`node -r`,
+`--import`) can run what it is handed (it imports or requires a computed name, runs a child process,
+imports a package or module the gate does not know, or is of a kind the gate does not read; writing
+a file does not count), and its own text judged as a data file's is. So `node replace.mjs alert.ts
+old.txt new.txt`, a helper that only reads and rewrites text, passes although `alert.ts` imports the
+alert sender, and the same command with a helper that runs, imports or posts what it is handed is
+refused. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
@@ -3670,7 +3680,7 @@ the session transcript handed to `issue-spool.sh` as a shell script: the first 2
 commands, 5.0 to 5.6 seconds on this Mac at load averages of 14 to 90. #2415 had already stopped
 reading such data files as code; the same line now takes 0.27 seconds against a 248 MB transcript
 (load average 14, 2026-11-09). A file the gate cannot tell from a script (a large file with no
-extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
+extension handed to a script that may run it) is still read as one, about 3 seconds for 2 MB at a load average of 95,
 and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
 distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
 the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
