@@ -1325,13 +1325,18 @@ export const untracedText = (file: string, added: string[], removed: string[], w
   return `This edit to ${file} ${what}, and the Slack alert guard could not trace whether that reaches Slack: ${why}`
 }
 
+// Why trying again does not help: a limit the trace met is met on every try; a search that ran out of
+// time (#2796, `late`) may finish on a quieter Mac, but ran out about 20 times on a busy one, so it is
+// never told to try again either.
+const noRetry = (late?: boolean) => (late ? 'The search can run out of time again' : 'Trying again is held the same way')
+
 /** The main session's refusal of an untraced edit: ask Dan, who sees the lines the guard shows him. */
-export const untracedRefusal = (id: string, file: string, added: string[], removed: string[], why: string): string =>
-  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. Trying again is held the same way, so Dan decides this one edit. Ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}"} and no answers filled in. The guard words the question and shows him the lines. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const untracedRefusal = (id: string, file: string, added: string[], removed: string[], why: string, late?: boolean): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. ${noRetry(late)}, so Dan decides this one edit. Ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}"} and no answers filled in. The guard words the question and shows him the lines. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal of an untraced edit: it may not ask Dan, so it stops and reports. */
-export const untracedAgentRefusal = (id: string, file: string, added: string[], removed: string[], why: string): string =>
-  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. Trying again is held the same way, and only the main session can ask Dan to approve this one edit. Stop and report to the main session that call ${id} waits on Dan approving an edit the Slack alert guard could not trace.`
+export const untracedAgentRefusal = (id: string, file: string, added: string[], removed: string[], why: string, late?: boolean): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. ${noRetry(late)}, and only the main session can ask Dan to approve this one edit. Stop and report to the main session that call ${id} waits on Dan approving an edit the Slack alert guard could not trace.`
 
 /** The question for an untraced edit: the file, that the guard could not trace it, why, and its exact lines. */
 export const untracedQuestion = (file: string, added: string[], removed: string[], why: string): string => {

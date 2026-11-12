@@ -1174,6 +1174,8 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   const failed = refusalOf(await call($, RETEMPLATE))
   expect(failed).toContain('could not check')
   expect(failed).toContain('timed out after 3000ms')
+  // git failing with time still left may pass on another try, so says to try again (#2796).
+  expect(failed).toContain('Try it again')
   w.ctl.gitFails = ''
   w.ctl.gitThrows = true
   const unrun = refusalOf(await call($, RETEMPLATE))
@@ -1181,9 +1183,12 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(unrun).toContain('could not be searched')
   w.ctl.gitThrows = false
   w.ctl.gitSlow = SCAN_MS + 1
+  // Out of time, it is held for Dan with an id (#2796), never left with nothing he can answer.
   const late = refusalOf(await call($, RETEMPLATE))
-  expect(late).toContain('could not check')
+  expect(late).toContain('could not trace')
   expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(late).not.toContain('Try it again')
+  expect(idIn(late)).toBeDefined()
   w.ctl.gitSlow = 0
   w.ctl.unreadable = SENDER
   const unread = refusalOf(await call($, RETEMPLATE))
@@ -1576,8 +1581,9 @@ test('a search over a widely imported module that runs late, or whose listing is
   const w = world($, on, { files: widelyImported(60, 0) })
   w.ctl.gitSlow = SCAN_MS / 2
   const late = refusalOf(await call($, REHTTP))
-  expect(late).toContain('could not check')
+  expect(late).toContain('could not trace')
   expect(late).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(idIn(late)).toBeDefined()
   w.ctl.gitSlow = 0
   w.ctl.gitTruncated = true
   const cut = refusalOf(await call($, REHTTP))
@@ -2588,6 +2594,60 @@ test('a search for what an edit brings to a send that runs out of time says so, 
   expect(late).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
   expect(late).not.toContain('could not name the repository')
   expect(w.ran).toEqual([])
+})
+
+// claude-config#2796: a search that ran out of its time was refused as could not check, "Try it
+// again", with no id, so nothing could be put to Dan, and the same import edit ran out again on every
+// try. It is now held as an edit the guard could not trace is (#2709): the lines shown, an id Dan can
+// approve, and his approval lets that one edit through and no other.
+test('names added to an import whose search runs out of time are held with the line shown and an id; Dan approving lets that one edit through and no other (#2796)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const LINE = "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'"
+  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: `${LINE}\n` }
+  w.ctl.gitSlow = SCAN_MS + 1
+  w.ctl.gitSlowWhen = ':(glob,icase)'
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain('could not trace')
+  expect(why).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
+  expect(why).toContain(LINE)
+  expect(why).toContain('can run out of time again')
+  expect(why).not.toContain('Try it again')
+  expect(idIn(why)).toBeDefined()
+  expect(w.ran).toEqual([])
+  expect(w.cards.length).toBe(1)
+  // A subagent is told to stop and report, never to ask or to try again.
+  const agent = refusalOf(await call($, { ...edit, agentId: 'agent-a1' }))
+  expect(agent).toContain('Stop and report to the main session')
+  expect(agent).not.toContain('Try it again')
+  // Dan is asked with the line shown, and his approval lets that exact edit through, still out of time.
+  await ask($, w, why, APPROVE, {})
+  const q = w.asked[0]?.questions[0]
+  expect(q?.question).toContain(LINE)
+  expect(q?.question).toContain(`not searched within ${SCAN_MS / 1000} seconds`)
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Any other edit to the same file is asked about again.
+  const other = refusalOf(await call($, { ...edit, new_string: "import { quietPage, quietClear, allClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }))
+  expect(other).toContain('could not trace')
+  expect(idIn(other)).not.toBe(idIn(why))
+  expect(w.ran.length).toBe(1)
+})
+
+// A git that fails with time still left, or a file that cannot be read, may pass on another try, so it
+// is still could not check, told to try again, with no approval route (#2796).
+test('names added to an import whose search fails with time left are refused as could not check, told to try again (#2796)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
+  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }
+  w.ctl.unreadable = QUIET
+  const unread = refusalOf(await call($, edit))
+  expect(unread).toContain('could not check')
+  expect(unread).toContain('Try it again')
+  expect(unread).not.toContain('could not trace')
+  expect(w.ran).toEqual([])
+  // Readable, the same edit passes, since the name it adds is sent nowhere.
+  w.ctl.unreadable = ''
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
 })
 
 // claude-config#2796: on 2026-11-11, in a work repository, an edit adding names to an existing
