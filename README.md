@@ -6613,8 +6613,9 @@ finds changes only logic: no JSX, string, comment, number, true or false, word a
 in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
 any text Dan reads in an app's screen, an issue whose answers cannot be read, and a pass that cannot
 be kept are held and asked as before (a mod's hook file is read on its own terms, below, and since
-#2845 a change there to a message's words alone passes too). A typed answer to the skip question records
-nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
+#2845 a change there to a message's words alone passes too). A typed answer to the skip question
+records nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in
+mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
 rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
@@ -6785,23 +6786,26 @@ a declaration drawn, a value followed into one, whole, the data it hands a call 
 every function that draws (the innermost one around a drawing call or element, a render hook's
 handler among them, so a new local naming the card there is asked about as Dan chose for #1248), no
 name what is drawn uses is imported from another file or under another name, the drawn parts read
-the same, and, from #1823 until #2845, the wording of every message a person reads is the same (Dan, 2026-10-27: "Timing
-wording can go through, but message wording should be asked about"): each string reaching a toast, a
+the same, and, from #1823 until #2845, the wording of every message a person reads is the same
+(Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about"):
+each string reaching a toast, a
 notification (`$.ui.notify`, the goal tracker's terminal-notifier and its `waitingOnYou`, so #1245's
 helper stays held as #1248 recorded), a transcript line (a debug one aside), a pane status, a
 question, a blocked card, or the `reason`, `block`, `deny`, `result`, `systemMessage` or `text` of
 an answer, followed into each as values are followed into what is drawn, and whatever each call of a
 function that sends one is handed, each wording counted once (rules.ts `modHookDrawingUntouched`,
-and until #2845 `messageWordingSame`); a change judged a run of lines at a time keeps its whole wording where a run
-passed only by this reading. A tool's description, read only by Claude, is no message. A JSX element
+and until #2845 `messageWordingSame`); a change judged a run of lines at a time keeps its whole
+wording where a run passed only by this reading. A tool's description, read only by Claude, is no
+message. A JSX element
 or a colour in those lines, and hook files that cannot be listed or read, are held as before.
 Replayed over the 3,107 Edit, MultiEdit and Write calls to mods' hook files in this Mac's
 transcripts (2026-10-04 to 2026-10-27), of the 333 to `.tsx` files whose text before the call could
 be settled 104 are held where 49 now are; the 55 let through change imports, types, logic, words
 only Claude reads, or when and where the steps card shows and what its buttons act on, none changes
-what a mod draws or a message's words, and none that passed is held. From #1841 until #2845 a mod's `.ts` hook
-file was held for the same message wording too, not only for what it draws (rules.ts `modHookTsHold`, since #2845 `modHookTsChange`:
-`drawsChange`, or `messageWordingSame` finding the words changed; the yes or no wrapper
+what a mod draws or a message's words, and none that passed is held. From #1841 until #2845 a
+mod's `.ts` hook file was held for the same message wording too, not only for what it draws
+(rules.ts `modHookTsHold`, since #2845 `modHookTsChange`: `drawsChange`, or `messageWordingSame`
+finding the words changed; the yes or no wrapper
 `modHookTsShows` that only tests called is gone since #1911), by an Edit, MultiEdit, Write, git put
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
@@ -6815,8 +6819,9 @@ handed through a helper that hands it straight back), and a comment holds no str
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
 words a person reads count there (Dan, 2026-10-28: "Narrow it first"; rules.ts `messageWordingSame`
-with `words`, since #2845 `messageWords`): a string a message is only computed from passes, that is a regular expression, a
-quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a command's words and flags
+with `words`, since #2845 `messageWords`): a string a message is only computed from passes, that
+is a regular expression, a quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a
+command's words and flags
 (what a process run is handed, a notifier excepted, and anything spelled like `--repo` or `-R`),
 what a string is split, searched or keyed by (only what `replace` looks for), what the disk and
 environment are asked, and a string with no letter in it (a separator); a `join` with words in it
