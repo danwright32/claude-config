@@ -355,8 +355,9 @@ const end = (found: Found): never => {
  * deep; a chain going further is could not check. A level handed on only to UI components
  * (uiComponent) is none there, never followed past them (Dan, 2026-11-09, #2519). A template is sent too by a file that uses it and
  * imports a Slack send helper (helperUser, #2361), as a copy or notice builder is. A test or a doc is never read as a sender or a
- * link (#2290, #2361). Every git call and read is bounded by `deadline`, and anything that cannot be
- * answered in time, or at all, is could not check, so the call is held rather than let through. More
+ * link (#2290, #2361). Every git call and read is bounded by `deadline`: a search that runs out of it
+ * is untraced and late, held for Dan to approve that one edit (#2796), and anything that cannot be
+ * answered at all is could not check, so the call is held rather than let through. More
  * than MOST_READ files to read is maybe: held for Dan to approve, naming no sender (#2364).
  *
  * A file in no repository, as a scratchpad script is, has nothing that sends it, so none, even when
@@ -673,8 +674,9 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
  *
  * Only JavaScript, TypeScript and python are traced. A sender or module that cannot be traced
  * counts every string of the files it imports, on both sides, so there it is a newly imported file
- * that is held; so does a search for senders that stopped short. Anything that cannot be read or
- * listed in time, and names newly handed on through more files than the guard follows, is could
+ * that is held; so does a search for senders that stopped short. A search that runs out of time,
+ * and names newly handed on through more files than the guard follows, are untraced, held for Dan
+ * to approve that one edit (#2709, #2796); anything that cannot be read or listed at all is could
  * not check.
  */
 const broughtIn = async ($: EngineInterface, path: string, before: string, after: string, deadline: number): Promise<Verdict> => {
