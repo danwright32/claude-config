@@ -1910,10 +1910,10 @@ test('#1823: the held Edit adding names to a mod hook file imports passes unaske
   expect(w.ran.length).toBe(1)
 })
 
-// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about".
-// A change judged a run of lines at a time must not carry a toast's new words through beside a run
-// only the #1823 reading let through (as manual steps' pressCopy rewording did, 2026-10-05).
-test("#1823: a placement change passes; the same Write also rewording a toast is asked, though the toast's run names no drawing word", withKit, async ($, on) => {
+// #1823 held a toast's new words in a mod's .tsx hook file (Dan, 2026-10-27: "message wording should
+// be asked about"); #2845 reverses that (Dan, 2026-11-12: "any words"): the words pass and are
+// recorded, named, while a placement change passes unrecorded.
+test("#1823, #2845: a placement change passes; the same Write also rewording a toast passes too, recorded naming the words", withKit, async ($, on) => {
   const text = `import type { EngineInterface, Register } from 'claude-code'
 
 const PANE_COLUMNS = 144
@@ -1944,13 +1944,12 @@ export const register: Register = on => {
   const placed = text.replace('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')
   expect(refusalOf(await call($, write(placed)))).toBe('')
   expect(w.ran.length).toBe(1)
-  const reworded = refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))
-  expect(reworded).toContain(SKIP_QUESTION)
-  // #1859: held for the toast's words alone, so it says so, naming them, and never the screen's look.
-  expect(reworded).toContain('payload/mods/manual-steps/hooks/register.tsx changes the words of a message Dan reads')
-  expect(reworded).toContain('Copied that value for step')
-  expect(reworded.includes('changes how the screen looks')).toBe(false)
-  expect(w.ran.length).toBe(1)
+  expect(autosOf(w)).toEqual([])
+  expect(refusalOf(await call($, write(placed.replace('Copied the value for step', 'Copied that value for step'))))).toBe('')
+  expect(w.ran.length).toBe(2)
+  const autos = autosOf(w)
+  expect(autos.map(a => a.files)).toEqual([['payload/mods/manual-steps/hooks/register.tsx']])
+  expect(autos[0]?.why).toContain('Copied that value for step')
 })
 
 // #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
@@ -2020,9 +2019,9 @@ test("#1275: a shell write making a line builder file draw differently is undone
   expect(w.ran.length).toBe(4)
 })
 
-// #1841: a mod's .ts hook file was judged only by what it draws, so a toast reworded there passed
-// unasked. Dan, 2026-10-27, for #1823: "Timing wording can go through, but message wording should be
-// asked about". Shaped after mods/secret-guard's register.ts, which draws nothing.
+// #1841 held a toast reworded in a mod's .ts hook file (Dan, 2026-10-27: "message wording should be
+// asked about"); #2845 reverses it (Dan, 2026-11-12: "any words"). Shaped after mods/secret-guard's
+// register.ts, which draws nothing.
 const GUARD_HOOK = `${DEMO}/guard.ts`
 const GUARD_TEXT = `import type { EngineInterface } from 'claude-code'
 export const KEEP_SPEC = { name: 'keep_job', description: 'Keep a background job running on purpose.' }
@@ -2030,20 +2029,15 @@ export const refuse = async ($: EngineInterface, what: string) => {
   if (what.length > 3) await $.ui.toast('Blocked a command that would print a secret.')
 }
 `
-test("#1841: a toast reworded in a mod's .ts hook file is asked about, by an Edit or a shell write; a logic change there and a tool description pass", withKit, async ($, on) => {
+test("#1841, #2845: a toast reworded in a mod's .ts hook file passes, recorded; a logic change there and a tool description pass with no record", withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
-  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, edit('what.length > 3', 'what.length > 5')))).toBe('')
   expect(refusalOf(await call($, edit('running on purpose.', 'up on purpose.')))).toBe('')
-  expect(w.ran.length).toBe(2)
-  // What sed leaves is read once it ran, by the same rule: the new words are undone and asked about.
-  const now = w.files[GUARD_HOOK] as string
-  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
-  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
-  expect(why).toContain(SKIP_QUESTION)
-  expect(why).toContain('was undone')
-  expect(w.files[GUARD_HOOK]).toBe(now)
+  expect(autosOf(w)).toEqual([])
+  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toBe('')
+  expect(w.ran.length).toBe(3)
+  expect(autosOf(w).length).toBe(1)
 })
 
 // #2294: Dan, 2026-11-05: "If you're confident that nothing on screen changes don't ask me to make a
@@ -2082,8 +2076,9 @@ test('#2294: a logic only edit to an app page goes through unasked and is record
 })
 
 // #2348: an automatic pass that could not be recorded held the call without looking for Dan's own
-// Not a look or wording change for it, so a call he had already let through was asked about again.
-test('#2348: a logic only edit whose automatic pass cannot be recorded goes through on Dan\'s earlier Not a look or wording change, and is held without one', withKit, async ($, on) => {
+// Not a look or wording change for it (named Not a look change since #2845), so a call he had
+// already let through was asked about again.
+test('#2348: a logic only edit whose automatic pass cannot be recorded goes through on Dan\'s earlier Not a look change, and is held without one', withKit, async ($, on) => {
   const w = world($, on, { files: { [RESULT]: RESULT_TEXT } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: RESULT, old_string: from, new_string: to })
   // Only the automatic pass fails to save; Dan's own answers save as usual.
@@ -2091,6 +2086,9 @@ test('#2348: a logic only edit whose automatic pass cannot be recorded goes thro
   // No earlier answer: held and asked, as today.
   const why = refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))
   expect(why).toContain(SKIP_QUESTION)
+  // Said as what the guard found, never as a look change (L11, folded into #2845).
+  expect(why).toContain('as leaving the look unchanged, but its automatic pass could not be recorded (')
+  expect(why).not.toContain('changes how the screen looks')
   expect(w.ran.length).toBe(0)
   // Dan lets this very call through; resent, it is not asked about again though the automatic pass
   // still cannot be saved.
@@ -2106,18 +2104,100 @@ test('#2348: a logic only edit whose automatic pass cannot be recorded goes thro
   expect(w.ran.length).toBe(1)
 })
 
-test('#2294: a new refusal message in a mod hook file is still held (the #2173 shape), however little else changes', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
-  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
-  expect(refusalOf(await call($, edit('  if (what.length > 3)', "  if (!what) return { deny: 'Blocked: there was nothing to check.' }\n  if (what.length > 3)")))).toContain(SKIP_QUESTION)
-  expect(refusalOf(await call($, edit('Blocked a command that would', 'Blocked a command that may')))).toContain(SKIP_QUESTION)
-  expect(w.ran.length).toBe(0)
-  expect(Object.keys(w.store).some(k => k.startsWith('auto:'))).toBe(false)
+// #2845: Dan, 2026-11-12, "any words": added, reworded or removed message text in a mod passes with
+// nothing asked, kept on record as an automatic pass naming the words; only a change to how something
+// looks stops. This reverses the wording holds of #1837 and #1841 (#1823), #1859, #1925 and #1934.
+const autosOf = (w: { store: Record<string, unknown> }) => Object.entries(w.store).filter(([k]) => k.startsWith('auto:')).map(([, v]) => v as { kind: string; files: string[]; subjects: string[]; why: string })
+test("#2845: a mod hook edit that only changes a message's words passes unasked and is recorded naming them; one changing what the mod draws is still held", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [ANSWERS_HOOK]: ANSWERS_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (file: string, from: string, to: string) => ({ tool: 'Edit', file_path: file, old_string: from, new_string: to })
+  // A new sentence added, a toast reworded, a sentence taken away, a picker's label changed: each
+  // judged against the file as it stands (the stand in tool writes nothing).
+  expect(refusalOf(await call($, edit(GUARD_HOOK, '  if (what', "  if (!what) return { deny: 'Blocked: there was nothing to check.' }\n  if (what")))).toBe('')
+  expect(refusalOf(await call($, edit(GUARD_HOOK, 'Blocked a command that', 'Stopped a command that')))).toBe('')
+  expect(refusalOf(await call($, edit(GUARD_HOOK, "  if (what.length > 3) await $.ui.toast('Blocked a command that would print a secret.')\n", '')))).toBe('')
+  expect(refusalOf(await call($, edit(ANSWERS_HOOK, "label: 'Skip them'", "label: 'Skip the rounds'")))).toBe('')
+  expect(w.ran.length).toBe(4)
+  expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
+  const autos = autosOf(w)
+  expect(autos.length).toBe(4)
+  for (const a of autos) {
+    expect(a).toMatchObject({ kind: 'no-screen-change', tool: 'Edit', subjects: ['issue #978 in slate'] })
+    expect(a.why).toContain('#2845')
+    expect(a.why).toContain('only the words of a message')
+  }
+  expect(autos.map(a => a.files)).toEqual([[`payload/mods/demo/hooks/guard.ts`], [`payload/mods/demo/hooks/guard.ts`], [`payload/mods/demo/hooks/guard.ts`], [`payload/mods/demo/hooks/answers.ts`]])
+  expect(autos[0]?.why).toContain('Blocked: there was nothing to check.')
+  expect(autos[1]?.why).toContain('Stopped a command that')
+  expect(autos[2]?.why).toContain('Blocked a command that')
+  expect(autos[3]?.why).toContain('Skip the rounds')
+  // A logic change records nothing, as before.
+  expect(refusalOf(await call($, edit(GUARD_HOOK, 'what.length > 3', 'what.length > 5')))).toBe('')
+  expect(autosOf(w).length).toBe(4)
+  // A shell write changing only words runs, is not undone, and is recorded.
+  w.ctl.shell = { [GUARD_HOOK]: GUARD_TEXT.replace('Blocked a command that', 'Halted a command that') }
+  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Halted a command/' payload/mods/demo/hooks/guard.ts" }))).toBe('')
+  expect(w.files[GUARD_HOOK]).toContain('Halted a command that')
+  expect(autosOf(w).length).toBe(5)
+  expect(autosOf(w).some(a => a.why.includes('Halted a command that'))).toBe(true)
+  w.ctl.shell = {}
+  // What a mod draws is still held: a line builder's style, by an Edit and by a shell write.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: 'bold: true', new_string: 'bold: false' }))).toContain(SKIP_QUESTION)
+  w.ctl.shell = { [LINES]: LINES_TEXT.replace('bold: true', 'bold: false') }
+  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/bold: true/bold: false/' payload/mods/demo/hooks/card.ts" }))).toContain('was undone')
+  expect(w.files[LINES]).toBe(LINES_TEXT)
 })
 
-// #1925: the #1904 builder's Edit adding "or wording" to the skip question's answers in the guard's own
-// rules.ts went through unasked, though Dan reads each answer's description in the picker. An
-// answer's description is held as a message's words, by an Edit or a shell write; a tool's still passes.
+// Dan, 2026-11-12, for #2845: a refused command leaves nothing behind, so a file it changed only in a
+// message's words is put back beside the one it changed the look of, and nothing is recorded; run
+// again once Dan answers, the words pass and are recorded then.
+test('#2845: a shell write changing a look and a message\'s words is refused, both files put back, nothing recorded', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  w.ctl.shell = { [GUARD_HOOK]: GUARD_TEXT.replace('Blocked a command that', 'Halted a command that'), [LINES]: LINES_TEXT.replace('bold: true', 'bold: false') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' -e 's/Blocked a command/Halted a command/' -e 's/bold: true/bold: false/' payload/mods/demo/hooks/guard.ts payload/mods/demo/hooks/card.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/guard.ts was undone')
+  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  expect(w.files[LINES]).toBe(LINES_TEXT)
+  expect(autosOf(w)).toEqual([])
+  w.ctl.shell = {}
+})
+
+// The refusal for a pass that could not be recorded says what the guard found, never that the edit
+// changes the look (L11; Dan folded this into #2845, 2026-11-12).
+const UNRECORDED = 'as leaving the look unchanged, but its automatic pass could not be recorded ('
+test('#2845: a words only pass that cannot be recorded is not made, and one on an issue Dan let skip records nothing', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+  const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
+  w.ctl.storeSetFailKey = 'auto:'
+  const why = refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(UNRECORDED)
+  expect(why).not.toContain('changes how the screen looks')
+  expect(JSON.stringify(w.cards)).not.toContain('may change how something looks')
+  expect(w.ran.length).toBe(0)
+  // A shell write changing only words, whose pass cannot be recorded, is put back, saying so as what
+  // the guard found, never as a change to what the mod draws.
+  w.ctl.shell = { [GUARD_HOOK]: GUARD_TEXT.replace('Blocked a command that', 'Halted a command that') }
+  const shell = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Halted a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(shell).toContain('was undone: the guard read it as leaving the look unchanged, but its automatic pass could not be recorded.')
+  expect(shell).toContain(UNRECORDED)
+  expect(shell).not.toContain('changes how the screen looks')
+  expect(shell).not.toContain('what the mod draws')
+  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  w.ctl.shell = {}
+  w.ctl.storeSetFailKey = undefined
+  const ran = w.ran.length
+  await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toBe('')
+  expect(w.ran.length).toBe(ran + 1)
+  expect(autosOf(w)).toEqual([])
+})
+
+// #1925 held an answer's description, which Dan reads in the picker, as a message's words; #2845
+// reverses that hold (Dan, 2026-11-12: "any words"): it passes, recorded naming the words, by an Edit
+// or a shell write, and a tool's description passes with no record.
 const ANSWERS_HOOK = `${DEMO}/answers.ts`
 const ANSWERS_TEXT = `export const TOOL_SPEC = { name: 'skip_rounds', description: 'Ask Dan whether to skip design rounds.' }
 export const skipOptions = () => [
@@ -2125,44 +2205,35 @@ export const skipOptions = () => [
   { label: 'Run /design-rounds', description: 'Nothing that changes the look is edited until you settle a design round' },
 ]
 `
-test("#1925: an answer's description reworded in a mod's .ts hook file is asked about as a message's words, by an Edit or a shell write; a tool's description passes", withKit, async ($, on) => {
+test("#1925, #2845: an answer's description reworded in a mod's .ts hook file passes, recorded, by an Edit or a shell write; a tool's description passes with no record", withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [ANSWERS_HOOK]: ANSWERS_TEXT, [`${SCRATCH}/.keep`]: '' } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: ANSWERS_HOOK, old_string: from, new_string: to })
-  const why = refusalOf(await call($, edit('changes the look is edited', 'changes the look or wording is edited')))
-  expect(why).toContain(SKIP_QUESTION)
-  expect(why).toContain('payload/mods/demo/hooks/answers.ts changes the words of a message Dan reads')
-  expect(why).toContain('or wording')
   expect(refusalOf(await call($, edit('Ask Dan whether to skip', 'Ask Dan if he wants to skip')))).toBe('')
-  expect(w.ran.length).toBe(1)
-  const now = w.files[ANSWERS_HOOK] as string
-  w.ctl.shell = { [ANSWERS_HOOK]: now.replace('the look go ahead', 'the look or wording go ahead') }
-  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/the look go/the look or wording go/' payload/mods/demo/hooks/answers.ts" }))
-  expect(said).toContain('was undone: it changed the words of a message Dan reads')
-  expect(w.files[ANSWERS_HOOK]).toBe(now)
+  expect(autosOf(w)).toEqual([])
+  expect(refusalOf(await call($, edit('changes the look is edited', 'changes the look or wording is edited')))).toBe('')
+  expect(autosOf(w)[0]?.why).toContain('or wording')
+  w.ctl.shell = { [ANSWERS_HOOK]: ANSWERS_TEXT.replace('the look go ahead', 'the look or wording go ahead') }
+  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/the look go/the look or wording go/' payload/mods/demo/hooks/answers.ts" }))).toBe('')
+  expect(w.files[ANSWERS_HOOK]).toContain('the look or wording go ahead')
+  expect(w.ran.length).toBe(3)
+  expect(autosOf(w).length).toBe(2)
 })
 
-// #1934: rewording the question a mod hands AskUserQuestion through next(), or the header above it,
-// went through unasked unless the same words were said in another message too, though Dan reads both
-// in the picker. Held as a message's words by an Edit or a shell write, as an answer's are (#1925).
+// #1934 held a reworded question a mod hands AskUserQuestion through next(), or the header above it,
+// as a message's words; #2845 reverses that: it passes, recorded naming the words.
 const QUESTION_HOOK = `${DEMO}/question.ts`
 const QUESTION_TEXT = `export const askSettled = (next: (e: object) => Promise<unknown>) =>
   next({ questions: [{ question: 'Is this design settled?', header: 'Settled', options: [{ label: 'Yes', description: 'It is settled' }], multiSelect: false }] })
 `
-test("#1934: a question's text or header reworded in a mod's .ts hook file is asked about as a message's words, by an Edit or a shell write; the logic beside it passes", withKit, async ($, on) => {
+test("#1934, #2845: a question's text or header reworded in a mod's .ts hook file passes, recorded naming the words; the logic beside it passes with no record", withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [QUESTION_HOOK]: QUESTION_TEXT, [`${SCRATCH}/.keep`]: '' } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: QUESTION_HOOK, old_string: from, new_string: to })
-  const why = refusalOf(await call($, edit('Is this design settled?', 'Is the design settled?')))
-  expect(why).toContain(SKIP_QUESTION)
-  expect(why).toContain('payload/mods/demo/hooks/question.ts changes the words of a message Dan reads')
-  expect(why).toContain('Is the design settled?')
-  expect(refusalOf(await call($, edit("header: 'Settled'", "header: 'Design settled'")))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, edit('multiSelect: false', 'multiSelect: true')))).toBe('')
-  expect(w.ran.length).toBe(1)
-  const now = w.files[QUESTION_HOOK] as string
-  w.ctl.shell = { [QUESTION_HOOK]: now.replace('Is this design', 'Is the design') }
-  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Is this design/Is the design/' payload/mods/demo/hooks/question.ts" }))
-  expect(said).toContain('was undone: it changed the words of a message Dan reads')
-  expect(w.files[QUESTION_HOOK]).toBe(now)
+  expect(autosOf(w)).toEqual([])
+  expect(refusalOf(await call($, edit('Is this design settled?', 'Is the design settled?')))).toBe('')
+  expect(refusalOf(await call($, edit("header: 'Settled'", "header: 'Design settled'")))).toBe('')
+  expect(w.ran.length).toBe(3)
+  expect(autosOf(w).map(a => a.why.includes('Is the design settled?') || a.why.includes('Design settled'))).toEqual([true, true])
 })
 
 // #1933: on 2026-10-29 the #1925 builder copied rules.ts to hooks/rules-before-1925.tmp.ts by mistake,
@@ -2183,71 +2254,45 @@ test('#1933: removing a mod hook file git has never tracked passes; removing a t
   w.ctl.gone = [OLD_DRAWS]
   expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f payload/mods/demo/hooks/register-old.tsx' }))).toBe('')
   expect(w.files[OLD_DRAWS]).toBeUndefined()
-  // The tracked hook file: put back and asked about, as before.
-  w.ctl.gone = [GUARD_HOOK]
-  const why = refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/guard.ts' }))
+  // A tracked hook file that draws: put back and asked about, as before. (One that only sends a
+  // message is taken away as words alone since #2845, and passes.)
+  w.ctl.gone = [LINES]
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/card.ts' }))
   expect(why).toContain(SKIP_QUESTION)
   expect(why).toContain('was undone')
-  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  expect(w.files[LINES]).toBe(LINES_TEXT)
   // Where git cannot say, the file counts as tracked.
-  w.files[SCRATCH_COPY] = GUARD_TEXT
+  w.files[SCRATCH_COPY] = LINES_TEXT
   w.ctl.gone = [SCRATCH_COPY]
   w.ctl.lsFilesFails = true
   expect(refusalOf(await call($, { tool: 'Bash', command: 'rm payload/mods/demo/hooks/guard-before-1933.tmp.ts' }))).toContain('was undone')
-  expect(w.files[SCRATCH_COPY]).toBe(GUARD_TEXT)
+  expect(w.files[SCRATCH_COPY]).toBe(LINES_TEXT)
   expect(w.ran.length).toBe(4)
 })
 
-// #1859: an edit held only because a message's words changed was refused as one that "changes how the
-// screen looks", and a shell write's as one that "changed what the mod draws", more than the check
-// measured (L11). The refusal, the card and the shell outcome say the words changed, naming them; a
-// look change still says the look.
-test("#1859: a toast reworded in a mod's .ts hook file is refused as a message's words, never the screen's look, by an Edit or a shell write; a look change still says the look", withKit, async ($, on) => {
-  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
+// A look change, by an Edit or a shell write, says the look (the refusal wording #1859 kept for it).
+test('a look change to a mod hook file says the look, by an Edit or a shell write', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [`${SCRATCH}/.keep`]: '' } })
   const LOOK = 'changes how the screen looks'
-  const why = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'Blocked a command that', new_string: 'Stopped a command that' }))
-  expect(why).toContain(SKIP_QUESTION)
-  expect(why).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads')
-  expect(why).toContain('Stopped a command that')
-  expect(why.includes(LOOK)).toBe(false)
-  const reason = String((w.cards[w.cards.length - 1] as { reason?: string }).reason)
-  expect(reason).toContain('Stopped a command that')
-  expect(reason.includes('looks on screen')).toBe(false)
-  // What sed leaves is undone, saying it changed a message's words, never what the mod draws.
-  const now = w.files[GUARD_HOOK] as string
-  w.ctl.shell = { [GUARD_HOOK]: now.replace('Blocked a command that', 'Stopped a command that') }
-  const said = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Stopped a command/' payload/mods/demo/hooks/guard.ts" }))
-  expect(said).toContain('was undone: it changed the words of a message Dan reads')
-  expect(said).toContain('Stopped a command that')
-  expect(said.includes('what the mod draws')).toBe(false)
-  expect(said.includes(LOOK)).toBe(false)
-  expect(w.files[GUARD_HOOK]).toBe(now)
-  // A look change, by an Edit or a shell write, still says the look.
   const look = refusalOf(await call($, DIVIDER))
   expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
-  expect(look.includes('the words of a message')).toBe(false)
   const divided = LINES_TEXT.replace('  card.steps.forEach((s, i) => {\n', '  card.steps.forEach((s, i) => {\n    if (i > 0) lines.push({ divider: true })\n')
   w.ctl.shell = { [LINES]: divided }
   const drawn = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/card.ts" }))
   expect(drawn).toContain('was undone: it changed what the mod draws on screen')
   expect(drawn).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
-  expect(drawn.includes('the words of a message')).toBe(false)
 })
 
-// #1859: an edit the guard cannot apply to the file as it stands cannot be read before it runs, so it
-// is held where the file draws or sends a message now. One to a file that sends a message and draws
-// nothing said "changes how the screen looks"; it says a message's words, naming none, since which
-// would change is unknown. One to a file that draws still says the look. Since #1954 that is only an
-// edit Claude Code's Edit may still apply, its curly quotes matched to the file's straight ones: one
-// that would not apply at all is told so instead (below).
+// An edit the guard cannot apply to the file as it stands cannot be read before it runs, so it is
+// held where the file draws now. One to a file that only sends a message passes since #2845 (it was
+// held as a message's words from #1859). Since #1954 that is only an edit Claude Code's Edit may
+// still apply, its curly quotes matched to the file's straight ones: one that would not apply at all
+// is told so instead (below).
 const CURLY = (s: string) => s.replace(/'/g, '’')
-test("#1859: an edit that may apply only by Claude Code's quote matching, to a mod's .ts hook file that only sends a message, is refused as a message's words; to one that draws, as the look", withKit, async ($, on) => {
+test("#2845: an edit that may apply only by Claude Code's quote matching passes to a mod's .ts hook file that only sends a message, and is held as the look in one that draws", withKit, async ($, on) => {
   world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT } })
   const LOOK = 'changes how the screen looks'
-  const worded = refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: CURLY("toast('Blocked"), new_string: "toast('Stopped" }))
-  expect(worded).toContain(SKIP_QUESTION)
-  expect(worded).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads,')
-  expect(worded.includes(LOOK)).toBe(false)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: GUARD_HOOK, old_string: CURLY("toast('Blocked"), new_string: "toast('Stopped" }))).toBe('')
   const lines = LINES_TEXT.split('\n').find(l => l.includes("'")) as string
   const look = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: CURLY(lines), new_string: lines }))
   expect(look).toContain(`payload/mods/demo/hooks/card.ts ${LOOK}`)
@@ -2266,7 +2311,10 @@ const COMMENTED = `${GUARD_TEXT}// A word holding a pattern character only insid
 const GLOB_CHAR = /[*?[\\]{}()~^#]/
 export const quotedGlob = (w: string) => GLOB_CHAR.test(w)
 `
-test("#1954: an edit that would not apply to a mod's hook file or a screen file is told so, never held for Dan; a regex and a comment pass, a message's words are held", withKit, async ($, on) => {
+// Since #2845 a file that only sends a message draws nothing, so an edit there that would not apply
+// is not held at all and goes to the Edit tool, which refuses it; only one to a file that draws is
+// told it would not apply.
+test("#1954, #2845: an edit that would not apply is told so where the guard would hold it, and passes to a file that draws nothing; a regex and a comment pass, a message's words pass recorded", withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: COMMENTED } })
   // The #1951 builder's slip: a comment's line missing its parenthesis, whatever the edit adds.
   const slip = {
@@ -2275,36 +2323,33 @@ test("#1954: an edit that would not apply to a mod's hook file or a screen file 
     old_string: '// A word holding a pattern character only inside quotes \'*push*\', "app/*.css") is handed on as written.',
     new_string: '// A word holding a pattern character only inside quotes is handed on as written.',
   }
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' }))
+  expect({ stale: why.includes('would not apply'), asked: why.includes(SKIP_QUESTION) }).toEqual({ stale: true, asked: false })
   for (const input of [
     slip,
-    { tool: 'Edit', file_path: LINES, old_string: 'no such text', new_string: 'anything' },
     { tool: 'MultiEdit', file_path: GUARD_HOOK, edits: [{ old_string: 'Blocked a command', new_string: 'Stopped a command' }, { old_string: 'Blocked a command', new_string: 'x' }] },
     // Twice in the file, with no replace_all: Claude Code's Edit refuses it too.
     { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'GLOB_CHAR', new_string: 'PATTERN_CHAR' },
-  ]) {
-    const why = refusalOf(await call($, input))
-    expect({ input, stale: why.includes('would not apply'), asked: why.includes(SKIP_QUESTION) || why.includes('message Dan reads') }).toEqual({ input, stale: true, asked: false })
-  }
-  // No card for Dan, and nothing left waiting on him.
+  ])
+    expect({ input, why: refusalOf(await call($, input)) }).toEqual({ input, why: '' })
+  // No card for Dan, nothing left waiting on him, and nothing recorded for edits never read.
   expect(w.cards).toEqual([])
-  expect(w.ran).toEqual([])
+  expect(w.ran.length).toBe(3)
+  expect(autosOf(w)).toEqual([])
   // The same edit with its text right: a comment and a regex literal change no message's words.
   expect(refusalOf(await call($, { ...slip, old_string: slip.old_string.replace("quotes '", "quotes ('") }))).toBe('')
   const added = { tool: 'Edit', file_path: GUARD_HOOK, old_string: 'export const refuse = async (', new_string: "// Shell examples: '*push*', \"app/*.css\" and app/\\*x are handed on; ''*x'' is not.\nconst ESCAPED = /[\\\\'\"]/\nexport const refuse = async (" }
   expect(refusalOf(await call($, added))).toBe('')
-  expect(w.ran.length).toBe(2)
-  // A message's words changed, alone or beside them, are still held, naming the words.
+  expect(autosOf(w)).toEqual([])
+  // A message's words changed, alone or beside them, pass, each recorded naming the words.
   const reword = { old_string: "toast('Blocked a command that", new_string: "toast('Stopped a command that" }
   for (const input of [
     { tool: 'Edit', file_path: GUARD_HOOK, ...reword },
     { tool: 'MultiEdit', file_path: GUARD_HOOK, edits: [{ old_string: added.old_string, new_string: added.new_string }, reword] },
-  ]) {
-    const held = refusalOf(await call($, input))
-    expect(held).toContain(SKIP_QUESTION)
-    expect(held).toContain('payload/mods/demo/hooks/guard.ts changes the words of a message Dan reads')
-    expect(held).toContain('Stopped a command that')
-  }
-  expect(w.ran.length).toBe(2)
+  ])
+    expect(refusalOf(await call($, input))).toBe('')
+  expect(w.ran.length).toBe(7)
+  expect(autosOf(w).map(a => a.why.includes('Stopped a command that'))).toEqual([true, true])
 })
 
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
@@ -2744,22 +2789,17 @@ test("#2704: on a file a merge left unmerged, a checkout that writes the conflic
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${RESULT_REL}` }))).toBe('')
 })
 
-test("#2704: taking the side merged in is judged against this branch's side: new words for a message, or a new look, are asked about, and a logic change passes", withKit, async ($, on) => {
+test("#2704, #2845: taking the side merged in is judged against this branch's side: new words for a message pass recorded, a new look is asked about, and a logic change passes", withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: conflicted(THEIRS_WORDS) }, blobs: sides(THEIRS_WORDS) })
   const theirs = () => call($, { tool: 'Bash', command: `git checkout --theirs -- ${GUARD_REL}` })
-  const why = refusalOf(await theirs())
-  expect(why).toContain(SKIP_QUESTION)
-  expect(why).toContain(`${GUARD_REL} changes the words of a message Dan reads`)
-  expect(why).toContain('and told Dan')
-  // Held too once the file on disk already reads as main's side: it is this branch's side the
-  // words are new against, never the conflict as it stands in the file.
-  w.files[GUARD_HOOK] = THEIRS_WORDS
-  expect(refusalOf(await theirs())).toContain(SKIP_QUESTION)
-  expect(w.ran).toEqual([])
-  // Main's side differing from this branch's only in logic passes, as that edit would.
+  expect(refusalOf(await theirs())).toBe('')
+  // Named against this branch's side, never the conflict as it stands in the file.
+  expect(autosOf(w).map(a => a.why.includes('and told Dan'))).toEqual([true])
+  // Main's side differing from this branch's only in logic passes, as that edit would, unrecorded.
   w.files[GUARD_HOOK] = conflicted(THEIRS_LOGIC)
   w.blobs[`/w/slate :3:${GUARD_REL}`] = THEIRS_LOGIC
   expect(refusalOf(await theirs())).toBe('')
+  expect(autosOf(w).length).toBe(1)
   // An app page whose side on main changes a class is asked about; one changing a data prop passes.
   const RESULT_REL = 'src/app/my-offers/result/page.tsx'
   const wider = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
@@ -2769,7 +2809,7 @@ test("#2704: taking the side merged in is judged against this branch's side: new
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toContain(SKIP_QUESTION)
   w.blobs[`/w/slate :3:${RESULT_REL}`] = RESULT_TEXT.replace('xbc={xbc}', "xbc={leadXbc ?? ''}")
   expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toBe('')
-  expect(w.ran.length).toBe(2)
+  expect(w.ran.length).toBe(3)
 })
 
 test("#2704: an unmerged file whose side on this branch cannot be read is held whole as before, the refusal naming each read and what git said of it", withKit, async ($, on) => {
@@ -2827,7 +2867,7 @@ test('#1158: a restore beside any other command is judged whole, saying why; one
 // changing no wording. Nothing that runs after a restore can change what it puts back, so a restore
 // that runs first on its line, the only one there and in no pipe or background, is read by the lines
 // it changes, as one alone is: what git holds at the source it names, against the file on disk.
-test('#2777: a restore run first on its line is judged by the lines it changes: logic put back passes, changed wording is held', withKit, async ($, on) => {
+test('#2777: a restore run first on its line is judged by the lines it changes: logic and changed wording put back pass', withKit, async ($, on) => {
   const changedLogic = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: changedLogic }, blobs: { [`/w/slate HEAD:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate origin/main:${GUARD_REL}`]: GUARD_TEXT } })
   const first = [
@@ -2840,15 +2880,14 @@ test('#2777: a restore run first on its line is judged by the lines it changes: 
   expect(w.ran.length).toBe(first.length)
   // The source read as git names it, from where the command puts it back.
   expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([`git -C /w/slate cat-file blob HEAD:${GUARD_REL}`, `git -C /w/slate cat-file blob origin/main:${GUARD_REL}`])
-  // The same restores bringing back changed words for a message Dan reads are held for them.
+  // The same restores bringing back changed words for a message Dan reads pass too since #2845, each
+  // read by its lines and recorded naming the words.
   const worded = GUARD_TEXT.replace('print a secret.', 'print a secret, and told Dan.')
   w.blobs[`/w/slate HEAD:${GUARD_REL}`] = worded
   w.blobs[`/w/slate origin/main:${GUARD_REL}`] = worded
-  for (const command of first) {
-    const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect({ command, held: why.includes(SKIP_QUESTION), worded: why.includes(`${GUARD_REL} changes the words of a message Dan reads`), whole: why.includes('could not read what git puts back') }).toEqual({ command, held: true, worded: true, whole: false })
-  }
-  expect(w.ran.length).toBe(first.length)
+  for (const command of first) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(2 * first.length)
+  expect(autosOf(w).map(a => a.why.includes('and told Dan'))).toEqual(first.map(() => true))
   // Still judged whole: something run before the restore, a second restore on the line, a restore
   // in the background or in a pipe, each of which may run beside or before what it reads.
   w.blobs[`/w/slate HEAD:${GUARD_REL}`] = GUARD_TEXT
@@ -2864,7 +2903,7 @@ test('#2777: a restore run first on its line is judged by the lines it changes: 
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
   }
-  expect(w.ran.length).toBe(first.length)
+  expect(w.ran.length).toBe(2 * first.length)
 })
 
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {

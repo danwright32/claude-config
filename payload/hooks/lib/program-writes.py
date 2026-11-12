@@ -24,6 +24,10 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
     write any file. A data file a program only may have written is still read as it is on disk when
     it is handed to a script (the gate's data rule, #2362), or every analysis that names its input
     twice would be refused.
+  * A git checkout, switch, hard reset, merge, pull, rebase or cherry pick writes tracked files it
+    does not name (GIT_TREE_WRITERS, claude-config#2827): each file the ref writes is read as the ref
+    holds it, beside what is on disk, asked of git (note_git, git_guesses). Only a ref the repository
+    holds before the command runs is read, so a pull is read against its branch as last fetched.
   * NON_WRITERS never write a file they are handed, and naming a file and then running it is
     everyday with them (`chmod +x run.sh && ./run.sh`), so their words are not read as writes; nor
     are git's subcommands that leave the working tree as it is (GIT_READS), the files handed to a
@@ -64,6 +68,22 @@ GIT_READS = frozenset({
     "rev-parse", "branch", "tag", "remote", "config", "describe", "shortlog", "rev-list", "merge-base",
     "cat-file", "ls-tree", "ls-remote", "check-ignore", "check-attr", "diff-tree", "diff-index",
     "name-rev", "reflog", "help", "version", "var", "count-objects", "fsck", "gc", "notes"})
+# git's subcommands that write tracked files the command does not name, from a ref the repository
+# holds (claude-config#2827), and for each the options whose value is the next word, so the value is
+# never read as the ref. "tree" writes every file the ref holds; "diff" the files the ref changed
+# since it parted from HEAD; "commit" the files the commit itself changed.
+GIT_TREE_WRITERS = {
+    "checkout": ("tree", {"-b", "-B", "--orphan", "--conflict"}),
+    "switch": ("tree", {"-c", "-C", "--create", "--force-create", "--orphan", "--conflict"}),
+    "reset": ("tree", set()),
+    "merge": ("diff", {"-m", "-F", "-s", "-X", "--strategy", "--strategy-option", "--file", "--into-name"}),
+    "pull": ("diff", {"-s", "-X", "--strategy", "--strategy-option", "--depth", "-j", "--jobs", "-o",
+                      "--server-option", "--upload-pack"}),
+    "rebase": ("diff", {"-s", "-X", "--strategy", "--strategy-option", "-x", "--exec", "--onto"}),
+    "cherry-pick": ("commit", {"-m", "--mainline", "-X", "--strategy", "--strategy-option"}),
+}
+# A git operation already under way: it takes no ref.
+GIT_UNDER_WAY = frozenset({"--abort", "--continue", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
 # Programs that copy into the folder or file their last word names.
 DIR_COPIERS = frozenset({"rsync", "ditto", "scp", "sftp", "rclone"})
 TARS = frozenset({"tar", "gtar", "bsdtar"})
@@ -154,6 +174,8 @@ def make(interpreter, shells, awks, senders):
             found = self.sw.git_read([v if v is not None else a for a, v in zip(args, vals)])
             if found and found[0] in GIT_READS:
                 return None
+            if found and found[0] in GIT_TREE_WRITERS:
+                self.note_git([v if v is not None else "\0" for v in vals[1:]], d)
             if name in TARS or name == "unzip":
                 self.note_unpack(name, args, vals, d)
             elif name in UNPACKERS:
@@ -233,6 +255,146 @@ def make(interpreter, shells, awks, senders):
             self.made_maybe.append((glob_escape(real.rstrip("/")) + "/*", label))
             if not os.path.isdir(real):
                 self.note_file(value, d, [("maybe", None, label)], append=True)
+
+        def note_git(self, words, d):
+            """A git subcommand that writes tracked files without naming them (GIT_TREE_WRITERS,
+            claude-config#2827): each file the ref holds (a checkout, a switch, a hard reset), or
+            changed (a merge, a pull, a rebase, a cherry pick), is read as that ref holds it, beside
+            what is on disk (git_guesses). Before #2827 it was read only as it was on disk before the
+            command, so `git checkout feature && bash run.sh` ran feature's run.sh unread.
+
+            Marking every tracked file unreadable instead (#2827's open question) would refuse
+            `git pull && bash any.sh`, the everyday shape, whatever the pull brings; reading what the
+            ref holds refuses only a file whose incoming text posts. Only a ref the repository holds
+            now can be read: a pull is read against what it would merge as that is before it fetches
+            (the branch tracked, or the remote's branch as last fetched). A ref that names nothing, a
+            word that cannot be worked out and a directory that is not a repository leave the files
+            as they are on disk, as before; a file the command names is noted as before (note_named),
+            so nothing refused before passes."""
+            words = list(words)
+            sub, front, after = self.sw.git_path(words)
+            mode, valued = GIT_TREE_WRITERS[sub]
+            where = self.resolve(".", d)
+            k = 0
+            while k < len(front):
+                if front[k] == "-C" and k + 1 < len(front):
+                    if "\0" in front[k + 1]:
+                        return
+                    where = os.path.join(where, os.path.expanduser(front[k + 1]))
+                    k += 2
+                    continue
+                if front[k].split("=", 1)[0] in ("--git-dir", "--work-tree"):
+                    return  # a repository set apart from the folder: not worked out here
+                k += 1
+            positional, onto, flags, k = [], [], set(), 0
+            while k < len(after):
+                w = after[k]
+                if w == "--":
+                    if sub in ("checkout", "reset", "switch"):
+                        return  # paths follow: those are named, and noted as before
+                    positional += after[k + 1:]
+                    break
+                if w.startswith("-") and w != "-":
+                    key = w.split("=", 1)[0]
+                    flags.add(key)
+                    if key == "--onto":
+                        onto.append(w.split("=", 1)[1] if "=" in w else (after[k + 1] if k + 1 < len(after) else "\0"))
+                    k += 2 if key in valued and "=" not in w else 1
+                    continue
+                positional.append(w)
+                k += 1
+            if flags & GIT_UNDER_WAY:
+                return
+            refs = []  # (the ref to read, as the refusal names it)
+            if sub == "checkout":
+                if len(positional) != 1:
+                    return  # none: a new branch at HEAD; more: a ref and the paths it writes, named
+                refs = [positional[0]]
+            elif sub == "switch":
+                refs = positional[:1]
+            elif sub == "reset":
+                if not flags & {"--hard", "--merge", "--keep"} or len(positional) > 1:
+                    return  # the working tree is left as it is, or paths are named
+                refs = positional[:1] or ["HEAD"]
+            elif sub == "merge":
+                refs = positional or ["@{upstream}"]
+            elif sub == "pull":
+                if not positional:
+                    refs = ["@{upstream}"]
+                else:
+                    specs = [s.split(":", 1)[0] for s in positional[1:]]
+                    specs = [s[len("refs/heads/"):] if s.startswith("refs/heads/") else s for s in specs]
+                    if positional[0] == ".":
+                        refs = specs
+                    else:
+                        refs = [f"{positional[0]}/{s}" for s in specs] or ["@{upstream}"]
+            elif sub == "rebase":
+                refs = onto + (positional[:1] or ["@{upstream}"])
+            elif sub == "cherry-pick":
+                refs = [r for r in positional if ".." not in r and not r.startswith("^")]
+            for ref in refs:
+                if not ref or "\0" in ref:
+                    continue
+                # Asked of git only once a later command reads a file (git_guesses), so a pull that
+                # runs nothing after it costs no git call.
+                label = f"git {sub} {ref}" if ref in positional or ref in onto else f"git {sub}"
+                self.made_git.append({"where": where, "spec": "@{-1}" if ref == "-" else ref, "mode": mode,
+                                      "label": label, "root": None, "sha": None, "names": None, "blobs": {}})
+
+        def git_resolve(self, e):
+            """The repository and commit a note_git entry reads, asked of git on first use: root and
+            sha stay empty ("") where the folder is not a repository or the ref names no commit."""
+            out = self.git_out(e["where"], ["rev-parse", "--show-toplevel"])
+            e["root"] = os.path.realpath(out.decode("utf-8", "replace").strip()) if out else ""
+            sha = self.git_out(e["root"], ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                           e["spec"] + "^{commit}"]) if e["root"] else None
+            e["sha"] = sha.decode("utf-8", "replace").strip() if sha else ""
+
+        @staticmethod
+        def git_out(where, args):
+            """git's output for a read only git command run in where, or None where it fails. The
+            session's GIT_ variables are left out, so a hook run inside a git operation reads the
+            repository the command names, not the one git set for the hook."""
+            import subprocess  # here, not at the top: only a git command that writes tracked files needs it
+            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            try:
+                p = subprocess.run(["git", "-C", where] + args, capture_output=True, env=env, timeout=5,
+                                   stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError):
+                return None
+            return p.stdout if p.returncode == 0 else None
+
+        def git_guesses(self, real):
+            """For made_from: the text each git command noted by note_git leaves in the file at real,
+            as ("text", it, label) pieces, where the ref writes that file and holds it other than it is
+            on disk. The files a ref writes, and each one's text, are asked of git once."""
+            out = []
+            for e in self.made_git:
+                if e["sha"] is None:
+                    self.git_resolve(e)
+                if not e["sha"] or not real.startswith(e["root"] + os.sep):
+                    continue
+                rel = real[len(e["root"]) + 1:]
+                if e["names"] is None:
+                    args = {"tree": ["ls-tree", "-r", "-z", "--name-only", e["sha"]],
+                            "diff": ["diff", "--name-only", "-z", "--no-renames", "HEAD..." + e["sha"]],
+                            "commit": ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root",
+                                       e["sha"]]}[e["mode"]]
+                    listed = self.git_out(e["root"], args)
+                    e["names"] = set(listed.decode("utf-8", "replace").split("\0")) - {""} if listed else set()
+                if rel not in e["names"]:
+                    continue
+                if rel not in e["blobs"]:
+                    blob = self.git_out(e["root"], ["cat-file", "blob", f"{e['sha']}:{rel}"])
+                    try:
+                        with open(real, "rb") as f:
+                            same = blob is not None and f.read(len(blob) + 1) == blob
+                    except OSError:
+                        same = False
+                    e["blobs"][rel] = None if blob is None or same else blob.decode("utf-8", "replace")
+                if e["blobs"][rel] is not None:
+                    out.append(("text", e["blobs"][rel], f"{rel} as {e['label']} leaves it"))
+            return out
 
         def note_code(self, raw, value, label, d, lang):
             """Code a program is given (lang "py", "js", "sed", "awk" or another): a file it names may
@@ -597,10 +759,17 @@ def make(interpreter, shells, awks, senders):
 
         @staticmethod
         def unzip_words(args, vals):
-            """tar_words for unzip: None where it lists, tests or prints (-l, -t, -p, -c, -Z, -z)."""
+            """tar_words for unzip: None where it lists, tests or prints (-l, -t, -p, -c, -Z, -z). The
+            names after -x are members left out, up to the next option: `unzip a.zip -x n -d sub`
+            unpacks into sub, which was read as unpacking under `.` (claude-config#2827)."""
             archive, dest_raw, dest, renames, k = None, ".", ".", False, 1
+            excluding = False
             while k < len(vals):
                 v = vals[k]
+                if excluding and not (v is not None and v.startswith("-")):
+                    k += 1
+                    continue
+                excluding = False
                 if v is not None and v.startswith("-"):
                     if v == "-d":
                         if k + 1 < len(vals):
@@ -612,7 +781,9 @@ def make(interpreter, shells, awks, senders):
                         k += 1
                         continue
                     if v == "-x":
-                        break  # the rest are names left out
+                        excluding = True  # names left out follow, up to the next option
+                        k += 1
+                        continue
                     if re.search(r"[ltpcZz]", v[1:]):
                         return None
                     renames = renames or "j" in v

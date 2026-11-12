@@ -1,7 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { stringsOf } from '../hooks/rules.ts'
-import { importedNames, jsSpans, mayBringIn, pySpans, readingOf, sentAt, trace, type Reading } from '../hooks/sends.ts'
+import { jsSpans, pySpans, readingOf, sentAt, trace, type Reading } from '../hooks/sends.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // Which strings reach a Slack send (claude-config#2570): only those are Slack wording. Each case
@@ -135,45 +135,6 @@ test('a marker in a route handler a framework call wraps does not make the whole
   const got = reached(r)
   expect(got['A slot was booked']).toBe('fetch')
   expect(got['That slot is already booked']).toBe('')
-})
-
-// claude-config#2637: which edits could bring another file's text to a send, told from the edited
-// file alone. Each case pairs an edit that could with one beside it that could not, so a reading
-// that always looks, or never does, fails.
-const ROUTE = [`import { lateBooking, NOT_FOUND } from './booking-copy'`, `import { postAlert } from '@/lib/notify/post'`, `export const run = (id: string) => postAlert(lateBooking(id))`, `export const miss = () => new Response(NOT_FOUND, { status: 404 })`, ``].join('\n')
-
-test('the names a file imports or hands on are read from its import, re-export and require statements, and python import lines (#2637)', () => {
-  const names = importedNames(js(`import dflt, { a, b as c, type T } from './x'\nimport * as ns from './y'\nexport { d as e } from './z'\nconst { f, g } = require('./w')\nconst h = await import('./v')\nimport React, { useState } from 'react'\nconst fs = require('fs')\nconst late = require(pick())\nexport const local = 1\n`))
-  for (const n of ['dflt', 'a', 'b', 'c', 'T', 'ns', 'd', 'e', 'f', 'g', 'h', 'late']) expect(names.has(n)).toBe(true)
-  for (const n of ['local', 'React', 'useState', 'fs', 'import', 'from', 'as', 'type', 'export', 'require']) expect(names.has(n)).toBe(false)
-  const python = importedNames(py('from app.copy import (\n    late_booking,\n    not_found as missing,\n)\nimport app.alerts.sender as sender\nLOCAL = 1\n'))
-  for (const n of ['late_booking', 'not_found', 'missing', 'sender']) expect(python.has(n)).toBe(true)
-  expect(python.has('LOCAL')).toBe(false)
-})
-
-test('an edit could bring text to a send when it imports a new module or name, or uses an imported name more; rewording a string, a comment or other code could not (#2637)', () => {
-  const was = js(ROUTE)
-  const could = (text: string) => mayBringIn(was, js(text))
-  // A new module, the same file name in another folder, a new name from a module already imported, and one more use.
-  expect(could(`import { quietPage } from './quiet-feed-copy'\n${ROUTE}`)).toBe(true)
-  expect(could(ROUTE.replace(`'./booking-copy'`, `'../other/booking-copy'`))).toBe(true)
-  expect(could(ROUTE.replace('lateBooking, NOT_FOUND', 'lateBooking, NOT_FOUND, earlyBooking'))).toBe(true)
-  expect(could(ROUTE.replace('postAlert(lateBooking(id))', 'postAlert(id ? lateBooking(id) : NOT_FOUND)'))).toBe(true)
-  expect(mayBringIn(js(''), was)).toBe(true)
-  // The same file, a reworded string, a comment naming an import, a new local, and an import taken away.
-  expect(could(ROUTE)).toBe(false)
-  expect(could(ROUTE.replace('status: 404', 'status: 410'))).toBe(false)
-  expect(could(`// lateBooking and NOT_FOUND come from ./booking-copy\n${ROUTE}`)).toBe(false)
-  expect(could(`${ROUTE}export const tries = 3\n`)).toBe(false)
-  expect(could(ROUTE.replace('export const miss = () => new Response(NOT_FOUND, { status: 404 })\n', ''))).toBe(false)
-})
-
-test('in a file that posts by itself, a send reaching a name it did not could bring text in, with no import touched; the same name logged could not (#2637)', () => {
-  const own = (body: string) => js([`import { lateBooking } from './booking-copy'`, `export const run = (id: string) => {`, `  const line = lateBooking(id)`, `  const note = 'ran'`, body, `}`].join('\n'))
-  const posts = (what: string) => `  return fetch(${WEBHOOK}, { method: 'POST', body: JSON.stringify({ text: ${what} }) })`
-  expect(mayBringIn(own(posts('note')), own(posts('note + line')))).toBe(true)
-  expect(mayBringIn(own('  console.log(note)'), own(posts('line')))).toBe(true)
-  expect(mayBringIn(own(posts('note')), own(`  console.log(line)\n${posts('note')}`))).toBe(false)
 })
 
 // #2719: a name's declarations are found only where the name stands, and what a file holds apart

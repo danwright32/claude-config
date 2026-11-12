@@ -6599,8 +6599,9 @@ and `issue` when the branch names none), recorded for what the refused call wait
 is, with a named `issue` beside it, never instead (#1046), and never the folder the session runs in
 (#1010); a `path` that is not absolute is refused by name; skipped is his Skip them to "Skip design
 rounds for this issue?" (`metadata.source` `design-round-guard:<the refused call's id>`), as ask
-before saving asks, whose third answer, Not a look or wording change (named so since #1911, as a
-hold can be for a message's words alone, and its other answers name wording beside the look), lets
+before saving asks, whose third answer, Not a look change (named Not a look or wording change from
+#1911 until #2845, while a hold could be for a message's words alone; since #2845 none is, so every
+answer names the look only), lets
 that one call through when it is sent again unchanged, from the same folder in the same session
 within the hour, and keeps his word with why under `pass:<the call's key>`. Since #1138 the skip
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
@@ -6610,14 +6611,16 @@ missing, longer than 300 characters or names a file. Since #2294 the question is
 for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
 finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
 in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
-a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
-be kept are held and asked as before. A typed answer to the skip question records
-nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
+any text Dan reads in an app's screen, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before (a mod's hook file is read on its own terms, below, and since
+#2845 a change there to a message's words alone passes too). A typed answer to the skip question
+records nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in
+mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
 rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
 raises `$.designRound.answered` with the question and answer, which picker manners checks off on
-the issue (#2261). Not a look or wording change raises nothing: it lets one call through and
+the issue (#2261). Not a look change raises nothing: it lets one call through and
 records nothing for the issue, so its question stays open there. The grey card drawn for a
 refused edit leads in plain words and names the file after (#1145). Since #1151 a program the
 shell runs (inline or on standard input) is judged by its own text, with a bare name placed in
@@ -6740,7 +6743,7 @@ not who sealed it. Since #1586 a script file a command runs (an interpreter's sc
 script language's extension or named by `./` or `../`) is judged by each file it is handed as an
 argument, read from mod-kit's `runs`: what a script writes cannot be read before it runs, so a
 screen file among them is held as an Edit of it would be, the refusal saying the guard cannot read
-what the script does with it, and Dan's Not a look or wording change lets one such call through
+what the script does with it, and Dan's Not a look change lets one such call through
 where the script only reads it. Since #1682 a module run with `python -m` and a tool run through
 `npx` are judged the same way. Since #1593 a settled design under `docs/design` handed to a script
 runs and is read again once it ran: unchanged or still sealed it stands, otherwise, on an issue Dan
@@ -6783,23 +6786,26 @@ a declaration drawn, a value followed into one, whole, the data it hands a call 
 every function that draws (the innermost one around a drawing call or element, a render hook's
 handler among them, so a new local naming the card there is asked about as Dan chose for #1248), no
 name what is drawn uses is imported from another file or under another name, the drawn parts read
-the same, and the wording of every message a person reads is the same (Dan, 2026-10-27: "Timing
-wording can go through, but message wording should be asked about"): each string reaching a toast, a
+the same, and, from #1823 until #2845, the wording of every message a person reads is the same
+(Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about"):
+each string reaching a toast, a
 notification (`$.ui.notify`, the goal tracker's terminal-notifier and its `waitingOnYou`, so #1245's
 helper stays held as #1248 recorded), a transcript line (a debug one aside), a pane status, a
 question, a blocked card, or the `reason`, `block`, `deny`, `result`, `systemMessage` or `text` of
 an answer, followed into each as values are followed into what is drawn, and whatever each call of a
 function that sends one is handed, each wording counted once (rules.ts `modHookDrawingUntouched`,
-`messageWordingSame`); a change judged a run of lines at a time keeps its whole wording where a run
-passed only by this reading. A tool's description, read only by Claude, is no message. A JSX element
+and until #2845 `messageWordingSame`); a change judged a run of lines at a time keeps its whole
+wording where a run passed only by this reading. A tool's description, read only by Claude, is no
+message. A JSX element
 or a colour in those lines, and hook files that cannot be listed or read, are held as before.
 Replayed over the 3,107 Edit, MultiEdit and Write calls to mods' hook files in this Mac's
 transcripts (2026-10-04 to 2026-10-27), of the 333 to `.tsx` files whose text before the call could
 be settled 104 are held where 49 now are; the 55 let through change imports, types, logic, words
 only Claude reads, or when and where the steps card shows and what its buttons act on, none changes
-what a mod draws or a message's words, and none that passed is held. Since #1841 a mod's `.ts` hook
-file is held for the same message wording too, not only for what it draws (rules.ts `modHookTsHold`:
-`drawsChange`, or `messageWordingSame` finding the words changed; the yes or no wrapper
+what a mod draws or a message's words, and none that passed is held. From #1841 until #2845 a
+mod's `.ts` hook file was held for the same message wording too, not only for what it draws
+(rules.ts `modHookTsHold`, since #2845 `modHookTsChange`: `drawsChange`, or `messageWordingSame`
+finding the words changed; the yes or no wrapper
 `modHookTsShows` that only tests called is gone since #1911), by an Edit, MultiEdit, Write, git put
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
@@ -6813,8 +6819,9 @@ handed through a helper that hands it straight back), and a comment holds no str
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
 words a person reads count there (Dan, 2026-10-28: "Narrow it first"; rules.ts `messageWordingSame`
-with `words`): a string a message is only computed from passes, that is a regular expression, a
-quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a command's words and flags
+with `words`, since #2845 `messageWords`): a string a message is only computed from passes, that
+is a regular expression, a quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a
+command's words and flags
 (what a process run is handed, a notifier excepted, and anything spelled like `--repo` or `-R`),
 what a string is split, searched or keyed by (only what `replace` looks for), what the disk and
 environment are asked, and a string with no letter in it (a separator); a `join` with words in it
@@ -6840,7 +6847,23 @@ Replayed over the same 3,173 calls, 5 more `.ts` edits pass (303 held where 308 
 unchanged at 17) and 1 `.tsx` edit (48 where 49), manual steps' press handler rewritten on
 2026-10-16, whose only changed strings are the button names it compares, which Dan approved letting
 through (2026-10-28); nothing newly held, and every `.ts` hold #1837 made still held. Mod-kit's
-printf escape keys stay held, since the same edit also added words a refusal says. Answers kept in
+printf escape keys stay held, since the same edit also added words a refusal says. Since #2845
+(Dan, 2026-11-12: "any words") none of these wording holds stands: an edit to a mod's hook file,
+`.ts`, `.tsx` or `.jsx`, by an Edit, MultiEdit, Write, git put back or shell write, that adds,
+rewords or takes away only the words of a message (a toast, a notification, a transcript line, a
+refusal's reason, a tool's result, a picker's question or answers) passes with nothing asked and is
+kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
+returning `{ words }`; a record that cannot be kept holds the call, a shell write's file put back,
+and the refusal and card say the guard read it as leaving the look unchanged but could not record
+that, never that it changes the look, for #2294's logic only pass alike, L11; a shell command also
+changing a file that is held and undone has its words only files put back too, recording nothing,
+so a refused command leaves nothing behind, Dan 2026-11-12).
+Only a change to how the mod looks is held: a drawing call, JSX, a line builder, a colour or frame,
+and the words inside what the mod draws (a band row, a pane, a card's text), which are drawing. This
+reverses the wording holds of #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's
+narrowing now decides which words are named rather than which are held. The reading of what counts
+as a message's words above is unchanged and decides what the record names. Alert and Slack wording
+stays with the Slack alert guard. Answers kept in
 the mod's store on this Mac. A patch it reads from a device or a fifo is never opened, through
 mod-kit's `inputTexts` (#1765): the read waited for ever, so the call never ran; one fed on standard
 input is the heredoc, read in the command. Nor is a look file a call writes, or what a `cp` copies
@@ -6872,7 +6895,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261
+#1954, #2261, #2845
 
 </td></tr>
 <tr><td>
@@ -7311,7 +7334,7 @@ stays open to be asked another night; both labels are named once, in that shared
 scope-modes shows them from (#1774). A question the design round guard asks with its own picker is
 written to the issue only once the guard says it recorded Dan's answer (`$.designRound.answered`),
 and then checked off with that answer; an answer the guard records nothing for on the issue (Run
-design rounds, Not yet, Not a look or wording change, a typed answer, a dialog closed while Dan was
+design rounds, Not yet, Not a look change, a typed answer, a dialog closed while Dan was
 away) writes nothing, and a question in the
 guard's words asked any other way is never written as settled (#2253, #2261). Picker manners also
 gives `$.designRound` a do nothing default, since a hook on a noun no loaded mod gives stops the mod
@@ -7677,8 +7700,11 @@ Holds every edit that changes the wording a Slack alert sends until Dan has seen
 Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
 have a design-rounds esque check on wording so I can approve the wording before it's created"). A
 code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
-SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
-template such a file sends (below). A Write, Edit or
+SDK, a Slack env setting, or a send helper named for Slack, called or imported, in its own code.
+Only such a file is ever held (#2837; Dan, 2026-11-12: "I'd much rather an alert get posted to slack
+that I didn't approve than deal with stopping every 2 seconds to approve wording that nobody will
+ever see"): a template, copy module or script that another file imports, reads, names or sends
+passes, and nothing else in the repository is searched. A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a
 `_test` or `test_` one, a `test-*.sh` suite or a `test-*.ts` node test script in any JavaScript or
@@ -7710,40 +7736,14 @@ to ask me for approval"): `hooks/sends.ts` finds the send calls (one a Slack mar
 client built from a Slack marker, a function whose body sends, or the nearest call holding a marker
 in its arguments, never across a function body), and a changed string counts only when it stands in
 a send's arguments or in the value of a name used there, followed name by name within the block
-that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. For a
-file another file sends, each sender is traced and the names it sends followed down through every
-file it reaches the template by; when the nearest senders send none of the change the search goes
-on. A file whose send cannot be traced (any other language, a text template, a send the reading
-cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
-the search stops short. A python docstring is never message text (#2574).
-Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
-copy module of four alert messages passed because nothing sent it yet, and the edits that made a
-route import and post it passed because they added no text of their own). A new file that nothing
-sends still passes, since nothing can post it, unless it is a module of message copy that no file
-but a test imports yet (#2720): its added wording is held as it is written. A copy module is known
-by its path (a name ending in copy or wording, a copy folder, or an alert word beside a message
-word) or by its shape (Slack formatting in a string, or mostly functions that only return message
-text with a value filled in); tests, prose, UI components and shell scripts never are. Measured on
-2026-11-10 it reads 1 of this repository's 665 code files as copy, one that is imported, so it
-holds none here today. A copy module already used, by a route that posts nothing or a screen, is
-judged by that use as before. Once an edit's own wording has passed, an edit to a
-JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
-more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
-send: each sender through the edited file (the file itself when it posts or imports a send helper,
-then every file that sends it) is traced as the edit leaves the file and as it was, down through the
-files it imports, found by the paths its imports name with one `git ls-files` per file and followed
-up to 3 files deep, and wording a send reaches only afterwards, which Dan has not approved, is held.
-The card, refusal and question name the file that holds the text and what sends it. Wording a sender
-already sent is not asked about again, and a name imported for a 404 answer is held only when a send
-takes it. Where names cannot be followed (a sender that takes a module whole, a send the reading
-cannot find, a search for senders that stops short) every message of a newly imported file is held;
-an imported file that cannot be read, a listing that fails or runs late, or names newly handed on
-deeper than the guard follows, holds the call as could not check. This shares the one 7 second
-search time with the edit's own wording. Not covered: a sender in a language the guard does not
-trace that newly reads a text template, a template a sender newly reads by path rather than by an
-import, and a file that only hands names on newly exporting a local copy of an imported value.
-When the nearest sender's part of a change is already approved, the search goes on to the senders
-further along rather than passing the rest (#2637).
+that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. A file
+whose sends cannot be traced (a workflow, a shell script, any other language, a send the reading
+cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
+docstring is never message text (#2574).
+No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
+a template, copy module or script whose own code names nothing of Slack, however a sender reaches
+it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
+write into a folder. The card, refusal and question name only the file that holds the text.
 A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
 2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
 prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
@@ -7776,34 +7776,11 @@ cannot be read before it runs; Dan's answer is kept by the command and the files
 same command run again by a resumed agent or from another folder goes through (#2371). A
 subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
-written by a call. A template whose own file has no Slack marker (a code file, or a text template
-such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
-git repository sends it: one that carries a Slack marker and names the template by its path, a
-relative import, or its python module, on a line that imports or reads it (a path it only names,
-as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
-sender. A
-module is held too when a file that imports it also imports a Slack send helper (a copy builder
-such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender; the
-helper is found by the path the import names. The search is one `git grep` for files holding the
-word slack or postMessage and the template's name in a form a reference takes (after a slash, as a
-file name with its extension, after its folder and a dot, or on a python import line, never a word
-the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
-each, all within 7 seconds per call (Claude Code kills a hook at 10, so 3 are left to answer;
-sized from the largest real searches, #2510), following files that
-re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
-`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
-so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
-component that itself sends, or imports a send helper, is still its sender, and a file with any
-other importer is followed as before. A search that fails, runs out of time or meets an
-unreadable file holds the call as could not check, which trying again may get past. One that would
-follow further than 3 files stops there on every try, so it holds the edit for Dan to approve: the
-picker shows the exact lines it adds and takes away and says the guard could not trace whether they
-reach Slack, and his approval, kept by the file and the edit's whole text, lets that one edit
-through and no other; a shell write stopped the same way is held as any shell write is (#2709).
-One that finds more than 500 files to read (the largest real one read 213, #2510), or a send
-helper search that fails, runs late or meets an unreadable helper, holds the call for Dan to
-approve like any other, naming no sender, rather than refusing it with nothing he can answer
-(#2364). A shell write to a path the write reader cannot name is outside it.
+written by a call. A shell write is read for the files it writes: a copy of one code file is judged
+by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
+into a folder passes. git failing to say which repository a self posting file is in, or a file
+that cannot be read, holds the call as could not check, which trying again may get past. A shell
+write to a path the write reader cannot name is outside it.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
