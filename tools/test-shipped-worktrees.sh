@@ -209,11 +209,25 @@ if hang_wait squatter_in_place; then ok; else bad "the fixture process never sto
 # 10. DETACHED: no branch, so no pull request can prove anything about it.
 git_q "$R" worktree add -q --detach "$WT/detached" main
 
-# 11. VANISHED: git still records it, but its directory was deleted by hand.
-agent vanished fix/vanished >/dev/null
-rm -rf "$WT/vanished"
-
 echo "shipped-worktrees: report mode judges every worktree and changes nothing"
+
+# 11. VANISHED: git still records it, but its directory was deleted by hand. Built last, right
+# before the report reads it, and waited on rather than assumed: it is the one fixture whose whole
+# point is a record git is allowed to drop, so the longer it sits between being made and being read
+# the more a loaded Mac can do to it in between (#1919: one run's report had no row for it, and
+# only this fixture can be lost that way). Nothing may still be standing in it when it is removed,
+# and git must be listing it, with its directory gone, before anything is judged.
+agent vanished fix/vanished >/dev/null
+nobody_in_vanished(){
+  local cwds; cwds="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
+  ! grep -q "^n$WT/vanished\(/\|\$\)" <<< "$cwds"
+}
+hang_wait nobody_in_vanished || bad "a process was still standing in the vanished worktree, so it could not be removed"
+rm -rf "$WT/vanished"
+vanished_listed(){
+  git -C "$R" worktree list --porcelain 2>/dev/null | grep -qx "worktree $WT/vanished" && [ ! -d "$WT/vanished" ]
+}
+if hang_wait vanished_listed; then ok; else bad "git does not list the vanished worktree with its directory gone, so the fixture was not built"; fi
 
 # The fixture is what the verdicts below are about, so it is proved before they are read: every
 # step worked, and git itself lists all eleven agent worktrees, the vanished one included. On
