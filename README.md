@@ -6595,10 +6595,14 @@ with `git cat-file blob` from where git puts the file back, by the same rule as 
 of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
 merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
 and judged against that side rather than the conflict on disk; since #2777 one run first on its
-line, the line's only checkout or restore and in no pipe or background, is measured the same way,
-since nothing after it can change what it puts back; one git cannot read, or one after any other
-command on the line (a cd aside), which may change what it puts back first, is judged whole with the
-refusal saying why), a program whose text names the files it writes, and a
+line is measured the same way, since nothing after it can change what it puts back, and since #2830
+one chained, piped, backgrounded or paired with another is too, wherever every command before or
+beside it only reads (cat, grep, git status, git log) or is another restore of named paths; one git
+cannot read, one beside a command that may move its source (a switch, an add, a fetch, a script),
+two where one reads the index, or a line writing inside .git, is judged whole with the refusal
+saying why), a program whose text names the files it writes (since #2847 also a python or node
+script file the command runs, its own code read as inline code is, a name its code writes where the
+folder cannot be followed held as could not check), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6622,8 +6626,9 @@ and `issue` when the branch names none), recorded for what the refused call wait
 is, with a named `issue` beside it, never instead (#1046), and never the folder the session runs in
 (#1010); a `path` that is not absolute is refused by name; skipped is his Skip them to "Skip design
 rounds for this issue?" (`metadata.source` `design-round-guard:<the refused call's id>`), as ask
-before saving asks, whose third answer, Not a look or wording change (named so since #1911, as a
-hold can be for a message's words alone, and its other answers name wording beside the look), lets
+before saving asks, whose third answer, Not a look change (named Not a look or wording change from
+#1911 until #2845, while a hold could be for a message's words alone; since #2845 none is, so every
+answer names the look only), lets
 that one call through when it is sent again unchanged, from the same folder in the same session
 within the hour, and keeps his word with why under `pass:<the call's key>`. Since #1138 the skip
 question carries `onScreen`, one plain sentence from the session saying what on screen changes
@@ -6633,14 +6638,16 @@ missing, longer than 300 characters or names a file. Since #2294 the question is
 for an edit to an app's React screen file that the guard's own reading (rules.ts logicOnlyChange)
 finds changes only logic: no JSX, string, comment, number, true or false, word a look is spelled
 in, stylesheet or swapped import. It goes ahead and is kept under `auto:<the call's key>` with why;
-a mod's hook file, any text Dan reads, an issue whose answers cannot be read, and a pass that cannot
-be kept are held and asked as before. A typed answer to the skip question records
-nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in mod-kit's
+any text Dan reads in an app's screen, an issue whose answers cannot be read, and a pass that cannot
+be kept are held and asked as before (a mod's hook file is read on its own terms, below, and since
+#2845 a change there to a message's words alone passes too). A typed answer to the skip question
+records nothing, and Dan is told so in a toast while Claude is told to say so and ask again, in
+mod-kit's
 one wording (`$.modkit.typedAnswer`, #1145); a typed answer to the settled question counts as Not
 yet, with nothing recorded and no toast, and Claude takes his words as the next round's feedback
 rather than asking again (#1336). Once Skip them or Settled is stored, and only then, the guard
 raises `$.designRound.answered` with the question and answer, which picker manners checks off on
-the issue (#2261). Not a look or wording change raises nothing: it lets one call through and
+the issue (#2261). Not a look change raises nothing: it lets one call through and
 records nothing for the issue, so its question stays open there. The grey card drawn for a
 refused edit leads in plain words and names the file after (#1145). Since #1151 a program the
 shell runs (inline or on standard input) is judged by its own text, with a bare name placed in
@@ -6763,7 +6770,7 @@ not who sealed it. Since #1586 a script file a command runs (an interpreter's sc
 script language's extension or named by `./` or `../`) is judged by each file it is handed as an
 argument, read from mod-kit's `runs`: what a script writes cannot be read before it runs, so a
 screen file among them is held as an Edit of it would be, the refusal saying the guard cannot read
-what the script does with it, and Dan's Not a look or wording change lets one such call through
+what the script does with it, and Dan's Not a look change lets one such call through
 where the script only reads it. Since #1682 a module run with `python -m` and a tool run through
 `npx` are judged the same way. Since #1593 a settled design under `docs/design` handed to a script
 runs and is read again once it ran: unchanged or still sealed it stands, otherwise, on an issue Dan
@@ -6806,23 +6813,26 @@ a declaration drawn, a value followed into one, whole, the data it hands a call 
 every function that draws (the innermost one around a drawing call or element, a render hook's
 handler among them, so a new local naming the card there is asked about as Dan chose for #1248), no
 name what is drawn uses is imported from another file or under another name, the drawn parts read
-the same, and the wording of every message a person reads is the same (Dan, 2026-10-27: "Timing
-wording can go through, but message wording should be asked about"): each string reaching a toast, a
+the same, and, from #1823 until #2845, the wording of every message a person reads is the same
+(Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about"):
+each string reaching a toast, a
 notification (`$.ui.notify`, the goal tracker's terminal-notifier and its `waitingOnYou`, so #1245's
 helper stays held as #1248 recorded), a transcript line (a debug one aside), a pane status, a
 question, a blocked card, or the `reason`, `block`, `deny`, `result`, `systemMessage` or `text` of
 an answer, followed into each as values are followed into what is drawn, and whatever each call of a
 function that sends one is handed, each wording counted once (rules.ts `modHookDrawingUntouched`,
-`messageWordingSame`); a change judged a run of lines at a time keeps its whole wording where a run
-passed only by this reading. A tool's description, read only by Claude, is no message. A JSX element
+and until #2845 `messageWordingSame`); a change judged a run of lines at a time keeps its whole
+wording where a run passed only by this reading. A tool's description, read only by Claude, is no
+message. A JSX element
 or a colour in those lines, and hook files that cannot be listed or read, are held as before.
 Replayed over the 3,107 Edit, MultiEdit and Write calls to mods' hook files in this Mac's
 transcripts (2026-10-04 to 2026-10-27), of the 333 to `.tsx` files whose text before the call could
 be settled 104 are held where 49 now are; the 55 let through change imports, types, logic, words
 only Claude reads, or when and where the steps card shows and what its buttons act on, none changes
-what a mod draws or a message's words, and none that passed is held. Since #1841 a mod's `.ts` hook
-file is held for the same message wording too, not only for what it draws (rules.ts `modHookTsHold`:
-`drawsChange`, or `messageWordingSame` finding the words changed; the yes or no wrapper
+what a mod draws or a message's words, and none that passed is held. From #1841 until #2845 a
+mod's `.ts` hook file was held for the same message wording too, not only for what it draws
+(rules.ts `modHookTsHold`, since #2845 `modHookTsChange`: `drawsChange`, or `messageWordingSame`
+finding the words changed; the yes or no wrapper
 `modHookTsShows` that only tests called is gone since #1911), by an Edit, MultiEdit, Write, git put
 back or shell write alike, a file made or taken away read as one with no text (since #1933 a shell
 command taking away a hook file git has never tracked, by `git ls-files`, passes, as a scratch copy
@@ -6836,8 +6846,9 @@ handed through a helper that hands it straight back), and a comment holds no str
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
 words a person reads count there (Dan, 2026-10-28: "Narrow it first"; rules.ts `messageWordingSame`
-with `words`): a string a message is only computed from passes, that is a regular expression, a
-quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a command's words and flags
+with `words`, since #2845 `messageWords`): a string a message is only computed from passes, that
+is a regular expression, a quoted value compared (`=== 'object'`, `case`, `in`), a type's union, a
+command's words and flags
 (what a process run is handed, a notifier excepted, and anything spelled like `--repo` or `-R`),
 what a string is split, searched or keyed by (only what `replace` looks for), what the disk and
 environment are asked, and a string with no letter in it (a separator); a `join` with words in it
@@ -6863,7 +6874,23 @@ Replayed over the same 3,173 calls, 5 more `.ts` edits pass (303 held where 308 
 unchanged at 17) and 1 `.tsx` edit (48 where 49), manual steps' press handler rewritten on
 2026-10-16, whose only changed strings are the button names it compares, which Dan approved letting
 through (2026-10-28); nothing newly held, and every `.ts` hold #1837 made still held. Mod-kit's
-printf escape keys stay held, since the same edit also added words a refusal says. Answers kept in
+printf escape keys stay held, since the same edit also added words a refusal says. Since #2845
+(Dan, 2026-11-12: "any words") none of these wording holds stands: an edit to a mod's hook file,
+`.ts`, `.tsx` or `.jsx`, by an Edit, MultiEdit, Write, git put back or shell write, that adds,
+rewords or takes away only the words of a message (a toast, a notification, a transcript line, a
+refusal's reason, a tool's result, a picker's question or answers) passes with nothing asked and is
+kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
+returning `{ words }`; a record that cannot be kept holds the call, a shell write's file put back,
+and the refusal and card say the guard read it as leaving the look unchanged but could not record
+that, never that it changes the look, for #2294's logic only pass alike, L11; a shell command also
+changing a file that is held and undone has its words only files put back too, recording nothing,
+so a refused command leaves nothing behind, Dan 2026-11-12).
+Only a change to how the mod looks is held: a drawing call, JSX, a line builder, a colour or frame,
+and the words inside what the mod draws (a band row, a pane, a card's text), which are drawing. This
+reverses the wording holds of #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's
+narrowing now decides which words are named rather than which are held. The reading of what counts
+as a message's words above is unchanged and decides what the record names. Alert and Slack wording
+stays with the Slack alert guard. Answers kept in
 the mod's store on this Mac. A patch it reads from a device or a fifo is never opened, through
 mod-kit's `inputTexts` (#1765): the read waited for ever, so the call never ran; one fed on standard
 input is the heredoc, read in the command. Nor is a look file a call writes, or what a `cp` copies
@@ -6895,7 +6922,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261
+#1954, #2261, #2830, #2845, #2847
 
 </td></tr>
 <tr><td>
@@ -7334,7 +7361,7 @@ stays open to be asked another night; both labels are named once, in that shared
 scope-modes shows them from (#1774). A question the design round guard asks with its own picker is
 written to the issue only once the guard says it recorded Dan's answer (`$.designRound.answered`),
 and then checked off with that answer; an answer the guard records nothing for on the issue (Run
-design rounds, Not yet, Not a look or wording change, a typed answer, a dialog closed while Dan was
+design rounds, Not yet, Not a look change, a typed answer, a dialog closed while Dan was
 away) writes nothing, and a question in the
 guard's words asked any other way is never written as settled (#2253, #2261). Picker manners also
 gives `$.designRound` a do nothing default, since a hook on a noun no loaded mod gives stops the mod
@@ -7792,11 +7819,13 @@ sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge he
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
 chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
 not check.
-In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
-next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
+In the morning the session that chose it (once that one has ended, a session working in the
+repository it was made in, never one in another, #2833; any session when that repository cannot be
+read) is told at Dan's next message to ask with metadata
+`{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
 question, with the message chosen, and only Approve wording records the approval. Change wording, a
 dialog that closed by itself or no answer records nothing, and it is asked again. A choice
-unanswered for three days expires: said once in each session, still held from merging, and no longer
+unanswered for three days expires: said once in each such session, held from merging, and no longer
 letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
 overnight). In any mode, taking away wording that origin's copy of the file on its default branch
 (named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
@@ -7804,7 +7833,7 @@ live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709, #2833
 
 </td></tr>
 </tbody>

@@ -36,9 +36,12 @@ export type SlackAlertChoice = {
   keys: string[]
   /** The message as Slack would post it, as the session chose it. */
   rendered: string
-  /** The session that asks Dan in the morning; null once that session has ended, when any session asks. */
+  /**
+   * The session that asks Dan in the morning; null once that session has ended, when a session in
+   * a repository it holds asks (#2833), or any session when that repository cannot be read.
+   */
   session: string | null
-  /** When it expired unanswered: still held, said once in every session. */
+  /** When it expired unanswered: still held, said once in each session that may ask it (#2833). */
   expired?: number
   /**
    * Where it holds merges (#2833): the file it was chosen in, then each file in another place its

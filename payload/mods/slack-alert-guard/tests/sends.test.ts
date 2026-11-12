@@ -11,8 +11,8 @@ import { pythonText } from './mod-kit/hooks/code.ts'
 const js = (text: string): Reading => readingOf(text, false, jsSpans(text))
 const py = (text: string): Reading => readingOf(text, true, pySpans(pythonText(text)))
 // Each string of a file, and the callee of the send it reaches ('' for none).
-const reached = (r: Reading, seeds?: Map<string, { callee: string; line: number }>, fns?: Set<string>): Record<string, string> => {
-  const t = trace(r, seeds, fns)
+const reached = (r: Reading): Record<string, string> => {
+  const t = trace(r)
   const strings = r.python ? pythonText(r.text).filter(s => s.kind !== 'comment').map(s => ({ text: r.text.slice(s.from, s.to), start: s.from })) : stringsOf(r.text, false, true)
   return Object.fromEntries(strings.map(s => [s.text, sentAt(t, s.start)?.callee ?? '']))
 }
@@ -76,26 +76,10 @@ test('a local send helper is a send wherever it is called, and two locals of one
   expect(got['Request was not valid']).toBe('')
 })
 
-test('a file below a sender is followed by the names the sender sends: the sent constant reaches, its neighbour does not', async () => {
-  const sender = js(`import { lateBooking, NOT_FOUND } from './copy'\nexport const run = () => sendSlackAlert(lateBooking('1'))\nexport const miss = () => new Response(NOT_FOUND)\n`)
-  const up = trace(sender)
-  expect(up.sends.map(s => s.callee)).toEqual(['sendSlackAlert'])
-  const copy = js("export const lateBooking = (id: string) => `Booking ${id} is late`\nexport const NOT_FOUND = 'No booking has that id'\n")
-  const got = reached(copy, up.names)
-  expect(got['Booking ${id} is late']).toBe('sendSlackAlert')
-  expect(got['No booking has that id']).toBe('')
-})
-
-test('a renamed import is followed by the name the file below gives it', async () => {
-  const sender = js(`import { lateBooking as late } from './copy'\nexport const run = () => sendSlackAlert(late('1'))\n`)
-  expect(reached(js("export const lateBooking = (id: string) => `Booking ${id} is late`\n"), trace(sender).names)['Booking ${id} is late']).toBe('sendSlackAlert')
-})
-
-test('calls to send functions imported from a helper module are sends', async () => {
-  const helper = js(`export const postAlert = (text: string) => fetch(${WEBHOOK}, { method: 'POST', body: JSON.stringify({ text }) })\n`)
-  expect([...trace(helper).fns]).toContain('postAlert')
-  const user = js("import { postAlert } from './post'\nexport const GET = async () => { console.log('cron started'); await postAlert('The nightly job is late') }\n")
-  const got = reached(user, new Map(), trace(helper).fns)
+test("a file's own send is traced: its function posting to a webhook is a send, a log line beside it is not", async () => {
+  const helper = js(`export const postAlert = (text: string) => fetch(${WEBHOOK}, { method: 'POST', body: JSON.stringify({ text }) })\nexport const GET = async () => { console.log('cron started'); await postAlert('The nightly job is late') }\n`)
+  expect(trace(helper).sends.map(s => s.callee)).toContain('fetch')
+  const got = reached(helper)
   expect(got['The nightly job is late']).toBe('postAlert')
   expect(got['cron started']).toBe('')
 })
@@ -172,13 +156,8 @@ test('declarations are found where the name stands: a destructuring, a python ta
   expect(sent['report ran']).toBe('')
 })
 
-test('tracing a text again with other send functions or names starts from the text alone: nothing asked of one trace carries into the next (#2719)', async () => {
+test('a call to a function imported from another file is no send of the file calling it (#2719, #2850)', async () => {
   const text = "import { postAlert } from './post'\nexport const GET = async () => { console.log('cron started'); await postAlert('The nightly job is late') }\n"
-  const imported = reached(js(text), new Map(), new Set(['postAlert']))
-  expect(imported['The nightly job is late']).toBe('postAlert')
-  // The same text, read again as a later step reads it: postAlert is no send of its own.
-  const bare = reached(js(text))
-  expect(bare['The nightly job is late']).toBe('')
+  expect(reached(js(text))['The nightly job is late']).toBe('')
   expect(trace(js(text)).sends).toEqual([])
-  expect(reached(js(text), new Map(), new Set(['postAlert']))).toEqual(imported)
 })

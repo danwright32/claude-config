@@ -24,7 +24,7 @@ export type DesignRoundPending = {
   subjects: DesignRoundSubject[]
   /** The checkouts its files are in, so Dan's Settled about it is for that project, never the session's folder (#1010). */
   trees: string[]
-  /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look or wording change. */
+  /** The call itself, as rules.ts callKey knows it, so the same call sent again is recognised after Not a look change. */
   key: string
   /** The call written out whole (rules.ts callText), which a pass must match exactly, the key being a hash. */
   call: string
@@ -32,7 +32,7 @@ export type DesignRoundPending = {
   agent?: true
 }
 
-/** Dan's Not a look or wording change for one refused call (#1010), kept in the mod's store under `pass:<its key>`. */
+/** Dan's Not a look change for one refused call (#1010), kept in the mod's store under `pass:<its key>`. */
 export type DesignRoundPass = {
   kind: 'not-look'
   /** When he answered, in milliseconds since the epoch. */
@@ -52,8 +52,9 @@ export type DesignRoundPass = {
 
 /**
  * A call the guard let through itself, with nothing asked, because its own reading of the edit found
- * it changes only logic (#2294), kept in the mod's store under `auto:<its call key>` so the skip can
- * be read back. A record of what happened, never an answer: nothing reads it to let a call through.
+ * it changes only logic (#2294), or, in a mod's hook file, only the words of a message a person reads
+ * (#2845; Dan, 2026-11-12: "any words"), nothing about how anything looks, kept in the mod's store
+ * under `auto:<its call key>` so the skip can be read back. Its `why` names those words. A record of what happened, never an answer: nothing reads it to let a call through.
  */
 export type DesignRoundAutoPass = {
   kind: 'no-screen-change'
@@ -93,7 +94,7 @@ export type DesignRoundRecord = {
  * An answer of Dan's the guard has just written down for the issue (#2261): his Skip them or his
  * Settled. Raised only once that write succeeded in full; a typed answer, Run design rounds, Not
  * yet, a dialog that closed while he was away and a write that failed raise nothing, since the guard
- * records nothing for them. Not a look or wording change raises nothing either: it lets one call
+ * records nothing for them. Not a look change raises nothing either: it lets one call
  * through and records nothing for the issue, whose question stays open (lessons review of PR #2274).
  */
 export type DesignRoundAnswered = {
