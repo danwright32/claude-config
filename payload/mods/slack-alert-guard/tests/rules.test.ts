@@ -1103,6 +1103,28 @@ test('an untraced edit is refused with an id Dan can approve, the lines shown an
   expect(a).toContain('t9')
   expect(a).toContain('Stop and report to the main session')
   expect(a).not.toContain('AskUserQuestion')
+  // A trace stopped at a limit stops there on every try, and is said to.
+  expect(r).toContain('Trying again is held the same way')
+})
+
+// claude-config#2796: a search that ran out of its time is put to Dan the same way, with an id, but
+// never told it is held the same way on every try, since on a quieter Mac it may finish; nor told to
+// try again, since on the Mac where it ran out it ran out about 20 times.
+test('an edit whose search ran out of time is refused with an id Dan can approve, saying the search may run out again rather than to try again (#2796)', () => {
+  const LATE = `what this edit to ${INDEX} brings to a Slack send was not searched within 7 seconds`
+  const r = untracedRefusal('t9', INDEX, ["import { pad } from './pad'"], [], LATE, true)
+  expect(r.startsWith('Blocked: ')).toBe(true)
+  expect(r).toContain(LATE)
+  expect(r).toContain("import { pad } from './pad'")
+  expect(r).toContain('"source": "slack-alert-guard:t9"')
+  expect(r).toContain('can run out of time again')
+  expect(r).not.toContain('held the same way')
+  expect(r).not.toContain('Try it again')
+  const a = untracedAgentRefusal('t9', INDEX, ["import { pad } from './pad'"], [], LATE, true)
+  expect(a).toContain('can run out of time again')
+  expect(a).not.toContain('held the same way')
+  expect(a).toContain('Stop and report to the main session')
+  expect(a).not.toContain('AskUserQuestion')
 })
 
 test('the question for an untraced edit names the file, says the guard could not trace it and that approving sends nothing, and shows the exact lines (#2709)', () => {
