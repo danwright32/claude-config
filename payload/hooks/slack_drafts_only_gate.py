@@ -1039,17 +1039,24 @@ class Judge(WrittenPaths, ProgramWrites):
         """For a file written earlier in this command with text that cannot be worked out
         (claude-config#2721), why it cannot be judged; None for any other file. with_maybe False
         leaves out a file a program only may have written (lib/program-writes.py)."""
-        names, maybe = [], []
+        names, maybe, found = [], [], False
         for kind, _, label in self.made_from(path) or ():
-            into = names if kind == "unknown" else maybe if kind == "maybe" and with_maybe else None
-            if into is not None and label not in into:
-                into.append(label)
-        if not (names or maybe):
-            return None
+            if kind == "unknown":
+                found = True
+                # "" is a word of a script read as commands, not a command this call ran (#2793).
+                if label and label not in names:
+                    names.append(label)
+            elif kind == "maybe" and with_maybe and label not in maybe:
+                maybe.append(label)
+        if found and not names:
+            return ("is written earlier in this command, but what wrote it could not be told, so what it "
+                    "holds cannot be read, and whether it posts cannot be checked")
         if names:
             listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-            return (f"is written earlier in this command by {listed}, so what it holds cannot be read, "
-                    f"and whether it posts cannot be checked")
+            return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
+                    f"whether it posts cannot be checked")
+        if not maybe:
+            return None
         # A program that names the file, or unpacks into its folder, may have written it (#2772).
         listed = maybe[0] if len(maybe) == 1 else ", ".join(maybe[:-1]) + " and " + maybe[-1]
         return (f"may be written earlier in this command by {listed}, in a way this gate does not follow, "
@@ -1316,6 +1323,8 @@ class Judge(WrittenPaths, ProgramWrites):
 
     def note_file(self, target, d, pieces, append=False):
         real = os.path.realpath(self.resolve(target, d))
+        if self.shell.get("on_disk"):
+            pieces = [(k, v, "") if k == "unknown" else (k, v, lb) for k, v, lb in pieces]
         if append:
             pieces = self.pieces_of(target, d) + pieces
         self.made[real] = pieces

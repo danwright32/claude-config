@@ -678,6 +678,39 @@ test('a copy builder used by a route that posts nothing passes', withKit, async 
   expect(w.ran.length).toBe(1)
 })
 
+// claude-config#2770: a file posting through a send helper it imports, named for nothing Slack, was
+// judged as a file that sends nothing, so rewording the message it hands the helper passed unheld.
+// The helper is followed to whether it reaches a Slack send.
+const NOTIFIER = '/w/app/src/jobs/stuck-orders.ts'
+const notifier = (from: string, helper: string) =>
+  `import { ${helper} } from '${from}'\nexport const run = async (count: number) => {\n  if (count > 5) await ${helper}(\`\${count} orders are stuck in the queue\`)\n}\n`
+const REWORD_NOTIFIER = { tool: 'Edit', file_path: NOTIFIER, old_string: 'orders are stuck in the queue', new_string: 'orders have been stuck for an hour' }
+
+test('rewording what a file hands a send helper named for nothing Slack is held, when the helper posts to Slack (#2770)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [POST]: POST_TEXT, [NOTIFIER]: notifier('@/lib/notify/post', 'postAlert') } })
+  const why = refusalOf(await call($, REWORD_NOTIFIER))
+  expect(why).toContain(NOTIFIER)
+  expect(why).toContain('${count} orders have been stuck for an hour')
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE, { rendered: '12 orders have been stuck for an hour' })
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('rewording what a file hands a helper that reaches no Slack send passes, from a module that posts nowhere or from a Slack module whose other function posts elsewhere (#2770)', withKit, async ($, on) => {
+  const METRICS = '/w/app/src/lib/metrics/emit.ts'
+  const METRICS_TEXT = 'export const emitEvent = (text: string) => fetch(process.env.METRICS_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
+  const w = world($, on, { files: { [METRICS]: METRICS_TEXT, [NOTIFIER]: notifier('@/lib/metrics/emit', 'emitEvent') } })
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same module as the Slack send helper, through its function that posts somewhere else.
+  const BOTH = `${POST_TEXT}export const postMetric = (text: string) => fetch(process.env.METRICS_URL, { method: "POST", body: JSON.stringify({ text }) })\n`
+  w.files[POST] = BOTH
+  w.files[NOTIFIER] = notifier('@/lib/notify/post', 'postMetric')
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
 test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
   const many: Record<string, string> = {}
   // Each names the template as an import does, and names a Slack webhook only in a comment, which git
