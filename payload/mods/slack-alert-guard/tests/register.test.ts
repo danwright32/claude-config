@@ -119,8 +119,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitTruncated: git's listing comes back cut short. stdoutCap: as $.process.run keeps only the first
   // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
-  // after #2481).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  // after #2481). lsFilesFails: git ls-files alone exits nonzero with this on stderr, every other git
+  // call answering as usual (#2773).
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app', lsFilesFails: '' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -210,6 +211,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       // git ls-files, listing the files a pathspec names (#2637): tracked or not, each ending in a NUL.
       if (argv[3] === 'ls-files') {
         if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
+        if (ctl.lsFilesFails) return { value: { exitCode: 128, stdout: '', stderr: `${ctl.lsFilesFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
         const named = argv.slice(argv.indexOf('--') + 1).filter(s => s.startsWith(':(glob,icase)')).map(s => s.slice(':(glob,icase)'.length))
         const asGlob = (g: string) =>
           new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
@@ -2107,7 +2109,20 @@ test('a cp -R into a folder a sender imports from through a tsconfig paths alias
   // The sender lives outside src and names lib, never src: only the alias brings src's files to it.
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/src' }))).toContain(`shell command writes to /w/app/src, which ${JOB} sends to Slack`)
   // A folder it imports nothing from still passes.
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/payload' }))).toBe('')
+  const elsewhere = { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/payload' }
+  expect(refusalOf(await call($, elsewhere))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // Listing what the sender imports fails: could not check, naming the listing, never a pass.
+  w.ctl.lsFilesFails = 'fatal: index file corrupt'
+  const failed = refusalOf(await call($, elsewhere))
+  expect(failed).toContain('could not check')
+  expect(failed).toContain(`git could not list the files ${JOB} imports (exit 128: fatal: index file corrupt)`)
+  // It fails after the search's time ran out: said as out of time, never a pass.
+  w.ctl.gitSlow = SCAN_MS + 1000
+  w.ctl.gitSlowWhen = 'no grep holds this'
+  const late = refusalOf(await call($, elsewhere))
+  expect(late).toContain('could not check')
+  expect(late).toContain(`were not searched within ${SCAN_MS / 1000} seconds`)
   expect(w.ran.length).toBe(1)
 })
 

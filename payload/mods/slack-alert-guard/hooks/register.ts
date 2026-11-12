@@ -669,6 +669,24 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
 }
 
 /**
+ * The files in the repository at `top` that the file `rel`, holding `text`, imports (#2371): found by
+ * the paths its imports name, aliased ones included, then kept where the import refers to them, as
+ * a send helper is found. `left` gives the milliseconds left; none left, before or after a listing
+ * that failed, is late. A listing that fails or is cut short otherwise is could not check.
+ */
+const importedFiles = async ($: EngineInterface, top: string, rel: string, text: string, left: () => Promise<number>): Promise<{ rels: string[] } | { late: true } | { failed: Unchecked }> => {
+  const specs = importSpecs(text)
+  if (!specs.length) return { rels: [] }
+  const ms = await left()
+  if (ms <= 0) return { late: true }
+  const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
+  if (out.exitCode !== 0 && (await left()) <= 0) return { late: true }
+  if (out.exitCode !== 0 || out.isStdoutTruncated)
+    return { failed: { unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` } }
+  return { rels: [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r)) }
+}
+
+/**
  * What an edit brings to a Slack send from the files the edited one imports (#2637). On 2026-11-10
  * a new copy module of four alert messages was written while nothing sent it, so it passed; the
  * edits that made a monitor route import it and post it added no text of their own, so they passed
@@ -688,24 +706,6 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
  * to approve that one edit (#2709, #2796); anything that cannot be read or listed at all is could
  * not check.
  */
-/**
- * The files in the repository at `top` that the file `rel`, holding `text`, imports (#2371): found by
- * the paths its imports name, aliased ones included, then kept where the import refers to them, as
- * a send helper is found. `left` gives the milliseconds left; none left, before or after a listing
- * that failed, is late. A listing that fails or is cut short otherwise is could not check.
- */
-const importedFiles = async ($: EngineInterface, top: string, rel: string, text: string, left: () => Promise<number>): Promise<{ rels: string[] } | { late: true } | { failed: Unchecked }> => {
-  const specs = importSpecs(text)
-  if (!specs.length) return { rels: [] }
-  const ms = await left()
-  if (ms <= 0) return { late: true }
-  const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
-  if (out.exitCode !== 0 && (await left()) <= 0) return { late: true }
-  if (out.exitCode !== 0 || out.isStdoutTruncated)
-    return { failed: { unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` } }
-  return { rels: [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r)) }
-}
-
 const broughtIn = async ($: EngineInterface, path: string, before: string, after: string, deadline: number): Promise<Verdict> => {
   const lang = languageOf(path, after)
   const python = lang === 'python'
