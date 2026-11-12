@@ -2094,6 +2094,23 @@ test('a cp -R into a folder is judged by where it lands: one in no repository, o
   expect(w.ran.length).toBe(3)
 })
 
+test('a cp -R into a folder a sender imports from through a tsconfig paths alias, never naming the folder, is held naming that sender (#2773)', withKit, async ($, on) => {
+  const JOB = '/w/app/jobs/notify-late.ts'
+  const w = world($, on, {
+    files: {
+      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
+      '/w/app/tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*"] } } }\n',
+      '/w/app/src/lib/alert-copy.ts': 'export const late = (id: string) => `Booking ${id} is late`\n',
+      [JOB]: "import { late } from '@/lib/alert-copy'\nexport const run = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: late('1') }) })\n",
+    },
+  })
+  // The sender lives outside src and names lib, never src: only the alias brings src's files to it.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/src' }))).toContain(`shell command writes to /w/app/src, which ${JOB} sends to Slack`)
+  // A folder it imports nothing from still passes.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/payload' }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
 // The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
 // one message among other values, so only the send asks.
 const FEEDS = '/w/app/src/lib/monitor/feeds.ts'

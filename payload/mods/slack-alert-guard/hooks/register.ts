@@ -688,6 +688,24 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
  * to approve that one edit (#2709, #2796); anything that cannot be read or listed at all is could
  * not check.
  */
+/**
+ * The files in the repository at `top` that the file `rel`, holding `text`, imports (#2371): found by
+ * the paths its imports name, aliased ones included, then kept where the import refers to them, as
+ * a send helper is found. `left` gives the milliseconds left; none left, before or after a listing
+ * that failed, is late. A listing that fails or is cut short otherwise is could not check.
+ */
+const importedFiles = async ($: EngineInterface, top: string, rel: string, text: string, left: () => Promise<number>): Promise<{ rels: string[] } | { late: true } | { failed: Unchecked }> => {
+  const specs = importSpecs(text)
+  if (!specs.length) return { rels: [] }
+  const ms = await left()
+  if (ms <= 0) return { late: true }
+  const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
+  if (out.exitCode !== 0 && (await left()) <= 0) return { late: true }
+  if (out.exitCode !== 0 || out.isStdoutTruncated)
+    return { failed: { unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` } }
+  return { rels: [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r)) }
+}
+
 const broughtIn = async ($: EngineInterface, path: string, before: string, after: string, deadline: number): Promise<Verdict> => {
   const lang = languageOf(path, after)
   const python = lang === 'python'
@@ -733,19 +751,11 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     const key = `${rel}\u0000${text}`
     const known = lists.get(key)
     if (known) return known
-    const specs = importSpecs(text)
-    let rels: string[] = []
-    if (specs.length) {
-      const ms = await left()
-      if (ms <= 0) late()
-      const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
-      if (out.exitCode !== 0 && (await left()) <= 0) late()
-      if (out.exitCode !== 0 || out.isStdoutTruncated)
-        end({ unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` })
-      rels = [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r))
-    }
-    lists.set(key, rels)
-    return rels
+    const got = await importedFiles($, top, rel, text, left)
+    if ('late' in got) late()
+    if ('failed' in got) end(got.failed)
+    lists.set(key, got.rels)
+    return got.rels
   }
   // sent: by imported file, its wording a send reaches. cut: by file, the names still handed on
   // where the guard stops following.
@@ -1152,7 +1162,16 @@ const landsIn = async ($: EngineInterface, path: string, deadline: number): Prom
       texts.set(rel, text)
       if (!isSender(rel, text)) continue
       if (!folder || rel.startsWith(`${folder}/`)) return POSTS
-      if (names?.test(codeOf(rel, text))) senders.push({ rel, chain: [] })
+      if (names?.test(codeOf(rel, text))) {
+        senders.push({ rel, chain: [] })
+        continue
+      }
+      // Or it imports a file under the folder through an alias that never names the folder (#2773),
+      // found as the files an edit brings in are.
+      const got = await importedFiles($, top, rel, text, left)
+      if ('late' in got) return late
+      if ('failed' in got) return got.failed
+      if (got.rels.some(r => r.startsWith(`${folder}/`))) senders.push({ rel, chain: [] })
     }
     return senders.length ? { senders, top, texts, complete: true } : NONE
   } catch (err) {
