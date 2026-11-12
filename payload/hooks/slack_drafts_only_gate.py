@@ -966,8 +966,11 @@ class Judge(WrittenPaths, ProgramWrites):
         directory it was copied from, followed MADE_DEPTH copies deep."""
         if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code):
             return None
-        if "\0" in path:
-            return None  # names no file; os.path refuses it (a replay crash, 2026-11-12, #2772)
+        if "\0" in path and not (self.made or self.made_dirs or self.made_unknown):
+            # Names no file. Only code a program was given is noted, and before #2772 this returned
+            # above, so a path os.path refuses passes as it did; with a write noted it raises, and the
+            # wrapper refuses, as before (a replay crash, 2026-11-12).
+            return None
         real = os.path.realpath(path)
         found = self.made_from_known(real, depth)
         # A file written where the path could not be worked out may be this one (claude-config#2721),
@@ -1006,8 +1009,6 @@ class Judge(WrittenPaths, ProgramWrites):
         """The bytes a read of path finds: what an earlier command of this call made it from, then the
         file on disk, if there is one, that the write replaces; the file on disk alone otherwise.
         Raises OSError as open() does for a file nothing made."""
-        if "\0" in path:
-            raise OSError(f"no file is named with a null character: {path!r}")
         pieces = self.made_from(path)
         if not pieces:
             with open(path, "rb") as f:
@@ -1181,12 +1182,10 @@ class Judge(WrittenPaths, ProgramWrites):
             if not home:
                 return None
             raw = "'" + home.replace("'", "'\\''") + "'" + raw[1:]
-        if "\0" in raw:
-            return None  # no file is named with one: os.path refuses it (#2772's replay, 2026-11-12)
         if not re.search(r"[$`\\\"' \t*?\[\]{}~();&|<>]", raw):
             return raw
         v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, self.shell["script"], False)
-        return None if splits or (v is not None and "\0" in v) else v
+        return None if splits else v
 
     @staticmethod
     def text_piece(text, label):

@@ -335,10 +335,11 @@ def make(interpreter, shells, awks, senders):
                 elif key not in ("bs", "ibs", "obs", "status"):
                     other = True  # skip, seek, count, conv: not the whole source as it is
             pieces = None if other else (self.pieces_of(src, d) if src else stdin)
-            if dst_raw is None:
-                return pieces
-            self.note_output(dst_raw, dst, d, pieces, "dd")
-            return []
+            if dst_raw is not None:
+                # Added to, never replacing, what an earlier write left there: this change only
+                # tightens the gate, so a file main read as unreadable stays so (#2772).
+                self.note_output(dst_raw, dst, d, pieces, "dd", append=True)
+            return None  # what it prints is not worked out, as before #2772
 
         def note_edited(self, raw, value, d, label, codes, strict=True):
             """A file a program edits with the code it was given (sed -i, gawk -i inplace, a file
@@ -490,7 +491,7 @@ def make(interpreter, shells, awks, senders):
                 if data is None:
                     self.note_file(target, d, [("maybe", None, f"{name}, which unpacks it")], append=True)
                 else:
-                    self.note_file(target, d, [("text", data, f"{member} in {archive}")])
+                    self.note_file(target, d, [("text", data, f"{member} in {archive}")], append=True)
 
         @staticmethod
         def read_members(path, name):

