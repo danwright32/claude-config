@@ -13,7 +13,8 @@
 #   - The gate's wrapper and its python half each carry a Slack marker (so these checks are about
 #     the rule, never a gate that stopped naming endpoints), and neither is a sender, with or
 #     without the #2576 advice added.
-#   - lib/issue-spool.sh is no sender, and no sender in the repository reads it.
+#   - lib/issue-spool.sh is no sender. Since #2837 the guard stops only on a file that posts by
+#     itself, so whether some sender reads the spool no longer decides anything and is not checked.
 #   - The control: skills/nudge/nudge.py, which really posts, is still a sender, and so is the
 #     gate's wrapper with a posting line added to it.
 #   - The guard's own source carries no marker of its own, so the guard never reads itself as a
@@ -40,13 +41,13 @@ fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-slack-alert-guard-real-gate.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
-EXPECTED=13
+EXPECTED=12
 
 cat >"$TMP/read.mjs" <<'JS'
 import { readFileSync, readdirSync } from 'node:fs'
 const [root] = process.argv.slice(2)
 const MOD = 'payload/mods/slack-alert-guard/hooks'
-const { codeOf, isProseFile, isSender, refersTo, slackMarked, testFile } = await import(`${root}/${MOD}/rules.ts`)
+const { codeOf, isProseFile, isSender, slackMarked, testFile } = await import(`${root}/${MOD}/rules.ts`)
 const read = rel => readFileSync(`${root}/${rel}`, 'utf8')
 let n = 0
 const say = (name, ok, evidence) => {
@@ -83,8 +84,6 @@ const senders = walk('payload').filter(rel => {
   return /slack|postmessage/i.test(text) && isSender(rel, text)
 })
 say(`${SPOOL} is no sender itself`, !isSender(SPOOL, read(SPOOL), true), 'the guard reads it as a file that posts to Slack')
-const readers = senders.filter(rel => refersTo(rel, read(rel), SPOOL))
-say(`no sender in the repository reads ${SPOOL}`, readers.length === 0, `read by ${readers.join(', ')}`)
 say(`${NUDGE}, which posts, is still a sender`, senders.includes(NUDGE), `the senders found: ${senders.join(', ') || 'none'}`)
 
 // The guard's own source: no marker anywhere in it, comments included.

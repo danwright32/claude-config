@@ -2,20 +2,14 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
-  MARKER_PREFILTER,
-  REEXPORT_HOPS,
-  SENDER_PREFILTER,
   agentRefusal,
-  changedLines,
   ciMessages,
   ciWorkflow,
   codeOf,
-  copyModule,
   editedText,
   flowCommands,
   foreignNames,
   foreignUse,
-  handsOn,
   modelCandidates,
   modelInput,
   modelLiteral,
@@ -23,8 +17,6 @@ import {
   modelReading,
   tokenRanges,
   heldText,
-  importSpecs,
-  importTerms,
   inScope,
   isMessage,
   isOwnRecord,
@@ -35,24 +27,13 @@ import {
   isProseFile,
   literalsOf,
   mentionsStore,
-  moduleSpecs,
-  namePatterns,
   plainYamlValues,
   question,
-  refersTo,
   refusal,
   renderedProblem,
-  searchTerm,
   slackMarked,
   stringsOf,
-  templateLines,
   testFile,
-  textTemplate,
-  uiComponent,
-  untracedAgentRefusal,
-  untracedKey,
-  untracedQuestion,
-  untracedRefusal,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -329,19 +310,6 @@ test('a held edit names the wording it adds or takes away; a held shell command 
   expect(refusal('t1', '/w/a/alert.ts', ['Deploy failed on production'], []).startsWith('Blocked: this edit to /w/a/alert.ts adds')).toBe(true)
 })
 
-// claude-config#2248: a template whose wording a different file sends to Slack.
-
-test('a held template names the file that sends it, and says the template itself posts nothing', () => {
-  expect(heldText('/w/a/templates/deploy.ts', ['Deploy failed on production'], [], '/w/a/notify.ts')).toBe(
-    'This edit to /w/a/templates/deploy.ts, which /w/a/notify.ts sends to Slack, adds Slack message text Dan has not approved: "Deploy failed on production"',
-  )
-  const shell = heldText('/w/a/templates/deploy.ts', [], [], '/w/a/notify.ts')
-  expect(shell).toContain('which /w/a/notify.ts sends to Slack')
-  expect(shell).not.toContain('which posts to Slack')
-  expect(refusal('t1', '/w/a/t.ts', ['Backup is late'], [], '/w/a/notify.ts')).toContain('/w/a/notify.ts sends to Slack')
-  expect(agentRefusal('t1', '/w/a/t.ts', ['Backup is late'], [], '/w/a/notify.ts')).toContain('/w/a/notify.ts sends to Slack')
-})
-
 // claude-config#2361, #2364, #2290: hold only text a Slack send builds.
 
 test('a test file is told by its name or a test folder, read from the repository root', () => {
@@ -353,11 +321,6 @@ test('a test file is told by its name or a test folder, read from the repository
     expect(testFile(p)).toBe(true)
   // A word holding "test" or "spec" is not a test.
   for (const p of ['lib/alert.ts', 'lib/latest.ts', 'app/contest.py', 'lib/attestation.ts', 'lib/special.ts', 'scripts/post-test-results.ts', 'lib/testing-copy.ts', 'scripts/testflight-notify.ts', 'scripts/tester.ts', 'lib/test-copy.md']) expect(testFile(p)).toBe(false)
-})
-
-test('docs are not text templates any more; a plain text template still is', () => {
-  for (const p of ['/w/a/docs/runbook.md', '/w/a/README.markdown']) expect(textTemplate(p)).toBe(false)
-  expect(textTemplate('/w/a/templates/backup.txt')).toBe(true)
 })
 
 test('a database select list or a code template is not message text; a sentence beside them still is', () => {
@@ -396,28 +359,6 @@ test('an approval may carry a placeholder the code writes as text, and still not
   expect(renderedProblem('Run the job with ${name} set', added, ['${name}'])).toBeUndefined()
   expect(renderedProblem('Run the job with ${name} set', added)).toContain('${name}')
   expect(renderedProblem('Run the job with ${other} set', added, ['${name}'])).toContain('${other}')
-})
-
-test('a sender that names a file without importing or reading it does not refer to it (Dan item 1)', () => {
-  expect(refersTo('scripts/deploy.sh', 'git add package.json CHANGELOG.md\ngit commit -m release\n', 'package.json')).toBe(false)
-  expect(refersTo('scripts/deploy.ts', 'const tracked = ["package.json", "lib/templates/deploy.ts"]\n', 'package.json')).toBe(false)
-  expect(refersTo('scripts/deploy.ts', 'await run(`cp lib/templates/deploy.ts dist/`)\n', 'lib/templates/deploy.ts')).toBe(false)
-  // Importing it, requiring it, or reading it still refers to it.
-  expect(refersTo('scripts/deploy.ts', "const pkg = require('../package.json')\n", 'package.json')).toBe(true)
-  expect(refersTo('scripts/deploy.sh', 'BODY=$(cat lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
-  expect(refersTo('scripts/deploy.sh', 'BODY=$(< lib/templates/deploy.txt)\n', 'lib/templates/deploy.txt')).toBe(true)
-  // A path built on one line and read on the next still refers (lessons review at 395e7be).
-  expect(refersTo('lib/notify.ts', "const TPL = path.join(__dirname, 'templates', 'deploy.txt')\nconst body = readFileSync(TPL, 'utf8')\n", 'lib/templates/deploy.txt')).toBe(true)
-  expect(refersTo('app/notify.py', 'TPL = os.path.join(BASE, "templates/backup.txt")\nbody = open(TPL).read()\n', 'app/templates/backup.txt')).toBe(true)
-})
-
-// #2368 met #2361: curl reads a file it is handed by `@` and posts its text, so that line reads it.
-test("curl's data or form argument taking a file by @ reads it; naming the file to curl without @ does not", () => {
-  const T = 'alerts/late.txt'
-  for (const run of ['--data-binary @alerts/late.txt', '-d @alerts/late.txt','--data=@alerts/late.txt', "--data-urlencode '@alerts/late.txt'", '-F file=@alerts/late.txt'])
-    expect(refersTo('.github/workflows/late.yml', `steps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" ${run}\n`, T)).toBe(true)
-  expect(refersTo('.github/workflows/late.yml', 'steps:\n  - run: curl -o alerts/late.txt https://example.com/late\n', T)).toBe(false)
-  expect(refersTo('scripts/mail.sh', 'git add alerts/late.txt\nnotify @alerts\n', T)).toBe(false)
 })
 
 test('an ordinary array or string method is not a query builder call, so an alert inside one is still message text', () => {
@@ -613,210 +554,6 @@ test("a Bitbucket step's after-script list is read like its script list (#2416)"
   expect(wordingOf(ciMessages(bitbucket, 'bitbucket-pipelines.yml'))).toEqual(['Deploy of main is stuck'])
 })
 
-test('a path built by Path or URL, as the READS comment says, is a read: its line is matched on lower cased text (#2416)', () => {
-  expect(refersTo('app/notify.py', 'TPL = Path("templates/backup.txt")\nbody = TPL.read_text()\n', 'app/templates/backup.txt')).toBe(true)
-  expect(refersTo('lib/notify.ts', "const TPL = new URL('templates/deploy.txt', base)\nconst body = await fetch(TPL)\n", 'lib/templates/deploy.txt')).toBe(true)
-})
-
-test('a sender naming a template only in a comment does not refer to it', () => {
-  expect(refersTo('lib/notify.ts', '// the wording is in docs/runbook.txt\nconst x = 1\n', 'docs/runbook.txt')).toBe(false)
-  expect(refersTo('app/notify.py', '# see templates/backup.txt\nx = 1\n', 'app/templates/backup.txt')).toBe(false)
-  expect(refersTo('lib/notify.ts', 'const body = readFileSync("docs/runbook.txt", "utf8")\n', 'docs/runbook.txt')).toBe(true)
-})
-
-test('the modules a file imports give the words a search for its send helper looks for', () => {
-  const ts = "import { postAlert } from '@/lib/notify/post'\nimport React from 'react'\nconst x = require('../slack/index.js')\nimport { miscCopy } from './outage-copy'\n"
-  expect(importTerms(ts).sort()).toEqual(['outage-copy', 'post', 'slack'])
-  expect(importTerms('from app.alerts.sender import post_alert\n').sort()).toContain('sender')
-})
-
-test('a sender names a template by a relative import, resolved against its own folder or the repository root', () => {
-  const T = 'src/lib/templates/deploy.ts'
-  expect(refersTo('src/lib/notify.ts', "import { deployFailed } from './templates/deploy'\n", T)).toBe(true)
-  expect(refersTo('src/lib/notify.ts', "import { deployFailed } from './templates/deploy.js'\n", T)).toBe(true)
-  expect(refersTo('src/jobs/notify.ts', "const t = require('../lib/templates/deploy')\n", T)).toBe(true)
-  // A shell script runs from the root, so its relative path is read from there too.
-  expect(refersTo('bin/notify.sh', 'MSG=$(cat ./src/lib/templates/deploy.ts)\n', T)).toBe(true)
-  // The same name in another folder is another file.
-  expect(refersTo('src/jobs/notify.ts', "import { deployFailed } from './templates/deploy'\n", T)).toBe(false)
-  expect(refersTo('src/lib/notify.ts', "import { x } from './deploy'\n", T)).toBe(false)
-})
-
-test('a sender names a template by its path, a file name with its extension, an alias, or a python module', () => {
-  const TXT = 'app/templates/backup.txt'
-  expect(refersTo('app/notify.py', 'body = open("templates/backup.txt").read()\n', TXT)).toBe(true)
-  expect(refersTo('app/notify.ts', "readFileSync(path.join(__dirname, 'templates', 'backup.txt'), 'utf8')\n", TXT)).toBe(true)
-  expect(refersTo('app/notify.ts', 'readFileSync(`${__dirname}/templates/backup.txt`)\n', TXT)).toBe(true)
-  expect(refersTo('web/notify.ts', "import { digest } from '@/lib/alerts/digest'\n", 'web/src/lib/alerts/digest.ts')).toBe(true)
-  const PY = 'app/alerts/messages.py'
-  expect(refersTo('app/notify.py', 'from app.alerts.messages import BACKUP_LATE\n', PY)).toBe(true)
-  expect(refersTo('app/notify.py', 'from app.alerts import messages\n', PY)).toBe(true)
-  expect(refersTo('app/alerts/notify.py', 'from . import messages\n', PY)).toBe(true)
-  expect(refersTo('app/alerts/notify.py', 'from .messages import BACKUP_LATE\n', PY)).toBe(true)
-  expect(refersTo('app/alerts/notify.py', 'import messages\n', PY)).toBe(true)
-  // A package's own index is named by its folder.
-  expect(refersTo('src/notify.ts', "import { late } from './alerts'\n", 'src/alerts/index.ts')).toBe(true)
-  expect(refersTo('app/notify.py', 'from app import alerts\n', 'app/alerts/__init__.py')).toBe(true)
-})
-
-test('a word that only shares the template name is not a reference to it', () => {
-  const PY = 'app/alerts/messages.py'
-  expect(refersTo('app/notify.py', 'messages = []\nfor m in messages: print(m)\n', PY)).toBe(false)
-  expect(refersTo('app/notify.ts', "import { messages } from '@slack/web-api'\n", 'app/alerts/messages.ts')).toBe(false)
-  expect(refersTo('app/notify.ts', "const kind = 'messages'\n", 'app/alerts/messages.ts')).toBe(false)
-  expect(refersTo('app/notify.ts', "fetch('/api/messages')\n", 'app/alerts/messages.ts')).toBe(false)
-  // Another file of the same name with a different extension is another file.
-  expect(refersTo('app/notify.py', 'open("templates/backup.json")\n', 'app/templates/backup.txt')).toBe(false)
-})
-
-test('a text template is read line by line, and the search term is the name a sender writes', () => {
-  for (const p of ['/w/a/templates/backup.txt', '/w/a/t/alert.hbs', '/w/a/t/alert.j2', '/w/a/t/alert.mustache']) expect(textTemplate(p)).toBe(true)
-  for (const p of ['/w/a/x.css', '/w/a/x.ts', '/w/a/Makefile']) expect(textTemplate(p)).toBe(false)
-  expect(templateLines('Backup is late\n\n  on {host}  \n')).toEqual(['Backup is late', 'on {host}'])
-  expect(searchTerm('src/lib/templates/deploy.ts')).toBe('deploy')
-  expect(searchTerm('src/alerts/index.ts')).toBe('alerts')
-  expect(searchTerm('app/alerts/__init__.py')).toBe('alerts')
-})
-
-// claude-config#2286: a template handed on through a file that imports and re-exports it.
-test('a file hands a template on when it can export what it imports: a JS or TS export, or any python module', () => {
-  for (const text of ["export * from './deploy'\n", "export { deployFailed } from './deploy'\n", "import t from './deploy'\nexport default t\n", "export{ t }\n", "module.exports = require('./deploy')\n", "exports.deployFailed = require('./deploy').deployFailed\n"])
-    expect(handsOn('lib/messages.ts', text)).toBe(true)
-  expect(handsOn('lib/messages.mjs', "export * from './deploy'\n")).toBe(true)
-  expect(handsOn('app/templates/__init__.py', 'from .deploy import TEXT\n')).toBe(true)
-  // A JS file that only uses what it imports cannot hand it to another file.
-  expect(handsOn('lib/use.ts', "import { deployFailed } from './deploy'\nconsole.log(deployFailed('1'))\n")).toBe(false)
-  expect(handsOn('lib/use.ts', "import { deployFailed } from './deploy'\nconst exporter = 1\nfoo.exports.x = 1\n")).toBe(false)
-  // A shell script, a text file, or JSON hands nothing on.
-  expect(handsOn('bin/run.sh', 'export DEPLOY=./deploy\n')).toBe(false)
-  expect(handsOn('docs/notes.md', "export * from './deploy'\n")).toBe(false)
-})
-
-// claude-config#2519, Dan 2026-11-09: a file imported only by UI components is not on a path that
-// posts to Slack. A UI component is a React file (.tsx, .jsx) in a components, screens or views folder.
-test('a UI component is a React file in a components, screens or views folder, and nothing else is', () => {
-  for (const p of ['apps/web/src/components/TracePanel.tsx', 'src/components/ui/Card.jsx', 'app/screens/Home.tsx', 'src/Views/Row.tsx', 'components/Logic.tsx'])
-    expect(uiComponent(p)).toBe(true)
-  // A plain module beside components, a React file outside those folders (an email or a Slack
-  // message built in JSX), python, and a test are judged as any other file is.
-  for (const p of ['apps/web/src/components/format.ts', 'apps/web/src/lib/logic-card.ts', 'emails/alert.tsx', 'lib/slack/blocks.tsx', 'app/pages/index.tsx', 'app/components/views.py', 'src/components/Card.test.tsx'])
-    expect(uiComponent(p)).toBe(false)
-})
-
-// A line the search lists for `rels`: one git grep lists for holding a name as a whole word (`words`,
-// fixed strings, -w, case ignored) that also holds, tested by the guard, the name in a shape refersTo
-// can accept. Every line expected below to be listed is so with -w, so -w leaves out none of them.
-const lists = (rels: string[], line: string) => {
-  const p = namePatterns(rels)
-  const word = (w: string) => new RegExp(`(^|[^A-Za-z0-9_])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_]|$)`, 'i')
-  return p.words.some(w => word(w).test(line)) && new RegExp(p.shape, 'i').test(line)
-}
-
-test('the search for the files naming a template finds the line that names it, in a pattern macOS git grep reads', () => {
-  const one = ['lib/templates/deploy.ts']
-  for (const line of ["export * from './deploy'", "const t = require('./deploy')", 'from .deploy import TEXT', 'import templates.deploy', "body = readFileSync('templates/deploy.ts')"]) expect(lists(one, line)).toBe(true)
-  expect(lists(one, 'const deploy = 1')).toBe(false)
-  expect(lists(['jobs/templates/backup.txt'], 'body = open("templates/backup.txt").read()')).toBe(true)
-  const two = ['lib/templates/index.ts', 'lib/alpha.ts']
-  expect(lists(two, "export * from './templates'")).toBe(true)
-  expect(lists(two, "export * from './alpha'")).toBe(true)
-  // macOS git grep -E reads \b as matching nothing (measured), so no pattern may use it.
-  expect(JSON.stringify(namePatterns(['lib/a.ts', 'b.txt', 'lib/x/index.ts'])).includes('\\\\b')).toBe(false)
-  expect(namePatterns(['lib/templates/deploy.ts']).words).toEqual(['deploy'])
-  expect(namePatterns(['lib/templates/index.ts', 'lib/alpha.ts']).words).toEqual(['templates', 'alpha'])
-  // A name is handed to git as written, never escaped as a regular expression would be.
-  expect(namePatterns(['lib/a.b.ts']).words).toEqual(['a.b'])
-  expect(REEXPORT_HOPS).toBe(3)
-})
-
-test('a common short name lists only the lines that name the file, never a word it is a piece of, and every reference refersTo accepts is listed (Dan item 3)', () => {
-  // Words the name is a piece of, as a work repository's files are full of them.
-  for (const [rel, line] of [
-    ['src/lib/et.ts', 'const settings = getSettings()'],
-    ['src/lib/et.ts', "import { getSettings } from '@/lib/get-settings'"],
-    ['src/lib/et.ts', 'let x = target.set(1)'],
-    ['src/lib/et.ts', "import { formatDate } from './date-et-helpers'"],
-    ['src/lib/memory.ts', '// the digest is kept in memory, then posted to slack'],
-    ['src/lib/memory.ts', 'const used = process.memoryUsage()'],
-    ['hooks/decide.ts', 'const verdict = guard.decide(input)'],
-  ] as const)
-    expect(lists([rel], line)).toBe(false)
-  // Every reference the refersTo tests accept is listed, so the narrower search never misses a sender.
-  const refs: [string, string, string][] = [
-    ['src/lib/notify.ts', "import { deployFailed } from './templates/deploy'\n", 'src/lib/templates/deploy.ts'],
-    ['src/lib/notify.ts', "import { deployFailed } from './templates/deploy.js'\n", 'src/lib/templates/deploy.ts'],
-    ['src/jobs/notify.ts', "const t = require('../lib/templates/deploy')\n", 'src/lib/templates/deploy.ts'],
-    ['bin/notify.sh', 'MSG=$(cat ./src/lib/templates/deploy.ts)\n', 'src/lib/templates/deploy.ts'],
-    ['app/notify.py', 'body = open("templates/backup.txt").read()\n', 'app/templates/backup.txt'],
-    ['app/notify.ts', "readFileSync(path.join(__dirname, 'templates', 'backup.txt'), 'utf8')\n", 'app/templates/backup.txt'],
-    ['app/notify.ts', 'readFileSync(`${__dirname}/templates/backup.txt`)\n', 'app/templates/backup.txt'],
-    ['web/notify.ts', "import { digest } from '@/lib/alerts/digest'\n", 'web/src/lib/alerts/digest.ts'],
-    ['app/notify.py', 'from app.alerts.messages import BACKUP_LATE\n', 'app/alerts/messages.py'],
-    ['app/notify.py', 'from app.alerts import messages\n', 'app/alerts/messages.py'],
-    ['app/alerts/notify.py', 'from . import messages\n', 'app/alerts/messages.py'],
-    ['app/alerts/notify.py', 'from .messages import BACKUP_LATE\n', 'app/alerts/messages.py'],
-    ['app/alerts/notify.py', 'import messages\n', 'app/alerts/messages.py'],
-    ['app/alerts/notify.py', 'from . import (a,messages)  # "the late notice"\n', 'app/alerts/messages.py'],
-    ['src/notify.ts', "import { late } from './alerts'\n", 'src/alerts/index.ts'],
-    ['app/notify.py', 'from app import alerts\n', 'app/alerts/__init__.py'],
-    ['lib/notify.ts', 'const body = readFileSync("docs/runbook.txt", "utf8")\n', 'docs/runbook.txt'],
-    ['src/jobs/digest.ts', "import { nowEt } from '../lib/et'\n", 'src/lib/et.ts'],
-    ['src/app/clock/page.tsx', "import { nowEt } from '@/lib/et'\n", 'src/lib/et.ts'],
-    ['src/app/x.ts', 'const m = require("lib.memory")\n', 'src/lib/memory.ts'],
-  ]
-  for (const [sender, text, template] of refs) {
-    expect(refersTo(sender, text, template)).toBe(true)
-    expect(text.split('\n').some(l => lists([template], l))).toBe(true)
-  }
-})
-
-test("the files a module's imports can be are named as git pathspecs, by path, never by what their text holds (Dan item 3)", () => {
-  const specs = importSpecs("import { postAlert } from '@/lib/notify/post'\nimport React from 'react'\nconst x = require('../slack/index.js')\nfrom app.alerts.sender import post_alert\n")
-  expect(specs).toContain(':(glob,icase)**/post.*')
-  expect(specs).toContain(':(glob,icase)**/post/index.*')
-  expect(specs).toContain(':(glob,icase)**/slack.*')
-  expect(specs).toContain(':(glob,icase)**/slack/index.*')
-  expect(specs).toContain(':(glob,icase)**/sender/__init__.py')
-  expect(specs.some(s => s.includes('react'))).toBe(false)
-  // A name holding a glob's own signs is matched as written.
-  expect(importSpecs("import { Row } from './[id]/row'\n")).toContain(':(glob,icase)**/row.*')
-  expect(importSpecs("import x from '../a*b'\n")).toContain(':(glob,icase)**/a\\*b.*')
-})
-
-test('the sender search keeps every file a Slack marker can match: each marker names slack or postMessage', () => {
-  // The repository is searched for SENDER_PREFILTER before any file is read (the files a send helper
-  // could be, and the files then searched for MARKER_PREFILTER), so a marker that could match text
-  // holding neither word would never see its file read.
-  for (const m of MARKERS) expect(/slack|postmessage/i.test(m.source)).toBe(true)
-  expect(SENDER_PREFILTER).toBe('slack|postmessage')
-})
-
-test('the files listed as able to post include every file a Slack marker matches in its code, and not one that only mentions Slack', () => {
-  // A comment between a helper's name and its parenthesis is blanked to a space in the code, so the
-  // marker matches the code and not the text; the prefilter must still list the file by its text.
-  const posts = [
-    'await fetch("https://hooks.slack.com/services/T0/B0/x")',
-    'await client.chat.postMessage({ channel, text })',
-    "import { WebClient } from '@slack/web-api'",
-    'from slack_sdk import WebClient',
-    'import "github.com/slack-go/slack"',
-    'const url = process.env.SLACK_ALERTS_WEBHOOK_URL',
-    'await notifySlack /* why */ (text)',
-    "import { postSlackAlert } from './notify'",
-    "const alertSlack = require('./slack')",
-    'await slackClient.send /* now */ (text)',
-    'await slackSendMessage(text)',
-  ]
-  const prefilter = new RegExp(MARKER_PREFILTER, 'i')
-  // Every marker is seen to match one of these in its code, so a marker added later needs a line here.
-  for (const m of MARKERS) expect(posts.some(p => m.test(codeOf('notify.ts', p)))).toBe(true)
-  for (const p of posts) expect(prefilter.test(p)).toBe(true)
-  for (const p of ['<h1>Slack alert preview</h1>', 'label: "Slack channel"', '// posts to Slack', 'window.postMessage(data)'])
-    expect(prefilter.test(p)).toBe(false)
-  // git grep -E on macOS reads none of these escapes, so the prefilter is written without them.
-  expect(/\\[bwsdBWSD]/.test(MARKER_PREFILTER)).toBe(false)
-})
-
 // claude-config#2284. Dan, 2026-11-05, rejecting "Post this Slack message from ...?" twice: "You
 // should never be posting a Slack message for me".
 test('the send detector is seen to fire on wording that asks to post or send, and not on wording that says nothing is sent', () => {
@@ -837,68 +574,6 @@ test('the question approves the wording of an automated alert in the named file,
   expect(lead).toContain('sends nothing')
   expect(q.endsWith('\n\nDeploy 4182 failed on production')).toBe(true)
 })
-
-// claude-config#2637: wording an edit adds none of and brings to a send from a file it imports.
-
-test('a held edit that brings in another file\'s wording names that file as where the text is, and what sends it; the question names it too and never asks to post (#2637)', () => {
-  const ROUTE = '/w/a/monitor/route.ts'
-  const COPY = '/w/a/monitor/quiet-feed-copy.ts'
-  expect(heldText(ROUTE, ['The feed has gone quiet'], [], undefined, COPY)).toBe(`This edit to ${ROUTE} makes it send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
-  expect(heldText('/w/a/barrel.ts', ['The feed has gone quiet'], [], ROUTE, COPY)).toBe(`This edit to /w/a/barrel.ts makes ${ROUTE} send Slack message text from ${COPY} that Dan has not approved: "The feed has gone quiet"`)
-  for (const r of [refusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY), agentRefusal('t1', ROUTE, ['The feed has gone quiet'], [], undefined, COPY)]) {
-    expect(r.startsWith(`Blocked: this edit to ${ROUTE} makes it send Slack message text from ${COPY}`)).toBe(true)
-    expect(r).not.toContain('adds Slack message text')
-  }
-  // With no such file the wording is as it was.
-  expect(refusal('t1', ROUTE, ['The feed has gone quiet'], [])).toContain(`this edit to ${ROUTE} adds Slack message text Dan has not approved`)
-  const q = question(ROUTE, 'The orders feed has gone quiet', COPY)
-  const [lead] = q.split('\n\n')
-  expect(readsAsSend(lead ?? '')).toBe(false)
-  expect(lead).toContain(`defined in ${COPY}`)
-  expect(lead).toContain(`the held edit to ${ROUTE}`)
-  expect(lead).toContain('sends nothing')
-  expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
-})
-
-// claude-config#2720: wording held in a module of message copy that nothing sends from yet, which
-// the card, both refusals and the question say, so Dan can tell it from a live send.
-
-test('a held copy module nothing sends yet is named as one on the card, both refusals and the question; every other hold reads as before (#2720)', () => {
-  const PHRASE = 'a module of message copy not yet wired to Slack'
-  const COPY = '/w/a/monitor/quiet-feed-copy.ts'
-  const added = ['The feed has gone quiet']
-  expect(heldText(COPY, added, [], undefined, undefined, true)).toBe(`This edit to ${COPY}, ${PHRASE}, adds Slack message text Dan has not approved: "The feed has gone quiet"`)
-  for (const r of [refusal('t1', COPY, added, [], undefined, undefined, true), agentRefusal('t1', COPY, added, [], undefined, undefined, true)])
-    expect(r.startsWith(`Blocked: this edit to ${COPY}, ${PHRASE}, adds Slack message text Dan has not approved`)).toBe(true)
-  const q = question(COPY, 'The orders feed has gone quiet', undefined, true)
-  const [lead] = q.split('\n\n')
-  expect(lead).toContain(`defined in ${COPY}, ${PHRASE}?`)
-  expect(readsAsSend(lead ?? '')).toBe(false)
-  expect(lead).toContain('sends nothing')
-  expect(q.endsWith('\n\nThe orders feed has gone quiet')).toBe(true)
-  // A live send, a template another file sends, wording brought in from another file, a removal
-  // and a shell command never carry it.
-  const others = [
-    heldText(COPY, added, []),
-    heldText(COPY, added, [], '/w/a/notify.ts'),
-    heldText(COPY, added, [], undefined, '/w/a/feeds.ts'),
-    heldText(COPY, [], ['The feed has gone quiet']),
-    heldText(COPY, [], []),
-    refusal('t1', COPY, added, []),
-    agentRefusal('t1', COPY, added, []),
-    question(COPY, 'The orders feed has gone quiet'),
-    question(COPY, 'The orders feed has gone quiet', '/w/a/feeds.ts'),
-  ]
-  for (const t of others) expect(t).not.toContain('not yet wired')
-})
-
-test('every module a file imports is named as the file names it, so one file name in two folders is two modules; a bare package is none (#2637)', () => {
-  const ts = "import { a } from './copy'\nimport { b } from '../other/copy'\nimport React from 'react'\nconst c = require('@/lib/notify/post')\n// import { d } from './commented'\n"
-  expect(moduleSpecs(ts).sort()).toEqual(['../other/copy', './copy', '@/lib/notify/post'])
-  expect(moduleSpecs('from app.alerts.copy import late_booking\nimport app.jobs.digest as digest\n')).toEqual(expect.arrayContaining(['app.alerts.copy', 'app.jobs.digest']))
-  expect(moduleSpecs('export const x = 1\n')).toEqual([])
-})
-
 // #2368's line reader and #2361's comment blanking were one rule written twice; codeOf is now the
 // tokenizer, and this holds the behaviours #2368's test of the line reader asserted.
 test('codeOf leaves comments out and keeps code, strings, and code after a closed block comment', () => {
@@ -1007,134 +682,3 @@ test('only prose files are ruled out as senders', () => {
   for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
 })
 
-// claude-config#2720: wording written into a module of message copy that nothing sends yet. On
-// 2026-11-10 four alert messages went into a new copy module unasked, and were held only later, at
-// the edit importing it. A copy module is known by its path or by its shape.
-const QUIET_COPY = [
-  'export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`',
-  'export const quietAgain = (feed: string) => `The ${feed} feed is still quiet, so somebody needs to look at it now`',
-  'export const quietClear = (feed: string) => `The ${feed} feed is sending again`',
-  "export const allClear = 'Every feed is sending again'",
-  "export const CHECKED = 'Checked every feed for a quiet one'",
-  '',
-].join('\n')
-
-test('a module of message copy is known by its path: a name ending in copy or wording, a copy folder, or an alert or Slack name beside a message one (#2720)', () => {
-  const prose = "export const m = 'Nothing has arrived for an hour'\n"
-  for (const p of ['src/lib/notify/outage-copy.ts', 'src/lib/monitor/quiet-feed-copy.ts', 'lib/quietFeedCopy.ts', 'lib/copy/alerts.ts', 'lib/copy.py', 'lib/slack/messages.ts', 'lib/alertText.ts', 'jobs/slack_templates.py', 'ops/alerts/notices.ts', 'notify/wording.ts'])
-    expect([p, copyModule(p, prose)]).toEqual([p, true])
-  // A verb, a guard named for Slack, a test, a doc or a screen is not a copy module by its path.
-  for (const p of ['scripts/copy-assets.sh', 'lib/copyFiles.ts', 'payload/mods/slack-alert-guard/hooks/rules.ts', 'payload/hooks/slack-drafts-only-gate.sh', 'lib/alerts.ts', 'lib/messages.ts', 'tests/send-wording.ts', 'lib/outage-copy.test.ts', 'docs/alert-copy.md', 'src/components/AlertMessage.tsx', 'src/lib/date.ts'])
-    expect([p, copyModule(p, prose)]).toEqual([p, false])
-})
-
-test('a module of message copy is known by its shape: mostly functions building message text, or Slack formatting (#2720)', () => {
-  expect(copyModule('src/lib/monitor/quiet.ts', QUIET_COPY)).toBe(true)
-  const py = 'def late_page(feed, minutes):\n    return f"The {feed} feed has gone quiet for {minutes} minutes"\n\ndef late_clear(feed):\n    return f"The {feed} feed is sending again"\n'
-  expect(copyModule('jobs/quiet.py', py)).toBe(true)
-  expect(copyModule('lib/run.ts', "export const blocks = (url: string) => [{ type: 'section', text: { type: 'mrkdwn', text: 'Run finished' } }]\n")).toBe(true)
-  expect(copyModule('lib/run.ts', 'export const line = (url: string) => `The nightly run failed: <${url}|open the log>`\n')).toBe(true)
-  expect(copyModule('lib/run.ts', "export const line = 'Somebody look at this <!here>'\n")).toBe(true)
-  // One builder alone, constants of error text, or a few builders among much other code is not.
-  expect(copyModule('lib/late.ts', 'export const late = (id: string) => `Booking ${id} is late`\n')).toBe(false)
-  expect(copyModule('lib/errors.ts', "export const NOT_FOUND = 'No booking has that id'\nexport const TAKEN = 'That slot is taken'\nexport const LATE = 'You are too late to book'\n")).toBe(false)
-  const busy = [
-    'export const a = (n: string) => `The ${n} job failed`',
-    'export const b = (n: string) => `The ${n} job is late again`',
-    ...Array.from({ length: 6 }, (_, i) => `export const k${i} = (x: number) => x + ${i}`),
-    '',
-  ].join('\n')
-  expect(copyModule('lib/jobs.ts', busy)).toBe(false)
-  // A test and a screen are never copy modules, whatever their shape.
-  expect(copyModule('src/lib/monitor/quiet.test.ts', QUIET_COPY)).toBe(false)
-  expect(copyModule('src/components/Quiet.tsx', QUIET_COPY)).toBe(false)
-  // Functions that do work and print or throw a message on the way build no copy: measured on this
-  // repository, reading those as builders made 16 scripts and mods copy modules (#2720).
-  const script = 'def load(path):\n    print(f"Reading {path} from disk now")\n    return open(path).read()\n\ndef check(rows):\n    if not rows:\n        raise SystemExit(f"No rows were found in {len(rows)} files")\n    return rows\n'
-  expect(copyModule('tools/merge.py', script)).toBe(false)
-  const thrower = 'export function load(p: string) {\n  if (!p) throw new Error(`No file was named for ${p} here`)\n  return p\n}\nexport function save(p: string) {\n  console.log(`Saved the file at ${p} just now`)\n  return p\n}\n'
-  expect(copyModule('lib/files.ts', thrower)).toBe(false)
-  // A shell script is a program, never a module another file imports, whatever its name.
-  expect(copyModule('payload/hooks/lib/placement-copy.sh', 'echo "Copied the payload into the fixture"\n')).toBe(false)
-  // A pipe in a shell string, or a word between colons, is no Slack formatting.
-  expect(copyModule('lib/run.sh', 'echo "a | b"\n')).toBe(false)
-  expect(copyModule('lib/run.ts', "export const t = 'Wait for <the run|other> to finish'\n")).toBe(false)
-})
-
-// claude-config#2709: a line the guard cannot trace gets the approval route real wording has, keyed
-// to that one edit, with the exact lines shown and the guard saying it could not trace them.
-const INDEX = '/w/a/lib/index.ts'
-const WHY = `${INDEX} is handed on through more than ${REEXPORT_HOPS} files before anything sends it, more than the guard follows (next: /w/a/lib/delta.ts)`
-
-test('the lines an untraced edit adds and takes away are each exactly as written, blank lines left out (#2709)', () => {
-  const before = "export * from './deploy'\n\nexport const VERSION = 1\n"
-  const after = "export * from './deploy'\nimport { pad } from './pad'\n\nexport const VERSION = 2\n"
-  expect(changedLines(before, after)).toEqual({ added: ["import { pad } from './pad'", 'export const VERSION = 2'], removed: ['export const VERSION = 1'] })
-  // A line written twice where it was once is one added line.
-  expect(changedLines('a\n', 'a\na\n')).toEqual({ added: ['a'], removed: [] })
-})
-
-test('an untraced edit is approved by its file and its exact text, so any other edit, or the same edit to another file, is asked about again (#2709)', () => {
-  const before = "export * from './deploy'\n"
-  const after = "export * from './deploy'\nimport { pad } from './pad'\n"
-  const key = untracedKey(INDEX, before, after)
-  expect(key).toBe(untracedKey(INDEX, before, after))
-  expect(key.startsWith('untraced:')).toBe(true)
-  expect(untracedKey('/w/a/other/index.ts', before, after)).not.toBe(key)
-  expect(untracedKey(INDEX, before, `${after}import { pin } from './pin'\n`)).not.toBe(key)
-  expect(untracedKey(INDEX, `${before}export const V = 1\n`, `${after}export const V = 1\n`)).not.toBe(key)
-  // Never the key real wording is kept under, so approving one never approves the other.
-  expect(key).not.toBe(wordingKey("import { pad } from './pad'"))
-})
-
-test('an untraced edit is refused with an id Dan can approve, the lines shown and why the guard could not trace them; a subagent is told to stop and report (#2709)', () => {
-  const r = untracedRefusal('t9', INDEX, ["import { pad } from './pad'"], [], WHY)
-  expect(r.startsWith('Blocked: ')).toBe(true)
-  expect(r).toContain('could not trace')
-  expect(r).toContain(INDEX)
-  expect(r).toContain("import { pad } from './pad'")
-  expect(r).toContain(WHY)
-  expect(r).toContain('"source": "slack-alert-guard:t9"')
-  // There is no message to render: the guard shows Dan the lines itself.
-  expect(r).not.toContain('"rendered"')
-  expect(r).not.toContain('Try it again')
-  const a = untracedAgentRefusal('t9', INDEX, ["import { pad } from './pad'"], [], WHY)
-  expect(a).toContain('could not trace')
-  expect(a).toContain('t9')
-  expect(a).toContain('Stop and report to the main session')
-  expect(a).not.toContain('AskUserQuestion')
-  // A trace stopped at a limit stops there on every try, and is said to.
-  expect(r).toContain('Trying again is held the same way')
-})
-
-// claude-config#2796: a search that ran out of its time is put to Dan the same way, with an id, but
-// never told it is held the same way on every try, since on a quieter Mac it may finish; nor told to
-// try again, since on the Mac where it ran out it ran out about 20 times.
-test('an edit whose search ran out of time is refused with an id Dan can approve, saying the search may run out again rather than to try again (#2796)', () => {
-  const LATE = `what this edit to ${INDEX} brings to a Slack send was not searched within 7 seconds`
-  const r = untracedRefusal('t9', INDEX, ["import { pad } from './pad'"], [], LATE, true)
-  expect(r.startsWith('Blocked: ')).toBe(true)
-  expect(r).toContain(LATE)
-  expect(r).toContain("import { pad } from './pad'")
-  expect(r).toContain('"source": "slack-alert-guard:t9"')
-  expect(r).toContain('can run out of time again')
-  expect(r).not.toContain('held the same way')
-  expect(r).not.toContain('Try it again')
-  const a = untracedAgentRefusal('t9', INDEX, ["import { pad } from './pad'"], [], LATE, true)
-  expect(a).toContain('can run out of time again')
-  expect(a).not.toContain('held the same way')
-  expect(a).toContain('Stop and report to the main session')
-  expect(a).not.toContain('AskUserQuestion')
-})
-
-test('the question for an untraced edit names the file, says the guard could not trace it and that approving sends nothing, and shows the exact lines (#2709)', () => {
-  const q = untracedQuestion(INDEX, ["import { pad } from './pad'"], ['export const VERSION = 1'], WHY)
-  const [lead] = q.split('\n\n')
-  expect(readsAsSend(lead ?? '')).toBe(false)
-  expect(lead).toContain(INDEX)
-  expect(lead).toContain('could not trace')
-  expect(lead).toContain('sends nothing')
-  expect(q).toContain(WHY)
-  expect(q).toContain("import { pad } from './pad'")
-  expect(q).toContain('export const VERSION = 1')
-})

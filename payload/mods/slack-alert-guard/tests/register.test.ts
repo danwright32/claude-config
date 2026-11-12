@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, MARKER_PREFILTER, MOST_READ, PATHSPEC_BYTES, REEXPORT_HOPS, SCAN_MS, SENDER_PREFILTER, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, MOST_READ, SCAN_MS, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -115,20 +115,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const store: Record<string, unknown> = {}
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
-  // gitSlow: the search answers, but only after the clock has moved past the scan's deadline; with
-  // gitSlowWhen, only a git grep one of whose arguments holds it does (#2719).
-  // readMs: each file the guard reads and checks moves the clock this far, standing in for reading
-  // and checking a real file on a busy Mac (#2371); cwd: the folder the session is in.
-  // regexMsPerKb: each git grep moves the clock this far for every kilobyte of regular expression it
-  // is given, for every file it searches, as measured on a real repository (#2462: 0.09 predicts the
-  // 25 to 37 ms of a one name search and the 5.5 to 7.7 s of a 150 name one over 1,430 files);
-  // fixed strings (-F) cost nothing here, as they cost about what one short pattern does there.
-  // gitTruncated: git's listing comes back cut short. stdoutCap: as $.process.run keeps only the first
-  // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
-  // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
-  // after #2481). lsFilesFails: git ls-files alone exits nonzero with this on stderr, every other git
-  // call answering as usual (#2773).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app', lsFilesFails: '' }
+  // cwd: the folder the session is in.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -140,8 +128,6 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
   // guard that never searched.
   const gits: { argv: string[]; timeoutMs?: number }[] = []
-  // How many lines each git grep listing lines (no -l) printed.
-  const printed: number[] = []
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: { answer?: string; afk?: boolean } = {}
@@ -210,9 +196,6 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       gits.push({ argv, timeoutMs: e.init?.timeoutMs })
       if (ctl.gitThrows) throw new Error('git could not be started')
-      // gitKilledLate (#2796): git is killed at its timeout, the time the search had left, so the clock
-      // has passed the deadline when it answers.
-      if (ctl.gitKilledLate) await clock.advance(SCAN_MS + 1)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const top = Object.keys(ORIGINS).find(r => dir === r || dir.startsWith(`${r}/`))
@@ -228,19 +211,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
         if (night2.originFails) return { value: { exitCode: 2, stdout: '', stderr: "error: No such remote 'origin'\n", isStdoutTruncated: false, isStderrTruncated: false } } as never
         return ok(`${ORIGINS[top]}\n`)
       }
-      // git ls-files, listing the files a pathspec names (#2637): tracked or not, each ending in a NUL.
-      if (argv[3] === 'ls-files') {
-        if (ctl.gitSlow) await clock.advance(ctl.gitSlow)
-        if (ctl.lsFilesFails) return { value: { exitCode: 128, stdout: '', stderr: `${ctl.lsFilesFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
-        const named = argv.slice(argv.indexOf('--') + 1).filter(s => s.startsWith(':(glob,icase)')).map(s => s.slice(':(glob,icase)'.length))
-        const asGlob = (g: string) =>
-          new RegExp(`^${g.replace(/\\(.)|(\*\*\/)|(\*)|(\?)|([.+^${}()|[\]])/g, (m, esc, all, star, one, lit) => (esc ? `\\${esc}` : all ? '(.*/)?' : star ? '[^/]*' : one ? '[^/]' : `\\${lit}`))}$`, 'i')
-        const res = named.map(asGlob)
-        const listed = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && res.some(re => re.test(p.slice(dir.length + 1))))
-        return { value: { exitCode: 0, stdout: listed.map(p => `${p.slice(dir.length + 1)}\u0000`).join(''), stderr: '', isStdoutTruncated: ctl.gitTruncated, isStderrTruncated: false } } as never
-      }
       if (argv[3] === 'grep') {
-        if (ctl.gitSlow && argv.some(a => a.includes(ctl.gitSlowWhen))) await clock.advance(ctl.gitSlow)
         // -F: every pattern a fixed string, and a line matching any of them is listed.
         const fixed = argv.includes('-F')
         const given = argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [a] : []))
@@ -265,18 +236,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
               (s.startsWith(':(literal)') && s.slice(':(literal)'.length) === p.slice(dir.length + 1)),
           )
         const searched = Object.keys(files).filter(p => p.startsWith(`${dir}/`) && inSpec(p))
-        if (ctl.regexMsPerKb && !fixed) await clock.advance(Math.ceil((given.join('').length / 1000) * searched.length * ctl.regexMsPerKb))
-        // What git printed, as $.process.run hands it back: no more than its first stdoutCap bytes.
-        const listing = (stdout: string) => {
-          const bytes = new TextEncoder().encode(stdout)
-          const cut = bytes.length > ctl.stdoutCap
-          const kept = cut ? new TextDecoder().decode(bytes.subarray(0, ctl.stdoutCap)) : stdout
-          return { value: { exitCode: 0, stdout: kept, stderr: '', isStdoutTruncated: ctl.gitTruncated || cut, isStderrTruncated: false } } as never
-        }
+        const listing = (stdout: string) => ok(stdout)
         if (!argv.includes('-l')) {
           // Each line holding a fixed string, after its path and a NUL, as git grep -z prints it.
           const lines = searched.flatMap(p => (files[p] ?? '').split('\n').filter(l => (fixed ? patterns.some(re => re.test(l)) : patterns.every(re => re.test(l)))).map(l => `${p.slice(dir.length + 1)}\u0000${l}\n`))
-          printed.push(lines.length)
           if (!lines.length) return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
           return listing(lines.join(''))
         }
@@ -342,7 +305,6 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     reads++
-    if (ctl.readMs) await clock.advance(ctl.readMs)
     return { value: t } as never
   })
   on('store.get', async ($, e) => {
@@ -389,7 +351,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
 }
 type W = ReturnType<typeof world>
 
@@ -454,6 +416,70 @@ test('new wording in a Slack alert is held until Dan approves the message as Sla
   const again = await call($, REWORD)
   expect(refusalOf(again)).toBe('')
   expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2837, Dan 2026-11-12: "I'd much rather an alert get posted to slack that I didn't
+// approve than deal with stopping every 2 seconds to approve wording that nobody will ever see." He
+// chose: stop only for real senders. An edit is held only when the file it changes carries a Slack
+// marker in its own code; what other files import, read, name or send of it is never a reason to stop.
+const JOB = '/w/app/lib/deploy-job.ts'
+const JOB_TEXT = "import { notify } from './notify'\nexport const run = (id: string) => notify(`Deploy ${id} started`)\n"
+const NOTIFY_SENDER = '/w/app/lib/notify.ts'
+const NOTIFY_SENDER_TEXT = 'export const notify = (text: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
+const DEPLOY_COPY = 'export const deployFailed = (id: string) => `Deploy ${id} failed`\n'
+const DEPLOY_COPY_FILE = '/w/app/lib/templates/deploy.ts'
+const SENDS_COPY = "import { deployFailed } from './templates/deploy'\nexport const page = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n"
+const realSenders = { files: { [JOB]: JOB_TEXT, [NOTIFY_SENDER]: NOTIFY_SENDER_TEXT, [DEPLOY_COPY_FILE]: DEPLOY_COPY, '/w/app/lib/page.ts': SENDS_COPY, '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n' } }
+// The searches the guard used to make for other files' senders, by pattern or by import: none is made
+// any more. Only the whole word search for a model prompt's other uses (#2475), which can only let a
+// self sender's wording through, is left.
+const searches = (w: W) => w.gits.filter(g => (g.argv[3] === 'grep' && !g.argv.includes('-F')) || g.argv[3] === 'ls-files').length
+
+test('an edit adding wording to a file that imports a Slack sender, or that a sender imports, passes without searching the repository (#2837)', withKit, async ($, on) => {
+  const w = world($, on, realSenders)
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'Deploy ${id} started', new_string: 'Deploy ${id} started on production' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: DEPLOY_COPY_FILE, old_string: 'Deploy ${id} failed', new_string: 'Deploy ${id} failed on production' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/app/lib/new-copy.ts', content: 'export const LATE = "The nightly backup is late again"\nexport const DOWN = "The booking site is down for everyone"\n' }))).toBe('')
+  expect(w.ran.length).toBe(3)
+  expect(searches(w)).toBe(0)
+  expect(w.cards).toEqual([])
+})
+
+test('an edit adding wording to a file that itself posts to Slack is still held, and Dan approving it lets it through (#2837)', withKit, async ($, on) => {
+  const w = world($, on, realSenders)
+  const edit = { tool: 'Edit', file_path: NOTIFY_SENDER, old_string: 'JSON.stringify({ text })', new_string: 'JSON.stringify({ text: `Deploy alert: ${text}` })' }
+  const why = refusalOf(await call($, edit))
+  expect(why).toContain(NOTIFY_SENDER)
+  expect(why).toContain('Deploy alert: ${text}')
+  expect(why).not.toContain('sends to Slack,')
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE, { rendered: 'Deploy alert: Deploy 4182 started' })
+  expect(refusalOf(await call($, edit))).toBe('')
+  expect(w.ran.length).toBe(1)
+  expect(searches(w)).toBe(0)
+})
+
+test("a cp -R into a sender's folder passes: what lands there is not a reason to stop (#2837)", withKit, async ($, on) => {
+  const w = world($, on, realSenders)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/lib' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/lib/templates' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  expect(searches(w)).toBe(0)
+})
+
+test('a shell write into a file that itself posts to Slack is held; one into a file a sender imports or reads passes (#2837)', withKit, async ($, on) => {
+  const w = world($, on, realSenders)
+  const into = (file: string) => ({ tool: 'Bash', command: `printf 'export const more = "Disk is full"\\n' >> ${file}` })
+  const why = refusalOf(await call($, into(NOTIFY_SENDER)))
+  expect(why).toContain(`shell command writes to ${NOTIFY_SENDER}, which posts to Slack`)
+  expect(idIn(why)).toBeDefined()
+  expect(refusalOf(await call($, into(DEPLOY_COPY_FILE)))).toBe('')
+  expect(refusalOf(await call($, into(JOB)))).toBe('')
+  // A heredoc making a new file that posts by itself is held as a write into one is.
+  const made = refusalOf(await call($, { tool: 'Bash', command: "cat > /w/app/lib/pager.sh <<'EOF'\n#!/bin/bash\ncurl -s --data \"Disk is full\" \"$SLACK_WEBHOOK_URL\"\nEOF" }))
+  expect(made).toContain('shell command writes to /w/app/lib/pager.sh, which posts to Slack')
+  expect(w.ran.length).toBe(2)
+  expect(searches(w)).toBe(0)
 })
 
 test('a test file sends nothing: its titles and fixtures pass, by an edit and by a shell write, while the same wording in the sender is held', withKit, async ($, on) => {
@@ -650,65 +676,6 @@ const COPY_TEXT = 'export const lateBooking = (id: string) => `Booking ${id} is 
 const POST = '/w/app/src/lib/notify/post.ts'
 const POST_TEXT = 'export const postAlert = (text: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
 const ROUTE = '/w/app/src/app/api/cron/route.ts'
-const ROUTE_TEXT = "import { lateBooking } from '@/lib/notify/outage-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async () => postAlert(lateBooking('1'))\n"
-
-test('a node test script importing a copy builder and its Slack send helper is not a sender, so it is never named as one; a route that does the same is (#2509, #2720)', withKit, async ($, on) => {
-  const NODE_TEST = '/w/app/scripts/test-outage-copy.ts'
-  const w = world($, on, {
-    files: {
-      [COPY]: COPY_TEXT,
-      [POST]: POST_TEXT,
-      [NODE_TEST]: "import { lateBooking } from '../src/lib/notify/outage-copy'\nimport { postAlert } from '../src/lib/notify/post'\nassert.equal(lateBooking('1'), 'Booking 1 is late')\nvoid postAlert\n",
-    },
-  })
-  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
-  // Imported by nothing but a test, the copy module's new wording is held as copy no file uses yet
-  // (#2720), naming no sender: the test script is not one.
-  const unwired = refusalOf(await call($, edit))
-  expect(unwired).toContain('Booking ${id} is late again')
-  expect(unwired).not.toContain('sends to Slack')
-  expect(unwired).not.toContain(NODE_TEST)
-  expect(w.ran).toEqual([])
-  // The same imports in a route make it the sender, so the guard is still deciding.
-  w.files[ROUTE] = ROUTE_TEXT
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain(`which ${ROUTE} sends to Slack`)
-  expect(why).not.toContain(NODE_TEST)
-})
-
-test('a copy builder whose text a route posts through a Slack send helper is held, naming the route as its sender', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
-  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain(COPY)
-  expect(why).toContain(`which ${ROUTE} sends to Slack`)
-  expect(why).toContain('Booking ${id} is late again')
-  expect(w.ran).toEqual([])
-  await ask($, w, why, APPROVE, { rendered: 'Booking 4182 is late again' })
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
-})
-
-test("a copy builder whose send helper cannot be read is held for Dan to approve, naming no sender, never let through", withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [ROUTE]: ROUTE_TEXT } })
-  w.ctl.unreadable = POST
-  const edit = { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain('Booking ${id} is late again')
-  expect(why).not.toContain('sends to Slack')
-  expect(why).not.toContain('could not check')
-  expect(idIn(why)).toBeDefined()
-  expect(w.ran).toEqual([])
-})
-
-test('a notice builder of any name, whose importer imports the Slack module, is held too: what decides is the send, not the name', withKit, async ($, on) => {
-  const NOTICE = '/w/app/src/lib/notify/notice.ts'
-  const RUN = "import { buildNotice } from './notice'\nimport type { Payload } from './post'\nexport const runChange = () => buildNotice('1')\n"
-  const w = world($, on, { files: { [NOTICE]: COPY_TEXT, [POST]: POST_TEXT, '/w/app/src/lib/notify/run.ts': RUN } })
-  const why = refusalOf(await call($, { tool: 'Edit', file_path: NOTICE, old_string: 'is late`', new_string: 'is late again`' }))
-  expect(why).toContain('which /w/app/src/lib/notify/run.ts sends to Slack')
-  expect(w.ran).toEqual([])
-})
 
 test('a copy builder used by a route that posts nothing passes', withKit, async ($, on) => {
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [ROUTE]: "import { lateBooking } from '@/lib/notify/outage-copy'\nexport const GET = async () => console.log(lateBooking('1'))\n" } })
@@ -724,17 +691,6 @@ const notifier = (from: string, helper: string) =>
   `import { ${helper} } from '${from}'\nexport const run = async (count: number) => {\n  if (count > 5) await ${helper}(\`\${count} orders are stuck in the queue\`)\n}\n`
 const REWORD_NOTIFIER = { tool: 'Edit', file_path: NOTIFIER, old_string: 'orders are stuck in the queue', new_string: 'orders have been stuck for an hour' }
 
-test('rewording what a file hands a send helper named for nothing Slack is held, when the helper posts to Slack (#2770)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [POST]: POST_TEXT, [NOTIFIER]: notifier('@/lib/notify/post', 'postAlert') } })
-  const why = refusalOf(await call($, REWORD_NOTIFIER))
-  expect(why).toContain(NOTIFIER)
-  expect(why).toContain('${count} orders have been stuck for an hour')
-  expect(w.ran).toEqual([])
-  await ask($, w, why, APPROVE, { rendered: '12 orders have been stuck for an hour' })
-  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
-  expect(w.ran.length).toBe(1)
-})
-
 test('rewording what a file hands a helper that reaches no Slack send passes, from a module that posts nowhere or from a Slack module whose other function posts elsewhere (#2770)', withKit, async ($, on) => {
   const METRICS = '/w/app/src/lib/metrics/emit.ts'
   const METRICS_TEXT = 'export const emitEvent = (text: string) => fetch(process.env.METRICS_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
@@ -747,23 +703,6 @@ test('rewording what a file hands a helper that reaches no Slack send passes, fr
   w.files[NOTIFIER] = notifier('@/lib/notify/post', 'postMetric')
   expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
   expect(w.ran.length).toBe(2)
-})
-
-test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
-  const many: Record<string, string> = {}
-  // Each names the template as an import does, and names a Slack webhook only in a comment, which git
-  // cannot tell from code, so each must be read (#2371).
-  for (let i = 0; i <= MOST_READ; i++) many[`/w/app/lib/jobs/job${i}.ts`] = `// deploy news went to hooks.slack.com\nimport { deployFailed } from '../templates/deploy'\nexport const n${i} = deployFailed\n`
-  const w = world($, on, { files: { ...sent.files, ...many } })
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).not.toContain('could not check')
-  expect(why).toContain('Deploy ${id} failed on production')
-  expect(idIn(why)).toBeDefined()
-  // No sender is named, since the guard could not tell which file sends it.
-  expect(why).not.toContain('sends to Slack')
-  await ask($, w, why, APPROVE)
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  expect(w.ran.length).toBe(1)
 })
 
 test('the real shapes that were over the limit: a page gaining a metadata title among 452 pages that mention Slack passes, since no file names it (#2371); a deploy doc gaining bullets is a doc and passes', withKit, async ($, on) => {
@@ -793,39 +732,9 @@ const crowd = (n: number) => {
     many[`/w/app/src/app/area${i}/page.tsx`] = `import { getSettings } from '@/lib/get-settings'\n// the digest is kept in memory, then posted to slack\nexport const let${i} = getSettings()\n`
   return many
 }
-const ET = '/w/app/src/lib/et.ts'
 const MEMORY = '/w/app/src/lib/memory.ts'
 const LABEL = 'export const nowEt = () => new Date()\nexport const label = "Eastern time"\n'
 const relabel = (file: string) => ({ tool: 'Edit', file_path: file, old_string: '"Eastern time"', new_string: '"Eastern time, as Dan reads it"' })
-
-test('a write to a file with a common short name (et.ts, memory.ts) is judged by the files that name it, within the deadline (Dan item 3)', withKit, async ($, on) => {
-  const CLOCK = '/w/app/src/app/clock/page.tsx'
-  const w = world($, on, {
-    files: {
-      ...crowd(150),
-      [ET]: LABEL,
-      [MEMORY]: LABEL,
-      // An importer that posts nothing.
-      [CLOCK]: "import { nowEt } from '@/lib/et'\nimport { remember } from '@/lib/memory'\nimport { db } from '@/lib/db'\nexport default function Clock() { return nowEt() }\n",
-    },
-  })
-  // Reading and checking 120 files takes the whole search budget.
-  w.ctl.readMs = Math.ceil(SCAN_MS / 120)
-  for (const file of [ET, MEMORY]) {
-    const before = w.reads()
-    expect(refusalOf(await call($, relabel(file)))).toBe('')
-    // Only the files that name it were read, never the crowd.
-    expect(w.reads() - before).toBeLessThan(10)
-  }
-  expect(w.ran.length).toBe(2)
-  // A file that does send it to Slack is still found, in the same crowd, and the edit is held naming it.
-  const DIGEST = '/w/app/src/jobs/digest.ts'
-  w.files[DIGEST] = "import { nowEt, label } from '../lib/et'\nexport const send = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: `${nowEt()} ${label}` })\n"
-  const why = refusalOf(await call($, relabel(ET)))
-  expect(why).toContain(`which ${DIGEST} sends to Slack`)
-  expect(why).toContain('Eastern time, as Dan reads it')
-  expect(w.ran.length).toBe(2)
-})
 
 test("a module's importers that also import common helpers (db, utils) do not make its write a hold (Dan item 3)", withKit, async ($, on) => {
   const many: Record<string, string> = {}
@@ -835,20 +744,6 @@ test("a module's importers that also import common helpers (db, utils) do not ma
   const w = world($, on, { files: { ...many, [MEMORY]: LABEL, '/w/app/src/lib/db.ts': 'export const db = {}\n', '/w/app/src/lib/utils.ts': 'export const cn = () => ""\n' } })
   expect(refusalOf(await call($, relabel(MEMORY)))).toBe('')
   expect(w.ran.length).toBe(1)
-})
-
-test('a send helper whose text never names its own module is still found through the import, so the copy it sends is held (Dan item 3)', withKit, async ($, on) => {
-  const ROUTE = '/w/app/src/app/api/digest/route.ts'
-  const w = world($, on, {
-    files: {
-      [MEMORY]: LABEL,
-      '/w/app/src/lib/messenger.ts': 'export const send = (text: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: "POST", body: JSON.stringify({ text }) })\n',
-      [ROUTE]: "import { label } from '@/lib/memory'\nimport { send } from '@/lib/messenger'\nexport const GET = () => send(label)\n",
-    },
-  })
-  const why = refusalOf(await call($, relabel(MEMORY)))
-  expect(why).toContain(`which ${ROUTE} sends to Slack`)
-  expect(w.ran).toEqual([])
 })
 
 test('an approval can carry a placeholder the code writes as text', withKit, async ($, on) => {
@@ -1048,27 +943,13 @@ test('a nested template literal in a Slack sender is held when its inner wording
   expect(w.ran.length).toBe(1)
 })
 
-// claude-config#2248: the wording lives in a template, and a different file sends it to Slack.
+// A template and the file that sends it to Slack (#2248). Since #2837 only the sender is ever held.
 const TEMPLATE = '/w/app/lib/templates/deploy.ts'
 const TEMPLATE_TEXT = 'export const deployFailed = (id: string) => `Deploy ${id} failed`\n'
 const SENDER = '/w/app/lib/notify.ts'
 const SENDER_TEXT =
   "import { deployFailed } from './templates/deploy'\nexport const notify = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n"
-const RETEMPLATE = { tool: 'Edit', file_path: TEMPLATE, old_string: 'Deploy ${id} failed', new_string: 'Deploy ${id} failed on production' }
 const sent = { files: { [TEMPLATE]: TEMPLATE_TEXT, [SENDER]: SENDER_TEXT } }
-const grepped = (w: W) => w.gits.filter(g => g.argv[3] === 'grep').length
-
-test('new wording in a template that another file sends to Slack is held, naming the sender, until Dan approves it', withKit, async ($, on) => {
-  const w = world($, on, sent)
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain(TEMPLATE)
-  expect(why).toContain(`which ${SENDER} sends to Slack`)
-  expect(why).toContain('Deploy ${id} failed on production')
-  expect(w.ran).toEqual([])
-  await ask($, w, why, APPROVE)
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  expect(w.ran.length).toBe(1)
-})
 
 // claude-config#2475: a file that posts to Slack imports a module that holds an editor model's own
 // instructions beside the title it posts. The instructions are text only the model reads, so adding a
@@ -1109,58 +990,6 @@ test("an edit to a model's own instructions, in a module a Slack sender imports,
   expect(w.asked).toEqual([])
 })
 
-test('the title the same module hands the Slack sender is still held, and so is a prompt edit made in the same call as one (#2475)', withKit, async ($, on) => {
-  const w = world($, on, editorWorld)
-  const title = { tool: 'Edit', file_path: EDITOR, old_string: 'Nightly digest: ${n} stories ready', new_string: 'Nightly digest: ${n} stories are ready' }
-  const why = refusalOf(await call($, title))
-  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
-  expect(why).toContain('Nightly digest: ${n} stories are ready')
-  // A call changing the prompt and the title shows Dan the title alone, never the prompt.
-  const both = refusalOf(await call($, { tool: 'MultiEdit', file_path: EDITOR, edits: [{ old_string: PROMPT_EDIT.old_string, new_string: PROMPT_EDIT.new_string }, { old_string: title.old_string, new_string: title.new_string }] }))
-  expect(both).toContain('Nightly digest: ${n} stories are ready')
-  expect(both).not.toContain('Lead with the biggest story')
-  expect(w.ran).toEqual([])
-})
-
-test('a prompt constant some file also posts, or uses any way but as a model input, is still held as Slack wording (#2475)', withKit, async ($, on) => {
-  // The sender posts the instructions themselves.
-  const POSTS_PROMPT = "import { WebClient } from '@slack/web-api'\nimport { EDITOR_PROMPT } from '../lib/ai/editor'\nconst slack = new WebClient(process.env.SLACK_BOT_TOKEN)\nexport const run = () => slack.chat.postMessage({ channel: 'C1', text: EDITOR_PROMPT })\n"
-  const w = world($, on, { files: { ...editorWorld.files, [DIGEST_JOB]: POSTS_PROMPT } })
-  const why = refusalOf(await call($, PROMPT_EDIT))
-  expect(why).toContain('Lead with the biggest story')
-  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a prompt constant another file hands to something other than a model is still held: the guard cannot see where that goes (#2475)', withKit, async ($, on) => {
-  const OTHER = '/w/app/src/lib/ai/log.ts'
-  const w = world($, on, { files: { ...editorWorld.files, [OTHER]: "import { EDITOR_PROMPT } from './editor'\nexport const note = () => record(EDITOR_PROMPT)\n" } })
-  expect(refusalOf(await call($, PROMPT_EDIT))).toContain('Lead with the biggest story')
-  // So is one renamed on its way out, which a search by its name could not follow.
-  const ALIAS = "export { EDITOR_PROMPT as PROMPT }\n"
-  w.files[EDITOR] = EDITOR_TEXT + ALIAS
-  delete w.files[OTHER]
-  expect(refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))).toContain('Name each story once')
-  expect(w.ran).toEqual([])
-})
-
-// The prompt reaches a model runner elsewhere through a barrel, which a search by its name still finds.
-const BARREL_AI = { '/w/app/src/lib/ai/index.ts': "export * from './editor'\n" }
-const REVIEW = '/w/app/src/lib/review/run.ts'
-const REVIEW_TEXT = "import { EDITOR_PROMPT } from '../ai'\nexport const review = (d: string) => client.messages.create({ system: EDITOR_PROMPT, messages: [{ role: 'user', content: d }] })\n"
-
-test('a prompt another file imports through a barrel and hands only to a model passes; one whose other uses cannot be read is held (#2475)', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...editorWorld.files, ...BARREL_AI, [REVIEW]: REVIEW_TEXT } })
-  expect(refusalOf(await call($, PROMPT_EDIT))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // The guard cannot tell what the runner does with it, so the prompt counts as wording: held, never let through.
-  w.ctl.unreadable = REVIEW
-  const why = refusalOf(await call($, { ...PROMPT_EDIT, new_string: 'Keep every sentence short and plain. Name each story once.' }))
-  expect(why).toContain('Name each story once')
-  expect(why).toContain(`which ${DIGEST_JOB} sends to Slack`)
-  expect(w.ran.length).toBe(1)
-})
-
 test('in a file that posts to Slack itself, its model prompt passes and its alert wording is still held (#2475)', withKit, async ($, on) => {
   const JOB = '/w/app/src/jobs/summary.ts'
   const JOB_TEXT = [
@@ -1179,37 +1008,6 @@ test('in a file that posts to Slack itself, its model prompt passes and its aler
   const why = refusalOf(await call($, { tool: 'Edit', file_path: JOB, old_string: 'Daily summary is ready', new_string: 'Daily summary is ready to read' }))
   expect(why).toContain('Daily summary is ready to read')
   expect(w.ran.length).toBe(1)
-})
-
-test('a text template a script reads and sends is held too, by a Write and by a shell write', withKit, async ($, on) => {
-  const TXT = '/w/app/templates/backup.txt'
-  const PY = '/w/app/jobs/backup.py'
-  const w = world($, on, { files: { [TXT]: 'Backup is late\n', [PY]: 'from slack_sdk import WebClient\nbody = open("templates/backup.txt").read()\n' } })
-  const why = refusalOf(await call($, { tool: 'Write', file_path: TXT, content: 'Backup is late on db-1\n' }))
-  expect(why).toContain('Backup is late on db-1')
-  expect(why).toContain(`which ${PY} sends to Slack`)
-  const shell = refusalOf(await call($, { tool: 'Bash', command: `printf 'Backup failed\\n' > ${TXT}` }))
-  expect(shell).toContain('shell command')
-  expect(shell).toContain(`which ${PY} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a template no file sends passes, after a search that ran; so does a file outside any repository', withKit, async ($, on) => {
-  const DIGEST = '/w/app/lib/templates/digest.ts'
-  const w = world($, on, { files: { ...sent.files, [DIGEST]: 'export const digest = `Nightly digest ready`\n' } })
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'Nightly digest ready', new_string: 'Nightly digest is ready' }))).toBe('')
-  // Two greps, once for the search, for the files holding a Slack word and which of those could post,
-  // and one for the files naming the template, senders and files handing it on alike (#2286, #2462);
-  // with none naming it, no lines are listed.
-  expect(grepped(w)).toBe(3)
-  // Every git call is bounded by the scan's deadline.
-  expect(w.gits.every(g => typeof g.timeoutMs === 'number' && g.timeoutMs > 0 && g.timeoutMs <= SCAN_MS)).toBe(true)
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/elsewhere/messages.ts', content: 'export const m = "Disk is full"\n' }))).toBe('')
-  // An edit touching no wording never searches at all.
-  const before = w.gits.length
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: TEMPLATE, old_string: 'id: string', new_string: 'deployId: string' }))).toBe('')
-  expect(w.gits.length).toBe(before)
-  expect(w.ran.length).toBe(3)
 })
 
 // Pivot, 2026-11-06: a project's CLAUDE.md named an engine file and a Slack webhook secret, and a
@@ -1232,541 +1030,19 @@ test('a prose file, or a comment, that names a template and mentions Slack does 
   expect(w.ran.length).toBe(1)
 })
 
-test('a sender in a language the guard does not list as code still sends', withKit, async ($, on) => {
-  const VUE = '/w/app/lib/notify.vue'
-  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [VUE]: SENDER_TEXT } })
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain(`which ${VUE} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a workflow that names a template in a step, not a comment, still sends it', withKit, async ($, on) => {
-  const MSG = '/w/app/alerts/late.txt'
-  const YML = '/w/app/.github/workflows/late.yml'
-  const w = world($, on, {
-    files: {
-      [MSG]: 'Backup is late\n',
-      [YML]: '# posts the late notice\nsteps:\n  - run: curl -X POST "$SLACK_ALERTS_WEBHOOK" --data-binary @alerts/late.txt\n',
-    },
-  })
-  const why = refusalOf(await call($, { tool: 'Write', file_path: MSG, content: 'Backup is late on db-1\n' }))
-  expect(why).toContain(`which ${YML} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a search that cannot finish, runs past its deadline, or meets an unreadable file holds the edit, saying why', withKit, async ($, on) => {
-  const w = world($, on, sent)
-  w.ctl.gitFails = 'timed out after 3000ms'
-  const failed = refusalOf(await call($, RETEMPLATE))
-  expect(failed).toContain('could not check')
-  expect(failed).toContain('timed out after 3000ms')
-  // git failing with time still left may pass on another try, so says to try again (#2796).
-  expect(failed).toContain('Try it again')
-  // git killed at its timeout once no time was left ran out of time, and is put to Dan (#2796).
-  w.ctl.gitKilledLate = true
-  const killed = refusalOf(await call($, RETEMPLATE))
-  expect(killed).toContain('could not trace')
-  expect(killed).toContain(`${SCAN_MS / 1000} seconds`)
-  expect(killed).not.toContain('Try it again')
-  expect(idIn(killed)).toBeDefined()
-  w.ctl.gitKilledLate = false
-  w.ctl.gitFails = ''
-  w.ctl.gitThrows = true
-  const unrun = refusalOf(await call($, RETEMPLATE))
-  expect(unrun).toContain('could not check')
-  expect(unrun).toContain('could not be searched')
-  w.ctl.gitThrows = false
-  w.ctl.gitSlow = SCAN_MS + 1
-  // Out of time, it is held for Dan with an id (#2796), never left with nothing he can answer.
-  const late = refusalOf(await call($, RETEMPLATE))
-  expect(late).toContain('could not trace')
-  expect(late).toContain(`${SCAN_MS / 1000} seconds`)
-  expect(late).not.toContain('Try it again')
-  expect(idIn(late)).toBeDefined()
-  w.ctl.gitSlow = 0
-  w.ctl.unreadable = SENDER
-  const unread = refusalOf(await call($, RETEMPLATE))
-  expect(unread).toContain('could not check')
-  expect(unread).toContain(SENDER)
-  expect(w.ran).toEqual([])
-})
-
-// claude-config#2286: the template reaches its sender through files that import and re-export it.
-const BARREL = '/w/app/lib/templates/index.ts'
-const BARREL_TEXT = "export * from './deploy'\n"
 const NOTIFY = '/w/app/lib/notify.ts'
-const notifies = (from: string) =>
-  `import { deployFailed } from '${from}'\nexport const notify = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })\n`
-const reexports = (from: string) => `export { deployFailed } from '${from}'\n`
 
-test('a template re-exported once, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
-  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [NOTIFY]: notifies('./templates') } })
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain(TEMPLATE)
-  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
-  expect(w.ran).toEqual([])
-  await ask($, w, why, APPROVE)
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-})
-
-test('a template re-exported twice, then sent to Slack, is held naming the file that sends it', withKit, async ($, on) => {
-  const MESSAGES = '/w/app/lib/messages.ts'
-  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [NOTIFY]: notifies('./messages') } })
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test(`a template handed on through ${REEXPORT_HOPS} files is followed; through more, the edit is held as one the guard could not trace, for Dan to approve (#2709)`, withKit, async ($, on) => {
-  const ALPHA = '/w/app/lib/alpha.ts'
-  const BRAVO = '/w/app/lib/bravo.ts'
-  const CHARLIE = '/w/app/lib/charlie.ts'
-  const chain = { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [ALPHA]: reexports('./templates'), [BRAVO]: reexports('./alpha') }
-  const w = world($, on, { files: { ...chain, [NOTIFY]: notifies('./bravo') } })
-  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
-  // One file more than the guard follows: it cannot say whether that file is sent, so it holds.
-  w.files[CHARLIE] = reexports('./bravo')
-  w.files[NOTIFY] = notifies('./charlie')
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain('could not trace')
-  expect(why).not.toContain('Try it again')
-  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
-  expect(why).toContain(CHARLIE)
-  expect(why).toContain('export const deployFailed = (id: string) => `Deploy ${id} failed on production`')
-  expect(idIn(why)).toBeDefined()
-  expect(w.ran).toEqual([])
-})
-
-// claude-config#2709: on 2026-11-10 an import added to an index file was held every time as "handed
-// on through more than 3 files before anything sends it", with no route forward, since the trace is
-// the same on every try. It is now held for Dan with the exact line shown, and his approval lets
-// that one edit through, and only that edit.
-test(`an import added to a file handed on through more than ${REEXPORT_HOPS} files is held with the line shown; Dan's approval lets that one edit through and no other (#2709)`, withKit, async ($, on) => {
-  const ALPHA = '/w/app/lib/alpha.ts'
-  const BRAVO = '/w/app/lib/bravo.ts'
-  const CHARLIE = '/w/app/lib/charlie.ts'
-  const DELTA = '/w/app/lib/delta.ts'
-  const PAD = '/w/app/lib/templates/pad.ts'
-  const w = world($, on, {
-    files: {
-      [TEMPLATE]: TEMPLATE_TEXT,
-      [BARREL]: BARREL_TEXT,
-      [PAD]: 'export const pad = (s: string) => s.trim()\n',
-      [ALPHA]: reexports('./templates'),
-      [BRAVO]: reexports('./alpha'),
-      [CHARLIE]: reexports('./bravo'),
-      [DELTA]: reexports('./charlie'),
-      [NOTIFY]: notifies('./delta'),
-    },
-  })
-  const LINE = "import { pad } from './pad'"
-  const edit = { tool: 'Edit', file_path: BARREL, old_string: BARREL_TEXT, new_string: `${LINE}\n${BARREL_TEXT}` }
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain('could not trace')
-  expect(why).toContain(BARREL)
-  expect(why).toContain(LINE)
-  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
-  expect(why).not.toContain('Try it again')
-  expect(w.ran).toEqual([])
-  expect(w.cards.length).toBe(1)
-  // A subagent making the same edit is told to stop and report, never to ask.
-  const agent = refusalOf(await call($, { ...edit, agentId: 'agent-a1' }))
-  expect(agent).toContain('could not trace')
-  expect(agent).toContain('Stop and report to the main session')
-  // Dan is asked with the line shown; there is no message to render, so none is required.
-  const a = await ask($, w, why, APPROVE, {})
-  const q = w.asked[0]?.questions[0]
-  expect(q?.question).toContain(LINE)
-  expect(q?.question).toContain('could not trace')
-  expect(q?.header).toBe(HEADER)
-  expect(q?.options.map(o => o.label)).toEqual([APPROVE, CHANGE])
-  expect(readsAsSend((q?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
-  expect(contextOf(a)).toContain('again')
-  // That exact edit goes through.
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // Any other edit to the same file is asked about again.
-  const other = refusalOf(await call($, { ...edit, new_string: `import { pin } from './pin'\n${BARREL_TEXT}` }))
-  expect(other).toContain('could not trace')
-  expect(idIn(other)).not.toBe(idIn(why))
-  expect(w.ran.length).toBe(1)
-})
-
-test(`a sender newly sending a name handed down through more than ${REEXPORT_HOPS} files below it is held with its line shown, for Dan to approve (#2709)`, withKit, async ($, on) => {
-  const DEEP = '/w/app/src/lib/deep'
-  const WATCH = '/w/app/src/jobs/watch.ts'
-  const w = world($, on, {
-    files: {
-      [`${DEEP}/copy.ts`]: 'export const quietPage = (f: string) => `The ${f} feed has gone quiet`\n',
-      [`${DEEP}/h4.ts`]: "export { quietPage } from './copy'\n",
-      [`${DEEP}/h3.ts`]: "export { quietPage } from './h4'\n",
-      [`${DEEP}/h2.ts`]: "export { quietPage } from './h3'\n",
-      [`${DEEP}/h1.ts`]: "export { quietPage } from './h2'\n",
-      [WATCH]: "import { quietPage } from '../lib/deep/h1'\nexport const watch = (t: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: t }) })\n",
-    },
-  })
-  const edit = { tool: 'Edit', file_path: WATCH, old_string: '{ text: t }', new_string: "{ text: t || quietPage('orders') }" }
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain('could not trace')
-  expect(why).toContain(`more than ${REEXPORT_HOPS} files below it`)
-  expect(why).toContain("quietPage('orders')")
-  expect(why).not.toContain('Try it again')
-  await ask($, w, why, APPROVE, {})
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
-})
-
-test('Change wording, or no answer, on an untraced edit records nothing, and the edit stays held (#2709)', withKit, async ($, on) => {
-  const ALPHA = '/w/app/lib/alpha.ts'
-  const BRAVO = '/w/app/lib/bravo.ts'
-  const CHARLIE = '/w/app/lib/charlie.ts'
-  const DELTA = '/w/app/lib/delta.ts'
-  const w = world($, on, {
-    files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [ALPHA]: reexports('./templates'), [BRAVO]: reexports('./alpha'), [CHARLIE]: reexports('./bravo'), [DELTA]: reexports('./charlie'), [NOTIFY]: notifies('./delta') },
-  })
-  const edit = { tool: 'Edit', file_path: BARREL, old_string: BARREL_TEXT, new_string: `import { pad } from './pad'\n${BARREL_TEXT}` }
-  const why = refusalOf(await call($, edit))
-  await ask($, w, why, CHANGE, {})
-  await ask($, w, why, undefined, {})
-  expect(Object.keys(w.store).length).toBe(0)
-  expect(refusalOf(await call($, edit))).toContain('could not trace')
-  expect(w.ran).toEqual([])
-  // A shell write to the same file is held as a shell write is, with an id Dan can approve, never
-  // as could not check.
-  const shell = refusalOf(await call($, { tool: 'Bash', command: `printf 'export const V = 1\\n' >> ${BARREL}` }))
-  expect(shell).toContain('shell command')
-  expect(shell).not.toContain('could not check')
-  expect(idIn(shell)).toBeDefined()
-  expect(w.ran).toEqual([])
-})
-
-// claude-config#2519, Dan 2026-11-09: a rule, not a deeper search. A file imported only by UI
-// components (React files in a components, screens or views folder) is not on a path that posts to
-// Slack, so it settles there; a file with any other importer is judged as before, and a UI file that
-// itself sends is still found by the sender check.
+// A React component (#2519), used below as a file that posts nothing.
 const CARD = '/w/app/components/DeployCard.tsx'
-const CARD_TEXT = "import { deployFailed } from '../lib/templates/deploy'\nexport const DeployCard = ({ id }: { id: string }) => <p>{deployFailed(id)}</p>\n"
-const uiImports = (name: string, from: string, used: string) => `import { ${used} } from '${from}'\nexport const ${name} = () => <${used} id="1" />\n`
-// Four components deep, one past what the guard follows, as the 14 components behind a work
-// repository's logic-card.ts were.
-const UI_CHAIN = {
-  [CARD]: CARD_TEXT,
-  '/w/app/components/DeployPanel.tsx': uiImports('DeployPanel', './DeployCard', 'DeployCard'),
-  '/w/app/components/DeployList.tsx': uiImports('DeployList', './DeployPanel', 'DeployPanel'),
-  '/w/app/screens/Deploys.tsx': uiImports('Deploys', '../components/DeployList', 'DeployList'),
-}
 
-test('a template imported only by UI components settles there, never followed past them', withKit, async ($, on) => {
-  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN } })
-  const before = grepped(w)
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // The template's importers were searched for, and no search was made for the component's own: no
-  // git grep looked for its name (a word after -e), though one listed the component's lines.
-  expect(grepped(w)).toBeGreaterThan(before)
-  const patterns = w.gits.flatMap(g => g.argv.filter((_, i) => g.argv[i - 1] === '-e'))
-  expect(patterns.length).toBeGreaterThan(0)
-  expect(patterns.some(p => /deploycard/i.test(p))).toBe(false)
-})
-
-test('a template imported by a UI component and by any other file is judged as before', withKit, async ($, on) => {
-  // The other importer leads past what the guard follows: held as an edit the guard could not trace
-  // (#2709), as without the component.
-  const deep = {
-    '/w/app/lib/emails/alpha.tsx': "import { deployFailed } from '../templates/deploy'\nexport const Alpha = () => <p>{deployFailed('1')}</p>\n",
-    '/w/app/lib/emails/bravo.tsx': "export { Alpha } from './alpha'\n",
-    '/w/app/lib/emails/charlie.tsx': "export { Alpha } from './bravo'\n",
-    '/w/app/lib/emails/delta.tsx': "export { Alpha } from './charlie'\n",
-  }
-  const w = world($, on, { files: { [TEMPLATE]: TEMPLATE_TEXT, ...UI_CHAIN, ...deep } })
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain('could not trace')
-  expect(why).toContain(`more than ${REEXPORT_HOPS} files`)
-  expect(w.ran).toEqual([])
-  // The other importer sends nothing, and the component is imported by a file that posts it to
-  // Slack: the component is followed as before, and that file is named as the sender.
-  for (const r of Object.keys(deep)) delete w.files[r]
-  const CARD_POST = '/w/app/lib/card-post.ts'
-  w.files['/w/app/lib/format.ts'] = "import { deployFailed } from './templates/deploy'\nexport const formatted = (id: string) => deployFailed(id).trim()\n"
-  w.files[CARD_POST] = "import { DeployCard } from '../components/DeployCard'\nexport const post = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: String(DeployCard({ id: '1' })) }) })\n"
-  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD_POST} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a UI component that sends the template to Slack itself, or through a send helper, is still held', withKit, async ($, on) => {
-  const w = world($, on, {
-    files: {
-      [TEMPLATE]: TEMPLATE_TEXT,
-      ...UI_CHAIN,
-      [CARD]: "import { deployFailed } from '../lib/templates/deploy'\nexport const DeployCard = ({ id }: { id: string }) => <button onClick={() => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: deployFailed(id) }) })} />\n",
-    },
-  })
-  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD} sends to Slack`)
-  w.files[POST] = POST_TEXT
-  w.files[CARD] = "import { deployFailed } from '../lib/templates/deploy'\nimport { postAlert } from '../src/lib/notify/post'\nexport const DeployCard = ({ id }: { id: string }) => <button onClick={() => postAlert(deployFailed(id))} />\n"
-  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${CARD} sends to Slack`)
-  expect(w.ran).toEqual([])
-})
-
-test('a re-export cycle ends: with a sender beside it the edit is held, with none it passes', withKit, async ($, on) => {
-  const ALPHA = '/w/app/lib/alpha.ts'
-  const BRAVO = '/w/app/lib/bravo.ts'
-  const loop = { [TEMPLATE]: TEMPLATE_TEXT, [ALPHA]: "export * from './templates/deploy'\nexport * from './bravo'\n", [BRAVO]: "export * from './alpha'\n" }
-  const w = world($, on, { files: { ...loop, [NOTIFY]: notifies('./bravo') } })
-  expect(refusalOf(await call($, RETEMPLATE))).toContain(`which ${NOTIFY} sends to Slack`)
-  expect(w.ran).toEqual([])
-  delete w.files[NOTIFY]
-  const before = grepped(w)
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // One grep for the files that could post for the whole search, then each level is one grep listing
-  // the files naming it, one listing their lines (and at most one for send helpers), and the loop
-  // back to alpha.ts adds no level.
-  expect(grepped(w) - before).toBeGreaterThan(2)
-  expect(grepped(w) - before).toBeLessThanOrEqual(1 + 3 * (REEXPORT_HOPS + 1))
-  expect(w.ran.length).toBe(1)
-})
-
-test('a template re-exported but sent to Slack by nothing passes, after the chain was followed', withKit, async ($, on) => {
-  const MESSAGES = '/w/app/lib/messages.ts'
-  const USES = '/w/app/lib/report.ts'
-  const w = world($, on, {
-    files: { [TEMPLATE]: TEMPLATE_TEXT, [BARREL]: BARREL_TEXT, [MESSAGES]: reexports('./templates'), [USES]: "import { deployFailed } from './messages'\nconsole.log(deployFailed('1'))\n" },
-  })
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // Past the first grep: the barrel and messages.ts were each searched for.
-  expect(grepped(w)).toBeGreaterThan(2)
-  expect(w.ran.length).toBe(1)
-})
-
-// #2368 met #2286: past the template's own level, a prose file or a comment still sends nothing.
-test('a prose file, or a comment, naming a file that hands the template on does not make a sender', withKit, async ($, on) => {
-  const NOTES = '/w/app/docs/alerts.md'
-  const YML = '/w/app/.github/workflows/deploy.yml'
-  const w = world($, on, {
-    files: {
-      [TEMPLATE]: TEMPLATE_TEXT,
-      [BARREL]: BARREL_TEXT,
-      [NOTES]: 'Deploy notices come from `lib/templates/index.ts` and post through SLACK_WEBHOOK_URL.\n',
-      [YML]: '# lib/templates/index.ts holds the wording; it posts with SLACK_WEBHOOK_URL\nsteps:\n  - run: curl -X POST "$SLACK_WEBHOOK_URL" -d "{}"\n',
-    },
-  })
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // The barrel's level was searched too, so the prose file and the comment were met and passed over.
-  expect(grepped(w)).toBeGreaterThan(2)
-})
-
-test('a commented import does not hand a template on, and a Slack marker in a comment does not stop a file that does', withKit, async ($, on) => {
-  const MESSAGES = '/w/app/lib/messages.ts'
-  const w = world($, on, {
-    files: {
-      [TEMPLATE]: TEMPLATE_TEXT,
-      [MESSAGES]: "// was: export { deployFailed } from './templates/deploy'\nexport const other = 1\n",
-      [NOTIFY]: notifies('./messages'),
-    },
-  })
-  expect(refusalOf(await call($, RETEMPLATE))).toBe('')
-  // A comment naming the Slack webhook makes messages.ts neither the sender nor a dead end: it is
-  // followed to the file that really sends the template.
-  w.files[MESSAGES] = "// posts nothing itself, never SLACK_WEBHOOK_URL; notify.ts does\nexport { deployFailed } from './templates/deploy'\n"
-  const why = refusalOf(await call($, RETEMPLATE))
-  expect(why).toContain(`which ${NOTIFY} sends to Slack`)
-  expect(why).not.toContain(`which ${MESSAGES}`)
-})
-
-// claude-config#2462: a module imported by many files, in a repository of many more. Handlers import
-// it, area barrels and routes import the handlers, and one file posting to Slack imports a route, so
-// the module reaches Slack two files away. The cost of git grep is the world's measured one.
+// A widely imported module (#2462), used below as a file that posts nothing.
 const HTTP = '/w/app/src/lib/http.ts'
-const HTTP_TEXT = 'export const jsonError = (msg: string) => new Response(JSON.stringify({ error: `Request failed: ${msg}` }))\n'
-const REHTTP = { tool: 'Edit', file_path: HTTP, old_string: 'Request failed: ${msg}', new_string: 'Request failed for ${msg}' }
-const POSTER = '/w/app/src/alerts/notify.ts'
-const AREAS = ['billing', 'accounts', 'orders', 'search', 'media', 'auth', 'reports', 'teams', 'webhooks', 'settings']
-const widelyImported = (importers: number, others = 1200): Record<string, string> => {
-  const files: Record<string, string> = { [HTTP]: HTTP_TEXT }
-  const handlers: { area: string; name: string }[] = []
-  for (let i = 0; i < importers; i++) {
-    const area = AREAS[i % AREAS.length] as string
-    const name = `${area}Handler${i}`
-    handlers.push({ area, name })
-    files[`/w/app/src/handlers/${area}/${name}.ts`] =
-      `import { jsonError } from '../../lib/http'\nimport { query } from '../../lib/db'\n\nexport const handle${i} = async (id: string) => (id ? query(id) : jsonError('missing id'))\n`
-  }
-  for (const area of AREAS)
-    files[`/w/app/src/handlers/${area}/index.ts`] = handlers.filter(h => h.area === area).map(h => `export * from './${h.name}'`).join('\n') + '\n'
-  for (let r = 0; r < 60; r++) {
-    const h = handlers[r % handlers.length] as { area: string; name: string }
-    files[`/w/app/src/routes/route${r}.ts`] = `import * as area from '../handlers/${h.area}'\nimport { handle${r % handlers.length} } from '../handlers/${h.area}/${h.name}'\n\nexport const route${r} = { path: '/${h.area}/${r}', area, h: handle${r % handlers.length} }\n`
-  }
-  files[POSTER] =
-    "import { route7 } from '../routes/route7'\nexport const notify = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: `Route ${route7.path} is failing` }) })\n"
-  for (let f = 0; f < others; f++) files[`/w/app/src/other/pkg${f % 40}/mod${f}.ts`] = `import { query } from '../../lib/db'\n\nexport const thing${f} = () => query('select ${f}')\n`
-  return files
-}
-
-test('a module imported by many files is searched within the limit, and the file two away that sends it is named', withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(60) })
-  w.ctl.regexMsPerKb = 0.09
-  const why = refusalOf(await call($, REHTTP))
-  expect(why).not.toContain('could not check')
-  expect(why).toContain(`which ${POSTER} sends to Slack`)
-  expect(w.ran).toEqual([])
-  // No regular expression git is asked to test grows with the files being traced: the names go to git
-  // as fixed strings, and the only regular expressions are the two fixed Slack searches.
-  const regexes = w.gits.filter(g => g.argv[3] === 'grep' && !g.argv.includes('-F')).flatMap(g => g.argv.filter((_, i) => g.argv[i - 1] === '-e'))
-  expect(regexes.length).toBeGreaterThan(0)
-  for (const r of regexes) expect([SENDER_PREFILTER, MARKER_PREFILTER]).toContain(r)
-})
-
-// Sized from real searches (#2510): on this Mac the largest repository the search walks (NurseDex,
-// 1,061 JavaScript, TypeScript and python files) needed 213 reads for its widely imported utils.ts,
-// taking 1.65 to 1.70 s at load 27 (about 8 ms a file, git included); a work repository's two copy
-// files needed 185 reads in 1.8 to 2.1 s at load 33, and ran past the 3 s budget then in force even
-// at load 6.4. widelyImported(n) reads n importers, 10 barrels and 60 routes.
-test('a module whose search reads as many files as the largest real one gets a verdict naming its sender, at the cost measured per file (#2510)', withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(150) })
-  w.ctl.regexMsPerKb = 0.09
-  w.ctl.readMs = 8
-  const why = refusalOf(await call($, REHTTP))
-  expect(w.reads()).toBeGreaterThan(213)
-  expect(why).not.toContain('could not check')
-  expect(why).toContain(`which ${POSTER} sends to Slack`)
-})
-
-test("the work repository's 185 reads, at the per file cost that ran past the old budget on a quiet Mac, still get a verdict (#2510)", withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(115) })
-  w.ctl.regexMsPerKb = 0.09
-  // 20 ms a file: 185 files come to 3.7 s, past the 3 s budget the work repository ran out of.
-  w.ctl.readMs = 20
-  const why = refusalOf(await call($, REHTTP))
-  expect(w.reads()).toBeGreaterThanOrEqual(185)
-  expect(why).not.toContain('could not check')
-  expect(why).toContain(`which ${POSTER} sends to Slack`)
-})
 
 test('the search leaves the hook time to refuse: its budget sits well inside the 10 s Claude Code gives a hook (#2510)', () => {
   // HookBudget.ms in the pinned Claude Code types: a hook running past it is killed.
   const HOOK_MS = 10_000
   expect(SCAN_MS).toBeGreaterThan(3000)
   expect(SCAN_MS).toBeLessThanOrEqual(HOOK_MS - 2500)
-})
-
-test('a module imported by more files than the guard reads is held for Dan, never let through, and never as could not check', withKit, async ($, on) => {
-  // 70 more reads than importers (10 barrels and 60 routes), so this reads MOST_READ + 10.
-  const w = world($, on, { files: widelyImported(MOST_READ - 60) })
-  w.ctl.regexMsPerKb = 0.09
-  const why = refusalOf(await call($, REHTTP))
-  expect(why).not.toContain('could not check')
-  expect(why).toContain('Request failed for ${msg}')
-  expect(w.ran).toEqual([])
-})
-
-test('a short common name met only inside longer words lists no lines to test', withKit, async ($, on) => {
-  const DB = '/w/app/src/lib/db.ts'
-  const others: Record<string, string> = {}
-  for (let f = 0; f < 50; f++) others[`/w/app/src/feedback/form${f}.ts`] = `export const feedbackDb${f} = 'feedback ${f}'\n`
-  const w = world($, on, { files: { [DB]: 'export const label = `Database is down`\n', ...others } })
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: DB, old_string: 'Database is down', new_string: 'Database is unreachable' }))).toBe('')
-  // The fifty files holding db only inside feedbackDb are not listed, so no line is printed to test.
-  expect(w.printed).toEqual([])
-  expect(w.gits.filter(g => g.argv.includes('-F') && g.argv.includes('-l')).length).toBe(1)
-})
-
-test('a search over a widely imported module that runs late, or whose listing is cut short, still holds the edit', withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(60, 0) })
-  w.ctl.gitSlow = SCAN_MS / 2
-  const late = refusalOf(await call($, REHTTP))
-  expect(late).toContain('could not trace')
-  expect(late).toContain(`${SCAN_MS / 1000} seconds`)
-  expect(idIn(late)).toBeDefined()
-  w.ctl.gitSlow = 0
-  w.ctl.gitTruncated = true
-  const cut = refusalOf(await call($, REHTTP))
-  expect(cut).toContain('could not check')
-  expect(cut).toContain('git grep listing the names of the files that')
-  expect(w.ran).toEqual([])
-})
-
-// After #2481, 2026-11-08: an edit to a widely imported copy file in a work repository was held as could not check. The
-// lines naming its importers, as git listed them, came to 9.9 MB, past what $.process.run keeps (4
-// MiB), almost all of it that repository's design pages: HTML that mentions Slack, with lines of up to 730 KB.
-// Here the cap is scaled down with the pages.
-const designPages = (count: number, bytes: number): Record<string, string> => {
-  const pages: Record<string, string> = {}
-  for (let i = 0; i < count; i++)
-    pages[`/w/app/docs/design/page${i}.html`] = `<h1>Slack alert preview</h1>\n<p>The http route for billing, as Slack shows it ${'x'.repeat(bytes)}</p>\n`
-  return pages
-}
-
-test('a module named on lines too long for one listing, in pages that cannot send it, still gets a verdict', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...widelyImported(60, 0), ...designPages(10, 20_000) } })
-  w.ctl.stdoutCap = 50_000
-  const why = refusalOf(await call($, REHTTP))
-  expect(why).not.toContain('could not check')
-  expect(why).toContain(`which ${POSTER} sends to Slack`)
-})
-
-// A file that can send or hand on the template, one of whose lines alone runs past the cap, as a
-// bundled or generated file's can.
-const LONG = '/w/app/src/alerts/bundled.ts'
-const LONG_TEXT = `import { jsonError } from '../lib/http'\nconst pad = 'http ${'x'.repeat(60_000)}'\nexport const notify = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: jsonError(pad) }) })\n`
-
-test('a file whose one line is longer than a whole listing is read and judged, never passed over', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...widelyImported(60, 0), [LONG]: LONG_TEXT } })
-  w.ctl.stdoutCap = 50_000
-  expect(refusalOf(await call($, REHTTP))).toContain(`which ${LONG} sends to Slack`)
-})
-
-test('a file too long for a listing that then cannot be read holds the edit as could not check', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...widelyImported(60, 0), [LONG]: LONG_TEXT } })
-  w.ctl.stdoutCap = 50_000
-  w.ctl.unreadable = LONG
-  const why = refusalOf(await call($, REHTTP))
-  expect(why).toContain('could not check')
-  expect(why).toContain(LONG)
-  expect(w.ran).toEqual([])
-})
-
-test('a list of the files naming the template that is cut short holds the edit, never reads as none', withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(60, 0) })
-  // Room for the Slack listing, too little for the sixty handlers naming http.
-  w.ctl.stdoutCap = 500
-  const why = refusalOf(await call($, REHTTP))
-  expect(why).toContain('could not check')
-  expect(why).toContain('git grep listing the names of the files that')
-  expect(w.ran).toEqual([])
-})
-
-// 2026-11-09: a session held an edit to a widely imported copy file in a work repository as "git grep
-// for the files that name it or hand it on failed (exit 0: no message)". git had not failed: what it
-// printed was cut short. The words were the same before and after #2508 changed which listing runs,
-// so the hold could not show that the session was still running the copy from before #2508.
-test('a listing cut short is held as cut short, naming the listing, never as git failing with exit 0', withKit, async ($, on) => {
-  const w = world($, on, { files: widelyImported(60, 0) })
-  // Room for the Slack listing, too little for the names of the sixty handlers naming http.
-  w.ctl.stdoutCap = 500
-  const names = refusalOf(await call($, REHTTP))
-  expect(names).toContain('could not check')
-  expect(names).toContain('git grep listing the names of the files that name')
-  expect(names).toContain('more than the 4 MiB')
-  expect(names).not.toContain('exit 0')
-  w.ctl.stdoutCap = Infinity
-  w.ctl.gitTruncated = true
-  const first = refusalOf(await call($, REHTTP))
-  expect(first).toContain('git grep listing the names of the files that mention Slack')
-  expect(first).toContain('more than the 4 MiB')
-  expect(first).not.toContain('exit 0')
-  expect(w.ran).toEqual([])
-})
-
-test('the files whose lines are listed are named to git in groups small enough for one command line', withKit, async ($, on) => {
-  const files = widelyImported(60, 0)
-  // Two thousand files with long paths naming http, each of which could hand it on.
-  for (let i = 0; i < 2000; i++) files[`/w/app/src/generated/a-rather-long-folder-name-for-generated-code/${'segment/'.repeat(4)}client${i}.ts`] = `// generated from the http schema\nexport const c${i} = ${i}\n`
-  const w = world($, on, { files })
-  expect(refusalOf(await call($, REHTTP))).toContain(`which ${POSTER} sends to Slack`)
-  const longest = Math.max(...w.gits.map(g => g.argv.reduce((n, a) => n + new TextEncoder().encode(a).length + 1, 0)))
-  expect(longest).toBeLessThanOrEqual(PATHSPEC_BYTES + 10_000)
-  expect(w.gits.filter(g => g.argv.some(a => a.startsWith(':(literal)'))).length).toBeGreaterThan(1)
 })
 
 test('the calls waiting on Dan are dropped at session end', withKit, async ($, on) => {
@@ -1816,19 +1092,7 @@ test('a sentence moved out of a Slack posting file unchanged passes, as one move
   expect(w.ran.length).toBe(2)
 })
 
-const BOOKING_COPY = '/w/app/src/lib/notify/booking-copy.ts'
-const BOOKING_COPY_TEXT = "export const lateBooking = (id: string) => `Booking ${id} is late`\nexport const NOT_FOUND = 'No booking has that id'\n"
 const LATE = '/w/app/src/lib/notify/late.ts'
-const LATE_TEXT = "import { lateBooking, NOT_FOUND } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\nexport const miss = () => new Response(NOT_FOUND, { status: 404 })\n"
-
-test('in a module a Slack sender imports, the text the sender sends is held naming it, and text it uses some other way passes (#2570)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT } })
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))).toBe('')
-  expect(w.ran.length).toBe(1)
-  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'is late', new_string: 'is running late' }))
-  expect(held).toContain('Booking ${id} is running late')
-  expect(held).toContain(LATE)
-})
 
 test('a file that posts to Slack in a way the guard cannot trace is held as before', withKit, async ($, on) => {
   const CONFIG = '/w/app/src/lib/digest-config.ts'
@@ -1869,59 +1133,8 @@ test('a module, class or function docstring passes even where the guard cannot t
   expect(refusalOf(await call($, docs('LATE = "The gate refused a send"\n')))).toContain('The gate refused a send')
 })
 
-test('when the nearest sender sends none of the edited text, the search goes on and a sender further along that does is named (#2570)', withKit, async ($, on) => {
-  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
-  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
-  const w = world($, on, {
-    files: {
-      [BOOKING_COPY]: BOOKING_COPY_TEXT,
-      [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
-      [BARREL_COPY]: "export * from './booking-copy'\n",
-      [NIGHTLY]: "import { NOT_FOUND } from '../lib/notify'\nexport const nightly = () => sendSlackAlert(NOT_FOUND)\n",
-    },
-  })
-  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))
-  expect(held).toContain('No booking has that id yet')
-  expect(held).toContain(NIGHTLY)
-  expect(w.ran.length).toBe(0)
-})
-
-test('a sender that takes the module whole, where its names cannot be followed, holds the edit as before, naming it (#2570)', withKit, async ($, on) => {
-  const BY_KEY = '/w/app/src/lib/notify/by-key.ts'
-  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [BY_KEY]: "import * as copy from './booking-copy'\nexport const run = (key: string) => sendSlackAlert(copy[key])\n" } })
-  const held = refusalOf(await call($, { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }))
-  expect(held).toContain('No booking has that id yet')
-  expect(held).toContain(BY_KEY)
-  expect(w.ran.length).toBe(0)
-})
-
-test('a search that runs late after finding a sender that sends none of the change holds the rest, naming that sender, never passing it (#2570)', withKit, async ($, on) => {
-  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
-  const files = {
-    [BOOKING_COPY]: BOOKING_COPY_TEXT,
-    [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
-    [BARREL_COPY]: "export * from './booking-copy'\n",
-  }
-  const edit = { tool: 'Edit', file_path: BOOKING_COPY, old_string: 'No booking has that id', new_string: 'No booking has that id yet' }
-  // With time to follow the barrel and find nothing further sending it, the edit passes.
-  const w = world($, on, { files })
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // Each read taking most of the deadline, the search stops at the barrel's importers with only the
-  // nearest sender in hand, so the change is held as before rather than let through unsearched.
-  // Sized from SCAN_MS (8/15 of it, which was 1600 ms at 3 s), so the two reads after the deadline is
-  // set still overrun it whatever the deadline is: a fixed 1600 let the search finish once it was 7 s.
-  w.ctl.readMs = Math.ceil(SCAN_MS * 8 / 15)
-  const held = refusalOf(await call($, edit))
-  expect(held).toContain('No booking has that id yet')
-  expect(held).toContain(`which ${LATE} sends to Slack`)
-  expect(w.ran.length).toBe(1)
-})
-
-// claude-config#2637: on 2026-11-10 a builder wrote a new copy module (two pages and two all clears
-// for a "feed has gone quiet" alarm) that a monitor route imports and posts to Slack. Nothing sent the
-// module when it was written, so the Write passed; the edits that made the route import and send it
-// added no text of their own, so they passed too, and the wording reached a branch unapproved.
+// A module of feed alert copy a monitor route imports and posts to Slack (#2637). Since #2837 only
+// wording the route itself carries stops; the module's own wording passes.
 const QUIET = '/w/app/src/lib/monitor/quiet-feed-copy.ts'
 const QUIET_TEXT = [
   'export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`',
@@ -1931,148 +1144,25 @@ const QUIET_TEXT = [
   "export const CHECKED = 'Checked every feed for a quiet one'",
   '',
 ].join('\n')
-const MONITOR = '/w/app/src/app/api/monitor/route.ts'
-const MONITOR_TEXT = [
-  "import { lateBooking } from '@/lib/notify/outage-copy'",
-  "import { postAlert } from '@/lib/notify/post'",
-  'export const GET = async () => {',
-  "  await postAlert(lateBooking('1'))",
-  '  return Response.json({ ok: true })',
-  '}',
-  '',
-].join('\n')
 const QUIET_IMPORT = "import { quietPage, quietClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n"
-const listedFiles = (w: W, from = 0) => w.gits.slice(from).filter(g => g.argv[3] === 'ls-files').length
 
-// claude-config#2720: the same module, held as it is written. Nothing sends it yet, but it is a
-// module of message copy by its name and by its shape, so its wording is asked about then, in the
-// file that holds it, rather than later at an edit that carries no words of its own.
-const QUIET_SHOWN = [
-  'The orders feed has gone quiet: nothing has arrived for 45 minutes',
-  'The orders feed is still quiet, so somebody needs to look at it now',
-  'The orders feed is sending again',
-  'Every feed is sending again',
-  'Checked every feed for a quiet one',
-].join('\n')
-
-test('a new copy module is held as it is written, though nothing sends it yet, naming no sender; once Dan approves, the edits that make a route send it go through (#2720)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
-  const write = { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }
-  const held = refusalOf(await call($, write))
-  expect(held).toContain(QUIET)
-  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
-  expect(held).toContain('Every feed is sending again')
-  // Nothing sends it, so no sender is named.
-  expect(held).not.toContain('sends to Slack')
-  expect(held).not.toContain(MONITOR)
-  expect(w.ran).toEqual([])
-  expect(w.cards.length).toBe(1)
-  // The refusal, the card and the question say it is copy nothing sends yet, not a live send.
-  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
-  expect(held).toContain(UNWIRED)
-  expect(String(w.cards[0]?.reason)).toContain(UNWIRED)
-  await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
-  // The question names the file that holds the wording.
-  expect(w.asked[0]?.questions[0]?.question).toContain(QUIET)
-  expect(w.asked[0]?.questions[0]?.question).toContain(`defined in ${QUIET}, a module of message copy not yet wired to Slack?`)
-  // Approving posts nothing (#2284), so the question above the message never reads as a send.
-  expect(readsAsSend((w.asked[0]?.questions[0]?.question ?? '').split('\n\n')[0] ?? '')).toBe(false)
-  expect(refusalOf(await call($, write))).toBe('')
-  // The wording is approved, so the import and the send that bring it to Slack are not asked again.
-  expect(refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: QUIET_IMPORT + MONITOR_TEXT }))).toBe('')
-  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(lateBooking('1'))\n  await postAlert(quietPage('orders', 45))\n" }
-  expect(refusalOf(await call($, send))).toBe('')
-  expect(w.ran.length).toBe(3)
-})
-
-test('a copy module nothing sends is held by its shape under any name, and by its name with one message; an ordinary module beside it is not (#2720)', withKit, async ($, on) => {
-  const w = world($, on)
-  // By shape: functions building message text, in a file whose name says nothing.
-  const SHAPED = '/w/app/src/lib/monitor/quiet.ts'
-  const shaped = refusalOf(await call($, { tool: 'Write', file_path: SHAPED, content: QUIET_TEXT }))
-  expect(shaped).toContain(SHAPED)
-  expect(shaped).toContain('The ${feed} feed is sending again')
-  // By name: one message in a file named as copy.
-  const NAMED = '/w/app/src/lib/ops/late-copy.ts'
-  const named = refusalOf(await call($, { tool: 'Write', file_path: NAMED, content: 'export const late = (id: string) => `Booking ${id} is running late`\n' }))
-  expect(named).toContain(NAMED)
-  expect(named).toContain('Booking ${id} is running late')
-  // By an edit to one already there, too.
-  w.files[NAMED] = 'export const late = (id: string) => `Booking ${id} is late`\n'
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: NAMED, old_string: 'is late', new_string: 'is very late' }))).toContain('Booking ${id} is very late')
-  // An ordinary module with the same single message, and an edit to the copy module that adds no
-  // wording, both pass.
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/app/src/lib/ops/late.ts', content: 'export const late = (id: string) => `Booking ${id} is running late`\n' }))).toBe('')
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: NAMED, old_string: '(id: string)', new_string: '(id: number)' }))).toBe('')
-  expect(w.ran.length).toBe(2)
-})
-
-test('a copy module in no repository, in a test, or already used by a screen or a route that sends nothing passes; one only a test imports is held (#2720)', withKit, async ($, on) => {
-  const w = world($, on, {
-    files: {
-      '/w/app/src/lib/ui/banner-copy.ts': 'export const BANNER = 1\n',
-      '/w/app/src/components/Banner.tsx': "import { BANNER } from '../lib/ui/banner-copy'\nexport const Banner = () => <p>{BANNER}</p>\n",
-      '/w/app/src/lib/api/miss-copy.ts': 'export const BANNER = 1\n',
-      '/w/app/src/app/api/miss/route.ts': "import { BANNER } from '@/lib/api/miss-copy'\nexport const GET = () => new Response(String(BANNER))\n",
-      '/w/app/src/lib/ops/late-copy.ts': 'export const BANNER = 1\n',
-      '/w/app/src/lib/ops/late-copy.test.ts': "import { BANNER } from './late-copy'\nit('is one', () => expect(BANNER).toBe(1))\n",
-    },
-  })
-  const add = (file: string) => ({ tool: 'Write', file_path: file, content: 'export const BANNER = 1\nexport const late = (id: string) => `Booking ${id} is running late`\n' })
-  expect(refusalOf(await call($, add('/private/tmp/scratch/late-copy.ts')))).toBe('')
-  expect(refusalOf(await call($, add('/w/app/src/lib/__tests__/late-copy.ts')))).toBe('')
-  // Used already, by a screen (#2519) or a route answering with it: judged by what that use sends.
-  expect(refusalOf(await call($, add('/w/app/src/lib/ui/banner-copy.ts')))).toBe('')
-  expect(refusalOf(await call($, add('/w/app/src/lib/api/miss-copy.ts')))).toBe('')
-  expect(w.ran.length).toBe(4)
-  // A test using it is no use: what the module is for is still not wired.
-  expect(refusalOf(await call($, add('/w/app/src/lib/ops/late-copy.ts')))).toContain('Booking ${id} is running late')
-  expect(w.ran.length).toBe(4)
-})
-
-// claude-config#2773: a shell command putting wording into a module of message copy, by a heredoc
-// or an append, passed where the same Write or Edit is held (#2720); and a shell command creating a
-// new file was not judged at all, since the file was not there to read.
-const UNWIRED_SHELL = (file: string) => `shell command writes to ${file}, a module of message copy not yet wired to Slack, and the wording it leaves cannot be read until it runs`
-test('a shell command writing a module of message copy nothing sends yet is held as the Write would be: a heredoc making one, an append to one, a copy of one (#2773)', withKit, async ($, on) => {
-  const SCRATCH_QUIET = '/private/tmp/scratch/quiet.ts'
-  const LATE = '/w/app/src/lib/ops/late-copy.ts'
-  const w = world($, on, { files: { [SCRATCH_QUIET]: QUIET_TEXT, [LATE]: 'export const late = (id: string) => `Booking ${id} is late`\n' } })
-  // A heredoc making a new copy module, known by its shape under a name that says nothing.
-  const SHAPED = '/w/app/src/lib/monitor/quiet.ts'
-  const heredoc = { tool: 'Bash', command: `cat > ${SHAPED} <<'EOF'\n${QUIET_TEXT}EOF` }
-  const held = refusalOf(await call($, heredoc))
-  expect(held).toContain(UNWIRED_SHELL(SHAPED))
-  expect(held).not.toContain('sends to Slack')
-  expect(idIn(held)).toBeDefined()
-  expect(String(w.cards.at(-1)?.reason)).toContain(UNWIRED_SHELL(SHAPED))
-  // Dan approves it, and the same command goes through.
-  await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
-  expect(refusalOf(await call($, heredoc))).toBe('')
-  // An append to a copy module already there, known by its name.
-  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'export const gone = (id: string) => \`Booking \${id} was cancelled\`\\n' >> ${LATE}` }))).toContain(UNWIRED_SHELL(LATE))
-  // A copy of one into the repository, judged by the file it copies.
-  const COPIED = '/w/app/src/lib/monitor/feed.ts'
-  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${SCRATCH_QUIET} ${COPIED}` }))).toContain(UNWIRED_SHELL(COPIED))
-  expect(w.ran.length).toBe(1)
-})
-
-test('a shell command creating a new file is judged as a Write of it is: one posting to Slack or one a sender reads is held; an ordinary module, a test, a scratch file pass (#2773)', withKit, async ($, on) => {
+test('a shell command creating a new file is judged as a Write of it is: one posting to Slack by itself is held; a template a sender reads, an ordinary module, a test, a scratch file pass (#2773, #2837)', withKit, async ($, on) => {
   const PY = '/w/app/jobs/late.py'
   const w = world($, on, { files: { [PY]: 'from slack_sdk import WebClient\nbody = open("templates/late.txt").read()\n' } })
   // A new script that posts to Slack by itself.
   const NOTIFY = '/w/app/scripts/notify-late.ts'
   const posts = refusalOf(await call($, { tool: 'Bash', command: `cat > ${NOTIFY} <<'EOF'\n${ALERT_TEXT}EOF` }))
   expect(posts).toContain(`shell command writes to ${NOTIFY}, which posts to Slack`)
-  // A new text template a sender already reads.
-  const TXT = '/w/app/templates/late.txt'
-  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'Booking is late\\n' > ${TXT}` }))).toContain(`which ${PY} sends to Slack`)
   expect(w.ran).toEqual([])
+  // A new text template a sender already reads passes (#2837): only a file posting by itself stops.
+  const TXT = '/w/app/templates/late.txt'
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'Booking is late\\n' > ${TXT}` }))).toBe('')
+  expect(w.ran.length).toBe(1)
   // An ordinary new module, a new test, and a copy module in no repository pass.
   expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /w/app/src/lib/ops/late.ts <<'EOF'\nexport const late = (id: string) => \`Booking \${id} is running late\`\nEOF` }))).toBe('')
   expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /w/app/src/lib/monitor/quiet.test.ts <<'EOF'\n${QUIET_TEXT}EOF` }))).toBe('')
   expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /private/tmp/scratch/quiet-copy.ts <<'EOF'\n${QUIET_TEXT}EOF` }))).toBe('')
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(4)
 })
 
 test('a copy the guard does not read, a video or a key, never has its source read, so an unreadable one passes rather than being held as could not check (#2773)', withKit, async ($, on) => {
@@ -2083,222 +1173,6 @@ test('a copy the guard does not read, a video or a key, never has its source rea
   w.ctl.unreadable = '/w/app/media/big.mov'
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp /w/app/media/big.mov /w/app/out/clip.mov' }))).toBe('')
   expect(w.ran.length).toBe(2)
-})
-
-// claude-config#2773: a cp -R into a folder (a hooks folder copied into a scratch folder in session
-// notes) was held as could not check, since the guard read the folder as a file. A copy is judged by
-// where it lands: a folder in no repository, or one no Slack sender reads, is not a send.
-test('a cp -R into a folder is judged by where it lands: one in no repository, or one no Slack sender reads, passes; one holding or read by a sender is held as a shell write (#2773)', withKit, async ($, on) => {
-  const NOTES = `${HOME}/.claude/state/session-notes/p/s/scratch`
-  const PY = '/w/app/jobs/late.py'
-  const w = world($, on, {
-    files: {
-      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
-      [`${NOTES}/hooks/old.sh`]: '#!/bin/bash\nexit 1\n',
-      '/w/app/backup/old.sh': '#!/bin/bash\nexit 1\n',
-      '/w/app/templates/late.txt': 'Booking is late\n',
-      [PY]: 'from slack_sdk import WebClient\nbody = open("templates/late.txt").read()\n',
-    },
-  })
-  // Into a scratch folder in session notes, in no repository: as a copy into the folder and of the
-  // folder's contents.
-  const notes = refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks ${NOTES}/` }))
-  expect(notes).not.toContain('could not check')
-  expect(notes).toBe('')
-  expect(refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks/ ${NOTES}/hooks` }))).toBe('')
-  // Into a folder in the repository that no Slack sender reads.
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup' }))).toBe('')
-  expect(w.ran.length).toBe(3)
-  // Into a folder holding a file that posts to Slack, which the copy may overwrite.
-  const over = refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/lib' }))
-  expect(over).toContain('shell command writes to /w/app/lib, which posts to Slack')
-  expect(idIn(over)).toBeDefined()
-  // Into a folder a sender reads its message from.
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/templates' }))).toContain(`shell command writes to /w/app/templates, which ${PY} sends to Slack`)
-  // A search that cannot run is still could not check, never a pass.
-  w.ctl.gitFails = 'git was killed'
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup/more' }))).toContain('could not check')
-  expect(w.ran.length).toBe(3)
-})
-
-test('a cp -R into a folder a sender imports from through a tsconfig paths alias, never naming the folder, is held naming that sender (#2773)', withKit, async ($, on) => {
-  const JOB = '/w/app/jobs/notify-late.ts'
-  const w = world($, on, {
-    files: {
-      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
-      '/w/app/tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*"] } } }\n',
-      '/w/app/src/lib/alert-copy.ts': 'export const late = (id: string) => `Booking ${id} is late`\n',
-      [JOB]: "import { late } from '@/lib/alert-copy'\nexport const run = () => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: late('1') }) })\n",
-    },
-  })
-  // The sender lives outside src and names lib, never src: only the alias brings src's files to it.
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/src' }))).toContain(`shell command writes to /w/app/src, which ${JOB} sends to Slack`)
-  // A folder it imports nothing from still passes.
-  const elsewhere = { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/payload' }
-  expect(refusalOf(await call($, elsewhere))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // Listing what the sender imports fails: could not check, naming the listing, never a pass.
-  w.ctl.lsFilesFails = 'fatal: index file corrupt'
-  const failed = refusalOf(await call($, elsewhere))
-  expect(failed).toContain('could not check')
-  expect(failed).toContain(`git could not list the files ${JOB} imports (exit 128: fatal: index file corrupt)`)
-  // It fails after the search's time ran out: said as out of time, never a pass.
-  w.ctl.gitSlow = SCAN_MS + 1000
-  w.ctl.gitSlowWhen = 'no grep holds this'
-  const late = refusalOf(await call($, elsewhere))
-  expect(late).toContain('could not check')
-  expect(late).toContain(`were not searched within ${SCAN_MS / 1000} seconds`)
-  expect(w.ran.length).toBe(1)
-})
-
-// The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
-// one message among other values, so only the send asks.
-const FEEDS = '/w/app/src/lib/monitor/feeds.ts'
-const FEEDS_TEXT = "export const quietPage = (feed: string, minutes: number) => `The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes`\nexport const CHECKED = 'Checked every feed for a quiet one'\nexport const LIMIT = 45\n"
-test('a new module that is no copy module passes while nothing sends it; the edit that makes a route send it is held for the wording it brings in, then goes through once Dan approves (#2637)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: MONITOR_TEXT } })
-  expect(refusalOf(await call($, { tool: 'Write', file_path: FEEDS, content: FEEDS_TEXT }))).toBe('')
-  // The import alone sends nothing of the module yet, so it passes: what is held is the send.
-  expect(refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: "import { quietPage, CHECKED } from '@/lib/monitor/feeds'\n" + MONITOR_TEXT }))).toBe('')
-  expect(w.ran.length).toBe(2)
-  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(lateBooking('1'))\n  await postAlert(quietPage('orders', 45))\n  console.log(CHECKED)\n" }
-  const held = refusalOf(await call($, send))
-  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
-  expect(held).toContain(FEEDS)
-  expect(held).toContain(MONITOR)
-  // Only what the send carries: never the line it logs, or the wording the route already sent.
-  expect(held).not.toContain('Checked every feed')
-  expect(held).not.toContain('is late')
-  expect(w.ran.length).toBe(2)
-  expect(w.cards.length).toBe(1)
-  await ask($, w, held, APPROVE, { rendered: 'The orders feed has gone quiet: nothing has arrived for 45 minutes' })
-  expect(w.asked[0]?.questions[0]?.question).toContain(FEEDS)
-  // A send that is wired is never named as copy not yet wired (#2720).
-  for (const t of [held, String(w.cards[0]?.reason), w.asked[0]?.questions[0]?.question ?? '']) expect(t).not.toContain('not yet wired')
-  expect(refusalOf(await call($, send))).toBe('')
-  expect(w.ran.length).toBe(3)
-})
-
-test('one change that writes a new sender over a new copy module is held for every message it sends, whether it posts by itself or through a send helper (#2637)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [POST]: POST_TEXT, [QUIET]: QUIET_TEXT } })
-  const route = `${QUIET_IMPORT}import { quietAgain, allClear } from '@/lib/monitor/quiet-feed-copy'\nimport { postAlert } from '@/lib/notify/post'\nexport const GET = async (quiet: boolean) => {\n  console.log(CHECKED)\n  return postAlert(quiet ? quietPage('orders', 45) : allClear)\n}\n`
-  const held = refusalOf(await call($, { tool: 'Write', file_path: MONITOR, content: route }))
-  expect(held).toContain('feed has gone quiet')
-  expect(held).toContain('Every feed is sending again')
-  expect(held).toContain(QUIET)
-  expect(held).not.toContain('Checked every feed')
-  expect(held).not.toContain('still quiet')
-  // A file that posts by itself, with no helper between.
-  const PAGE = '/w/app/src/lib/monitor/page.ts'
-  const page = "import { quietAgain } from './quiet-feed-copy'\nexport const page = (feed: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: quietAgain(feed) }) })\n"
-  const direct = refusalOf(await call($, { tool: 'Write', file_path: PAGE, content: page }))
-  expect(direct).toContain('feed is still quiet, so somebody needs to look at it now')
-  expect(direct).toContain(QUIET)
-  expect(direct).not.toContain('gone quiet')
-  expect(w.ran).toEqual([])
-})
-
-test('wording a sender newly reaches through a barrel it already imports, or in a module it already imports, is held; the barrel gaining the module is not, while nothing sends it (#2637)', withKit, async ($, on) => {
-  const BARREL_COPY = '/w/app/src/lib/monitor/index.ts'
-  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
-  const NIGHTLY_TEXT = "import { quietClear } from '../lib/monitor'\nexport const nightly = (text: string) => sendSlackAlert(text)\n"
-  const w = world($, on, { files: { [QUIET]: QUIET_TEXT, [BARREL_COPY]: 'export const VERSION = 1\n', [NIGHTLY]: NIGHTLY_TEXT, [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT } })
-  expect(refusalOf(await call($, { tool: 'Write', file_path: BARREL_COPY, content: "export const VERSION = 1\nexport * from './quiet-feed-copy'\n" }))).toBe('')
-  expect(w.ran.length).toBe(1)
-  const through = refusalOf(await call($, { tool: 'Edit', file_path: NIGHTLY, old_string: 'sendSlackAlert(text)', new_string: "sendSlackAlert(text || quietClear('orders'))" }))
-  expect(through).toContain('The ${feed} feed is sending again')
-  expect(through).toContain(QUIET)
-  expect(through).not.toContain('gone quiet')
-  // No import changes at all: a name the sender already imported for a 404 answer is now sent.
-  const already = refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'sendSlackAlert(lateBooking(id))', new_string: 'sendSlackAlert(id ? lateBooking(id) : NOT_FOUND)' }))
-  expect(already).toContain('No booking has that id')
-  expect(already).toContain(BOOKING_COPY)
-  expect(already).not.toContain('is late')
-  expect(w.ran.length).toBe(1)
-})
-
-test('an edit that brings no new wording to a send passes: more use of what a sender already sent, a name used some other way, and any import in a file nothing sends (#2637)', withKit, async ($, on) => {
-  const HELP = '/w/app/src/lib/help.ts'
-  const w = world($, on, { files: { [BOOKING_COPY]: BOOKING_COPY_TEXT, [LATE]: LATE_TEXT, [QUIET]: QUIET_TEXT, [HELP]: 'export const help = () => 1\n' } })
-  // The route already sent lateBooking, wording older than the guard: sending it once more is no new alert.
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'export const miss', new_string: 'export const again = (id: string) => sendSlackAlert(lateBooking(id))\nexport const miss' }))).toBe('')
-  expect(refusalOf(await call($, { tool: 'Edit', file_path: LATE, old_string: 'export const miss', new_string: 'export const gone = () => new Response(NOT_FOUND, { status: 410 })\nexport const miss' }))).toBe('')
-  expect(w.ran.length).toBe(2)
-  // A file on no path to Slack: the search for what sends it runs, and no imported module is listed or read.
-  const before = w.gits.length
-  expect(refusalOf(await call($, { tool: 'Write', file_path: HELP, content: "import { allClear } from './monitor/quiet-feed-copy'\nexport const help = () => allClear\n" }))).toBe('')
-  expect(w.gits.length).toBeGreaterThan(before)
-  expect(listedFiles(w, before)).toBe(0)
-  expect(w.ran.length).toBe(3)
-})
-
-test('wording an edit may bring to a send is held, never let through, when the search runs late or the imported module cannot be read (#2637)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
-  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(quietPage('orders', 45))\n" }
-  w.ctl.unreadable = QUIET
-  const unread = refusalOf(await call($, send))
-  expect(unread).toContain('could not check')
-  expect(unread).toContain(QUIET)
-  w.ctl.unreadable = ''
-  w.ctl.gitSlow = SCAN_MS + 1
-  expect(refusalOf(await call($, send))).toContain(`not searched within ${SCAN_MS / 1000} seconds`)
-  w.ctl.gitSlow = 0
-  w.ctl.gitFails = 'fatal: unable to read tree'
-  expect(refusalOf(await call($, send))).toContain('could not check')
-  expect(w.ran).toEqual([])
-  // With the search able to finish, the same edit is held for the wording, so the three above were
-  // the guard failing closed, never a guard with nothing to hold.
-  w.ctl.gitFails = ''
-  expect(refusalOf(await call($, send))).toContain('feed has gone quiet')
-})
-
-test('where the names sent cannot be followed, every message of a newly imported module is held: a sender taking the edited module whole is named, and a search that stops short names none (#2637)', withKit, async ($, on) => {
-  const BY_KEY = '/w/app/src/lib/notify/by-key.ts'
-  const BARREL_COPY = '/w/app/src/lib/monitor/index.ts'
-  const many: Record<string, string> = {}
-  // Each names the barrel as an import does, and a Slack webhook only in a comment, which git cannot
-  // tell from code, so each must be read: one more than the guard reads.
-  for (let i = 0; i <= MOST_READ; i++) many[`/w/app/src/lib/jobs/job${i}.ts`] = `// news went to hooks.slack.com\nimport { VERSION } from '../monitor'\nexport const n${i} = VERSION\n`
-  const w = world($, on, {
-    files: { [QUIET]: QUIET_TEXT, [BOOKING_COPY]: BOOKING_COPY_TEXT, [BY_KEY]: "import * as copy from './booking-copy'\nexport const run = (key: string) => sendSlackAlert(copy[key])\n", [BARREL_COPY]: 'export const VERSION = 1\n', ...many },
-  })
-  const whole = refusalOf(await call($, { tool: 'Write', file_path: BOOKING_COPY, content: `export * from '../monitor/quiet-feed-copy'\n${BOOKING_COPY_TEXT}` }))
-  for (const s of ['feed has gone quiet', 'still quiet', 'feed is sending again', 'Every feed is sending again']) expect(whole).toContain(s)
-  expect(whole).toContain(`makes ${BY_KEY} send Slack message text from ${QUIET}`)
-  // What the module already held is no part of this edit.
-  expect(whole).not.toContain('is late')
-  const short = refusalOf(await call($, { tool: 'Write', file_path: BARREL_COPY, content: "export const VERSION = 1\nexport * from './quiet-feed-copy'\n" }))
-  expect(short).not.toContain('could not check')
-  expect(short).toContain('feed has gone quiet')
-  expect(short).toContain(`makes it send Slack message text from ${QUIET}`)
-  expect(idIn(short)).toBeDefined()
-  expect(w.ran).toEqual([])
-})
-
-test('once Dan approves what the nearest sender sends, the rest of the same edit is still held for the sender further along that sends it', withKit, async ($, on) => {
-  const BARREL_COPY = '/w/app/src/lib/notify/index.ts'
-  const NIGHTLY = '/w/app/src/jobs/nightly.ts'
-  const w = world($, on, {
-    files: {
-      [BOOKING_COPY]: BOOKING_COPY_TEXT,
-      [LATE]: "import { lateBooking } from './booking-copy'\nexport const run = (id: string) => sendSlackAlert(lateBooking(id))\n",
-      [BARREL_COPY]: "export * from './booking-copy'\n",
-      [NIGHTLY]: "import { NOT_FOUND } from '../lib/notify'\nexport const nightly = () => sendSlackAlert(NOT_FOUND)\n",
-    },
-  })
-  const both = { tool: 'Write', file_path: BOOKING_COPY, content: BOOKING_COPY_TEXT.replace('is late', 'is running late').replace('has that id', 'has that id yet') }
-  const first = refusalOf(await call($, both))
-  expect(first).toContain('Booking ${id} is running late')
-  expect(first).toContain(LATE)
-  await ask($, w, first, APPROVE, { rendered: 'Booking 4182 is running late' })
-  // The nearest sender's wording is approved now; the 404 text only the nightly job sends is not.
-  const second = refusalOf(await call($, both))
-  expect(second).toContain('No booking has that id yet')
-  expect(second).toContain(NIGHTLY)
-  expect(w.ran).toEqual([])
-  await ask($, w, second, APPROVE, { rendered: 'No booking has that id yet' })
-  expect(refusalOf(await call($, both))).toBe('')
-  expect(w.ran.length).toBe(1)
 })
 
 // Code that names a Slack endpoint only to refuse or match it posts nothing (#2662; Dan, 2026-11-10:
@@ -2412,7 +1286,6 @@ MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessa
 SEND_TOOLS = {"slack_send_message", "slack_schedule_message", "slack_post_message", "slack_reply_to_thread"}
 SENDERS = {"curl", "wget", "http", "https", "xh", "httpie", "curlie"}
 
-
 def sh_env_code(assigns, body, names):
     """{NAME: text} for each NAME="$VAR" in front of a command where VAR holds Python the script
     wrote. Inline code is read from lib/issue-spool.sh as one text."""
@@ -2428,23 +1301,6 @@ test('an edit to a script the Slack drafts gate names passes: a gate that only m
   // The gate's own refusal wording passes too.
   expect(refusalOf(await call($, { tool: 'Edit', file_path: GATE_PY, old_string: '    return {}', new_string: '    raise SystemExit("REFUSED: this command posts to Slack. Save it as a draft instead.")' }))).toBe('')
   expect(w.ran.length).toBe(2)
-  // The search ran, so the pass is the guard deciding (the gate is read, and is no sender).
-  expect(w.gits.some(g => g.argv.includes('grep'))).toBe(true)
-})
-
-test('the same script is still held when a file that really posts to Slack reads it (#2662)', withKit, async ($, on) => {
-  const POSTER = '/w/app/payload/hooks/spool-digest.py'
-  const w = world($, on, {
-    files: {
-      [GATE_PY]: GATE_PY_TEXT,
-      [SPOOL]: SPOOL_TEXT,
-      [POSTER]: 'import os\nimport urllib.request\nbody = open("payload/hooks/lib/issue-spool.sh").read()\nurllib.request.urlopen(os.environ["SLACK_WEBHOOK_URL"], data=body.encode())\n',
-    },
-  })
-  const why = refusalOf(await call($, RESPOOL))
-  expect(why).toContain('Recorded the finding for the next issue review')
-  expect(why).toContain(`which ${POSTER} sends to Slack`)
-  expect(w.ran).toEqual([])
 })
 
 // #2628: in sleep mode the session chooses held wording and keeps working; Dan is asked in the
@@ -2600,26 +1456,6 @@ test('outside sleep mode nothing changes: no choosing, no records, and no merge 
   expect(refusalOf(await call($, MERGE))).toBe('')
   expect(w.ghs).toEqual([])
   expect(await promptLines($)).toBe('')
-})
-
-test('a copy module nothing sends yet is named as one asleep, and by the awake refusal a choice gets (#2720, #2628)', withNight, async ($, on) => {
-  const UNWIRED = `${QUIET}, a module of message copy not yet wired to Slack,`
-  nightFresh(true)
-  const w = world($, on)
-  const asleep = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
-  expect(asleep).toContain(CHOOSE)
-  expect(asleep).toContain(UNWIRED)
-  // The choice keeps it, so the morning question names it too.
-  expect(refusalOf(await choose($, /"call": "(t\d+)"/.exec(asleep)?.[1] ?? '', QUIET_SHOWN))).toBe('')
-  const kept = chosenIn(w).map(k => w.store[k] as { unwired?: boolean })
-  expect(kept.length).toBeGreaterThan(0)
-  for (const c of kept) expect(c.unwired).toBe(true)
-  nightFresh(false)
-  const awake = refusalOf(await call($, { tool: 'Write', file_path: QUIET, content: QUIET_TEXT }))
-  expect(awake).toContain(UNWIRED)
-  const chosen = refusalOf(await choose($, idIn(awake) as string))
-  expect(chosen).toContain('awake')
-  expect(chosen).toContain(UNWIRED)
 })
 
 test('a merge the guard cannot read, or whose diff gh cannot give, is held while any choice waits; every way to merge is read (#2628)', withNight, async ($, on) => {
@@ -2845,7 +1681,7 @@ const importBig = async ($: Caller, w: W, text: string) => {
 // An edit sending the quiet feed page through the route's send helper.
 const sendQuiet = (helper: string) => ({ tool: 'Edit', file_path: BIG, old_string: '  if (!rows7.length) return', new_string: `  if (!rows7.length) await ${helper}(quietPage('orders', 45))\n  if (!rows7.length) return` })
 
-test('an 11,000 line route posting through a Slack send helper is judged inside the search time: an import passes, and an edit bringing new wording to its send, or rewording one, is still held (#2719)', withKit, async ($, on) => {
+test('an 11,000 line route posting through a Slack send helper is judged inside the search time: an import and a send of another module\'s wording pass, and rewording its own message is still held (#2719, #2837)', withKit, async ($, on) => {
   const text = bigRoute(BIG_LINES)
   expect(text.split('\n').length).toBeGreaterThanOrEqual(BIG_LINES - 20)
   const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
@@ -2853,96 +1689,15 @@ test('an 11,000 line route posting through a Slack send helper is judged inside 
   // The one line import that was held 14 times: it sends nothing of the module yet.
   expect(await importBig($, w, text)).toBe('')
   expect(w.ran.length).toBe(1)
-  // Sending it brings the module's wording to the helper's send, so it is held for that wording.
-  const held = await onWall($, w, sendQuiet('postSlackAlert'))
-  expect(held).not.toContain('not searched within')
-  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
-  expect(held).toContain(QUIET)
+  // Sending the imported module's wording adds none of the route's own (#2837), so it passes.
+  expect(await onWall($, w, sendQuiet('postSlackAlert'))).toBe('')
+  expect(w.ran.length).toBe(2)
   // Rewording a message the route sends itself is held for the new wording.
   const rewording = { tool: 'Edit', file_path: BIG, old_string: "Look at the queue before the next run.`)\n  }\n  return { name: 'check12'", new_string: "Somebody must clear the queue before the next run.`)\n  }\n  return { name: 'check12'" }
   const reworded = await onWall($, w, rewording)
   expect(reworded).not.toContain('not searched within')
   expect(reworded).toContain('Somebody must clear the queue before the next run')
-  expect(w.ran.length).toBe(1)
-})
-
-test('an 11,000 line route posting through a send helper named for nothing Slack is judged inside the search time: its import passes and the send it adds is held (#2719)', withKit, async ($, on) => {
-  // The route posts through the helper's own sends, traced with them as the route's send functions.
-  const text = bigRoute(BIG_LINES, 'postAlert', '@/lib/notify/post')
-  const w = world($, on, { files: { [POST]: POST_TEXT, [QUIET]: QUIET_TEXT, [BIG]: text } })
-  expect(await importBig($, w, text)).toBe('')
-  const held = await onWall($, w, sendQuiet('postAlert'))
-  expect(held).not.toContain('not searched within')
-  expect(held).toContain('The ${feed} feed has gone quiet: nothing has arrived for ${minutes} minutes')
-  expect(held).toContain(QUIET)
-  expect(w.ran.length).toBe(1)
-})
-
-test('a search for what an edit brings to a send that runs out of time says so, never that git could not name the repository (#2719)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
-  const send = { tool: 'Edit', file_path: MONITOR, old_string: "  await postAlert(lateBooking('1'))\n", new_string: "  await postAlert(quietPage('orders', 45))\n" }
-  // Only the search for the route's own send helper, by its imports, runs past the deadline: the
-  // place the 12 ms of git came from.
-  w.ctl.gitSlow = SCAN_MS + 1
-  w.ctl.gitSlowWhen = ':(glob,icase)'
-  const late = refusalOf(await call($, send))
-  expect(late).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
-  expect(late).not.toContain('could not name the repository')
-  expect(w.ran).toEqual([])
-})
-
-// claude-config#2796: a search that ran out of its time was refused as could not check, "Try it
-// again", with no id, so nothing could be put to Dan, and the same import edit ran out again on every
-// try. It is now held as an edit the guard could not trace is (#2709): the lines shown, an id Dan can
-// approve, and his approval lets that one edit through and no other.
-test('names added to an import whose search runs out of time are held with the line shown and an id; Dan approving lets that one edit through and no other (#2796)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
-  const LINE = "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'"
-  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: `${LINE}\n` }
-  w.ctl.gitSlow = SCAN_MS + 1
-  w.ctl.gitSlowWhen = ':(glob,icase)'
-  const why = refusalOf(await call($, edit))
-  expect(why).toContain('could not trace')
-  expect(why).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
-  expect(why).toContain(LINE)
-  expect(why).toContain('can run out of time again')
-  expect(why).not.toContain('Try it again')
-  expect(idIn(why)).toBeDefined()
-  expect(w.ran).toEqual([])
-  expect(w.cards.length).toBe(1)
-  // A subagent is told to stop and report, never to ask or to try again.
-  const agent = refusalOf(await call($, { ...edit, agentId: 'agent-a1' }))
-  expect(agent).toContain('Stop and report to the main session')
-  expect(agent).not.toContain('Try it again')
-  // Dan is asked with the line shown, and his approval lets that exact edit through, still out of time.
-  await ask($, w, why, APPROVE, {})
-  const q = w.asked[0]?.questions[0]
-  expect(q?.question).toContain(LINE)
-  expect(q?.question).toContain(`not searched within ${SCAN_MS / 1000} seconds`)
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
-  // Any other edit to the same file is asked about again.
-  const other = refusalOf(await call($, { ...edit, new_string: "import { quietPage, quietClear, allClear, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }))
-  expect(other).toContain('could not trace')
-  expect(idIn(other)).not.toBe(idIn(why))
-  expect(w.ran.length).toBe(1)
-})
-
-// A git that fails with time still left, or a file that cannot be read, may pass on another try, so it
-// is still could not check, told to try again, with no approval route (#2796).
-test('names added to an import whose search fails with time left are refused as could not check, told to try again (#2796)', withKit, async ($, on) => {
-  const w = world($, on, { files: { [COPY]: COPY_TEXT, [POST]: POST_TEXT, [MONITOR]: QUIET_IMPORT + MONITOR_TEXT, [QUIET]: QUIET_TEXT } })
-  const edit = { tool: 'Edit', file_path: MONITOR, old_string: QUIET_IMPORT, new_string: "import { quietPage, quietClear, quietAgain, CHECKED } from '@/lib/monitor/quiet-feed-copy'\n" }
-  w.ctl.unreadable = QUIET
-  const unread = refusalOf(await call($, edit))
-  expect(unread).toContain('could not check')
-  expect(unread).toContain('Try it again')
-  expect(unread).not.toContain('could not trace')
-  expect(w.ran).toEqual([])
-  // Readable, the same edit passes, since the name it adds is sent nowhere.
-  w.ctl.unreadable = ''
-  expect(refusalOf(await call($, edit))).toBe('')
-  expect(w.ran.length).toBe(1)
+  expect(w.ran.length).toBe(2)
 })
 
 // claude-config#2796: on 2026-11-11, in a work repository, an edit adding names to an existing
