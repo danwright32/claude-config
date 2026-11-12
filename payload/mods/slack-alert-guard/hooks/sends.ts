@@ -460,9 +460,9 @@ export type Traced = {
 export const trace = (r: Reading, seeds: Map<string, Send> = new Map(), imported: Set<string> = new Set()): Traced => {
   const { defsFor, changesFor, sendsWith, namesAt, renames } = analysisOf(r)
   // Which calls send does not depend on the seeds, so it is worked out once for each set of imported
-  // send functions (#2796); a copy is handed back, so no caller changes the one kept.
+  // send functions (#2796); copies are used here, so no caller changes the ones kept.
   const found = sendsWith(imported)
-  const sending = found.sending
+  const sending = new Set(found.sending)
   const sendFns = new Set(found.sendFns)
 
   const ix = indexOf(r)

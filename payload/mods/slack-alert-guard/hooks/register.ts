@@ -384,6 +384,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     if (ms <= 0) return late
     const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
     if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return NONE
+    if (where.exitCode !== 0 && (await left()) <= 0) return late
     if (where.exitCode !== 0 || where.isStdoutTruncated)
       return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
     // git prints the repository's top folder, then the folder searched from below it, ending in a

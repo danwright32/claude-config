@@ -120,7 +120,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // 4194304 bytes of what git prints, a listing longer than this comes back as its first stdoutCap
   // bytes, marked cut short (a work repository's design pages, whose lines run to hundreds of kilobytes, met this
   // after #2481).
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitKilledLate: false, gitThrows: false, gitSlow: 0, gitSlowWhen: '', readMs: 0, regexMsPerKb: 0, gitTruncated: false, stdoutCap: Infinity, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -181,6 +181,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       gits.push({ argv, timeoutMs: e.init?.timeoutMs })
       if (ctl.gitThrows) throw new Error('git could not be started')
+      // gitKilledLate (#2796): git is killed at its timeout, the time the search had left, so the clock
+      // has passed the deadline when it answers.
+      if (ctl.gitKilledLate) await clock.advance(SCAN_MS + 1)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const inRepo = dir === REPO || dir.startsWith(`${REPO}/`)
@@ -1176,6 +1179,14 @@ test('a search that cannot finish, runs past its deadline, or meets an unreadabl
   expect(failed).toContain('timed out after 3000ms')
   // git failing with time still left may pass on another try, so says to try again (#2796).
   expect(failed).toContain('Try it again')
+  // git killed at its timeout once no time was left ran out of time, and is put to Dan (#2796).
+  w.ctl.gitKilledLate = true
+  const killed = refusalOf(await call($, RETEMPLATE))
+  expect(killed).toContain('could not trace')
+  expect(killed).toContain(`${SCAN_MS / 1000} seconds`)
+  expect(killed).not.toContain('Try it again')
+  expect(idIn(killed)).toBeDefined()
+  w.ctl.gitKilledLate = false
   w.ctl.gitFails = ''
   w.ctl.gitThrows = true
   const unrun = refusalOf(await call($, RETEMPLATE))
