@@ -24,8 +24,9 @@
 # Exit 0 = every suite passed. Exit 1 = at least one failed, or a directory it was
 # told to read held no suites, or nothing was found to run. Finding NO suites is a
 # failure, not a pass: an empty run is indistinguishable from a clean one
-# otherwise (LESSONS.md L98). Exit 75 = a whole run waited HOOK_TESTS_SLOT_WAIT for
-# this Mac's full suite slot and refused, running nothing (claude-config#2012).
+# otherwise (LESSONS.md L98). Exit 75 = a whole run waiting for this Mac's full suite
+# slot refused, running nothing, because the line stood still for HOOK_TESTS_SLOT_STILL
+# or the whole wait reached HOOK_TESTS_SLOT_WAIT (claude-config#2012, #2835).
 #
 # Environment:
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
@@ -65,7 +66,10 @@
 #                             and a folder run holding half the tree's suites or more, never fewer
 #                             than 3, on the same terms (claude-config#2034)
 #   HOOK_TESTS_SLOT_DIR       where that queue lives (default ${CLAUDE_HOME:-~/.claude}/state/full-run-slot)
-#   HOOK_TESTS_SLOT_WAIT      seconds a run waits for the slot before refusing (default 3600)
+#   HOOK_TESTS_SLOT_STILL     seconds the line for the slot may stand still (no run ahead finishing
+#                             or leaving) before a waiting run refuses (default 3600, #2835)
+#   HOOK_TESTS_SLOT_WAIT      seconds the whole wait may last before refusing (unset: no bound;
+#                             claude-sync's pull sets it inside its own deadline, #2758)
 #   HOOK_TESTS_SLOT_HOLD      seconds a live holder keeps it before a waiter passes it over (2700)
 #   HOOK_TESTS_SLOT_SAY_EVERY, HOOK_TESTS_SLOT_POLL   how often a wait says it is still waiting (60)
 #                             and looks (2); HOOK_TESTS_SLOT_NOW, HOOK_TESTS_SLOT_SLEEP, seams for tests

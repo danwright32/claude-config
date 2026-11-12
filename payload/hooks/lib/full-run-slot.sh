@@ -27,20 +27,30 @@
 # time zone took it for gone, before merge-turn.sh judged starts in one fixed form) takes the same
 # number back rather than joining at the back behind every run that arrived after it, and says so
 # once. On 2026-11-12 a run refused after 60 minutes had in fact been served in order: the three runs
-# that held the slot while it waited had all joined before it, and the bound below is on the whole
-# wait, so a run fourth in line behind full runs of 20 to 30 minutes each is refused by design.
+# that held the slot while it waited had all joined before it, and the bound was then on the whole
+# wait, so a run fourth in line behind full runs of 20 to 30 minutes each was refused by design.
 #
 # A WAIT IS NEVER SILENT. A run that has to wait says so at once, naming the holder's pid, its
 # checkout and how long it has held the slot, says it again whenever the holder changes, and says
 # "still waiting" with the time so far every HOOK_TESTS_SLOT_SAY_EVERY seconds (60), so working,
-# still alive and failed are three different things on screen. The wait is bounded by
-# HOOK_TESTS_SLOT_WAIT (3600 seconds, more than one hold bound, so the run first in line is never
-# refused while the holder is inside its own), and ends in a refusal, exit 75, naming who still
-# holds it. claude-sync's pull hands its own run a shorter bound, half of its 1800 second deadline,
-# so a run the slot keeps waiting refuses here inside that deadline, and the pull says the suite
-# waited for the slot and ran nothing, records it, and runs it again on the next pull
-# (claude-config#2758). With the runner's 3600 here instead, the pull stopped the run while it was
-# still queued and reported it as a suite "still running".
+# still alive and failed are three different things on screen.
+#
+# THE BOUND IS ON THE LINE STANDING STILL (claude-config#2835). A waiting run refuses, exit 75, once
+# the line in front of it has not moved for HOOK_TESTS_SLOT_STILL seconds (3600): no run ahead of it
+# finished, left or was passed over, and none took the slot. 3600 is more than one hold bound, so
+# the run first in line is never refused while the holder is inside its own. A line that keeps
+# moving serves every run in it however long the whole wait: the runs ahead are a fixed number, as
+# later arrivals join behind, so each movement brings the turn closer. The whole wait bounded at
+# 3600 seconds refused a run fourth in line behind full runs of 20 to 30 minutes with nothing run,
+# twice (2026-11-11 and 12), though the line was moving and serving it in order.
+#
+# HOOK_TESTS_SLOT_WAIT still bounds the WHOLE wait, but only when it is set: claude-sync's pull hands
+# its own run half of its 1800 second deadline there, so a run the slot keeps waiting refuses inside
+# that deadline however the line moves, and the pull says the suite waited for the slot and ran
+# nothing, records it, and runs it again on the next pull (claude-config#2758). With no bound of its
+# own the pull stopped the run while it was still queued and reported it as a suite "still running".
+# That refusal keeps the words the pull reads ("waited <d> for this Mac's full suite slot, the most
+# HOOK_TESTS_SLOT_WAIT allows, and <who>. Nothing was run."). Both refusals name who holds the slot.
 #
 # WHAT STAYS OUTSIDE. Only a WHOLE run takes the slot: one naming no directories, of the real
 # repository (no HOOK_TESTS_ROOT), started from a fresh shell (not inside another run) and not
@@ -56,8 +66,8 @@
 # ahead without queueing and says so, because a broken state folder must never be the reason a
 # verdict is missing.
 #
-# Settings, refused when unreadable rather than guessed (L50): HOOK_TESTS_SLOT_WAIT,
-# HOOK_TESTS_SLOT_HOLD, HOOK_TESTS_SLOT_SAY_EVERY (whole seconds), HOOK_TESTS_SLOT_POLL (seconds
+# Settings, refused when unreadable rather than guessed (L50): HOOK_TESTS_SLOT_STILL,
+# HOOK_TESTS_SLOT_WAIT (unset: no bound on the whole wait), HOOK_TESTS_SLOT_HOLD, HOOK_TESTS_SLOT_SAY_EVERY (whole seconds), HOOK_TESTS_SLOT_POLL (seconds
 # between looks, 2). Seams, so its tests never wait on a real clock (L290, L524):
 # HOOK_TESTS_SLOT_NOW (a command printing epoch seconds) and HOOK_TESTS_SLOT_SLEEP (the sleep
 # between looks). A HOOK_TESTS_SLOT_NOW read that is not a whole number refuses the run, exit 1,
@@ -65,7 +75,7 @@
 #
 #   full_run_slot_settings          validates the settings; returns 1 with FULL_RUN_SLOT_ERR
 #   full_run_slot_take <label>      queues and waits: 0 once held, or when running without the slot
-#                                   (said); 75 when refused at the bound (said); 1 when the injected
+#                                   (said); 75 when refused at either bound (said); 1 when the injected
 #                                   clock printed no number (said)
 #   full_run_slot_release           gives the slot back; safe to call twice
 
@@ -104,7 +114,7 @@ full_run_slot_clock_refused(){
 full_run_slot_settings(){
   local v isset val
   FULL_RUN_SLOT_ERR=""
-  for v in HOOK_TESTS_SLOT_WAIT HOOK_TESTS_SLOT_HOLD HOOK_TESTS_SLOT_SAY_EVERY; do
+  for v in HOOK_TESTS_SLOT_STILL HOOK_TESTS_SLOT_WAIT HOOK_TESTS_SLOT_HOLD HOOK_TESTS_SLOT_SAY_EVERY; do
     # Read by indirection, never eval: an eval can bind any name, so the Slack drafts gate stopped
     # following a script's variables past it (claude-config#2465).
     isset="${!v+set}"; val="${!v-}"
@@ -145,9 +155,12 @@ full_run_slot_ancestor_holds(){
 }
 
 full_run_slot_take(){   # $1 = what this run is about (its checkout)
-  local label wait hold say poll sleep_cmd t0 t elapsed last_say=0 last_head="" hpid hlabel ahead msg retold=""
+  local label wait still hold say poll sleep_cmd t0 t elapsed last_say=0 last_head="" hpid hlabel ahead msg retold=""
+  local moved_at prev_head="" prev_ahead="" bounds
   label="$(printf '%s' "${1:-?}" | tr '\n\t' '  ')"
-  wait="${HOOK_TESTS_SLOT_WAIT:-3600}"; hold="${HOOK_TESTS_SLOT_HOLD:-2700}"
+  # The whole wait is bounded only when HOOK_TESTS_SLOT_WAIT is set (claude-sync's pull, #2758); the
+  # line standing still always is (#2835).
+  wait="${HOOK_TESTS_SLOT_WAIT:-}"; still="${HOOK_TESTS_SLOT_STILL:-3600}"; hold="${HOOK_TESTS_SLOT_HOLD:-2700}"
   say="${HOOK_TESTS_SLOT_SAY_EVERY:-60}"; poll="${HOOK_TESTS_SLOT_POLL:-2}"
   sleep_cmd="${HOOK_TESTS_SLOT_SLEEP:-sleep}"
   TURN_PID="$$"; TURN_PID_START=""; TURN_TICKET=""
@@ -162,7 +175,9 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
     return 0
   fi
   FULL_RUN_SLOT_HELD=1
-  t="$t0"
+  t="$t0"; moved_at="$t0"
+  bounds="this run refuses once the line stands still for $(turn_dur "$still"), with no run ahead of it finishing or leaving"
+  [ -z "$wait" ] || bounds="$bounds, or once it has waited $(turn_dur "$wait") in all"
   while :; do
     elapsed=$(( t - t0 ))
     turn_look "$t" "$hold"
@@ -196,19 +211,30 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
       [ -z "$last_head" ] || echo "run-all-tests: took this Mac's full suite slot after waiting $(turn_dur "$elapsed")."
       return 0
     fi
+    # The line moved: the run holding the slot changed, or fewer runs are ahead of this one (one
+    # finished, left or was passed over). A run joining behind is not movement (#2835).
+    if [ -n "$prev_head" ] && { [ "$TURN_HEAD_TICKET" != "$prev_head" ] || [ "$TURN_AHEAD" -lt "$prev_ahead" ]; }; then
+      moved_at="$t"
+    fi
+    prev_head="$TURN_HEAD_TICKET"; prev_ahead="$TURN_AHEAD"
     hpid="$(turn_field "$TURN_REPO_DIR/$TURN_HEAD_TICKET" pid)"
     hlabel="${TURN_HEAD_PR:-?}"
     ahead=$(( TURN_AHEAD - 1 ))
     msg="pid ${hpid:-?}, a full run in $hlabel, has held it for $(turn_dur $(( t - ${TURN_HEAD_SINCE:-$t} )))"
     if [ "$ahead" -eq 1 ]; then msg="$msg, and 1 other run is waiting ahead of this one"
     elif [ "$ahead" -gt 1 ]; then msg="$msg, and $ahead other runs are waiting ahead of this one"; fi
-    if [ "$elapsed" -ge "$wait" ]; then
+    if [ -n "$wait" ] && [ "$elapsed" -ge "$wait" ]; then
       echo "run-all-tests: REFUSED: waited $(turn_dur "$elapsed") for this Mac's full suite slot, the most HOOK_TESTS_SLOT_WAIT allows, and $msg. Nothing was run. Run it again once that run ends, or run the one suite you need directly (bash <its path>), which never waits for the slot (claude-config#2012)."
       full_run_slot_release
       return 75
     fi
+    if [ $(( t - moved_at )) -ge "$still" ]; then
+      echo "run-all-tests: REFUSED: waited $(turn_dur "$elapsed") for this Mac's full suite slot, and the line stood still for the last $(turn_dur $(( t - moved_at ))), the most HOOK_TESTS_SLOT_STILL allows, with no run ahead of this one finishing or leaving: $msg. Nothing was run. Run it again once that run ends, or run the one suite you need directly (bash <its path>), which never waits for the slot (claude-config#2835)."
+      full_run_slot_release
+      return 75
+    fi
     if [ "$TURN_HEAD_TICKET" != "$last_head" ]; then
-      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories that hold under half the suites or only one or two, a single suite and SECTION_ONLY never wait. Waiting up to $(turn_dur "$wait"), then this run refuses."
+      echo "run-all-tests: waiting for this Mac's full suite slot: $msg. Whole runs take turns so parallel builders do not compete for the Mac (claude-config#2012); a run naming directories that hold under half the suites or only one or two, a single suite and SECTION_ONLY never wait. It waits as long as the line keeps moving: $bounds."
       last_head="$TURN_HEAD_TICKET"; last_say="$elapsed"
     elif [ $(( elapsed - last_say )) -ge "$say" ]; then
       echo "run-all-tests: still waiting for this Mac's full suite slot, $(turn_dur "$elapsed") so far: $msg."

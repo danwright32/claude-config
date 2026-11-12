@@ -10074,8 +10074,9 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   limit="${SYNC_HOOK_TESTS_TIMEOUT:-1800}"
   case "$limit" in ''|*[!0-9]*) limit=1800 ;; esac
   # How long the runner may queue for this Mac's one full suite slot (claude-config#2758). The run
-  # is a whole run, so it queues (#2012), and the runner's own bound, HOOK_TESTS_SLOT_WAIT, is 3600
-  # seconds, sized for a person's run. Against this 1800 second deadline that meant a pull whose
+  # is a whole run, so it queues (#2012), and the runner's own bound, sized for a person's run, was
+  # then 3600 seconds on the whole wait; since #2835 a person's run has none, only an hour of the
+  # line standing still. Against this 1800 second deadline that meant a pull whose
   # slot a builder held could spend the whole deadline in the queue, run nothing, and be stopped as
   # a suite "still running": 17 of 34 pulls landing hooks in one session on 2026-11-10 and 11.
   #
