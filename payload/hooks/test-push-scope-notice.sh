@@ -248,6 +248,19 @@ out="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_e
 [ "$rc" -eq 2 ] && check "a hooksPath read that fails refuses the push" ok || check "a hooksPath read that fails refuses the push" "exit $rc, stderr [$(head -c 300 "$W/err")]"
 says "and says it could not read it, not that the folder is missing" "$(cat "$W/err")" "could not read"
 
+echo "push scope notice: an orchestrated agent runs the install before its first commit (claude-config#2098)"
+
+# The decision recorded on #2098 for #2070's open question: no hook runs an install when a worktree
+# is created, and the agent rules say to run it right after the worktree is made, before any commit,
+# since until the folder exists git runs none of the repository's hooks on a commit either, and the
+# refusal above only arrives at the push.
+RULES="$DIR/../skills/orchestrate/agent-rules.md"
+rules="$(cat "$RULES" 2>/dev/null)"
+says "the agent rules name the setting to read in the worktree" "$rules" "config --get core.hooksPath"
+says "and say to run the install before the first commit" "$rules" "before your first commit"
+says "and name the lockfile's install" "$rules" "pnpm install"
+says "and name the decision" "$rules" "#2098"
+
 echo "push scope notice: it is actually run"
 
 python3 - "$SETTINGS" <<'PY' && check "settings register it on PreToolUse Bash" ok || check "settings register it on PreToolUse Bash" "not registered"

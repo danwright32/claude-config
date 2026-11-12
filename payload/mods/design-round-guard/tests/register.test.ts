@@ -2822,6 +2822,51 @@ test('#1158: a restore beside any other command is judged whole, saying why; one
   expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && git checkout HEAD -- ${MOD_REL}` }))).toBe('')
 })
 
+// #2777: on 2026-11-11 a builder's `git checkout origin/main -- payload/mods/goal-box && git status
+// --short` was judged whole, and a design round question went to Dan, though it put back four files
+// changing no wording. Nothing that runs after a restore can change what it puts back, so a restore
+// that runs first on its line, the only one there and in no pipe or background, is read by the lines
+// it changes, as one alone is: what git holds at the source it names, against the file on disk.
+test('#2777: a restore run first on its line is judged by the lines it changes: logic put back passes, changed wording is held', withKit, async ($, on) => {
+  const changedLogic = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: changedLogic }, blobs: { [`/w/slate HEAD:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate origin/main:${GUARD_REL}`]: GUARD_TEXT } })
+  const first = [
+    `git checkout HEAD -- ${GUARD_REL} && git status --short`,
+    `git checkout origin/main -- ${GUARD_REL} && git merge origin/main`,
+    `git restore --source=HEAD ${GUARD_REL}; git status`,
+    `cd /w/slate && git checkout HEAD -- ${GUARD_REL} && git diff --stat`,
+  ]
+  for (const command of first) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(first.length)
+  // The source read as git names it, from where the command puts it back.
+  expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([`git -C /w/slate cat-file blob HEAD:${GUARD_REL}`, `git -C /w/slate cat-file blob origin/main:${GUARD_REL}`])
+  // The same restores bringing back changed words for a message Dan reads are held for them.
+  const worded = GUARD_TEXT.replace('print a secret.', 'print a secret, and told Dan.')
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = worded
+  w.blobs[`/w/slate origin/main:${GUARD_REL}`] = worded
+  for (const command of first) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), worded: why.includes(`${GUARD_REL} changes the words of a message Dan reads`), whole: why.includes('could not read what git puts back') }).toEqual({ command, held: true, worded: true, whole: false })
+  }
+  expect(w.ran.length).toBe(first.length)
+  // Still judged whole: something run before the restore, a second restore on the line, a restore
+  // in the background or in a pipe, each of which may run beside or before what it reads.
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = GUARD_TEXT
+  w.blobs[`/w/slate main:${GUARD_REL}`] = GUARD_TEXT
+  const whole = [
+    `git switch other && git checkout HEAD -- ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} && git checkout main -- ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} & git switch other`,
+    `git checkout HEAD -- ${GUARD_REL} | cat`,
+    `cat list | git checkout HEAD -- ${GUARD_REL}`,
+  ]
+  for (const command of whole) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran.length).toBe(first.length)
+})
+
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {
   world($, on, { agents: ['agent-a1'] })
   for (const extra of [{}, { agentId: 'agent-a1' }]) {

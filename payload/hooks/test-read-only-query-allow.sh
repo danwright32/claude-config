@@ -179,14 +179,16 @@ if len(ms) != 1:
     print("registered %d times" % len(ms)); sys.exit()
 m = ms[0]
 want = ["mcp__claude_ai_Supabase__execute_sql"] + ["mcp__claude_ai_SFDC_-_Read_Only__" + t for t in
-        ("find", "getObjectSchema", "getRelatedRecords", "getUserInfo", "listRecentSobjectRecords", "soqlQuery")]
+        ("find", "getObjectSchema", "getRelatedRecords", "getUserInfo", "listRecentSobjectRecords", "soqlQuery")] + [
+        # Since #2763: Bash, for a read through the Supabase CLI, judged by the same predicate.
+        "Bash"]
 never = ["mcp__claude_ai_Supabase__apply_migration", "mcp__claude_ai_SFDC_USE__soqlQuery",
-         "mcp__claude_ai_SFDC_USE__updateSobjectRecord", "mcp__claude_ai_SFDC_USE__find", "Bash", "Edit"]
+         "mcp__claude_ai_SFDC_USE__updateSobjectRecord", "mcp__claude_ai_SFDC_USE__find", "Edit", "Write"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 print("ok" if not bad else "matcher %s: %s" % (m, ", ".join(bad)))
 PY
 )"
-check "the settings run the hook for execute_sql and the six read only Salesforce tools, and nothing else" "$wiring"
+check "the settings run the hook for execute_sql, the six read only Salesforce tools and Bash, and nothing else" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
