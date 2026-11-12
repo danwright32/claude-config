@@ -2189,6 +2189,17 @@ run_rs "node load.mjs alert.ts old.txt new.txt"
 says "a source file refused for the helper it is handed to names the helper" "the script load.mjs"
 says "and the source file by its role, with the import that posts" "is handed alert.ts, which imports ./slack"
 
+# A helper on disk that this same command first replaces is judged as the command leaves it, not as
+# it is on disk now: a harmless replace.mjs overwritten by a loader that imports what it is handed
+# still has the source file read as code (lessons review of the #2797 merge, 2026-11-12).
+for runs in "cp load.mjs replace.mjs && node replace.mjs alert.ts old.txt new.txt" \
+  "cat load.mjs > replace.mjs; node replace.mjs alert.ts old.txt new.txt" \
+  "cp spawn.mjs replace.mjs && node replace.mjs alert.ts old.txt new.txt"; do
+  run_rs "$runs"
+  refused "a helper the command replaces first is judged as replaced: $runs"
+  says "and the handed source file is read for the import that posts: $runs" "is handed alert.ts, which imports ./slack"
+done
+
 # A word of a log line read as commands is not a program the call ran: the refusal must not name it as
 # the writer of a file (claude-config#2793). Only a command parsed from the command line itself is named.
 printf '%s\n' 'FAIL: a check wrote > made.sh' 'sh made.sh' > "$T/df/run.log"
