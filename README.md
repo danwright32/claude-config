@@ -1472,6 +1472,21 @@ itself. A hook git runs is an executable file named after one. On 2026-11-03 eac
 repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
 refused.
 
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
 any method but GET, any spelling), and a GraphQL mutation that merges a pull request
