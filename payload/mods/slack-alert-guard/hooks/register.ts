@@ -45,7 +45,7 @@ import {
   wordingKey,
   wordingOf,
 } from './rules.ts'
-import { type Reading, docstrings, jsSpans, pySpans, readingOf, sentAt, trace } from './sends.ts'
+import { type Reading, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
@@ -486,7 +486,11 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
     if (edited === undefined || !(python || (lang === 'c' && isJs(path)))) return holdFor(change)
-    const [tBefore, tAfter] = [trace(await readFor($, before, python)), trace(await readFor($, after, python))]
+    const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
+    const was = scanWork()
+    const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
+    // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
+    $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
     // A file that posts to Slack by a send the guard cannot find is held for all of it.
     if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(change)
     // Only wording one of its own sends carries is held (#2570): a log line, an error or a route's

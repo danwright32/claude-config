@@ -132,6 +132,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const asked: Asked[] = []
   const dialog: { answer?: string; afk?: boolean } = {}
   const cards: Record<string, unknown>[] = []
+  const traced: number[] = []
   const toasts: string[] = []
   // Every read of the clock first charges the real time spent since the last charge (#2805), so
   // computing between calls to the world, such as tracing senders through a large module, counts
@@ -328,6 +329,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   on('ui.log', ($, e) => {
     const text = String((e as { text?: string }).text ?? '')
     if (text.startsWith('CARD ')) cards.push(JSON.parse(text.slice(5)))
+    // The searching each trace did (#2719), as the guard reports it.
+    const t = /^slack-alert-guard: traced .*: searched (\d+)$/.exec(text)
+    if (t) traced.push(Number(t[1]))
     return { value: undefined } as never
   })
   on('ui.toast', ($, e) => {
@@ -351,7 +355,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
+  return { files, store, ctl, ran, asked, dialog, cards, traced, toasts, gits, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
 }
 type W = ReturnType<typeof world>
 
@@ -1644,13 +1648,18 @@ test('taking away unapproved wording that is not on origin passes in any mode; w
 // smaller file went through. git and the reads were not the time: tracing the file's sends was,
 // and it grew with the square of the file, since each name's declarations were found by searching
 // the whole file once per name. A route of checks, each with its own names as a real one has, judged
-// on the wall (the test clock moved on by the real time the guard spends). This route is lighter
+// by the searching its tracing does (sends.ts scanWork), never by the wall, which failed it on a Mac
+// at load average 149 though the guard did no more work (L290; #2833). This route is lighter
 // per line than the real one: at 5,500 lines the guard before the fix took 2.0 to 2.6 s an edit on
 // the personal MacBook at load 15 to 41, and at 11,000 lines 8.3 s, held as "git could not name the
 // repository", the third message the real file met. So it is judged at 11,000 lines, where the
 // guard before the fix fails here as it failed there.
 const BIG = '/w/app/src/app/api/monitor/feeds/route.ts'
 const BIG_LINES = 11_000
+// The most searching one call may do (scanWork), as a multiple of the route's length: the guard
+// searched 0.24 times it on 2026-11-12, and the same guard made to search the whole route for each
+// name's declarations, as before #2719, searched 22,163 times it and failed here.
+const SEARCHED_PER_CHAR = 4
 const bigCheck = (i: number, helper: string) => `
 // Check ${i}: rows of kind ${i} that have not moved in a day.
 export async function check${i}(db: Db, now: Date): Promise<CheckResult> {
@@ -1689,39 +1698,52 @@ const bigRoute = (lines: number, helper = 'postSlackAlert', from = '@/lib/notify
   const calls = Array.from({ length: i }, (_, k) => `check${k}(db, now)`).join(', ')
   return `${head}${body.join('')}\nexport async function GET() {\n  const db = await getDb()\n  const now = new Date()\n  const results = await Promise.all([${calls}])\n  return Response.json({ ok: results.every(r => r.ok) })\n}\n`
 }
-// One call judged on the wall, from just before it starts.
-const onWall = async ($: Caller, w: W, input: Record<string, unknown>) => {
-  w.wallStart()
-  return refusalOf(await call($, input))
+// One call judged, with the searching its tracing did as the guard reports it (sends.ts scanWork), in
+// multiples of the route's length.
+const BIG_CHARS = bigRoute(BIG_LINES).length
+const searched: number[] = []
+const measured = async ($: Caller, w: W, input: Record<string, unknown>) => {
+  const from = w.traced.length
+  const why = refusalOf(await call($, input))
+  searched.push(w.traced.slice(from).reduce((a, b) => a + b, 0) / BIG_CHARS)
+  return why
 }
 // The route's one line import of the quiet feed copy, judged; then, as the world writes only a
 // Write, put in place as the Edit leaves it.
 const LOGGER_IMPORT = "import { logger } from '@/lib/logger'\n"
 const importBig = async ($: Caller, w: W, text: string) => {
-  const held = await onWall($, w, { tool: 'Edit', file_path: BIG, old_string: LOGGER_IMPORT, new_string: `${LOGGER_IMPORT}${QUIET_IMPORT}` })
+  const held = await measured($, w, { tool: 'Edit', file_path: BIG, old_string: LOGGER_IMPORT, new_string: `${LOGGER_IMPORT}${QUIET_IMPORT}` })
   w.files[BIG] = text.replace(LOGGER_IMPORT, `${LOGGER_IMPORT}${QUIET_IMPORT}`)
   return held
 }
 // An edit sending the quiet feed page through the route's send helper.
 const sendQuiet = (helper: string) => ({ tool: 'Edit', file_path: BIG, old_string: '  if (!rows7.length) return', new_string: `  if (!rows7.length) await ${helper}(quietPage('orders', 45))\n  if (!rows7.length) return` })
 
-test('an 11,000 line route posting through a Slack send helper is judged inside the time the guard has: an import and a send of another module\'s wording pass, and rewording its own message is still held (#2719, #2837)', withKit, async ($, on) => {
+test('an 11,000 line route posting through a Slack send helper is judged with searching that grows with the file, not its square: an import and a send of another module\'s wording pass, and rewording its own message is still held (#2719, #2837)', withKit, async ($, on) => {
   const text = bigRoute(BIG_LINES)
   expect(text.split('\n').length).toBeGreaterThanOrEqual(BIG_LINES - 20)
+  expect(text.length).toBe(BIG_CHARS)
+  searched.length = 0
   const SLACK_POST = '/w/app/src/lib/notify/slack.ts'
   const w = world($, on, { files: { [SLACK_POST]: POST_TEXT.replace('postAlert', 'postSlackAlert'), [QUIET]: QUIET_TEXT, [BIG]: text } })
   // The one line import that was held 14 times: it sends nothing of the module yet.
   expect(await importBig($, w, text)).toBe('')
   expect(w.ran.length).toBe(1)
   // Sending the imported module's wording adds none of the route's own (#2837), so it passes.
-  expect(await onWall($, w, sendQuiet('postSlackAlert'))).toBe('')
+  expect(await measured($, w, sendQuiet('postSlackAlert'))).toBe('')
   expect(w.ran.length).toBe(2)
   // Rewording a message the route sends itself is held for the new wording.
   const rewording = { tool: 'Edit', file_path: BIG, old_string: "Look at the queue before the next run.`)\n  }\n  return { name: 'check12'", new_string: "Somebody must clear the queue before the next run.`)\n  }\n  return { name: 'check12'" }
-  const reworded = await onWall($, w, rewording)
+  const reworded = await measured($, w, rewording)
   expect(reworded).not.toContain('could not check')
   expect(reworded).toContain('Somebody must clear the queue before the next run')
   expect(w.ran.length).toBe(2)
+  // The import and the send add none of the route's own wording, so neither traces it (#2837); the
+  // reword traces the route as it was and as the edit leaves it, and so searched something, though a
+  // small multiple of the file: one search of the whole file for each name is hundreds of times it.
+  expect(searched.length).toBe(3)
+  expect(searched[2]).toBeGreaterThan(0)
+  for (const s of searched) expect(s).toBeLessThan(SEARCHED_PER_CHAR)
 })
 
 // claude-config#2796: on 2026-11-11, in a work repository, an edit adding names to an existing

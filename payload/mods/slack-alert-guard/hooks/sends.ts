@@ -196,7 +196,14 @@ const lineOf = (ix: Index, at: number): number => atLeast(ix.newlines, at) + 1
  * `tail`, for a pattern that is a whole word name then the rest: every start is already that name as
  * a whole word (`skip` long), so only the rest is tried, after it, by one sticky pattern made once,
  * rather than one pattern made for every name in the file.
+ *
+ * Every search here is counted in `scanned` (#2719): a whole text or slice searched counts its
+ * length, and each start tried counts one. The searches for names are where tracing a file grew with
+ * its square, so the count measures that work on any machine, however loaded.
  */
+let scanned = 0
+/** The searching done so far: characters searched whole, plus starts tried (#2719). */
+export const scanWork = (): number => scanned
 const matchesAt = (
   text: string,
   source: string,
@@ -208,6 +215,7 @@ const matchesAt = (
   const base = inside?.from ?? 0
   if (!starts) {
     const part = inside ? text.slice(inside.from, inside.to) : text
+    scanned += part.length
     return [...part.matchAll(new RegExp(source, `${flags}g`))].map(m => ({ at: base + (m.index ?? 0), end: base + (m.index ?? 0) + m[0].length }))
   }
   if (!starts.length) return []
@@ -218,6 +226,7 @@ const matchesAt = (
   let last = base
   for (const s of starts) {
     if (s < last) continue
+    scanned++
     re.lastIndex = s + skip
     let end = re.exec(text) ? re.lastIndex : -1
     // The slice also differs at its start, where nothing comes before a match (a tail's caller has
@@ -369,7 +378,7 @@ const defsOf = (r: Reading, name: string, blocks: Blocks, fns: Fn[]): Def[] => {
   const s = r.skel
   const ix = indexOf(r)
   const at = wordsAt(ix, name)
-  const add = (at: number, from: number, to: number, scopeAt = at) => out.push({ at, value: { from, to }, scope: blocks(scopeAt) })
+  const add =(at: number, from: number, to: number, scopeAt = at) => out.push({ at, value: { from, to }, scope: blocks(scopeAt) })
   // name = value, name += value, const name: T = value, self.name = value; never ==, =>, <= or !=.
   for (const m of matchesAt(s, `${word(name)}${ASSIGNED}`, '', at, undefined, { re: ASSIGNED_TAIL, skip: name.length })) add(m.at, m.end, valueEnd(r, m.end))
   // const { a, name } = value, const [a, name] = value, python a, name = value. One can start only
