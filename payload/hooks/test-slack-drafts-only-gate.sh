@@ -3833,7 +3833,7 @@ for runs in "node fromfetch.mjs hook.txt" "node subscript.mjs hook.txt"; do
 done
 printf '%s\n' "import re, sys" "MARK = re.compile(r'chat[._]postMessage|slack_webhook|hooks\\.slack\\.com')" \
   "print(bool(MARK.search(open(sys.argv[1]).read())))" > "$P/regex_ok.py"
-printf '%s\n' "import re, sys" "print(re.findall(pattern='slack_webhook', string=sys.argv[1]))" > "$P/regex_kw.py"
+printf '%s\n' "import re, sys" "# page one$(printf '\f')" "# page two" "print(re.findall(pattern='slack_webhook', string=sys.argv[1]))" > "$P/regex_kw.py"
 printf '%s\n' "import re, urllib.request" "MARK = re.compile(r'slack_webhook')" "$PY_POST_2844" > "$P/regex_post.py"
 printf '%s\n' "import re, sys" "print(re.sub(r'x', 'https://hooks.slack.com/services/T/B/C', sys.argv[1]))" > "$P/regex_repl.py"
 for runs in "python3 regex_ok.py hook.txt" "python3 regex_kw.py x"; do

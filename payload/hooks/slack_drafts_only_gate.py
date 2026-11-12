@@ -215,15 +215,14 @@ def py_marker(text):
             tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return hit
-    lines = text.splitlines(keepends=True)
-    starts, at = [], 0
-    for ln in lines:
-        starts.append(at)
-        at += len(ln)
+    # Lines as ast numbers them: ended by \r\n, \r or \n only (str.splitlines also ends one at a form
+    # feed, \x1c to \x1e, \x85 and U+2028/2029, which would shift every line after it).
+    starts = [0] + [m.end() for m in re.finditer(r"\r\n|\r|\n", text)]
 
     def offset(line, col):  # ast's column is a UTF-8 byte offset into its line
-        raw = lines[line - 1].encode("utf-8", "surrogatepass")  # a lone surrogate keeps its place
-        return starts[line - 1] + len(raw[:col].decode("utf-8", "surrogatepass"))
+        a = starts[line - 1]
+        raw = text[a:starts[line] if line < len(starts) else len(text)].encode("utf-8", "surrogatepass")
+        return a + len(raw[:col].decode("utf-8", "surrogatepass"))  # a lone surrogate keeps its place
     spans = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -1611,7 +1610,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         program running it, taken for a file with no extension of its own. label names the file in
         the reason, "the script <word>" unless its role is otherwise (every_file, claude-config#2786).
         sourced is True for a file a source or . command reads, whose exports reach the commands
-        after it. built names the compiler the file is read as a source of (claude-config#2844).
+        after it. built names the program a build ran (the compiler, or a launcher in front of it),
+        whose naming of this source is not a write (claude-config#2844).
 
         Under a command sh_placed wrote out (placing), a file found clean is not read again where it
         is read the same way: a suite runs one hook by a variable hundreds of times, and each of those
