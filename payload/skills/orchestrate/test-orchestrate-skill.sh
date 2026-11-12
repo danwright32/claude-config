@@ -113,6 +113,27 @@ check "#2490 no brief part still names the scratchpad as the working folder" "$(
 check "#2490 agents write working files in the notes folder" "$(has "$RULES" 'never in the scratchpad under `/private/tmp`')"
 check "#2490 agents never put a worktree in the temp folder" "$(has "$RULES" 'Never put a worktree under `/tmp`')"
 
+# claude-config#2563: the merge command written in the skill and in the global rules must carry
+# every argument the helper's usage marks required, say it runs from inside a checkout, and say how
+# the merge method is chosen. Required is read from the helper's own usage line: a token outside [].
+HELPER="${MERGE_HELPER:-$DIR/../../hooks/lib/merge-when-ready.sh}"
+GLOBAL_RULES="${GLOBAL_RULES_FILE:-$DIR/../../CLAUDE.md}"
+usage_line="$(grep -m1 'echo "usage: ' "$HELPER")"
+required="$(printf '%s' "$usage_line" | sed 's/.*\$SELF //; s/".*//; s/\[[^]]*\]//g')"
+check "#2563 the helper's usage names a required argument" "$([ -n "${required// /}" ] && echo ok || echo "none parsed from: $usage_line")"
+for f in "$SKILL" "$GLOBAL_RULES"; do
+  cmd_line="$(grep -F 'merge-when-ready.sh' "$f" | head -1)"
+  for tok in $required; do
+    case "$tok" in
+      "<pr>") want='merge-when-ready.sh <' ;;
+      *) want="$tok" ;;
+    esac
+    check "#2563 $(basename "$(dirname "$f")")/$(basename "$f") command carries required $tok" "$(printf '%s' "$cmd_line" | grep -F -q -- "$want" && echo ok || echo "missing $want")"
+  done
+  check "#2563 $(basename "$f") says it runs from inside a checkout" "$(printf '%s' "$cmd_line" | grep -F -q 'inside a checkout' && echo ok || echo 'no checkout requirement')"
+  check "#2563 $(basename "$f") names the merge method and how it is chosen" "$(printf '%s' "$cmd_line" | grep -F -q -- '--squash' && printf '%s' "$cmd_line" | grep -F -q 'its history uses' && echo ok || echo 'no merge method rule')"
+done
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
