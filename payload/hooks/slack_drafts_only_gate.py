@@ -40,8 +40,9 @@ Two routes are judged:
     hooks folder, by its real path; a copy anywhere else is refused like any other script that posts.
 
 Limits, stated so nobody reads more into a pass than it measured: a JavaScript import of a package or
-through a path alias (`@/lib/x`), a Python module in the standard library or installed, a module run
-with `python3 -m`, and an import of another language's files are
+through a path alias (`@/lib/x`), a Python module in the standard library or installed (whether
+imported or run with `python3 -m`, whose local module is followed as an import is, claude-config#2827),
+and an import of another language's files are
 not followed; a program run by bare name from the PATH is not read; a file run, rather than sourced,
 through a variable or a substitution whose value the gate cannot work out is not read
 (claude-config#2678); a shell script's data reaching a
@@ -51,7 +52,9 @@ is followed through the shell's own writes (a redirection, tee, a copy, a downlo
 archive that can be read, and is otherwise unreadable once a program names it (claude-config#2772),
 so one written by a name the program builds at run time, or by a program the gate counts as never
 writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk, as is a file a
-compiler or a git checkout writes without naming it; a write to a path in a variable inside a
+compiler writes without naming it; a file a git checkout, switch, hard reset, merge, pull, rebase or
+cherry pick writes is read as the ref holds it as well as on disk, but only a ref the repository
+holds before the command runs (claude-config#2827); a write to a path in a variable inside a
 script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
 assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
@@ -909,6 +912,9 @@ class Judge(WrittenPaths, ProgramWrites):
         # which may write any file the code names.
         self.made_maybe = []
         self.made_code = []
+        # The git commands that write tracked files they do not name, each the ref its files are read
+        # from (note_git in lib/program-writes.py, claude-config#2827).
+        self.made_git = []
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -1036,7 +1042,8 @@ class Judge(WrittenPaths, ProgramWrites):
         """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
         None when nothing did. A file under a directory copied earlier is the same file under the
         directory it was copied from, followed MADE_DEPTH copies deep."""
-        if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code):
+        if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code
+                or self.made_git):
             return None
         if "\0" in path and not (self.made or self.made_dirs or self.made_unknown):
             # Names no file. Only code a program was given is noted, and before #2772 this returned
@@ -1051,6 +1058,8 @@ class Judge(WrittenPaths, ProgramWrites):
                    if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
         if self.made_maybe or self.made_code:
             guessed += self.program_guesses(path, real)
+        if self.made_git:
+            guessed += self.git_guesses(real)
         return (list(found or []) + guessed) if guessed else found
 
     def made_from_known(self, real, depth):
@@ -1552,7 +1561,7 @@ class Judge(WrittenPaths, ProgramWrites):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
         key = None
         if self.placing and not (self.made or self.made_dirs or self.made_unknown or self.made_maybe
-                                 or self.made_code):
+                                 or self.made_code or self.made_git):
             # A directory that is not there (a cd the reader kept as written, `cd "$WORK"`) is one
             # directory to this: no relative path is found under any of them.
             there = not d or os.path.isdir(d)
@@ -3936,6 +3945,9 @@ class Judge(WrittenPaths, ProgramWrites):
                 # The files after it are the code's arguments, judged as a script's are: a data file
                 # is read when the code can act on it, and any other file is read as code (#2439).
                 return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
+            module = self.py_module(words) if lang == "py" else None
+            if module:
+                return self.py_module_run(words[0], name, module, d, depth, here)
             fed, is_body = self.fed(fed_by, whole) if operand == "-" else (None, False)
             if is_body and "-m" not in words[1:]:
                 # Code fed in a heredoc (python3 - a.md b.md <<'EOF'): the files after - are its
@@ -4004,6 +4016,71 @@ class Judge(WrittenPaths, ProgramWrites):
         # function runs the command it is handed and a suite its stand in, and refusing it too newly
         # refused 261 more of this repository's 546 scripts on 2026-11-12 (claude-config#2683).
         return None
+
+    def py_module(self, words):
+        """(the module, the words after it) where a Python command runs a module with -m, or None
+        (claude-config#2827). Its options are read as Python reads them, as py_args does: a word
+        that is not an option, `-`, `--` or code given by -c ends them with no module, -W and -X take
+        a value, glued or the next word, and -m takes the rest of its cluster (`-mjson.tool`) or the
+        next word. A redirection is the shell's, never Python's (operands)."""
+        k = 1
+        while k < len(words):
+            w = words[k]
+            m = self.sw.REDIRECT_WORD.match(w)
+            if m:
+                k += 1 if m.group(1) else 2
+                continue
+            if w in ("-", "--") or not w.startswith("-"):
+                return None
+            if w.startswith("--"):
+                k += 2 if w == "--check-hash-based-pycs" else 1
+                continue
+            letters, step = w[1:], 1
+            for i, ch in enumerate(letters):
+                if ch == "m":
+                    if letters[i + 1:]:
+                        return letters[i + 1:], words[k + 1:]
+                    return (words[k + 1], words[k + 2:]) if k + 1 < len(words) else None
+                if ch == "c":
+                    return None
+                if ch in "WX":
+                    step = 1 if letters[i + 1:] else 2
+                    break
+            k += step
+        return None
+
+    def py_module_run(self, program, name, module, d, depth, here):
+        """The reason a module a Python command runs with -m posts, or None (claude-config#2827).
+
+        Before #2827 neither the module nor any file after it was read, so a local module that posts,
+        or one that runs a file it is handed, passed. Python finds the module from the directory the
+        command runs in (here), then its PYTHONPATH, the standard library and installed packages, as
+        an import from code run there does, and runs it as the program (a package's __main__.py,
+        after each package's __init__.py). So it is judged as code given by -c that imports it is:
+        each local file it runs, and every local module those import, read for an endpoint (imports),
+        and the files after it judged as that module's arguments (every_file, held): the module is
+        certainly the program, as a script word held_slot places is, so a data file is read where the
+        module can act on it and a code file where it can run what it is handed (handed_code).
+
+        A module in the standard library or installed, or one found nowhere, is not read, and nor are
+        the files after it, as for a program run by bare name from the PATH: whether py_compile, black
+        or pytest runs what it is handed is not something the gate knows, and counting them all as
+        running it refuses `python3 -m py_compile` on any file naming an endpoint, this gate's own
+        source among them. A module named by a variable or a
+        substitution is not read, as a script path that cannot be worked out is not."""
+        mod, after = module
+        if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", mod):
+            return None
+        found = self.resolve_py(0, mod, ("__main__",), here, here)
+        if not found:
+            return None
+        label = f"{name} -m {mod}"
+        main = os.path.basename(found[-1]) == "__main__.py"
+        code = f"import {mod}.__main__" if main else f"import {mod}"
+        reason = self.imports(label, None, here, code, "py")
+        if reason:
+            return reason
+        return self.every_file([program] + after, d, depth, False, "py", inline=(label, code, here), held_code=True)
 
     def unworked_path(self, text, slot, d, verb):
         """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
@@ -4075,7 +4152,7 @@ class Judge(WrittenPaths, ProgramWrites):
             words = words[k:]
         return words
 
-    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None):
+    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None, held_code=False):
         """The reason any word after the program that names a file posts, or None.
 
         Which word is the script depends on each program's own option table (python3 -I takes no
@@ -4100,7 +4177,10 @@ class Judge(WrittenPaths, ProgramWrites):
 
         inline, (its label, its text, the directory it runs in), is code the program was given by an
         option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
-        first file read as code is, so a data file it is handed is read when it can act on it."""
+        first file read as code is, so a data file it is handed is read when it can act on it.
+        held_code says that code is certainly the program (a module python3 -m runs,
+        claude-config#2827), so a code shaped file after it is handed to it, as after a held script
+        word, and read as code only where the code can run what it is handed."""
         code, data = [], []
         if inline:
             label, text, here = inline
@@ -4115,7 +4195,10 @@ class Judge(WrittenPaths, ProgramWrites):
         # something the program runs can run what it is handed (handed_code), and its own text
         # judged as any data file's is.
         held = self.held_slot(words, d) if slot and not empty else None
-        past = after_held = False
+        past = False
+        # held_code says the inline code is certainly the program, so every file after it is handed to
+        # it, as after a held script word (a module python3 -m runs, claude-config#2827).
+        after_held = bool(inline and held_code)
         prog = os.path.basename(words[0])
         # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
         # is opened for writing by the shell before the program starts and is never handed to it, so

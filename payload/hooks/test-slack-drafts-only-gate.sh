@@ -3525,6 +3525,129 @@ PY
   check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
 fi
 
+echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"
+
+# Three ways a file reached a program unread (measured through this wrapper on main at a2490ad,
+# 2026-11-12: every shape in each refused list below passed). `python3 -m <module> <files>` read
+# neither the module nor the files after it. `unzip a.zip -x n -d sub` was noted as unpacking under
+# the folder it runs in, not sub. And a file a git checkout, switch, reset, merge, pull, rebase or
+# cherry pick writes was read as it was on disk, since the command does not name it. Each refused
+# shape has an allowed twin that differs only in whether the file posts, so a refusal here is the
+# file being read and not every such command being refused. Nothing here is run.
+M="$T/m2827"
+mkdir -p "$M/ppkg" "$M/qpkg" "$M/tools" "$M/lib" "$M/arc"
+PY_POST_2827="urllib.request.urlopen('https://slack.com/api/chat.postMessage')"
+printf '%s\n' "import urllib.request" "$PY_POST_2827" > "$M/postmod.py"
+printf '%s\n' "print('hi')" > "$M/quietmod.py"
+printf '%s\n' "import postmod" > "$M/viapost.py"
+printf '%s\n' "import quietmod" > "$M/viaquiet.py"
+: > "$M/ppkg/__init__.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2827" > "$M/ppkg/__main__.py"
+: > "$M/qpkg/__init__.py"
+printf '%s\n' "print('hi')" > "$M/qpkg/__main__.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2827" > "$M/tools/sender.py"
+printf '%s\n' "print('hi')" > "$M/tools/quiet.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2827" > "$M/lib/libpost.py"
+printf '%s\n' "print('hi')" > "$M/lib/libquiet.py"
+printf '%s\n' "import runpy, sys" "runpy.run_path(sys.argv[1])" > "$M/runner.py"
+printf '%s\n' "import sys" "print(open(sys.argv[1]).read())" > "$M/reader.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2827" > "$M/post.py"
+printf '%s\n' "print('hi')" > "$M/plain.py"
+printf '%s\n' "https://slack.com/api/chat.postMessage" > "$M/hook.txt"
+printf '%s\n' '{"a": 1}' > "$M/data.json"
+printf '%s\n' "$POST" > "$M/arc/post-run.sh"
+printf '%s\n' "echo hello" > "$M/arc/plain-run.sh"
+python3 -c 'import sys, zipfile
+for out, src, name in ((sys.argv[1], sys.argv[2], "post-run.sh"), (sys.argv[3], sys.argv[4], "plain-run.sh")):
+    z = zipfile.ZipFile(out, "w"); z.write(src, name); z.close()' \
+  "$M/post.zip" "$M/arc/post-run.sh" "$M/plain.zip" "$M/arc/plain-run.sh"
+rm -rf "$M/arc"
+run_m() { run_raw "$(payload Bash "$(bash_input "$1")" "$M")"; }
+
+for runs in "python3 -m postmod" "python3 -m viapost" "python3 -m ppkg" "python3 -m tools.sender" \
+  "python3 -u -m postmod" "python3 -W ignore -m postmod" "PYTHONPATH=lib python3 -m libpost" \
+  "python3 -m runner hook.txt" "python3 -m runner post.py" "python3 -mpostmod" "cd tools && python3 -m sender"; do
+  run_m "$runs"
+  refused "a module python3 -m runs, and the files handed to it, are read: $runs"
+done
+for runs in "python3 -m quietmod" "python3 -m viaquiet" "python3 -m qpkg" "python3 -m tools.quiet" \
+  "python3 -u -m quietmod" "python3 -W ignore -m quietmod" "PYTHONPATH=lib python3 -m libquiet" \
+  "python3 -m reader hook.txt" "python3 -m runner plain.py" "python3 -mquietmod" "cd tools && python3 -m quiet" \
+  "python3 -m quietmod post.py" "python3 -m reader post.py" "python3 -m nosuch_2827"; do
+  run_m "$runs"
+  allowed "a module python3 -m runs that does not post, and cannot run or send what it is handed, passes: $runs"
+done
+# A module in the standard library or installed is not read, nor are the files handed to it, as for a
+# program run by bare name: py_compile and json.tool only read them, and the gate cannot tell which
+# installed modules run what they are handed, so reading them would refuse checking any file naming
+# an endpoint, the gate's own source among them.
+for runs in "python3 -m py_compile post.py" "python3 -m json.tool hook.txt" \
+  "python3 -m py_compile $DIR/slack_drafts_only_gate.py"; do
+  run_m "$runs"
+  allowed "a module from the standard library is handed files it only reads: $runs"
+done
+run_m "python3 -m ppkg"
+says "the refusal names the module python3 -m runs" "python3 -m ppkg"
+
+for runs in "unzip -o post.zip -x nothing -d sub && bash sub/post-run.sh" \
+  "unzip -o post.zip -x a b -d sub; bash sub/post-run.sh" "unzip -q post.zip -x nothing -dsub && bash sub/post-run.sh"; do
+  run_m "$runs"
+  refused "a zip unpacked past -x into the folder -d names is read there: $runs"
+done
+for runs in "unzip -o plain.zip -x nothing -d sub && bash sub/plain-run.sh" \
+  "unzip -o plain.zip -x a b -d sub; bash sub/plain-run.sh" "unzip -o post.zip -x nothing -d sub && bash plain.py"; do
+  run_m "$runs"
+  allowed "a zip unpacked past -x into the folder -d names, holding nothing that posts, passes: $runs"
+done
+
+# A repository whose branch posting changes run.sh to post and adds new.sh, which posts, and whose
+# branch quiet changes both to scripts that do not. main tracks posting, so a plain pull merges it.
+G="$T/g2827"
+git init -q -b main "$G"
+printf '%s\n' "echo hello" > "$G/run.sh"
+git -C "$G" add run.sh
+git -C "$G" -c user.name=t -c user.email=t@example.invalid commit -q -m base
+git -C "$G" branch posting
+git -C "$G" branch quiet
+git -C "$G" checkout -q posting
+printf '%s\n' "$POST" > "$G/run.sh"
+printf '%s\n' "$POST" > "$G/new.sh"
+git -C "$G" add run.sh new.sh
+git -C "$G" -c user.name=t -c user.email=t@example.invalid commit -q -m posting
+git -C "$G" checkout -q quiet
+printf '%s\n' "echo bye" > "$G/run.sh"
+printf '%s\n' "echo new" > "$G/new.sh"
+git -C "$G" add run.sh new.sh
+git -C "$G" -c user.name=t -c user.email=t@example.invalid commit -q -m quiet
+git -C "$G" checkout -q main
+git -C "$G" config branch.main.remote .
+git -C "$G" config branch.main.merge refs/heads/posting
+run_g() { run_raw "$(payload Bash "$(bash_input "$1")" "$G")"; }
+
+for ref in posting quiet; do
+  for runs in "git checkout @ && bash run.sh" "git checkout -q @; bash new.sh" "git switch @ && bash run.sh" \
+    "git switch --detach @ && bash run.sh" "git checkout -b mine @ && bash run.sh" \
+    "git reset --hard @ && bash run.sh" "git merge @ && bash run.sh" "git merge --no-edit -m m @ && bash new.sh" \
+    "git pull . @ && bash run.sh" "git rebase @ && bash run.sh" "git cherry-pick @ && bash new.sh" \
+    "git -C . checkout @ && bash run.sh" "git checkout @ && cd . && bash run.sh"; do
+    run_g "${runs//@/$ref}"
+    if [ "$ref" = posting ]; then
+      refused "a file a git command writes from a branch that posts is read as that branch holds it: ${runs//@/$ref}"
+    else
+      allowed "a file a git command writes from a branch that does not post passes: ${runs//@/$ref}"
+    fi
+  done
+done
+run_g "git pull && bash run.sh"
+refused "a pull merges the branch main tracks, which posts, so run.sh is read as that branch holds it"
+run_g "git checkout posting && bash run.sh"
+says "the refusal says where the text came from" "git checkout posting"
+for runs in "git status && bash run.sh" "git fetch . posting && bash run.sh" "git checkout nosuchref_2827 && bash run.sh" \
+  "git checkout posting && bash elsewhere.sh" "git log posting && bash run.sh" "git pull . quiet && bash run.sh"; do
+  run_g "$runs"
+  allowed "a git command that writes nothing that posts, or a ref that names nothing, leaves run.sh as it is on disk: $runs"
+done
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
