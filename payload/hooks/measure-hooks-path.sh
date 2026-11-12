@@ -12,7 +12,9 @@
 # wherever they live) it prints one tab separated line:
 #   <working tree> <scope> <value> <kind> main=<verdict> agent=<verdict>
 # scope and value are where core.hooksPath is set and to what (unset when it is not); kind is
-# unset, folder, missing or "not a folder" (such as /dev/null) for the location git resolves; each
+# unset, folder, missing or "not a folder" (such as /dev/null) for the location git resolves, or
+# unreadable when the setting cannot be read, and a worktree list entry gone from disk reads
+# "not on disk" with no verdicts; each
 # verdict is pass, refused, or "error <exit code>", from the SHIPPING push-scope-notice.sh given a
 # plain push from that tree, once as the main session and once carrying an agent's id. It asks the
 # gate rather than copying its rules, so the numbers are the gate's own (L107).
