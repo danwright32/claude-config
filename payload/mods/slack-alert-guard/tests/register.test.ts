@@ -2652,6 +2652,11 @@ test('a choice made overnight in one repository holds a merge there, never one i
   // Repository B's pull request even carries the same words, and is still not the one carrying the choice.
   w.night.diffs['7'] = DIFF
   expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  // -R spelled with gh's host or as a whole address names the same repository.
+  for (const r of ['github.com/danwright32/site', 'https://github.com/DanWright32/site.git'])
+    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toBe('')
+  for (const r of ['github.com/danwright32/app', 'https://github.com/DanWright32/app.git'])
+    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toContain('chosen overnight')
   // Merged from its folder rather than with -R, gh says which repository the pull request is in.
   w.night.urls['7'] = 'https://github.com/danwright32/site/pull/7'
   w.ctl.cwd = SITE

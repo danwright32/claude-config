@@ -1043,7 +1043,7 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
         return { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
       }
       if (!removed.length) return undefined
-      const keys = await unapproved($, [removalKey(path, removed)])
+      const keys = await unapproved($, [removalKey(path, removed)], path)
       if (!keys.length) return undefined
       // Text origin does not hold was never live, so taking it away takes nothing Dan approved (#2628).
       origin ??= await onOrigin($, path, read)
