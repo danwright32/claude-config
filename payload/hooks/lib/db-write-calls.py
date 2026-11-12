@@ -31,6 +31,10 @@ call without signing in.
   cli_read_approval(command, cwd, judge, sw)
                                          (True, why) when a Bash command is one Supabase CLI read,
                                          for read-only-query-allow.sh; else (False, why not)
+  dry_push_dir(command, sw, cwd)         the directory whose migrations a Bash command previews,
+                                         when it is one `supabase db push --dry-run` of the linked
+                                         project, else None; lib/db-apply-approval.py reads the
+                                         session's dry runs with it (claude-config#2829)
   asked_words()                          every word a call must hold for this file to ask about it
 
 Each finding is (why the call is asked about, the statement it is about or None).
@@ -1010,6 +1014,28 @@ def cli_read_approval(command, cwd, judge, sw):
     if found:
         return False, found[0][0]
     return True, "supabase db query runs only statements that read"
+
+
+# The flags a dry run may carry and still preview what an Applied push would send: the push's own
+# (lib/db-apply-approval.py PUSH_FLAGS) and --dry-run. --local or --db-url previews another database,
+# and --include-all, --include-seed or --include-roles a different set of changes.
+DRY_RUN_FLAGS = {"--dry-run", "--linked", "--yes", "--workdir", "--debug"}
+
+
+def dry_push_dir(command, sw, cwd):
+    """The directory whose supabase/migrations a Bash command previews, when the whole command is
+    one `supabase db push --dry-run` of the linked project (plain_supabase(), so nothing else in it
+    could change the folder), else None (claude-config#2829)."""
+    plain = plain_supabase(command, sw, cwd)
+    if plain is None:
+        return None
+    here, text = plain
+    path, flags = _supabase_words(sw.command_words(text), SUPABASE_VALUED)
+    if path != ["db", "push"] or not _dry(flags) or not {name for name, _, _ in flags} <= DRY_RUN_FLAGS:
+        return None
+    if any(name == "--linked" and eq and value.lower() not in ("true", "1", "t") for name, eq, value in flags):
+        return None
+    return _workdir(here, flags)
 
 
 def bash_findings(command, judge, sw, cwd=""):

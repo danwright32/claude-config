@@ -50,7 +50,8 @@
 #
 # WHAT IT LETS THROUGH (permissionDecision "allow"), since #2763: one `supabase db push` that Dan has
 # already answered Apply for in the /db-apply skill's picker, in this session, for that migration
-# file unchanged and that project (lib/db-apply-approval.py says exactly when), in a command that
+# file unchanged and that project, with the migrations folder as the dry run before his Apply found
+# it (#2829; lib/db-apply-approval.py says exactly when), in a command that
 # is that push and nothing else but cd. One decision, apply this migration, had been put to him up
 # to four times. The skill's ad hoc write, a `supabase db query -f <file>` that writes, is let
 # through the same way when his Apply named that file and project (Dan, 2026-11-11). Every other
@@ -312,7 +313,8 @@ if tool == "Bash":
                 ok, why = False, ap_why
             else:
                 try:
-                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), f.file)
+                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), f.file,
+                                         lambda c, w: calls.dry_push_dir(c, sw, w))
                 except Exception as e:
                     ok, why = False, "whether Dan applied it could not be checked (" + type(e).__name__ + ")"
             if ok:

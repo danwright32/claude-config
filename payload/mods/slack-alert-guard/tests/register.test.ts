@@ -10,6 +10,7 @@ import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 import { readsAsSend } from './send-wording.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
+import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 
 // The Slack alert guard (claude-config#2242) in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -32,13 +33,16 @@ const modKit: { name: string; register: Register } = {
       }
       // Only the members the guard calls are stood in; any other it ever reached would be undefined
       // and throw, which every test here would show as a refusal it did not expect.
-      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper' | 'branch'> = {
+      const modkit: Pick<Kit, 'writes' | 'pythonText' | 'blocked' | 'typedAnswer' | 'screen' | 'pipeline' | 'gh' | 'mergeHelper' | 'branch' | 'repo' | 'linkRepo'> = {
         screen: async () => null,
         // The gh and command readers are byte for byte copies of mod-kit's own (#2628).
         pipeline: async (input: { command: string; cwd?: string }) => ask('pipeline', input),
         gh: async (input: { words: string[] }) => ask('gh', input),
         mergeHelper: async c => ask('mergeHelper', c),
         branch: async (input: { path: string }) => ask('branch', input),
+        // The repository readers are mod-kit's own, copied (#2833).
+        repo: async (input: { root?: string | null; remote: string | null }) => ask('repo', input),
+        linkRepo: async (input: { link: string }) => ask('linkRepo', input),
         writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
         pythonText: async (input: { code: string }) => ask('pythonText', input),
         blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -99,6 +103,9 @@ const ALERT_TEXT = 'export const alert = (id: string) => fetch(process.env.SLACK
 const PLAIN = '/w/app/lib/date.ts'
 // The repository the files above are in, as git names it.
 const REPO = '/w/app'
+// #2833: a second repository, and each one's origin as git prints it.
+const SITE = '/w/site'
+const ORIGINS: Record<string, string> = { [REPO]: 'git@github.com:danwright32/app.git', [SITE]: 'https://github.com/danwright32/site.git' }
 
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
@@ -125,7 +132,9 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
-  const night2 = { session: 's1', diffs: {} as Record<string, string>, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
+  // #2833: originFails, git remote get-url exits nonzero; urls, the pull request each selector names
+  // as gh pr view gives it (absent: danwright32/app's), and viewFails, gh pr view alone failing.
+  const night2 = { session: 's1', diffs: {} as Record<string, string>, urls: {} as Record<string, string>, viewFails: false, originFails: false, ghFails: false, upstream: undefined as Record<string, string> | undefined, showFails: false, defaultBranch: 'main' as string | null, shownFrom: [] as string[] }
   const ghs: string[][] = []
   let reads = 0
   // Every git command the guard ran, with the timeout it gave it, so a pass can be told from a
@@ -186,8 +195,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       ghs.push(argv)
       if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
-      if (argv[1] !== 'pr' || argv[2] !== 'diff') throw new Error(`unexpected gh command: ${argv.join(' ')}`)
       const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
+      if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url')) {
+        if (night2.viewFails) return { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(`${night2.urls[sel] ?? `https://github.com/danwright32/app/pull/${sel || '12'}`}\n`)
+      }
+      if (argv[1] !== 'pr' || argv[2] !== 'diff') throw new Error(`unexpected gh command: ${argv.join(' ')}`)
       const d = night2.diffs[sel]
       if (d === undefined) return { value: { exitCode: 1, stdout: '', stderr: `no pull requests found for ${sel || 'the current branch'}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       return ok(d)
@@ -202,11 +215,18 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       if (ctl.gitKilledLate) await clock.advance(SCAN_MS + 1)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
-      const inRepo = dir === REPO || dir.startsWith(`${REPO}/`)
+      const top = Object.keys(ORIGINS).find(r => dir === r || dir.startsWith(`${r}/`))
+      const notRepo = { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
       if (argv[3] === 'rev-parse') {
-        if (!inRepo) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
+        if (!top) return notRepo
         // As git prints it: the top folder, then the folder below it ending in a slash, empty at the top.
-        return ok(`${REPO}\n${dir === REPO ? '' : `${dir.slice(REPO.length + 1)}/`}\n`)
+        return ok(`${top}\n${dir === top ? '' : `${dir.slice(top.length + 1)}/`}\n`)
+      }
+      // git remote get-url origin (#2833).
+      if (argv[3] === 'remote' && argv[4] === 'get-url' && argv[5] === 'origin') {
+        if (!top) return notRepo
+        if (night2.originFails) return { value: { exitCode: 2, stdout: '', stderr: "error: No such remote 'origin'\n", isStdoutTruncated: false, isStderrTruncated: false } } as never
+        return ok(`${ORIGINS[top]}\n`)
       }
       // git ls-files, listing the files a pathspec names (#2637): tracked or not, each ending in a NUL.
       if (argv[3] === 'ls-files') {
@@ -291,6 +311,11 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     // undefined (no gh, no helper) travels as null and is read back as none.
     if (cmd === '__modkit' && method === 'gh') return ok(JSON.stringify(ghArgs((JSON.parse(String(raw)) as { words: string[] }).words) ?? null))
     if (cmd === '__modkit' && method === 'mergeHelper') return ok(JSON.stringify(mergeHelperArgs(JSON.parse(String(raw))) ?? null))
+    if (cmd === '__modkit' && method === 'repo') {
+      const input = JSON.parse(String(raw)) as { root?: string | null; remote: string | null }
+      return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }))
+    }
+    if (cmd === '__modkit' && method === 'linkRepo') return ok(JSON.stringify(linkRepo((JSON.parse(String(raw)) as { link: string }).link)))
     if (cmd === '__modkit' && method === 'branch') return ok(JSON.stringify({ root: REPO, main: REPO, branch: '2628-sleep', defaultBranch: night2.defaultBranch, isDefault: false, issues: [2628] }))
     if (cmd === '__modkit' && method === 'typedAnswer') {
       const input = JSON.parse(String(raw)) as TypedAnswer
@@ -2611,6 +2636,86 @@ test('a merge the guard cannot read, or whose diff gh cannot give, is held while
   const before = w.ghs.length
   expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
   expect(w.ghs.length).toBe(before)
+})
+
+// #2833: a choice holds merges in the repository it was made in, never in another. After sleep mode
+// on 2026-11-12 a merge in one repository was refused over four choices made in another
+// repository's worktree, none of whose files or wording its pull request carried.
+const SITE_MERGE = { tool: 'Bash', command: 'gh pr merge 7 --squash -R danwright32/site' }
+const placesIn = (w: W) => chosenIn(w).map(k => ((w.store[k] as { places?: { repo: string | null }[] }).places ?? []).map(p => p.repo))
+
+test('a choice made overnight in one repository holds a merge there, never one in another (#2833)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  expect(placesIn(w)).toEqual(chosenIn(w).map(() => ['danwright32/app']))
+  // Repository B's pull request even carries the same words, and is still not the one carrying the choice.
+  w.night.diffs['7'] = DIFF
+  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  // -R spelled with gh's host or as a whole address names the same repository.
+  for (const r of ['github.com/danwright32/site', 'https://github.com/DanWright32/site.git'])
+    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toBe('')
+  for (const r of ['github.com/danwright32/app', 'https://github.com/DanWright32/app.git'])
+    expect(refusalOf(await call($, { tool: 'Bash', command: `gh pr merge 7 --squash -R ${r}` }))).toContain('chosen overnight')
+  // Merged from its folder rather than with -R, gh says which repository the pull request is in.
+  w.night.urls['7'] = 'https://github.com/danwright32/site/pull/7'
+  w.ctl.cwd = SITE
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
+  expect(w.ghs.some(g => g.slice(0, 4).join(' ') === 'gh pr view 7')).toBe(true)
+  // In repository A the pull request carrying it is refused, by folder or by -R.
+  w.ctl.cwd = REPO
+  expect(refusalOf(await call($, MERGE))).toContain('chosen overnight')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 12 --squash -R danwright32/app' }))).toContain('chosen overnight')
+  // One in A that no longer carries it passes, as before.
+  w.night.diffs['12'] = DIFF_CHANGED
+  expect(refusalOf(await call($, MERGE))).toBe('')
+})
+
+test('wording a choice lets through asleep in another repository holds merges there too (#2833)', withNight, async ($, on) => {
+  nightFresh(true)
+  const SITE_ALERT = `${SITE}/lib/alert.ts`
+  const w = world($, on, { files: { [SITE_ALERT]: ALERT_TEXT } })
+  await chooseReword($, w)
+  // The same wording put in repository B while Dan is asleep goes through on the choice, which now
+  // names B as well, so B's pull request carrying it is held.
+  expect(refusalOf(await call($, { ...REWORD, file_path: SITE_ALERT }))).toBe('')
+  expect(placesIn(w)).toEqual(chosenIn(w).map(() => ['danwright32/app', 'danwright32/site']))
+  w.night.diffs['7'] = DIFF
+  expect(refusalOf(await call($, SITE_MERGE))).toContain('chosen overnight')
+})
+
+test('a choice whose repository cannot be read, or a pull request whose repository cannot be, still holds the merge (#2833)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  // The choice's origin cannot be read when it is made, nor at the merge: it holds any pull request
+  // carrying its wording, as before #2833, and says which repository could not be read.
+  w.night.originFails = true
+  await chooseReword($, w)
+  expect(placesIn(w)).toEqual(chosenIn(w).map(() => [null]))
+  w.night.diffs['7'] = DIFF
+  const why = refusalOf(await call($, SITE_MERGE))
+  expect(why).toContain('chosen overnight')
+  expect(why).toContain(` As the repository ${ALERT} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`)
+  // Readable at the merge, it is read then.
+  w.night.originFails = false
+  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  // A choice recorded before #2833 names no repository, so it is read from its file at the merge.
+  for (const k of chosenIn(w)) {
+    const { places: _p, ...before2833 } = w.store[k] as { places?: unknown }
+    w.store[k] = before2833
+  }
+  expect(refusalOf(await call($, SITE_MERGE))).toBe('')
+  w.night.originFails = true
+  expect(refusalOf(await call($, SITE_MERGE))).toContain('chosen overnight')
+  w.night.originFails = false
+  // gh cannot say which repository the pull request is in: held as could not check.
+  w.night.viewFails = true
+  const unread = refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))
+  expect(unread).toContain('could not check')
+  expect(unread).toContain('pull request cannot be read')
+  // A pull request carrying no chosen wording needs no repository, as before.
+  w.night.diffs['7'] = DIFF_CHANGED
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr merge 7 --squash' }))).toBe('')
 })
 
 test('a choice unanswered for three days expires, said once, and stays held; it is never approval (#2628)', withNight, async ($, on) => {

@@ -212,8 +212,9 @@ const foreignUses = async ($: EngineInterface, path: string, names: string[], de
 
 // The keys of a change Dan has not yet approved; a store that cannot be read throws. While he is
 // asleep, wording a session chose overnight and that has not expired goes through too (#2628): a
-// choice is never an approval, so awake it is held as before.
-const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]> => {
+// choice is never an approval, so awake it is held as before. Given the `file` the wording goes in, a
+// choice letting it through there holds merges in that file's repository too (#2833).
+const unapproved = async ($: EngineInterface, keys: string[], file?: string): Promise<string[]> => {
   const out: string[] = []
   for (const k of keys) if ((await $.store.get(k)) === undefined) out.push(k)
   const chosen: string[] = []
@@ -222,6 +223,7 @@ const unapproved = async ($: EngineInterface, keys: string[]): Promise<string[]>
     if (c && c.expired === undefined) chosen.push(k)
   }
   if (!chosen.length || !(await isAsleep($))) return out
+  if (file !== undefined) await placeChoices($, chosen, file)
   return out.filter(k => !chosen.includes(k))
 }
 
@@ -250,26 +252,101 @@ const chosenKeysOf = async ($: EngineInterface, id: string): Promise<string[]> =
 }
 
 /**
+ * The GitHub repository a file is in (#2833), as owner/name in lower case: the origin of the checkout
+ * holding it, read from the nearest folder that exists, so a worktree removed since is read through
+ * the checkout it was under, which has the same origin. null when git or the origin cannot say.
+ */
+const repoOf = async ($: EngineInterface, path: string): Promise<string | null> => {
+  try {
+    const where = await placed($, path, (await $.clock.now()) + SCAN_MS)
+    if (!where) return null
+    const r = await $.process.run(['git', '-C', where.top, 'remote', 'get-url', 'origin'], { timeoutMs: SCAN_MS })
+    if (r.exitCode !== 0 || r.isStdoutTruncated) return null
+    return (await $.modkit.repo({ root: where.top, remote: r.stdout.trim() })).github?.toLowerCase() ?? null
+  } catch (err) {
+    $.ui.log(`slack-alert-guard: the repository ${path} is in could not be read, so a choice made there holds merges in every repository: ${message(err)}`, { to: 'debug' })
+    return null
+  }
+}
+
+/**
+ * The repositories a choice holds merges in (#2833), and the files whose repository could not be
+ * read, read again here: a choice made before #2833 is read from its file.
+ */
+const choiceRepos = async ($: EngineInterface, c: SlackAlertChoice): Promise<{ repos: string[]; unread: string[] }> => {
+  const repos: string[] = []
+  const unread: string[] = []
+  for (const p of c.places ?? [{ file: c.file, repo: null }]) {
+    const r = p.repo ?? (await repoOf($, p.file))
+    if (r) repos.push(r)
+    else unread.push(p.file)
+  }
+  return { repos, unread }
+}
+
+/**
+ * Asleep, wording a choice lets through in a file is held against merges there too (#2833): the
+ * file and its repository are added to each such choice's places, so a pull request in another
+ * repository carrying it is still held.
+ */
+const placeChoices = async ($: EngineInterface, chosen: string[], file: string): Promise<void> => {
+  const done = new Set<string>()
+  for (const k of chosen) {
+    const c = (await $.store.get(chosenKey(k))) as SlackAlertChoice | undefined
+    if (!c || done.has(c.id)) continue
+    done.add(c.id)
+    const places = c.places ?? [{ file: c.file, repo: await repoOf($, c.file) }]
+    if (places.some(p => p.file === file)) continue
+    const next = [...places, { file, repo: await repoOf($, file) }]
+    for (const key of await chosenKeysOf($, c.id)) await $.store.set(key, { ...((await $.store.get(key)) as SlackAlertChoice), places: next } satisfies SlackAlertChoice)
+  }
+}
+
+/**
  * A merge carrying wording chosen overnight (#2628): while any choice waits on Dan, each pull request
  * a command merges is read with gh pr diff, and one whose added lines carry a choice is refused, so
- * nothing posts it before he approves it. A merge that cannot be read, or a diff gh cannot give, is
- * held as could not check. With no choice waiting, no command is read.
+ * nothing posts it before he approves it. Only in the repositories the choice holds (#2833): one
+ * made in another repository lets the merge through, and one whose repository cannot be read holds
+ * it wherever it is. A merge that cannot be read, a diff gh cannot give, or a pull request whose
+ * repository gh cannot say, is held as could not check. With no choice waiting, no command is read.
  */
 const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
   const waiting = await choices($)
   if (!waiting.length) return PASS
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
+  const unreadable: Verdict = { unchecked: 'a merge whose pull request cannot be read, while Slack alert wording chosen overnight waits on Dan' }
   for (const c of await $.modkit.pipeline({ command, cwd, home })) {
     const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
     if (m === undefined) continue
-    if ('unreadable' in m) return { unchecked: 'a merge whose pull request cannot be read, while Slack alert wording chosen overnight waits on Dan' }
+    if ('unreadable' in m) return unreadable
     const argv = ['gh', 'pr', 'diff', ...m.selector, ...(m.repo ? ['-R', m.repo] : [])]
     const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
     if (r.exitCode !== 0 || r.isStdoutTruncated)
       return { unchecked: `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'}), while Slack alert wording chosen overnight waits on Dan` }
-    const held = carried(r.stdout, waiting)
-    if (held.length) return { merge: mergeRefusal(held) }
+    const carrying = carried(r.stdout, waiting)
+    if (!carrying.length) continue
+    // The pull request's repository: the one the command names, else the one gh reads it in, asked
+    // only once some choice's wording is carried.
+    let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
+    const held: SlackAlertChoice[] = []
+    const unreadFiles: string[] = []
+    for (const x of carrying) {
+      const { repos, unread } = await choiceRepos($, x)
+      if (unread.length) {
+        held.push(x)
+        unreadFiles.push(...unread)
+        continue
+      }
+      if (prRepo === undefined) {
+        const v = await $.process.run(['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
+        const link = v.exitCode === 0 && !v.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.stdout.trim() }) : null
+        if (!link) return unreadable
+        prRepo = link.toLowerCase()
+      }
+      if (repos.includes(prRepo)) held.push(x)
+    }
+    if (held.length) return { merge: mergeRefusal(held, unreadFiles) }
   }
   return PASS
 }
@@ -809,10 +886,10 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     for (const [m, strings] of now.sent) {
       const fresh = [...strings].filter(s => !was?.sent.get(m)?.has(s))
       if (!fresh.length) continue
-      const open = await unapproved($, fresh.map(wordingKey))
+      const mod = mods.get(m) as Mod
+      const open = await unapproved($, fresh.map(wordingKey), mod.path)
       const shown = fresh.filter(s => open.includes(wordingKey(s)))
       if (!shown.length) continue
-      const mod = mods.get(m) as Mod
       const [kept = []] = await postable($, mod.path, mod.lang, [{ text: mod.text, lits: mod.lits, changed: shown }], deadline)
       const postableText = new Set(wordingOf(kept.map(l => l.text)))
       for (const s of shown) {
@@ -958,7 +1035,7 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const holdOf = async ({ added, removed }: { added: string[]; removed: string[] }): Promise<Hold | undefined> => {
       if (added.length) {
         const fresh = [...new Set(added)]
-        const open = await unapproved($, fresh.map(wordingKey))
+        const open = await unapproved($, fresh.map(wordingKey), path)
         if (!open.length) return undefined
         const shown = fresh.filter(s => open.includes(wordingKey(s)))
         // The placeholders the code writes as text, which the message shown to Dan may carry (#2361).
@@ -966,6 +1043,8 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
         return { file: path, added: shown, removed, keys: open, ...(literal.length ? { literal } : {}) }
       }
       if (!removed.length) return undefined
+      // No file given (#2833): a removal's key names its file, so a chosen removal only ever lets
+      // through an edit to that same file, never one in another repository.
       const keys = await unapproved($, [removalKey(path, removed)])
       if (!keys.length) return undefined
       // Text origin does not hold was never live, so taking it away takes nothing Dan approved (#2628).
@@ -1492,6 +1571,7 @@ export const register: Register = on => {
       ...(waiting.sender ? { sender: waiting.sender } : {}),
       ...(waiting.from ? { from: waiting.from } : {}),
       ...(waiting.unwired ? { unwired: waiting.unwired } : {}),
+      places: [{ file: waiting.file, repo: await repoOf($, waiting.file) }],
     }
     for (const k of waiting.keys) await $.store.set(chosenKey(k), choice)
     await update($, pendingRef, p => (p ?? []).filter(x => x.id !== call))
