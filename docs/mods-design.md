@@ -3608,6 +3608,47 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   and its other answers, the refusal and the reason kept say the look, never wording. Labels are
   worded by the guard alone, so contract 3 stands.
 
+### What #2847 and #2830 changed, 2026-11-12
+
+- **A script file's own code is read (#2847).** On 2026-11-12 the #2845 builder ran four python
+  scripts from its notes folder that rewrote this guard's rules.ts by a path inside their code, and
+  none was judged: a script was read only for the files it is handed (#1586). register.ts
+  `scriptsRun` now finds each python or node script file a command runs (an interpreter's operand,
+  or one run by its own name with a .py, .js or .ts kind of extension) and hands its text to mod-kit's
+  write reader as a program on standard input (rules.ts `asProgram`), so it is read exactly as
+  inline code is, with no second reader. Each file its code names and writes is judged as a write
+  of it: a mod hook file is read again once the command ran, so one only read passes, and a screen
+  file is held before it runs, saying which script names it (`scriptNamesFile`). Where its writes are
+  not all named, a mod hook file its text names (`mentionedModHookFiles`), and a look changing file
+  named from the top of the disk or home, are judged too; a relative look changing name there is
+  not. A name its code writes where the folder it runs in cannot be followed, or a script that is
+  there but cannot be read, is held as could not check.
+- **Measured before shipping.** Over 14 days of this Mac's Bash commands (7,951 distinct ones
+  naming an interpreter or a script; 1,927 ran a script file, 575 of them still on disk to read)
+  and the repository's own 170 scripts, nothing was held before running and nothing was held as
+  could not check. Eight were judged after running, each a script naming a mod hook file: five
+  commands running the #2845 scripts, the case the issue names, and three scripts that only read
+  one. Before the
+  relative rule, seven commands were held, every one usage text, a docstring or a scratch repository
+  fixture (make-switcher.py's `<out.html>`, an end to end test's `site/invoices/index.html`).
+- **A write it could not follow says so (L11, folded in by Dan).** rules.ts `unsure` and
+  `unsureCard` said "could not tell which issue or branch it belongs to" for every hold of that
+  kind, a write the guard could not follow included (a folder git cannot list, a name a variable,
+  pattern or command's output fills in, a script's write that cannot be placed). Those now say the
+  guard could not check where the call writes, why, and to name each file where it can be read
+  (the verdict's `unfollowed`); a checkout the disk cannot answer for keeps the branch sentence.
+- **Not read.** A shell script's own commands, a script named through a variable or a command's
+  output, a relative script name where the folder cannot be followed, a script written by the same
+  command (it is read as it stands on disk), and a module a script imports.
+- **A restore beside other commands is measured (#2830).** #2777 measured a git checkout or restore
+  only where it ran first on its line, alone, in no pipe or background. register.ts `restoreAlone`
+  now measures one wherever every command that runs before it, or beside it in a pipe or the
+  background, can neither move a ref nor change the index (rules.ts `leavesGitAlone`: a reading
+  command, or git reading only) or is another restore of named paths (`pathRestore`). Two restores
+  where one reads the index (`indexSource`), and a line writing inside .git, stay whole, and the
+  refusal names the command that may change what it puts back. A settled design record keeps the
+  strict rule of one restore alone. This lets through restores held before, so it waits on Dan.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

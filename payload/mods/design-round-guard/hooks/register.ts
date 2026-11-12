@@ -52,6 +52,15 @@ import {
   sealCheck,
   RECORD_REMOVED,
   scriptUnread,
+  scriptNamesFile,
+  scriptUnplaced,
+  scriptUnreadable,
+  scriptLanguage,
+  asProgram,
+  mentionedModHookFiles,
+  leavesGitAlone,
+  pathRestore,
+  indexSource,
   settledNotSealed,
   settledUnchecked,
   settledUnread,
@@ -157,8 +166,8 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   passes, recorded naming those words (below).
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
-//   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
-//   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
+//   passes; one git cannot read, or one beside a command that may change what it puts back
+//   (restoreAlone, since #2830; until then any other command), is judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
 // - Since #1191: a design round's working files go in the session's scratchpad (rules.ts
 //   inScratchpad: Claude Code's temp folder, the session's id), in no checkout, so never held and
 //   needing no issue or branch; a name a program only mentions and only joins onto a folder is read
@@ -279,6 +288,21 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   2026-11-12: "any words"). A checkout whose issue cannot be told records nothing and still passes.
 //   A pass that cannot be kept is not made, as #2348's. Only a change to how something looks stops.
 //   This reverses the wording holds of #1823 (#1837), #1841, #1859, #1925, #1934, #2161 and #2788.
+// - Since #2847: a python or node script file a command runs (`python3 step1.py`, `node gen.mjs`,
+//   `./edit.py`) is read for what its own code writes, as mod-kit reads inline code (its text handed
+//   to mod-kit's write reader as a program, rules.ts asProgram, never a second reader): each file its
+//   code names and writes is judged as a write of it, a mod hook file read again once it ran, a screen
+//   file held before it runs saying why (rules.ts scriptNamesFile). On 2026-11-12 four such scripts
+//   rewrote this guard's rules.ts unread. Where its writes are not all named, a mod hook file its text
+//   names, and a look changing file it names from the top of the disk or home, are judged the same; a
+//   relative look changing name there is not (measured noise, scriptsRun). A name its code writes
+//   where the folder cannot be followed, or a script that cannot be read, is held as could not check.
+//   A shell script's own commands, and a script named through a variable, are not read (as before).
+// - Since #2830: a git checkout or restore beside other commands is measured by what git puts back
+//   wherever nothing before it, or beside it in a pipe or the background, can change its source: a
+//   command that only reads, git reading only, or another restore of named paths (rules.ts
+//   leavesGitAlone, pathRestore). Two restores where one reads the index, and a write inside .git,
+//   stay whole. Until #2830 only a restore run first on its line, alone in no pipe, was (#2777).
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -380,7 +404,8 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // `unexpanded`, for a file a run is handed whose every $ is in single quotes or after a backslash
 // (mod-kit's mark, #1953), which holds no variable's value.
 // `unread`, for a write reaching a whole folder whose files cannot be listed (#2395), says why.
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string }
+// `inScript`, for a file a script file's own code writes (#2847), is that script as the command names it.
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string; inScript?: string; tool?: true; removes?: true; quoted?: true; unexpanded?: true; values?: string[]; unread?: string }
 
 // A path without its `.` segments or a trailing slash (`lib/.` and `lib/` are lib), as git lists it.
 const plainPath = (path: string) => path.replace(/\/\.(?=\/|$)/g, '').replace(/(.)\/+$/, '$1')
@@ -480,7 +505,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A script file the command runs (#1586, measured live on 2026-10-23: `python3 gen.py app/page.tsx`
   // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
   // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
-  // that file would be. What it writes that no argument names (a path in its own text) is not read.
+  // that file would be. What it writes that no argument names, a path in its own code, is read below
+  // since #2847 for a python or node script.
   // The spool helper's note writes none of what it is handed (#1747, rules.ts spoolNote).
   for (const r of w.runs ?? []) {
     if (spoolNote(r, at.home)) continue
@@ -525,10 +551,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // read as sys.argv) is one it may write (lessons review of #1151). A -c program is one of its
       // words, read as its code instead.
       const read = [u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n')
-      for (const m of mentionedLookFiles(read)) {
-        const t = await guessAt($, m, u.folder, at, scratch, read, command)
-        if (t) targets.push(t)
-      }
+      targets.push(...(await programGuesses($, read, u.folder, at, scratch, command)))
       continue
     }
     // Otherwise what the command, and any patch or script file it reads, mentions is the guess. One it
@@ -545,9 +568,107 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A write the words do not name, or a destination the reader could not follow, may be the record
   // when the command names the plugin store at all: refused, failing closed as ask before saving does
   // for lasting memory (lessons review of #991).
+  // A python or node script file the command runs (#2847), read for what its own code writes, as
+  // mod-kit reads inline code: each file its code names and writes is judged as a write of it. Where
+  // its code does not name every file it writes, each mod hook file its text names is judged too, as
+  // a shell write to it is (read again once it ran, so one only read passes), and so is a look
+  // changing file it names from the top of the disk or the home folder. A relative look changing name
+  // in such a script is not: over 14 days of this Mac's commands every one was usage text, a docstring
+  // or a fixture for a scratch repository (make-switcher.py's `<out.html>`), never a write, where an
+  // inline program's names are its own (#1151). A file its code names where the folder it runs in
+  // cannot be followed, or a script that cannot be read, is held as could not check. A script whose
+  // writes are not all named and whose text names the plugin store may write the guard's record,
+  // refused as a command naming the store is.
+  let scriptStore = false
+  for (const s of await scriptsRun($, command, at)) {
+    if ('unread' in s) {
+      targets.push({ word: s.word, unread: s.unread, inScript: s.word })
+      continue
+    }
+    const read = await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd: s.folder ?? UNPLACED, home: at.home })
+    const named = scratch || namesScratchpad(s.text, at.session, at.temps)
+    for (const u of read.unnamed) {
+      if (u.targets) {
+        for (const p of u.targets)
+          targets.push(p.startsWith(`${UNPLACED}/`) ? { word: p, unread: scriptUnplaced(s.word, p.slice(UNPLACED.length + 1)), inScript: s.word } : { path: p, word: p, inScript: s.word })
+        continue
+      }
+      scriptStore ||= mentionsStore(s.text)
+      const text = u.code ?? u.program ?? ''
+      for (const m of mentionedModHookFiles(text)) {
+        const t = await guessAt($, m, s.folder, at, named, text, '')
+        if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
+      }
+      for (const m of mentionedLookFiles(text).filter(x => /^(\/|~\/)/.test(x))) {
+        const t = await guessAt($, m, s.folder, at, named, text, '')
+        if (t?.path) targets.push({ ...t, inScript: s.word })
+      }
+    }
+  }
   // A quoted pattern read as its one name (#1951) is still one the script may match itself.
-  const unfollowed = w.unnamed.length > 0 || targets.some(t => !t.path || t.quoted)
-  return { targets, storeMentioned: unfollowed && mentionsStore(command) }
+  // A script file's own targets (`inScript`) are left out: their store is asked of the script's text above.
+  const unfollowed = w.unnamed.length > 0 || targets.some(t => (!t.path && t.inScript === undefined) || t.quoted)
+  return { targets, storeMentioned: (unfollowed && mentionsStore(command)) || scriptStore }
+}
+
+// The look changing and mod hook files a program's text names (#1151, #2847), each as guessAt places
+// it in the folder the program runs in, as a guess at a file it writes.
+const programGuesses = async ($: EngineInterface, read: string, folder: string | undefined, at: Where, scratch: boolean, command: string): Promise<Target[]> => {
+  const out: Target[] = []
+  for (const m of [...mentionedLookFiles(read), ...mentionedModHookFiles(read)]) {
+    const t = await guessAt($, m, folder, at, scratch, read, command)
+    if (t) out.push(t)
+  }
+  return out
+}
+
+// #2847: the folder a script's code is read in where the folder it runs in cannot be followed, so a
+// relative name its code writes comes back under it and is told apart as one that cannot be placed.
+// No real folder: mod-kit's write reader reads names only, and nothing is ever opened there.
+const UNPLACED = '/design-round-guard-folder-not-known'
+// #2847: the most of a script file read for what its own code writes. A script a session writes is
+// far smaller; a larger file run by name (a package's bundled tool) is no script of the session's.
+const SCRIPT_MAX = 512 * 1024
+// A command run by its own name that is a script file, as mod-kit's write reader reads one (#1586):
+// one named by its folder (`./gen`, `scripts/gen.py`) or ending in a script language's extension.
+const runsByName = (w: string | undefined) => w !== undefined && (/^\.\.?\//.test(w) || /\.(?:py|[cm]?js|[cm]?ts)$/i.test(w))
+
+// #2847: each python or node script file a command runs, with its text and the folder it runs in
+// (mod-kit's `folder`, absent where a cd before it cannot be followed), or why one that is there could
+// not be read. A script named through a variable or a command's output, or by a relative name where
+// the folder is unknown, cannot be found, nor can one not there (nothing to run, or one the same
+// command writes first, which is read as it stands); each is left as #1586 leaves it, judged by the
+// files it is handed. Inline code and a script on standard input are read already, as programs.
+type ScriptRun = { word: string; path: string; lang: 'python' | 'node'; folder: string | undefined; text: string } | { word: string; unread: string }
+const scriptsRun = async ($: EngineInterface, command: string, at: Where): Promise<ScriptRun[]> => {
+  const out: ScriptRun[] = []
+  for (const c of await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) {
+    if (c.program !== undefined) continue
+    // A shell's script file (no `language`) is read as the commands it runs by no one here.
+    const word = c.script ? (c.script.stdin || c.language === undefined ? undefined : c.script.files[0]) : c.language === undefined && runsByName(c.words[0]) ? c.words[0] : undefined
+    if (word === undefined || /[$`*?[]/.test(word)) continue
+    const folder = c.folder ?? undefined
+    if (folder === undefined && !/^(\/|~\/)/.test(word)) continue
+    const path = resolvePath(word, folder ?? '/', at.home)
+    if (out.some(s => 'path' in s && s.path === path)) continue
+    let kind: { kind: string; size?: number }
+    try {
+      kind = (await $.fs.stat(path, { resolve: true })) as { kind: string; size?: number }
+    } catch {
+      continue
+    }
+    if (kind.kind !== 'file' || (kind.size ?? 0) > SCRIPT_MAX) continue
+    let text: string
+    try {
+      text = String(await $.fs.read(path))
+    } catch (err) {
+      out.push({ word, unread: scriptUnreadable(word, message(err)) })
+      continue
+    }
+    const lang = scriptLanguage(path, c.language)
+    if (lang) out.push({ word, path, lang, folder, text })
+  }
+  return out
 }
 
 // Whether a Swift file is a SwiftUI view: the text the call carries, beside the file as it is now.
@@ -705,35 +826,49 @@ const neverTracked = async ($: EngineInterface, path: string, tree: string): Pro
 // Why what git puts back cannot be read before a shell call runs, or undefined when it can (lessons
 // review of #1158): putBack reads the source as it stands now, and any other command on the line may
 // change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
-// restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
-// before it aside, is measured, or with `first` one run first on its line (#2777, below); anything
-// else is judged whole, saying so. So is git told to read
+// restore f`, a script that runs git). So a line that is one git checkout or restore alone, a cd
+// before it aside, is measured, and with `named` one beside only commands that cannot change its
+// source (#2777, #2830, below); anything else is judged whole, saying so. So is git told to read
 // another index, repository or setting: a GIT_ variable set on the line (which the command reader
 // drops from a command's words), or any of git's own options before the subcommand but -C, whose
 // folder mod-kit already follows (lessons review).
 // A `&` that runs what is before it in the background: not one of `&&`, nor a redirection's (`2>&1`,
 // `&>`, `|&`). One inside quotes reads as one too, so such a line is judged whole, as before.
 const BACKGROUND = /(^|[^&>|<])&(?![&>])/
-// With `first` (#2777), a restore that runs first on its line is measured too: nothing run after it
-// can change what it puts back. Only where it is the line's one git checkout or restore, so every
-// source a target names is that restore's, and runs neither in a pipe nor in the background, where
-// what follows it on the line may run beside it.
-const restoreAlone = async ($: EngineInterface, command: string, first = false): Promise<string | undefined> => {
+// With `named` (#2777, #2830), a restore beside other commands on its line is measured too, wherever
+// nothing that runs before it, or beside it in a pipe or the background, can change what it puts
+// back: every such command only reads (rules.ts leavesGitAlone) or is another restore of named paths
+// (rules.ts pathRestore), which moves no ref. Nothing run after it in sequence can change what it
+// puts back. Two restores where one puts back from the index (`sources`, every source the line's
+// restores name) stay whole, since one may change the index the other reads, and so does a line
+// writing inside .git. Only a settled design record keeps the strict rule of one restore alone.
+// Until #2830 the restore had to run first, be the line's only one and run in no pipe or background.
+const restoreAlone = async ($: EngineInterface, command: string, named = false, sources: readonly string[] = []): Promise<string | undefined> => {
+  const notAlone = 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
   try {
     const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
-    const restores = async () => {
-      let n = 0
-      for (const c of all) if (['checkout', 'restore'].includes((await $.modkit.git({ words: c.words }))?.sub ?? '')) n++
-      return n
+    if (all.length !== 1 && !named) return notAlone
+    const gits: (Awaited<ReturnType<typeof $.modkit.git>>)[] = []
+    for (const c of all) gits.push(await $.modkit.git({ words: c.words }))
+    const restoring = all.map((_, i) => all.length === 1 ? ['checkout', 'restore'].includes(gits[i]?.sub ?? '') : pathRestore(gits[i]))
+    if (!restoring.some(Boolean)) return notAlone
+    for (const [i, c] of all.entries()) {
+      const g = gits[i]
+      if (!restoring[i] || !g?.sub) continue
+      const before = c.words.slice(1, c.words.indexOf(g.sub, 1))
+      if (/(^|[^\w$])GIT_\w*=/.test(command) || !before.every((w, k) => k % 2 === 1 || w === '-C') || before.length % 2)
+        return `the command sets how git reads its repository (${before.length ? before.join(' ') : 'a GIT_ variable'}), so what it puts back may not be what this checkout holds`
     }
-    const piped = all.some(c => c.pipedFrom !== undefined)
-    const alone = all.length === 1 || (first && !piped && !BACKGROUND.test(command) && (await restores()) === 1)
-    const words = alone ? (all[0]?.words ?? []) : []
-    const g = words.length ? await $.modkit.git({ words }) : undefined
-    if (!(g?.sub === 'checkout' || g?.sub === 'restore')) return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
-    const before = words.slice(1, words.indexOf(g.sub, 1))
-    if (/(^|[^\w$])GIT_\w*=/.test(command) || !before.every((w, i) => i % 2 === 1 || w === '-C') || before.length % 2)
-      return `the command sets how git reads its repository (${before.length ? before.join(' ') : 'a GIT_ variable'}), so what it puts back may not be what this checkout holds`
+    if (all.length === 1) return undefined
+    if (/(^|[\s/'"=])\.git(\/|\s|$)/.test(command)) return 'the command writes inside .git, which may change what the git checkout or restore puts back'
+    const beside = all.some(c => c.pipedFrom !== undefined) || BACKGROUND.test(command)
+    const last = restoring.lastIndexOf(true)
+    for (const [i, c] of all.entries()) {
+      if (restoring[i] || (!beside && i > last) || leavesGitAlone(c.words, gits[i])) continue
+      return `\`${c.words.join(' ')}\` runs ${beside ? 'beside' : 'before'} the git checkout or restore and may change what it puts back`
+    }
+    if (restoring.filter(Boolean).length > 1 && sources.some(indexSource))
+      return 'the command runs more than one git checkout or restore, and one puts back from the index, which another may change first'
     return undefined
   } catch (err) {
     return `mod-kit could not read the command: ${message(err)}`
@@ -1047,7 +1182,8 @@ type Verdict =
   | { pass: true; watch?: Watched[]; auto?: Auto }
   | { forged: string }
   | { stale: string }
-  | { unsure: string[]; why: string }
+  // `unfollowed` (#2847): `why` is a write the guard could not follow, never an issue or branch it could not tell.
+  | { unsure: string[]; why: string; unfollowed?: true }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
   // `unrecorded`: why an automatic pass could not be recorded, for a change held only for that (#2845, L11).
   | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; unrecorded?: string } }
@@ -1112,8 +1248,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // or of a shell write to a mod hook file, which cannot be read before it runs (#1341).
   const unreadIn = new Map<string, string[]>()
   // restoreAlone's answer for this call once asked, strictly for a settled design record, whose
-  // refusal says a restore alone goes through, and with a restore run first on its line for a file
-  // judged by its lines (#2777); null until then.
+  // refusal says a restore alone goes through, and with a restore beside commands that cannot change
+  // what it puts back for a file judged by its lines (#2777, #2830); null until then.
   let notAlone: string | undefined | null = null
   let notFirst: string | undefined | null = null
   const unsureFiles: string[] = []
@@ -1156,11 +1292,19 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const logicOnly = new Set<string>()
   let read: { logic?: boolean } = {}
   let why = ''
+  // Whether `why` is a write the guard could not follow (#2847), so the refusal says that rather than
+  // an issue or branch it could not tell (L11); set with `why`, by the cause that first set it.
+  let unfollowed = false
+  const notFollowed = (said: string) => {
+    if (!why) unfollowed = true
+    why ||= said
+  }
   for (const t of targets) {
-    // A whole folder whose files cannot be listed (#2395) may hold a look changing file: held, saying why.
+    // A whole folder whose files cannot be listed (#2395), and a script's own write that cannot be
+    // placed or a script that cannot be read (#2847), may hold a look changing file: held, saying why.
     if (t.unread !== undefined) {
       unsureFiles.push(t.word)
-      why ||= t.unread
+      notFollowed(t.unread)
       continue
     }
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
@@ -1208,14 +1352,15 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         continue
       }
       unsureFiles.push(t.word)
-      why ||=
+      notFollowed(
         output
           ? `where the command writes ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
           : variable
           ? `where the command writes ${t.word} could not be followed, and its name is a shell variable's value, which the design round guard cannot read before it runs, so it may name a look changing file`
           : may === 'unread'
           ? `where the command writes ${t.word} could not be followed, and its name is a pattern the design round guard cannot read, so it may name a look changing file`
-          : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`
+          : `where the command writes ${t.word} could not be followed, and its name is a pattern that may name a look changing file`,
+      )
       continue
     }
     const kind = shapeKind(t.path ?? t.word)
@@ -1234,13 +1379,13 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {
         unsureFiles.push(t.word)
-        why ||= `where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`
+        notFollowed(`where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`)
       }
       continue
     }
     if (!t.path) {
       unsureFiles.push(t.word)
-      why ||= `where the command writes ${t.word} could not be followed`
+      notFollowed(`where the command writes ${t.word} could not be followed`)
       continue
     }
     let tree: string | null
@@ -1267,7 +1412,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // One a script run is handed (#1593), check-decision-map.py and make-settled.py among them, runs and
     // is read again once it ran (afterShell): what a script writes cannot be read before it runs. One
     // that cannot be read now could not be judged after either, and is held, saying so.
-    if (!modTs && t.run !== undefined && isDesignRecord(relTo(t.path, tree))) {
+    if (!modTs && (t.run ?? t.inScript) !== undefined && isDesignRecord(relTo(t.path, tree))) {
       let before: string | undefined
       try {
         before = await textNow($, t.path)
@@ -1305,8 +1450,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         unreadIn.set(tree, notes)
       }
     }
-    // A restore whose lines are measured may run first on its line rather than alone (#2777).
-    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null) notFirst = await restoreAlone($, String(input.command ?? ''), true)
+    // A restore whose lines are measured may run beside commands that cannot change its source,
+    // rather than alone (#2777, #2830).
+    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null)
+      notFirst = await restoreAlone($, String(input.command ?? ''), true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])))
     if (modTs) {
       const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch)
       if (drawn === 'pass') continue
@@ -1378,6 +1525,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const said = scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
+    } else if (t.inScript !== undefined && !isDesignRecord(relTo(t.path, tree))) {
+      // A file a script file's own code writes (#2847), said the same way, naming where it was read.
+      const notes = unreadIn.get(tree) ?? []
+      const said = scriptNamesFile(t.inScript, relTo(t.path, tree))
+      if (!notes.includes(said)) notes.push(said)
+      unreadIn.set(tree, notes)
     }
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
@@ -1423,7 +1576,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (now !== undefined && editWouldNotApply(now, tool, input)) return { stale: relTo(path, tree) }
     }
   }
-  if (unsureFiles.length) return { unsure: unsureFiles, why }
+  if (unsureFiles.length) return { unsure: unsureFiles, why, ...(unfollowed ? { unfollowed: true as const } : {}) }
   // #2294: a call waiting on Dan only for files the guard's own reading found change only logic goes
   // ahead unasked, for judge to record. Anything else waiting, a checkout or issue that could not be
   // read (unsure, above), or a note on what could not be read, keeps the whole call held as before.
@@ -1452,9 +1605,9 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
   // An edit that would not apply asks nothing of Dan (#1954): no card, nothing left waiting.
   if ('stale' in v) return stale(v.stale)
   if ('unsure' in v) {
-    const c = unsureCard(v.unsure)
+    const c = unsureCard(v.unsure, v.unfollowed === true)
     await drawCard($, call.id, c.reason, c.safeWay)
-    return unsure(v.unsure, v.why)
+    return unsure(v.unsure, v.why, v.unfollowed === true)
   }
   if ('unreadable' in v) {
     const u = v.unreadable
@@ -1691,7 +1844,7 @@ const afterShell = async (
 const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   if ('forged' in v) return forged(v.forged)
   if ('stale' in v) return stale(v.stale)
-  if ('unsure' in v) return unsure(v.unsure, v.why)
+  if ('unsure' in v) return unsure(v.unsure, v.why, v.unfollowed === true)
   if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why)
   return checked(v.missing.files, v.missing.subjects, v.missing.unread, v.missing.unrecorded)
 }
