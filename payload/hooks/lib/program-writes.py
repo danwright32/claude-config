@@ -27,7 +27,8 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
   * A git checkout, switch, hard reset, merge, pull, rebase, cherry pick, revert, stash, new linked
     worktree or clone writes tracked files it does not name (GIT_TREE_WRITERS, claude-config#2827,
     #2844): each file it writes is read as git holds it, beside what is on disk, asked of git (note_git,
-    git_guesses). A pull's ref is fetched first into a scratch repository, so what the fetch brings is
+    git_guesses). A pull's ref, and a remote branch a git fetch earlier in the command fetched, is
+    fetched first into a scratch repository, so what the fetch brings is
     read (git_fetch); a clone of anything but a local repository is a download, and unreadable.
   * NON_WRITERS never write a file they are handed, and naming a file and then running it is
     everyday with them (`chmod +x run.sh && ./run.sh`), so their words are not read as writes; nor
@@ -320,7 +321,8 @@ def make(interpreter, shells, awks, senders):
             Marking every tracked file unreadable instead (#2827's open question) would refuse
             `git pull && bash any.sh`, the everyday shape, whatever the pull brings; reading what the
             ref holds refuses only a file whose incoming text posts. A ref is read as the repository
-            holds it before the command runs, except a pull's, which is fetched into a scratch
+            holds it before the command runs, except a pull's, and a remote branch a git fetch earlier in
+            the command fetched (fetched_ref), each fetched into a scratch
             repository first, so what the fetch brings is read (git_fetch); a clone of a local
             repository is read there, and a clone of anything else is downloaded, so every file under
             the folder it makes is unreadable, as a download's is. A ref that names nothing, a word
