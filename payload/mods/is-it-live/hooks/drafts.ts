@@ -35,7 +35,8 @@ export async function registerUnrelated($: EngineInterface): Promise<void> {
 }
 
 // The answer to the tool: refused from a subagent (the main session's turn end is the one held) and
-// where the session started from no thread; a second call keeps the first one's step.
+// where the session started from no thread, since only such a session is owed the reply by the most
+// recent link that this clears; a second call says it was already said.
 async function declareUnrelated($: EngineInterface, agentId: unknown): Promise<{ deny: string } | { result: string }> {
   if (agentId !== undefined) return { deny: 'Not from a subagent: only the main session can say its later merges are unrelated to the thread it started from.' }
   const started = ((await $.state.get(threadsRef)).value ?? []).filter(t => !t.mid)
