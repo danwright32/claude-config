@@ -390,11 +390,10 @@ check_eq "#2474 and said once, not at every look" "" "$TURN_SAID"
 #     it lost its place in line. Each ticket now also carries its start in one fixed form (startc),
 #     read the same way by every reader. Asia/Tokyo and UTC0 differ on every host, CI included.
 # =================================================================================================
-trim_ps(){ sed -e 's/^ *//' -e 's/ *$//'; }
 # The fault the fixture must be able to see (L1): a ticket with only the zone dependent start, as a
 # helper before this version writes, is judged dead by a reader in another zone.
 reset
-other_joins acme/widget 9 900 "$LIVE" "$(TZ=UTC0 ps -o lstart= -p "$LIVE" | trim_ps)" >/dev/null
+other_joins acme/widget 9 900 "$LIVE" "$(turn__trim "$(TZ=UTC0 ps -o lstart= -p "$LIVE")")" >/dev/null
 said="$( export TZ=Asia/Tokyo; TURN_TICKET=""; turn_open acme/widget; turn_look 1000 3600; printf '%s' "$TURN_SAID" )"
 check "#2828 (control) an old ticket written in UTC0 and read in Tokyo is judged dead" "no longer running" "$said"
 # The fix: a ticket this version writes for a run it reads itself carries the fixed form, and a
