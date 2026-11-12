@@ -501,14 +501,19 @@ def make(interpreter, shells, awks, senders):
             import tempfile
             remote, ref = e["fetch"]
             root = e["root"]
-            if remote is None:
+            if remote is None or ref is None:
+                # No refspec: the branch the current one tracks, as git pull merges it (with a remote
+                # named, only where the current branch tracks a branch of that remote).
                 cur = self.git_out(root, ["symbolic-ref", "-q", "--short", "HEAD"])
                 cur = cur.decode("utf-8", "replace").strip() if cur else ""
                 if not cur:
                     return None
-                remote = self.git_out(root, ["config", f"branch.{cur}.remote"])
+                tracked = self.git_out(root, ["config", f"branch.{cur}.remote"])
+                tracked = tracked.decode("utf-8", "replace").strip() if tracked else ""
+                if remote is not None and remote != tracked:
+                    return None
+                remote = tracked
                 ref = self.git_out(root, ["config", f"branch.{cur}.merge"])
-                remote = remote.decode("utf-8", "replace").strip() if remote else ""
                 ref = ref.decode("utf-8", "replace").strip() if ref else ""
             if not remote or remote == "." or not ref or "\0" in remote + ref:
                 return None

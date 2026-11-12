@@ -3679,6 +3679,7 @@ printf '%s\n' '{' '  // where the build goes' '  "compilerOptions": { "outDir": 
 printf '%s\n' '{ "compilerOptions": { "outDir": "qdist" }, "include": ["qsrc/**/*"] }' > "$C/tsconfig.quiet.json"
 printf '%s\n' "fetch('https://slack.com/api/chat.postMessage');" > "$C/esrc/post.ts"
 printf '%s\n' "console.log('hi');" > "$C/esrc/quiet.ts"
+printf '%s\n' "console.log('hi');" > "$C/qsrc/x.js"
 run_c() { run_raw "$(payload Bash "$(bash_input "$1")" "$C")"; }
 
 for runs in "tsc && node dist/main.js" "npx tsc && node dist/lib/send.js" "tsc -p . && node dist/main.js" \
@@ -3691,6 +3692,7 @@ for runs in "tsc && node dist/main.js" "npx tsc && node dist/lib/send.js" "tsc -
 done
 for runs in "tsc -p tsconfig.quiet.json && node qdist/main.js" "tsc --outDir out qsrc/main.ts && node out/main.js" \
   "npx tsc --outDir out qsrc/main.ts && node out/main.js" \
+  "tsc --outDir qsrc qsrc/main.ts && node qsrc/x.js" \
   "tsc qsrc/main.ts && node qsrc/main.js" "esbuild qsrc/main.ts --bundle --outdir=build && node build/main.js" \
   "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/quiet.js" "tsc && node elsewhere.js" \
   "tsc --noEmit && node dist/main.js"; do
@@ -3819,7 +3821,8 @@ git -C "$B2" update-ref refs/heads/main "$OTHER"
 git -C "$L" remote add quiet "$B2"
 run_l() { run_raw "$(payload Bash "$(bash_input "$1")" "$L")"; }
 L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
-for runs in "git pull && bash other.sh" "git pull origin main && bash other.sh" "git pull -q --ff-only && bash other.sh"; do
+for runs in "git pull && bash other.sh" "git pull origin main && bash other.sh" "git pull -q --ff-only && bash other.sh" \
+  "git pull origin && bash other.sh"; do
   run_l "$runs"
   read_refused "a file a pull brings from the remote, which posts, is read as the remote holds it: $runs"
 done

@@ -618,7 +618,7 @@ def make():
                             out.append((src, e["label"], e["writer"]))
             seen, found = set(), []
             for src, how, writer in out:
-                if src not in seen and os.path.isfile(src):
+                if src not in seen and os.path.realpath(src) != real and os.path.isfile(src):  # never the output itself
                     seen.add(src)
                     found.append((src, how, writer))
             return found
