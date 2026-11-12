@@ -1049,7 +1049,8 @@ type Verdict =
   | { stale: string }
   | { unsure: string[]; why: string }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
-  | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[] } }
+  // `unrecorded`: why an automatic pass could not be recorded, for a change held only for that (#2845, L11).
+  | { missing: { files: string[]; subjects: DesignRoundSubject[]; trees: string[]; unread: string[]; unrecorded?: string } }
 
 // Keeps an automatic pass under `auto:<call key>` (#2294, #2845), saying why; throws where it cannot.
 const keepAuto = async ($: EngineInterface, called: Called, tool: string, auto: Auto): Promise<void> => {
@@ -1083,7 +1084,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
       return pass
     } catch (err) {
       $.ui.log(`design-round-guard: an automatic pass could not be recorded, so the call waits on Dan's own answer: ${message(err)}`, { to: 'debug' })
-      const missing: Verdict = { missing: { files: auto.files, subjects: auto.subjects, trees: auto.trees, unread: [] } }
+      const missing: Verdict = { missing: { files: auto.files, subjects: auto.subjects, trees: auto.trees, unread: [], unrecorded: message(err) } }
       try {
         return (await passed($, called ?? (await keyOf($, tool, input)))) ? pass : missing
       } catch {
@@ -1461,12 +1462,12 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
     await drawCard($, call.id, c.reason, c.safeWay)
     return unreadable(u.files, u.subjects, u.why)
   }
-  const { files, subjects, trees, unread } = v.missing
+  const { files, subjects, trees, unread, unrecorded } = v.missing
   const waiting: DesignRoundPending = { id: call.id, tool: call.tool, files, subjects, trees, key: call.called.key, call: call.called.call, ...(call.agent ? { agent: true as const } : {}) }
   await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== call.id), waiting])
-  const c = card(files, subjects)
+  const c = card(files, subjects, unrecorded)
   await drawCard($, call.id, c.reason, c.safeWay)
-  return call.agent ? agentRefusal(files, subjects, call.id, unread) : refusal(call.id, files, subjects, unread)
+  return call.agent ? agentRefusal(files, subjects, call.id, unread, unrecorded) : refusal(call.id, files, subjects, unread, unrecorded)
 }
 
 // The session's scratchpad on the disk (#1296): `<temp>/claude-<uid>/<project>/<session id>/scratchpad`,
@@ -1630,6 +1631,8 @@ const afterShell = async (
   }
   if (!held.length && !autos.length) return r
   const called = await keyOf($, call.tool, call.input)
+  // Why the automatic pass could not be recorded, when that alone is why every held file is held.
+  let unrecorded: string | undefined
   if (!held.length) {
     const auto: Auto = { files: [], subjects: [], trees: [], worded: [] }
     for (const { c, open } of autos) {
@@ -1643,8 +1646,10 @@ const afterShell = async (
       await keepAuto($, called, call.tool, auto)
       return r
     } catch (err) {
-      // A pass that cannot be kept is not made (#2294, #2348): put back and asked, as a look change is.
+      // A pass that cannot be kept is not made (#2294, #2348): put back and asked, as a look change is,
+      // though said as what the guard found, never as a look change (#2845, L11).
       $.ui.log(`design-round-guard: an automatic pass could not be recorded, so the call waits on Dan's own answer: ${message(err)}`, { to: 'debug' })
+      unrecorded = message(err)
       for (const { c, open } of autos) {
         held.push(c)
         if (!trees.includes(c.w.tree)) trees.push(c.w.tree)
@@ -1659,7 +1664,7 @@ const afterShell = async (
   for (const c of held) {
     const file = relTo(c.w.path, c.w.tree)
     if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }, c.w.record))
-    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record))
+    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record, unrecorded !== undefined))
   }
   const files = held.map(c => relTo(c.w.path, c.w.tree))
   const whys = held.flatMap(c => (c.why === undefined ? [] : [c.why]))
@@ -1667,7 +1672,7 @@ const afterShell = async (
     ? { unsure: unknown.files, why: unknown.why.join('; ') }
     : unread.files.length
       ? { unreadable: { files: unread.files, subjects: unread.subjects, why: unread.why.join('; ') } }
-      : { missing: { files, subjects: lacking, trees, unread: whys } }
+      : { missing: { files, subjects: lacking, trees, unread: whys, ...(unrecorded === undefined ? {} : { unrecorded }) } }
   const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
   // What the command printed is never repeated here: only the tool's own result passes the secret
   // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).
@@ -1680,7 +1685,7 @@ const previewed = (v: Exclude<Verdict, { pass: true }>): string => {
   if ('stale' in v) return stale(v.stale)
   if ('unsure' in v) return unsure(v.unsure, v.why)
   if ('unreadable' in v) return unreadable(v.unreadable.files, v.unreadable.subjects, v.unreadable.why)
-  return checked(v.missing.files, v.missing.subjects, v.missing.unread)
+  return checked(v.missing.files, v.missing.subjects, v.missing.unread, v.missing.unrecorded)
 }
 
 // A refused call waiting on Dan, by its id: the one lookup the skip question and the settled question

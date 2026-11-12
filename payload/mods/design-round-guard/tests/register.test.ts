@@ -2086,6 +2086,9 @@ test('#2348: a logic only edit whose automatic pass cannot be recorded goes thro
   // No earlier answer: held and asked, as today.
   const why = refusalOf(await call($, edit('}: Props)', '}: ResultProps)')))
   expect(why).toContain(SKIP_QUESTION)
+  // Said as what the guard found, never as a look change (L11, folded into #2845).
+  expect(why).toContain('as leaving the look unchanged, but its automatic pass could not be recorded (')
+  expect(why).not.toContain('changes how the screen looks')
   expect(w.ran.length).toBe(0)
   // Dan lets this very call through; resent, it is not asked about again though the automatic pass
   // still cannot be saved.
@@ -2146,17 +2149,34 @@ test("#2845: a mod hook edit that only changes a message's words passes unasked 
   expect(w.files[LINES]).toBe(LINES_TEXT)
 })
 
+// The refusal for a pass that could not be recorded says what the guard found, never that the edit
+// changes the look (L11; Dan folded this into #2845, 2026-11-12).
+const UNRECORDED = 'as leaving the look unchanged, but its automatic pass could not be recorded ('
 test('#2845: a words only pass that cannot be recorded is not made, and one on an issue Dan let skip records nothing', withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: GUARD_TEXT, [`${SCRATCH}/.keep`]: '' } })
   const edit = (from: string, to: string) => ({ tool: 'Edit', file_path: GUARD_HOOK, old_string: from, new_string: to })
   w.ctl.storeSetFailKey = 'auto:'
   const why = refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))
   expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(UNRECORDED)
+  expect(why).not.toContain('changes how the screen looks')
+  expect(JSON.stringify(w.cards)).not.toContain('may change how something looks')
   expect(w.ran.length).toBe(0)
+  // A shell write changing only words, whose pass cannot be recorded, is put back, saying so as what
+  // the guard found, never as a change to what the mod draws.
+  w.ctl.shell = { [GUARD_HOOK]: GUARD_TEXT.replace('Blocked a command that', 'Halted a command that') }
+  const shell = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/Blocked a command/Halted a command/' payload/mods/demo/hooks/guard.ts" }))
+  expect(shell).toContain('was undone: the guard read it as leaving the look unchanged, but its automatic pass could not be recorded.')
+  expect(shell).toContain(UNRECORDED)
+  expect(shell).not.toContain('changes how the screen looks')
+  expect(shell).not.toContain('what the mod draws')
+  expect(w.files[GUARD_HOOK]).toBe(GUARD_TEXT)
+  w.ctl.shell = {}
   w.ctl.storeSetFailKey = undefined
+  const ran = w.ran.length
   await askSkip($, w, why, SKIP_YES)
   expect(refusalOf(await call($, edit('Blocked a command that', 'Stopped a command that')))).toBe('')
-  expect(w.ran.length).toBe(1)
+  expect(w.ran.length).toBe(ran + 1)
   expect(autosOf(w)).toEqual([])
 })
 

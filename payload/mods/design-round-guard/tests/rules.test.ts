@@ -970,7 +970,7 @@ const msEdit = (from: string, to: string, text = MS_TSX) => {
 
 test('#1823: the held Edit adding names to the imports draws nothing new, though it names the card', () => {
   const after = msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW)
-  // Held today for its words, which is the hold #1823 reports.
+  // The line test still asks about its drawing words, the hold #1823 reports; the reading below passes it.
   expect(modHookLogicOnly(MS_TSX, after)).toBe(false)
   expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)).toBe(true)
   // A new helper that reads the card's heading for no surface and no message draws nothing either.

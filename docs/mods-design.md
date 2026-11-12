@@ -3590,6 +3590,10 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   A words change is never held: register.ts records it under `auto:<the call's key>` with the
   words in `why` (`autoPassWhy`, citing #2845), by an Edit, MultiEdit, Write, git put back or shell
   write alike. A shell write whose record cannot be kept is put back and held, as a look change is.
+- **A pass that cannot be recorded says so (L11).** Held because its record failed, for #2294's
+  logic only pass and this words pass alike, the call's refusal, card and shell outcome say the
+  guard read it as leaving the look unchanged but could not record that (rules.ts `heldAs`,
+  `shellOutcome`'s `unrecorded`), never that it changes the look or what the mod draws.
 - **What stays held.** What a mod draws: a drawing call, JSX, a line builder, a colour or frame,
   and the words inside what is drawn (a band row, a pane, a card's text), which are drawing, not a
   message. An app's React screen file is unchanged (#2294): its text is still held.

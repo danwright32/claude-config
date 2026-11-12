@@ -6848,7 +6848,9 @@ printf escape keys stay held, since the same edit also added words a refusal say
 rewords or takes away only the words of a message (a toast, a notification, a transcript line, a
 refusal's reason, a tool's result, a picker's question or answers) passes with nothing asked and is
 kept under `auto:<the call's key>` naming those words (rules.ts `messageWords`, `modHookTsChange`
-returning `{ words }`; a shell write's record that cannot be kept puts the file back and holds it).
+returning `{ words }`; a record that cannot be kept holds the call, a shell write's file put back,
+and the refusal and card say the guard read it as leaving the look unchanged but could not record
+that, never that it changes the look, for #2294's logic only pass alike, L11).
 Only a change to how the mod looks is held: a drawing call, JSX, a line builder, a colour or frame,
 and the words inside what the mod draws (a band row, a pane, a card's text), which are drawing. This
 reverses the wording holds of #1837, #1841 (for #1823), #1859, #1925, #1934 and #2161, and #2788's

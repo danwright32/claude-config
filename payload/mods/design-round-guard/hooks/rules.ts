@@ -3039,11 +3039,23 @@ export const settledUnchecked = (file: string, why: string): string =>
  */
 export const ROUND_FILES = `A design round's own working files (its builder, stylesheet, spec and switcher) go in this session's scratchpad, which the guard never holds: if this is one, write it there, naming it by its full path or after a cd there.`
 
+/**
+ * What a refusal says the held files do (L11). A change the guard read as leaving the look as it is,
+ * an app's logic (#2294) or a mod message's words (#2845), whose automatic pass could not be
+ * recorded is held, since a pass that cannot be kept is not made (#2348); `unrecorded`, why the
+ * record failed, says that instead of a look change, which the guard never found.
+ */
+const heldAs = (files: readonly string[], unrecorded?: string): string =>
+  unrecorded === undefined
+    ? `${listed(files)} changes how the screen looks`
+    : `the design round guard read ${listed(files)} ${AS_UNRECORDED} (${unrecorded})`
+const AS_UNRECORDED = 'as leaving the look unchanged, but its automatic pass could not be recorded'
+
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
-export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
+export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], unrecorded?: string): string => {
   const s = named(subjects)
   return (
-    `Blocked: ${listed(files)} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
+    `Blocked: ${heldAs(files, unrecorded)}, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when the look does not change, lets this one edit through. ` +
     unreadSaid(unread) +
@@ -3053,16 +3065,16 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
 }
 
 /** What a check with no call id reads ($.tool.check): the call would be refused, and making it says how to go on. */
-export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
+export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], unrecorded?: string): string =>
+  `Blocked: ${heldAs(files, unrecorded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
   unreadSaid(unread) +
   `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}". ${ROUND_FILES}`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
-export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
+export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = [], unrecorded?: string): string => {
   const sentence = 'one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes'
   return (
-    `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
+    `Blocked: ${heldAs(files, unrecorded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
     unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and ${sentence}, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
@@ -3078,8 +3090,8 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
 const CARD_LEAD = 'Claude wants to make an edit that may change how something looks on screen'
 
 /** The card Dan sees for a refused look changing edit, drawn by mod-kit as every guard's is. */
-export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
-  reason: `${CARD_LEAD}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
+export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[], unrecorded?: string) => ({
+  reason: `${unrecorded === undefined ? CARD_LEAD : `Claude wants to make an edit the design round guard read as leaving the look unchanged, but it could not record that (${unrecorded})`}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
   safeWay: `Claude tells you in plain words what would change, then starts /design-rounds or asks whether to skip them for this issue, or whether this edit changes the look at all.`,
 })
 
@@ -3164,10 +3176,20 @@ export type ShellOutcome =
 // `record`, for a settled design under docs/design a script run was handed (#1593): what the change
 // did is said as the page no longer being sealed, never as a mod's drawing (L11). A file that could
 // not be read after says it cannot tell which.
-export const shellOutcome = (o: ShellOutcome, record = false): string => {
-  const did = record ? `left ${o.file} no settled design exactly as make-settled.py wrote it` : `changed what the mod draws in ${o.file}`
+// `unrecorded`, for a change the guard read as leaving the look unchanged whose automatic pass could
+// not be recorded (#2845): said as that, never as a change to what the mod draws (L11).
+export const shellOutcome = (o: ShellOutcome, record = false, unrecorded = false): string => {
+  const did = record
+    ? `left ${o.file} no settled design exactly as make-settled.py wrote it`
+    : unrecorded
+      ? `changed ${o.file} in a way the guard read ${AS_UNRECORDED}`
+      : `changed what the mod draws in ${o.file}`
   const notUndone = `The command ran and ${did}, and that change was NOT undone:`
-  const why = record ? 'it left no settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws on screen'
+  const why = record
+    ? 'it left no settled design exactly as make-settled.py wrote it'
+    : unrecorded
+      ? `the guard read it ${AS_UNRECORDED}`
+      : 'it changed what the mod draws on screen'
   if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: ${why}. What the command wrote there is kept at ${o.undone}.`
   if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
   if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`
