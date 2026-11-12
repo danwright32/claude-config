@@ -34,6 +34,18 @@ answered Apply by Dan. It covers a push when all of these hold, and each failure
       * the migration is the newest file in the folder (migrations are named by a leading
         version, so the newest sorts last). One written after the dry run would be pushed with it
         and is not on its list, so it is asked about.
+  - the folder is as the dry run Dan saw found it (claude-config#2829). The pending list is only
+    what that dry run printed, and the sha256 only what the file held when the picker was built, so
+    each holds only while nothing in supabase/migrations changes after the dry run. So the session
+    must hold a dry run before the Apply: a Bash call that is one `supabase db push --dry-run` of
+    the linked project (lib/db-write-calls.py dry_push_dir()), on this push's directory, that
+    succeeded. A dry run of another project's folder, one only after the Apply, or one that failed
+    covers nothing. And no .sql file in the folder may have a status change time (st_ctime, which
+    a write, a rename or a new file sets, and which no command can set back) at or after the moment
+    that dry run was sent (its tool_use entry's timestamp, stamped before the command runs). That
+    asks again about a migration edited, renamed or added after the dry run, an older version
+    added under the newest included (the gap #2800 recorded), and a dry run of the other project's
+    folder used for this one.
 
 THE AD HOC WRITE (Dan, 2026-11-11, folded into #2763). The skill's path 3, `supabase db query
 --linked --yes -f <file>` running a write, is covered by the same Apply when "migration" names that
@@ -48,14 +60,17 @@ writes a record of its own, so there is no record file a command could forge or 
 transcript that cannot be read covers nothing.
 
 WHAT IT CANNOT SEE: the database itself. The pending list is what the dry run printed before the
-picker; a change on the database between that dry run and the push is not reflected in it, nor is
-a migration file added after the dry run under an older version than the applied one (a newer one
-is caught by the newest file rule).
+picker; a change on the database between that dry run and the push is not reflected in it. Nor a
+`supabase link` to another project between the dry run and the Apply in the same directory: the
+CLI's own writes to supabase/.temp were not measured, so its files are not timed (#2829).
 
-  covered(workdir, flags, session_id, transcript_path, file=None)
+  covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None)
       (True, the sentence naming the Apply) or (False, why no Apply covers the run); file is None
-      for a push, else the absolute path of the -f file a `db query` runs
+      for a push, else the absolute path of the -f file a `db query` runs. dry_dir(command, cwd)
+      is the directory a Bash command dry runs a push of, or None (db-write-calls dry_push_dir);
+      without it no dry run is found, so no push is covered.
 """
+import datetime
 import hashlib
 import json
 import os
@@ -94,14 +109,31 @@ def _answered_apply(ask, result, is_error):
     return isinstance(chosen, str) and chosen.strip() == APPLY
 
 
+def _stamp_ns(stamp):
+    """A transcript entry's ISO timestamp in nanoseconds since the epoch, or None."""
+    if not isinstance(stamp, str) or not stamp:
+        return None
+    try:
+        t = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        return None
+    # Whole seconds plus microseconds, so no float rounding moves the moment later.
+    return int(t.timestamp()) * 1_000_000_000 + t.microsecond * 1000
+
+
 def applies(transcript_path, session_id):
-    """The metadata of every /db-apply picker Dan answered Apply in this session, oldest first.
-    Raises when the transcript cannot be read."""
-    found, asked = [], {}
+    """(metadata, dry runs) for every /db-apply picker Dan answered Apply in this session, oldest
+    first. The dry runs are every Bash call naming --dry-run that had finished without error before
+    the picker was put, as (sent at, in ns; the session's directory then; its command), oldest
+    first; covered() decides which are dry runs of a push. Raises when the transcript cannot be read."""
+    found, asked, dries, dry_sent = [], {}, [], {}
     with open(transcript_path, "rb") as f:
         for raw in f:
-            use = b"AskUserQuestion" in raw
-            if not use and not (asked and b"tool_result" in raw and any(k in raw for k in asked)):
+            use = b"AskUserQuestion" in raw or b"dry-run" in raw
+            waiting = list(asked) + list(dry_sent)
+            if not use and not (waiting and b"tool_result" in raw and any(k in raw for k in waiting)):
                 continue
             try:
                 e = json.loads(raw.decode("utf-8", "replace"))
@@ -116,16 +148,28 @@ def applies(transcript_path, session_id):
             for item in content:
                 if not isinstance(item, dict):
                     continue
+                uid = item.get("id")
                 if item.get("type") == "tool_use" and item.get("name") == "AskUserQuestion":
-                    ask, uid = item.get("input"), item.get("id")
+                    ask = item.get("input")
                     meta = ask.get("metadata") if isinstance(ask, dict) else None
                     if (isinstance(uid, str) and uid and isinstance(meta, dict) and meta.get("source") == SOURCE
                             and not ask.get("answers")):
-                        asked[uid.encode("utf-8", "surrogatepass")] = ask
+                        asked[uid.encode("utf-8", "surrogatepass")] = (ask, list(dries))
+                elif item.get("type") == "tool_use" and item.get("name") == "Bash":
+                    ti = item.get("input")
+                    command = ti.get("command") if isinstance(ti, dict) else None
+                    sent = _stamp_ns(e.get("timestamp"))
+                    if (isinstance(uid, str) and uid and isinstance(command, str) and "dry-run" in command
+                            and sent is not None and isinstance(e.get("cwd"), str)):
+                        dry_sent[uid.encode("utf-8", "surrogatepass")] = (sent, e["cwd"], command)
                 elif item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
-                    ask = asked.pop(item["tool_use_id"].encode("utf-8", "surrogatepass"), None)
-                    if ask is not None and _answered_apply(ask, e.get("toolUseResult"), item.get("is_error")):
-                        found.append(ask["metadata"])
+                    key = item["tool_use_id"].encode("utf-8", "surrogatepass")
+                    dry = dry_sent.pop(key, None)
+                    if dry is not None and not item.get("is_error"):
+                        dries.append(dry)
+                    pair = asked.pop(key, None)
+                    if pair is not None and _answered_apply(pair[0], e.get("toolUseResult"), item.get("is_error")):
+                        found.append((pair[0]["metadata"], pair[1]))
     return found
 
 
@@ -149,9 +193,44 @@ def _pending_why_not(pending, name):
     return None
 
 
-def _why_not(meta, ref, folder, newest, file):
+def _dry_run_why_not(dries, workdir, folder, names, dry_dir):
+    """None when a dry run of workdir's migrations came before the Apply, and nothing in folder
+    (holding the .sql files names) has changed since it was sent, else why not (claude-config#2829).
+    The latest such dry run is the one judged: the list on the picker was copied from it."""
+    here = os.path.realpath(workdir)
+    sent, unread = None, None
+    for at, cwd, command in dries:
+        try:
+            d = dry_dir(command, cwd) if dry_dir is not None else None
+        except Exception as e:
+            d, unread = None, type(e).__name__
+        if d is not None and os.path.realpath(d) == here:
+            sent = at
+    if sent is None and unread is not None:
+        return ("a command naming --dry-run before Dan's Apply could not be read (" + unread
+                + "), so whether it was a dry run of this project could not be told")
+    if sent is None:
+        return ("no dry run of this project's migrations finished in this session before Dan's Apply, "
+                "so the list of what the push would send was never shown to him")
+    changed = []
+    for n in names:
+        try:
+            if os.stat(os.path.join(folder, n)).st_ctime_ns >= sent:
+                changed.append(n)
+        except OSError as e:
+            return n + " could not be read (" + type(e).__name__ + ")"
+    if changed:
+        shown = ", ".join(n[:120] for n in changed[:20]) + (", and more" if len(changed) > 20 else "")
+        return (shown + (" was" if len(changed) == 1 else " were") + " written, renamed or added after "
+                "the dry run Dan saw, so the push could send what that dry run did not list")
+    return None
+
+
+def _why_not(meta, dries, ref, folder, names, file, workdir, dry_dir):
     """None when this Apply covers the run, else why not: for a push (file None) of folder's
-    migrations, newest the last of them; for a `db query` write, of file. Both to project ref."""
+    migrations, names its .sql files in order; for a `db query` write, of file. Both to project
+    ref; dries are the dry runs that finished before the Apply (applies())."""
+    newest = names[-1]
     mig, sha, aref = meta.get("migration"), meta.get("sha256"), meta.get("project_ref")
     if not (isinstance(mig, str) and os.path.isabs(mig) and isinstance(sha, str) and SHA.fullmatch(sha.lower())
             and isinstance(aref, str) and aref):
@@ -168,7 +247,7 @@ def _why_not(meta, ref, folder, newest, file):
         return ("Dan's Apply named " + name + ", and " + newest + " is a newer migration this push would "
                 "apply too")
     else:
-        why = _pending_why_not(meta.get("pending"), name)
+        why = _pending_why_not(meta.get("pending"), name) or _dry_run_why_not(dries, workdir, folder, names, dry_dir)
         if why is not None:
             return why
     try:
@@ -180,10 +259,11 @@ def _why_not(meta, ref, folder, newest, file):
     return None
 
 
-def covered(workdir, flags, session_id, transcript_path, file=None):
+def covered(workdir, flags, session_id, transcript_path, file=None, dry_dir=None):
     """(True, the sentence naming the Apply) when Dan's Apply in this session covers a run in
     workdir with flags [(name, written with =, value)]: a `db push` when file is None, else a
-    `db query` running the statements of file, an absolute path. Else (False, why not)."""
+    `db query` running the statements of file, an absolute path. Else (False, why not). dry_dir
+    reads which directory a Bash command dry runs a push of (module docstring)."""
     allowed, what = (PUSH_FLAGS, "a push") if file is None else (QUERY_FLAGS, "a run")
     extra = sorted({name for name, _, _ in flags} - allowed)
     if extra:
@@ -222,8 +302,8 @@ def covered(workdir, flags, session_id, transcript_path, file=None):
     if not given:
         return False, "Dan has answered no /db-apply Apply in this session"
     why = None
-    for meta in reversed(given):
-        why = _why_not(meta, ref, folder, names[-1], file)
+    for meta, dries in reversed(given):
+        why = _why_not(meta, dries, ref, folder, names, file, workdir, dry_dir)
         if why is None:
             what = "migration " + names[-1] if file is None else os.path.basename(file)
             return True, ("Dan answered Apply for " + what + " on project " + ref
