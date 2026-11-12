@@ -315,6 +315,13 @@ def js_scan(text):
 # python interpreter running a file with no extension.
 PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
 PY_BANG = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*)\b")
+# A command line that may change which python a bare name runs, or where that python looks for
+# modules, so the gate's own interpreter cannot stand in for it (found_nowhere, claude-config#2631):
+# PATH, PYTHONHOME, PYTHONUSERBASE or a virtual environment set, a file sourced, an environment
+# manager or eval run, or a shell function defined.
+PY_ENV_CHANGE = re.compile(r"(^|[^A-Za-z0-9_])(PATH|PYTHONHOME|PYTHONUSERBASE|VIRTUAL_ENV|CONDA_PREFIX)\+?="
+                           r"|(^|[\s;&|(`])(source|\.|activate|conda|pyenv|mamba|micromamba|eval|function)(\s|$)"
+                           r"|\(\s*\)\s*\{")
 # Read when a file cannot be parsed as Python by this python3: each import statement's first line.
 PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\(?([^#\n)]*)|import[ \t]+([^#\n]+))",
                             re.M)
@@ -336,6 +343,10 @@ IMPORT_MAX_FILES = 300
 # a node script; each named chat.postMessage in text nobody runs.
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
+# A redirection word that only WRITES, with its target in the next word: >, >>, >|, >&, &>, &>>, each
+# with an optional descriptor number (claude-config#2771). Never <, <> or <&, whose target the program
+# reads. A target glued to the operator is one word, which REDIRECT_WORD already passes over.
+OUTPUT_REDIRECT = re.compile(r"\d*(?:>>|>\||>&|&>>?|>)\Z")
 # What lets a script act on a data file as more than data: sending a request (whose address the file
 # can hold), running code (which the file can be), or writing it somewhere that runs later.
 #
@@ -1557,8 +1568,14 @@ class Judge(WrittenPaths, ProgramWrites):
         repo = None  # the script's repository, looked for on first passing the limit; False for none
         queue = [(origin, root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
+        top = True  # the code the command hands Python, before any module it imports
         while queue:
             cur, cur_dir, text, chain = queue.pop(0)
+            # The import that is the starting code's first statement, which runs before anything else
+            # in it (claude-config#2631); never one in a module reached, which runs after whatever
+            # imported it.
+            first = self.py_first_import(text) if kind == "py" and top else None
+            top = False
             if kind == "py":
                 self.py_inserts(text, cur, inserts)
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
@@ -1566,6 +1583,9 @@ class Judge(WrittenPaths, ProgramWrites):
                 return
             for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings):
                 via = f"{chain}, which imports {spec}"
+                lead, first = first, None  # only the first import given can be that statement's
+                if targets is False and lead is not None and spec == lead and self.found_nowhere(spec, root):
+                    continue  # Python stops there with ImportError, before anything runs
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
@@ -1716,6 +1736,63 @@ class Judge(WrittenPaths, ProgramWrites):
             elif isinstance(node, ast.ImportFrom):
                 out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
         return out
+
+    @staticmethod
+    def py_first_import(text):
+        """The module an absolute import that is text's first statement names first, as
+        import_targets writes it (`import a, b` gives a, `from a.b import c` gives a.b), or None when
+        the first statement is anything else or text does not parse (claude-config#2631)."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                body = ast.parse(text).body
+        except (SyntaxError, ValueError):
+            return None
+        node = body[0] if body else None
+        if isinstance(node, ast.Import):
+            return node.names[0].name
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            return node.module
+        return None
+
+    def found_nowhere(self, spec, root):
+        """Whether Python cannot find the top level module spec names anywhere it would look, so a
+        first statement importing it stops with ImportError before anything runs (claude-config#2631).
+        Asked only of an import resolve_py already placed nowhere: not beside the script (root), on
+        the command's PYTHONPATH, behind a sys.path change, in the standard library or installed.
+
+        It holds only where the gate's own interpreter stands in for the one the command runs: the
+        command is that interpreter typed plainly (py_cmd plain), and it is the same file, by real
+        path, as this python. The gate's own import system is then asked (importlib.util.find_spec,
+        which consults every finder a .pth file installed, without running the module), and every
+        folder searched must be one the gate can list, since a module in a folder it cannot read
+        may be one Python finds. Anything else is not known to be absent, and stays refused."""
+        interp = self.py_cmd.get("interp")
+        if not interp or not self.py_cmd.get("plain"):
+            return False
+        path = self.resolve(interp, self.py_cmd["cwd"]) if "/" in interp else None
+        # A bare name is the first on the PATH, as the shell finds it (shutil.which is not used:
+        # importing shutil costs 4 ms on every call the gate reads). An empty or relative entry is
+        # searched from wherever the command runs, so one met first leaves the interpreter unknown.
+        for d in ([] if path else os.environ.get("PATH", "").split(os.pathsep)):
+            if not os.path.isabs(d):
+                return False
+            p = os.path.join(d, interp)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                path = p
+                break
+        if not path or os.path.realpath(path) != os.path.realpath(sys.executable):
+            return False
+        for d in [root] + list(self.py_cmd["path"]) + [p for p in sys.path if p]:
+            if d and os.path.isdir(d):
+                try:
+                    os.listdir(d)
+                except OSError:
+                    return False
+        try:
+            return importlib.util.find_spec(spec.split(".")[0]) is None
+        except Exception:
+            return False
 
     def resolve_py(self, level, module, names, cur_dir, root, inserts=((), ())):
         """The local files a Python import runs (each package's __init__.py, the module, and any
@@ -3517,7 +3594,18 @@ class Judge(WrittenPaths, ProgramWrites):
         else:
             path = self.py_path(os.environ.get("PYTHONPATH", ""), d)
         interp = next((w for w in words[:3] if PY_RUNTIME.match(os.path.basename(w))), None)
-        saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp}
+        # plain: the interpreter is the command itself (run by name, or by its path, which the shell
+        # words call a "direct" wrapper), as written, past only reserved words and assignments: not
+        # one a runner command_rest reads past runs (sudo, env, exec), nor a wrapper's string (bash
+        # -c, xargs), a package manager or a script read as commands; and the line changes nothing
+        # about which python that is (found_nowhere, claude-config#2631).
+        plain = False
+        if interp and words[0] == interp and depth == 0 and wrapper in ("", "direct") and self.shell.get("outer"):
+            typed = self.sw.command_words(text.lstrip().lstrip("("))
+            while typed and (typed[0] in self.sw.RESERVED or SH_ASSIGN_LIKE.match(typed[0].lstrip("\"'"))):
+                typed = typed[1:]
+            plain = typed[:1] == [interp] and not PY_ENV_CHANGE.search(whole or "")
+        saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp, "plain": plain}
         # An export read inside a script this command runs in its own shell ends with that shell; one
         # read inside a sourced script (`source`, `.`) really exports into the caller, so it is kept
         # (claude-config#2409).
@@ -3763,31 +3851,57 @@ class Judge(WrittenPaths, ProgramWrites):
         any of them can act on it as more than data (acts): sending a request, whose address the file
         can hold, or running code, which the file can be.
 
+        And a file of any shape after the script word, where that word certainly names a file on disk
+        (held_slot, claude-config#2797): it is the script's argument, read as a script, imports
+        followed, only where a file read as code can run what it is handed (handed_code), and its own
+        text judged as a data file's is. Where the script word is not certain, every file not shaped
+        like data is read as code, as above.
+
         inline, (its label, its text, the directory it runs in), is code the program was given by an
         option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
         first file read as code is, so a data file it is handed is read when it can act on it."""
         code, data = [], []
         if inline:
             label, text, here = inline
-            code.append((label, lambda: self.acts_inline(text, here, lang)))
+            code.append((label, lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
         # The word the program runs as its script (operands), and whether it is certain to name no
         # file (empty_slot, claude-config#2786): a program whose script is not there runs nothing,
         # so a data file after that word is an argument, judged as data even with no script to act.
         slot = None if inline else self.operands(words)[0]
         empty = self.empty_slot(words, d) if slot else None
-        past = False
+        # And where the script word certainly names a file on disk (held_slot, claude-config#2797),
+        # a code shaped file after it is the script's argument too: read as a script only where
+        # something the program runs can run what it is handed (handed_code), and its own text
+        # judged as any data file's is.
+        held = self.held_slot(words, d) if slot and not empty else None
+        past = after_held = False
         prog = os.path.basename(words[0])
+        # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
+        # is opened for writing by the shell before the program starts and is never handed to it, so
+        # it is not read (claude-config#2771): reading it refused rerunning a suite whose earlier output
+        # named an endpoint. A file fed with < or <> is the program's input and is still read, as is
+        # every argument, and a file written here and run by a later command is judged there.
+        written = False
         for w in words[1:]:
+            if written:
+                written = False
+                continue
             if empty and w == empty:
                 past = True
                 continue
-            if w.startswith("-") or w.startswith("+") or self.sw.REDIRECT_WORD.match(w):
+            if self.sw.REDIRECT_WORD.match(w):
+                written = bool(OUTPUT_REDIRECT.match(w))
+                continue
+            if w.startswith("-") or w.startswith("+"):
                 continue
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
             if (code or past) and self.data_shaped(path):
-                data.append((w, path))
+                data.append((w, path, False))
+                continue
+            if after_held and code:
+                data.append((w, path, True))
                 continue
             # A file read as code in the place of a script word that names no file is named by that
             # role, not called the script (claude-config#2786).
@@ -3799,8 +3913,14 @@ class Judge(WrittenPaths, ProgramWrites):
             reason = self.script(w, d, depth, shell_hint, lang, label)
             if reason:
                 return reason
-            code.append((label or f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
-        for w, path in data:
+            code.append((label or f"the script {w}",
+                         lambda runs_only=False, path=path: self.acts(path, d, shell_hint, lang, runs_only)))
+            after_held = after_held or w == held
+        for w, path, handed in data:
+            if handed:
+                reason = self.handed_code(w, d, depth, shell_hint, lang, code)
+                if reason:
+                    return reason
             self.tick(path)
             # A data file another program only MAY have written is read as it is on disk (#2772):
             # read as unreadable, every analysis handing a file it named to a script refused.
@@ -3846,6 +3966,38 @@ class Judge(WrittenPaths, ProgramWrites):
             return None
         return slot
 
+    def held_slot(self, words, d):
+        """The word the program certainly runs as its script when that word names a file on disk,
+        else None (claude-config#2797). The program runs that file, and every file after it is an
+        argument the file is handed, however it is shaped. Certain only where nothing else could be
+        the script, as for empty_slot: the word stands in the slot by the family's option table with
+        no option before it the table does not know (only Python's table is complete), it is not
+        built from a variable or a pattern, and where it is relative, the directory it runs in is
+        certain. A file a valued option names before it (node -r, --import) is read as code still."""
+        skipped = []
+        slot = self.operands(words, skipped)[0]
+        if not slot or slot == "-" or re.search(r"[$`*?\[{]", slot) or words[1:].count(slot) != 1:
+            return None  # a word written twice (node -r x.js x.js) leaves which one is the script open
+        if skipped and self.family(os.path.basename(words[0])) != "py":
+            return None
+        if not os.path.isabs(os.path.expanduser(slot)) and self.sh_dir(d) == SH_UNKNOWN_DIR:
+            return None
+        return slot if self.is_file(self.resolve(slot, d)) else None
+
+    def handed_code(self, w, d, depth, shell_hint, lang, code):
+        """The reason a code shaped file handed to a script posts, or None (claude-config#2797). It is
+        read as a script, its imports followed (#2318), only where something the program runs can
+        run what it is handed (acts with runs_only: importing, requiring or executing it, or a module
+        the gate does not know); a script that only reads or writes text cannot make it run. Its own
+        text is judged afterwards as any data file's is."""
+        for script_label, script_acts in code:
+            runs = script_acts(runs_only=True)
+            if not runs:
+                continue
+            why = self.script(w, d, depth, shell_hint, lang, w)
+            return f"{script_label} {runs}, and is handed {why}" if why else None
+        return None
+
     def data_shaped(self, path):
         """Whether a file is shaped like data rather than a script: an extension none of the programs
         this gate reads runs (CODE_EXT), and no #! line."""
@@ -3857,7 +4009,7 @@ class Judge(WrittenPaths, ProgramWrites):
         except OSError:
             return True
 
-    def acts(self, path, d, shell_hint, lang):
+    def acts(self, path, d, shell_hint, lang, runs_only=False):
         """How a script can act on a file it is handed as more than data, as a phrase ("sends a request
         (curl)", "runs the file it is handed (source)"), or None when it only reads what it is handed.
 
@@ -3870,17 +4022,18 @@ class Judge(WrittenPaths, ProgramWrites):
         cannot be read, and one whose imports cannot all be followed are taken to act: only a script
         seen to do none of it has its data files left unread. A script a shell script hands its
         arguments to is judged here the same way; one already being judged further up counts as
-        judged there."""
+        judged there. runs_only asks only whether it can run what it is handed (handed_code): writing
+        a file is not counted, in the script or the modules it imports (claude-config#2797)."""
         real = os.path.realpath(path)
         if real in self.acting:
             return None  # a script handing its arguments back to itself is judged where it began
         self.acting.add(real)
         try:
-            return self.acts_on(real, d, shell_hint, lang)
+            return self.acts_on(real, d, shell_hint, lang, runs_only)
         finally:
             self.acting.discard(real)
 
-    def acts_on(self, real, d, shell_hint, lang):
+    def acts_on(self, real, d, shell_hint, lang, runs_only=False):
         """acts() for a script at its real path, once the walk is known not to have come back to it."""
         self.tick(real)
         try:
@@ -3893,24 +4046,26 @@ class Judge(WrittenPaths, ProgramWrites):
         kind = self.language(real, first, lang)
         if not kind:
             return "is a kind of script the gate does not read for what it does with its arguments"
-        return self.acts_body(body, real, os.path.dirname(real), kind)
+        return self.acts_body(body, real, os.path.dirname(real), kind, runs_only=runs_only)
 
-    def acts_inline(self, text, here, lang, writes=True, env=None):
+    def acts_inline(self, text, here, lang, writes=True, env=None, runs_only=False):
         """acts() for code given inline (python3 -c), run from here (claude-config#2439). Code in a
         language whose imports the gate does not follow (perl -e, ruby -e) is taken to act, as a script
         file of that kind is. writes and env are acts_body's, for code a shell script writes."""
         if lang not in ("py", "js"):
             return "is code in a language the gate does not read for what it does with its arguments"
-        return self.acts_body(text, None, here, lang, writes, env)
+        return self.acts_body(text, None, here, lang, writes, env, runs_only)
 
-    def acts_body(self, body, real, root, kind, writes=True, env=None):
+    def acts_body(self, body, real, root, kind, writes=True, env=None, runs_only=False):
         """How a Python or JavaScript script's text (real its file, None for inline code; root where it
         runs from) can act on what it is handed, its local imports included, or None.
 
         writes is False for code a shell script writes inline (claude-config#2446), where writing a
         file is not counted, as it is not for the shell script itself. env, there, is the Python the
         script put in that command's environment ({NAME: its text}, sh_env_code): code the inline
-        code runs with exec(os.environ["NAME"]) is read with it, as one text (py_env_code)."""
+        code runs with exec(os.environ["NAME"]) is read with it, as one text (py_env_code). runs_only
+        leaves writing a file uncounted in the text and in every module it imports (acts)."""
+        writes = writes and not runs_only
         ran = frozenset()
         if kind == "py" and env:
             body, ran = self.py_env_code(body, env)
@@ -3920,7 +4075,8 @@ class Judge(WrittenPaths, ProgramWrites):
         for why, _, target, found in self.modules("it", real, root, body, kind):
             if why:
                 return f"imports a module the gate cannot follow ({why})"
-            inner = self.py_acts(found, target, root) if kind == "py" else self.js_acts(found)
+            inner = (self.py_acts(found, target, root, not runs_only) if kind == "py"
+                     else self.js_acts(found, not runs_only))
             if inner:
                 return f"imports {os.path.basename(target)}, which {inner}"
         return None
@@ -4664,9 +4820,19 @@ def main():
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives
         # up, never matched by its wording) is not a post it found, so it says the check could not be
         # made rather than claiming a post.
+        unfollowed = bool(judge.unfollowed) and judge.unfollowed in reason
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if judge.unfollowed and judge.unfollowed in reason else "REFUSED: this command posts to Slack: ")
-        print("refuse\n" + lead + reason + ". " + draft_advice("with the same channel and thread"))
+                if unfollowed else "REFUSED: this command posts to Slack: ")
+        if unfollowed and not MARKER.search(cmd):
+            # Nothing in the command names a posting endpoint, so it is no message, and telling the
+            # session to save one as a draft only misleads it (claude-config#2631).
+            advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "
+                      "command names no Slack posting endpoint, so there is no message to save as a draft. "
+                      "Change the command so the gate can see everything it runs, or, if it must run as "
+                      "written, say so to Dan (claude-config#2631).")
+        else:
+            advice = draft_advice("with the same channel and thread")
+        print("refuse\n" + lead + reason + ". " + advice)
     else:
         print("allow")
 
