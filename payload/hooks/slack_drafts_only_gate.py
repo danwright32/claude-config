@@ -315,6 +315,13 @@ def js_scan(text):
 # python interpreter running a file with no extension.
 PY_RUNTIME = re.compile(r"^(python[0-9.]*|pypy[0-9.]*)$")
 PY_BANG = re.compile(r"^#!.*\b(python[0-9.]*|pypy[0-9.]*)\b")
+# A command line that may change which python a bare name runs, or where that python looks for
+# modules, so the gate's own interpreter cannot stand in for it (found_nowhere, claude-config#2631):
+# PATH, PYTHONHOME, PYTHONUSERBASE or a virtual environment set, a file sourced, an environment
+# manager or eval run, or a shell function defined.
+PY_ENV_CHANGE = re.compile(r"(^|[^A-Za-z0-9_])(PATH|PYTHONHOME|PYTHONUSERBASE|VIRTUAL_ENV|CONDA_PREFIX)\+?="
+                           r"|(^|[\s;&|(`])(source|\.|activate|conda|pyenv|mamba|micromamba|eval|function)(\s|$)"
+                           r"|\(\s*\)\s*\{")
 # Read when a file cannot be parsed as Python by this python3: each import statement's first line.
 PY_IMPORT_LINE = re.compile(r"^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+\(?([^#\n)]*)|import[ \t]+([^#\n]+))",
                             re.M)
@@ -1557,8 +1564,14 @@ class Judge(WrittenPaths, ProgramWrites):
         repo = None  # the script's repository, looked for on first passing the limit; False for none
         queue = [(origin, root, body, start)]
         inserts = ([], [])  # the folders a sys.path change puts in front of the rest, and behind them
+        top = True  # the code the command hands Python, before any module it imports
         while queue:
             cur, cur_dir, text, chain = queue.pop(0)
+            # The import that is the starting code's first statement, which runs before anything else
+            # in it (claude-config#2631); never one in a module reached, which runs after whatever
+            # imported it.
+            first = self.py_first_import(text) if kind == "py" and top else None
+            top = False
             if kind == "py":
                 self.py_inserts(text, cur, inserts)
             elif not strings and (JS_SINK.search(text) or JS_DYNAMIC.search(js_code(text))):
@@ -1566,6 +1579,9 @@ class Judge(WrittenPaths, ProgramWrites):
                 return
             for spec, targets in self.import_targets(text, kind, cur_dir, root, inserts, strings):
                 via = f"{chain}, which imports {spec}"
+                lead, first = first, None  # only the first import given can be that statement's
+                if targets is False and lead is not None and spec == lead and self.found_nowhere(spec, root):
+                    continue  # Python stops there with ImportError, before anything runs
                 if targets is False:
                     where = ("" if kind != "py" or spec.startswith(".") else
                              " beside the script, on its PYTHONPATH or sys.path, in the standard library or installed")
@@ -1716,6 +1732,63 @@ class Judge(WrittenPaths, ProgramWrites):
             elif isinstance(node, ast.ImportFrom):
                 out.append((node.level, node.module or "", tuple(a.name for a in node.names)))
         return out
+
+    @staticmethod
+    def py_first_import(text):
+        """The module an absolute import that is text's first statement names first, as
+        import_targets writes it (`import a, b` gives a, `from a.b import c` gives a.b), or None when
+        the first statement is anything else or text does not parse (claude-config#2631)."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                body = ast.parse(text).body
+        except (SyntaxError, ValueError):
+            return None
+        node = body[0] if body else None
+        if isinstance(node, ast.Import):
+            return node.names[0].name
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            return node.module
+        return None
+
+    def found_nowhere(self, spec, root):
+        """Whether Python cannot find the top level module spec names anywhere it would look, so a
+        first statement importing it stops with ImportError before anything runs (claude-config#2631).
+        Asked only of an import resolve_py already placed nowhere: not beside the script (root), on
+        the command's PYTHONPATH, behind a sys.path change, in the standard library or installed.
+
+        It holds only where the gate's own interpreter stands in for the one the command runs: the
+        command is that interpreter typed plainly (py_cmd plain), and it is the same file, by real
+        path, as this python. The gate's own import system is then asked (importlib.util.find_spec,
+        which consults every finder a .pth file installed, without running the module), and every
+        folder searched must be one the gate can list, since a module in a folder it cannot read
+        may be one Python finds. Anything else is not known to be absent, and stays refused."""
+        interp = self.py_cmd.get("interp")
+        if not interp or not self.py_cmd.get("plain"):
+            return False
+        path = self.resolve(interp, self.py_cmd["cwd"]) if "/" in interp else None
+        # A bare name is the first on the PATH, as the shell finds it (shutil.which is not used:
+        # importing shutil costs 4 ms on every call the gate reads). An empty or relative entry is
+        # searched from wherever the command runs, so one met first leaves the interpreter unknown.
+        for d in ([] if path else os.environ.get("PATH", "").split(os.pathsep)):
+            if not os.path.isabs(d):
+                return False
+            p = os.path.join(d, interp)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                path = p
+                break
+        if not path or os.path.realpath(path) != os.path.realpath(sys.executable):
+            return False
+        for d in [root] + list(self.py_cmd["path"]) + [p for p in sys.path if p]:
+            if d and os.path.isdir(d):
+                try:
+                    os.listdir(d)
+                except OSError:
+                    return False
+        try:
+            return importlib.util.find_spec(spec.split(".")[0]) is None
+        except Exception:
+            return False
 
     def resolve_py(self, level, module, names, cur_dir, root, inserts=((), ())):
         """The local files a Python import runs (each package's __init__.py, the module, and any
@@ -3517,7 +3590,18 @@ class Judge(WrittenPaths, ProgramWrites):
         else:
             path = self.py_path(os.environ.get("PYTHONPATH", ""), d)
         interp = next((w for w in words[:3] if PY_RUNTIME.match(os.path.basename(w))), None)
-        saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp}
+        # plain: the interpreter is the command itself (run by name, or by its path, which the shell
+        # words call a "direct" wrapper), as written, past only reserved words and assignments: not
+        # one a runner command_rest reads past runs (sudo, env, exec), nor a wrapper's string (bash
+        # -c, xargs), a package manager or a script read as commands; and the line changes nothing
+        # about which python that is (found_nowhere, claude-config#2631).
+        plain = False
+        if interp and words[0] == interp and depth == 0 and wrapper in ("", "direct") and self.shell.get("outer"):
+            typed = self.sw.command_words(text.lstrip().lstrip("("))
+            while typed and (typed[0] in self.sw.RESERVED or SH_ASSIGN_LIKE.match(typed[0].lstrip("\"'"))):
+                typed = typed[1:]
+            plain = typed[:1] == [interp] and not PY_ENV_CHANGE.search(whole or "")
+        saved, self.py_cmd = self.py_cmd, {"path": path, "cwd": here, "interp": interp, "plain": plain}
         # An export read inside a script this command runs in its own shell ends with that shell; one
         # read inside a sourced script (`source`, `.`) really exports into the caller, so it is kept
         # (claude-config#2409).
@@ -4664,9 +4748,19 @@ def main():
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives
         # up, never matched by its wording) is not a post it found, so it says the check could not be
         # made rather than claiming a post.
+        unfollowed = bool(judge.unfollowed) and judge.unfollowed in reason
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
-                if judge.unfollowed and judge.unfollowed in reason else "REFUSED: this command posts to Slack: ")
-        print("refuse\n" + lead + reason + ". " + draft_advice("with the same channel and thread"))
+                if unfollowed else "REFUSED: this command posts to Slack: ")
+        if unfollowed and not MARKER.search(cmd):
+            # Nothing in the command names a posting endpoint, so it is no message, and telling the
+            # session to save one as a draft only misleads it (claude-config#2631).
+            advice = ("This is not a finding that it posts: the gate could not follow what it runs, and the "
+                      "command names no Slack posting endpoint, so there is no message to save as a draft. "
+                      "Change the command so the gate can see everything it runs, or, if it must run as "
+                      "written, say so to Dan (claude-config#2631).")
+        else:
+            advice = draft_advice("with the same channel and thread")
+        print("refuse\n" + lead + reason + ". " + advice)
     else:
         print("allow")
 

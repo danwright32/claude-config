@@ -725,19 +725,90 @@ printf '%s\n' 'await fetch("https://hooks.slack.com/services/T0/B0/x", { method:
 run_bash "node '$T/so it cannot see what/post.mjs'"
 says "a script that posts from a folder named like the could not check wording gets the posts wording" \
   "REFUSED: this command posts to Slack"
-run_bash "python3 $T/pp/app/run.py"
-refused "the PYTHONPATH script run without it, its import placed nowhere"
+# run_late.py imports the same helper after a statement that runs, so its import placed nowhere is
+# still refused (run.py's, its first statement, is not: claude-config#2631, below).
+printf '%s\n' 'import json' 'import pp_notify' 'pp_notify.go()' > "$T/pp/app/run_late.py"
+run_bash "python3 $T/pp/app/run_late.py"
+refused "the PYTHONPATH script run without it, its import placed nowhere after a statement that runs"
 # An export inside a script run in its own shell ends with that shell, so it must not place the
 # imports of the commands after it; a sourced one really exports into the caller (claude-config#2409).
 printf '%s\n' '#!/bin/bash' "export PYTHONPATH=$T/pp/okdir" > "$T/pp/setexp.sh"
-run_bash "bash $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+run_bash "bash $T/pp/setexp.sh; python3 $T/pp/app/run_late.py"
 refused "an export inside a script run by bash does not place the next command's import"
-run_bash "source $T/pp/setexp.sh; python3 $T/pp/app/run.py"
+run_bash "source $T/pp/setexp.sh; python3 $T/pp/app/run_late.py"
 allowed "an export inside a sourced script places the next command's import"
-run_bash ". $T/pp/setexp.sh && python3 $T/pp/app/run.py"
+run_bash ". $T/pp/setexp.sh && python3 $T/pp/app/run_late.py"
 allowed "the same sourced with a dot"
-run_bash "cd $T/pp && python3 -c 'import no_such_helper_2358'"
-refused "inline Python importing a module placed nowhere"
+run_bash "cd $T/pp && python3 -c 'import json; import no_such_helper_2358'"
+refused "inline Python importing a module placed nowhere after a statement that runs"
+
+echo "slack drafts only: a first statement importing a module found nowhere runs nothing (claude-config#2631)"
+
+# python3 -c "import playwright; print('py ok')" (2026-11-10) and a python3 -I -c "import openpyxl"
+# probe after an ffprobe and an ls (2026-11-12) were refused as imports the gate could not follow.
+# When the import is the code's first statement and the module is in none of the places the
+# interpreter named would look, Python stops with ImportError before anything runs, so nothing can
+# reach Slack. The module names are invented, so no test depends on what this Mac has installed (L411).
+mkdir -p "$T/probe/media"
+: > "$T/probe/media/clip.m4a"
+run_bash "python3 -c \"import no_such_probe_2631; print('py ok')\""
+allowed "a probe whose first statement imports a module found nowhere"
+run_bash "ffprobe -v error -show_entries format_tags -of default=nw=1 \"$T/probe/media/clip.m4a\"; ls \"$T/probe/media/clip.m4a\" 2>&1; python3 -I -c \"import no_such_probe_2631; print('no_such_probe_2631', no_such_probe_2631.__version__)\""
+allowed "the same probe with -I as one segment of a longer command"
+run_bash "cd $T/probe && python3 -c 'from no_such_probe_2631.sub import thing; thing()'"
+allowed "a from import of a package found nowhere as the first statement"
+run_bash "python3 $T/pp/app/run.py"
+allowed "a script whose first statement imports a helper on no path it is run with"
+# The gate's own interpreter named by its path is the same interpreter (the wrapper runs python3).
+PYEXE="$(python3 -c 'import sys; print(sys.executable)')"
+run_bash "'$PYEXE' -c 'import no_such_probe_2631'"
+allowed "the same probe run by the path of the interpreter python3 names"
+# What still refuses: a statement that runs before the import, a second import placed nowhere, a
+# module Python may find but the gate cannot read, and an interpreter other than the gate's own.
+run_bash "python3 -c \"print('x'); import no_such_probe_2631\""
+refused "a statement that runs before the import placed nowhere"
+run_bash "python3 -c 'import os, no_such_probe_2631'"
+refused "an import placed nowhere named after a module that is found"
+run_bash "python3 -c 'import no_such_probe_2631; import no_such_other_2631'"
+refused "a later import placed nowhere, though the first is too"
+says "that refusal names the later import" "no_such_other_2631"
+run_bash "python3 -c 'try:
+    import no_such_probe_2631
+except ImportError:
+    pass'"
+refused "an import placed nowhere inside a try, whose failure the code carries on past"
+mkdir -p "$T/probe/unread" "$T/probe/locked"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://hooks.slack.com/services/T0/B0/x", data=b"{}")' \
+  > "$T/probe/unread/unread_probe_2631.py"
+chmod 000 "$T/probe/unread/unread_probe_2631.py" "$T/probe/locked"
+run_bash "cd $T/probe/unread && python3 -c 'import unread_probe_2631'"
+refused "a first statement importing a module beside it the gate cannot read"
+run_bash "PYTHONPATH=$T/probe/locked python3 -c 'import no_such_probe_2631'"
+refused "a first statement importing a module placed nowhere, with a folder on PYTHONPATH the gate cannot list"
+chmod 755 "$T/probe/locked"
+chmod 644 "$T/probe/unread/unread_probe_2631.py"
+mkdir -p "$T/probe/fakebin"
+printf '%s\n' '#!/bin/sh' 'exit 0' > "$T/probe/fakebin/python3"
+chmod +x "$T/probe/fakebin/python3"
+run_bash "$T/probe/fakebin/python3 -c 'import no_such_probe_2631'"
+refused "a first statement importing a module placed nowhere, run by an interpreter other than the gate's own"
+run_bash "PATH=$T/probe/fakebin:\$PATH python3 -c 'import no_such_probe_2631'"
+refused "the same with PATH changed for the command, so python3 may be another interpreter"
+run_bash "uv run python3 -c 'import no_such_probe_2631'"
+refused "the same run through a wrapper that chooses its own environment"
+run_bash "sudo python3 -c 'import no_such_probe_2631'"
+refused "the same run by sudo, whose PATH and user are not the session's"
+run_bash "bash -c \"python3 -c 'import no_such_probe_2631'\""
+refused "the same run by a wrapper's string"
+# The refusal that is left does not tell the session to save a draft when nothing in the command
+# names a Slack posting endpoint: it says the gate could not follow the import.
+run_bash "python3 -c \"print('x'); import no_such_probe_2631\""
+says "a could not follow refusal says what it could not follow" "the gate could not follow"
+case "$ERR" in *slack_send_message_draft*) check "that refusal does not tell the session to save a draft" "stderr: ${ERR:0:400}" ;;
+  *) check "that refusal does not tell the session to save a draft" ok ;; esac
+says "that refusal says nothing in the command names a posting endpoint" "names no Slack posting endpoint"
+run_bash "echo https://hooks.slack.com/services/T0/B0/x >/dev/null; python3 -c \"print('x'); import no_such_probe_2631\""
+says "a could not follow refusal for a command naming an endpoint still says to save a draft" "slack_send_message_draft"
 
 echo "slack drafts only: a sys.path entry handed to python through a shell variable is placed (claude-config#2449)"
 
