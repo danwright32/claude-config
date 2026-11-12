@@ -3186,7 +3186,7 @@ done
 # A copy writes its target, never what it copies from. With the target a word the gate cannot work
 # out, every word was taken for a possible target, so a suite copying the hook it tests into a temp
 # folder (`cp "$CHECK" "$NOLIB/check-home-paths.sh"`) and then running "$CHECK" was refused as posting
-# once #2678 read files run through a variable: 23 suites, switch off (#2683). A word stays a possible
+# once #2678 read files run through a variable: 25 scripts, switch off (measured 2026-11-12, #2683). A word stays a possible
 # target where it is last, where every word after it can expand to nothing, or where the word before it
 # may be an option that takes it as a value (-t, or a word the gate cannot work out).
 ur_plain cpsrc 'T="$(mktemp -d)"' 'cp "$ROOT/tools/lib/act.sh" "$T/act.sh"' 'bash "$ROOT/tools/lib/act.sh"'
