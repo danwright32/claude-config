@@ -22,6 +22,14 @@
 # HOOK_TESTS_SLOT_HOLD (2700 seconds) is passed over too (L523): a full run that has held the slot
 # for 45 minutes on a quiet Mac is stuck, and the next run should not wait out its whole bound.
 #
+# IN THE ORDER THEY ARRIVED (claude-config#2828). Runs are served by ticket number, which is the order
+# they joined. A waiting run whose ticket another run removed (a run reading its start time in another
+# time zone took it for gone, before merge-turn.sh judged starts in one fixed form) takes the same
+# number back rather than joining at the back behind every run that arrived after it, and says so
+# once. On 2026-11-12 a run refused after 60 minutes had in fact been served in order: the three runs
+# that held the slot while it waited had all joined before it, and the bound below is on the whole
+# wait, so a run fourth in line behind full runs of 20 to 30 minutes each is refused by design.
+#
 # A WAIT IS NEVER SILENT. A run that has to wait says so at once, naming the holder's pid, its
 # checkout and how long it has held the slot, says it again whenever the holder changes, and says
 # "still waiting" with the time so far every HOOK_TESTS_SLOT_SAY_EVERY seconds (60), so working,
@@ -52,11 +60,13 @@
 # HOOK_TESTS_SLOT_HOLD, HOOK_TESTS_SLOT_SAY_EVERY (whole seconds), HOOK_TESTS_SLOT_POLL (seconds
 # between looks, 2). Seams, so its tests never wait on a real clock (L290, L524):
 # HOOK_TESTS_SLOT_NOW (a command printing epoch seconds) and HOOK_TESTS_SLOT_SLEEP (the sleep
-# between looks).
+# between looks). A HOOK_TESTS_SLOT_NOW read that is not a whole number refuses the run, exit 1,
+# naming what it printed, and gives back any place it took (claude-config#2828).
 #
 #   full_run_slot_settings          validates the settings; returns 1 with FULL_RUN_SLOT_ERR
 #   full_run_slot_take <label>      queues and waits: 0 once held, or when running without the slot
-#                                   (said); 75 when refused at the bound (said)
+#                                   (said); 75 when refused at the bound (said); 1 when the injected
+#                                   clock printed no number (said)
 #   full_run_slot_release           gives the slot back; safe to call twice
 
 FULL_RUN_SLOT_HELD=""
@@ -64,11 +74,31 @@ FULL_RUN_SLOT_ERR=""
 
 full_run_slot_dir(){ printf '%s' "${HOOK_TESTS_SLOT_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/full-run-slot}"; }
 
-full_run_slot_now(){
-  local t=""
-  [ -n "${HOOK_TESTS_SLOT_NOW:-}" ] && t="$(${HOOK_TESTS_SLOT_NOW} 2>/dev/null)"
-  case "$t" in ''|*[!0-9]*) t="$(date +%s)" ;; esac
-  printf '%s' "$t"
+# Reads the clock into FULL_RUN_SLOT_T, without a subshell so a failure's reason survives. An injected
+# clock printing anything but a whole number returns 1 with FULL_RUN_SLOT_ERR (claude-config#2828),
+# never answered from the real clock: a wait started on one clock and judged on the other looks
+# decades long, so the run was refused, or the holder passed over, for a reason that had nothing to
+# do with the bad read (the class of #2778). Without HOOK_TESTS_SLOT_NOW this is the real clock.
+FULL_RUN_SLOT_T=""
+full_run_slot_clock(){
+  local t
+  FULL_RUN_SLOT_T=""
+  if [ -n "${HOOK_TESTS_SLOT_NOW:-}" ]; then
+    t="$(${HOOK_TESTS_SLOT_NOW} 2>/dev/null)"
+    case "$t" in
+      ''|*[!0-9]*)
+        FULL_RUN_SLOT_ERR="HOOK_TESTS_SLOT_NOW (${HOOK_TESTS_SLOT_NOW}) printed '$(printf '%s' "$t" | tr '\n\t' '  ' | cut -c1-80)', not a whole number of seconds"
+        return 1 ;;
+    esac
+    FULL_RUN_SLOT_T="$t"; return 0
+  fi
+  FULL_RUN_SLOT_T="$(date +%s)"
+}
+# Says the clock refusal, gives back any place taken, and returns the refusal's status.
+full_run_slot_clock_refused(){
+  echo "run-all-tests: REFUSED: $FULL_RUN_SLOT_ERR, so this run stopped rather than judge its wait for this Mac's full suite slot by any other clock. Nothing was run (claude-config#2828)."
+  full_run_slot_release
+  return 1
 }
 
 full_run_slot_settings(){
@@ -115,7 +145,7 @@ full_run_slot_ancestor_holds(){
 }
 
 full_run_slot_take(){   # $1 = what this run is about (its checkout)
-  local label wait hold say poll sleep_cmd t0 t elapsed last_say=0 last_head="" hpid hlabel ahead msg
+  local label wait hold say poll sleep_cmd t0 t elapsed last_say=0 last_head="" hpid hlabel ahead msg retold=""
   label="$(printf '%s' "${1:-?}" | tr '\n\t' '  ')"
   wait="${HOOK_TESTS_SLOT_WAIT:-3600}"; hold="${HOOK_TESTS_SLOT_HOLD:-2700}"
   say="${HOOK_TESTS_SLOT_SAY_EVERY:-60}"; poll="${HOOK_TESTS_SLOT_POLL:-2}"
@@ -125,7 +155,8 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
   if full_run_slot_ancestor_holds; then
     return 0
   fi
-  t0="$(full_run_slot_now)"
+  full_run_slot_clock || { full_run_slot_clock_refused; return; }
+  t0="$FULL_RUN_SLOT_T"
   if ! turn_join "$label" "$t0"; then
     echo "run-all-tests: could not take a place in this Mac's full suite slot ($TURN_ERR), so this run goes ahead without queueing and may compete with other full runs on this Mac (claude-config#2012)."
     return 0
@@ -142,14 +173,24 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
         -e 's/^/run-all-tests: /'
     fi
     if [ -n "$TURN_GONE" ]; then
-      # Passed over by another waiter as stuck: join again at the back, as merge-when-ready does.
-      TURN_TICKET=""
-      if ! turn_join "$label" "$t"; then
-        FULL_RUN_SLOT_HELD=""
-        echo "run-all-tests: lost this run's place in this Mac's full suite slot and could not join again ($TURN_ERR), so it goes ahead without queueing (claude-config#2012)."
-        return 0
+      # Another run removed this run's ticket while it waited (it judged the run gone). A run here
+      # has never held the slot, since one that does returns at once, so it takes the same number
+      # back and keeps the order it arrived in (claude-config#2828); joining at the back put every
+      # run that arrived after it ahead of it. Said once, however often it happens.
+      if turn_retake "$label" "$t0"; then
+        [ -n "$retold" ] || echo "run-all-tests: another run removed this run's place in this Mac's full suite slot while it waited, so it took the same place back and keeps the order it arrived in (claude-config#2828)."
+        retold=1
+      else
+        echo "run-all-tests: another run removed this run's place in this Mac's full suite slot while it waited, and it could not take that place back ($TURN_ERR), so it joins again at the back of the line (claude-config#2828)."
+        TURN_TICKET=""
+        if ! turn_join "$label" "$t"; then
+          FULL_RUN_SLOT_HELD=""
+          echo "run-all-tests: lost this run's place in this Mac's full suite slot and could not join again ($TURN_ERR), so it goes ahead without queueing (claude-config#2012)."
+          return 0
+        fi
       fi
-      t="$(full_run_slot_now)"; continue
+      full_run_slot_clock || { full_run_slot_clock_refused; return; }
+      t="$FULL_RUN_SLOT_T"; continue
     fi
     if [ "$TURN_MINE" = 1 ]; then
       [ -z "$last_head" ] || echo "run-all-tests: took this Mac's full suite slot after waiting $(turn_dur "$elapsed")."
@@ -174,7 +215,8 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
       last_say="$elapsed"
     fi
     "$sleep_cmd" "$poll"
-    t="$(full_run_slot_now)"
+    full_run_slot_clock || { full_run_slot_clock_refused; return; }
+    t="$FULL_RUN_SLOT_T"
   done
 }
 

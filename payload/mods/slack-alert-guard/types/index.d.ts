@@ -55,7 +55,16 @@ export type SlackAlertChoice = {
   unwired?: true
   /** When it expired unanswered: still held, said once in every session. */
   expired?: number
+  /**
+   * Where it holds merges (#2833): the file it was chosen in, then each file in another place its
+   * wording was let through while Dan was asleep, with the GitHub repository each is in as owner/name
+   * in lower case, null where that could not be read (read again at a merge). Absent on a choice
+   * made before #2833, read from `file` at a merge.
+   */
+  places?: SlackAlertPlace[]
 }
+
+export type SlackAlertPlace = { file: string; repo: string | null }
 
 declare module 'claude-code' {
   interface PluginState {

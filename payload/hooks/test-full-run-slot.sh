@@ -456,6 +456,98 @@ else
     || check "#2034 payload/hooks still holds at least ${_share}% of the real tree's suites, so a run of it queues" "$_hooks of $_all; re-measure the threshold in run-all-tests.sh"
 fi
 
+# ---- 12. a slot clock that prints no number refuses the run, never the real clock (#2828) --------
+# The same class of fault as #2778: a wait started on the test clock and judged on the real one looks
+# decades long, so the run was refused, or the holder passed over, for a reason that had nothing to
+# do with the bad read.
+clear_slot
+HC="$(new_holder hp12)"
+hold_slot "$HC" "/work/trees/clocked" 1000000
+printf '#!/usr/bin/env bash\necho soon\n' > "$T/bad-clock"; chmod +x "$T/bad-clock"
+rm -f "$T/mark12"
+fx_run "$T/out12" HOOK_TESTS_SLOT_NOW="$T/bad-clock" HOOK_TESTS_SLOT_SLEEP=true HOOK_TESTS_SLOT_WAIT=0 SLOT_MARK="$T/mark12"; rc12=$?
+o12="$(cat "$T/out12")"
+[ "$rc12" -eq 1 ] && check "#2828 a slot clock printing no number refuses the run with exit 1" ok \
+  || check "#2828 a slot clock printing no number refuses the run with exit 1" "exit=$rc12 out=$o12"
+[ ! -f "$T/mark12" ] && check "#2828 a run refused over its clock ran no suite" ok || check "#2828 a run refused over its clock ran no suite" "the suite ran: $o12"
+has "#2828 the refusal names the clock and what it printed" "HOOK_TESTS_SLOT_NOW ($T/bad-clock) printed 'soon'" "$o12"
+has "#2828 the refusal is plain" "REFUSED" "$o12"
+[ "$(tickets | wc -l | tr -d ' ')" = 1 ] && check "#2828 a run refused over its clock leaves no place in the queue" ok \
+  || check "#2828 a run refused over its clock leaves no place in the queue" "tickets: $(tickets | tr '\n' ' ')"
+# A clock that reads well and then goes blank part way through the wait: the run had a place, gives
+# it back, and is refused at that read.
+printf '0\n' > "$T/fading.n"
+cat > "$T/fading-clock" <<CLK
+#!/usr/bin/env bash
+n="\$(cat "$T/fading.n")"; printf '%s\n' "\$(( n + 1 ))" > "$T/fading.n"
+[ "\$n" -lt 3 ] && printf '1000000\n'
+exit 0
+CLK
+chmod +x "$T/fading-clock"
+rm -f "$T/mark12b"
+fx_run "$T/out12b" HOOK_TESTS_SLOT_NOW="$T/fading-clock" HOOK_TESTS_SLOT_SLEEP=true HOOK_TESTS_SLOT_WAIT=600 SLOT_MARK="$T/mark12b"; rc12b=$?
+o12b="$(cat "$T/out12b")"
+[ "$rc12b" -eq 1 ] && check "#2828 a slot clock going blank mid wait refuses the run with exit 1" ok \
+  || check "#2828 a slot clock going blank mid wait refuses the run with exit 1" "exit=$rc12b out=$o12b"
+[ ! -f "$T/mark12b" ] && check "#2828 a run refused mid wait ran no suite" ok || check "#2828 a run refused mid wait ran no suite" "the suite ran: $o12b"
+has "#2828 the mid wait refusal names what the clock printed" "printed ''" "$o12b"
+[ "$(tickets | wc -l | tr -d ' ')" = 1 ] && check "#2828 a run refused mid wait gives its place back" ok \
+  || check "#2828 a run refused mid wait gives its place back" "tickets: $(tickets | tr '\n' ' ')"
+kill "$HC" 2>/dev/null
+
+# ---- 13. a waiting run whose place was removed keeps the order it arrived in (#2828) -------------
+# Another run reading this run's start time in a different time zone took it for a reused pid and
+# removed its ticket; the run then joined again at the back, behind every run that arrived after it.
+# W1 arrives, then W2 (a stand in), then W1's ticket is removed. When the holder ends, W1 must be next.
+clear_slot
+H13="$(new_holder hp13)"
+hold_slot "$H13" "/work/trees/holder" "$(date +%s)"
+env -u HOOK_TESTS_RUNNING -u CI -u HOOK_TESTS_ROOT HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=2 \
+  HOOK_TESTS_SLOT_DIR="$SLOT" HOOK_TESTS_SLOT_POLL=0.1 HOOK_TESTS_SLOT_WAIT=40 SLOT_MARK="$T/mark13" bash "$FXR" > "$T/out13" 2>&1 &
+w13=$!
+hang_wait 'grep -q "waiting for this Mac" "$T/out13" 2>/dev/null' || check "fixture: the first waiter reached its wait" "out=$(cat "$T/out13")"
+W13="$(new_holder hw13)"
+hold_slot "$W13" "/work/trees/arrived-later" "$(date +%s)"
+w1_ticket=""
+for _t in $(tickets); do
+  grep -q -e "^pid $H13\$" -e "^pid $W13\$" "$SLOT/full-run/$_t" || w1_ticket="$_t"
+done
+[ -n "$w1_ticket" ] && check "fixture: the first waiter's ticket was found" ok || check "fixture: the first waiter's ticket was found" "tickets: $(tickets | tr '\n' ' ')"
+rm -f "$SLOT/full-run/$w1_ticket" "$SLOT/full-run/$w1_ticket.head"
+hang_wait 'grep -q "took the same place back" "$T/out13" 2>/dev/null' || check "fixture: the first waiter noticed its place was removed" "out=$(cat "$T/out13")"
+kill "$H13" 2>/dev/null
+wait "$w13"; rc13=$?
+o13="$(cat "$T/out13")"
+{ [ "$rc13" -eq 0 ] && [ -f "$T/mark13" ]; } && check "#2828 a waiter whose place was removed is still served before a run that arrived after it" ok \
+  || check "#2828 a waiter whose place was removed is still served before a run that arrived after it" "exit=$rc13 out=$o13"
+has "#2828 taking its place back is said" "took the same place back" "$o13"
+_left="$(tickets)"
+{ [ "$(printf '%s\n' "$_left" | grep -c .)" = 1 ] && grep -q "^pid $W13\$" "$SLOT/full-run/$_left"; } \
+  && check "#2828 the run that arrived later is still waiting, its place untouched" ok \
+  || check "#2828 the run that arrived later is still waiting, its place untouched" "tickets: $(tickets | tr '\n' ' ')"
+kill "$W13" 2>/dev/null
+
+# ---- 14. a waiter that dies never holds up the runs behind it ------------------------------------
+clear_slot
+H14="$(new_holder hp14)"
+hold_slot "$H14" "/work/trees/finishing" 999970
+D14="$(new_holder hd14)"
+hold_slot "$D14" "/work/trees/crashed-waiter" 999980
+kill -9 "$D14" 2>/dev/null
+hang_wait '! kill -0 "$D14" 2>/dev/null' || check "fixture: the dead waiter really ended" "pid $D14 still answers"
+cat > "$T/release14" <<REL
+#!/usr/bin/env bash
+for f in "$SLOT"/full-run/*; do case "\${f##*/}" in ''|*[!0-9]*) ;; *) grep -q "^pid $H14\$" "\$f" && rm -f "\$f" "\$f.head" ;; esac; done
+REL
+chmod +x "$T/release14"
+printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark14"
+fx_run "$T/out14" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP="$T/release14" HOOK_TESTS_SLOT_WAIT=600 SLOT_MARK="$T/mark14"; rc14=$?
+o14="$(cat "$T/out14")"
+{ [ "$rc14" -eq 0 ] && [ -f "$T/mark14" ]; } && check "#2828 a waiter that died ahead of this run does not hold it up once the holder ends" ok \
+  || check "#2828 a waiter that died ahead of this run does not hold it up once the holder ends" "exit=$rc14 out=$o14"
+has "#2828 passing over the dead waiter is said, with its pid" "pid $D14) is no longer running" "$o14"
+[ -z "$(tickets)" ] && check "#2828 nothing is left in the queue" ok || check "#2828 nothing is left in the queue" "tickets: $(tickets | tr '\n' ' ')"
+
 # The settings are read by indirection, never eval (#2465, which the Slack drafts gate cannot follow):
 # a set bad value is still refused by name, an unset one still skipped, a set good one still taken.
 r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_HOLD=soon bash -c \
