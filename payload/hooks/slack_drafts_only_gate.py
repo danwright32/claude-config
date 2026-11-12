@@ -662,6 +662,8 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
 SH_UNKNOWN_DIR = "${unknown directory}"
+# An assignment, as raw_words steps past it: plain, an append, or an array element.
+SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
 # The builtins that cannot change a shell variable, the only commands a `local` value is taken across
 # (claude-config#2465): any other command can be a function, and a function can set its caller's
 # local. printf is one only without -v.
@@ -3444,9 +3446,6 @@ class Judge(WrittenPaths, ProgramWrites):
             # The positional parameters a `bash -c '...' _ a b` string's own commands see, while they
             # are being read (claude-config#2538): (the -c record's depth, its values), or None.
             pos = None
-            # The depth of the eval whose string's commands are being read, for unworked_path: what an
-            # eval runs is read as commands of their own, not as a program it names (#2683).
-            ev = None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
@@ -3454,9 +3453,6 @@ class Judge(WrittenPaths, ProgramWrites):
                 if pos and wdepth <= pos[0]:
                     pos = None  # past the string's commands
                 self.shell["positional"] = pos[1] if pos and wdepth == pos[0] + 1 else None
-                if ev is not None and wdepth <= ev:
-                    ev = None
-                self.shell["evaled"] = ev is not None and wdepth == ev + 1
                 # Whether this command's input is exactly what the command before it printed, for
                 # note_writes (claude-config#2721): True only where the text before it is that
                 # command, written whole, then a pipe. Anything else, a group, subshell, loop or if
@@ -3485,8 +3481,6 @@ class Judge(WrittenPaths, ProgramWrites):
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                 if pos and wdepth == pos[0] + 1 and not self.sh_keeps_positional(text, d):
                     pos = (pos[0], [])  # shifted, set, or a sourced file that may do either
-                if wrapper.split()[:1] == ["eval"]:
-                    ev = wdepth
                 if wrapper.endswith(" -c") and wrapper.split()[0] in SHELLS:
                     values = self.sh_positional(text, d)
                     pos = (wdepth, values) if values is not None else None
@@ -3677,9 +3671,10 @@ class Judge(WrittenPaths, ProgramWrites):
                 return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
             return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
-        # A program named by a variable alone (`"$RUN" x`) is a file run by a path too (#2683); the
-        # string an eval runs is not a program it names, so it is left as before.
-        return None if self.shell.get("evaled") else self.unworked_path(text, 0, d, "runs")
+        # A program named by a variable alone (`$cmd`, `"$gh" pr view`) is left as it was: it is how a
+        # function runs the command it is handed and a suite its stand in, and refusing it too newly
+        # refused 261 more of this repository's 546 scripts on 2026-11-12 (claude-config#2683).
+        return None
 
     def unworked_path(self, text, slot, d, verb):
         """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
@@ -3735,8 +3730,13 @@ class Judge(WrittenPaths, ProgramWrites):
         reads: past any reserved word, and past a launcher and its options as judge() steps past them
         (claude-config#2683). A redirection is kept as a word of its own, as operands() expects."""
         rest = self.sw.join_continuations(self.sw.command_rest(text)[0])
-        words = [t for kind, t in self.sh_tokens(rest) if kind == "word" or SH_REDIRECT.fullmatch(t)]
-        while words and words[0] in self.sw.RESERVED:
+        toks = self.sh_tokens(rest)
+        if len(toks) > 1 and toks[1] == ("op", "(") and SH_ASSIGN_LIKE.fullmatch(toks[0][1]):
+            return []  # an array assignment, `a=(x y)` or `a+=("$x")`: it runs nothing
+        words = [t for kind, t in toks if kind == "word" or SH_REDIRECT.fullmatch(t)]
+        # Past reserved words and assignments, quoted or not: the shared reader takes only a bare `A=x`
+        # for one, so `A+=x`, `a[i]=x` and env's `"PATH=$X/bin"` would read as the program.
+        while words and (words[0] in self.sw.RESERVED or SH_ASSIGN_LIKE.match(words[0].lstrip("\"'"))):
             words = words[1:]
         name = os.path.basename(words[0]) if words else ""
         if name in LAUNCHERS or (name == "uv" and len(words) > 1 and words[1] == "run"):

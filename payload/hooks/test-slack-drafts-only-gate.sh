@@ -2792,14 +2792,26 @@ allowed "switched off: a command running a file through a variable it never sets
 run_ur refuse "python3 \"\$NOT_SET_2683/act.py\""
 refused "switched on: a command running a file through a variable it never sets is refused"
 says "and says so of this command" "this command runs \"\$NOT_SET_2683/act.py\", a path the gate cannot work out"
-for cmd in "\$NOT_SET_2683 --version" "\"\$NOT_SET_2683\" --version" "A=1 \"\$NOT_SET_2683\"" "ls; \$NOT_SET_2683"; do
-  run_bash "$cmd"
-  allowed "switched off: a program named only by a variable it never sets is let through: $cmd"
-  run_ur refuse "$cmd"
-  refused "switched on: a program named only by a variable it never sets is refused: $cmd"
-done
-run_ur refuse "eval \"\$NOT_SET_2683\""
-allowed "switched on: the string an eval runs is not a program it names, so it is left as before"
+# A program named by a variable alone is how a function runs the command it is handed, and a suite its
+# stand in; refusing it newly refused 261 more of this repository's scripts (2026-11-12), so it is
+# left as it was, as is the string an eval runs. A path holding a slash is a file run, and is refused.
+printf '%s\n' '#!/bin/bash' 'run() { local cmd="$1"; $cmd 2>/dev/null; }' 'run "$NOT_SET_2683"' \
+  '"$NOT_SET_2683" --version' 'A=1 "$NOT_SET_2683"' 'eval "$NOT_SET_2683"' > "$UR/posts/tests/bare.sh"
+run_ur refuse "bash $UR/posts/tests/bare.sh"
+allowed "switched on: a program named by a variable alone, or the string an eval runs, is left as before"
+printf '%s\n' '#!/bin/bash' 'eval "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/eval-path.sh"
+run_ur refuse "bash $UR/posts/tests/eval-path.sh"
+refused "switched on: an eval running a file by a path it cannot work out is refused"
+# An assignment is not a program, however the shared reader splits it; a program past env's is found.
+printf '%s\n' '#!/bin/bash' 'A+="$NOT_SET_2683/x.sh"' 'a[1]="$NOT_SET_2683/x.sh"' 'a+=("$NOT_SET_2683/x.sh")' \
+  'b=("$NOT_SET_2683/x.sh" y)' 'case "$1" in /*) a+=("${1#/}") ;; esac' > "$UR/posts/tests/assigns.sh"
+run_ur refuse "bash $UR/posts/tests/assigns.sh"
+allowed "switched on: appends and array assignments built from a variable are not read as runs"
+printf '%s\n' '#!/bin/bash' 'env "PATH=$NOT_SET_2683/bin:$PATH" "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/env-path.sh"
+run_bash "bash $UR/posts/tests/env-path.sh"
+allowed "switched off: a file run past env's assignment by a path it cannot work out is let through"
+run_ur refuse "bash $UR/posts/tests/env-path.sh"
+says "switched on: the file run past env's quoted assignment is the one named" "runs \"\$NOT_SET_2683/tools/lib/act.sh\", a path the gate cannot work out"
 # Any other value, or none, is off.
 for value in "" 0 off yes 1; do
   run_ur "$value" "bash $UR/posts/tests/unset-python3.sh"
