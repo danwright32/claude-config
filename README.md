@@ -7063,7 +7063,12 @@ morning otherwise); git in a throwaway repository under the temp folder (a path 
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
 refused for git only where it would run git, never for the word in prose (#1124). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. What may merge and
+and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
+passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
+in one line it writes every time it runs, so a final report with no note of the check says it did
+not run. A failed, cancelled or timed out run is listed. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
