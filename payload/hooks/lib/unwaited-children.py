@@ -35,12 +35,16 @@ WHAT IT REPORTS, one line per site, `<path>:<line>: <kind>: <text>`:
                  - the subshell starting it sends both its stdout and its stderr to /dev/null,
                    `( worker & echo "$!" >> f ) >/dev/null 2>&1`: whatever that subshell writes after
                    the fork cannot reach a pipe;
+                 - a bare `wait` comes after it in the same function, or both at the top level
+                   (#2040: read file wide, one bare wait passed kept jobs thousands of lines away),
+                   with no `disown` between them taking that job out of the table (#2838: a loop's
+                   jobs, kept nowhere, are reaped by the wait after the loop). A function written
+                   on one line, `ok(){ ...; }`, ends on that line, so it neither hides a bare wait
+                   from the job before it nor lends its own to the top level after it (#2838);
                  - the statement straight after it keeps its pid (`p=$!`, `lane[$i]=$!`,
-                   `inflight="$inflight $!"`) and the file has a `wait` naming that variable, or a
-                   bare `wait` after it in the same function, or both at the top level (#2040: read
-                   file wide, one bare wait passed kept jobs thousands of lines away). A wait on a
-                   loop's variable, `for p in $pids; do wait "$p"`, names the list the nearest `for`
-                   before it walks (#2040);
+                   `inflight="$inflight $!"`) and the file has a `wait` naming that variable. A
+                   wait on a loop's variable, `for p in $pids; do wait "$p"`, names the list the
+                   nearest `for` before it walks (#2040);
                  - it is in a function that calls `wait` (#1984's rule).
                What the last two cannot see is ORDER: a kept child that exits, or is killed, while
                this shell prints something before its `wait` is the hazard all the same. So every
@@ -91,6 +95,9 @@ except Exception as e:  # noqa: BLE001  missing, or failing to load: either way 
                      "this scan judges, so it judges nothing (%s: %s)\n" % (type(e).__name__, e))
     sys.exit(2)
 FUNC = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{")
+# A function written on one line, `ok(){ pass=$((pass + 1)); }`, closes on it: its `}` follows a `;`
+# or `&`, as the shell requires, and only redirections may follow it (#2838).
+ONE_LINE_END = re.compile(r"[;&]\s*\}(\s+\d*[<>&].*)?$")
 WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Where a word is a command rather than an argument, so `case` there opens a case statement.
 CMDPOS = re.compile(r"(^|[;&|({]|\bthen|\bdo|\belse)\s*$")
@@ -150,6 +157,7 @@ class Walk:
         self.bg = []             # background jobs: dicts read once the whole file has been walked
         self.silenced = set()    # ids of ( ) subshells whose stdout and stderr both go to /dev/null
         self.waits = []          # (names it waits for, whether it is a bare wait, its line, its function id)
+        self.disowns = []        # (line, function id, what it disowns) of each `disown` run
         self.loop_lists = {}     # a `for` loop's variable -> the names in the list it walks
         self.code_mask = set()   # line numbers that start in code and hold some
         self.code_lines = 0
@@ -204,9 +212,14 @@ def judge(text, background=False):
                 w.heredocs.pop(0)
             continue
         in_code_at_start = w.quote is None and (not w.stack or w.stack[-1] != 'dq')
+        opened_here = False
         if in_code_at_start and not w.stack:
             m = FUNC.match(line)
             if m:
+                # One still open is settled first, so its wait is never lost to the next (#2838).
+                if w.func_id is not None:
+                    w.func_waited[w.func_id] = w.func_wait
+                opened_here = True
                 w.func_count += 1
                 w.func, w.func_id, w.func_wait = m.group(1), w.func_count, False
             elif line.startswith('}') and w.func is not None:
@@ -216,6 +229,12 @@ def judge(text, background=False):
             w.code_lines += 1
             w.code_mask.add(n)
         walk_line(w, line, n, background)
+        # A function written on one line ends on it, or it would run on to the next line starting
+        # with `}` and swallow the top level in between (#2838).
+        if (opened_here and w.quote is None and not w.stack
+                and ONE_LINE_END.search(re.sub(r"\s+#.*$", "", line).rstrip())):
+            w.func_waited[w.func_id] = w.func_wait
+            w.func, w.func_id = None, None
         # A newline ends a statement at the current depth unless it continues.
         if w.quote is None and (not w.stack or w.stack[-1] not in ('dq', 'brace', 'arith', 'apar')):
             stripped = re.sub(r"\s+#.*$", "", line).rstrip()
@@ -255,15 +274,24 @@ def judge_background(w, lines):
         waited.update(names)
     # A bare wait answers only for a job started before it in the same function, or both at the top
     # level (#2040): read file wide, one bare wait passed every kept job thousands of lines away.
+    # It reaps every job in the table, kept or not, but not one a `disown` between them took out of
+    # it (#2838: a loop's jobs, kept nowhere, are reaped by the wait after the loop).
     bare_waits = [(ln, fn) for _, b, ln, fn in w.waits if b]
-    for job in w.bg:
+    for idx, job in enumerate(w.bg):
         # Started by a subshell that ends at once, or that can write to no pipe: never this shell's child,
         # or a child of a shell that cannot be writing into a pipe when it exits.
         if job['double'] or any(p in w.silenced for p in job['pars']):
             continue
         name = kept_name(w, lines, job)
-        bare = any(ln > job['line'] and fn == job['func'] for ln, fn in bare_waits)
-        if name is not None and (bare or name in waited):
+        def disowned(by):
+            kind, arg = by
+            return (kind == 'all' or (kind == 'last' and arg == idx)
+                    or (kind == 'named' and name is not None and name in arg))
+        bare = any(ln > job['line'] and fn == job['func']
+                   and not any(job['line'] <= dl <= ln and dfn == fn and disowned(by)
+                               for dl, dfn, by in w.disowns)
+                   for ln, fn in bare_waits)
+        if bare or (name is not None and name in waited):
             continue
         if job['func'] is not None and w.func_waited.get(job['func']):
             continue
@@ -464,6 +492,17 @@ def walk_line(w, line, n, background):
                     w.pop()
                 if w.stack:
                     w.pop()
+            elif boundary and word == 'disown' and CMDPOS.search(line[:i]):
+                # `-a` or `-r` takes every job; no job named, or `$!`, the latest; a variable, the
+                # job kept in it (#2838).
+                args = stmt_rest(line[m.end():]).split()
+                if any(a.startswith('-') and ('a' in a or 'r' in a) for a in args):
+                    what = ('all', None)
+                elif not [a for a in args if not a.startswith('-')] or any('$!' in a for a in args):
+                    what = ('last', len(w.bg) - 1)
+                else:
+                    what = ('named', set(re.findall(r"\$\{?([A-Za-z_]\w*)", ' '.join(args))))
+                w.disowns.append((n, w.func_id, what))
             elif boundary and word == 'wait':
                 w.func_wait = True
                 if WAITPOS.search(line[:i]):
