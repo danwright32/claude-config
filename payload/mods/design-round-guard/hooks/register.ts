@@ -1450,7 +1450,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         unreadIn.set(tree, notes)
       }
     }
-    // A restore whose lines are measured may run first on its line rather than alone (#2777).
+    // A restore whose lines are measured may run beside commands that cannot change its source,
+    // rather than alone (#2777, #2830).
     if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null)
       notFirst = await restoreAlone($, String(input.command ?? ''), true, targets.flatMap(x => (x.from === undefined ? [] : [x.from])))
     if (modTs) {
