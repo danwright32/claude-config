@@ -3873,6 +3873,9 @@ for runs in "git fetch quiet && git checkout quiet/main && bash other.sh" "git c
   run_l "$runs"
   allowed "a branch fetched quiet, or one no fetch in the command touches, is read as it is held: $runs"
 done
+L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
+if [ "$L_AFTER" = "$L_BEFORE" ]; then check "every pull and fetch read leaves the repository's refs and files as they were" ok
+else check "every pull and fetch read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
 # A local branch with a slash in its name is not a remote's: after a fetch it is read as it is held.
 git -C "$L" branch local2844/posting origin/main >/dev/null 2>&1
 git -C "$T/u2844" push -q "$L" "main:refs/heads/local2844/posting" 2>/dev/null
