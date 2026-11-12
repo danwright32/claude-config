@@ -6,7 +6,7 @@ import { type Landing, assignLandings, draftHoldOf, draftLetGoOf, draftOwedFrom,
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
 // this file keeps, per session in $.state: the threads, the step a merge last landed at, each
-// thread's step of its last draft, and whether the session said its later merges are unrelated (#2653). register.ts calls markLanded when a merge lands and
+// thread's step of its last draft, and whether the session said its merges are unrelated (#2653). register.ts calls markLanded when a merge lands and
 // draftHold at its turn end, after the card's check has asked GitHub about the background merges.
 
 const threadsRef = { plugin: 'is-it-live', key: 'threads' } as const
@@ -196,7 +196,7 @@ export async function draftHold($: EngineInterface, e: { stop_hook_active?: bool
 }
 
 export function registerDrafts(on: On): void {
-  // #2653: the tool a session says its later merges are unrelated with (registered by
+  // #2653: the tool a session says its merges are unrelated with (registered by
   // registerUnrelated from register.ts's session.start, the one an event may have), answered here.
   on('tool.call', { tool: UNRELATED_TOOL }, async ($, e) => declareUnrelated($, e.agentId))
 

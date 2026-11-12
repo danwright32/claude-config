@@ -96,7 +96,7 @@ const unrelatedOf = (t: SlackThread, tool: string) =>
 
 /** Why a turn end is held, naming every thread owed a draft reply. A thread a card asked a draft of
  * its message for is owed that message, the one Dan was shown, never a second reply (#2630).
- * `unrelatedTool` is the tool a session calls to say its later merges are unrelated (#2653). */
+ * `unrelatedTool` is the tool a session calls to say its merges are unrelated (#2653, #2849). */
 export const draftHoldOf = (owed: Pasted[], unrelatedTool: string): string =>
   owed
     .map(t =>
