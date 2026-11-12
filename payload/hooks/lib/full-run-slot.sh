@@ -213,8 +213,8 @@ full_run_slot_take(){   # $1 = what this run is about (its checkout)
     fi
     # The line moved: the run holding the slot changed, or fewer runs are ahead of this one (one
     # finished, left or was passed over). A run joining behind is not movement (#2835). Judged by
-    # the queue's own turn_moved, the same answer the merge helper's time in line uses.
-    if turn_moved "$prev_head" "$prev_ahead"; then
+    # the queue's own turn_line_moved, the same answer the merge helper's time in line uses.
+    if turn_line_moved "$prev_head" "$prev_ahead"; then
       moved_at="$t"
     fi
     prev_head="$TURN_HEAD_TICKET"; prev_ahead="$TURN_AHEAD"
