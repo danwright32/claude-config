@@ -3668,25 +3668,25 @@ it cannot evaluate (refused, not passed, unless the module is also installed), a
 standard library or installed run with `python3 -m` (other than the runners below), an import path
 built at run time, a program run by bare name from the PATH (pytest apart), a file run through a
 variable or a substitution whose value it cannot work out, a build or git command inside a script on
-disk or a package script, and an endpoint assembled from pieces on purpose.
+disk or a package script, and an endpoint assembled from pieces on purpose. The threat it answers is
+a session that means well choosing the quickest way to post. It fails closed: a python that is
+missing or crashes, or a payload it cannot read that names a send route, is refused with the reason.
 
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,
-cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect, each
-with every local module it imports; and a file tsc or esbuild builds earlier in the same command, read
-as the source it is built from. A file a revert, a stash, a new linked worktree or a clone of a local
-repository writes is read as git holds it, a pull's as its fetch brings it (fetched into a scratch
-repository that borrows the repository's objects, so the repository itself is left as it was), and a
-clone of a remote makes files the gate cannot read, refused when the same command runs one, as a
-downloaded script is. The threat it answers is a session that means well choosing the quickest way to
-post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
-send route, is refused with the reason.
+cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect,
+each with every local module it imports; and a file tsc or esbuild builds earlier in the same
+command, read as the source it is built from. A file a revert, a stash, a new linked worktree or a
+clone of a local repository writes is read as git holds it, and a pull's as its fetch brings it
+(fetched into a scratch repository that borrows the repository's objects, so the repository itself
+is left as it was). A clone of a remote makes files the gate cannot read, refused when the same
+command runs one, as a downloaded script is.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
-names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same file,
-which before then passed only because the gate did not read what unittest runs. The suite runner
-(`run-all-tests.sh`, through `lib/skill-python-tests.py`) loads the file itself and is not affected.
-This is a known false positive, left for Dan to decide rather than exempted.
+names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
+file, which before then passed only because the gate did not read what unittest runs. The suite
+runner (`run-all-tests.sh`, through `lib/skill-python-tests.py`) loads the file itself and is not
+affected. This is a known false positive, left for Dan to decide rather than exempted.
 
 Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
 and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
