@@ -1092,7 +1092,7 @@ const SECRET_TS = [
   '}',
   '',
 ].join('\n')
-test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts hook file is asked about, though it draws nothing", () => {
+test("#1841, #2845: the wording of a toast, a refusal or a tool's result in a mod's .ts hook file is named as words, never asked about, as it draws nothing", () => {
   const edit = (from: string, to: string) => {
     const after = SECRET_TS.replace(from, to)
     if (after === SECRET_TS) throw new Error(`no ${from}`)
