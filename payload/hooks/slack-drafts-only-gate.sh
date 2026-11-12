@@ -68,6 +68,9 @@ RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
+# A program named by a variable or a substitution ("$RUN" x), whose path the rule judges for the
+# refusal that ships switched off (claude-config#2683). With it off the rule allows it, as before.
+RUNS+='|'"${START}"'([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(\\")?[$`]'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }

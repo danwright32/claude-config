@@ -72,6 +72,17 @@ sys.dont_write_bytecode = True
 HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ISSUE = "claude-config#2302"
 
+# Refusing a file run or sourced by a path the gate cannot work out (Judge.unworked_path), OFF until
+# Dan decides from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10:
+# "measure first", as #2538 does for sourcing). It only ever adds refusals, so the environment may
+# switch it on anywhere (SLACK_GATE_UNWORKED_PATHS=refuse, as the measurement and the suite do), and
+# nothing switches it off once this is True.
+REFUSE_UNWORKED_PATHS = False
+
+
+def unworked_paths_refused():
+    return REFUSE_UNWORKED_PATHS or os.environ.get("SLACK_GATE_UNWORKED_PATHS") == "refuse"
+
 # The endpoints and names that post: Slack's Web API methods that put a message in front of people,
 # an incoming webhook's host, and the variable name projects keep a webhook in.
 MARKER = re.compile(r"chat[._](postMessage|scheduleMessage|postEphemeral|meMessage)|hooks\.slack\.com|slack_webhook",
@@ -3433,6 +3444,9 @@ class Judge(WrittenPaths, ProgramWrites):
             # The positional parameters a `bash -c '...' _ a b` string's own commands see, while they
             # are being read (claude-config#2538): (the -c record's depth, its values), or None.
             pos = None
+            # The depth of the eval whose string's commands are being read, for unworked_path: what an
+            # eval runs is read as commands of their own, not as a program it names (#2683).
+            ev = None
             for d, text, wrapper, why, wdepth in self.sw.every_command(s, cwd):
                 if not wdepth:
                     self.shell["at"] = starts[k] if k < len(starts) else None
@@ -3440,6 +3454,9 @@ class Judge(WrittenPaths, ProgramWrites):
                 if pos and wdepth <= pos[0]:
                     pos = None  # past the string's commands
                 self.shell["positional"] = pos[1] if pos and wdepth == pos[0] + 1 else None
+                if ev is not None and wdepth <= ev:
+                    ev = None
+                self.shell["evaled"] = ev is not None and wdepth == ev + 1
                 # Whether this command's input is exactly what the command before it printed, for
                 # note_writes (claude-config#2721): True only where the text before it is that
                 # command, written whole, then a pipe. Anything else, a group, subshell, loop or if
@@ -3468,6 +3485,8 @@ class Judge(WrittenPaths, ProgramWrites):
                     self.shell["last_cmd"] = (at, text) if at is not None else None
                 if pos and wdepth == pos[0] + 1 and not self.sh_keeps_positional(text, d):
                     pos = (pos[0], [])  # shifted, set, or a sourced file that may do either
+                if wrapper.split()[:1] == ["eval"]:
+                    ev = wdepth
                 if wrapper.endswith(" -c") and wrapper.split()[0] in SHELLS:
                     values = self.sh_positional(text, d)
                     pos = (wdepth, values) if values is not None else None
@@ -3556,7 +3575,9 @@ class Judge(WrittenPaths, ProgramWrites):
             if reason:
                 return reason
             if operand and operand != "-":
-                return None  # read above with every other word naming a file
+                # Read above with every other word naming a file; one whose path cannot be worked
+                # out is unread, and refused with the switch on (claude-config#2683).
+                return self.unworked_path(text, "operand", d, "runs")
             fed, is_body = self.fed(text, whole)
             if is_body and depth < MAX_DEPTH:
                 try:
@@ -3608,7 +3629,8 @@ class Judge(WrittenPaths, ProgramWrites):
                 if reason:
                     return reason
             if operand and operand != "-":
-                return None  # read above with every other word naming a file
+                # Read above, or unread where its path cannot be worked out (claude-config#2683).
+                return self.unworked_path(text, "operand", d, "runs")
             if stdin:
                 fed = self.fed(text, whole)[0]
                 hit = MARKER.search(fed)
@@ -3629,7 +3651,11 @@ class Judge(WrittenPaths, ProgramWrites):
             if bad:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
-                return self.script(words[1], d, depth, True) if raw and not re.search(r"[$`]", raw) else None
+                # One built from what cannot be worked out is unread, and refused with the switch on
+                # (claude-config#2683).
+                if raw and not re.search(r"[$`]", raw):
+                    return self.script(words[1], d, depth, True)
+                return self.unworked_path(text, 1, d, "sources")
             return self.script(v, d, depth, True) if v is not None else None
         if "/" in words[0]:
             if hit:
@@ -3647,10 +3673,78 @@ class Judge(WrittenPaths, ProgramWrites):
                 first = ""
             shell = path.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
             if not (shell or first.startswith("#!")):
-                return self.script(words[0], d, depth, False)
+                # Nothing there, or no script: a path it cannot work out is refused with the switch on.
+                return self.script(words[0], d, depth, False) or self.unworked_path(text, 0, d, "runs")
             lang = "js" if JS_BANG.match(first) else "py" if PY_BANG.match(first) else None
-            return self.every_file([words[0]] + words, d, depth, shell, lang)
-        return None
+            return self.every_file([words[0]] + words, d, depth, shell, lang) or self.unworked_path(text, 0, d, "runs")
+        # A program named by a variable alone (`"$RUN" x`) is a file run by a path too (#2683); the
+        # string an eval runs is not a program it names, so it is left as before.
+        return None if self.shell.get("evaled") else self.unworked_path(text, 0, d, "runs")
+
+    def unworked_path(self, text, slot, d, verb):
+        """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
+        sourced (verb) by a path the gate cannot work out: the word in slot of the command as written
+        ("operand", the program's script by its option table; or a position), where it is built from a
+        variable or a substitution whose value is not certain. That file is never read, so one that
+        posts could hide behind it. None with the switch off, for a word with no variable or
+        substitution in it (read as written, as before), and for one whose value is worked out. Says
+        which path, in which script and on which line, and what the gate could not follow, so whoever
+        wrote the script can tell which line to make plain (the wording #2538's measurement used for a
+        sourced path)."""
+        if not unworked_paths_refused():
+            return None
+        words = self.raw_words(text)
+        if slot == "operand":
+            raw = self.operands(words)[0] if words else None
+        else:
+            raw = words[slot] if slot < len(words) else None
+        if not raw or raw == "-" or not re.search(r"[$`]", raw):
+            return None
+        ctx = self.shell
+        v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, ctx["script"], False)
+        if v is not None and not splits:
+            return None
+        at = ctx["at"]
+        where = f"the script {ctx['script']}" if ctx["script"] else "this command"
+        if at is not None and ctx["script"]:
+            where += f", line {ctx['text'].count(chr(10), 0, at) + 1},"
+        names = [a or b for a, b in SH_PARAM.findall(raw)]
+        unknown = sorted({n for n in (re.split(r"[^A-Za-z0-9_]", n)[0] for n in names)
+                          if n and n != "BASH_SOURCE" and self.sh_source_var(n) is None})
+        if re.search(r"\$\(|`", raw):
+            why = "it is built from a command's output"
+        elif unknown:
+            why = ", ".join("$" + n for n in unknown) + (" is" if len(unknown) == 1 else " are") + " not certain there"
+        elif self.sh_cwd(d) == SH_UNKNOWN_DIR:
+            why = "the directory it runs in is not certain"
+        else:
+            why = None
+        known = self.sh_ctx_known() if at is not None else None
+        if why and known and at >= known["top"] and known["top"] < len(ctx["text"]):
+            n = ctx["text"].count("\n", 0, known["top"]) + 1
+            line = ctx["text"][ctx["text"].rfind("\n", 0, known["top"]) + 1:].split("\n", 1)[0].strip()[:120]
+            why += f", since the gate stops following the script's variables at line {n}: {line}"
+        why = f" ({why})" if why else ""
+        # Through unfollow, so main() says the check could not be made rather than claiming a post (L11).
+        return self.unfollow(f"{where} {verb} {raw}, a path the gate cannot work out{why}, so the file it "
+                             "names cannot be read. Write the path so it can be worked out: a literal path, "
+                             "or one built from variables the script sets plainly before it")
+
+    def raw_words(self, text):
+        """One command's words as written, quotes and expansions kept, lined up with the words judge()
+        reads: past any reserved word, and past a launcher and its options as judge() steps past them
+        (claude-config#2683). A redirection is kept as a word of its own, as operands() expects."""
+        rest = self.sw.join_continuations(self.sw.command_rest(text)[0])
+        words = [t for kind, t in self.sh_tokens(rest) if kind == "word" or SH_REDIRECT.fullmatch(t)]
+        while words and words[0] in self.sw.RESERVED:
+            words = words[1:]
+        name = os.path.basename(words[0]) if words else ""
+        if name in LAUNCHERS or (name == "uv" and len(words) > 1 and words[1] == "run"):
+            k = 2 if name == "uv" else 1
+            while k < len(words) and words[k].startswith("-"):
+                k += 1
+            words = words[k:]
+        return words
 
     def every_file(self, words, d, depth, shell_hint, lang=None, inline=None):
         """The reason any word after the program that names a file posts, or None.
