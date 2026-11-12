@@ -8,6 +8,8 @@ import { APPROVE, CHANGE, SOURCE, UNWIRED, fixedParts } from './rules.ts'
 // that wrote it: the edit goes ahead and the choice is kept in the guard's store, apart from Dan's
 // approvals, by the message as Slack would post it. A choice is never an approval:
 //   1. no pull request carrying chosen wording may merge until Dan approves it, so nothing posts it;
+//      a choice holds pull requests only in the repositories it was made in or let wording through
+//      in (#2833), and one whose repository cannot be read holds them in every repository;
 //   2. it lets wording through only while sleep mode is on, so a day session asks him as before;
 //   3. in the morning the session that chose it puts it to him in the guard's own picker, and only
 //      his Approve wording there records an approval; Change wording, a dialog closed by itself, or
