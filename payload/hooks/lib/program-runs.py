@@ -617,7 +617,7 @@ def make():
                 stems = [os.path.dirname(s) for o, s in entries if o is None]
                 outbase = os.path.commonpath(stems) if len(stems) > 1 else (stems[0] if stems else outdir)
             return {"entries": entries, "outfile": self.resolve(opts["--outfile"], d) if isinstance(opts.get("--outfile"), str) else None,
-                    "outdir": outdir, "outbase": outbase, "names": "--entry-names" in opts}
+                    "outdir": outdir, "outbase": outbase, "names": "--entry-names" in opts or "--entry-naming" in opts}
 
         def built_from(self, path):
             """[(the source, the compiler as a refusal names it, the program the command ran)] that a

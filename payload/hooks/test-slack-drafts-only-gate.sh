@@ -3708,7 +3708,8 @@ says "the refusal names the source the compiler builds from" "src/main.ts"
 for runs in "esbuild esrc/post.ts --bundle --outfile=out.js && node out.js" \
   "npx esbuild esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outfile out.js && node out.js" \
   "bun build esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outdir bout && node bout/post.js" \
-  "bun build --compile esrc/post.ts --outfile app2844 && ./app2844" "bun build src/main.ts --outdir bout && node bout/main.js"; do
+  "bun build --compile esrc/post.ts --outfile app2844 && ./app2844" "bun build src/main.ts --outdir bout && node bout/main.js" \
+  "bun build esrc/post.ts --outdir bout --entry-naming '[name]-x.[ext]' && node bout/post-x.js"; do
   run_c "$runs"
   read_refused "a file esbuild or bun builds from a source that posts, and the command runs, is read as that source: $runs"
 done
