@@ -34,6 +34,19 @@
 # whoever removed it says so. Liveness is judged dead only on that positive evidence: a pid that
 # cannot be read either way is taken as alive, and the bound below ends it.
 #
+# ONE FORM OF A START TIME (claude-config#2828). ps prints a start time in the time zone and language
+# of the process READING it, so a run started under TZ=UTC0 (or another locale) and read by a run in
+# the Mac's own zone looked like a reused pid: its ticket was removed and it lost its place. A ticket
+# this version writes for a run whose start it read itself also carries "startc", the start read in
+# the C locale and UTC0, which every reader reads the same way, and a ticket carrying it is judged by
+# it. A ticket without it (an older helper's, or one whose start the caller named) is judged by
+# "start" as before, so an older helper reading a new ticket sees nothing it does not know.
+#
+# TAKING A PLACE BACK (claude-config#2828). A run that finds its ticket gone while it was only
+# waiting can take the same number back (turn_retake): numbers are never handed out twice, so the
+# number is still free and still sits where the run arrived, and every reader, old or new, puts it
+# back in that order. Joining again at the back put every run that arrived after it ahead of it.
+#
 # A BOUND ON HOLDING IT (L523). A live run can still be stuck (its checks never finish, a laptop
 # asleep), so the moment a ticket first holds the turn is marked (<n>.head, made once with ln by
 # whichever run first sees it hold, so every run agrees), and a run that is WAITING passes over a
@@ -59,12 +72,18 @@
 #                               line can tell the line moving from it standing still, #1697),
 #                               TURN_OVERTOOK (live tickets that joined before this one and are
 #                               now behind it, because it joined at the front, #2474)
+#   turn_retake <pr> <joined>   takes this run's own number (TURN_TICKET) back after another run
+#                               removed it, keeping when it first joined; returns 1 with TURN_ERR
+#                               when that place is taken or the run never had one
 #   turn_leave                  gives up this run's place
 #
 # TURN_PID and TURN_PID_START name the run (this shell and its start time by default).
 
 TURN_PID="${TURN_PID:-$$}"
 TURN_PID_START="${TURN_PID_START:-}"
+# The fixed form of this run's start, and the "<pid> <start>" it was read with: written only for
+# that same pid and start, so a start the caller names is never paired with one read elsewhere.
+TURN_PID_STARTC=""; TURN__STARTC_OF=""
 TURN_TICKET=""; TURN_REPO_DIR=""; TURN_ERR=""
 
 # Every reader here runs in the shell's own builtins, never a sed, cat or grep per field (claude-config
@@ -72,9 +91,10 @@ TURN_TICKET=""; TURN_REPO_DIR=""; TURN_ERR=""
 # 150 programs a look, at every look of every helper waiting in it.
 # turn__trim <text>: the text without its leading and trailing spaces, as sed 's/^ *//;s/ *$//' gave.
 turn__trim(){ local s="$1"; s="${s#"${s%%[! ]*}"}"; s="${s%"${s##*[! ]}"}"; printf '%s' "$s"; }
-turn_proc_start(){
+turn_proc_start(){   # $1 = pid [$2 = c: in the fixed form, the C locale and UTC0]
   local s
-  s="$(ps -o lstart= -p "$1" 2>/dev/null)"
+  if [ "${2:-}" = c ]; then s="$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null)"
+  else s="$(ps -o lstart= -p "$1" 2>/dev/null)"; fi
   case "$s" in
     *$'\n'*) printf '%s\n' "$s" | sed -e 's/^ *//' -e 's/ *$//' ;;
     *) turn__trim "$s" ;;
@@ -112,47 +132,63 @@ turn__first_line(){
 }
 
 # The start times of a look's runs, read with ONE ps for all of them (claude-config#2694) rather than
-# one each. turn__batch <pid>...: sets TURN__STARTS ("<pid> <start>" lines) and TURN__BATCHED (the
-# pids asked). A ps that fails (it refuses the whole list over one pid it calls too large, and says
-# nothing for it) leaves nothing batched, so every pid is read alone as before. A pid the list
-# answered without is not running, which its own read would have found too. turn__unbatch ends it.
-TURN__STARTS=""; TURN__BATCHED=""
+# one each. turn__batch [c] <pid>...: sets TURN__STARTS ("<pid> <start>" lines) and TURN__BATCHED
+# (the pids asked), or with c, TURN__STARTCS and TURN__BATCHEDC in the fixed form (#2828), so a look
+# whose tickets all carry the fixed form still starts one ps. A ps that fails (it refuses the whole
+# list over one pid it calls too large, and says nothing for it) leaves nothing batched, so every pid
+# is read alone as before. A pid the list answered without is not running, which its own read would
+# have found too. turn__unbatch ends both.
+TURN__STARTS=""; TURN__BATCHED=""; TURN__STARTCS=""; TURN__BATCHEDC=""
 turn__batch(){
-  local list="" p out l pid
-  TURN__STARTS=""; TURN__BATCHED=""
+  local list="" p out l pid canon="" batched="" starts=""
+  if [ "${1:-}" = c ]; then canon=1; shift; fi
   for p in "$@"; do
     case "$p" in ''|*[!0-9]*) continue ;; esac
-    case " $TURN__BATCHED " in *" $p "*) continue ;; esac
-    TURN__BATCHED="$TURN__BATCHED $p"; list="$list${list:+,}$p"
+    case " $batched " in *" $p "*) continue ;; esac
+    batched="$batched $p"; list="$list${list:+,}$p"
   done
-  [ -n "$list" ] || return 0
-  if ! out="$(ps -o pid=,lstart= -p "$list" 2>/dev/null)"; then TURN__BATCHED=""; return 0; fi
-  while IFS= read -r l; do
-    l="$(turn__trim "$l")"; pid="${l%% *}"
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    TURN__STARTS="$TURN__STARTS$pid $(turn__trim "${l#"$pid"}")"$'\n'
-  done <<<"$out"
+  if [ -n "$list" ]; then
+    if [ -n "$canon" ]; then out="$(LC_ALL=C TZ=UTC0 ps -o pid=,lstart= -p "$list" 2>/dev/null)" || batched=""
+    else out="$(ps -o pid=,lstart= -p "$list" 2>/dev/null)" || batched=""; fi
+    if [ -n "$batched" ]; then
+      while IFS= read -r l; do
+        l="$(turn__trim "$l")"; pid="${l%% *}"
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        starts="$starts$pid $(turn__trim "${l#"$pid"}")"$'\n'
+      done <<<"$out"
+    fi
+  fi
+  if [ -n "$canon" ]; then TURN__STARTCS="$starts"; TURN__BATCHEDC="$batched"
+  else TURN__STARTS="$starts"; TURN__BATCHED="$batched"; fi
 }
-turn__unbatch(){ TURN__STARTS=""; TURN__BATCHED=""; }
-# turn__start <pid>: prints its start time, from the batch when it was asked there.
+turn__unbatch(){ TURN__STARTS=""; TURN__BATCHED=""; TURN__STARTCS=""; TURN__BATCHEDC=""; }
+# turn__start <pid> [c]: prints its start time, from the batch when it was asked there.
 turn__start(){
-  local l
-  case " $TURN__BATCHED " in
+  local l asked starts
+  if [ "${2:-}" = c ]; then asked="$TURN__BATCHEDC"; starts="$TURN__STARTCS"
+  else asked="$TURN__BATCHED"; starts="$TURN__STARTS"; fi
+  case " $asked " in
     *" $1 "*)
       while IFS= read -r l; do
         [ "${l%% *}" = "$1" ] && { printf '%s' "${l#* }"; return 0; }
-      done <<<"$TURN__STARTS"
+      done <<<"$starts"
       return 0 ;;
   esac
-  turn_proc_start "$1"
+  turn_proc_start "$1" "${2:-}"
 }
 
 # Dead only on evidence: the system says no such process, or the pid runs with another start time.
-turn_alive(){   # $1 = pid, $2 = the start time recorded for it
+# Judged by the fixed form when the ticket carries one (#2828), else by the start as it was written.
+turn_alive(){   # $1 = pid, $2 = the start time recorded for it [$3 = its start in the fixed form]
   local out st
   case "$1" in ''|*[!0-9]*) return 1 ;; esac
   if ! out="$(kill -0 "$1" 2>&1)"; then
     case "$out" in *"o such process"*) return 1 ;; esac
+  fi
+  if [ -n "${3:-}" ]; then
+    st="$(turn__start "$1" c)"
+    [ -z "$st" ] || [ "$st" = "$3" ] || return 1
+    return 0
   fi
   st="$(turn__start "$1")"
   [ -z "$st" ] || [ -z "$2" ] || [ "$st" = "$2" ] || return 1
@@ -192,6 +228,27 @@ turn_tickets(){   # the ticket numbers in the repository's folder, lowest first
   for b in $rest; do printf '%s\n' "$b"; done
 }
 
+# turn__ticket <pr> <joined> <front line or nothing>: writes this run's ticket to a private file,
+# TURN__TMP, complete before it is linked into the line, or returns 1 with TURN_ERR.
+turn__ticket(){
+  local startc=""
+  if ! mkdir -p "$TURN_REPO_DIR" 2>/dev/null || [ ! -d "$TURN_REPO_DIR" ]; then
+    TURN_ERR="could not make $TURN_REPO_DIR"; return 1
+  fi
+  if [ -z "$TURN_PID_START" ]; then
+    TURN_PID_START="$(turn_proc_start "$TURN_PID")"
+    TURN_PID_STARTC="$(turn_proc_start "$TURN_PID" c)"; TURN__STARTC_OF="$TURN_PID $TURN_PID_START"
+  fi
+  [ "$TURN__STARTC_OF" = "$TURN_PID $TURN_PID_START" ] && [ -n "$TURN_PID_STARTC" ] && startc="startc $TURN_PID_STARTC"$'\n'
+  TURN__TMP="$TURN_REPO_DIR/.join.$TURN_PID.$RANDOM"
+  # "order 2": this run reads the line with its front (see turn_order), so a run at the front may
+  # go ahead of it; a ticket without it is an older helper's, which reads the line in number order.
+  if ! printf 'pr %s\npid %s\nstart %s\n%sjoined %s\norder 2\n%s' "$1" "$TURN_PID" "$TURN_PID_START" "$startc" "$2" "$3" > "$TURN__TMP" 2>/dev/null; then
+    rm -f "$TURN__TMP"; TURN_ERR="could not write in $TURN_REPO_DIR"; return 1
+  fi
+  return 0
+}
+
 turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front, or nothing
   local tmp n hw max tries=0 front=""
   TURN_ERR=""; TURN_TICKET=""
@@ -200,16 +257,8 @@ turn_join(){   # $1 = pull request, $2 = now, $3 = "first" to join at the front,
     first) front=$'first 1\n' ;;
     *) TURN_ERR="'$3' is not a way to join the line (only first, or nothing)"; return 1 ;;
   esac
-  if ! mkdir -p "$TURN_REPO_DIR" 2>/dev/null || [ ! -d "$TURN_REPO_DIR" ]; then
-    TURN_ERR="could not make $TURN_REPO_DIR"; return 1
-  fi
-  [ -n "$TURN_PID_START" ] || TURN_PID_START="$(turn_proc_start "$TURN_PID")"
-  tmp="$TURN_REPO_DIR/.join.$TURN_PID.$RANDOM"
-  # "order 2": this run reads the line with its front (see turn_order), so a run at the front may
-  # go ahead of it; a ticket without it is an older helper's, which reads the line in number order.
-  if ! printf 'pr %s\npid %s\nstart %s\njoined %s\norder 2\n%s' "$1" "$TURN_PID" "$TURN_PID_START" "$2" "$front" > "$tmp" 2>/dev/null; then
-    rm -f "$tmp"; TURN_ERR="could not write in $TURN_REPO_DIR"; return 1
-  fi
+  turn__ticket "$1" "$2" "$front" || return 1
+  tmp="$TURN__TMP"
   hw="$(cat "$TURN_REPO_DIR/seq" 2>/dev/null)"; case "$hw" in ''|*[!0-9]*) hw=0 ;; esac
   max="$(turn_tickets | tail -1)"; max="${max:-0}"
   [ "$max" -ge "$hw" ] || max="$hw"
@@ -287,19 +336,28 @@ turn_tell(){   # $1 = what about (a key), $2 = the line
 }
 
 turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
-  local now="$1" bound="$2" n f pid start pr fv seen_own="" head="" order pids
+  local now="$1" bound="$2" n f pid start startc pr fv seen_own="" head="" order pids cpids
   TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_HEAD_TICKET=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""; TURN_OVERTOOK=0
   order="$(turn_order)"
-  # Every other run's start time in one ps, read before the loop (claude-config#2694).
-  pids=""
-  for n in $order; do [ "$n" = "$TURN_TICKET" ] || pids="$pids $(turn_field "$TURN_REPO_DIR/$n" pid)"; done
+  # Every other run's start time in one ps, read before the loop (claude-config#2694): one for the
+  # tickets carrying the fixed form (#2828), and one more only while an older ticket is in line.
+  pids=""; cpids=""
+  for n in $order; do
+    [ "$n" = "$TURN_TICKET" ] && continue
+    f="$TURN_REPO_DIR/$n"
+    if [ -n "$(turn_field "$f" startc)" ]; then cpids="$cpids $(turn_field "$f" pid)"
+    else pids="$pids $(turn_field "$f" pid)"; fi
+  done
   # shellcheck disable=SC2086
   turn__batch $pids
+  # shellcheck disable=SC2086
+  turn__batch c $cpids
   for n in $order; do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
-    pid="$(turn_field "$f" pid)"; start="$(turn_field "$f" start)"; pr="$(turn_field "$f" pr)"; fv="$(turn_field "$f" first)"
-    if [ "$n" != "$TURN_TICKET" ] && ! turn_alive "$pid" "$start"; then
+    pid="$(turn_field "$f" pid)"; start="$(turn_field "$f" start)"; startc="$(turn_field "$f" startc)"
+    pr="$(turn_field "$f" pr)"; fv="$(turn_field "$f" first)"
+    if [ "$n" != "$TURN_TICKET" ] && ! turn_alive "$pid" "$start" "$startc"; then
       rm -f "$f" "$f.head"
       TURN_SAID="${TURN_SAID}#${pr:-?}'s place in line was passed over: its run (pid $pid) is no longer running."$'\n'
       continue
@@ -335,6 +393,20 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
   TURN_SAID="${TURN_SAID%$'\n'}"
   if [ -n "$TURN_TICKET" ] && [ -z "$seen_own" ]; then TURN_GONE=1; return 0; fi
   [ -n "$TURN_TICKET" ] && [ "$head" = "$TURN_TICKET" ] && TURN_MINE=1
+  return 0
+}
+
+# Takes this run's own number back after another run removed its ticket (#2828). ln fails when the
+# name exists, so a place another ticket now holds is never taken over.
+turn_retake(){   # $1 = pull request, $2 = when this run first joined
+  local n="$TURN_TICKET"
+  TURN_ERR=""
+  case "$n" in ''|*[!0-9]*) TURN_ERR="this run has no place in line to take back"; return 1 ;; esac
+  turn__ticket "$1" "$2" "" || return 1
+  if ! ln "$TURN__TMP" "$TURN_REPO_DIR/$n" 2>/dev/null; then
+    rm -f "$TURN__TMP"; TURN_ERR="place $n in $TURN_REPO_DIR is taken"; return 1
+  fi
+  rm -f "$TURN__TMP"
   return 0
 }
 

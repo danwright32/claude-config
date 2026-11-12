@@ -383,6 +383,79 @@ check "#2474 it is said that the mark was ignored" "#5's place at the front of t
 turn_look 1010 3600
 check_eq "#2474 and said once, not at every look" "" "$TURN_SAID"
 
+# =================================================================================================
+# 11. A live run is judged alive whatever time zone wrote or reads its ticket (claude-config#2828).
+#     ps prints a start time in the reading process's time zone and language, so a run started
+#     under TZ=UTC0 and read under another zone looked like a reused pid: its ticket was removed and
+#     it lost its place in line. Each ticket now also carries its start in one fixed form (startc),
+#     read the same way by every reader. Asia/Tokyo and UTC0 differ on every host, CI included.
+# =================================================================================================
+trim_ps(){ sed -e 's/^ *//' -e 's/ *$//'; }
+# The fault the fixture must be able to see (L1): a ticket with only the zone dependent start, as a
+# helper before this version writes, is judged dead by a reader in another zone.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$(TZ=UTC0 ps -o lstart= -p "$LIVE" | trim_ps)" >/dev/null
+said="$( export TZ=Asia/Tokyo; TURN_TICKET=""; turn_open acme/widget; turn_look 1000 3600; printf '%s' "$TURN_SAID" )"
+check "#2828 (control) an old ticket written in UTC0 and read in Tokyo is judged dead" "no longer running" "$said"
+# The fix: a ticket this version writes for a run it reads itself carries the fixed form, and a
+# reader in another zone finds the run alive and leaves its place alone.
+reset
+( export TZ=UTC0; TURN_PID="$LIVE"; TURN_PID_START=""; turn_open acme/widget && turn_join 9 900 ) >/dev/null
+check "#2828 a ticket says when its run started in the fixed form" "startc " "$(cat "$MWR_TURN_DIR/acme/widget/1")"
+said="$( export TZ=Asia/Tokyo; TURN_TICKET=""; turn_open acme/widget; turn_look 1000 3600; printf '%s|%s' "$TURN_SAID" "$TURN_HEAD_PR" )"
+check_eq "#2828 a live run written in UTC0 and read in Tokyo keeps the turn, and nothing is said" "|9" "$said"
+check_eq "#2828 and its ticket is still there" "1" "$(ls "$MWR_TURN_DIR/acme/widget" | grep -cxE '1')"
+# A reused pid is still caught through the fixed form: the same live pid with another start.
+reset
+( TURN_PID="$LIVE"; TURN_PID_START=""; turn_open acme/widget && turn_join 9 900 ) >/dev/null
+sed -e 's/^startc .*/startc Thu Jan  1 00:00:00 1970/' "$MWR_TURN_DIR/acme/widget/1" > "$WORKDIR/t1" && mv "$WORKDIR/t1" "$MWR_TURN_DIR/acme/widget/1"
+turn_open acme/widget; turn_join 7 1000
+turn_look 1000 3600
+check_eq "#2828 a live pid whose fixed form start differs is not its holder" "1" "$TURN_MINE"
+check "#2828 and is said as no longer running" "no longer running" "$TURN_SAID"
+# A start given by the caller is not paired with a fixed form read from the pid: tests and helpers
+# that name a start (a reused pid among them) are judged by that start alone, as before.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null
+check_not "#2828 a ticket whose start the caller named carries no fixed form of its own" "startc " "$(cat "$MWR_TURN_DIR/acme/widget/1")"
+
+# =================================================================================================
+# 12. A run whose place was removed while it waited takes the same place back (claude-config#2828),
+#     so it is still served in the order it arrived. Joining again at the back put every run that
+#     arrived after it ahead of it.
+# =================================================================================================
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null           # 1, holding
+observer_looks 900 >/dev/null
+turn_open acme/widget; turn_join 7 1000                                  # 2, this run
+other_joins acme/widget 5 1001 "$LIVE" "$LIVE_START" >/dev/null          # 3, arrived after it
+rm -f "$MWR_TURN_DIR/acme/widget/2"
+turn_look 1002 3600
+check_eq "#2828 fixture: a run whose ticket was removed finds it gone" "1" "$TURN_GONE"
+turn_retake 7 1000; rc=$?
+check_eq "#2828 the run takes its place back" "0" "$rc"
+check_eq "#2828 under the same number it arrived with" "2" "$TURN_TICKET"
+check "#2828 the place keeps when the run first joined" "joined 1000" "$(cat "$MWR_TURN_DIR/acme/widget/2")"
+turn_look 1003 3600
+check_eq "#2828 back in its place, only the holder is ahead of it" "1|" "$TURN_AHEAD|$TURN_GONE"
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1004 3600
+check_eq "#2828 when the holder leaves, the turn is this run's, not the run that arrived after it" "1" "$TURN_MINE"
+# Failure paths: a place somebody else now holds is never taken over, and a run that never had a
+# place has none to take back. Each says why.
+reset
+turn_open acme/widget; turn_join 7 1000
+rm -f "$MWR_TURN_DIR/acme/widget/1"
+printf 'pr 4\npid %s\nstart %s\njoined 1001\norder 2\n' "$LIVE" "$LIVE_START" > "$MWR_TURN_DIR/acme/widget/1"
+turn_retake 7 1000; rc=$?
+check_eq "#2828 a place now holding another run's ticket is not taken back" "1" "$rc"
+check "#2828 and the refusal says the place is taken" "is taken" "$TURN_ERR"
+check "#2828 and the other run's ticket is untouched" "pr 4" "$(cat "$MWR_TURN_DIR/acme/widget/1")"
+TURN_TICKET=""
+turn_retake 7 1000; rc=$?
+check_eq "#2828 a run that never had a place has none to take back" "1" "$rc"
+check "#2828 and says so" "no place in line" "$TURN_ERR"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
