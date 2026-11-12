@@ -1316,8 +1316,8 @@ export const agentRefusal = (id: string, file: string, added: string[], removed:
 
 /**
  * An edit the guard could not trace (#2709): the trace stopped at one of its limits, which it meets
- * the same way on every try, so trying again can never get it through. What it changes, line by
- * line, and why the guard stopped.
+ * the same way on every try, or its search ran out of time (#2796), which on a busy Mac it does on
+ * every try. What it changes, line by line, and why the guard stopped.
  */
 export const untracedText = (file: string, added: string[], removed: string[], why: string): string => {
   const parts = [...(added.length ? [`adds ${listed(added)}`] : []), ...(removed.length ? [`takes away ${listed(removed)}`] : [])]
