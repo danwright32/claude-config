@@ -140,9 +140,20 @@ check "with no env file, psql is never started and the refusal names the missing
 # run there and the session fell through to handing Dan SQL. The linked path needs no secret in the
 # command at all, so it must come first, must not read an env file, and, because it reports no row
 # count for a write, must be paired with a guard block that rolls back on a wrong count.
-linked_line="$(grep -m 1 -F 'supabase db query --linked --yes -f' <<< "$CODE")"
+# Since #2763 the check and the change are two Bash calls: the change alone in its command is what
+# db-write-ask.sh lets through on Dan's Apply, so it is run only after the check exits 0. linked_line
+# is the two as the skill says to run them.
+change_line="$(grep -m 1 -F 'supabase db query --linked --yes -f' <<< "$CODE")"
+check_line="$(grep -m 1 -F 'db query --linked --file /dev/null --help' <<< "$CODE")"
 check "there is a supabase db query --linked --yes -f command to test" \
-  "$([ -n "$linked_line" ] && echo ok || echo "no linked db query command in a block")"
+  "$([ -n "$change_line" ] && echo ok || echo "no linked db query command in a block")"
+check "there is a check of the CLI before it, in a block of its own" \
+  "$([ -n "$check_line" ] && [ "$check_line" != "$change_line" ] && echo ok || echo "check line: ${check_line:-none}")"
+check "the change command stands alone, so an Apply can cover it (#2763)" \
+  "$([ "$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<< "$change_line")" = "supabase db query --linked --yes -f change.sql" ] && echo ok || echo "the change line is: $change_line")"
+check "the check sends no change" \
+  "$(grep -qE -- '--yes|change\.sql' <<< "$check_line" && echo "the check line is: $check_line" || echo ok)"
+linked_line="$check_line && $change_line"
 first_linked="$(grep -m 1 -n -F 'supabase db query --linked --yes -f' "$SKILL" | cut -d: -f1)"
 psql_cmd_at="$(grep -m 1 -n -E 'psql "\$url"' "$SKILL" | cut -d: -f1)"
 check "the linked path is offered before the psql command" \

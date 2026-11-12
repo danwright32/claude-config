@@ -18,6 +18,10 @@ const BEFORE = '2026-10-08T01:00:00Z'
 const HOME = `${'/Users'}/x`
 const ok = (stdout: string): Ran => ({ exitCode: 0, stdout, stderr: '' })
 const fail = (stderr: string): Ran => ({ exitCode: 1, stdout: '', stderr })
+// The night's workflow runs in a repository, as GitHub's REST API lists them (#2766): created since
+// sleep began, with how each was started and how it ended.
+const RUNS = (repo: string) => `gh api repos/${repo}/actions/runs?per_page=100&created=>=2026-10-08T03:00:00Z`
+const runs = (list: object[], total = list.length): Ran => ok(JSON.stringify({ total_count: total, workflow_runs: list }))
 
 type World = Record<string, Ran>
 const QUIET: World = {
@@ -29,8 +33,8 @@ const QUIET: World = {
   [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok('1700000000000'),
   'gh api repos/o/r/milestones?state=all&per_page=100': ok('[]'),
   'gh api repos/o/claude-config/milestones?state=all&per_page=100': ok('[]'),
-  'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok('[]'),
-  'gh run list -R o/claude-config --json workflowName,event,createdAt,url --limit 100': ok('[]'),
+  [RUNS('o/r')]: runs([]),
+  [RUNS('o/claude-config')]: runs([]),
 }
 // What $.fs.stat says of a path, from the world: its last change, or a rejection with the reason, as
 // the engine rejects (measured 2026-11-01: "<mod>: $.fs.stat(<path>) failed: ENOENT").
@@ -66,7 +70,7 @@ describe('the wake check', () => {
     expect(r.unmeasured).toEqual([])
     // Every repository with an event overnight, and the config repository, is read.
     expect(r.asked).toContain('gh api repos/o/r/milestones?state=all&per_page=100')
-    expect(r.asked).toContain('gh run list -R o/claude-config --json workflowName,event,createdAt,url --limit 100')
+    expect(r.asked).toContain(RUNS('o/claude-config'))
   })
   test('issues created, milestones touched, LESSONS.md changed and deploy runs are each found', async () => {
     const r = await check({
@@ -81,15 +85,15 @@ describe('the wake check', () => {
       'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 4, title: 'New one', updated_at: AFTER }, { number: 3, title: 'Old one', updated_at: BEFORE }])),
       'gh api repos/o/r/issues/events?per_page=100&page=1': ok('[]'),
       'gh api repos/o/s/milestones?state=all&per_page=100': ok('[]'),
-      'gh run list -R o/s --json workflowName,event,createdAt,url --limit 100': ok('[]'),
+      [RUNS('o/s')]: runs([]),
       'gh api repos/o/claude-config/commits?path=payload/LESSONS.md&since=2026-10-08T03:00:00Z': ok(JSON.stringify([{ sha: 'abcdef1234', commit: { message: 'Add L999\n\nbody' } }])),
       [`mtime ${'/Users'}/x/.claude/LESSONS.md`]: ok(String(SINCE + 60_000)),
-      'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify([
-        { workflowName: 'Deploy', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/1' },
-        { workflowName: 'CI', event: 'push', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/2' },
-        { workflowName: 'Nightly', event: 'workflow_dispatch', createdAt: AFTER, url: 'https://github.com/o/r/actions/runs/3' },
-        { workflowName: 'Deploy', event: 'push', createdAt: BEFORE, url: 'https://github.com/o/r/actions/runs/0' },
-      ])),
+      [RUNS('o/r')]: runs([
+        { name: 'Deploy', event: 'push', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/1' },
+        { name: 'CI', event: 'push', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/2' },
+        { name: 'Nightly', event: 'workflow_dispatch', created_at: AFTER, html_url: 'https://github.com/o/r/actions/runs/3' },
+        { name: 'Deploy', event: 'push', created_at: BEFORE, html_url: 'https://github.com/o/r/actions/runs/0' },
+      ]),
     })
     expect(r.unmeasured).toEqual([])
     expect(r.hits).toEqual([
@@ -105,12 +109,12 @@ describe('the wake check', () => {
   test('a read that fails is said as not checked, never as nothing found (L460)', async () => {
     const r = await check({
       [`gh search issues --author @me --created >=2026-10-08T03:00:00Z --json repository,number,title,url --limit 100`]: fail('HTTP 403: rate limited'),
-      'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok('<html>'),
+      [RUNS('o/r')]: ok('<html>'),
     })
     expect(r.hits).toEqual([])
     expect(r.unmeasured).toEqual([
       'issues created overnight were not checked (gh search issues: HTTP 403: rate limited)',
-      'deploy runs in o/r were not checked (gh run list: the answer was not JSON)',
+      'deploy runs in o/r were not checked (gh api: the answer was not JSON)',
     ])
   })
   // #2016: the installed LESSONS.md is read through $.fs.stat, never BSD's stat -f, which on Linux
@@ -133,7 +137,7 @@ describe('the wake check', () => {
   test('a time GitHub did not give, or gave unreadable, is unknown: said, never compared away nor called overnight (L50)', async () => {
     const r = await check({
       'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'No date' }, { title: 'Garbled', updated_at: 'garbled' }])),
-      'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify([{ workflowName: 'Deploy', event: 'push', url: 'u' }])),
+      [RUNS('o/r')]: runs([{ name: 'Deploy', event: 'push', html_url: 'u' }]),
     })
     expect(r.hits).toEqual([])
     expect(r.unmeasured).toEqual([
@@ -144,19 +148,19 @@ describe('the wake check', () => {
   })
   test('a full page of milestones or runs says the rest were not read, runs by the window left (L24, #1160)', async () => {
     const ms = Array.from({ length: 100 }, (_, n) => ({ title: `m${n}`, updated_at: BEFORE }))
-    const runs = Array.from({ length: 100 }, () => ({ workflowName: 'CI', event: 'push', createdAt: AFTER, url: 'u' }))
+    const many = Array.from({ length: 100 }, () => ({ name: 'CI', event: 'push', created_at: AFTER, html_url: 'u' }))
     const r = await check({
       'gh api repos/o/r/milestones?state=all&per_page=100': ok(JSON.stringify(ms)),
-      'gh run list -R o/r --json workflowName,event,createdAt,url --limit 100': ok(JSON.stringify(runs)),
+      [RUNS('o/r')]: runs(many, 140),
     })
-    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'the runs in o/r from 11:00 PM ET on Wed Oct 7 to 1:00 AM ET on Thu Oct 8 were not read for deploys (only the newest 100 were asked for)'])
+    expect(r.unmeasured).toEqual(['o/r holds 100 or more milestones, so only the first 100 were read', 'the runs in o/r from 11:00 PM ET on Wed Oct 7 to 1:00 AM ET on Thu Oct 8 were not read for deploys (only the newest 100 of 140 were asked for)'])
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = {
       ...QUIET,
       'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ number: 1, title: 'Secret', updated_at: AFTER }])),
       'gh api repos/o/private/issues/events?per_page=100&page=1': ok('[]'),
-      'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]'),
+      [RUNS('o/private')]: runs([]),
     }
     const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'], now: () => SINCE, mtimeOf: mtimeFrom(world) })
     expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret", by changes nothing the night recorded accounts for: the milestone itself, at 1:00 AM ET on Thu Oct 8 (no issue event in it explains that)'])
@@ -211,7 +215,7 @@ describe('the events, page by page back to sleep (#1160)', () => {
     Array.from({ length: n }, (_, i) => ({ type: 'PushEvent', created_at: iso(newest - i), repo: { name: repo } }))
   const quietRepo = (repo: string): World => ({
     [`gh api repos/${repo}/milestones?state=all&per_page=100`]: ok('[]'),
-    [`gh run list -R ${repo} --json workflowName,event,createdAt,url --limit 100`]: ok('[]'),
+    [RUNS(repo)]: runs([]),
   })
 
   test('a page that is not full is the last one asked for', async () => {
@@ -428,5 +432,118 @@ describe('a milestone the night\'s own work explains is left out (#2393)', () =>
     expect(workedOn({ kind: 'done', repo: 'not a repo', issue: 5 })).toEqual([])
     expect(workedOn({ kind: 'done', repo: 'o/r', issue: '5' })).toEqual([])
     expect(workedOn('not a note')).toEqual([])
+  })
+})
+
+// #2766: on 2026-11-11 the check listed 34 lines and none needed Dan: scheduled runs that passed or
+// were skipped, the passing deploy of a merge the night's notes account for, and milestone changes
+// made from his own accounts by other sessions. Each is now counted, never listed, and the count is
+// said in one line, so a check that stopped looking reads differently from a quiet night. What went
+// wrong (a scheduled run that failed, was cancelled or timed out; a deploy that failed) is still listed.
+describe('what needs nobody is counted, never listed (#2766)', () => {
+  const MS = 'gh api repos/o/r/milestones?state=all&per_page=100'
+  const EVENTS = 'gh api repos/o/r/issues/events?per_page=100&page=1'
+  const CLOSERS = 'gh issue list -R o/r --state closed --search closed:>=2026-10-08T03:00:00Z --json number,closedByPullRequestsReferences --limit 100'
+  const AUTH = 'gh auth status --json hosts'
+  const PULLS = (sha: string) => `gh api repos/o/r/commits/${sha}/pulls`
+  const url = (n: number) => `https://github.com/o/r/actions/runs/${n}`
+  const run = (n: number, o: Record<string, unknown>) => ({ name: 'Drift check', event: 'schedule', status: 'completed', created_at: AFTER, html_url: url(n), ...o })
+  const bot = { login: 'github-actions[bot]', type: 'Bot' }
+
+  test('a scheduled run that passed or was skipped is counted, and one that failed, was cancelled or timed out is listed', async () => {
+    const r = await check({
+      [RUNS('o/r')]: runs([
+        run(1, { conclusion: 'success' }),
+        run(2, { conclusion: 'success' }),
+        run(3, { conclusion: 'skipped', name: 'Alert on deploy failure' }),
+        run(4, { conclusion: 'failure' }),
+        run(5, { conclusion: 'cancelled' }),
+        run(6, { conclusion: 'timed_out' }),
+        run(7, { status: 'in_progress', conclusion: null }),
+      ]),
+    })
+    expect(r.unmeasured).toEqual([])
+    expect(r.hits).toEqual([
+      `Scheduled run overnight: o/r Drift check, failed (${url(4)})`,
+      `Scheduled run overnight: o/r Drift check, cancelled (${url(5)})`,
+      `Scheduled run overnight: o/r Drift check, timed out (${url(6)})`,
+    ])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 2 scheduled runs passed, 1 scheduled run skipped, 1 scheduled run still running.')
+  })
+
+  test('a run dispatched by a cron (a bot started it) is judged as a scheduled one; one a person dispatched is still listed', async () => {
+    const r = await check({
+      [RUNS('o/r')]: runs([
+        run(1, { event: 'workflow_dispatch', conclusion: 'success', triggering_actor: bot }),
+        run(2, { event: 'workflow_dispatch', conclusion: 'failure', triggering_actor: bot }),
+        // Dispatched from the gh login, as a session would: an outward action, listed however it ended.
+        run(3, { event: 'workflow_dispatch', name: 'Canary', conclusion: 'success', triggering_actor: { login: 'dan', type: 'User' } }),
+      ]),
+    })
+    expect(r.hits).toEqual([
+      `Scheduled run overnight: o/r Drift check, failed (${url(2)})`,
+      `Deploy run overnight: o/r Canary, passed (${url(3)})`,
+    ])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 scheduled run passed.')
+  })
+
+  test('a deploy that passed for a merge the night accounts for is counted; one that failed, or of a merge it does not, is listed', async () => {
+    const deploy = (n: number, sha: string, conclusion: string) => ({ name: 'Deploy', event: 'push', status: 'completed', conclusion, head_sha: sha, created_at: AFTER, html_url: url(n) })
+    const r = await check({
+      [RUNS('o/r')]: runs([deploy(1, 'aaaaaaa1', 'success'), deploy(2, 'bbbbbbb2', 'success'), deploy(3, 'aaaaaaa1', 'failure'), deploy(4, 'ccccccc3', 'success')]),
+      // The night's notes name PR #20, whose merge commit started run 1.
+      [PULLS('aaaaaaa1')]: ok(JSON.stringify([{ number: 20 }])),
+      [PULLS('bbbbbbb2')]: ok(JSON.stringify([{ number: 31 }])),
+      [PULLS('ccccccc3')]: fail('HTTP 502: Bad Gateway'),
+    }, github, ['o/r#20'])
+    expect(r.hits).toEqual([
+      `Deploy run overnight: o/r Deploy, passed (${url(2)})`,
+      `Deploy run overnight: o/r Deploy, failed (${url(3)})`,
+      `Deploy run overnight: o/r Deploy, passed (${url(4)}); which merge started it could not be read (HTTP 502: Bad Gateway)`,
+    ])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 deploy run of a merge the night accounts for passed.')
+  })
+
+  test('a milestone change made from one of Dan\'s own accounts is counted; one made by anybody else is listed', async () => {
+    const ms = { number: 2, title: 'Ungrouped' }
+    const closed = (n: number, actor: string, when: string) => ({ event: 'closed', created_at: when, actor: { login: actor }, issue: { number: n, milestone: ms } })
+    const world = {
+      [MS]: ok(JSON.stringify([{ ...ms, updated_at: '2026-10-08T05:00:01Z' }])),
+      [EVENTS]: ok(JSON.stringify([
+        closed(11, 'dan', '2026-10-08T05:00:00Z'),
+        closed(12, 'Dan-Work', '2026-10-08T04:59:00Z'),
+        closed(13, 'eve', '2026-10-08T04:58:00Z'),
+        closed(1, 'eve', BEFORE),
+      ])),
+      [CLOSERS]: ok(JSON.stringify([{ number: 11, closedByPullRequestsReferences: [] }, { number: 12, closedByPullRequestsReferences: [] }, { number: 13, closedByPullRequestsReferences: [] }])),
+      // Every account gh is logged in to on this Mac is Dan's.
+      [AUTH]: ok(JSON.stringify({ hosts: { 'github.com': [{ login: 'dan', active: true }, { login: 'dan-work', active: false }] } })),
+    }
+    const r = await check(world)
+    expect(r.unmeasured).toEqual([])
+    expect(r.hits).toEqual(['Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #13 closed by eve'])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 2 milestone changes made from your own accounts.')
+
+    // Which accounts are Dan's cannot be read: only the gh login is his, and the rest is listed.
+    const unread = await check({ ...world, [AUTH]: fail('not logged in to dan-work') })
+    expect(unread.hits).toEqual(['Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #13 closed by eve; #12 closed by Dan-Work'])
+    expect(unread.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 milestone change made from your own accounts.')
+  })
+
+  test('a night whose every line is healthy lists nothing and still says what it read and left out', async () => {
+    const r = await check({ [RUNS('o/r')]: runs([run(1, { conclusion: 'success' }), run(2, { conclusion: 'skipped' })]) })
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual([])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub; left out as healthy: 1 scheduled run passed, 1 scheduled run skipped.')
+    expect((await check()).checked).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
+  })
+
+  test('runs that cannot be read are said as not checked, never counted as healthy', async () => {
+    const r = await check({ [RUNS('o/r')]: fail('HTTP 500: boom') })
+    expect(r.hits).toEqual([])
+    expect(r.unmeasured).toEqual(['deploy runs in o/r were not checked (gh api: HTTP 500: boom)'])
+    expect(r.checked).toBe('The overnight check read 2 repositories on GitHub and left nothing out.')
+    // Without the login nothing on GitHub was read, and the line says so.
+    expect((await check({ 'gh api user --jq .login': fail('not logged in') })).checked).toBe('The overnight check read no repositories on GitHub and left nothing out.')
   })
 })
