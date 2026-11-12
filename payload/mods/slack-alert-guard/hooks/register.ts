@@ -1147,7 +1147,7 @@ const landsIn = async ($: EngineInterface, path: string, deadline: number): Prom
     for (const group of pathspecGroups(words)) marked.push(...(await listed(what, ['-e', MARKER_PREFILTER, '--', ...group.map(r => `:(literal)${r}`)])))
     if (marked.length > MOST_READ) return MAYBE
     const name = folder.slice(folder.lastIndexOf('/') + 1)
-    // The folder's name as a path segment, never inside a longer name or a host (hooks.slack.com).
+    // The folder's name as a path segment, never inside a longer name or a host name such as a webhook's (hooks, then a dot).
     const names = name ? new RegExp(`(^|[^\\w.-])${escapeRe(name)}([^\\w.-]|$)`, 'i') : undefined
     const texts = new Map<string, string>()
     const senders: Sender[] = []
