@@ -3942,6 +3942,13 @@ for runs in "git fetch quiet && git checkout quiet/main && bash other.sh" "git c
   run_l "$runs"
   allowed "a branch fetched quiet, or one no fetch in the command touches, is read as it is held: $runs"
 done
+# The scratch repository borrows the objects of a repository whose path is not ASCII: its alternates
+# file holds that path as the bytes git printed.
+git clone -q "$B" "$T/lé2844" 2>/dev/null
+git -C "$T/lé2844" reset -q --hard "$OTHER"
+git -C "$T/lé2844" update-ref refs/remotes/origin/main "$OTHER"
+run_raw "$(payload Bash "$(bash_input "git pull && bash other.sh")" "$T/lé2844")"
+read_refused "a pull in a repository whose path is not ASCII is read as its fetch brings it"
 L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
 if [ "$L_AFTER" = "$L_BEFORE" ]; then check "every pull and fetch read leaves the repository's refs and files as they were" ok
 else check "every pull and fetch read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
