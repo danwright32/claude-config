@@ -198,14 +198,17 @@ def _dry_run_why_not(dries, workdir, folder, names, dry_dir):
     (holding the .sql files names) has changed since it was sent, else why not (claude-config#2829).
     The latest such dry run is the one judged: the list on the picker was copied from it."""
     here = os.path.realpath(workdir)
-    sent = None
+    sent, unread = None, None
     for at, cwd, command in dries:
         try:
             d = dry_dir(command, cwd) if dry_dir is not None else None
-        except Exception:
-            d = None
+        except Exception as e:
+            d, unread = None, type(e).__name__
         if d is not None and os.path.realpath(d) == here:
             sent = at
+    if sent is None and unread is not None:
+        return ("a command naming --dry-run before Dan's Apply could not be read (" + unread
+                + "), so whether it was a dry run of this project could not be told")
     if sent is None:
         return ("no dry run of this project's migrations finished in this session before Dan's Apply, "
                 "so the list of what the push would send was never shown to him")

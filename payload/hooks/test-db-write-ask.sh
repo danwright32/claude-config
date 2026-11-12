@@ -966,6 +966,21 @@ case "$reason" in *001b_extra.sql*) check "the question names the migration adde
 P_CTL="$APPLY/dry-control"; fresh_proj "$P_CTL" exampleprojectref000
 at="$(now_iso)"
 dry_case "the same dry run stamp with nothing changed after it is let through" allow "$P_CTL" DRY_AT="$at"
+# A dry run reader that fails is asked about, and the question says it could not be read rather
+# than that no dry run ran (L11).
+APPROVAL_LIB="${APPROVAL_LIB:-$DIR/lib/db-apply-approval.py}"
+unread="$(python3 - "$APPROVAL_LIB" "$P_CTL" "$DRY_LAST_T" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("db_apply_approval_probe", sys.argv[1])
+ap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ap)
+def broken(command, cwd):
+    raise RuntimeError("reader failed")
+ok, why = ap.covered(sys.argv[2], [("--linked", False, ""), ("--yes", False, "")], "s1", sys.argv[3], None, broken)
+print(("allow " if ok else "ask ") + why)
+PY
+)"
+case "$unread" in "ask "*"could not be read (RuntimeError)"*) check "a dry run reader that fails is asked about, saying it could not be read" ok ;; *) check "a dry run reader that fails is asked about, saying it could not be read" "got: ${unread:0:300}" ;; esac
 mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
 both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
 mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
