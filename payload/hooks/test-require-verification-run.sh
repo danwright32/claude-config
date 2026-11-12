@@ -436,6 +436,14 @@ out="$(notice '{"agent_id": "abc"}')"
 expect_allow "a subagent is never asked to raise a picker" "$out"
 out="$(CLAUDE_DETACHED_RUN=1 notice)"
 expect_allow "a headless run has nobody to ask" "$out"
+# Run by its bare name from its own folder, BASH_SOURCE holds no slash. The folder the hook hands its
+# inline python was cut with %/*, which leaves a bare name whole, so the folder was not found and the
+# notice ended with nothing said (the lessons review of claude-config#2678). On a copy of the tally,
+# so the asked once mark it leaves does not reach the checks below.
+cp -R "$HOME_V" "$WORK/home-bare"
+out="$(payload "ls" "$REPO" "" 2>/dev/null | (cd "$HOOK_DIR" && VERIFICATION_HOME="$WORK/home-bare" bash verification-tally-notice.sh))"
+if [ "$(printf '%s' "$out" | jq -r '.decision // ""' 2>/dev/null)" = block ] && says "$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)" "Switch to block"; then pass
+else fail "run by its bare name from its own folder, the notice did not ask for the picker: ${out:0:300}"; fi
 out="$(notice)"
 reason="$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)"
 if [ "$(printf '%s' "$out" | jq -r '.decision // ""' 2>/dev/null)" = block ] && says "$reason" "AskUserQuestion" \

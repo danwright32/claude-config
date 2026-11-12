@@ -128,14 +128,16 @@ NONE_UNKNOWN='{"number":7,"baseRefName":"main","url":"https://github.com/acme/wi
 denied() { local re='"permissionDecision": *"deny"'; [[ "$1" =~ $re ]]; }
 
 says() {  # $1 = the hook output, $2 = a LITERAL needle, matched case insensitively
-  local prior found
+  local was=0 found
   # `nocasematch` is a shell wide setting, so it is restored rather than switched off: leaving it
-  # clear would be a silent change to any caller that had set it (L509).
-  prior="$(shopt -p nocasematch)"
+  # clear would be a silent change to any caller that had set it (L509). Restored by shopt itself
+  # rather than an eval of what `shopt -p` printed, which the Slack drafts gate cannot follow, so it
+  # stopped reading every variable of this suite (claude-config#2683).
+  shopt -q nocasematch && was=1
   shopt -s nocasematch
   # "$2" is quoted, so a needle is a literal here where `grep -qi` read it as a regex.
   [[ "$1" == *"$2"* ]] && found=0 || found=1
-  eval "$prior"
+  [ "$was" = 1 ] || shopt -u nocasematch
   return "$found"
 }
 
