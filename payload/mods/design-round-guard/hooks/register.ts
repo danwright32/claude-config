@@ -582,7 +582,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   let scriptStore = false
   for (const s of await scriptsRun($, command, at)) {
     if ('unread' in s) {
-      targets.push({ word: s.word, unread: s.unread })
+      targets.push({ word: s.word, unread: s.unread, inScript: s.word })
       continue
     }
     const read = await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd: s.folder ?? UNPLACED, home: at.home })
@@ -590,14 +590,14 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     for (const u of read.unnamed) {
       if (u.targets) {
         for (const p of u.targets)
-          targets.push(p.startsWith(`${UNPLACED}/`) ? { word: p, unread: scriptUnplaced(s.word, p.slice(UNPLACED.length + 1)) } : { path: p, word: p, inScript: s.word })
+          targets.push(p.startsWith(`${UNPLACED}/`) ? { word: p, unread: scriptUnplaced(s.word, p.slice(UNPLACED.length + 1)), inScript: s.word } : { path: p, word: p, inScript: s.word })
         continue
       }
       scriptStore ||= mentionsStore(s.text)
       const text = u.code ?? u.program ?? ''
       for (const m of mentionedModHookFiles(text)) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
-        if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word) })
+        if (t) targets.push(t.path ? { ...t, inScript: s.word } : { word: t.word, unread: scriptUnplaced(s.word, t.word), inScript: s.word })
       }
       for (const m of mentionedLookFiles(text).filter(x => /^(\/|~\/)/.test(x))) {
         const t = await guessAt($, m, s.folder, at, named, text, '')
@@ -606,7 +606,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     }
   }
   // A quoted pattern read as its one name (#1951) is still one the script may match itself.
-  const unfollowed = w.unnamed.length > 0 || targets.some(t => (!t.path && t.inScript === undefined && t.unread === undefined) || t.quoted)
+  // A script file's own targets (`inScript`) are left out: their store is asked of the script's text above.
+  const unfollowed = w.unnamed.length > 0 || targets.some(t => (!t.path && t.inScript === undefined) || t.quoted)
   return { targets, storeMentioned: (unfollowed && mentionsStore(command)) || scriptStore }
 }
 
@@ -825,9 +826,9 @@ const neverTracked = async ($: EngineInterface, path: string, tree: string): Pro
 // Why what git puts back cannot be read before a shell call runs, or undefined when it can (lessons
 // review of #1158): putBack reads the source as it stands now, and any other command on the line may
 // change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
-// restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
-// before it aside, is measured, or with `first` one run first on its line (#2777, below); anything
-// else is judged whole, saying so. So is git told to read
+// restore f`, a script that runs git). So a line that is one git checkout or restore alone, a cd
+// before it aside, is measured, and with `named` one beside only commands that cannot change its
+// source (#2777, #2830, below); anything else is judged whole, saying so. So is git told to read
 // another index, repository or setting: a GIT_ variable set on the line (which the command reader
 // drops from a command's words), or any of git's own options before the subcommand but -C, whose
 // folder mod-kit already follows (lessons review).
