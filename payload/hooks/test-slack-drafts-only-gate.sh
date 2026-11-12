@@ -13,6 +13,15 @@
 # 2.1.274 (session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name,
 # tool_input, tool_use_id). The Slack tool names are the ones the two integrations list today: the
 # Slack plugin's mcp__plugin_slack_slack__* and the claude.ai connector's mcp__claude_ai_Slack__*.
+#
+# Probing the gate by hand (claude-config#2794): drive it the way this suite does, by piping a
+# hook payload into the wrapper, never by importing slack_drafts_only_gate from a Python script.
+# The rule's own source names Slack's posting endpoints, so the gate refuses any script that
+# imports it as one that posts, and setting PYTHONPATH only changes which refusal comes back
+# (measured 2026-11-11). For example:
+#   jq -n --arg c 'node tools/x.mjs a.ts' '{hook_event_name:"PreToolUse",tool_name:"Bash",
+#     tool_input:{command:$c},cwd:"."}' | bash payload/hooks/slack-drafts-only-gate.sh; echo $?
+# Exit 0 is allowed and 2 is refused, with the reason on stderr.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
