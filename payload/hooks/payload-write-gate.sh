@@ -421,7 +421,10 @@ def add(tok, base):
 # payload paths its text named in backticks.
 # A command that could make cat or tee something else, or send what it writes on to a shell, is
 # never narrowed: a function or alias of either, a change to PATH or the command hash, or a
-# process substitution anywhere in it.
+# process substitution anywhere in it. Anywhere but the bodies being copied, when their end marker
+# is quoted: the shell expands nothing in one, so its words define nothing. On 2026-11-11 a cat
+# append to a session notes file was refused because its text said "function" (claude-config#2789).
+# An unquoted body is expanded, so its words are still read.
 NOT_A_PLAIN_COPY = re.compile(r"[<>]\(|\bfunction\b|\balias\b|\bhash\b|\b(?:PATH|path)\+?=|(?:^|[\s;&|(){}])(?:cat|tee)\s*\(\s*\)")
 
 def copy_targets(text):
@@ -461,15 +464,17 @@ def copy_targets(text):
 def copied_as_text(cmd):
     """cmd with the body of each heredoc only cat or tee copies into a named file blanked, its line
     breaks kept, or cmd unchanged wherever that cannot be read (claude-config#2722)."""
-    if "<<" not in cmd or "\n" not in cmd or NOT_A_PLAIN_COPY.search(cmd):
+    if "<<" not in cmd or "\n" not in cmd:
         return cmd
     try:
-        parts, spans = [], []
-        _sw.commands(cmd, heredocs=[], parts=parts, spans=spans)
+        parts, spans, heredocs = [], [], []
+        _sw.commands(cmd, heredocs=heredocs, parts=parts, spans=spans)
     except Exception:
         return cmd
-    out = list(cmd)
-    for opener, start, end in spans:
+    if len(heredocs) != len(spans):
+        return cmd
+    out, rest_of_it = list(cmd), list(cmd)
+    for (opener, start, end), (quoted, _, _) in zip(spans, heredocs):
         part = next((p for p in parts if any(o[0] == opener for o in p["openers"])), None)
         # Only a command the session shell runs itself, its output not piped on to another.
         if part is None or part["scope"] != (0,) or part["how"] == "|":
@@ -485,6 +490,10 @@ def copied_as_text(cmd):
         for k in range(start, end):
             if out[k] != "\n":
                 out[k] = " "
+                if quoted:
+                    rest_of_it[k] = " "
+    if NOT_A_PLAIN_COPY.search("".join(rest_of_it)):
+        return cmd
     return "".join(out)
 
 try:
