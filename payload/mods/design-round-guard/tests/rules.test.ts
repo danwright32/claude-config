@@ -2561,3 +2561,62 @@ test("#2726: a call whose hook the worker lost is passed on as the hook would pa
   expect(await caughtCall({ tool: 'Write', agentId: 'a1' }, { file_path: '/w/slate/app/page.tsx', content: 'x' }, WEDGED, on('agent write'))).toEqual({ deny: HELD_WEDGED })
   expect(sent).toEqual(['main write', 'agent question', 'agent grep'])
 })
+
+// #2788: on 2026-11-10 and 11 an edit to the Slack alert guard's register.ts (#2709) was held twice
+// as a wording change, quoting a message the edit never touched. It wrapped a verdict in a helper
+// that hands it straight back (`return await askUntraced(path, await broughtIn(path))`) and added a
+// comment, and changed no string: measured on the real files, the message reading stopped following
+// the verdict into broughtIn once it went through the helper, so that function's words read as gone.
+// The comment's apostrophes played no part (the edit without its comment was held the same). Only
+// the strings an edit adds or changes are judged now, so a change to code alone is never held.
+const UNTRACED_BEFORE = [
+  "import type { EngineInterface, Register } from 'claude-code'",
+  'type Verdict = { pass: true } | { unchecked: string; untraced?: true }',
+  'const PASS: Verdict = { pass: true }',
+  'const broughtIn = async (path: string): Promise<Verdict> => {',
+  '  if (!path) return { unchecked: `git could not name the repository ${path} is in, so what this edit brings could not be told` }',
+  '  return PASS',
+  '}',
+  'const judge = async (path: string): Promise<Verdict> => {',
+  '  return await broughtIn(path)',
+  '}',
+  'export const register: Register = on => {',
+  "  on('tool.check', async ($: EngineInterface, e: { input: { file_path: string } }) => {",
+  '    const v = await judge(e.input.file_path)',
+  "    if ('unchecked' in v) return { deny: `Blocked: ${v.unchecked}` }",
+  '    return {}',
+  '  })',
+  '}',
+  '',
+].join('\n')
+const untracedWrapped = (helper: readonly string[]) => {
+  const after = UNTRACED_BEFORE.replace('  return await broughtIn(path)\n}\n', ['  return await askUntraced(path, await broughtIn(path))', '}', '', ...helper, ''].join('\n'))
+  if (after === UNTRACED_BEFORE) throw new Error('no edit')
+  return after
+}
+const UNTRACED_HELPER = [
+  "// An edit whose trace stopped at one of the guard's own limits stops there on every try, so it",
+  "// is held for Dan to approve. Dan's approval lets that one edit through and no other.",
+  'const askUntraced = async (path: string, v: Verdict): Promise<Verdict> => {',
+  "  if (!('unchecked' in v) || !v.untraced || !path) return v",
+  '  return PASS',
+  '}',
+]
+test('#2788: wrapping a verdict in a helper and adding a comment with apostrophes, changing no string, passes', () => {
+  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER))).toBeUndefined()
+  // The helper without its comment passes alike.
+  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER.slice(2)))).toBeUndefined()
+})
+test('#2788: the same change carrying new words for a message, or a message reworded or taken away, is still held', () => {
+  // The helper's comment beside a new message in a string: held for the string, never the comment.
+  const told = untracedWrapped([...UNTRACED_HELPER.slice(0, 4), "  return { unchecked: 'Dan has not approved this edit yet' }", '}'])
+  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, told)).toEqual({ worded: 'Dan has not approved this edit yet' })
+  // The message the helper is wrapped around, reworded in the same edit, and reworded with no helper.
+  const reworded = untracedWrapped(UNTRACED_HELPER).replace('so what this edit brings could not be told', 'so what this edit brings is unknown')
+  expect(holdOf([], 'register.ts', UNTRACED_BEFORE, reworded)).toBe('worded')
+  const rewordedAlone = UNTRACED_BEFORE.replace('so what this edit brings could not be told', 'so what this edit brings is unknown')
+  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, rewordedAlone)).toEqual({ worded: 'is in, so what this edit brings is unknown' })
+  // A message's own words taken away, the helper beside it.
+  const gone = untracedWrapped(UNTRACED_HELPER).replace('return { deny: `Blocked: ${v.unchecked}` }', 'return { deny: v.unchecked }')
+  expect(holdOf([], 'register.ts', UNTRACED_BEFORE, gone)).toBe('worded')
+})

@@ -6512,9 +6512,11 @@ since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the li
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
 of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
 merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
-and judged against that side rather than the conflict on disk; one git cannot read, or
-one beside any other command on the line (a cd aside), which may change what it puts back first, is
-judged whole with the refusal saying why), a program whose text names the files it writes, and a
+and judged against that side rather than the conflict on disk; since #2777 one run first on its
+line, the line's only checkout or restore and in no pipe or background, is measured the same way,
+since nothing after it can change what it puts back; one git cannot read, or one after any other
+command on the line (a cd aside), which may change what it puts back first, is judged whole with the
+refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6745,6 +6747,9 @@ command taking away a hook file git has never tracked, by `git ls-files`, passes
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
 schema's description pass, a property the schema names `reason` or `text` being no message. Since
+#2788 only the words of a string the change adds, rewords or takes away count, so a change to code
+alone passes even where the reading follows a message less far after it than before (a verdict
+handed through a helper that hands it straight back), and a comment holds no string. Since
 #1925 the words Dan reads in a mod's picker are a message's too: an answer's label and description
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
