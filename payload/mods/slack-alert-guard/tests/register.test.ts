@@ -2058,6 +2058,42 @@ test('a copy the guard does not read, a video or a key, never has its source rea
   expect(w.ran.length).toBe(2)
 })
 
+// claude-config#2773: a cp -R into a folder (a hooks folder copied into a scratch folder in session
+// notes) was held as could not check, since the guard read the folder as a file. A copy is judged by
+// where it lands: a folder in no repository, or one no Slack sender reads, is not a send.
+test('a cp -R into a folder is judged by where it lands: one in no repository, or one no Slack sender reads, passes; one holding or read by a sender is held as a shell write (#2773)', withKit, async ($, on) => {
+  const NOTES = `${HOME}/.claude/state/session-notes/p/s/scratch`
+  const PY = '/w/app/jobs/late.py'
+  const w = world($, on, {
+    files: {
+      '/w/app/payload/hooks/gate.sh': '#!/bin/bash\nexit 0\n',
+      [`${NOTES}/hooks/old.sh`]: '#!/bin/bash\nexit 1\n',
+      '/w/app/backup/old.sh': '#!/bin/bash\nexit 1\n',
+      '/w/app/templates/late.txt': 'Booking is late\n',
+      [PY]: 'from slack_sdk import WebClient\nbody = open("templates/late.txt").read()\n',
+    },
+  })
+  // Into a scratch folder in session notes, in no repository: as a copy into the folder and of the
+  // folder's contents.
+  const notes = refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks ${NOTES}/` }))
+  expect(notes).not.toContain('could not check')
+  expect(notes).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp -R payload/hooks/ ${NOTES}/hooks` }))).toBe('')
+  // Into a folder in the repository that no Slack sender reads.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup' }))).toBe('')
+  expect(w.ran.length).toBe(3)
+  // Into a folder holding a file that posts to Slack, which the copy may overwrite.
+  const over = refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/lib' }))
+  expect(over).toContain('shell command writes to /w/app/lib, which posts to Slack')
+  expect(idIn(over)).toBeDefined()
+  // Into a folder a sender reads its message from.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/templates' }))).toContain(`shell command writes to /w/app/templates, which ${PY} sends to Slack`)
+  // A search that cannot run is still could not check, never a pass.
+  w.ctl.gitFails = 'git was killed'
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R payload/hooks/ /w/app/backup/more' }))).toContain('could not check')
+  expect(w.ran.length).toBe(3)
+})
+
 // The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
 // one message among other values, so only the send asks.
 const FEEDS = '/w/app/src/lib/monitor/feeds.ts'

@@ -20,6 +20,7 @@ import {
   ciWorkflow,
   codeOf,
   copyModule,
+  escapeRe,
   type Decl,
   type Foreign,
   type ModelReading,
@@ -1088,6 +1089,78 @@ const writtenBy = async ($: EngineInterface, f: { sources?: string[] }, command:
   return cut < 0 ? '' : command.slice(cut + 1)
 }
 
+/** Whether a shell write lands in a folder (#2773): a copy of a folder's contents, a folder already there, or a copy of a folder to a new name. */
+const isFolder = async ($: EngineInterface, f: { path?: string; sources?: string[]; tree?: true }, exists: boolean): Promise<boolean> => {
+  if (f.tree) return true
+  if (exists) return (await $.fs.stat(f.path as string)).kind === 'dir'
+  for (const s of f.sources ?? []) if ((await $.fs.exists(s)) && (await $.fs.stat(s)).kind === 'dir') return true
+  return false
+}
+
+/**
+ * What a copy into the folder at `path` can bring to a Slack send (#2773). A folder in no repository,
+ * as a scratch folder in session notes is, has nothing that sends it: none. In a repository, a file
+ * under the folder that posts to Slack may be overwritten by the copy, so the folder posts; a file
+ * elsewhere that posts to Slack and names the folder in its code reads what lands there, so it is the
+ * folder's sender. Neither is none. A search that fails or runs late is could not check, never none;
+ * more files to read than MOST_READ is maybe.
+ */
+const landsIn = async ($: EngineInterface, path: string, deadline: number): Promise<Found> => {
+  const late: Found = { unchecked: `the files that could send what lands in ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
+  const left = async () => Math.floor(deadline - (await $.clock.now()))
+  const target = path.replace(/\/+$/, '') || '/'
+  let dir = target
+  while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
+  let ms = await left()
+  if (ms <= 0) return late
+  const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
+  if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return NONE
+  if (where.exitCode !== 0 || where.isStdoutTruncated)
+    return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
+  const [top = '', prefix = ''] = where.stdout.split('\n')
+  if (!top) return { unchecked: `git named no repository for ${path}` }
+  // The folder below the top, '' when it is the top itself.
+  const folder = `${prefix}${target.slice(dir === '/' ? 1 : dir.length + 1)}`.replace(/\/+$/, '')
+  const listed = async (what: string, args: string[]): Promise<string[]> => {
+    ms = await left()
+    if (ms <= 0) throw new Ended(late)
+    const hits = await $.process.run(['git', '-C', top, 'grep', '-l', '-z', '-I', '-i', '--untracked', '--no-color', '-E', ...args], { timeoutMs: ms })
+    if (hits.exitCode === 1) return []
+    if (hits.exitCode !== 0) throw new Ended({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
+    if (hits.isStdoutTruncated) throw new Ended({ unchecked: `git grep listing the names of the files that ${what} printed more than the ${STDOUT_KEPT_MIB} MiB Claude Code keeps of a command's output, so it could not be read whole` })
+    return hits.stdout.split('\u0000').filter(r => r && !testFile(r) && !isProseFile(r))
+  }
+  try {
+    const what = `could post what lands in ${path} to Slack`
+    const words = await listed(what, ['-e', SENDER_PREFILTER, '--', '.'])
+    const marked: string[] = []
+    for (const group of pathspecGroups(words)) marked.push(...(await listed(what, ['-e', MARKER_PREFILTER, '--', ...group.map(r => `:(literal)${r}`)])))
+    if (marked.length > MOST_READ) return MAYBE
+    const name = folder.slice(folder.lastIndexOf('/') + 1)
+    // The folder's name as a path segment, never inside a longer name or a host (hooks.slack.com).
+    const names = name ? new RegExp(`(^|[^\\w.-])${escapeRe(name)}([^\\w.-]|$)`, 'i') : undefined
+    const texts = new Map<string, string>()
+    const senders: Sender[] = []
+    for (const rel of marked) {
+      if ((await left()) <= 0) return late
+      let text = ''
+      try {
+        text = String(await $.fs.read(`${top}/${rel}`))
+      } catch (err) {
+        return { unchecked: `${top}/${rel}, which ${what}, could not be read: ${message(err)}` }
+      }
+      texts.set(rel, text)
+      if (!isSender(rel, text)) continue
+      if (!folder || rel.startsWith(`${folder}/`)) return POSTS
+      if (names?.test(codeOf(rel, text))) senders.push({ rel, chain: [] })
+    }
+    return senders.length ? { senders, top, texts, complete: true } : NONE
+  } catch (err) {
+    if (err instanceof Ended) return err.found
+    return { unchecked: `the files that could send what lands in ${path} to Slack could not be searched: ${message(err)}` }
+  }
+}
+
 const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): Promise<Verdict> => {
   const command = typeof input.command === 'string' ? input.command : ''
   if (!command) return PASS
@@ -1105,6 +1178,17 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
       const exists = await $.fs.exists(f.path)
+      // A copy into a folder (#2773) is judged by where it lands, never read as a file.
+      if (await isFolder($, f, exists)) {
+        const keys = await unapproved($, [key])
+        if (!keys.length) return PASS
+        deadline ??= (await $.clock.now()) + SCAN_MS
+        const found = await landsIn($, f.path, deadline)
+        if ('unchecked' in found) return found
+        if ('posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
+        if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }
+        continue
+      }
       // What the command puts in the file cannot be read until it runs (#2773), so it is read from
       // the one file it copies, or else from the command's lines after its first, where a heredoc's
       // body is. A file the command makes is judged by that as a Write of it is, never skipped.
