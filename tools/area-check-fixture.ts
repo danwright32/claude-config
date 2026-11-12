@@ -24,6 +24,14 @@ import type { ReplayInput, ReplaySummary } from '../payload/mods/area-check/hook
 
 export const PART_BYTES = 100 * 1024
 
+// Where the area check's rules are from a file of the fixture folder, for the type imports written
+// into those files. Named once and put into each written line, never spelt inside the line: this
+// file imports what it wrote to read it back, so the Slack drafts gate follows every import it finds
+// in a string here, and from this folder that path names nothing. Once the gate read a file run
+// through a variable (claude-config#2678) it refused test-area-check-replay.sh for that import, as
+// one it could not find (measured through its wrapper, 2026-11-10).
+const RULES_FROM_FIXTURE = '../../hooks/rules.ts'
+
 // This repository is public, and an issue body can name a scratch path on somebody's machine: a home
 // directory with the user's name, an encoded project folder, a session id. The replay only matches a
 // ref against repository relative paths, which such a path can never equal, so only its shape matters
@@ -101,7 +109,7 @@ export const fixtureFiles = (fx: Fixture, partBytes: number = PART_BYTES): Map<s
   }
   const tables: Table[] = [
     { name: 'paths', about: 'the judged files the sessions edit, sorted, each session naming its files by place in this list', type: 'string', rows: fx.paths.map(j) },
-    { name: 'issues', about: 'the open issues that name a path: number, structural labels, priority, the paths named', type: 'CachedIssue', rows: fx.input.issues.map(j), imports: "import type { CachedIssue } from '../../hooks/rules.ts'" },
+    { name: 'issues', about: 'the open issues that name a path: number, structural labels, priority, the paths named', type: 'CachedIssue', rows: fx.input.issues.map(j), imports: `import type { CachedIssue } from '${RULES_FROM_FIXTURE}'` },
     { name: 'tracked', about: 'the tracked files sharing a basename with a path an issue names or a session edits', type: 'string', rows: fx.input.tracked.map(j) },
     { name: 'growth', about: "each day's rankable files: day, path, net lines grown and fix commits over the 90 days before it, its lines", type: '[string, string, number, number, number]', rows: growthRows },
     { name: 'sessions', about: 'the sessions, each a commit: id, day, the issues its subject names, its judged files as places in PATHS', type: '{ id: string; day: string; own: number[]; files: number[] }', rows: fx.input.sessions.map(j) },
@@ -126,7 +134,7 @@ export const fixtureFiles = (fx: Fixture, partBytes: number = PART_BYTES): Map<s
     `// Measured by tools/area-check-replay.ts from ${fx.repo} on ${fx.measuredOn}: ${fx.days} days to ${fx.head.slice(0, 10)}, rules v${fx.rule}.\n` +
       `// Generated; measure again rather than edit (L48). The rows are in the parts beside this file, one\n` +
       `// per line (#2097), and each session's files are places in PATHS.\n` +
-      `import type { ReplayInput, ReplaySummary } from '../../hooks/rules.ts'\n` +
+      `import type { ReplayInput, ReplaySummary } from '${RULES_FROM_FIXTURE}'\n` +
       imports.join('\n') + '\n\n' +
       `export const PATHS: string[] = ${spread.paths}\n\n` +
       `// Every day of the window in order, so a day with no rankable file is still a day.\n` +
