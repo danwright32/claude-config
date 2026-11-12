@@ -62,7 +62,6 @@ GIT_READS = frozenset({
     "rev-parse", "branch", "tag", "remote", "config", "describe", "shortlog", "rev-list", "merge-base",
     "cat-file", "ls-tree", "ls-remote", "check-ignore", "check-attr", "diff-tree", "diff-index",
     "name-rev", "reflog", "help", "version", "var", "count-objects", "fsck", "gc", "notes"})
-GIT_VALUED = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"})
 # Programs that copy into the folder or file their last word names.
 DIR_COPIERS = frozenset({"rsync", "ditto", "scp", "sftp", "rclone"})
 TARS = frozenset({"tar", "gtar", "bsdtar"})
@@ -149,7 +148,9 @@ def make(interpreter, shells, awks, senders):
                 return None
             if name == "dd":
                 return self.note_dd(args, vals, d, stdin)
-            if name == "git" and self.git_sub(vals) in GIT_READS:
+            # git's subcommand by the shared reader, never by word position (test-gh-reader.sh).
+            found = self.sw.git_read([v if v is not None else a for a, v in zip(args, vals)])
+            if found and found[0] in GIT_READS:
                 return None
             if name in TARS or name == "unzip":
                 self.note_unpack(name, args, vals, d)
@@ -292,19 +293,6 @@ def make(interpreter, shells, awks, senders):
                 if len(out) > 32:
                     break
             return out
-
-        @staticmethod
-        def git_sub(vals):
-            k = 1
-            while k < len(vals):
-                v = vals[k] or ""
-                if v in GIT_VALUED:
-                    k += 2
-                elif v.startswith("-"):
-                    k += 1
-                else:
-                    return v
-            return None
 
         @staticmethod
         def decompresses(vals):
