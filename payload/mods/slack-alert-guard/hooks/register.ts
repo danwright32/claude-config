@@ -99,12 +99,14 @@ const HELD = cannotCheck('unknown failure')
 // untraced (#2709): for an edit the trace stopped short of at one of its limits, why it stopped; its
 // added and removed are then the lines the edit adds and takes away, not message text.
 // unwired (#2720): a module of message copy no file uses yet, named as one to Dan.
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; untraced?: string; unwired?: true }
+// late (#2796): the untraced edit's search ran out of its time.
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; sender?: string; literal?: string[]; from?: string; untraced?: string; late?: true; unwired?: true }
 // Could not check, and with `untraced` (#2709), because the trace met one of its own limits (more
-// files handed on than it follows), which it meets the same way on every try: held for Dan to
-// approve that one edit, since trying again can never get it through. Any other could not check
-// (out of time, git failing, a file unreadable) may pass on another try, so says to try again.
-type Unchecked = { unchecked: string; untraced?: true }
+// files handed on than it follows), which it meets the same way on every try, or with `late` too
+// (#2796), because the search ran out of its time, which on a busy Mac it does on every try: held
+// for Dan to approve that one edit. Any other could not check (git failing with time left, a file
+// unreadable) may pass on another try, so says to try again.
+type Unchecked = { unchecked: string; untraced?: true; late?: true }
 type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold } | { merge: string }
 const PASS: Verdict = { pass: true }
 
@@ -353,8 +355,9 @@ const end = (found: Found): never => {
  * deep; a chain going further is could not check. A level handed on only to UI components
  * (uiComponent) is none there, never followed past them (Dan, 2026-11-09, #2519). A template is sent too by a file that uses it and
  * imports a Slack send helper (helperUser, #2361), as a copy or notice builder is. A test or a doc is never read as a sender or a
- * link (#2290, #2361). Every git call and read is bounded by `deadline`, and anything that cannot be
- * answered in time, or at all, is could not check, so the call is held rather than let through. More
+ * link (#2290, #2361). Every git call and read is bounded by `deadline`: a search that runs out of it
+ * is untraced and late, held for Dan to approve that one edit (#2796), and anything that cannot be
+ * answered at all is could not check, so the call is held rather than let through. More
  * than MOST_READ files to read is maybe: held for Dan to approve, naming no sender (#2364).
  *
  * A file in no repository, as a scratchpad script is, has nothing that sends it, so none, even when
@@ -366,7 +369,7 @@ const end = (found: Found): never => {
  * when it posts by itself or through a send helper it imports, before the files that send it.
  */
 const findSender = async ($: EngineInterface, path: string, deadline: number, marked = false, settle?: Settle, self?: string): Promise<Found> => {
-  const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds` }
+  const late: Found = { unchecked: `the files that could send ${path} to Slack were not searched within ${SCAN_MS / 1000} seconds`, untraced: true, late: true }
   // The senders found so far, and what the search returns when it stops with them in hand.
   const found: Sender[] = []
   let top = ''
@@ -389,6 +392,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     if (ms <= 0) return late
     const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
     if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return NONE
+    if (where.exitCode !== 0 && (await left()) <= 0) return late
     if (where.exitCode !== 0 || where.isStdoutTruncated)
       return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
     // git prints the repository's top folder, then the folder searched from below it, ending in a
@@ -408,6 +412,8 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
       if (ms <= 0) end(late)
       const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...args], { timeoutMs: ms })
       if (hits.exitCode === 1) return ''
+      // git stopped at its timeout, which was the time the search had left, ran out of time (#2796).
+      if (hits.exitCode !== 0 && (await left()) <= 0) end(late)
       if (hits.exitCode !== 0)
         end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
       // Cut short is not git failing: said as "exit 0: no message" it hid which listing ran long, and
@@ -455,6 +461,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
         if (ms <= 0) end(late)
         const hits = await $.process.run(['git', '-C', top, 'grep', '-z', '-I', '-i', '--untracked', '--no-color', ...words, '--', ...group.map(r => `:(literal)${r}`)], { timeoutMs: ms })
         if (hits.exitCode === 1) return
+        if (hits.exitCode !== 0 && (await left()) <= 0) end(late)
         if (hits.exitCode !== 0) end({ unchecked: `git grep for the files that ${what} failed (exit ${hits.exitCode}: ${hits.stderr.trim().split('\n')[0] || 'no message'})` })
         if (!hits.isStdoutTruncated) {
           for (const line of hits.stdout.split('\n')) {
@@ -675,8 +682,9 @@ const placed = async ($: EngineInterface, path: string, deadline: number): Promi
  *
  * Only JavaScript, TypeScript and python are traced. A sender or module that cannot be traced
  * counts every string of the files it imports, on both sides, so there it is a newly imported file
- * that is held; so does a search for senders that stopped short. Anything that cannot be read or
- * listed in time, and names newly handed on through more files than the guard follows, is could
+ * that is held; so does a search for senders that stopped short. A search that runs out of time,
+ * and names newly handed on through more files than the guard follows, are untraced, held for Dan
+ * to approve that one edit (#2709, #2796); anything that cannot be read or listed at all is could
  * not check.
  */
 const broughtIn = async ($: EngineInterface, path: string, before: string, after: string, deadline: number): Promise<Verdict> => {
@@ -687,7 +695,8 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
   if (!mayBringIn(rBefore, rAfter)) return PASS
   let top = ''
   const left = async () => Math.floor(deadline - (await $.clock.now()))
-  const late = (): never => end({ unchecked: `what this edit to ${path} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds` })
+  const outOfTime: Unchecked = { unchecked: `what this edit to ${path} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`, untraced: true, late: true }
+  const late = (): never => end(outOfTime)
   // Each imported file, read once: its strings, and its reading where its sends can be traced. A
   // file that holds no message text the guard reads (a JSON file, a stylesheet) is null.
   type Mod = { path: string; text: string; lang: ReturnType<typeof languageOf>; lits: Lit[]; r?: Reading }
@@ -729,6 +738,7 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
       const ms = await left()
       if (ms <= 0) late()
       const out = await $.process.run(['git', '-C', top, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...specs], { timeoutMs: ms })
+      if (out.exitCode !== 0 && (await left()) <= 0) late()
       if (out.exitCode !== 0 || out.isStdoutTruncated)
         end({ unchecked: `git could not list the files ${top}/${rel} imports (exit ${out.exitCode}: ${out.stderr.trim().split('\n')[0] || 'no message'})` })
       rels = [...new Set(out.stdout.split('\u0000'))].filter(r => r && r !== rel && !testFile(r) && !isProseFile(r) && refersTo(rel, text, r))
@@ -803,14 +813,20 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     }
     return added.length ? { file: path, added, removed: [], keys: added.map(wordingKey), from: from.join(', '), ...(literal.length ? { literal: [...new Set(literal)] } : {}) } : undefined
   }
-  // Untraced is kept, so a limit the trace met is still told from a failure (#2709).
+  // Untraced and late are kept, so a limit the trace met, or its time running out, is still told from
+  // a failure (#2709, #2796).
   const failed = (err: unknown): Verdict =>
-    err instanceof Ended && 'unchecked' in err.found ? { unchecked: err.found.unchecked, ...(err.found.untraced ? { untraced: true as const } : {}) } : { unchecked: message(err) }
+    err instanceof Ended && 'unchecked' in err.found
+      ? { unchecked: err.found.unchecked, ...(err.found.untraced ? { untraced: true as const } : {}), ...(err.found.late ? { late: true as const } : {}) }
+      : { unchecked: message(err) }
   let verdict: Verdict | undefined
   const settle: Settle = async (senders, repo, texts, template) => {
     top = repo
     try {
       for (const s of senders) {
+        // Tracing a sender reads nothing new once its files are read, so without this the search ran
+        // on past its deadline, sender after sender, toward the hook's own limit (#2796).
+        if ((await left()) <= 0) late()
         let now: Reached
         let was: Reached | undefined
         if (s.rel === template) {
@@ -856,7 +872,7 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
   // of an edit is when its own search stops short.
   // A search that ran out of time says so (#2719): git given what was left of it, or none, was read
   // as "git could not name the repository" and as git "aborted: still running after 12ms".
-  const lateNow = async (): Promise<Verdict | undefined> => ((await left()) <= 0 ? { unchecked: `what this edit to ${path} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds` } : undefined)
+  const lateNow = async (): Promise<Verdict | undefined> => ((await left()) <= 0 ? outOfTime : undefined)
   try {
     const at = await placed($, path, deadline)
     if (!at) return (await lateNow()) ?? { unchecked: `git could not name the repository ${path} is in, so what this edit brings to a Slack send could not be told` }
@@ -902,8 +918,9 @@ const judgeEdit = async ($: EngineInterface, tool: string, input: Record<string,
   }
 }
 
-// An edit whose trace stopped at one of the guard's own limits (#2709) stops there on every try, so
-// it is held for Dan to approve, with the lines it adds and takes away shown. His approval is kept by
+// An edit whose trace stopped at one of the guard's own limits (#2709) stops there on every try, and
+// one whose search ran out of time (#2796) did so about 20 times on a busy Mac, so it is held for Dan
+// to approve, with the lines it adds and takes away shown. His approval is kept by
 // the file and the edit's whole text, so it lets that one edit through and no other.
 const askUntraced = async ($: EngineInterface, path: string, before: string, after: string, v: Verdict): Promise<Verdict> => {
   if (!('unchecked' in v) || !v.untraced) return v
@@ -913,7 +930,7 @@ const askUntraced = async ($: EngineInterface, path: string, before: string, aft
   } catch (err) {
     return { unchecked: message(err) }
   }
-  return { hold: { file: path, ...changedLines(before, after), keys: [key], untraced: v.unchecked } }
+  return { hold: { file: path, ...changedLines(before, after), keys: [key], untraced: v.unchecked, ...(v.late ? { late: true as const } : {}) } }
 }
 
 /** The verdict on the wording an edit changes in its own file. */
@@ -1132,13 +1149,13 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
   // An edit the guard could not trace (#2709): Dan is shown its lines, never a rendered message, so it
   // is never chosen overnight, which needs one.
   if (v.hold.untraced !== undefined) {
-    const { file, added, removed, keys, untraced } = v.hold
+    const { file, added, removed, keys, untraced, late } = v.hold
     if (id) {
       const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, untraced, ...(agent ? { agent: true as const } : {}) }
       await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
       await drawCard($, id, `${untracedText(file, added, removed, untraced)}.`, agent ? 'The main session asks you about it.' : undefined)
     }
-    return agent ? untracedAgentRefusal(id, file, added, removed, untraced) : untracedRefusal(id, file, added, removed, untraced)
+    return agent ? untracedAgentRefusal(id, file, added, removed, untraced, late) : untracedRefusal(id, file, added, removed, untraced, late)
   }
   const { file, added, removed, keys, sender, literal, from, unwired } = v.hold
   // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
