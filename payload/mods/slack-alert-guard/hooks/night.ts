@@ -11,7 +11,8 @@ import { APPROVE, CHANGE, SOURCE, fixedParts } from './rules.ts'
 //      a choice holds pull requests only in the repositories it was made in or let wording through
 //      in (#2833), and one whose repository cannot be read holds them in every repository;
 //   2. it lets wording through only while sleep mode is on, so a day session asks him as before;
-//   3. in the morning the session that chose it puts it to him in the guard's own picker, and only
+//   3. in the morning the session that chose it (once that one ended, a session working in the
+//      repository it was made in, #2833) puts it to him in the guard's own picker, and only
 //      his Approve wording there records an approval; Change wording, a dialog closed by itself, or
 //      no answer leaves it held and asked again;
 //   4. one unanswered for CHOICE_MS expires, said once in each session that may ask it (a session in
@@ -74,7 +75,8 @@ const asking = (c: SlackAlertChoice) =>
 /**
  * What a session is told at Dan's message while he is awake (never while asleep, when no question
  * reaches him): each choice still waiting that this session made, or that a session since ended made,
- * put to him now; each expired one, once per session, named as expired and still held.
+ * put to him now; each expired one, once per session, named as expired and still held. Given only the
+ * choices this session may ask (register.ts askedHere, #2833): its own, or ones made in its repository.
  */
 export const morningLines = (choices: readonly SlackAlertChoice[], session: string, told: readonly string[]): string[] => {
   const lines: string[] = []
