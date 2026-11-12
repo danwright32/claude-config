@@ -220,7 +220,7 @@ echo "shipped-worktrees: report mode judges every worktree and changes nothing"
 agent vanished fix/vanished >/dev/null
 nobody_in_vanished(){
   local cwds; cwds="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
-  ! grep -q "^n$WT/vanished\(/\|\$\)" <<< "$cwds"
+  ! grep -Eq "^n$WT/vanished(/|\$)" <<< "$cwds"
 }
 hang_wait nobody_in_vanished || bad "a process was still standing in the vanished worktree, so it could not be removed"
 rm -rf "$WT/vanished"
