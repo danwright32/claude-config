@@ -6468,7 +6468,9 @@ recorded when the merge landed is chosen. Links pasted in one prompt are owed to
 before any link was pasted owes the threads the session started from, and a PR linking a thread
 the session started from owes that one. The session may say once, with the `unrelated_merges`
 tool, that its merges have nothing to do with the threads (#2653); since #2849 that clears the
-merges already landed as well as later ones, though never a reply a PR's link or a card asks for.
+merges already landed as well as later ones. It never clears a reply owed to a thread pasted mid
+session that a PR links, nor a card's message; a PR's link to a thread the session started from is
+cleared, as before.
 
 </td><td>
 

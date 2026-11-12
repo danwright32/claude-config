@@ -167,7 +167,9 @@ const latest = (...xs: (number | undefined)[]): number | undefined => {
 /**
  * The step a thread's draft is owed from: the latest merge whose pull request links it when pasted
  * mid session (#2578), and the latest merge owing it the session's reply (#2849) until the session
- * says its merges are unrelated (#2653). A card asking a draft of its message in a thread the session
+ * says its merges are unrelated (#2653). That reply includes one a pull request's link to a thread
+ * the session started from asks for, which saying so cleared before #2849 too, so it still does.
+ * A card asking a draft of its message in a thread the session
  * started from (#2630) owes it from the latest merge whatever was said, as a card for a thread
  * pasted mid session does through `related`.
  */
