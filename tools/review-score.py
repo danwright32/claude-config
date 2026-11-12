@@ -72,6 +72,11 @@ import sys
 import tempfile
 import time
 
+# No cache left in the hooks lib (#2600). Set here, before anything loads from it, rather than in
+# one loader: review-answered.py is loaded as this file is imported, and a setting inside the
+# runner's loader came too late for it (#2840).
+sys.dont_write_bytecode = True
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_HOOKS_LIB = os.path.join(REPO, "payload", "hooks", "lib")
 DEFAULT_LESSONS_DIR = os.path.join(REPO, "payload")
@@ -175,7 +180,6 @@ def load_case(root, cid):
 def _runner_module(hooks_lib):
     """The runner itself, so a finding line is recognised by the same pattern the gate counts."""
     path = os.path.join(hooks_lib, "ai-review-run.py")
-    sys.dont_write_bytecode = True   # no cache left in the hooks lib (#2600)
     spec = importlib.util.spec_from_file_location("ai_review_run", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

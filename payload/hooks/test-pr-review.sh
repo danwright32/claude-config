@@ -2836,7 +2836,7 @@ spec.loader.exec_module(m)
 mark = " [review harness: not placed, it quoted no line, so line 4 is the reviewer's own number, unchecked]"
 print(m.similarity("the cache key ignores the locale" + mark, "retries never back off between attempts" + mark))
 PY
-sim="$(python3 -c "$sim_prog" "$DIR/lib/review-answered.py" </dev/null)"
+sim="$(python3 -B -c "$sim_prog" "$DIR/lib/review-answered.py" </dev/null)"
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.35 else 1)" "${sim:-1}" && ok \
   || bad "#1357 two different claims carrying the same harness mark read as one point (similarity $sim)"
 runners_done || bad "#1357 a runner was still going at the end"
