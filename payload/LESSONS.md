@@ -4727,6 +4727,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   is crossed by chance.** (bidspoke#2851, 2026-10-27)
   SHORT: A rate monitor judging a sub-day window against whole days must match clock hours, and page only on a shift improbable at its count.
 
+- **L850. A record that an alert was already sent for a condition that can persist must be renewed
+  for as long as the condition stands, never given a fixed expiry shorter than the condition can
+  last, because on the day the record lapses the same alert posts again with nothing having
+  changed.** (bidspoke#3599, 2026-11-12)
+  SHORT: A record that an alert was sent must be renewed while its condition stands, or the alert repeats when the record's fixed expiry lapses.
+
 ## State and identity
 
 - **L1032. A check that a file is still the one it was before must not rest on its device and inode

@@ -195,6 +195,28 @@ sl="$(printf 'probe-bare-same-line.sh\n' | python3 "$SCAN" --root "$TMPROOT" --b
 [ "$sl_rc" = 0 ] && [ -z "$sl" ] \
   && check "#2040 a bare wait after a named one on the same line still counts, and the scan does not fail on it" ok \
   || check "#2040 a bare wait after a named one on the same line still counts, and the scan does not fail on it" "exit $sl_rc: $sl"
+# A function written on one line, `ok(){ ...; }`, ends on that line (#2838). Read as running on to
+# the next line starting with `}`, it swallowed the top level after it: a later one line function
+# then hid a bare wait from the job before it (test-merge-turn.sh's racers), and a top level job
+# after one that waits borrowed that wait. A job with no kept pid is answered by a bare wait after it
+# in its own scope as a kept one is, unless a `disown` comes between them (the controls).
+{
+  printf '#!/usr/bin/env bash\n'                                    # 1
+  printf 'ok(){ pass=$((pass + 1)); }\n'                            # 2
+  printf 'for i in 1 2; do\n  sleep 1 &\ndone\nwait\n'              # 3-6 not: the bare wait after it at the top level
+  printf "trim_ps(){ sed 's/ *\$//'; }\n"                           # 7
+  printf 'f(){ sleep 2 & q=$!; }\n'                                 # 8 background: its one line function never waits
+  printf 'sleep 4 &\ndisown\nwait\n'                                # 9-11 background: disowned before the bare wait
+  printf 'sleep 5 &\np=$!\ndisown "$p"\nwait\n'                       # 12-15 background: disowned by the name it is kept in
+  printf 'sleep 3 &\nr=$!\n'                                        # 16-17 background: the only bare wait after it is in g
+  printf 'g(){ wait; }\n'                                           # 18
+} > "$TMPROOT/probe-one-line-function.sh"
+olf="$(printf 'probe-one-line-function.sh\n' | python3 "$SCAN" --root "$TMPROOT" --background)"; olf_rc=$?
+olf_got="$(printf '%s\n' "$olf" | awk -F': ' 'NF { split($1, p, ":"); printf "%s:%s ", p[2], $2 }')"
+[ "$olf_rc" = 1 ] && [ "$olf_got" = "8:background 9:background 12:background 16:background " ] \
+  && check "#2838 a one line function ends on its own line, so it neither hides nor lends a bare wait" ok \
+  || check "#2838 a one line function ends on its own line, so it neither hides nor lends a bare wait" "exit $olf_rc, got '$olf_got' where '8:background 9:background 12:background 16:background ' was wanted:
+$olf"
 
 # An `&` inside arithmetic is a bitwise and, and a `<(` there is a comparison, never a job or a
 # process substitution (#2015): bug-bash's egress setup and disk-clean's scan-lib.sh read flags that
