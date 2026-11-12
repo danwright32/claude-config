@@ -192,7 +192,7 @@ bad = [t for t in texts
        if rs.claim_matches(t.lower(), item, False, t) != (ra.similarity(t, item["claim"]) >= ra.MIN_SIMILARITY)]
 print("agree" if not bad else "differ: " + " | ".join(bad))
 PY
-agree="$(python3 -I -c "$agree_prog" "$TOOL" "$DIR/../payload/hooks/lib/review-answered.py" </dev/null)"
+agree="$(python3 -I -B -c "$agree_prog" "$TOOL" "$DIR/../payload/hooks/lib/review-answered.py" </dev/null)"
 check "a restated claim is judged by review-answered.py's own measure" "agree" "$agree"
 rm -f "$FAKE_DIR/answers/far.txt"
 answer far2 "shop/paginate.py" 'shop/paginate.py:16: range stops at len(items) - 1 (off by one). Should be: len(items). [severity: major]

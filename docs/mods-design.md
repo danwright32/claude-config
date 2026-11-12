@@ -2833,7 +2833,7 @@ direction is what follows.
   a className, style, literal, JSX, copy, an import, a prop on a plain HTML element (CSS can read
   it), two changes in one edit, a shell edit, a new file. Leaning that way on purpose: a hold costs
   Dan one answer, a pass is a look he never saw.
-- **A third answer.** The skip question offers Not a look change (named Not a look or wording change since #1911) beside Skip them and Run
+- **A third answer.** The skip question offers Not a look change (named Not a look or wording change from #1911 until #2845) beside Skip them and Run
   /design-rounds. It lets that one refused call through, recognised when it is sent again unchanged
   by a hash of its tool, its input, the folder it runs in and the session (so a shell command's
   relative path elsewhere, or the same edit in a later session, is asked about again), within an
@@ -2861,7 +2861,7 @@ direction is what follows.
   file. A file an inline script only mentions keeps its route segments and groups (`(shop)`) too;
   it was read as `/page.tsx`, at the top of the disk, and passed.
 - **The design rounds skill has an exit with nothing to render**: say so, build no switcher, and
-  ask the guard's own question about the refused edit, where Not a look or wording change lets it through.
+  ask the guard's own question about the refused edit, where Not a look change lets it through.
 
 ### What #1015 and #1057 changed, 2026-10-12
 
@@ -3043,7 +3043,7 @@ way", so the edit it never wanted stayed.
   other way", and, for a `.tsx` or `.jsx` file only, that undoing an earlier edit of one's own is
   judged by the lines it changes; a stylesheet's refusal does not claim it (lessons review).
 - Left as is: a stylesheet or other look file has no lines that draw nothing, so putting one back
-  still waits on a round. Dan's Not a look or wording change lets one refused call through, so undoing an edit
+  still waits on a round. Dan's Not a look change lets one refused call through, so undoing an edit
   he passed that way to a stylesheet is asked about again.
 
 ### What #1171 changed, 2026-10-13
@@ -3259,7 +3259,7 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
 - **A shell write judged by what it leaves** (Dan, 2026-10-17: judge after, and undo). A shell write
   to a mod's `.ts` hook file that draws nothing yet runs, and the guard reads the file again once it
   ran (a `tool.call` hook around the `tool.check` judgement, and the subagent's own). One the command
-  made draw, on an issue Dan has not answered for and not his Not a look or wording change for that call, is put
+  made draw, on an issue Dan has not answered for and not his Not a look change for that call, is put
   back: what the command wrote is written to the session's scratchpad
   (`design-round-guard/<call id>-<file>`) and read back first; the file is put back only while it
   still holds exactly what the command wrote; a file the command made is taken away with `rm`. The
@@ -3360,7 +3360,7 @@ read no write from a script file's arguments.
   file that draws nothing runs and is read again after (#1296; since #1576 any mod hook file, `.ts`,
   `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
-  `scriptUnread`); where the script only reads it, Dan's Not a look or wording change lets that one call through.
+  `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
 - **The settled page went through by a cp, until #1593.** As #1586 shipped, a page under
   `docs/design` handed to a script was never seal checked, since there is no text to check before it
   runs, so make-settled.py run straight into `docs/design` was held on an issue with no answer. The
@@ -3450,8 +3450,8 @@ before saving, the overnight LESSONS.md check, the collision guard, the design r
 - **What it costs.** A test runner handed a test file (`npx vitest run x.test.ts`, the commonest
   form) is now, to the collision guard, a possible edit of that file, as a script handed one has been
   since #1592; to the design round guard a test passes. A read only tool handed a screen file (`npx
-  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look or
-  wording change lets it through. No list of tools that only read was added: such a list exempts whatever it
+  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look
+  change lets it through. No list of tools that only read was added: such a list exempts whatever it
   misses (L96), and an exemption is Dan's to sign off.
 - **Still unread.** A file a run writes that no argument names (a path in a script's own text), what
   is under a folder a run is handed (`npx codemod app/`, judged as the folder alone, which is no look
@@ -3469,7 +3469,7 @@ deleted).
   being asked; changed, it stands while the design rounds skill's own check says it is still a
   settled design exactly as make-settled.py sealed it (register.ts `sealed`, the one call of
   `sealCheck` the before and after readings share). Otherwise, on an issue Dan has not answered for
-  and not his Not a look or wording change for that call, it is put back as it was, what the script wrote kept
+  and not his Not a look change for that call, it is put back as it was, what the script wrote kept
   in the session's scratchpad first, a page the script made taken away, one it took away written
   back, and the call waits on him with the check's reason; the outcome is said as the page no longer
   being sealed, never as a mod's drawing (rules.ts `shellOutcome`'s `record`). A seal check that
@@ -3502,6 +3502,7 @@ worktree-agent-a09a06788b6ba53ab in claude-config" (2026-10-29, for #1859), a na
 - **The answers name wording (#1911).** Since #1859 a hold can be for a message's words alone, so the
   third answer reads "Not a look or wording change" and the other two say "change the look or
   wording". The answer is matched by the constant, never stored, so nothing kept is stranded.
+  Reversed by #2845, which names the look only again.
 - **One reading of a .ts hook change (#1911).** `modHookTsShows`, a yes or no wrapper over
   `modHookTsHold` that only tests called, is gone; its tests now assert which hold each change gets
   (the look, a message's words, or none), which the wrapper could not tell apart.
@@ -3524,7 +3525,7 @@ adding a refusal Dan reads, so confidence comes from the guard's own reading, ne
   `DesignRoundAutoPass`: kind `no-screen-change`, when, the tool, the files, the issue it would have
   waited on, why (rules.ts `autoPassWhy`) and the call. Nothing reads it to let a call through.
 - **What stays held.** A mod's hook file (its own readings, #1138 to #2161, decide it, and a
-  message's words there are asked about, which keeps the #2173 shape held); any string, comment or
+  message's words there were asked about until #2845, which kept the #2173 shape held); any string, comment or
   number change anywhere in an app file; a call also changing a file that is held for any other
   reason; an issue whose answers or checkout cannot be read; text the reader cannot follow; and a
   pass whose record cannot be written, which is held and asked about as before.
@@ -3538,7 +3539,7 @@ adding a refusal Dan reads, so confidence comes from the guard's own reading, ne
   an answer it kept from one it ignored, and picker manners checked its question off on the issue
   either way (a typed answer, a dialog closed while Dan was away). Now, after storing Skip them or
   Settled for the issue, and only then, the guard raises
-  `$.designRound.answered({ call, question, answer, options })`. Not a look or wording change is not
+  `$.designRound.answered({ call, question, answer, options })`. Not a look change is not
   raised (lessons review of PR #2274): it lets one call through, records nothing for the issue, and
   the next look changing edit there is asked about again, so its question must stay open. The
   event is a noun of its own with a no-op default set in `engine.create`, the pattern
@@ -3577,6 +3578,76 @@ identical to the branch's own commit.
 - Left as is: a settled design under docs/design keeps `putBack`; an Edit or Write resolving a
   conflict, and `git checkout HEAD -- <file>` on an unmerged file, are still judged against the
   disk; and `git merge` itself is not read by mod-kit's git reader.
+
+### What #2845 changed, 2026-11-12
+
+Dan, 2026-11-12, choosing "any words": added, reworded or removed message text in a mod passes the
+guard with nothing asked, kept on record as an automatic pass; only a change to how something looks
+stops. Alert and Slack wording stay with the Slack alert guard.
+
+- **Words pass, named.** rules.ts `modHookTsChange` (which replaces `modHookTsHold`) returns
+  `{ look }` or `{ words }`, and `messageWords` names the words a `.tsx` or `.jsx` edit changes.
+  A words change is never held: register.ts records it under `auto:<the call's key>` with the
+  words in `why` (`autoPassWhy`, citing #2845), by an Edit, MultiEdit, Write, git put back or shell
+  write alike. A shell write whose record cannot be kept is put back and held, as a look change is.
+- **A refused command leaves nothing behind.** Dan, 2026-11-12: a shell command that changes a file
+  the guard holds and undoes, and also a mod file only in a message's words, has the words file put
+  back too, with nothing recorded (register.ts afterShell, `shellOutcome` `beside`). Run again once
+  Dan answers, the words pass and are recorded then.
+- **A pass that cannot be recorded says so (L11).** Held because its record failed, for #2294's
+  logic only pass and this words pass alike, the call's refusal, card and shell outcome say the
+  guard read it as leaving the look unchanged but could not record that (rules.ts `heldAs`,
+  `shellOutcome`'s `unrecorded`), never that it changes the look or what the mod draws.
+- **What stays held.** What a mod draws: a drawing call, JSX, a line builder, a colour or frame,
+  and the words inside what is drawn (a band row, a pane, a card's text), which are drawing, not a
+  message. An app's React screen file is unchanged (#2294): its text is still held.
+- **Reversed.** The wording holds of #1837, #1841 (for #1823's "message wording should be asked
+  about"), #1859, #1925, #1934 and #2161 (reasonsOnly and its helpers are deleted), and #2788's
+  narrowing, which now decides which words are named, not which are held.
+- **The answers name the look only.** The skip question's third answer is Not a look change again,
+  and its other answers, the refusal and the reason kept say the look, never wording. Labels are
+  worded by the guard alone, so contract 3 stands.
+
+### What #2847 and #2830 changed, 2026-11-12
+
+- **A script file's own code is read (#2847).** On 2026-11-12 the #2845 builder ran four python
+  scripts from its notes folder that rewrote this guard's rules.ts by a path inside their code, and
+  none was judged: a script was read only for the files it is handed (#1586). register.ts
+  `scriptsRun` now finds each python or node script file a command runs (an interpreter's operand,
+  or one run by its own name with a .py, .js or .ts kind of extension) and hands its text to mod-kit's
+  write reader as a program on standard input (rules.ts `asProgram`), so it is read exactly as
+  inline code is, with no second reader. Each file its code names and writes is judged as a write
+  of it: a mod hook file is read again once the command ran, so one only read passes, and a screen
+  file is held before it runs, saying which script names it (`scriptNamesFile`). Where its writes are
+  not all named, a mod hook file its text names (`mentionedModHookFiles`), and a look changing file
+  named from the top of the disk or home, are judged too; a relative look changing name there is
+  not. A name its code writes where the folder it runs in cannot be followed, or a script that is
+  there but cannot be read, is held as could not check.
+- **Measured before shipping.** Over 14 days of this Mac's Bash commands (7,951 distinct ones
+  naming an interpreter or a script; 1,927 ran a script file, 575 of them still on disk to read)
+  and the repository's own 170 scripts, nothing was held before running and nothing was held as
+  could not check. Eight were judged after running, each a script naming a mod hook file: five
+  commands running the #2845 scripts, the case the issue names, and three scripts that only read
+  one. Before the
+  relative rule, seven commands were held, every one usage text, a docstring or a scratch repository
+  fixture (make-switcher.py's `<out.html>`, an end to end test's `site/invoices/index.html`).
+- **A write it could not follow says so (L11, folded in by Dan).** rules.ts `unsure` and
+  `unsureCard` said "could not tell which issue or branch it belongs to" for every hold of that
+  kind, a write the guard could not follow included (a folder git cannot list, a name a variable,
+  pattern or command's output fills in, a script's write that cannot be placed). Those now say the
+  guard could not check where the call writes, why, and to name each file where it can be read
+  (the verdict's `unfollowed`); a checkout the disk cannot answer for keeps the branch sentence.
+- **Not read.** A shell script's own commands, a script named through a variable or a command's
+  output, a relative script name where the folder cannot be followed, a script written by the same
+  command (it is read as it stands on disk), and a module a script imports.
+- **A restore beside other commands is measured (#2830).** #2777 measured a git checkout or restore
+  only where it ran first on its line, alone, in no pipe or background. register.ts `restoreAlone`
+  now measures one wherever every command that runs before it, or beside it in a pipe or the
+  background, can neither move a ref nor change the index (rules.ts `leavesGitAlone`: a reading
+  command, or git reading only) or is another restore of named paths (`pathRestore`). Two restores
+  where one reads the index (`indexSource`), and a line writing inside .git, stay whole, and the
+  refusal names the command that may change what it puts back. A settled design record keeps the
+  strict rule of one restore alone. This lets through restores held before, so it waits on Dan.
 
 ## Picker manners (#615), built 2026-10-04
 
@@ -3617,7 +3688,7 @@ What picker manners does:
   the guard's store is its own, so the guard says so itself: after storing Skip them or Settled for
   the issue it raises `$.designRound.answered` with the question, answer and choices, and picker
   manners' `on('designRound.answered')` writes the item, off the dialog. Its own picker's other
-  answers (Run design rounds, Not yet, and Not a look or wording change, which passes one call and
+  answers (Run design rounds, Not yet, and Not a look change, which passes one call and
   settles nothing for the issue), a typed answer and a dialog closed while Dan
   was away record nothing, so nothing is written, and the question is no longer added open either.
   A question in the guard's words asked without its picker is never written as settled (#2253).
