@@ -1399,6 +1399,63 @@ export const targetUnread = (file: string, why: string): string =>
 export const scriptUnread = (script: string, file: string): string =>
   `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
 
+/**
+ * What a refusal says of a file a script file's own code writes (#2847): the script was read as
+ * mod-kit reads inline code, and the file its code names cannot be read as it will be until it ran.
+ */
+export const scriptNamesFile = (script: string, file: string): string =>
+  `The design round guard cannot read what ${script} writes to ${file}, which its own code names, before it runs, so it judged it as a write of that file.`
+
+/** Why a script file whose own code names a look changing file by a relative name, run where the folder cannot be followed, could not be checked (#2847). */
+export const scriptUnplaced = (script: string, file: string): string =>
+  `${script} names ${file} in its own code, and where that file is could not be followed, since the folder the script runs in is not known`
+
+/** Why a script file that is there could not be checked (#2847): reading it failed, so what its code writes is unknown. */
+export const scriptUnreadable = (script: string, why: string): string => `${script} could not be read for the files its own code writes (${why})`
+
+/**
+ * The language a script file a command runs is read in for what its own code writes (#2847): python
+ * or node, by the program the command runs it with (mod-kit's `language`, the one reader of what a
+ * command runs; bun and deno read as node), else, for a file run by its own name, its extension.
+ * Undefined for anything else (a shell script, awk's or sed's program file, a binary, a file run by
+ * its own name with no such extension, whose #! line no mod-kit reader gives), whose own writes are
+ * not read here.
+ */
+export const scriptLanguage = (path: string, language?: string): 'python' | 'node' | undefined => {
+  if (language === 'python' || language === 'node') return language
+  if (language !== undefined) return undefined
+  if (/\.py$/i.test(path)) return 'python'
+  return /\.(?:[cm]?js|[cm]?ts)$/i.test(path) ? 'node' : undefined
+}
+
+/**
+ * A script file's text as a command handing it to its language on standard input from a quoted
+ * heredoc (#2847), so mod-kit's write reader reads it exactly as it reads inline code (which files
+ * its code writes, by name where it can tell, and its text with data blanked), the one reader of what
+ * a program writes (L655). The heredoc's end word is one no line of the text is.
+ */
+export const asProgram = (lang: 'python' | 'node', text: string): string => {
+  const lines = new Set(text.split('\n'))
+  let end = 'DESIGN_ROUND_GUARD_SCRIPT'
+  while (lines.has(end)) end += '_'
+  return `${lang === 'python' ? 'python3' : 'node'} - <<'${end}'\n${text}${text.endsWith('\n') ? '' : '\n'}${end}`
+}
+
+/**
+ * The mod hook TypeScript files a program's text names (#2847), as mentionedLookFiles names look
+ * changing ones: a mod's plain .ts hook file may build what it draws (#1275), and a program that
+ * writes files without naming every one may write such a file it names. Judged as a shell write to
+ * it is, read again once the command ran, so one only read passes.
+ */
+export const mentionedModHookFiles = (text: string): string[] => {
+  const out: string[] = []
+  for (const m of text.matchAll(/[\w./~@+-]+\.[cm]?ts\b/g)) {
+    const word = m[0].replace(/^[.]+(?=[^./])/, '')
+    if (isModHookTs(word) && !out.includes(word)) out.push(word)
+  }
+  return out
+}
+
 
 /**
  * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files in
@@ -3004,6 +3061,39 @@ const unreadSaid = (unread: readonly string[]) => (unread.length ? `${unread.joi
 /** One file a git checkout or restore puts back that could not be read, and why (#1158). */
 export const unreadPutBack = (file: string, why: string): string =>
   `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
+
+// #2830: the commands that only read, never run another program, and so can never move a ref or
+// change git's index, and git's own subcommands that only read. A restore with only these before it
+// on its line, or beside it in a pipe or the background, is read by what git holds at the source it
+// names, as one alone is (#1158). Any other command may move what it reads (a switch, an add, a
+// fetch, a script that runs git), so the restore beside it is judged whole. A write inside .git is
+// told apart by the caller. Read, never copied: a name missing here only leaves a restore whole.
+const READS_ONLY_COMMANDS: ReadonlySet<string> = new Set(['cat', 'ls', 'echo', 'printf', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'diff', 'cmp', 'true', 'false', 'test', '[', 'sleep', 'pwd', 'date', 'sort', 'uniq', 'cut', 'tr', 'nl', 'column', 'jq', 'stat', 'file', 'basename', 'dirname', 'realpath', 'readlink', 'which', 'wait'])
+const GIT_READS_ONLY: ReadonlySet<string> = new Set(['status', 'diff', 'log', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'cat-file', 'blame', 'grep', 'rev-list', 'merge-base', 'describe', 'shortlog', 'show-ref', 'diff-tree', 'diff-index', 'name-rev', 'check-ignore'])
+
+/**
+ * Whether a command, by its words and mod-kit's git reading of them, can neither move a ref nor
+ * change git's index (#2830): one of READS_ONLY_COMMANDS, or git running a subcommand that only reads.
+ */
+export const leavesGitAlone = (words: readonly string[], git: { sub: string | undefined } | undefined): boolean => {
+  const name = (words[0] ?? '').split('/').pop() ?? ''
+  if (name === 'git') return git?.sub !== undefined && GIT_READS_ONLY.has(git.sub)
+  return READS_ONLY_COMMANDS.has(name)
+}
+
+/**
+ * Whether git's reading of a command is a restore of named paths (#2830): any git restore, or a git
+ * checkout naming a path after `--` or after a source, as mod-kit's write reader reads one. A
+ * checkout naming one word (git may take it for a branch) or making a branch moves HEAD, so it is none.
+ */
+export const pathRestore = (git: { sub: string | undefined; args: readonly string[] } | undefined): boolean => {
+  if (git?.sub === 'restore') return true
+  if (git?.sub !== 'checkout' || git.args.some(a => ['-b', '-B', '--orphan'].includes(a))) return false
+  return git.args.includes('--') || git.args.filter(a => !a.startsWith('-')).length >= 2
+}
+
+/** Whether a restore's source, as `git cat-file blob <from>:<path>` reads it, is git's index or one side of a conflict in it (#2830). */
+export const indexSource = (from: string): boolean => from === '' || from.startsWith(':')
 
 /**
  * Whether a path inside its checkout is where a settled design is committed (#1524): an HTML page, the

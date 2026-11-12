@@ -78,6 +78,12 @@ import {
   passesByShape,
   caughtCheck,
   caughtCall,
+  scriptLanguage,
+  asProgram,
+  mentionedModHookFiles,
+  leavesGitAlone,
+  pathRestore,
+  indexSource,
 } from '../hooks/rules.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
@@ -2472,4 +2478,42 @@ test('#2788, #2845: the same change carrying new words for a message, or a messa
   // A message's own words taken away, the helper beside it.
   const gone = untracedWrapped(UNTRACED_HELPER).replace('return { deny: `Blocked: ${v.unchecked}` }', 'return { deny: v.unchecked }')
   expect(changeOf([], 'register.ts', UNTRACED_BEFORE, gone)).toBe('words')
+})
+
+// #2847: a script file is read in the language the command runs it with, else by its extension.
+test('#2847: scriptLanguage reads python and node scripts only, by the program, then the extension', () => {
+  expect(scriptLanguage('/n/a.txt', 'python')).toBe('python')
+  expect(scriptLanguage('/n/a.py', 'awk')).toBeUndefined()
+  expect(scriptLanguage('/n/gen.py', undefined)).toBe('python')
+  expect(scriptLanguage('/n/gen.mts', undefined)).toBe('node')
+  expect(scriptLanguage('/n/tool', undefined)).toBeUndefined()
+  expect(scriptLanguage('/n/run.sh', undefined)).toBeUndefined()
+})
+
+// #2847: the heredoc a script's text is handed in never ends early on a line of the script itself.
+test('#2847: asProgram ends its heredoc on a word no line of the script is', () => {
+  expect(asProgram('python', "print('x')")).toBe("python3 - <<'DESIGN_ROUND_GUARD_SCRIPT'\nprint('x')\nDESIGN_ROUND_GUARD_SCRIPT")
+  const tricky = "a = 1\nDESIGN_ROUND_GUARD_SCRIPT\nb = 2\n"
+  expect(asProgram('node', tricky)).toBe(`node - <<'DESIGN_ROUND_GUARD_SCRIPT_'\n${tricky}DESIGN_ROUND_GUARD_SCRIPT_`)
+})
+
+test('#2847: mentionedModHookFiles names only a mod hook TypeScript file, never a declaration or other .ts', () => {
+  expect(mentionedModHookFiles("p = '/w/r/payload/mods/demo/hooks/rules.ts'; q = 'src/app.ts'; d = 'mods/x/hooks/t.d.ts'; m = \"mods/y/hooks/a.mts\"")).toEqual(['/w/r/payload/mods/demo/hooks/rules.ts', 'mods/y/hooks/a.mts'])
+})
+
+// #2830: what may run before or beside a measured restore without moving what it reads from.
+test('#2830: leavesGitAlone passes reading commands and git reading only; pathRestore is a restore of named paths', () => {
+  expect(leavesGitAlone(['cat', 'list'], undefined)).toBe(true)
+  expect(leavesGitAlone(['/bin/echo', 'x'], undefined)).toBe(true)
+  expect(leavesGitAlone(['git', 'status'], { sub: 'status' })).toBe(true)
+  for (const sub of ['add', 'switch', 'fetch', 'commit', 'checkout', 'stash', 'branch']) expect({ sub, alone: leavesGitAlone(['git', sub], { sub }) }).toEqual({ sub, alone: false })
+  expect(leavesGitAlone(['python3', 'x.py'], undefined)).toBe(false)
+  expect(leavesGitAlone(['xargs', 'git'], undefined)).toBe(false)
+  expect(pathRestore({ sub: 'restore', args: ['--staged', 'f'] })).toBe(true)
+  expect(pathRestore({ sub: 'checkout', args: ['HEAD', '--', 'f'] })).toBe(true)
+  expect(pathRestore({ sub: 'checkout', args: ['main', 'f'] })).toBe(true)
+  expect(pathRestore({ sub: 'checkout', args: ['main'] })).toBe(false)
+  expect(pathRestore({ sub: 'checkout', args: ['-b', 'x', 'main'] })).toBe(false)
+  expect(pathRestore({ sub: 'switch', args: ['main'] })).toBe(false)
+  expect([indexSource(''), indexSource(':2'), indexSource('HEAD'), indexSource('origin/main')]).toEqual([true, true, false, false])
 })

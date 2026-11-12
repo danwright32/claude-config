@@ -3,7 +3,7 @@ import { awaitAtEnd, never, test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES, settledNotYet } from '../hooks/rules.ts'
-import { commandWrites } from './mod-kit/hooks/writes.ts'
+import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import { git as gitCommand, pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
@@ -223,7 +223,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       const input = JSON.parse(String(args[1])) as { command: string; cwd: string; home: string }
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
     }
-    if (cmd === '__modkit' && args[0] === 'pipeline') return ok(JSON.stringify(pipeline(JSON.parse(String(args[1])).command)))
+    // Given the folder the call starts in, each command with the folder it runs in (#2000), as mod-kit's own pipeline gives it.
+    if (cmd === '__modkit' && args[0] === 'pipeline') {
+      const input = JSON.parse(String(args[1])) as { command: string; cwd?: string; home?: string }
+      return ok(JSON.stringify(input.cwd === undefined ? pipeline(input.command) : pipelineIn(input.command, input.cwd, input.home ?? '')))
+    }
     // mod-kit's git reader (#1158), read here with its copy; JSON has no undefined, so none is null.
     if (cmd === '__modkit' && args[0] === 'git') return ok(JSON.stringify(gitCommand(JSON.parse(String(args[1])).words) ?? null))
     // mod-kit's typed answer wording (#1145), read here with its copy.
@@ -2846,14 +2850,15 @@ test("#2704: an unmerged file whose side on this branch cannot be read is held w
 })
 
 // Lessons review of #1158: git's source is read before the call runs, so anything else on the line
-// may change what it names first (a branch switch, a staged copy, a script that runs git).
-test('#1158: a restore beside any other command is judged whole, saying why; one alone after a cd is measured', withKit, async ($, on) => {
+// may change what it names first (a branch switch, a staged copy, a script that runs git). Since
+// #2830 a command beside it that only reads (`| cat`) no longer makes it whole; these still do.
+test('#1158: a restore beside a command that may change its source is judged whole, saying why; one alone after a cd is measured', withKit, async ($, on) => {
   const w = world($, on, { files: { [MOD_HOOK]: EDITED, ...MOD_PLUGIN }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: MOD_TEXT, [`/w/slate :${MOD_REL}`]: MOD_TEXT } })
-  const chained = [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git checkout HEAD -- ${MOD_REL} | cat`]
+  const chained = [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git fetch | git checkout HEAD -- ${MOD_REL}`]
   // So does git told to read another index, repository or setting, by the environment or its own
   // options before the subcommand (lessons review).
   const elsewhere = [`GIT_INDEX_FILE=/tmp/idx git restore ${MOD_REL}`, `GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `env GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `git -c core.autocrlf=true checkout HEAD -- ${MOD_REL}`, `git --git-dir=/other checkout HEAD -- ${MOD_REL}`, `git --work-tree=/w/slate checkout HEAD -- ${MOD_REL}`]
-  for (const [commands, said] of [[chained, 'the command runs more than this one git checkout or restore'], [elsewhere, 'the command sets how git reads its repository']] as const)
+  for (const [commands, said] of [[chained, 'the git checkout or restore and may change what it puts back'], [elsewhere, 'the command sets how git reads its repository']] as const)
     for (const command of commands) {
       const why = refusalOf(await call($, { tool: 'Bash', command }))
       expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes(said) }).toEqual({ command, held: true, said: true })
@@ -2888,22 +2893,69 @@ test('#2777: a restore run first on its line is judged by the lines it changes: 
   for (const command of first) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
   expect(w.ran.length).toBe(2 * first.length)
   expect(autosOf(w).map(a => a.why.includes('and told Dan'))).toEqual(first.map(() => true))
-  // Still judged whole: something run before the restore, a second restore on the line, a restore
-  // in the background or in a pipe, each of which may run beside or before what it reads.
+  // Still judged whole: a command that may move what the restore reads from, run before it or beside
+  // it in the background (#2830 keeps these).
   w.blobs[`/w/slate HEAD:${GUARD_REL}`] = GUARD_TEXT
   w.blobs[`/w/slate main:${GUARD_REL}`] = GUARD_TEXT
-  const whole = [
-    `git switch other && git checkout HEAD -- ${GUARD_REL}`,
-    `git checkout HEAD -- ${GUARD_REL} && git checkout main -- ${GUARD_REL}`,
-    `git checkout HEAD -- ${GUARD_REL} & git switch other`,
-    `git checkout HEAD -- ${GUARD_REL} | cat`,
-    `cat list | git checkout HEAD -- ${GUARD_REL}`,
-  ]
+  const whole = [`git switch other && git checkout HEAD -- ${GUARD_REL}`, `git checkout HEAD -- ${GUARD_REL} & git switch other`]
   for (const command of whole) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('`git switch other` runs') }).toEqual({ command, held: true, said: true })
   }
   expect(w.ran.length).toBe(2 * first.length)
+})
+
+// #2830: #2777 measured a restore only where it ran first on its line, so one chained after another
+// command, piped, backgrounded or paired with a second restore was still judged whole as a look
+// change, even where nothing else on the line can change what it puts back. Each is now read by what
+// git holds at the source it names, wherever every other command that runs before or beside it cannot
+// move a ref or change the index: a command that reads only, git reading only, or another restore of
+// paths from a ref. Anything else, and two restores where one puts back from the index, stays whole.
+test('#2830: a restore chained, piped, backgrounded or paired is judged by its lines where nothing beside it can change its source', withKit, async ($, on) => {
+  const changedLogic = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
+  const drawn = GUARD_TEXT + "export const row = (t: string) => [{ text: t, color: 'warning' }]\n"
+  const w = world($, on, {
+    files: { ...DEMO_FILES, [GUARD_HOOK]: changedLogic },
+    blobs: {
+      [`/w/slate HEAD:${GUARD_REL}`]: GUARD_TEXT,
+      [`/w/slate origin/main:${GUARD_REL}`]: GUARD_TEXT,
+      [`/w/slate main:${GUARD_REL}`]: GUARD_TEXT,
+      [`/w/slate :${GUARD_REL}`]: GUARD_TEXT,
+      [`/w/slate origin/main:payload/mods/demo/hooks/card.ts`]: LINES_TEXT,
+    },
+  })
+  const measured = [
+    `git status --short && git checkout origin/main -- ${GUARD_REL}`,
+    `git diff --stat; git log -1 --oneline && git restore --source=HEAD ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} 2>&1 | tail -1`,
+    `cat list | git checkout HEAD -- ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} & wait`,
+    `git checkout HEAD -- ${GUARD_REL} && git checkout main -- ${GUARD_REL}`,
+    `git checkout origin/main -- payload/mods/demo/hooks/card.ts && git checkout origin/main -- ${GUARD_REL}`,
+  ]
+  for (const command of measured) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(measured.length)
+  // Measured, a restore bringing back what the mod draws is still held, for that.
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = drawn
+  const look = refusalOf(await call($, { tool: 'Bash', command: `git status && git checkout HEAD -- ${GUARD_REL}` }))
+  expect(look).toContain(SKIP_QUESTION)
+  expect(look).not.toContain('runs before')
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = GUARD_TEXT
+  // Whole, naming what may change the source: a command that moves a ref or the index, anything the
+  // guard cannot tell does neither, a write inside .git, and two restores where one reads the index.
+  const whole: [string, string][] = [
+    [`git add ${GUARD_REL} && git restore ${GUARD_REL}`, `\`git add ${GUARD_REL}\` runs before`],
+    [`python3 tools/x.py && git checkout HEAD -- ${GUARD_REL}`, '`python3 tools/x.py` runs before'],
+    [`git checkout main && git checkout HEAD -- ${GUARD_REL}`, '`git checkout main` runs before'],
+    [`git fetch | git checkout origin/main -- ${GUARD_REL}`, '`git fetch` runs beside'],
+    [`echo x > .git/HEAD && git checkout HEAD -- ${GUARD_REL}`, 'inside .git'],
+    [`git restore --staged ${GUARD_REL} && git restore ${GUARD_REL}`, 'from the index'],
+  ]
+  for (const [command, said] of whole) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes(said) }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran.length).toBe(measured.length)
 })
 
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {
@@ -3401,6 +3453,83 @@ test('#1586: a script handed no screen file, a test, a file in no checkout, or o
   w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
   expect(refusalOf(await call($, GEN('/w/slate/app/page.tsx')))).toBe('')
   expect(w.ran.length).toBe(6)
+})
+
+// #2847: on 2026-11-12 the #2845 builder ran python3 on scripts kept in its notes folder that opened
+// and rewrote the design round guard's own rules.ts, named only inside their code (`p = '<path>'`,
+// `open(p, 'w').write(s)`), four times, and none was read: a script file was judged only by the files
+// it is handed as arguments (#1586). Each python or node script file a command runs is now read as
+// mod-kit reads inline code, and each guarded file its own code writes is judged as a write of it.
+const NOTES = '/w/notes/2845'
+const REWRITE_KEYS = "p = '/w/slate/payload/mods/demo/hooks/keys.ts'\ns = open(p).read()\nopen(p, 'w').write(s + 'x')\n"
+
+test('#2847: a script rewriting a mod hook file by a path in its own code is read, and a look change it made is undone and held', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/step1.py`]: REWRITE_KEYS } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/step1.py` }))
+  expect(why).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  // A script whose writes are not all named, naming the hook file relatively in the folder it runs in.
+  w.files[`${NOTES}/step2.py`] = "import subprocess\nsubprocess.run(['true'])\np = 'payload/mods/demo/hooks/keys.ts'\nopen(p, 'w').write(open(p).read() + 'x')\n"
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && python3 ${NOTES}/step2.py` }))).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+test('#2847: a python or node script writing a screen file its own code names is held before it runs, saying why', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      [`${NOTES}/gen.py`]: "open('/w/slate/app/page.tsx', 'w').write('<main/>')\n",
+      [`${NOTES}/gen.mjs`]: "import { writeFileSync } from 'node:fs'\nwriteFileSync('/w/slate/app/page.tsx', '<main/>')\n",
+      '/w/slate/scripts/edit.py': "#!/usr/bin/env python3\nopen('app/globals.css', 'w').write('body {}')\n",
+      // Its writes not all named (it runs a process), a screen file named from the top of the disk.
+      [`${NOTES}/build.py`]: "import subprocess\nsubprocess.run(['true'])\nopen('/w/slate/app/page.tsx', 'w').write('<main/>')\n",
+    },
+  })
+  for (const command of [`python3 ${NOTES}/gen.py`, `node ${NOTES}/gen.mjs`, 'cd /w/slate && ./scripts/edit.py', `cd ${NOTES} && python3 gen.py --dry`, `python3 ${NOTES}/build.py`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('which its own code names') }).toEqual({ command, held: true, said: true })
+  }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/gen.py` }))).toContain(
+    `The design round guard cannot read what ${NOTES}/gen.py writes to app/page.tsx, which its own code names, before it runs`,
+  )
+  expect(w.ran).toEqual([])
+})
+
+test('#2847: a script writing only files the guard does not judge, only reading a screen file, or leaving a mod hook file as it was runs', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      ...WITH_SCRATCH,
+      [`${NOTES}/data.py`]: "import json\njson.dump({}, open('/w/slate/data.json', 'w'))\n",
+      [`${NOTES}/read.py`]: "print(open('/w/slate/app/page.tsx').read())\n",
+      [`${NOTES}/count.py`]: "src = open('/w/slate/app/page.tsx').read()\nopen('/w/slate/notes.txt', 'w').write(str(len(src)))\n",
+      [`${NOTES}/test.py`]: "open('/w/slate/app/page.test.tsx', 'w').write('x')\n",
+      [`${NOTES}/away.mjs`]: "import { writeFileSync } from 'node:fs'\nwriteFileSync('/tmp/page.tsx', 'x')\n",
+      [`${NOTES}/keys.py`]: REWRITE_KEYS,
+      [`${NOTES}/gen.py`]: "open('/w/slate/app/page.tsx', 'w').write('<main/>')\n",
+    },
+  })
+  // A script whose writes are not all named (it runs a process) passes a look changing file it names
+  // only relatively, as make-switcher.py's usage text names `<out.html>`: over 14 days of this Mac's
+  // commands every such name was usage, a docstring or a scratch repository's fixture.
+  w.files[`${NOTES}/usage.py`] = '"""Usage: python3 usage.py <spec.json> <out.html>, styles from screen.css."""\nimport subprocess, sys\nsubprocess.run(["make", sys.argv[1]])\n'
+  const commands = ['data.py', 'read.py', 'count.py', 'test.py', 'keys.py'].map(s => `python3 ${NOTES}/${s}`).concat(`node ${NOTES}/away.mjs`, 'python3 /w/notes/none.py', `cd /w/slate && python3 ${NOTES}/usage.py`)
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  // On an issue Dan answered, a script writing a screen file runs as any write there does.
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/gen.py` }))).toBe('')
+})
+
+test('#2847: a script whose own code names a screen file where it cannot be followed, or that cannot be read, is held as could not check', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${NOTES}/rel.py`]: "open('app/page.tsx', 'w').write('<main/>')\n", [`${NOTES}/locked.py`]: 'UNREADABLE' } })
+  const unplaced = refusalOf(await call($, { tool: 'Bash', command: `cd "$X" && python3 ${NOTES}/rel.py` }))
+  expect(unplaced).toContain('Blocked')
+  expect(unplaced).toContain(`${NOTES}/rel.py names app/page.tsx in its own code, and where that file is could not be followed`)
+  const locked = refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/locked.py` }))
+  expect(locked).toContain('Blocked')
+  expect(locked).toContain(`${NOTES}/locked.py could not be read for the files its own code writes`)
+  expect(w.ran).toEqual([])
 })
 
 // #1747: on 2026-10-25 a builder recording a finding with the spool helper's note was refused as a
