@@ -1756,7 +1756,7 @@ test('an 11,000 line route posting through a Slack send helper is judged with se
 // times over; at 11,000 lines, 7.0 s. #2850 removed that search, so the 80 senders are never read
 // and nothing here is judged on the wall: a real time budget measured only the machine's load
 // (L290), and failed at load 17. What still holds is that the edit passes and new wording is held;
-// the cost of tracing an 11,000 line file of its own is judged on the wall by the #2719 test above.
+// the cost of tracing an 11,000 line file of its own is judged by the #2719 test above, by its count.
 const LIB = '/w/app/src/lib/monitor/alerts.ts'
 const DB_FILE = '/w/app/src/lib/db.ts'
 const dbModule = (helpers: number) =>
