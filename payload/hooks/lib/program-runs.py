@@ -594,8 +594,10 @@ def make():
                     "outdir": outdir, "outbase": outbase, "names": "--entry-names" in opts}
 
         def built_from(self, path):
-            """[(the source, how it is named in a refusal)] that a compiler run earlier in this call
-            builds path from (note_build), each a file on disk; empty where none does."""
+            """[(the source, the compiler as a refusal names it, the program the command ran)] that a
+            compiler run earlier in this call builds path from (note_build), each a file on disk other
+            than path itself; empty where none does. The program (a launcher, npx, or the compiler) is
+            the one whose naming of the source script() skips as a write."""
             real = os.path.realpath(path)
             stem, ext = os.path.splitext(real)
             if ext not in BUILT_FROM:
