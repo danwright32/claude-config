@@ -2041,7 +2041,8 @@ for runs in "node post.mjs alert.ts old.txt new.txt" "node load.mjs alert.ts old
   "node --require ./pre.cjs replace.mjs alert.ts old.txt new.txt" \
   "node --import ./hook.mjs replace.mjs alert.ts old.txt new.txt" \
   "node --experimental-loader replace.mjs alert.ts old.txt new.txt" \
-  "node replace.mjs slack.ts old.txt new.txt" "node alert.ts old.txt new.txt"; do
+  "node replace.mjs slack.ts old.txt new.txt" "node alert.ts old.txt new.txt" \
+  "node -r ./replace.mjs ./replace.mjs alert.ts old.txt new.txt"; do
   run_rs "$runs"
   refused "a source file something can run, or that may be the script, is still read: $runs"
 done

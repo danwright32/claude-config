@@ -3630,6 +3630,12 @@ class Judge(WrittenPaths):
         any of them can act on it as more than data (acts): sending a request, whose address the file
         can hold, or running code, which the file can be.
 
+        And a file of any shape after the script word, where that word certainly names a file on disk
+        (held_slot, claude-config#2797): it is the script's argument, read as a script, imports
+        followed, only where a file read as code can run what it is handed (handed_code), and its own
+        text judged as a data file's is. Where the script word is not certain, every file not shaped
+        like data is read as code, as above.
+
         inline, (its label, its text, the directory it runs in), is code the program was given by an
         option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
         first file read as code is, so a data file it is handed is read when it can act on it."""
@@ -3735,8 +3741,8 @@ class Judge(WrittenPaths):
         certain. A file a valued option names before it (node -r, --import) is read as code still."""
         skipped = []
         slot = self.operands(words, skipped)[0]
-        if not slot or slot == "-" or re.search(r"[$`*?\[{]", slot):
-            return None
+        if not slot or slot == "-" or re.search(r"[$`*?\[{]", slot) or words[1:].count(slot) != 1:
+            return None  # a word written twice (node -r x.js x.js) leaves which one is the script open
         if skipped and self.family(os.path.basename(words[0])) != "py":
             return None
         if not os.path.isabs(os.path.expanduser(slot)) and self.sh_dir(d) == SH_UNKNOWN_DIR:
