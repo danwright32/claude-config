@@ -455,6 +455,35 @@ turn_retake 7 1000; rc=$?
 check_eq "#2828 a run that never had a place has none to take back" "1" "$rc"
 check "#2828 and says so" "no place in line" "$TURN_ERR"
 
+# turn_moved: the ONE answer to whether the line moved between two looks, read by the merge helper's
+# time in line (#1697) and the full suite slot's wait (#2835), so the two can never disagree on it.
+# It moved when the turn passed to another ticket, or fewer tickets are ahead of this run.
+reset
+other_joins acme/widget 9 900 "$LIVE" "$LIVE_START" >/dev/null           # 1, holding
+other_joins acme/widget 5 900 "$LIVE" "$LIVE_START" >/dev/null           # 2, waiting ahead
+turn_open acme/widget; turn_join 7 1000                                  # 3, this run
+turn_look 1000 3600
+seen_head="$TURN_HEAD_TICKET"; seen_ahead="$TURN_AHEAD"
+check_eq "turn_moved fixture: two runs ahead, the first holding" "1|2" "$seen_head|$seen_ahead"
+turn_moved "" 0; rc=$?
+check_eq "turn_moved: with no earlier look there is nothing to compare, so no movement" "1" "$rc"
+turn_moved "$seen_head" "$seen_ahead"; rc=$?
+check_eq "turn_moved: the same holder and the same count ahead is the line standing still" "1" "$rc"
+other_joins acme/widget 4 1001 "$LIVE" "$LIVE_START" >/dev/null          # 4, behind this run
+turn_look 1001 3600
+turn_moved "$seen_head" "$seen_ahead"; rc=$?
+check_eq "turn_moved: a run joining behind is not movement" "1" "$rc"
+rm -f "$MWR_TURN_DIR/acme/widget/2"
+turn_look 1002 3600
+turn_moved "$seen_head" "$seen_ahead"; rc=$?
+check_eq "turn_moved: a run waiting ahead leaving is movement" "0" "$rc"
+seen_head="$TURN_HEAD_TICKET"; seen_ahead="$TURN_AHEAD"
+rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
+turn_look 1003 3600
+turn_moved "$seen_head" "$seen_ahead"; rc=$?
+check_eq "turn_moved: the turn passing is movement" "0" "$rc"
+check_eq "turn_moved fixture: and the turn is now this run's" "1" "$TURN_MINE"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

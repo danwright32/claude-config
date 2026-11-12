@@ -25419,7 +25419,7 @@ check "#2758 (fixture) none of those runs reached the suite while the slot was h
 # HOOK_TESTS_SLOT_STILL, in its own words. Set here below the pull's own bound, that refusal comes
 # first, and the pull must report it as what it was (how long the line stood still, and who held
 # the slot), not as a wait of "its whole bound" naming nobody. The clock moves 120 seconds a look, so
-# a 240 second bound is reached on the third look, at 4 minutes.
+# a 240 second bound is reached on the third look, at 4 minutes (all set here, not measured).
 out_sw8="$(sw_pull HOOK_TESTS_SLOT_STILL=240 SYNC_HOOK_TESTS_SLOT_WAIT=600 SW_RAN="$SWT/ran8")"
 dbg "#2835 a pull whose run refused because the line stood still: $out_sw8"
 check "#2835 the pull says the line stood still, for how long, and that the suite ran nothing" \

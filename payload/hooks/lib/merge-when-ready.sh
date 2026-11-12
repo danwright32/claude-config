@@ -1323,10 +1323,11 @@ budget_left(){   # sets BUDGET_LEFT (seconds) and BUDGET_SAID (which budget, in 
 }
 # Whether the line moved since the last look (claude-config#1697): the turn passed to another ticket,
 # or a ticket ahead of this run left. Returns 0 when it moved, and starts the still budget again, and
-# spares the looks it took in line until then from MWR_MAX_POLLS (claude-config#2351).
+# spares the looks it took in line until then from MWR_MAX_POLLS (claude-config#2351). Judged by the
+# queue's own turn_moved, the one answer the full suite slot's wait uses too (claude-config#2835).
 line_note(){   # $1 = now
   local moved=1
-  if [ -n "$line_seen_ticket" ] && { [ "${TURN_HEAD_TICKET:-}" != "$line_seen_ticket" ] || [ "$TURN_AHEAD" -lt "$line_seen_ahead" ]; }; then
+  if turn_moved "$line_seen_ticket" "$line_seen_ahead"; then
     line_moved_at="$1"; moved=0; line_spare
   fi
   line_seen_ticket="${TURN_HEAD_TICKET:-?}"; line_seen_ahead="$TURN_AHEAD"

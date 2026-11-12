@@ -72,6 +72,9 @@
 #                               line can tell the line moving from it standing still, #1697),
 #                               TURN_OVERTOOK (live tickets that joined before this one and are
 #                               now behind it, because it joined at the front, #2474)
+#   turn_moved <head> <ahead>   0 when the line moved since a look that saw TURN_HEAD_TICKET <head>
+#                               and TURN_AHEAD <ahead> (the turn passed, or fewer are ahead), the
+#                               one answer for every wait bounded by the line standing still (#2835)
 #   turn_retake <pr> <joined>   takes this run's own number (TURN_TICKET) back after another run
 #                               removed it, keeping when it first joined; returns 1 with TURN_ERR
 #                               when that place is taken or the run never had one
@@ -394,6 +397,16 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
   if [ -n "$TURN_TICKET" ] && [ -z "$seen_own" ]; then TURN_GONE=1; return 0; fi
   [ -n "$TURN_TICKET" ] && [ "$head" = "$TURN_TICKET" ] && TURN_MINE=1
   return 0
+}
+
+# Did the line move since an earlier look? The turn passed to another ticket, or fewer live tickets
+# are ahead of this run (one finished, left or was passed over); a run joining behind is not
+# movement. The one answer for every caller that bounds a wait by the line standing still: the merge
+# helper's time in line (#1697) and the full suite slot's wait (#2835). Returns 1 with no earlier
+# look to compare (an empty holder).
+turn_moved(){   # $1 = TURN_HEAD_TICKET at the earlier look, $2 = TURN_AHEAD at it
+  [ -n "$1" ] || return 1
+  [ "${TURN_HEAD_TICKET:-}" != "$1" ] || [ "${TURN_AHEAD:-0}" -lt "${2:-0}" ]
 }
 
 # Takes this run's own number back after another run removed its ticket (#2828). ln fails when the

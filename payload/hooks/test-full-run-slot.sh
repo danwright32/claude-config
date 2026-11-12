@@ -552,6 +552,7 @@ has "#2828 passing over the dead waiter is said, with its pid" "pid $D14) is no 
 # A sleep that moves the line: every <every>th call it ends the lowest numbered ticket whose pid is
 # listed in <pids file>, which is a run in front of this one finishing (turn_leave removes its
 # ticket). The clock moves 30 seconds a look, so <every> calls are <every> x 30 seconds of the line.
+# Every duration in 15 to 17 is set here, not measured.
 line_mover(){ # line_mover <script> <pids file> <every>
   cat > "$1" <<MOVER
 #!/usr/bin/env bash
@@ -565,9 +566,10 @@ MOVER
   chmod +x "$1"; rm -f "$1.count"
 }
 
-# 15. Fourth in line behind three full runs of 25 minutes each: the line moves every 25 minutes, so
-# the run is served after 75, though that is past the hour the whole wait was once bounded by. Seen
-# twice before #2835, both runs refused with nothing run while served in arrival order.
+# 15. Fourth in line behind three full runs of 25 minutes each (set here, not measured): the line
+# moves every 25 minutes, so the run is served after 75, though that is past the hour the whole wait
+# was once bounded by. Seen twice before #2835 (2026-11-11 and 12), both runs refused with nothing
+# run while served in arrival order.
 clear_slot
 H15a="$(new_holder hp15a)"; H15b="$(new_holder hp15b)"; H15c="$(new_holder hp15c)"
 hold_slot "$H15a" "/work/trees/first" 1000000 || check "fixture: the first run's ticket was written" "turn_join failed"
@@ -587,7 +589,7 @@ has "#2835 the wait says it lasts as long as the line keeps moving" "as long as 
 # 16. A line that moves once and then stands still: the run waiting second refuses once nothing has
 # started or finished for HOOK_TESTS_SLOT_STILL, measured from the last movement, not from its
 # arrival. The run ahead leaves at 5 minutes, then the holder keeps it (its hold bound lifted), so
-# the run refuses at 15 minutes in all, 10 of them standing still.
+# the run refuses at 15 minutes in all, 10 of them standing still (all set here, not measured).
 clear_slot
 H16="$(new_holder hp16)"; W16="$(new_holder hw16)"
 hold_slot "$H16" "/work/trees/long-holder" 1000000 || check "fixture: the holder's ticket was written" "turn_join failed"
@@ -612,7 +614,8 @@ _left16="$(tickets)"
 
 # 17. claude-sync's pull hands the runner HOOK_TESTS_SLOT_WAIT, half its 1800 second deadline (#2758),
 # and that stays a bound on the WHOLE wait: a line that keeps moving does not carry the pull past its
-# deadline. Same three run line as 15, moving every 10 minutes; the pull's run gives up at 15, with
+# deadline. Same three run line as 15, moving every 10 minutes (settings, not measured); the pull's
+# run gives up at 15, with
 # the line claude-sync reads (its pattern is "REFUSED: waited <d> for this Mac's full suite slot, the
 # most HOOK_TESTS_SLOT_WAIT allows, and <who>. Nothing was run.").
 clear_slot
