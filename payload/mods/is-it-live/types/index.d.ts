@@ -77,10 +77,10 @@ declare module 'claude-code' {
       /**
        * #2653: the session said, by calling the unrelated_merges tool, that its merges have nothing
        * to do with the threads it was given. Since #2849 no merge then owes the reply the most recent
-       * thread is owed (`defaulted`), those already landed included. `landed`, the landed step when
-       * it was said, was read until #2849 and is no longer written or read.
+       * thread is owed (`defaulted`), those already landed included. Only its presence is read; the
+       * landed step it carried until #2849 is no longer kept.
        */
-      unrelated: { landed?: number }
+      unrelated: Record<string, never>
     }
   }
 }

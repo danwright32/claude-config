@@ -111,10 +111,11 @@ export const draftLetGoOf = (owed: SlackThread[]): string => `No Slack draft rep
 
 /**
  * #2653: the session said its merges are unrelated to the threads it was given. Kept in session
- * state, so a new session from the same thread is asked again. `landed` is no longer written or read
- * (#2849): what was said now covers the merges already landed as well as later ones.
+ * state, so a new session from the same thread is asked again. Only its presence is read: since
+ * #2849 what was said covers the merges already landed as well as later ones, so the landed step
+ * it once carried is no longer kept.
  */
-export type Unrelated = { landed?: number }
+export type Unrelated = Record<string, never>
 
 /**
  * #2849: a merge as it lands: its name as the hold names it, the keys of the recorded threads its
