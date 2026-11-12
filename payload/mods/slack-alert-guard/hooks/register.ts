@@ -752,8 +752,8 @@ const broughtIn = async ($: EngineInterface, path: string, before: string, after
     const known = lists.get(key)
     if (known) return known
     const got = await importedFiles($, top, rel, text, left)
-    if ('late' in got) late()
-    if ('failed' in got) end(got.failed)
+    if ('late' in got) return late()
+    if ('failed' in got) return end(got.failed)
     lists.set(key, got.rels)
     return got.rels
   }
