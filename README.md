@@ -7700,8 +7700,11 @@ Holds every edit that changes the wording a Slack alert sends until Dan has seen
 Slack will post it and approved it (Dan, 2026-11-04: "anytime a slack alert is created, we need to
 have a design-rounds esque check on wording so I can approve the wording before it's created"). A
 code or config file that posts to Slack counts: one naming a Slack webhook, the chat API, a Slack
-SDK, a Slack env setting, or a send helper named for Slack, called or imported, and so does a
-template such a file sends (below). A Write, Edit or
+SDK, a Slack env setting, or a send helper named for Slack, called or imported, in its own code.
+Only such a file is ever held (#2837; Dan, 2026-11-12: "I'd much rather an alert get posted to slack
+that I didn't approve than deal with stopping every 2 seconds to approve wording that nobody will
+ever see"): a template, copy module or script that another file imports, reads, names or sends
+passes, and nothing else in the repository is searched. A Write, Edit or
 MultiEdit there that adds message text, changes it or takes it away is refused. Only text a Slack
 send builds counts (#2361, #2364, #2290, #2287): a test file (a `.test.` or `.spec.` file, a
 `_test` or `test_` one, a `test-*.sh` suite or a `test-*.ts` node test script in any JavaScript or
@@ -7733,40 +7736,14 @@ to ask me for approval"): `hooks/sends.ts` finds the send calls (one a Slack mar
 client built from a Slack marker, a function whose body sends, or the nearest call holding a marker
 in its arguments, never across a function body), and a changed string counts only when it stands in
 a send's arguments or in the value of a name used there, followed name by name within the block
-that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. For a
-file another file sends, each sender is traced and the names it sends followed down through every
-file it reaches the template by; when the nearest senders send none of the change the search goes
-on. A file whose send cannot be traced (any other language, a text template, a send the reading
-cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
-the search stops short. A python docstring is never message text (#2574).
-Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
-copy module of four alert messages passed because nothing sent it yet, and the edits that made a
-route import and post it passed because they added no text of their own). A new file that nothing
-sends still passes, since nothing can post it, unless it is a module of message copy that no file
-but a test imports yet (#2720): its added wording is held as it is written. A copy module is known
-by its path (a name ending in copy or wording, a copy folder, or an alert word beside a message
-word) or by its shape (Slack formatting in a string, or mostly functions that only return message
-text with a value filled in); tests, prose, UI components and shell scripts never are. Measured on
-2026-11-10 it reads 1 of this repository's 665 code files as copy, one that is imported, so it
-holds none here today. A copy module already used, by a route that posts nothing or a screen, is
-judged by that use as before. Once an edit's own wording has passed, an edit to a
-JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
-more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
-send: each sender through the edited file (the file itself when it posts or imports a send helper,
-then every file that sends it) is traced as the edit leaves the file and as it was, down through the
-files it imports, found by the paths its imports name with one `git ls-files` per file and followed
-up to 3 files deep, and wording a send reaches only afterwards, which Dan has not approved, is held.
-The card, refusal and question name the file that holds the text and what sends it. Wording a sender
-already sent is not asked about again, and a name imported for a 404 answer is held only when a send
-takes it. Where names cannot be followed (a sender that takes a module whole, a send the reading
-cannot find, a search for senders that stops short) every message of a newly imported file is held;
-an imported file that cannot be read, a listing that fails or runs late, or names newly handed on
-deeper than the guard follows, holds the call as could not check. This shares the one 7 second
-search time with the edit's own wording. Not covered: a sender in a language the guard does not
-trace that newly reads a text template, a template a sender newly reads by path rather than by an
-import, and a file that only hands names on newly exporting a local copy of an imported value.
-When the nearest sender's part of a change is already approved, the search goes on to the senders
-further along rather than passing the rest (#2637).
+that declares it. A route's 409 answer, a log line or a thrown error beside the send passes. A file
+whose sends cannot be traced (a workflow, a shell script, any other language, a send the reading
+cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
+docstring is never message text (#2574).
+No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
+a template, copy module or script whose own code names nothing of Slack, however a sender reaches
+it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
+write into a folder. The card, refusal and question name only the file that holds the text.
 A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
 2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
 prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
@@ -7799,34 +7776,11 @@ cannot be read before it runs; Dan's answer is kept by the command and the files
 same command run again by a resumed agent or from another folder goes through (#2371). A
 subagent's call is refused and told to stop and report to the main
 session. The calls waiting on Dan are dropped at session end, and the guard's own record is never
-written by a call. A template whose own file has no Slack marker (a code file, or a text template
-such as `.txt` or `.hbs`, read line by line) is held the same way when another file in its
-git repository sends it: one that carries a Slack marker and names the template by its path, a
-relative import, or its python module, on a line that imports or reads it (a path it only names,
-as in `git add package.json`, or one in a comment, does not count). The card and refusal name that
-sender. A
-module is held too when a file that imports it also imports a Slack send helper (a copy builder
-such as `outage-copy.ts`, or a notice builder), and the card names that file as the sender; the
-helper is found by the path the import names. The search is one `git grep` for files holding the
-word slack or postMessage and the template's name in a form a reference takes (after a slash, as a
-file name with its extension, after its folder and a dot, or on a python import line, never a word
-the name is only a piece of, so a short name like `et.ts` lists no crowd, #2371), then a read of
-each, all within 7 seconds per call (Claude Code kills a hook at 10, so 3 are left to answer;
-sized from the largest real searches, #2510), following files that
-re-export the template up to 3 deep (#2286). A file handed on only to UI components (a `.tsx` or
-`.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
-so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
-component that itself sends, or imports a send helper, is still its sender, and a file with any
-other importer is followed as before. A search that fails, runs out of time or meets an
-unreadable file holds the call as could not check, which trying again may get past. One that would
-follow further than 3 files stops there on every try, so it holds the edit for Dan to approve: the
-picker shows the exact lines it adds and takes away and says the guard could not trace whether they
-reach Slack, and his approval, kept by the file and the edit's whole text, lets that one edit
-through and no other; a shell write stopped the same way is held as any shell write is (#2709).
-One that finds more than 500 files to read (the largest real one read 213, #2510), or a send
-helper search that fails, runs late or meets an unreadable helper, holds the call for Dan to
-approve like any other, naming no sender, rather than refusing it with nothing he can answer
-(#2364). A shell write to a path the write reader cannot name is outside it.
+written by a call. A shell write is read for the files it writes: a copy of one code file is judged
+by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
+into a folder passes. git failing to say which repository a self posting file is in, or a file
+that cannot be read, holds the call as could not check, which trying again may get past. A shell
+write to a path the write reader cannot name is outside it.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
