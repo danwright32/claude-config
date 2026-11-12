@@ -48,6 +48,16 @@
 #     The registration carries onFailure block, so a crash or a timeout refuses the call rather than
 #     letting a write through unasked.
 #
+# WHAT IT LETS THROUGH (permissionDecision "allow"), since #2763: one `supabase db push` that Dan has
+# already answered Apply for in the /db-apply skill's picker, in this session, for that migration
+# file unchanged and that project (lib/db-apply-approval.py says exactly when), in a command that
+# is that push and nothing else but cd. One decision, apply this migration, had been put to him up
+# to four times. The skill's ad hoc write, a `supabase db query -f <file>` that writes, is let
+# through the same way when his Apply named that file and project (Dan, 2026-11-11). Every other
+# push or write is asked about, the question saying why no Apply covers it. In
+# the same kind of command a `db query -f` file is read and judged by the one predicate, so a
+# read back from a file is not asked about either (lib/db-write-calls.py, "ONE SUPABASE RUN").
+#
 # THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
 # unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
 # about holds (test-db-write-ask.sh checks that), or names a Salesforce write tool.
@@ -168,6 +178,11 @@ def sf_notice():
             + ("that rule" if len(hits) == 1 else "those rules") + " from that file on that Mac; it is not synced, "
             "so no session or sync removes it (claude-config#2521).")
 
+def release(reason):
+    """Let the call through: Dan has already answered for it (claude-config#2763)."""
+    sys.stdout.write("allow\x1f" + reason.replace("\x1f", " ").replace("\x00", ""))
+    sys.exit()
+
 def emit(decision_reason=None, message=None):
     """Hand the verdict to the shell, which builds the JSON through lib/hook-notice.sh: "ask", the
     reason and the notice, or "note" and the notice, split by the unit separator, which is taken
@@ -272,20 +287,49 @@ if tool == "Bash":
     sw, sw_why = part("shell_words_shared", "shell-words.py")
     if sw is None:
         ask(sw_why + ", so the command, which names a database client, could not be read", "2536")
+    cwd = d.get("cwd")
     try:
-        found = calls.bash_findings(command, judge, sw)
+        found = calls.bash_findings(command, judge, sw, cwd if isinstance(cwd, str) else "")
     except Exception as e:
         ask("the command names a database client and could not be read (" + type(e).__name__
             + "), so the call could not be classified as read only", "2536")
     if not found:
         sys.exit()
+    # A `supabase db push`, or a `supabase db query` write from a -f file, that is the whole of its
+    # command is let through when the Apply Dan answered in the /db-apply picker in this session
+    # covers it, and asked about, saying why, when none does (claude-config#2763). A finding is
+    # Applicable only in a command that holds nothing else but cd, so letting it through lets
+    # nothing else through with it.
+    pushes = [f for f in found if calls.is_applicable(f)]
+    if pushes:
+        ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
+        kept, released = [], []
+        for f in found:
+            if not calls.is_applicable(f):
+                kept.append(f)
+                continue
+            if ap is None:
+                ok, why = False, ap_why
+            else:
+                try:
+                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), f.file)
+                except Exception as e:
+                    ok, why = False, "whether Dan applied it could not be checked (" + type(e).__name__ + ")"
+            if ok:
+                released.append(why)
+            else:
+                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why, f[1]))
+        if not kept:
+            release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
+        found = kept
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)
     # An edge function deploy is not a database call, so the question says which of the two the
     # command holds, or both, and names the issue behind each (claude-config#2660).
     deploys = [f for f in found if calls.is_function_deploy(f)]
     kinds = ([DATABASE_CALL] if len(deploys) < len(found) else []) + ([DEPLOY] if deploys else [])
-    issues = (["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
+    issues = ((["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
+              + (["2763"] if pushes else []))
     ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""),
         ", claude-config#".join(issues), " and ".join(kinds))
 
@@ -335,6 +379,12 @@ if [ "$rc" -eq 0 ]; then
       exit 0 ;;
     "note$US"*)
       hook_notice_json "${out#note$US}"
+      exit 0 ;;
+    "allow$US"*)
+      # Dan's /db-apply Apply covers this push (claude-config#2763). The reason keeps only
+      # characters that need no escaping, as read-only-query-allow.sh's approval does.
+      reason="${out#allow$US}"
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
       exit 0 ;;
   esac
 fi
