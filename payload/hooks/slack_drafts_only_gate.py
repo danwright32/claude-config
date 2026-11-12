@@ -42,8 +42,11 @@ with `python3 -m`, and an import of another language's files are
 not followed; a program run by bare name from the PATH is not read; a shell script's data reaching a
 program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
 shell script's writes are not counted as acting on a data file; a file written in the same command
-is followed only through the shell's own writes (a redirection, tee, a copy, a download), never one a
-program writes by name (python3 -c "open(...)", sed -i), and a write to a path in a variable inside a
+is followed through the shell's own writes (a redirection, tee, a copy, a download), dd and an
+archive that can be read, and is otherwise unreadable once a program names it (claude-config#2772),
+so one written by a name the program builds at run time, or by a program the gate counts as never
+writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk, as is a file a
+compiler or a git checkout writes without naming it; a write to a path in a variable inside a
 script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
 assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
@@ -724,6 +727,9 @@ def load_reader():
 
 # What a write to a path that cannot be worked out can name (claude-config#2785): Judge's base.
 WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
+# The files any other program writes by name (claude-config#2772): note_program and its readers.
+_program_writes = load_lib("program_writes", "program-writes.py")
+ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
 
 
 def draft_advice(where):
@@ -780,7 +786,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths):
+class Judge(WrittenPaths, ProgramWrites):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -826,6 +832,11 @@ class Judge(WrittenPaths):
         # [(a pattern, what wrote it)] for files written where the path cannot be worked out
         # (claude-config#2721): every path it matches is unreadable from then on.
         self.made_unknown = []
+        # The same for files another program may write (kind "maybe", claude-config#2772, read in
+        # lib/program-writes.py): [(a pattern, the program)], and [(code it was given, the program)],
+        # which may write any file the code names.
+        self.made_maybe = []
+        self.made_code = []
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -953,13 +964,21 @@ class Judge(WrittenPaths):
         """What an earlier command of this call wrote path from, as [(kind, path or text, name)], or
         None when nothing did. A file under a directory copied earlier is the same file under the
         directory it was copied from, followed MADE_DEPTH copies deep."""
-        if not (self.made or self.made_dirs or self.made_unknown):
+        if not (self.made or self.made_dirs or self.made_unknown or self.made_maybe or self.made_code):
+            return None
+        if "\0" in path and not (self.made or self.made_dirs or self.made_unknown):
+            # Names no file. Only code a program was given is noted, and before #2772 this returned
+            # above, so a path os.path refuses passes as it did; with a write noted it raises, and the
+            # wrapper refuses, as before (a replay crash, 2026-11-12).
             return None
         real = os.path.realpath(path)
         found = self.made_from_known(real, depth)
-        # A file written where the path could not be worked out may be this one (claude-config#2721).
+        # A file written where the path could not be worked out may be this one (claude-config#2721),
+        # and so may one another program writes under a folder or names in its code (#2772).
         guessed = [("unknown", None, label) for pat, label in self.made_unknown
                    if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
+        if self.made_maybe or self.made_code:
+            guessed += self.program_guesses(path, real)
         return (list(found or []) + guessed) if guessed else found
 
     def made_from_known(self, real, depth):
@@ -997,8 +1016,8 @@ class Judge(WrittenPaths):
         real = os.path.realpath(path)
         made = []
         for kind, value, _ in pieces:
-            if kind == "unknown":
-                continue  # nothing to read: script() refuses a file holding one (unread)
+            if kind in ("unknown", "maybe", "code"):
+                continue  # nothing to read: script() refuses a file holding one (unread, code_names)
             if kind == "text":
                 made.append(value.encode("utf-8", "replace"))
                 continue
@@ -1016,30 +1035,38 @@ class Judge(WrittenPaths):
                 pass
         return out[:limit]
 
-    def unread(self, path):
+    def unread(self, path, with_maybe=True):
         """For a file written earlier in this command with text that cannot be worked out
-        (claude-config#2721), why it cannot be judged; None for any other file."""
-        names, found = [], False
+        (claude-config#2721), why it cannot be judged; None for any other file. with_maybe False
+        leaves out a file a program only may have written (lib/program-writes.py)."""
+        names, maybe, found = [], [], False
         for kind, _, label in self.made_from(path) or ():
             if kind == "unknown":
                 found = True
                 # "" is a word of a script read as commands, not a command this call ran (#2793).
                 if label and label not in names:
                     names.append(label)
-        if not found:
-            return None
-        if not names:
+            elif kind == "maybe" and with_maybe and label not in maybe:
+                maybe.append(label)
+        if found and not names:
             return ("is written earlier in this command, but what wrote it could not be told, so what it "
                     "holds cannot be read, and whether it posts cannot be checked")
-        listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-        return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
-                f"whether it posts cannot be checked")
+        if names:
+            listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
+                    f"whether it posts cannot be checked")
+        if not maybe:
+            return None
+        # A program that names the file, or unpacks into its folder, may have written it (#2772).
+        listed = maybe[0] if len(maybe) == 1 else ", ".join(maybe[:-1]) + " and " + maybe[-1]
+        return (f"may be written earlier in this command by {listed}, in a way this gate does not follow, "
+                f"so what it holds cannot be read, and whether it posts cannot be checked")
 
     def made_note(self, path, word):
         """For a refusal: which files (or heredoc) word was made from, or None when it was not made."""
         names = []
         for kind, _, label in self.made_from(path) or ():
-            if kind == "unknown":
+            if kind in ("unknown", "maybe"):
                 continue
             if label and label not in names:
                 names.append(label)
@@ -1126,7 +1153,8 @@ class Judge(WrittenPaths):
         else:
             for a, v in self.downloads(name, args, vals):
                 self.note_unreadable(a, v, d, f"{name}, which downloads it")
-            out = None
+            # Any other program, by the files it names or unpacks (lib/program-writes.py, #2772).
+            out = self.note_program(name, args, vals, d, stdin)
         if out is None:
             out = [("unknown", None, label)]
         files = []  # (raw target, its value, whether it takes the output, appending)
@@ -1393,6 +1421,9 @@ class Judge(WrittenPaths):
         unread = self.unread(path)
         if unread:
             return f"{label} {unread}"
+        edited = self.code_names(path, MARKER) if self.made_code else None
+        if edited:
+            return f"{label} is edited earlier in this command by {edited[0]}, whose code names {edited[1]}"
         real = os.path.realpath(path)
         if self.nudge and real == self.nudge and not self.made_from(real):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
@@ -3677,7 +3708,9 @@ class Judge(WrittenPaths):
             code.append((label or f"the script {w}", lambda path=path: self.acts(path, d, shell_hint, lang)))
         for w, path in data:
             self.tick(path)
-            unread = self.unread(path)
+            # A data file another program only MAY have written is read as it is on disk (#2772):
+            # read as unreadable, every analysis handing a file it named to a script refused.
+            unread = self.unread(path, with_maybe=False)
             if unread:
                 what = f"{w}, which {unread}"
             else:
