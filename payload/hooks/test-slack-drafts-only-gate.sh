@@ -3183,6 +3183,29 @@ for shape in oneline oneline-kw oneline-var oneline-second; do
   run_bash "bash $UR/quiet/tests/$shape.sh"
   allowed "and one that runs a file that does not post is allowed ($shape, #2832)"
 done
+# A copy writes its target, never what it copies from. With the target a word the gate cannot work
+# out, every word was taken for a possible target, so a suite copying the hook it tests into a temp
+# folder (`cp "$CHECK" "$NOLIB/check-home-paths.sh"`) and then running "$CHECK" was refused as posting
+# once #2678 read files run through a variable: 23 suites, switch off (#2683). A word stays a possible
+# target where it is last, where every word after it can expand to nothing, or where the word before it
+# may be an option that takes it as a value (-t, or a word the gate cannot work out).
+ur_plain cpsrc 'T="$(mktemp -d)"' 'cp "$ROOT/tools/lib/act.sh" "$T/act.sh"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpsrc-mv 'T="$(mktemp -d)"' 'mv -f "$ROOT/tools/lib/act.sh" "$T/x/"' 'bash "$ROOT/tools/lib/act.sh"'
+run_bash "bash $UR/quiet/tests/cpsrc.sh"
+allowed "a file copied from into a folder the gate cannot work out is still read as it is (cp, #2683)"
+run_bash "bash $UR/quiet/tests/cpsrc-mv.sh"
+allowed "a file moved from into a folder the gate cannot work out is still read as it is (mv, #2683)"
+run_bash "bash $UR/posts/tests/cpsrc.sh"
+says "and the same file that posts is refused as the post (#2683)" "REFUSED: this command posts to Slack"
+ur_plain cpdst 'T="$(mktemp -d)"' 'cp "$T/x" "$ROOT/tools/lib/act.sh"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-opt 'T="$(mktemp -d)"' 'cp $OPTS "$ROOT/tools/lib/act.sh" "$T/x"' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-gone 'T="$(mktemp -d)"' 'cp "$T/x" "$ROOT/tools/lib/act.sh" $MORE' 'bash "$ROOT/tools/lib/act.sh"'
+ur_plain cpdst-t 'T="$(mktemp -d)"' 'cp -t "$ROOT/tools/lib/act.sh" "$T/x"' 'bash "$ROOT/tools/lib/act.sh"'
+for shape in cpdst cpdst-opt cpdst-gone cpdst-t; do
+  run_bash "bash $UR/quiet/tests/$shape.sh"
+  says "a file that may be the target of a copy from a word the gate cannot work out is refused unread ($shape, #2683)" \
+    "what wrote it could not be told"
+done
 for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
   run_ur refuse "bash $UR/quiet/tests/$shape.sh"
   says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \
@@ -3415,23 +3438,38 @@ again = sorted(n for n in rests.values() if n > 1)
 if again:
     wrong.append("one command's words were read %d times" % again[-1])
 # sh_binds answers as the patterns it had did, over every name claude-sync binds or reads, on a
-# piece of it and on texts placed to catch a line's edges.
-SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
-              r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# piece of it and on texts placed to catch a line's edges. Each pattern here runs over the whole text;
+# sh_binds reads only the lines holding the name. Since #2683 the rules are: printf binds only through
+# -v, a line that is only a comment binds nothing, and a builtin binds only in command position.
+SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let)\b"
+              r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
+def comment(t, at):
+    s = t.rfind("\n", 0, at) + 1
+    return t[s:at + 1].lstrip(" \t").startswith("#")
 def before(name, t, allowed=0):
     if name not in t:
         return False
     n = re.escape(name)
-    if len(re.findall(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t)) > allowed:
+    if sum(1 for m in re.finditer(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t) if not comment(t, m.start())) > allowed:
         return True
-    if re.search(r"\(\([^()]*(?<![\w$])" + n + r"\b", t):
+    if any(not comment(t, m.start()) for m in re.finditer(r"\(\([^()]*(?<![\w$])" + n + r"\b", t)):
         return True
-    return any(not re.match(r"(?:export|readonly)\b", m.group(0)) for m in re.finditer(SH_BINDERS.format(n), t))
+    pat, pos = re.compile(SH_BINDERS.format(n)), 0
+    while True:
+        m = pat.search(t, pos)
+        if not m:
+            return False
+        w = m.group(0)
+        if not comment(t, m.start()) and not re.match(r"(?:export|readonly)\b", w) and (
+                w.startswith("$") or gate.sh_command_at(t, t.rfind("\n", 0, m.start()) + 1, m.start())):
+            return True
+        pos = m.start() + 1
 piece = text[200000:260000]
 names = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", piece)))
 edges = ["x=1", "\nx=1", "$x=1", "ax=1", "x[1]=a\n", "local\nx", "read -r a x", "export x", "export x=1",
          "(( y +\n x ))", "((a)) x", "echo ${x:=d}", "for x in a", "a; read x", "x", "local y x\nexport x",
-         "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2"]
+         "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2", "# read x", "  # x=1", "printf 'x %s'",
+         'echo "now read x"', "IFS= read -r x", "if read x", "a # read x\nread x", "f() { local x; }"]
 bad = []
 for t in [piece] + edges:
     for name in (names if t is piece else ["x"]):

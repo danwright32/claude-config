@@ -653,15 +653,6 @@ SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset
 SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
 
 
-# The three patterns Judge.sh_binds reads a name by, compiled once per name for the life of the run:
-# NAME=, NAME+= and NAME[i]=; NAME inside (( )); and the builtins that bind a name. re keeps only 512
-# compiled patterns, and one script can have thousands of names (claude-config#2569).
-# NAME= starts with the name itself and checks the character before it from there (a lookbehind
-# over [\w$]NAME, fixed width since the name is literal), which matches exactly what a leading
-# (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
-# but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
-# 973,000, and sh_locals asks once per local (claude-config#2784).
-@functools.lru_cache(maxsize=None)
 def sh_comment_at(text, at):
     """Whether offset at in shell text is on a line that is only a comment: its first character past
     the indent is a # (claude-config#2683)."""
@@ -695,6 +686,15 @@ def sh_command_at(text, start, at):
     return not before or before[-1] in ";&|(){}!`" or bool(SH_CMD_AFTER.search(before))
 
 
+# The three patterns Judge.sh_binds reads a name by, compiled once per name for the life of the run:
+# NAME=, NAME+= and NAME[i]=; NAME inside (( )); and the builtins that bind a name. re keeps only 512
+# compiled patterns, and one script can have thousands of names (claude-config#2569).
+# NAME= starts with the name itself and checks the character before it from there (a lookbehind
+# over [\w$]NAME, fixed width since the name is literal), which matches exactly what a leading
+# (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
+# but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
+# 973,000, and sh_locals asks once per local (claude-config#2784).
+@functools.lru_cache(maxsize=None)
 def sh_bind_patterns(name):
     n = re.escape(name)
     return (re.compile(n + r"(?<![\w$]" + n + r")(?:\[[^\]\n]*\])?\+?="),
@@ -1189,8 +1189,11 @@ class Judge(WrittenPaths, ProgramWrites):
         elif name in COPIERS:
             if any(v is None for v in vals):
                 # Which word is the target, and what it is copied from, cannot be told: every word
-                # naming a file may be either, so each is unreadable from here on.
-                for a, v in zip(args[1:], vals[1:]):
+                # naming a file may be either, so each is unreadable from here on. A word worked out
+                # that cannot be the target is only copied from, which leaves it as it was (#2683).
+                for i, (a, v) in enumerate(zip(args[1:], vals[1:]), 1):
+                    if v is not None and not v.startswith("-") and not self.copy_target_may_be(name, args, vals, i):
+                        continue
                     if v is None or not v.startswith("-"):
                         self.note_unreadable(a, v, d, f"{name}, from a word that cannot be worked out",
                                              copier=True)
@@ -1404,6 +1407,41 @@ class Judge(WrittenPaths, ProgramWrites):
     def is_dir(self, word, d):
         real = os.path.realpath(self.resolve(word, d))
         return os.path.isdir(real) or real in self.made_dirs
+
+    def copy_target_may_be(self, name, args, vals, i):
+        """Whether args[i], a word worked out of a copy, link or move (COPIERS) another word of which
+        is not, can be the file it writes (claude-config#2683). The target is the last word, or the
+        value of -t: so args[i] can be it where every word after it can expand to nothing, or where
+        the word before it is, or may be, an option taking the next word as its value. Any other word
+        is only read (cp, ln, install) or taken away (mv), and what it holds is as it was."""
+        if all(self.sh_may_vanish(w) for w in args[i + 1:]):
+            return True
+        if i < 2:
+            return False  # the word before it is the program's name
+        pv = vals[i - 1]
+        if pv is None:
+            return True  # it can be -t, or end in t
+        if pv.startswith("--"):
+            key, eq, _ = pv.partition("=")
+            return key in COPIER_LONG_VALUED and not eq
+        if pv.startswith("-") and len(pv) > 1:
+            for j, c in enumerate(pv[1:], 1):
+                if c in COPIERS[name]:
+                    return j == len(pv) - 1
+        return False
+
+    @staticmethod
+    def sh_may_vanish(raw):
+        """Whether a shell word as written can expand to no word at all: "$@", "$*" or every element of
+        an array, quoted or not, or an unquoted word that is only expansions, a substitution or a
+        pattern (which nullglob can leave empty). A quoted word is one word, empty or not."""
+        if re.search(r"\$\{?[@*]|\[[@*]\]\}", raw):
+            return True
+        if any(q in raw for q in "'\""):
+            return False
+        if "$(" in raw or "`" in raw or re.search(r"[*?\[]", raw):
+            return True
+        return re.sub(r"\$\{[^{}]*\}|\$(?:[A-Za-z_]\w*|[0-9#?$!-])", "", raw) == ""
 
     def note_copy(self, name, words, d):
         """note_writes for cp, mv, install, ln or link with its words after the name."""
