@@ -34,6 +34,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/slack-drafts-only-gate.sh"
+# The gate's switched off refusal (#2683) is switched on only where run_ur asks for it, never by
+# whatever the caller's environment holds.
+unset SLACK_GATE_UNWORKED_PATHS
 NUDGE="$(cd "$DIR/.." && pwd)/skills/nudge/nudge.py"
 
 pass=0
