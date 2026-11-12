@@ -785,7 +785,7 @@ run_bash "cd $T/probe/unread && python3 -c 'import unread_probe_2631'"
 refused "a first statement importing a module beside it the gate cannot read"
 # Run as root, mode 000 still lets the folder be listed, so the case cannot be set up here (L411).
 if ls "$T/probe/locked" >/dev/null 2>&1; then
-  echo "UNMEASURED: a folder on PYTHONPATH the gate cannot list: mode 000 does not stop this user listing it"
+  echo "SUITE-PART-UNMEASURED #2631 a first statement import with a folder on PYTHONPATH the gate cannot list: this user can list a mode 000 folder (running as root), so no unlistable folder could be made"
 else
   run_bash "PYTHONPATH=$T/probe/locked python3 -c 'import no_such_probe_2631'"
   refused "a first statement importing a module placed nowhere, with a folder on PYTHONPATH the gate cannot list"
