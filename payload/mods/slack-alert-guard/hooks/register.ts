@@ -374,7 +374,14 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
   const found: Sender[] = []
   let top = ''
   const texts = new Map<string, string>()
-  const withFound = (complete: boolean, otherwise: Found): Found => (found.length ? { senders: found, top, texts, complete } : otherwise)
+  // The file itself, counted among its own senders when `self` is given, is left out of what a
+  // search stopping without a verdict returns: it answers only for what it sends itself, so a search
+  // finding nothing else is still none, with what that says of the file, or stopped short (#2770).
+  let ownRel: string | undefined
+  const withFound = (complete: boolean, otherwise: Found): Found => {
+    const others = found.filter(s => s.rel !== ownRel)
+    return others.length ? { senders: others, top, texts, complete } : otherwise
+  }
   // Whole milliseconds, as process.run takes a timeout; under one left is none.
   const left = async () => Math.floor(deadline - (await $.clock.now()))
   try {
@@ -554,6 +561,7 @@ const findSender = async ($: EngineInterface, path: string, deadline: number, ma
     // the files it imports (#2637): it posts by itself, or through a send helper it imports, as a
     // file using a template does. It is read as that text from here on, never from the disk.
     if (self !== undefined) {
+      ownRel = templateRel
       texts.set(templateRel, self)
       const own: Sender[] = isSender(templateRel, self)
         ? [{ rel: templateRel, chain: [] }]
@@ -1027,6 +1035,20 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     let verdict: { held: Verdict } | { untraced: string } | undefined
     const settle: Settle = async (senders, top, texts, template) => {
       for (const s of senders) {
+        // The file itself, sending through a send helper it imports whatever the helper is named
+        // (#2770): its strings reaching the helper's sends, traced as the helper's own functions. One
+        // posting by itself was traced above. A helper that cannot be traced holds the rest.
+        if (s.rel === template) {
+          if (s.helper === undefined) continue
+          const helper = await readingAt($, texts, s.helper)
+          if (!helper) return ((verdict = { untraced: `${top}/${s.helper}` }), true)
+          const fns = trace(helper).fns
+          const own = sentIn(trace(rBefore, new Map(), fns), trace(rAfter, new Map(), fns), rest)
+          if (!own.added.length && !own.removed.length) continue
+          const held = await holdFor(own)
+          if (!('pass' in held)) return ((verdict = { held }), true)
+          continue
+        }
         const names = await sentInto($, s, texts, template)
         if (!names) return ((verdict = { untraced: `${top}/${s.rel}` }), true)
         const sent = sentIn(trace(rBefore, names), trace(rAfter, names), rest)
@@ -1039,7 +1061,8 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
       }
       return false
     }
-    const found = await findSender($, path, deadline, false, settle)
+    // The file as the edit leaves it is searched first, for a send helper it imports (#2770).
+    const found = await findSender($, path, deadline, false, settle, after)
     if (verdict && 'untraced' in verdict) return holdFor(rest, verdict.untraced)
     if (verdict) return verdict.held
     if ('unchecked' in found) return found

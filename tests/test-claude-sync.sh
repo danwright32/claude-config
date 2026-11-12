@@ -18730,13 +18730,34 @@ check "#1842 and a trap slow to start its child is still waited for until it has
 check "#1842 and that slow suite is still stopped within the bound, with nothing left running (${dl_held}ms, bound 20000ms)" \
   "[ '$dl_held' -le 20000 ] && [ '$dl_tc_up' -eq 0 ] && [ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
 # The seam refuses what is not a time rather than reading it as zero, which would end no deadline.
-# Judged on the message alone, so the real one second clock racing this fixture costs nothing here.
+# And it never falls back to the real clock (claude-config#2778): a deadline started on the test
+# clock and judged on the real one looks hours past, so the run stopped two checks later for a
+# reason that had nothing to do with the bad read, which is what made #2765 hard to find. A bad
+# read stops the run there, naming what the clock printed. An empty read first, which is what a
+# clock file caught mid write gives.
 dl_write_suite noclock "true"
-out_1842b="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
-  SYNC_TEST_SUITE_CLOCK=/usr/bin/false SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"
+out_2778a="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_TEST_SUITE_CLOCK=/usr/bin/false SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"; rc_2778a=$?
 dl_reap
-check "#1842 a clock that prints no number is said, and the real clock is used" \
-  "line_has \"\$out_1842b\" 'SYNC_TEST_SUITE_CLOCK' 'real clock'"
+dbg "#2778 send with a test clock that prints nothing (rc $rc_2778a): $out_2778a"
+check "#2778 a test clock that prints nothing stops the send, naming the clock and the empty read" \
+  "[ '$rc_2778a' -ne 0 ] && line_has \"\$out_2778a\" 'SYNC_TEST_SUITE_CLOCK' \"printed ''\" 'not a whole number' 'stopped'"
+check "#2778 and it never falls back to the real clock" "! grep -q 'real clock' <<< \"\$out_2778a\""
+check "#2778 and so the suite is not reported as stopped at a deadline it never reached" \
+  "! line_has \"\$out_2778a\" 'test-stuck\\.sh' 'SYNC_SEND_TESTS_TIMEOUT'"
+check "#2778 and the hook it covers is not published" \
+  "! git -C '$DLB' cat-file -e HEAD:payload/hooks/stuck.sh 2>/dev/null"
+# A read that is there but is not a number, named as it was printed. A suite of its own, so the send
+# runs it rather than reusing a verdict the case above may have recorded for the same bytes.
+dl_write_suite wordclock "true"
+printf '#!/usr/bin/env bash\necho "half past"\n' > "$DLP/word.clock"; chmod +x "$DLP/word.clock"
+out_2778b="$(CLAUDE_HOME="$DLH" SYNC_REPO="$DLR" SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_TEST_SUITE_CLOCK="$DLP/word.clock" SYNC_SEND_TESTS_TIMEOUT=1 SYNC_SUITE_STOP_GRACE=1 bash "$SCRIPT" send 2>&1)"; rc_2778b=$?
+dl_reap
+dbg "#2778 send with a test clock that prints a word (rc $rc_2778b): $out_2778b"
+check "#2778 a test clock that prints something other than a number stops the send, naming what it printed" \
+  "[ '$rc_2778b' -ne 0 ] && line_has \"\$out_2778b\" 'SYNC_TEST_SUITE_CLOCK' \"printed 'half past'\" 'stopped'"
+check "#2778 and that one never falls back to the real clock either" "! grep -q 'real clock' <<< \"\$out_2778b\""
 # A grace nobody can read is refused as a number, never taken as zero or as for ever (L50).
 check "#464 an unreadable grace falls back to the default and says so" \
   "line_has \"\$(CLAUDE_HOME='$DLH' SYNC_REPO='$DLR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SUITE_STOP_GRACE=soon bash '$SCRIPT' status 2>&1)\" 'SYNC_SUITE_STOP_GRACE' 'soon'"
@@ -18763,6 +18784,36 @@ check "#464 and nothing the runner started is left running" \
   "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ]"
 check "#464 and the pull still reports the runner as stopped at its deadline" \
   "line_has \"\$out_464c\" 'could NOT be completed here' \"still running after ${DL_CEIL}s\""
+
+# A test clock that goes bad WHILE the runner is running (claude-config#2778), which is where #2765's
+# empty read landed. It reads a fixed time until the runner has started its child and grandchild,
+# then nothing. Before the fix that read fell back to the real clock, against a deadline started at
+# the fixed time, so the runner was reported as still running after its deadline. Now the run stops
+# on the bad read, with the runner and everything it started stopped first.
+printf '# marker 2778\n' > "$DLPR/payload/hooks/dl-marker.sh"
+{ printf '#!/usr/bin/env bash\n'; dl_blocked_body pullclk "true"; } > "$DLPR/payload/hooks/run-all-tests.sh"
+cat > "$DLP/pullclk.clock" <<DLCLOCK
+#!/usr/bin/env bash
+[ -s '$DLP/pullclk.child' ] && [ -s '$DLP/pullclk.grandchild' ] && exit 0
+echo 1000000
+DLCLOCK
+chmod +x "$DLP/pullclk.clock"
+dl_t0="$(dl_ms)"
+out_2778c="$(CLAUDE_HOME="$DLPH" SYNC_REPO="$DLPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_POLL_INTERVAL=0.1 \
+  SYNC_TEST_SUITE_CLOCK="$DLP/pullclk.clock" SYNC_HOOK_TESTS_TIMEOUT="$DL_CEIL" bash "$SCRIPT" pull 2>&1)"; rc_2778c=$?
+dl_held=$(( $(dl_ms) - dl_t0 ))
+dbg "#2778 pull whose test clock goes empty while the runner runs (rc $rc_2778c, ${dl_held}ms): $out_2778c"
+dl_child_up=0; dl_running "$DLP/pullclk.child" 'bash -c' && dl_child_up=1
+dl_gc_up=0; dl_running "$DLP/pullclk.grandchild" 'sleep 40' && dl_gc_up=1
+dl_reap
+check "#2778 the fixture: the runner really started its child before the clock went bad" \
+  "[ -s '$DLP/pullclk.child' ] && [ -s '$DLP/pullclk.grandchild' ]"
+check "#2778 a test clock that goes empty mid run stops the pull, naming the clock and the empty read" \
+  "[ '$rc_2778c' -ne 0 ] && line_has \"\$out_2778c\" 'SYNC_TEST_SUITE_CLOCK' \"printed ''\" 'stopped'"
+check "#2778 and the pull does not report a deadline the test clock never reached" \
+  "! grep -q 'could NOT be completed here' <<< \"\$out_2778c\" && ! grep -q 'real clock' <<< \"\$out_2778c\""
+check "#2778 and nothing the runner started is left running, within the bound (${dl_held}ms, bound 20000ms)" \
+  "[ '$dl_child_up' -eq 0 ] && [ '$dl_gc_up' -eq 0 ] && [ '$dl_held' -le 20000 ]"
 SYNC_NO_SEND_TESTS=1
 
 

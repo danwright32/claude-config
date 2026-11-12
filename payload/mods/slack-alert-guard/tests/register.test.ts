@@ -137,14 +137,29 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const dialog: { answer?: string; afk?: boolean } = {}
   const cards: Record<string, unknown>[] = []
   const toasts: string[] = []
-  const clock = mock.clock(on, { now: T0 })
+  // Every read of the clock first charges the real time spent since the last charge (#2805), so
+  // computing between calls to the world, such as tracing senders through a large module, counts
+  // against a deadline checked inside that work, as it does in a session. The mock clock registers
+  // the one clock.now handler, so it is registered through this wrapper, which puts the charge
+  // ahead of it. wall is declared below; it is only called once a read happens.
+  let readClock: () => Promise<number> = async () => NaN
+  const clockOn = ((name: string, handler: (...a: never[]) => unknown) => {
+    if (name !== 'clock.now') return on(name as never, handler as never)
+    const charged = async (...a: never[]) => {
+      await wall()
+      return handler(...a)
+    }
+    readClock = async () => ((await charged()) as { value: number }).value
+    return on(name as never, charged as never)
+  }) as unknown as On
+  const clock = mock.clock(clockOn, { now: T0 })
   // The wall (#2719): once started, every call the guard makes to the world first moves the test
   // clock on by the real time spent since the last one, so the guard's own reading and tracing of a
   // file is charged against its deadline as it is in a session, where git and reads cost little and
   // the work between them is the time. Started just before the call it measures.
   let wallAt: number | undefined
-  const wallStart = () => {
-    wallAt = performance.now()
+  const wallStart = (spentMs = 0) => {
+    wallAt = performance.now() - spentMs
   }
   const wall = async () => {
     if (wallAt === undefined) return
@@ -339,7 +354,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
 }
 type W = ReturnType<typeof world>
 
@@ -664,6 +679,39 @@ test('a copy builder used by a route that posts nothing passes', withKit, async 
   const w = world($, on, { files: { [COPY]: COPY_TEXT, [ROUTE]: "import { lateBooking } from '@/lib/notify/outage-copy'\nexport const GET = async () => console.log(lateBooking('1'))\n" } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: COPY, old_string: 'is late`', new_string: 'is late again`' }))).toBe('')
   expect(w.ran.length).toBe(1)
+})
+
+// claude-config#2770: a file posting through a send helper it imports, named for nothing Slack, was
+// judged as a file that sends nothing, so rewording the message it hands the helper passed unheld.
+// The helper is followed to whether it reaches a Slack send.
+const NOTIFIER = '/w/app/src/jobs/stuck-orders.ts'
+const notifier = (from: string, helper: string) =>
+  `import { ${helper} } from '${from}'\nexport const run = async (count: number) => {\n  if (count > 5) await ${helper}(\`\${count} orders are stuck in the queue\`)\n}\n`
+const REWORD_NOTIFIER = { tool: 'Edit', file_path: NOTIFIER, old_string: 'orders are stuck in the queue', new_string: 'orders have been stuck for an hour' }
+
+test('rewording what a file hands a send helper named for nothing Slack is held, when the helper posts to Slack (#2770)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [POST]: POST_TEXT, [NOTIFIER]: notifier('@/lib/notify/post', 'postAlert') } })
+  const why = refusalOf(await call($, REWORD_NOTIFIER))
+  expect(why).toContain(NOTIFIER)
+  expect(why).toContain('${count} orders have been stuck for an hour')
+  expect(w.ran).toEqual([])
+  await ask($, w, why, APPROVE, { rendered: '12 orders have been stuck for an hour' })
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('rewording what a file hands a helper that reaches no Slack send passes, from a module that posts nowhere or from a Slack module whose other function posts elsewhere (#2770)', withKit, async ($, on) => {
+  const METRICS = '/w/app/src/lib/metrics/emit.ts'
+  const METRICS_TEXT = 'export const emitEvent = (text: string) => fetch(process.env.METRICS_URL, { method: "POST", body: JSON.stringify({ text }) })\n'
+  const w = world($, on, { files: { [METRICS]: METRICS_TEXT, [NOTIFIER]: notifier('@/lib/metrics/emit', 'emitEvent') } })
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same module as the Slack send helper, through its function that posts somewhere else.
+  const BOTH = `${POST_TEXT}export const postMetric = (text: string) => fetch(process.env.METRICS_URL, { method: "POST", body: JSON.stringify({ text }) })\n`
+  w.files[POST] = BOTH
+  w.files[NOTIFIER] = notifier('@/lib/notify/post', 'postMetric')
+  expect(refusalOf(await call($, REWORD_NOTIFIER))).toBe('')
+  expect(w.ran.length).toBe(2)
 })
 
 test('more files could send a template than the guard reads: the edit is held with an id Dan can approve, never refused unanswerably', withKit, async ($, on) => {
@@ -2707,4 +2755,30 @@ test('names added to an existing import in an 11,000 line module that 80 files s
   expect(reworded).toContain('Nothing has arrived for kind 3 today')
   expect(reworded).not.toContain('not searched within')
   expect(w.ran.length).toBe(1)
+})
+
+test('the test clock charges computing time to a clock read: work between calls to the world moves it once the wall is started (#2805)', withKit, async ($, on) => {
+  const w = world($, on)
+  const before = await w.readClock()
+  // Not started: computing costs nothing, as in every test that does not judge the wall.
+  const idle = performance.now()
+  while (performance.now() - idle < 30) { /* busy */ }
+  expect(await w.readClock()).toBe(before)
+  // Started: the same computing is charged by the next read, with no call to the world between.
+  w.wallStart()
+  const busy = performance.now()
+  while (performance.now() - busy < 30) { /* busy */ }
+  expect((await w.readClock()) - before).toBeGreaterThanOrEqual(30)
+  // A later read never goes back: charges only add.
+  const at = await w.readClock()
+  expect(await w.readClock()).toBeGreaterThanOrEqual(at)
+})
+
+test('a CPU bound trace is charged against the search deadline on the test clock: reading the clock after SCAN_MS of computing finds the deadline passed (#2805)', withKit, async ($, on) => {
+  const w = world($, on)
+  const deadline = (await w.readClock()) + SCAN_MS
+  // Computing that began SCAN_MS ago, as a trace through a huge module would have, with no call to
+  // the world in between (what #2808's check before each sender reads the clock for).
+  w.wallStart(SCAN_MS)
+  expect(await w.readClock()).toBeGreaterThanOrEqual(deadline)
 })

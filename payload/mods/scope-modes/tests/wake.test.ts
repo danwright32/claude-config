@@ -348,9 +348,31 @@ describe('morningPrompt puts what the report says needs Dan, and what sleep mode
     parked: ['Failed a repo not named: the auto mode classifier refused Bash: it gave no reason'],
     banned,
   })
-  test('each Needs a look row is its own picker, from the data block', () => {
-    expect(p).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
+  test('each kind of Needs a look row is its own picker, from the data block', () => {
+    expect(p).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below with rows of one kind together: put each 7\.n to Dan in its own AskUserQuestion picker, one at a time/)
     expect(p).toContain('7.1 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
+  })
+  // #2766: on 2026-11-11 the wake prompt asked for 34 pickers, one per line, most of one kind.
+  test('rows of one kind are one picker naming how many there are; a row of its own kind stays alone', () => {
+    const q = morningPrompt({
+      worker: true,
+      offers: false,
+      issues: [],
+      lessons: [],
+      look: [
+        'Done overnight, check it: Scheduled run overnight: o/r Drift check, failed (u1)',
+        'Done overnight, check it: Milestone touched overnight: o/r "Ungrouped", by changes nothing the night recorded accounts for: #13 closed by eve',
+        'Done overnight, check it: Scheduled run overnight: o/s Canary, timed out (u2)',
+        'Not checked overnight: deploy runs in o/r were not checked (gh api: HTTP 500: boom)',
+        'Not checked overnight: the installed LESSONS.md was not checked (no time was given)',
+        'o/r PR #36 was noted done, but GitHub does not show it merged.',
+      ],
+    })
+    expect(q).toMatch(/a 7\.n holding several rows \(7\.n\.1, 7\.n\.2 and on\) is one picker that says how many rows it holds/)
+    expect(q).toContain('7.1 2 rows of one kind: Done overnight, check it: Scheduled run overnight\n7.1.1 Done overnight, check it: Scheduled run overnight: o/r Drift check, failed (u1)\n7.1.2 Done overnight, check it: Scheduled run overnight: o/s Canary, timed out (u2)')
+    expect(q).toContain('7.2 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
+    expect(q).toContain('7.3 2 rows of one kind: Not checked overnight\n7.3.1 Not checked overnight: deploy runs in o/r')
+    expect(q).toContain('7.4 o/r PR #36 was noted done, but GitHub does not show it merged.')
   })
   test('each Parked and failed row is its own picker too', () => {
     expect(p).toMatch(/What the night's report lists under Parked and failed that this session hands over \(its own, and in the session that ended sleep those of sessions since closed\), numbered 8\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)

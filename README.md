@@ -1472,6 +1472,21 @@ itself. A hook git runs is an executable file named after one. On 2026-11-03 eac
 repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
 refused.
 
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
 any method but GET, any spelling), and a GraphQL mutation that merges a pull request
@@ -3668,6 +3683,21 @@ refused none. That zero is a lower bound, because 6.5% of the judged commands ra
 that have since been deleted, and the gate lets a missing script through. The work MacBook has not
 been replayed. The gate on main that day refused 187 more commands and timed out on 48 more than the
 gate at #2640, which #2784, #2785 and #2786 follow up.
+
+A file a program writes by name and the same command then runs (#2772) is followed where its text
+can be read and refused where it cannot, in `lib/program-writes.py`. dd and an archive tar or unzip
+unpacks are followed by what they write. A file that code edits or names (`sed -i`, a `python3 -c`
+or heredoc, `node -e`, an awk `print >`) is judged as that code, the files it reads and what was
+there before, where the code is seen unable to fetch or run anything; otherwise, and for any other
+program naming it (`sort -o`, `rsync`, `base64 -o`), it is refused as unreadable. Programs that
+never write what they are handed (`chmod`, `grep`, git's reading subcommands) and the files handed
+to a script on disk are not counted. Measured on 2026-11-12 by replaying 3 days of this Mac's Bash
+calls (about 21,000 distinct, each with more than one command): the first version refused 135 more
+than main, almost all a script edited and then run, or a word like `owner/repo` read as a file; the
+third refused 2 more, both a sed replacement naming a file it does not write. That last change only
+narrows what sed and awk are read as writing, and both pass on what shipped, so it refuses no more
+than main on that replay. `claude-sync lesson L174` takes 1.9 s through the wrapper on both (5
+readings each at load average 10 to 18).
 
 When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
 to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
@@ -6512,9 +6542,11 @@ since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the li
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
 of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
 merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
-and judged against that side rather than the conflict on disk; one git cannot read, or
-one beside any other command on the line (a cd aside), which may change what it puts back first, is
-judged whole with the refusal saying why), a program whose text names the files it writes, and a
+and judged against that side rather than the conflict on disk; since #2777 one run first on its
+line, the line's only checkout or restore and in no pipe or background, is measured the same way,
+since nothing after it can change what it puts back; one git cannot read, or one after any other
+command on the line (a cd aside), which may change what it puts back first, is judged whole with the
+refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6745,6 +6777,9 @@ command taking away a hook file git has never tracked, by `git ls-files`, passes
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
 schema's description pass, a property the schema names `reason` or `text` being no message. Since
+#2788 only the words of a string the change adds, rewords or takes away count, so a change to code
+alone passes even where the reading follows a message less far after it than before (a verdict
+handed through a helper that hands it straight back), and a comment holds no string. Since
 #1925 the words Dan reads in a mod's picker are a message's too: an answer's label and description
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
@@ -7063,7 +7098,12 @@ morning otherwise); git in a throwaway repository under the temp folder (a path 
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
 refused for git only where it would run git, never for the word in prose (#1124). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. What may merge and
+and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
+passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
+in one line it writes every time it runs, so a final report with no note of the check says it did
+not run. A failed, cancelled or timed out run is listed. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
