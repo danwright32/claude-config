@@ -705,7 +705,8 @@ const neverTracked = async ($: EngineInterface, path: string, tree: string): Pro
 // review of #1158): putBack reads the source as it stands now, and any other command on the line may
 // change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
 // restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
-// before it aside, is measured; anything else is judged whole, saying so. So is git told to read
+// before it aside, is measured, or with `first` one run first on its line (#2777, below); anything
+// else is judged whole, saying so. So is git told to read
 // another index, repository or setting: a GIT_ variable set on the line (which the command reader
 // drops from a command's words), or any of git's own options before the subcommand but -C, whose
 // folder mod-kit already follows (lessons review).
