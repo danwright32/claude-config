@@ -330,10 +330,12 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     // only once some choice's wording is carried.
     let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
     const held: SlackAlertChoice[] = []
+    const unreadFiles: string[] = []
     for (const x of carrying) {
       const { repos, unread } = await choiceRepos($, x)
       if (unread.length) {
         held.push(x)
+        unreadFiles.push(...unread)
         continue
       }
       if (prRepo === undefined) {
@@ -344,7 +346,7 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
       }
       if (repos.includes(prRepo)) held.push(x)
     }
-    if (held.length) return { merge: mergeRefusal(held) }
+    if (held.length) return { merge: mergeRefusal(held, unreadFiles) }
   }
   return PASS
 }

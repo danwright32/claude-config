@@ -2683,12 +2683,14 @@ test('a choice whose repository cannot be read, or a pull request whose reposito
   nightFresh(true)
   const w = world($, on)
   // The choice's origin cannot be read when it is made, nor at the merge: it holds any pull request
-  // carrying its wording, as before #2833.
+  // carrying its wording, as before #2833, and says which repository could not be read.
   w.night.originFails = true
   await chooseReword($, w)
   expect(placesIn(w)).toEqual(chosenIn(w).map(() => [null]))
   w.night.diffs['7'] = DIFF
-  expect(refusalOf(await call($, SITE_MERGE))).toContain('chosen overnight')
+  const why = refusalOf(await call($, SITE_MERGE))
+  expect(why).toContain('chosen overnight')
+  expect(why).toContain(` As the repository ${ALERT} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`)
   // Readable at the merge, it is read then.
   w.night.originFails = false
   expect(refusalOf(await call($, SITE_MERGE))).toBe('')

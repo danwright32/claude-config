@@ -143,6 +143,9 @@ export const carried = (diff: string, choices: readonly SlackAlertChoice[]): Sla
   return choices.filter(c => (c.added.length ? c.added.some(holds(added)) : c.removed.some(holds(gone))))
 }
 
-/** The refusal of a merge carrying chosen wording. */
-export const mergeRefusal = (held: readonly SlackAlertChoice[]): string =>
-  `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it. ${held.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.`
+/**
+ * The refusal of a merge carrying chosen wording. `unread` names each file whose repository could not
+ * be read (#2833), so its wording held the merge wherever the pull request is.
+ */
+export const mergeRefusal = (held: readonly SlackAlertChoice[], unread: readonly string[] = []): string =>
+  `Blocked: this pull request carries Slack alert wording chosen overnight that Dan has not approved (${held.map(c => `${c.file}: "${c.rendered}"`).join('; ')}). Nothing carrying it may merge until he approves it. ${held.map(c => `Put it to him: call AskUserQuestion with one question and metadata {"source": "${morningSource(c.id)}"}`).join('; ')}; while he is asleep, leave the pull request open for the morning.${[...new Set(unread)].map(f => ` As the repository ${f} is in could not be read, the wording chosen there holds a pull request carrying it in any repository.`).join('')}`
