@@ -42,13 +42,16 @@ for root in "$@"; do
   # A .git folder is a repository's main checkout, whose worktree list names every linked worktree
   # wherever it lives; a .git file is a linked worktree. Dependency and build folders hold
   # repositories nobody pushes from.
+  # Into a file first, so find has exited before the loop reads (claude-config#2040).
+  find "$root" \( -name node_modules -o -name .build -o -name Pods -o -name DerivedData \) -prune -o -name .git -print > "$WORK/found" 2>/dev/null
   while IFS= read -r g; do
+    [ -n "$g" ] || continue
     top="$(cd "${g%/.git}" 2>/dev/null && pwd -P)" || continue
     if [ -d "$g" ]; then
       git -C "$top" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' >> "$WORK/trees"
     fi
     printf '%s\n' "$top" >> "$WORK/trees"
-  done < <(find "$root" \( -name node_modules -o -name .build -o -name Pods -o -name DerivedData \) -prune -o -name .git -print 2>/dev/null)
+  done < "$WORK/found"
 done
 sort -u "$WORK/trees" > "$WORK/unique"
 
