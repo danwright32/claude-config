@@ -806,6 +806,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   incident, so the association record was never written and no retry could have helped)
   SHORT: A detection that ACCUSES on an empty answer from a derived index must confirm against the primary record, because a missing entry looks like a breach.
 
+- **L849. A fallback destination for a message that needs action (a channel, an inbox, a queue)
+  must be checked against who is actually in it on production, because a destination set up during
+  testing accepts every message and reaches nobody who can act.**
+  (slate#4774, 2026-11-11)
+  SHORT: Check who is actually in a fallback channel, inbox or queue on production: one set up for testing accepts every message and reaches nobody.
+
 - **L173. A fallback added because a lookup failed must be reachable on EVERY way that lookup can
   fail, not only the flavour that was observed, because the remedy gets scoped to the symptom named
   in the incident report and is then absent in the neighbouring, worse failure.** The tell is a

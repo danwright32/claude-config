@@ -236,6 +236,13 @@ and its check of whether this Mac's skills folder holds anything to send, #2017)
 `hooks/test-python-bad-bytes.sh` all read (#2001), so no check judges a skill the sync does not send.
 A send never carries them and a pull never deletes a Mac's own copy. Edit that file to change them.
 
+A suite that scans the config it is installed in lists its files with `synced_files` from
+`payload/hooks/lib/synced-trees.sh`: the trees `claude-sync` mirrors (its `MIRROR_DIRS`, plus
+`skills/` less the entries above), never `state/`, `projects/` or another folder a Mac keeps for
+itself. Installed, the scanned tree is `~/.claude`, where agents keep copies of hooks in their
+session notes, and a whole tree walk failed the pull on those copies (#2750).
+`hooks/test-synced-trees.sh` fails when its list of trees and `MIRROR_DIRS` differ.
+
 A send never puts back a file the shared repo deleted when this Mac's copy is a leftover: the
 version the repo deleted, or an earlier version nothing on this Mac has written since the deletion
 reached it. The send names it, does not publish it, and removes the leftover here, saying which
@@ -896,6 +903,15 @@ bounds how long the pull will wait before stopping it and saying nothing was ver
 told `SYNC_NO_HOOK_TESTS=1` in its own environment, because the test suite runs pulls of its own and
 a pull that runs the suite would otherwise recurse without end.
 
+The pull's run is a whole run, so it queues for this Mac's one full suite slot like any other
+(#2012), and it is told how long it may queue: `SYNC_HOOK_TESTS_SLOT_WAIT`, by default half of
+`SYNC_HOOK_TESTS_TIMEOUT`, and never as long as the deadline itself (#2758). A run still queued at
+that bound runs nothing, and the pull says so in those words, naming the run that held the slot,
+rather than reporting a suite "still running". It is recorded in `.hook-tests` as `slotwait`,
+`claude-sync status` reports it, and the next pull runs the suite again even when it carries no
+hook of its own; the change watcher does not, since every tick would queue behind the same run. A
+suite stopped at the deadline after waiting part of it for the slot says how long it waited.
+
 ### A send names what it keeps back
 
 A path the shared repo has changed since this Mac last applied is held back from the send, because
@@ -910,6 +926,16 @@ is wrong: while this clone holds config it has not applied, it names each file, 
 holding it back, and names the pull that settles it. It says nothing when every path the repo
 changed is already here, which is the ordinary aftermath of this clone's own commits and repairs
 itself on the next send (#515).
+
+Whether a path is applied has three answers: applied, not applied, and could not compare. A step
+that fails while asking (putting this Mac's home path into the repo's `settings.hooks.json`, the jq
+comparing its hooks block with `settings.json`, making a tokenized file's copy as this Mac holds
+it, reading which skills the sync carries, the final comparison) used to answer "not applied", so
+status said the shared repo had changed a file nothing had compared. Status now lists such a file
+under `config not compared with the shared repo`, in the same shape as the mods block below, one
+line per file naming the step and its exit status. The send still holds it back, since whether the
+repo moved past this Mac's copy is unknown, and says that it could not compare it rather than that
+the repo changed it (#2682).
 
 `claude-sync push` also records what it published, which `send` has always done. Without that, the
 marker stayed at the previous commit, every path the push committed read as unapplied, and the next
@@ -1446,6 +1472,21 @@ itself. A hook git runs is an executable file named after one. On 2026-11-03 eac
 repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
 refused.
 
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
 any method but GET, any spelling), and a GraphQL mutation that merges a pull request
@@ -1803,7 +1844,14 @@ included) as above, and never updates the same head twice; four minutes after th
 nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
 repository's settings, merges by the one method they allow, and when they allow more (claude-config
 and a work repository allow all three) stops at once naming them rather than at the merge after the wait.
-It does not guess squash from history, which GitHub does not record a method for. While it waits it
+It does not guess squash from history, which GitHub does not record a method for. It merges as an
+account that can merge, not the first that could read the pull request: at its first look it asks
+GitHub the permission (`viewerPermission`) of the account that read it, and when that is below
+WRITE asks each other account gh is signed in to, with a token scoped to each call and never
+`gh auth switch`. Every write in the run is made as the first with WRITE, MAINTAIN or ADMIN, and it
+says which and why; when none can, it stops before any update or wait, naming each account and its
+permission. On 2026-11-10 a read only active account waited 7m 30s and was then refused at the merge
+(claude-config#2629). While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
 one can be told apart (claude-config#1476). Its looks follow the one polling policy,
 `hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
@@ -1819,7 +1867,14 @@ real engine by `tests/test-session-id-agreement.sh`, claude-config#1575). A rate
 answer to any read or update pauses every look in the session for GitHub's Retry-After, the reset
 time of an allowance it reports spent, or, for a burst limit naming no time, a minute doubling while
 it holds; the wait is said as a rate limit, with a heartbeat inside any wait longer than two
-minutes. It accepts only the merge
+minutes. A run waiting for its turn (below) leaves GitHub to the run holding it (claude-config#2715):
+on 2026-11-10 one session's 102 merge logs held 2,845 waits on that cap, 251 of them by the run
+holding the turn, with a median of 8 runs in line behind it. A run in line reads the turn, and the
+line moving, from the queue on this Mac, and reads GitHub only every ten minutes
+(`MWR_LINE_LOOK_SECONDS`) to see its pull request is still open, each time leaving one of the
+session's looks a minute free, so the run holding the turn looks at its own pace. A run not yet in
+line leaves that look free too whenever the queue shows another run holding the turn
+(claude-config#2749), since its first look comes before it learns it is in line. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
@@ -1850,7 +1905,16 @@ and log, and waited on like any other run. A run whose jobs ran and failed is ne
 already on a later attempt (re-run by the helper or anyone) that fails to start again is said and
 left, and a jobs read or a re-run GitHub refuses is said and left, so in each of those the merge
 gate decides exactly as before. Nothing is treated as green here: whatever the re-run reports still
-has to pass `block-red-merge.sh`. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+has to pass `block-red-merge.sh`. A job that waited for a runner is said (claude-config#2714): GitHub
+runs at most 20 jobs at once on the Free plan's hosted runners (docs.github.com/en/actions/reference/limits),
+and on 2026-11-10 that pool was full twice and 15 jobs waited over a minute, up to 6.6 minutes, which
+read in the merge logs as slow tests. Once every run of the head has finished, each run the helper
+saw a check of still open has its jobs read once, and a job that waited more than
+`MWR_POOL_WAIT_SECONDS` (60) to start is said with how long, and how many of this repository's jobs
+were running when it was queued (counted from the runs created up to `MWR_POOL_LOOKBACK_SECONDS`
+before it); the pool is called full only when that count reaches `MWR_POOL_LIMIT` (20). Only this
+repository's jobs can be counted, since GitHub gives no read of an account's running jobs. A run with
+no wait says nothing, and a failed read is said and changes nothing. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed a work project's pull request, which was based on the merged
 branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
 one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
@@ -2344,9 +2408,24 @@ And one holds the rule CLAUDE.md gives every worktree session about a stale base
   0.092 to 0.105 seconds on every edit after it, five readings of each. No override: a payload it
   cannot read is let through with a notice.
 
+Reading an old checkout is the other half, and that one is said rather than refused:
+
+- `checkout-behind-notice.sh` (SessionStart and SubagentStart) tells a session, and every subagent
+  it starts, when the checkout it is in lacks commits that `origin`'s default branch has
+  (claude-config#2712). On 2026-11-10 a session on the work MacBook read a primary checkout on a
+  detached HEAD 279 commits behind main as current and told Dan twice that a shipped feature did not
+  exist. It speaks on a detached HEAD at any distance, or when the oldest missing commit is 8 hours
+  old, or 50 commits are missing (`CHECKOUT_BEHIND_HOURS`, `CHECKOUT_BEHIND_COMMITS`; measured on the
+  personal MacBook's checkouts, where worktrees in use lacked at most 5 hours of work and stale ones
+  at least 16). The session is told to read the current code with `git show origin/main:<path>` and
+  `git grep <pattern> origin/main`, since a shared checkout must not be switched; the hook itself
+  only fetches, bounded at 5 seconds and cached for 10 minutes per repository, and a fetch that fails
+  says the checkout could not be checked, never that it is level. The person is told once per
+  session for each answer; a compaction, a `/clear` and each subagent get it again as context.
+
 ### What a push actually waits on
 
-Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2827,6 +2906,17 @@ anything
 2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
 average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
 before python3 starts
+
+</td></tr>
+<tr><td>
+
+`read-only-query-allow.sh` (#2763)
+
+</td><td>
+
+2026-11-11: 0.015 to 0.047 seconds, five readings of the hook alone on a plain `git push` at load
+averages of 24 to 28, so mostly the machine; it reads every Bash call since #2763, and one that never
+names supabase leaves after reading its input, before loading anything
 
 </td></tr>
 </tbody>
@@ -3420,7 +3510,37 @@ imports followed, each module read once, so a cycle ends. So repo-digest's `npm 
 `src/digest.ts` imports `src/slack.ts`, is refused, naming `slack.ts`, as are NurseDex's
 `scripts/check-*.ts` that import `scripts/slack-alert.ts`. An import it cannot find or read is
 refused, since node may still find it (package.json exports, a path alias, a loader) and run what the
-gate never saw, and so is a script reaching more than 300 modules (the largest real one reaches 11).
+gate never saw, and so is a script reaching more than 300 modules in no repository (the largest
+real script of ours reaches 11).
+
+Past 300 the gate reads on when the script is inside a repository and every module it reaches is
+too (#2470; Dan, 2026-11-09: "Time budget past 300, repository files only"). A lint run in a work
+repository was refused whole because its config's imports pass 300, though nothing in it posts, and
+builders linted file by file or went round the gate. A file is inside the repository when its real
+path is under the nearest folder at or above the script that holds `.git`, so an installed package
+under `node_modules` counts and a link leading out does not (Dan, 2026-11-10). Every module past 300
+is still read whole and judged by the endpoint it names, so one that posts is refused by name; a
+module outside the repository is refused, named, as a call the gate could not check. Nothing is
+allowed unread. What bounds the reading is the gate's one budget of 11 seconds for the whole call
+(Dan, 2026-11-10, rather than a second number), and running out of it refuses the call as not
+checked, saying how many modules it had read. Measured through the wrapper on the personal MacBook
+on 2026-11-10 (12 cores, load average 17 to 27 from other sessions' suites, several readings each):
+
+| Measured | What was judged | Modules | Readings | Least | Middle | Most | Verdict |
+|---|---|---|---|---|---|---|---|
+| 2026-11-10 | a made up lint script | 342 | 7 | 0.13 s | 0.14 s | 0.14 s | allowed |
+| 2026-11-10 | `node node_modules/eslint/bin/eslint.js .`, a real install | 339 to 397 | 7 | 0.37 s | 0.38 s | 0.47 s | allowed |
+| 2026-11-10 | a made up lint script | 5,315 | 5 | 0.95 s | 0.99 s | 1.00 s | allowed |
+| 2026-11-10 | a made up lint script | 42,502 | 5 | 7.60 s | 7.68 s | 7.81 s | allowed |
+| 2026-11-10 | a made up lint script | 95,627 | 3 | 11.11 s | 11.12 s | 11.13 s | refused, out of time |
+
+In those readings of 2026-11-10 the made up modules are about 270 bytes each and ESLint's own are
+larger: about 0.8 ms a module against 0.2 ms, once the 0.08 s the gate takes to start is taken
+off. So at that load the budget covers some ten thousand modules of real size. The cost of the
+change is the last row: a tree too large to read is now refused after 11 seconds, where the count
+refused it in a fraction of one. The work repository's own lint run is on the work MacBook and
+was not among these readings.
+
 A module is judged by its text, as a Python script is, so a helper that only greps for an endpoint
 names it and is refused like a script run directly would be; a helper that names none (one that
 saves a draft) passes. Measured over the 139 scripts in repo-digest's `src/` and NurseDex's
@@ -3515,7 +3635,17 @@ package, `worker_threads`, `dns` and every program off the list of senders. A sh
 are not counted, since every shell script that keeps state writes (`issue-spool.sh clear` moves its
 spool files into place), and neither are its data reaching a program through a pipe or code written
 into the script itself (a heredoc fed to `python3 -`). A later file with a script's extension, a `#!`
-or no extension at all is read as before, since a wrapper may run it. Cost: the clear line takes about 0.21 s
+or no extension at all is read as code where the gate cannot be certain which word is the script. Where
+it can (#2797: the word the program's option table places as its script names a file on disk, no
+option the table does not know comes before it except for Python, whose table is complete, and the
+word is not built from a variable or a pattern), every later file is that script's argument: read as
+a script, its imports followed, only where the script or a file loaded before it (`node -r`,
+`--import`) can run what it is handed (it imports or requires a computed name, runs a child process,
+imports a package or module the gate does not know, or is of a kind the gate does not read; writing
+a file does not count), and its own text judged as a data file's is. So `node replace.mjs alert.ts
+old.txt new.txt`, a helper that only reads and rewrites text, passes although `alert.ts` imports the
+alert sender, and the same command with a helper that runs, imports or posts what it is handed is
+refused. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
@@ -3564,12 +3694,51 @@ the session transcript handed to `issue-spool.sh` as a shell script: the first 2
 commands, 5.0 to 5.6 seconds on this Mac at load averages of 14 to 90. #2415 had already stopped
 reading such data files as code; the same line now takes 0.27 seconds against a 248 MB transcript
 (load average 14, 2026-11-09). A file the gate cannot tell from a script (a large file with no
-extension handed to a script) is still read as one, about 3 seconds for 2 MB at a load average of 95,
+extension handed to a script that may run it) is still read as one, about 3 seconds for 2 MB at a load average of 95,
 and is what the budget now bounds. The number in Claude Code's label is the hook's place among the
 distinct PreToolUse commands in the settings, so it moves whenever a PreToolUse hook is added above
 the gate (41 on 2026-11-06, 42 once `read-only-query-allow.sh` was added, 43 once `db-write-ask.sh` was). The suite times the budget
 by a step clock (`SLACK_GATE_TICK_BUDGET`, honoured only under `HOOK_TESTS_RUNNING=1`), never the
 real one.
+
+What the gate costs in refused commands (#2642), measured on 2026-11-11 by replaying 30 days of Bash
+commands from the personal MacBook (83,323 distinct, 55,729 judged by the Python rule): #2640 newly
+refused none. That zero is a lower bound, because 6.5% of the judged commands ran scratch scripts
+that have since been deleted, and the gate lets a missing script through. The work MacBook has not
+been replayed. The gate on main that day refused 187 more commands and timed out on 48 more than the
+gate at #2640, which #2784, #2785 and #2786 follow up.
+
+A file a program writes by name and the same command then runs (#2772) is followed where its text
+can be read and refused where it cannot, in `lib/program-writes.py`. dd and an archive tar or unzip
+unpacks are followed by what they write. A file that code edits or names (`sed -i`, a `python3 -c`
+or heredoc, `node -e`, an awk `print >`) is judged as that code, the files it reads and what was
+there before, where the code is seen unable to fetch or run anything; otherwise, and for any other
+program naming it (`sort -o`, `rsync`, `base64 -o`), it is refused as unreadable. Programs that
+never write what they are handed (`chmod`, `grep`, git's reading subcommands) and the files handed
+to a script on disk are not counted. Measured on 2026-11-12 by replaying 3 days of this Mac's Bash
+calls (about 21,000 distinct, each with more than one command): the first version refused 135 more
+than main, almost all a script edited and then run, or a word like `owner/repo` read as a file; the
+third refused 2 more, both a sed replacement naming a file it does not write. That last change only
+narrows what sed and awk are read as writing, and both pass on what shipped, so it refuses no more
+than main on that replay. `claude-sync lesson L174` takes 1.9 s through the wrapper on both (5
+readings each at load average 10 to 18).
+
+When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
+to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
+with `gh pr merge` directly once every check is green, without deleting the branch (the helper
+deletes it only after moving the pull requests stacked on it), to confirm the state with
+`gh pr view`, and to tell Dan the helper could not be started. On 2026-11-09 a session retried the
+same merge seven times because the refusal named no other way. The reader prints a verdict of its
+own for this (`outoftime`), refused exactly as before, and the wrapper adds the advice; a call that
+is no merge gets none. Measured again on 2026-11-10 (12 cores): the line refused that day takes
+7,976 steps (the suite's own line, which has no `cd` in front, takes one fewer, 7,975) against the
+suite's ceiling of 12,000, up 76 from #2591 on either line, all of it the helper (125,803 to 128,049
+bytes and one more sourced file; the gate's own growth adds no step), 2.5 seconds of processor time,
+and 2.6 to 4.4 seconds on the wall over five readings at load averages of 85 to 94. Later the same
+day, with the helper at 135,488 bytes, it was 8,133 steps and the same 2.5 seconds. So the one
+refusal that day, at 2:32 PM ET, was not a helper grown past the gate. No load figure was recorded
+for that minute, so the likely cause (a Mac too busy to give the gate a quarter of a core for 11
+seconds) is inferred, not measured.
 
 ## Read only queries are approved without asking
 
@@ -3588,6 +3757,11 @@ What it approves:
   never is, its query tool included.
 - The claude.ai Supabase `execute_sql` when its query is one statement starting with `select`, `with`,
   `explain` or `show`, against any project.
+- Since #2763, a Bash command that is one Supabase CLI run and nothing else but a `cd`: a `supabase db
+  query` whose every statement, in its words or in the `-f` file it names (which the hook reads), passes
+  the same rule, or a `supabase db push --dry-run`. A pipe, a redirection, a second command or a flag
+  it does not know leaves the call to the usual check. `db-write-ask.sh` reads the same command with
+  the same library, so a call approved here is never asked about there.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
 comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
@@ -3648,13 +3822,33 @@ the statement and the project named) for:
   - the same through the Supabase CLI, so that one route is not the way round the other:
     `branches create`, `delete`, `pause`, `unpause` and `update`, and `projects create` and `delete`.
 
-  Left unasked, since none changes a database: `deploy_edge_function` and
-  `create_edge_function_secret` (code and configuration, as `supabase functions deploy` is in a
-  shell; the secret's value, by the tool's description, is typed in the Supabase dashboard),
+  Left unasked, since none changes a database: `deploy_edge_function` while it keeps JWT
+  verification on (the next rule asks about one that turns it off) and
+  `create_edge_function_secret` (code and configuration; the secret's value, by the tool's
+  description, is typed in the Supabase dashboard),
   `create_notebook` (saved without being run; `run_notebook` is asked about), `delete_notebook`,
   `submit_feedback` and `delete_feedback`. The list is `SUPABASE_CHANGES` in
   `lib/db-write-calls.py`, written by hand from the connector's tool descriptions as read on
   2026-11-10.
+- since #2660, one kind of call that changes no database: a Supabase edge function deploy that turns
+  JWT verification off, or may. With it off the platform checks no caller, so anyone holding the
+  function's address can call it without signing in, unless its own code checks them. The question
+  names the function and the project, and says "edge function deploy" where the others say
+  "database call":
+  - `deploy_edge_function` on any server whose name holds supabase, when `verify_jwt` is false (or
+    the text false, or a `no_verify_jwt` that is true). A `verify_jwt` that is neither true nor false
+    (null, a number, the text true) is asked about as one that could not be read. One that is true
+    is passed, and so is one left out, because the connector's schema (read 2026-11-10) declares it
+    a boolean whose default is true. That default was read from the schema and not measured on a
+    real deploy.
+  - every `supabase functions deploy` in a shell, whatever its flags, naming its functions or
+    saying "all functions" when it names none. In a shell the setting can sit in the project's
+    `supabase/config.toml` (`verify_jwt = false` under the function), which a plain deploy applies
+    with no flag in the command, and the hook never reads a file. Dan decided on 2026-11-10: "Ask on
+    every shell deploy". The question says verification is off when `--no-verify-jwt` is given as
+    anything but `=false` (or the `--verify-jwt=false` an older CLI took is), and otherwise says
+    where the setting is kept. `functions serve --no-verify-jwt` runs on this Mac only and is
+    passed, as are `new`, `list`, `delete` and `download`.
 - anything it cannot classify: a missing or non text query, a payload it cannot read whose text names
   one of these tools, or `lib/sql-read-only.py` failing to load (then a select is asked about too). For
   a shell client that also means statements in a file or on its input (`-f`, a pipe, a heredoc; the
@@ -3676,7 +3870,10 @@ store, most of them reads the rule cannot prove are reads (a dot command, two st
 it does not know such as `hex`), and 53 of the 76 sqlite3 runs carried `-readonly`, which the hook
 does not take as proof. None of the tools or CLI subcommands #2632 added had been called in any
 transcript on the personal MacBook by 2026-11-10 (the connector's calls there were `list_projects`,
-`execute_sql` and `list_tables`), so they add no question to anything measured there.
+`execute_sql` and `list_tables`), so they add no question to anything measured there. #2660's rule
+would have asked 3 times in everything run there: over all 8,368 transcripts on 2026-11-10, 3 Bash
+commands ran `supabase functions deploy`, none with `--no-verify-jwt`, and no session had called
+`deploy_edge_function`.
 
 It also says, in a message to Dan, when `~/.claude/settings.local.json` on the Mac it runs on
 pre-allows a write tool of the writable Salesforce connection (`createSobjectRecord`,
@@ -3686,6 +3883,26 @@ rule lets those writes skip auto mode entirely, and the work MacBook's file held
 on that Mac. The message comes on each call of one of those tools and on every database question,
 never on a read it passes.
 
+One Apply covers one migration (#2763). Applying a migration through `/db-apply` was a dry run, a push
+and a read back, each asked about after Dan had answered the skill's own Apply or Cancel picker, so one
+decision reached him up to four times. Now a `supabase db push` that is the whole of its command (a
+`cd` before it aside) is let through, answered "allow", when Dan answered Apply in a picker carrying
+the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256, the project
+ref, and `pending`, the list of migrations the skill's dry run said the push would apply) in the same
+session. `hooks/lib/db-apply-approval.py` reads his answer from the session
+transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
+to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
+`--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
+is asked about, the question saying why no Apply covers it. The skill's ad hoc write, `supabase db
+query --linked --yes -f <file>` alone in its command, is let through the same way when the Apply named
+that file and project and the file is unchanged (Dan, 2026-11-11). A push sends every migration the
+database has not had, so the skill copies the dry run's list onto the picker and shows it in the
+question, and the push is let through only when that list is exactly the one migration Dan applied:
+a missing, empty or longer list, or one naming another file, is asked about, the question naming the
+other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
+What it cannot see: a change on the database between the dry run and the push, or a migration file
+added after the dry run under an older version than the applied one.
+
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
 prisma, or `wrangler d1`); a client run through a program not on the hook's list of carriers; a
@@ -3693,8 +3910,10 @@ connector whose SQL tool has neither sql in its name nor a field named for a sta
 Snowflake connector is not signed in on either Mac, so its tool names are unmeasured); PostHog's
 `exec`, whose `execute-sql` runs HogQL, which only reads; a tool Supabase adds later that changes a
 database with no statement, and any other host's tool of that kind (a Neon branch reset, say), until
-it is listed; and a deploy of an edge function, which is code and not a database. The tool names
-were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
+it is listed; and a connector deploy of an edge function that keeps JWT verification on, which is
+code and not a database. Of a deploy that turns it off, two routes: a deploy through a Supabase
+server whose name does not hold supabase, and a call to Supabase's own API (curl, a script). The tool
+names were measured on the personal MacBook only. Suite: `test-db-write-ask.sh`.
 
 The auto mode settings themselves (`autoMode` in `settings.json`, with its `soft_deny` and
 `environment` lists) are per Mac: the sync carries neither, so each Mac's copy is corrected on that Mac.
@@ -3940,13 +4159,39 @@ recomputes the median, lowest and highest per arm from that file and requires th
 columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
 back by NAME, so adding a column cannot silently re-aim the reader (#524).
 
-CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 40 runs
-of the tests workflow on main, read from their logs with gh on 2026-10-25 (#1667). They fall into
-two groups by runner speed, 885s to 1092s and 1192s to 1362s, and the budget's fraction was raised
-from 70% to 76% (1368s at CI's 1800s ceiling) so it sits above every one of them; at 70% it sat
-inside the slower group and turned runs red by chance. The sync suite fails while the budget at
-CI's ceiling, read from the workflow, is not above the highest recorded run, so a slower run
-appended there is a decision to make rather than a pull request gone red at random.
+CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 328
+runs of the tests workflow, 100 on main and 228 on pull requests, read from their logs with gh on
+2026-11-10 (#2614), each with its processor, region, core count, check count and runner group.
+They fall into two groups by runner speed with a gap between them, 834s to 1179s and 1201s to
+1393s. The budget's fraction is set from the slower group's spread: 80% (1440s at CI's 1800s
+ceiling) is above its mean plus four standard deviations and every recorded run, and under 15%
+over its median, so growth still fails. At 76% (1368s, set from 40 runs on 2026-10-25, #1667) it
+sat at that group's 97th percentile and turned 5 of the 328 runs red with every check passing. The
+sync suite recomputes both bounds from the record, read by column name, and fails while the budget
+at CI's ceiling, read from the workflow, falls outside them, so a refreshed record is a decision to
+make rather than a pull request gone red at random.
+
+The record is refreshed with one command (#2692), rather than by hand as #2614 first built it:
+
+```bash
+bash tools/ci-section-time-readings.sh --cache ~/.cache/ci-section-time-logs
+```
+
+It lists the finished runs of the tests workflow since the earliest run the record holds (pushes to
+main and pull requests), fetches each log with `gh run view --log`, and reads from the part the sync
+suite ran in: its section time and check count, and that runner's core count, processor and region.
+A run it reads replaces its row and a row it did not re-read is kept, so logs GitHub has expired
+lose nothing; only `--since` drops older rows, and it says how many. The runner group split is the
+middle of the gap the record already has between its groups (1190s on 2026-11-10) unless
+`--split` gives one. `--print` shows the result and changes nothing. A run it cannot read without
+guessing (no core count, no section time after the result, a suite reported in two parts, a new
+run whose log gh could not fetch) is named and nothing is written; a recorded run whose log gh
+could not fetch keeps its row and is named; a run that never reached the sync suite's result
+is named as skipped. The cache matters: on 2026-11-10 the window held about 400 runs, whose logs of
+half a megabyte each took several minutes to fetch, and a finished run's log never changes.
+`tools/test-ci-section-time-readings.sh` holds the tool to the committed record, from real logs
+saved in `tools/ci-section-time-sample/`. Finished runs are picked out by the tool rather than by
+`gh run list --status completed`, which on 2026-11-10 left out 3 of 290 finished runs.
 
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
@@ -4214,6 +4459,14 @@ so no folder is made. A suite that names its own still wins. Arming refuses to r
 the list cannot be loaded or the folder cannot be made, rather than letting it write the real ones.
 A new record is one line in that list.
 
+The same file turns Python's bytecode cache off for every suite, from the runner and from arming
+alike (`PYTHONDONTWRITEBYTECODE=1`, claude-config#2751). A part's suites run side by side, and three
+times a suite importing from `hooks/lib` with it on left `lib/__pycache__` for `test-work-names.sh`'s
+check to find on a pull request that touched neither (#2444, #2600, #2751). `python3 -I` and `-E`
+drop the variable, so `test-lib-bytecode-importers.sh` still asks for `-B` on any command loading
+from lib, following a shell variable to the path it was assigned. A suite whose check is about
+bytecode unsets it after arming, so the check can still see a writer.
+
 A record with no variable is not covered by the list, and this finds one:
 
 ```bash
@@ -4347,6 +4600,20 @@ each `parts` job runs one part (`HOOK_TESTS_DEALT`, `HOOK_TESTS_PART`, `HOOK_TES
 each part's timings into the cache the next deal reads. A part refuses outright when the deal does
 not cover exactly the suites the tree holds, so a new suite can never be run by no job.
 `gh workflow run tests.yml --ref <branch>` runs a branch with no pull request open.
+
+A pull request run whose exact tree already passed does not run the suites again (claude-config#2690,
+the cheap run after `gh pr update-branch`). Every full green run records its tree as an artifact
+named `green-tree-<tree>`; the `deal` job asks `tools/ci-reuse-green-tree.sh` whether this run's
+tree has such a record, and reuses it only on proof: that run completed green, is this repository's
+own `tests.yml` and not a fork's, and the commit it tested, read back from GitHub by its sha, holds
+exactly this tree. Every job then still reports under its own name, skips its work, and says in its
+log which run and commit it stood on. Any doubt, an API failure included, is the full suite.
+
+A push to main stands only on a pull request run of its exact tree, the run its merge followed, so
+a merge no longer runs the suites twice on the same files (claude-config#2717, Dan's choice on
+2026-11-10). Every tree on main still has a verdict of its own, which is what #594 kept every main
+run for: a sync push from a Mac, or any commit whose tree no pull request passed, runs in full, and
+so does a push to another branch or a run by hand.
 
 Run ONE section while iterating, which is the fast path:
 
@@ -5433,6 +5700,24 @@ repo but not applied here (what a pull that stops before its apply leaves). The 
 the clone status runs in, which it names, so run it from the scheduled clone for that clone's
 records.
 
+A file status could not compare is said on its own, whatever the window, under `mods not compared
+with the shared repo`, one line per file naming the step that failed and its exit status: hashing
+it, putting the home path placeholder back, hashing it with the placeholder put back, or reading
+when the shared repo added it, changed it or removed it (#2673). Such a file is counted neither as
+behind nor as this Mac's own work, and status exits as it would otherwise. Before this, every one
+of those steps discarded its errors, so a file whose hash failed matched nothing the repo had held
+and read as unsent work here, dropping out of the lag line with nothing said; one failed
+placeholder swap reproduced the unexplained suite failure of 2026-11-02 exactly (#2091).
+
+The search that finds which installed mod files hold this Mac's home path is one of those steps.
+`grep -r` exits 2 when it could not read a file, and still exits 2 when every other file matched,
+so the matches it printed are used and each file it named in an error is listed as not compared,
+with grep's reason. An error naming no file under `mods` leaves unknown which files hold the home
+path, so every installed file the search neither printed nor named is then searched on its own: a
+file that search answers for is compared as usual, and one whose own search fails is listed as not
+compared and left out of the lag line, counted neither as behind nor as this Mac's own work (#2688). Before this, the error was read as no
+match, so a file the search missed read as this Mac's own work.
+
 <table>
 <thead>
 <tr><th>Setting</th><th>Default</th><th>What it does</th></tr>
@@ -5725,7 +6010,17 @@ a YAML scalar) and a YAML flow list (`script: ["a", "b"]`) are read only through
 `hooks/mod-kit/quoted.ts` (#2467: the design round guard and the Slack alert guard each kept their
 own, and `$.modkit.commands` reads shell only, gluing a flow list's brackets and commas onto its
 words); the scan fails a mod undoing YAML's `''` by hand, matching a single quoted scalar with a
-pattern, or walking a string to the quote it opened with.
+pattern, or walking a string to the quote it opened with. `hooks/quoted.ts` holds `pythonText` too
+(moved from `hooks/code.ts` in #2710, which re-exports it), so the file reader below reads python's
+strings with no other file. What a FILE's text reaches beyond itself (a program it starts, a web
+request it makes, a module it loads by a name given at run time) is read only through `fileReach`
+in `hooks/reaches.ts`, kept by each mod that asks it at `hooks/mod-kit/reaches.ts` (#2710: the
+Slack alert guard kept its own lists of module names, and asks inside a search too short for an
+engine call per file). It counts a name only where the file imports or calls it, never in a string,
+a pattern, a comment or a template's text, so a gate's list of what it refuses starts nothing;
+`whole` reads code another program holds in quotes (a shell script's `python3 -c`) as it stands.
+The scan's program-reader rule names it beside `$.modkit.pipeline`, which judges a command's
+inline code and counts a process word anywhere.
 That the real engine's `$.fs` reports a fifo and
 `/dev/null` as `other`, never calls `/dev/stdin` or a link to it a file (asked with links followed,
 a headless run of 2.1.312 refuses them with EBADF), and lists no fifo as a file is checked by
@@ -6269,9 +6564,13 @@ judged) or by Bash: every file mod-kit's `$.modkit.writes` names, a removal or e
 git itself changes (a checkout of a path, `git restore`, `git rm`, both names of a `git mv`, #1136;
 since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the lines it changes, read
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
-of changed lines at a time, so undoing an edit the guard let through passes; one git cannot read, or
-one beside any other command on the line (a cd aside), which may change what it puts back first, is
-judged whole with the refusal saying why), a program whose text names the files it writes, and a
+of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
+merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
+and judged against that side rather than the conflict on disk; since #2777 one run first on its
+line, the line's only checkout or restore and in no pipe or background, is measured the same way,
+since nothing after it can change what it puts back; one git cannot read, or one after any other
+command on the line (a cd aside), which may change what it puts back first, is judged whole with the
+refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6502,6 +6801,9 @@ command taking away a hook file git has never tracked, by `git ls-files`, passes
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
 schema's description pass, a property the schema names `reason` or `text` being no message. Since
+#2788 only the words of a string the change adds, rewords or takes away count, so a change to code
+alone passes even where the reading follows a message less far after it than before (a verdict
+handed through a helper that hands it straight back), and a comment holds no string. Since
 #1925 the words Dan reads in a mod's picker are a message's too: an answer's label and description
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
@@ -6820,7 +7122,12 @@ morning otherwise); git in a throwaway repository under the temp folder (a path 
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
 refused for git only where it would run git, never for the word in prose (#1124). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. What may merge and
+and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
+passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
+in one line it writes every time it runs, so a final report with no note of the check says it did
+not run. A failed, cancelled or timed out run is listed. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which
@@ -7245,9 +7552,11 @@ checked again that session. A Bash command is judged by the files mod-kit's writ
 judged as its first edit would be, and a held one is refused as "this Bash command, which writes"
 followed by the file (#2142).
 A write whose file cannot be named (a name built from a variable, a pattern, a program writing files
-its words do not name) is held saying it cannot be read, and may only proceed; it passes where it is
-in no checkout, or where the repository has no fast growing file and no structural issue naming a
-file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
+its words do not name) is held saying it cannot be read, and may proceed, or fold into one of the
+repository's open structural issues naming a file, which the hold lists, the session's own included
+(#2706); a fold only records the issue, and the command runs as proceed would let it. It passes
+where it is in no checkout, or where the repository has no fast growing file and no structural issue
+naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
 A folder a script is handed is judged as a write of every file under it (#2321), unless the
 script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
@@ -7402,6 +7711,53 @@ file it reaches the template by; when the nearest senders send none of the chang
 on. A file whose send cannot be traced (any other language, a text template, a send the reading
 cannot find, a module a sender takes whole) is held as before, and so is the rest of a change when
 the search stops short. A python docstring is never message text (#2574).
+Wording that arrives in a new file is held when a send first reaches it (#2637; on 2026-11-10 a new
+copy module of four alert messages passed because nothing sent it yet, and the edits that made a
+route import and post it passed because they added no text of their own). A new file that nothing
+sends still passes, since nothing can post it, unless it is a module of message copy that no file
+but a test imports yet (#2720): its added wording is held as it is written. A copy module is known
+by its path (a name ending in copy or wording, a copy folder, or an alert word beside a message
+word) or by its shape (Slack formatting in a string, or mostly functions that only return message
+text with a value filled in); tests, prose, UI components and shell scripts never are. Measured on
+2026-11-10 it reads 1 of this repository's 665 code files as copy, one that is imported, so it
+holds none here today. A copy module already used, by a route that posts nothing or a screen, is
+judged by that use as before. Once an edit's own wording has passed, an edit to a
+JavaScript, TypeScript or python file that imports a new module or name, uses an imported name once
+more, or, in a file that posts by itself, sends a name it did not, is judged for what it brings to a
+send: each sender through the edited file (the file itself when it posts or imports a send helper,
+then every file that sends it) is traced as the edit leaves the file and as it was, down through the
+files it imports, found by the paths its imports name with one `git ls-files` per file and followed
+up to 3 files deep, and wording a send reaches only afterwards, which Dan has not approved, is held.
+The card, refusal and question name the file that holds the text and what sends it. Wording a sender
+already sent is not asked about again, and a name imported for a 404 answer is held only when a send
+takes it. Where names cannot be followed (a sender that takes a module whole, a send the reading
+cannot find, a search for senders that stops short) every message of a newly imported file is held;
+an imported file that cannot be read, a listing that fails or runs late, or names newly handed on
+deeper than the guard follows, holds the call as could not check. This shares the one 7 second
+search time with the edit's own wording. Not covered: a sender in a language the guard does not
+trace that newly reads a text template, a template a sender newly reads by path rather than by an
+import, and a file that only hands names on newly exporting a local copy of an imported value.
+When the nearest sender's part of a change is already approved, the search goes on to the senders
+further along rather than passing the rest (#2637).
+A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
+2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
+prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
+that is a name (a webhook's host, the chat API's method, an SDK, a Slack setting) is only being
+matched when it is written as one alternative of a pattern, a bar beside it, or as the middle of a
+glob, a star at each side. Written any other way (in an address, read as a setting, called, a whole
+quoted string, a bare word) it is used, and a send helper called or imported always is. A file is
+no sender only when every marker in its code is matched that way, or sits in a comment, and the
+file makes no request and starts no program that could: curl, wget and the like or a command named
+for Slack in a shell script, a network or process module in python, fetch, an HTTP client or
+child_process in JavaScript. So a script that refuses and also posts, and one that matches an
+endpoint and then calls it, are held as before. Only shell, python, JavaScript and TypeScript are
+read this way: in any other language a marker anywhere makes a sender, as before. No file is named
+or exempted. Still held, since nothing tells them from a use: a sentence that spells an endpoint
+out, a list of bare endpoint names, a pattern in a regex literal. No longer held: a file that
+matches an endpoint and leaves the posting to another file whose code names nothing of Slack, and,
+as the file being edited, one whose only marker is in a comment and that makes no request.
+`tests/test-slack-alert-guard-real-gate.sh` holds the real drafts gate, and the guard's own source,
+to this.
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
@@ -7433,16 +7789,40 @@ re-export the template up to 3 deep (#2286). A file handed on only to UI compone
 `.jsx` file in a `components`, `screens` or `views` folder) is not on a path that posts to Slack,
 so the search settles there rather than following the components on (Dan, 2026-11-09, #2519); a
 component that itself sends, or imports a send helper, is still its sender, and a file with any
-other importer is followed as before. A search that fails, runs out of time, meets an
-unreadable file, or would follow further holds the call as could not check. One that finds more
-than 500 files to read (the largest real one read 213, #2510), or a send helper search that
-fails, runs late or meets an unreadable helper, holds the call for Dan to approve like any other,
-naming no sender, rather than refusing it with nothing he can answer (#2364). A shell write to a
-path the write reader cannot name is outside it.
+other importer is followed as before. A search that fails, runs out of time or meets an
+unreadable file holds the call as could not check, which trying again may get past. One that would
+follow further than 3 files stops there on every try, so it holds the edit for Dan to approve: the
+picker shows the exact lines it adds and takes away and says the guard could not trace whether they
+reach Slack, and his approval, kept by the file and the edit's whole text, lets that one edit
+through and no other; a shell write stopped the same way is held as any shell write is (#2709).
+One that finds more than 500 files to read (the largest real one read 213, #2510), or a send
+helper search that fails, runs late or meets an unreadable helper, holds the call for Dan to
+approve like any other, naming no sender, rather than refusing it with nothing he can answer
+(#2364). A shell write to a path the write reader cannot name is outside it.
+In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
+choose the alert in sleep mode and put it to me in the morning to see if I want something else").
+While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
+before) is refused with an instruction to call `mcp__slack-alert-guard__choose` with the held call's
+id and the message as Slack will post it, checked as the question's `rendered` is. The choice is
+kept in the store under `chosen:<key>`, apart from Dan's approvals, noted for the night's report as
+a `wording` note, and the call sent again goes through; a choice lets wording through only while
+sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
+merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
+chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
+not check.
+In the morning the session that chose it (or any session, once that one has ended) is told at Dan's
+next message to ask with metadata `{"source": "slack-alert-guard:chosen:<id>"}`; the guard words the
+question, with the message chosen, and only Approve wording records the approval. Change wording, a
+dialog that closed by itself or no answer records nothing, and it is asked again. A choice
+unanswered for three days expires: said once in each session, still held from merging, and no longer
+letting wording through. Not covered: a direct push to a default branch (sleep mode refuses that
+overnight). In any mode, taking away wording that origin's copy of the file on its default branch
+(named by mod-kit's branch reader, then one `git show`) does not hold passes, since it was never
+live; no default branch, or git failing to say, holds as before.
 
 </td><td>
 
-#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510
+#2242, #2248, #2286, #2361, #2364, #2290, #2287, #2519, #2510, #2637, #2720, #2628, #2709
 
 </td></tr>
 </tbody>

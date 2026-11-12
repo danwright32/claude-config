@@ -116,7 +116,7 @@ describe('codeOnly (#1165)', () => {
     expect(codeOnly('python', `p='tests/x.test.ts'\nnew='''${data}'''\nopen(p,'w').write(new)`)).toBe(`p='tests/x.test.ts'\nnew='''${blank(data.slice(0, -3))}})\n'''\nopen(p,'w').write(new)`)
     expect(codeOnly('python', '# rewrites app/page.tsx\nx = 1')).toBe(`#${blank(' rewrites app/page.tsx')}\nx = 1`)
     // One line: a path, and a path with a space in it (a Bidspoke checkout).
-    for (const code of ["open('app/page.tsx', 'w')", "open('/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')"]) expect(codeOnly('python', code)).toBe(code)
+    for (const code of ["open('app/page.tsx', 'w')", `open('${'/Users'}/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')`]) expect(codeOnly('python', code)).toBe(code)
     // An f-string's braces hold code, so it is kept, across lines too.
     const f = "open(f'''{root}\n/app/page.tsx''', 'w')"
     expect(codeOnly('python', f)).toBe(f)
@@ -128,7 +128,7 @@ describe('codeOnly (#1165)', () => {
       // Only a path: no space in it, or a space in a path from the root or the home folder.
       "p = 'src/app/globals.css'",
       "rep('screen.css', 'app/page.tsx')",
-      "p = '/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx'",
+      `p = '${'/Users'}/dan/Documents - Dan Pro/Bidspoke/app/page.tsx'`,
       "p = '~/Documents - Dan Pro/Bidspoke/app/page.tsx'",
       "p = './my site/screen.css'",
       // A space in a relative path, passed where a path goes.

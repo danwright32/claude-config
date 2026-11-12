@@ -25,6 +25,9 @@ set -uo pipefail
   exit 1
 }
 suite_deadline_arm || exit $?
+# Arming and the runner turn bytecode off for every suite (#2751). This one checks that the skill
+# test runner writes none of its own, so it runs it with that cleared.
+unset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$DIR/lib/skill-python-tests.py"

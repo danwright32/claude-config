@@ -53,6 +53,42 @@ want "a payload with no claude-sync beside it is not a clone" "" "$(sc_clone_roo
 want "a directory that is neither is not a clone" "" "$(sc_clone_root_of "$FIX/bare" || true)"
 want "a directory that is not there answers nothing" "" "$(sc_clone_root_of "$FIX/no/such/dir" || true)"
 
+echo "sync clone: whether a clone is a plain copy with no repository around it (claude-config#2705)"
+
+# What the daemon overwrites in a development checkout it reaches through the repository, so a copy
+# of the tree with none is out of its reach. Yes is said only when git, asked, says there is no
+# repository AND no .git is found by looking, and every other answer, an unanswered one included,
+# is no (L42). Each fixture is built here, so what is being asked about is what the case says (L52).
+DESC="a copy of the tree with no repository is a plain copy"; yes sc_is_plain_copy "$FIX/clone"
+cp -R "$FIX/clone" "$FIX/gitclone"
+git init -q "$FIX/gitclone" 2>/dev/null
+[ -e "$FIX/gitclone/.git" ] && check "the checkout fixture was built" ok || check "the checkout fixture was built" "git init left no .git at $FIX/gitclone"
+DESC="the same tree with a repository in it is not"; no sc_is_plain_copy "$FIX/gitclone"
+mkdir -p "$FIX/gitclone/inner/copy/payload"
+: > "$FIX/gitclone/inner/copy/claude-sync"
+DESC="a copy inside a checkout's work tree is not"; no sc_is_plain_copy "$FIX/gitclone/inner/copy"
+# git stops looking at a ceiling it is given and says there is no repository; the .git above still
+# counts, found by looking rather than by asking.
+ceiling_no(){ GIT_CEILING_DIRECTORIES="$FIX/gitclone/inner" sc_is_plain_copy "$FIX/gitclone/inner/copy"; }
+DESC="nor is it when git is told to stop looking below the repository"; no ceiling_no
+cp -R "$FIX/clone" "$FIX/brokenclone"
+printf 'gitdir: %s\n' "$FIX/no/such/repository" > "$FIX/brokenclone/.git"
+DESC="a tree whose .git points at a repository that is gone is not"; no sc_is_plain_copy "$FIX/brokenclone"
+# With no git that runs, or one that fails for a reason of its own, nothing has said there is no
+# repository, and the answer is no.
+mkdir -p "$FIX/nogit" "$FIX/othergit"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FIX/nogit/git"
+printf '#!/usr/bin/env bash\necho "fatal: detected dubious ownership in repository" >&2\nexit 128\n' > "$FIX/othergit/git"
+chmod +x "$FIX/nogit/git" "$FIX/othergit/git"
+nogit_no(){ PATH="$FIX/nogit:$PATH" sc_is_plain_copy "$FIX/clone"; }
+othergit_no(){ PATH="$FIX/othergit:$PATH" sc_is_plain_copy "$FIX/clone"; }
+DESC="a plain copy is not taken for one when git cannot run"; no nogit_no
+DESC="nor when git fails without saying there is no repository"; no othergit_no
+DESC="a directory that is not there is not a plain copy"; no sc_is_plain_copy "$FIX/no/such/dir"
+DESC="and nothing asked about is not one either"; no sc_is_plain_copy ""
+# The control: with the real git back, the first answer stands (L159).
+DESC="and the plain copy is one again once git answers"; yes sc_is_plain_copy "$FIX/clone"
+
 echo "sync clone: which clone a live watcher runs from"
 
 # The boundary is the point: without it a watcher at /x/a/b/claude-sync answers for a clone at
@@ -192,9 +228,14 @@ python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$FIX/noreader" sync-clone.sh
   || check "#2204 sync-clone.sh could be installed with what it sources" "the install refused"
 rm -f "$FIX/noreader/hold-record.sh"   # the copy without the hold reader, on purpose
 printf '%s %s host session=unknown from a terminal\n' "$(( now + 3600 ))" "$now" > "$SYNC_HOLD_FILE"
-nr_out="$(bash -c '. "$1" || { echo NOT-LOADED; exit 0; }
-  if sc_hold_covers "$2"; then echo COVERED; else echo NOT-COVERED; fi
-  sc_hold_others_sentence "$2"' _ "$FIX/noreader/sync-clone.sh" "$ME" 2>&1)"
+# Driven by a script written beside the copy and run as a process of its own, which sources the
+# copy from its own directory. Sourcing the copy from here names a path made at run time, which the
+# Slack drafts gate cannot work out (claude-config#2538).
+printf '%s\n' \
+  '. "${BASH_SOURCE[0]%/*}/sync-clone.sh" || { echo NOT-LOADED; exit 0; }' \
+  'if sc_hold_covers "$1"; then echo COVERED; else echo NOT-COVERED; fi' \
+  'sc_hold_others_sentence "$1"' > "$FIX/noreader/drive-noreader.sh"
+nr_out="$(bash "$FIX/noreader/drive-noreader.sh" "$ME" 2>&1)"
 case "$nr_out" in *NOT-LOADED*) check "it still loads without hold-record.sh" "it failed to load" ;; *) check "it still loads without hold-record.sh" ok ;; esac
 case "$nr_out" in *NOT-COVERED*) check "and no hold covers anyone, a terminal's included" ok ;; *) check "and no hold covers anyone, a terminal's included" "got: $nr_out" ;; esac
 case "$nr_out" in *"git checkout -- payload/hooks/lib/hold-record.sh"*) check "and the sentence a refusal carries says the reader is missing and how to restore it" ok ;; *) check "and the sentence a refusal carries says the reader is missing and how to restore it" "got: $nr_out" ;; esac

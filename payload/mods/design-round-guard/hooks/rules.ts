@@ -3109,7 +3109,10 @@ export type Worded = { file: string; words: string }
  * passes. A file any of them cannot be read in is held. The one reading of such a change: the yes or
  * no wrapper that stood beside it, which only tests called, is gone (#1911). New words a message
  * reading reaches only as the reasons a refusal or reader gives, in fields no person reads, pass too
- * (reasonsOnly, #2161; Dan, 2026-11-03); a record handed whole to a message stays held.
+ * (reasonsOnly, #2161; Dan, 2026-11-03); a record handed whole to a message stays held. Only the
+ * words of a string the change adds, rewords or takes away count (#2788): a change to code alone,
+ * which the message reading may follow less far after it than before, is never held for words it
+ * left exactly as they were.
  */
 export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
   if (drawsChange(files, name, before, after)) return { look: true }
@@ -3119,7 +3122,27 @@ export const modHookTsHold = (files: readonly ModFile[], name: string, before: s
   if (!was || !now) return { look: true }
   if (was.words.length === now.words.length && was.words.every((x, i) => x === now.words[i])) return undefined
   if (reasonsOnly(was, now)) return undefined
-  return { worded: heldWords(was.words, now.words) }
+  // #2788: a word the reading reaches on one side only counts where its string is one the change
+  // touched; one whose string stands in both texts as many times reads as reached or not by the
+  // reading alone, and is left as it was.
+  const touched = stringsTouched(was.r, now.r)
+  const said = was.words.filter(x => now.words.includes(x) || touched.has(x))
+  const says = now.words.filter(x => was.words.includes(x) || touched.has(x))
+  if (said.length === says.length && said.every((x, i) => x === says[i])) return undefined
+  return { worded: heldWords(said, says) }
+}
+
+// #2788: the text of every string, template text and JSX text in a file that stands in `a` and `b` a
+// different number of times: those a change adds, rewords or takes away. A comment holds none.
+const stringsTouched = (a: ModRead, b: ModRead): Set<string> => {
+  const count = (r: ModRead) => {
+    const n = new Map<string, number>()
+    for (const [x, y] of r.strings) n.set(r.text.slice(x, y), (n.get(r.text.slice(x, y)) ?? 0) + 1)
+    return n
+  }
+  const was = count(a)
+  const now = count(b)
+  return new Set([...was.keys(), ...now.keys()].filter(s => was.get(s) !== now.get(s)))
 }
 
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
@@ -3369,6 +3392,33 @@ export const stale = (file: string): string =>
   'Read the file and send the edit again with the text it replaces exactly as the file holds it; it is judged then as any edit is. Nothing is asked of Dan for an edit that would not apply.'
 
 export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
+
+/**
+ * A call the guard passes on its tool and input alone, before reading anything (#2726): not the
+ * shell, and either a tool known only to read or one carrying no file path, so it can change no file.
+ * The one test judged makes first, and the one a catch answers by, so the two cannot disagree.
+ */
+export const passesByShape = (tool: string, input: Record<string, unknown>): boolean => tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)
+
+/**
+ * The tool.check hook's catch, when its hook failed (#2726): most often Claude Code replacing its
+ * one hooks worker after a missed heartbeat, which fails every hook in flight at once, in every
+ * agent. A call the guard passes by its shape is answered as the hook answers it, by `pass` (the
+ * verdicts beneath, read and nothing run); every other call is refused naming why, as before, since
+ * the guard would have had to read it. Nothing is judged again here: a rerun of the guard's reading
+ * could outlast the catch's 1,000 ms, and a catch cut there lets the call run (hold.ts).
+ */
+export const caughtCheck = <R>(tool: string, input: Record<string, unknown>, why: string, pass: () => R): R | { decision: 'deny'; reason: string } =>
+  passesByShape(tool, input) ? pass() : { decision: 'deny', reason: cannotCheck(why) }
+
+/**
+ * The tool.call hook's catch, when its hook failed before passing the call on (#2726). That hook
+ * judges a subagent's call alone: the main session's, and any AskUserQuestion, it passes straight
+ * on to be judged at tool.check, so those are passed on here too (`pass`), as is a subagent's call
+ * the guard passes by its shape. A subagent's call the guard must read is refused naming why.
+ */
+export const caughtCall = <R>(call: { tool: string; agentId?: string }, input: Record<string, unknown>, why: string, pass: () => R): R | { deny: string } =>
+  call.agentId === undefined || call.tool === 'AskUserQuestion' || passesByShape(call.tool, input) ? pass() : { deny: cannotCheck(why) }
 
 /**
  * What became of a shell write the guard judged once it ran (#1296): a change to a mod's .ts hook file

@@ -1,0 +1,65 @@
+{
+  "total_count": 6,
+  "jobs": [
+    {
+      "id": 130044506318,
+      "run_id": 42877469413,
+      "name": "deal",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:39:51Z",
+      "started_at": "2026-11-10T18:39:53Z",
+      "completed_at": "2026-11-10T18:40:01Z"
+    },
+    {
+      "id": 130044602921,
+      "run_id": 42877469413,
+      "name": "suites part 2",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:40:01Z",
+      "started_at": "2026-11-10T18:40:03Z",
+      "completed_at": "2026-11-10T18:51:14Z"
+    },
+    {
+      "id": 130044602974,
+      "run_id": 42877469413,
+      "name": "suites part 4",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:40:01Z",
+      "started_at": "2026-11-10T18:40:03Z",
+      "completed_at": "2026-11-10T18:47:05Z"
+    },
+    {
+      "id": 130044603026,
+      "run_id": 42877469413,
+      "name": "suites part 3",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:40:01Z",
+      "started_at": "2026-11-10T18:40:03Z",
+      "completed_at": "2026-11-10T18:50:40Z"
+    },
+    {
+      "id": 130044603042,
+      "run_id": 42877469413,
+      "name": "suites part 1",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:40:01Z",
+      "started_at": "2026-11-10T18:40:03Z",
+      "completed_at": "2026-11-10T18:51:03Z"
+    },
+    {
+      "id": 130051211621,
+      "run_id": 42877469413,
+      "name": "suite",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-11-10T18:51:15Z",
+      "started_at": "2026-11-10T18:51:17Z",
+      "completed_at": "2026-11-10T18:51:25Z"
+    }
+  ]
+}

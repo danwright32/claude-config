@@ -20,6 +20,7 @@ You are one of several agents, each working one item while the orchestrator sess
   `git -C <repo> fetch origin`
   `git -C <repo> worktree add <worktree path> -b <branch> origin/main`
   The worktree path is the one your brief names, inside the repository's own `.claude/worktrees/` folder. Never put a worktree under `/tmp`, `/private/tmp` or the scratchpad: a restart of the Mac empties them, and an uncommitted fix goes with it (claude-config#2490).
+- Then read `git -C <worktree path> config --get core.hooksPath`. When it names a folder that is not there in the worktree, run the install that creates it in the worktree before your first commit (`pnpm install` beside a `pnpm-lock.yaml`, and likewise for yarn, bun or npm). Until that folder exists git runs none of the repository's own hooks, on a commit or a push, and `push-scope-notice.sh` refuses your push (claude-config#2070, #2098).
 - Use absolute literal paths, one plain command per call: no shell variables, no loops.
 - Test first with `superpowers:test-driven-development`. The test goes in the same commit as the fix and covers a failure path, not only the happy path. Run the project's whole suite, typecheck and build.
 - Write the commit message to a file and commit with `git commit -F <file>`. End it with the `Claude-Session:` line from your brief. Nothing may say or suggest Claude wrote the work.
@@ -38,7 +39,7 @@ Delete or drop data, apply migrations to a shared database, send anything to peo
 
 ## Your report
 
-Hand back one report of at most 300 words, in this order. Detail goes in files in your working folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`.
+Hand back one report of at most 300 words, in this order. Detail goes in files in your working folder, named in the report, for the orchestrator to read only when it needs them: the full test output in `tests.txt`, the evidence in `evidence.md`. Never write a `.md` file whose name starts with findings, report, summary or analysis (any case): Claude Code's Write tool refuses that name from a subagent whatever the file holds (claude-config#2671), so use the names given here.
 
 1. Outcome in one sentence.
 2. Cause, with the evidence that settles it (counts, times in ET, the change responsible). Say plainly what you could not access.

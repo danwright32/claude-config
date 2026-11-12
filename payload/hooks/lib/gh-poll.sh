@@ -53,9 +53,19 @@ ghp__num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;;
 ghp__dir(){ printf '%s' "${GH_POLL_STATE_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/gh-poll}"; }
 
 # The session's key: its id kept to a file name's characters, or no-session.
+# Worked out once per id (ghp__key_keep, in the caller's own shell, before the command substitutions
+# that read it), not by a tr at every look (claude-config#2694).
+GHP__KEY_ID=""; GHP__KEY=""
+ghp__key_keep(){
+  local id="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$id" ] || return 0
+  [ "$GHP__KEY_ID" = "$id" ] && [ -n "$GHP__KEY" ] && return 0
+  GHP__KEY="$(printf '%s' "$id" | tr -c 'A-Za-z0-9_-' '_')"; GHP__KEY_ID="$id"
+}
 ghp_session_key(){
   local id="${CLAUDE_CODE_SESSION_ID:-}"
   [ -n "$id" ] || { printf 'no-session'; return 0; }
+  if [ "$GHP__KEY_ID" = "$id" ] && [ -n "$GHP__KEY" ]; then printf '%s' "$GHP__KEY"; return 0; fi
   printf '%s' "$id" | tr -c 'A-Za-z0-9_-' '_'
 }
 
@@ -134,14 +144,27 @@ ghp__write_pause(){   # $1 = the session folder, $2 = until, $3 = strikes, $4 = 
 # Take one look for the session at $1 (epoch seconds). Returns 0 when the look may be made, counted
 # against the session's minute. Returns 1 when it must wait, setting GHP_WAIT (seconds), GHP_WHY
 # (pause: a rate limit is in force, cap: the session's minute is full), GHP_SAID (why the pause was
-# set) and GHP_CAP (the looks a minute allowed). A state that cannot be kept never holds a look back:
+# set), GHP_CAP (the looks a minute this look was allowed) and GHP_SEEN (the looks already taken in it).
+#
+# $2, when given, is how many of the minute's looks this one leaves free for others (claude-config#2715):
+# a merge helper only waiting for its turn, or not yet in line while another holds it (#2749), passes
+# 1, so it looks only while the helper holding the
+# turn would still find a look free, and the holder's reads come first. On 2026-11-10 one session's 102
+# merge logs held 2,845 waits on this cap: 2,594 by helpers waiting in line, and 251 by the helper
+# holding the turn, with a median of 8 helpers in line behind it. A look never leaves the whole
+# minute free: with a cap of one, it is still taken once a minute.
+#
+# A state that cannot be kept never holds a look back:
 # the cap is a courtesy to other sessions, and refusing every look over a folder that cannot be
 # written would stop a merge for nothing (it says so on standard error).
 ghp_take(){
-  local now="$1" s cap keep oldest n=0 t
-  GHP_WAIT=0; GHP_WHY=""; GHP_SAID=""
+  local now="$1" s cap keep oldest n=0 t free
+  GHP_WAIT=0; GHP_WHY=""; GHP_SAID=""; GHP_SEEN=0
   cap="$(ghp__num "${GH_POLL_PER_MINUTE:-}" 4)"; [ "$cap" -ge 1 ] || cap=1
+  free="$(ghp__num "${2:-}" 0)"
+  cap=$(( cap - free )); [ "$cap" -ge 1 ] || cap=1
   GHP_CAP="$cap"
+  ghp__key_keep
   s="$(ghp__session_dir)" || { echo "gh-poll: the state folder $(ghp__dir) could not be made, so this look is not counted against the session's cap." >&2; return 0; }
   ghp__lock "$s"
   ghp__read_pause "$s"
@@ -158,8 +181,12 @@ ghp_take(){
       { [ -z "$oldest" ] || [ "$t" -lt "$oldest" ]; } && oldest="$t"
     done < "$s/polls"
   fi
+  GHP_SEEN="$n"
   if [ "$n" -ge "$cap" ]; then
     printf '%s' "$keep" > "$s/polls.$$" && mv "$s/polls.$$" "$s/polls"
+    # Until enough of the minute's looks have aged out to leave one for this look: the oldest when
+    # the minute is just full, a later one when a look leaving others free finds more than its share.
+    [ "$n" -eq "$cap" ] || oldest="$(sort -n <<<"$keep" | awk -v k=$(( n - cap + 1 )) 'NF { i++ } i == k { print; exit }')"
     GHP_WAIT=$(( oldest + 60 - now )); [ "$GHP_WAIT" -ge 1 ] || GHP_WAIT=1
     GHP_WHY=cap
     ghp__unlock "$s"; return 1
@@ -172,6 +199,7 @@ ghp_take(){
 # A look was answered: the next rate limit starts again at the first wait.
 ghp_answered(){
   local s
+  ghp__key_keep
   s="$(ghp__dir)/$(ghp_session_key)"
   [ -f "$s/pause" ] || return 0
   ghp__lock "$s"

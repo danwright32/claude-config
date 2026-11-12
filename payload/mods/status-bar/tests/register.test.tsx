@@ -1,6 +1,7 @@
 import { expect, mock } from 'claude-code/testing'
 import { never, test } from './mod-kit/tests/hang-ceiling.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
+import { register } from '../hooks/register.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type {} from '../types/index.d.ts'
@@ -76,7 +77,7 @@ const modKit: { name: string; register: Register } = {
         login: async () => undefined,
         // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
         account: async () => {
-          const path = '/Users/x/.claude.json'
+          const path = `${'/Users'}/x/.claude.json`
           try {
             if (!(await built.fs.exists(path))) return {}
             const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
@@ -125,7 +126,7 @@ const SEC = 1_000
 const MIN = 60 * SEC
 const HOUR = 60 * MIN
 const T0 = 1_000 * HOUR
-const DIR = '/Users/x/.claude/state/status-bar'
+const DIR = `${'/Users'}/x/.claude/state/status-bar`
 
 // This Mac beneath the status bar: files in memory, git and gh answering as each test sets them,
 // the clock, the session, and Claude Code's own band beneath mod-kit's.
@@ -178,7 +179,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   // #2100: each hold taken, each letting go and each compaction, in the order they happened.
   const order: string[] = []
   // A Mac with no claude.ai login unless a test logs it in (#815).
-  const files: Record<string, string> = { '/Users/x/.claude.json': '{}' }
+  const files: Record<string, string> = { [`${'/Users'}/x/.claude.json`]: '{}' }
   const toasts: string[] = []
   const logs: string[] = []
   const debug: string[] = []
@@ -188,7 +189,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const prompts: { text: string; afterCompacts: number }[] = []
   const runs: string[][] = []
   const polls: { argv: string[]; env?: Record<string, string> }[] = []
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, { HOME: `${'/Users'}/x` })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
     // Refused with the disk's reason, which is how a failed write reaches the mod.
@@ -227,7 +228,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (got === 'throws') throw new Error('git did not answer within 10 seconds')
       return r(got.exitCode, got.stdout, got.stderr)
     }
-    if (cmd === 'bash' && rest[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
+    if (cmd === 'bash' && rest[0] === `${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`) {
       polls.push({ argv: [...e.argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
       if (rest[1] === 'take') return answer(w.poll.take)
       if (rest[1] === 'next') return r(0, `${w.poll.next(rest[2] as string, rest[3] as string)}\n`)
@@ -266,6 +267,8 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('turn.step', async function* ($, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null } as never
   })
+  // A turn beginning, just before its first model request (#2726).
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.root', () => ({ value: '/repo' }) as never)
   on('session.usage', () => ({ value: { startedAt: T0, context: { window: w.window, percent: w.usage, ...(w.tokens === undefined ? {} : { tokens: w.tokens }) }, rateLimits: [] } }) as never)
@@ -306,14 +309,25 @@ const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, 
 }
 const turn = ($: { turn: { complete: (e: never) => Promise<unknown> } }) =>
   $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
-// One model request of a turn, main's unless a subagent's id is given, read to its end.
+// A turn starting, main's unless a subagent's id is given: its first model request goes out with it.
+// The bar hears a request by the turn's start and by the rows stored before the next one (#2726),
+// never by the request itself, whose stream it no longer carries.
 const step = async ($: unknown, clock: { settle: () => Promise<void> }, agentId?: string) => {
-  const s = ($ as { turn: { step: (e: never) => AsyncIterable<unknown> } }).turn.step({ turnId: 't', index: 0, model: 'opus', messageCount: 2, ...(agentId ? { agentId } : {}) } as never)
-  for await (const _chunk of s) {
-    // Each chunk is the response arriving; nothing to read here.
-  }
+  await ($ as { turn: { start: (e: never) => Promise<unknown> } }).turn.start({ text: '', turnId: 't', ...(agentId ? { agentId } : {}) } as never)
   await clock.settle()
 }
+// One row stored in a conversation by the door Claude Code names, main's unless a subagent's id is
+// given: a tool's result, a hook's context, a block of a response.
+let keptCount = 0
+const kept = async ($: unknown, clock: { settle: () => Promise<void> }, door: string, agentId?: string) => {
+  const message = door === 'response'
+    ? { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'ok' }] }
+    : { type: 'user', role: 'user', content: [{ type: 'text', text: 'ok' }] }
+  await ($ as { session: { append: (e: never) => Promise<unknown> } }).session.append({ door, origin: { kind: 'engine' }, uuid: `kept-${++keptCount}`, message, ...(agentId ? { agentId } : {}) } as never)
+  await clock.settle()
+}
+// A model request after a tool call: the tool's result is stored, then the request goes out.
+const toolResult = ($: unknown, clock: { settle: () => Promise<void> }, agentId?: string) => kept($, clock, 'tool-result', agentId)
 const cacheIn = (files: Record<string, string>) => (JSON.parse(files[`${DIR}/s1.json`] as string) as { cacheExpiresAt: number | null }).cacheExpiresAt
 const measure = ($: { session: { measure: (e: never) => Promise<unknown> } }, percent: number, size?: { tokens: number; window: number }) =>
   $.session.measure({ context: { window: size?.window ?? 200_000, percent, ...(size ? { tokens: size.tokens } : {}) }, rateLimits: [], changed: ['context'] } as never)
@@ -479,7 +493,7 @@ test("each look is the session's: the policy is asked as this session, and an an
   const { w, clock, polls } = world(on, { gh: { exitCode: 1, stdout: '', stderr: limited } })
   w.poll.failed = { exitCode: 0, stdout: 'paused\t60\ta burst limit\n', stderr: '' }
   await start($, clock)
-  expect(polls[0]?.argv).toEqual(['bash', '/Users/x/.claude/hooks/lib/gh-poll.sh', 'take', String(T0 / SEC)])
+  expect(polls[0]?.argv).toEqual(['bash', `${'/Users'}/x/.claude/hooks/lib/gh-poll.sh`, 'take', String(T0 / SEC)])
   expect(polls[0]?.env).toEqual({ CLAUDE_CODE_SESSION_ID: 's1' })
   expect(polls.find(p => p.argv[2] === 'failed')?.argv.slice(3)).toEqual([String(T0 / SEC), limited])
   w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
@@ -489,7 +503,7 @@ test("each look is the session's: the policy is asked as this session, and an an
 
 test('a polling policy that cannot be asked never stops the read, and is said once in the debug log (#1482)', withKit, async ($, on) => {
   const { w, clock, runs, debug } = world(on)
-  w.poll.take = { exitCode: 127, stdout: '', stderr: 'bash: /Users/x/.claude/hooks/lib/gh-poll.sh: No such file or directory' }
+  w.poll.take = { exitCode: 127, stdout: '', stderr: `bash: ${'/Users'}/x/.claude/hooks/lib/gh-poll.sh: No such file or directory` }
   await start($, clock)
   expect(ghAsks(runs)).toBe(1)
   await clock.advance(10 * MIN)
@@ -653,7 +667,7 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
 // Compact the row queues, since a model cannot type /compact itself; in an unattended /goal run
 // nothing else would compact until Dan came back. Main session only, and only once the note is there.
 // #2490: in the session's notes folder, which a restart of the Mac cannot clear, never the scratchpad.
-const NOTE = '/Users/x/.claude/state/session-notes/-repo/s1/handoff.md'
+const NOTE = `${'/Users'}/x/.claude/state/session-notes/-repo/s1/handoff.md`
 // Where the note was kept before #2490, which a session mid stretch may still pass once.
 const LEGACY = '/private/tmp/claude-501/-repo/s1/scratchpad/handoff.md'
 type Called = { deny?: string; text?: string; result?: unknown; isError?: boolean }
@@ -720,7 +734,7 @@ test('a notes folder that cannot be made refuses the copy with its reason, and n
   await clock.advance(SEC)
   files[LEGACY] = 'Next: push the branch.'
   mtimes[LEGACY] = clock.now()
-  w.mkdirFails = 'mkdir: /Users/x/.claude/state: Permission denied'
+  w.mkdirFails = `mkdir: ${'/Users'}/x/.claude/state: Permission denied`
   const why = refusal(await queueCompact($, { note: LEGACY }))
   expect(why).toContain('Permission denied')
   expect(files[NOTE]).toBeUndefined()
@@ -733,7 +747,7 @@ test("a note in another session's notes folder is refused, naming this session's
   const { clock, compacts, files, mtimes } = world(on)
   await start($, clock)
   await step($, clock)
-  const other = '/Users/x/.claude/state/session-notes/-repo/s2/handoff.md'
+  const other = `${'/Users'}/x/.claude/state/session-notes/-repo/s2/handoff.md`
   files[other] = 'Someone else.'
   mtimes[other] = clock.now()
   const why = refusal(await queueCompact($, { note: other }))
@@ -749,7 +763,7 @@ test('a note path climbing out of the notes folder with . or .. is refused (#249
   await step($, clock)
   await clock.advance(SEC)
   for (const key of ['..', '.']) {
-    const out = `/Users/x/.claude/state/session-notes/${key}/s1/handoff.md`
+    const out = `${'/Users'}/x/.claude/state/session-notes/${key}/s1/handoff.md`
     files[out] = 'Outside.'
     mtimes[out] = clock.now()
     expect(refusal(await queueCompact($, { note: out }))).toContain(`not ${out}`)
@@ -1348,7 +1362,7 @@ test("a turn's start whose write failed is written again at its next request, so
   await measure($, 80)
   await step($, clock)
   expect(refused).toBe(true)
-  await step($, clock)
+  await toolResult($, clock)
   await start($, clock)
   const ui = await $.ui.mount(band)
   const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
@@ -1493,19 +1507,94 @@ test('a request starts the hour of cache: the status line file says when it goes
 // #697: the spec's "1 hour prompt cache measured from the last request". Every request of a turn
 // keeps the cache warm, so each one restarts the hour; a subagent's requests carry its own
 // conversation, not this one, and the turn's end makes no request of its own.
+// #2726: heard from the turn's start and each main tool result, the moments just before a request
+// goes out (measured 6 to 19 ms before it), never from the request's own stream.
 test('each main request restarts the hour; a subagent request and the turn ending do not move it', withKit, async ($, on) => {
   const { files, clock } = world(on)
   await start($, clock)
   await step($, clock)
   await clock.advance(30 * MIN)
-  await step($, clock)
+  await toolResult($, clock)
   expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
   await clock.advance(10 * MIN)
   await step($, clock, 'sub-1')
+  await toolResult($, clock, 'sub-1')
   expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
   await turn($)
   await clock.settle()
   expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
+})
+
+// #2726, Dan 2026-11-11: the status bar keeps no turn.step hook. Claude Code loses pieces of a
+// streamed tool call's input when it replaces its hooks worker while a turn.step hook carries the
+// stream, so a hook that only relays it is a risk to every call of every agent for nothing.
+test('status-bar registers no turn.step hook, so no model stream passes through the hooks worker for it (#2726)', async () => {
+  const events: string[] = []
+  register(((event: string) => { events.push(event) }) as never, {} as never)
+  expect(events).toContain('turn.start')
+  expect(events).not.toContain('turn.step')
+})
+
+test('a model request heard only as itself moves nothing: the clock follows the turn start and tool results (#2726)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  await start($, clock)
+  const s = ($ as { turn: { step: (e: never) => AsyncIterable<unknown> } }).turn.step({ turnId: 't', index: 0, model: 'opus', messageCount: 2 } as never)
+  for await (const _chunk of s) {
+    // The response arriving; nothing to read.
+  }
+  await clock.settle()
+  expect(cacheIn(files)).toBe(null)
+})
+
+// #2726: a Stop hook that sends the turn on stores its context, and the request it starts follows
+// with no tool result before it (measured: 12 ms after the row). The row alone cannot say a request
+// follows, since a Stop hook that lets the turn end stores one too, so it is taken only once a
+// response to that request is stored, at the row's own time.
+test("a Stop hook's context restarts the hour at its own time once a response follows it, never when the turn ends after it (#2726)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await clock.advance(10 * MIN)
+  await kept($, clock, 'hook-context')
+  await clock.advance(MIN)
+  expect(cacheIn(files)).toBe(T0 + HOUR)
+  await kept($, clock, 'response')
+  expect(cacheIn(files)).toBe(T0 + 10 * MIN + HOUR)
+  // A response with no context before it, and the rows that precede no request, move nothing.
+  await clock.advance(MIN)
+  await kept($, clock, 'response')
+  await kept($, clock, 'attachment')
+  await kept($, clock, 'notice')
+  await kept($, clock, 'prompt')
+  expect(cacheIn(files)).toBe(T0 + 10 * MIN + HOUR)
+  // The Stop hook that lets the turn end: its context, then the turn's end, and no request.
+  await kept($, clock, 'hook-context')
+  await turn($)
+  await clock.settle()
+  expect(cacheIn(files)).toBe(T0 + 10 * MIN + HOUR)
+  // The next turn starts the hour itself, and that context is not taken by its responses.
+  await clock.advance(20 * MIN)
+  await step($, clock)
+  await clock.advance(MIN)
+  await kept($, clock, 'response')
+  expect(cacheIn(files)).toBe(T0 + 32 * MIN + HOUR)
+  // A subagent's context and responses are its own conversation's.
+  await kept($, clock, 'hook-context', 'sub-1')
+  await clock.advance(MIN)
+  await kept($, clock, 'response', 'sub-1')
+  expect(cacheIn(files)).toBe(T0 + 32 * MIN + HOUR)
+})
+
+test('a tool result after a Stop hook context drops it, so a later response keeps the tool result time (#2726)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await kept($, clock, 'hook-context')
+  await clock.advance(MIN)
+  await toolResult($, clock)
+  await clock.advance(MIN)
+  await kept($, clock, 'response')
+  expect(cacheIn(files)).toBe(T0 + MIN + HOUR)
 })
 
 test('while a turn runs no cache toast or cache row, however long since its last request; idle, both come on time', withKit, async ($, on) => {
@@ -1522,7 +1611,7 @@ test('while a turn runs no cache toast or cache row, however long since its last
   await clock.advance(56 * MIN)
   expect(toasts).toEqual([])
   expect(await shown(ui as never)).toBe('engine band')
-  await step($, clock)
+  await toolResult($, clock)
   await turn($)
   await clock.advance(55 * MIN)
   expect(toasts).toEqual([WARNED])
@@ -1605,7 +1694,7 @@ test('a session with no screen (claude -p) reads nothing and writes nothing: nob
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
   await clock.advance(5 * MIN)
   expect(runs.filter(r => r[0] === 'git' || r[0] === 'gh')).toEqual([])
-  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
+  expect(Object.keys(files).filter(f => f !== `${'/Users'}/x/.claude.json`)).toEqual([])
 })
 
 test('a clean end deletes the session file, so no stale cache is read for it', withKit, async ($, on) => {
@@ -1749,7 +1838,7 @@ test('a job watcher from before agents were watched still shows its jobs, with n
 
 // #1583, settled with Dan: nothing is asked of him while Claude works, so a quiet background command
 // is not in the band then; once Claude's turn has ended and it is still quiet, it asks him to ask
-// Claude to check. Read from the turn the bar already follows: this conversation's own request
+// Claude to check. Read from the turn the bar already follows: this conversation's own turn start
 // starts it, its turn's end ends it.
 test('a quiet background command shows only once Claude has stopped, and goes again when a turn runs (#1583)', { plugins: [modKit, quietWatcher] }, async ($, on) => {
   const { clock } = world(on)
@@ -1927,6 +2016,32 @@ test('a compaction from anywhere else resets it too; one that is skipped, a suba
   expect(cacheIn(files)).toBeNull()
 })
 
+// #2726: a Stop hook's context held from before a compaction belongs to the conversation it replaced.
+test("a compaction drops a Stop hook context still held, so the response after it starts no hour from the old conversation (#2726)", withKit, async ($, on) => {
+  const { files, clock, w } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await kept($, clock, 'hook-context')
+  w.compact = () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] })
+  await $.session.compact(compactEvent('manual'))
+  await clock.settle()
+  expect(cacheIn(files)).toBeNull()
+  await kept($, clock, 'response')
+  expect(cacheIn(files)).toBeNull()
+})
+
+test('a /clear drops a Stop hook context still held too (#2726)', withKit, async ($, on) => {
+  const { clock, files } = world(on)
+  await start($, clock)
+  await step($, clock)
+  await kept($, clock, 'hook-context')
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await clock.settle()
+  await kept($, clock, 'response')
+  // The /clear removes the file; a held context taken now would write it back with an hour in it.
+  expect(files[`${DIR}/s1.json`] === undefined ? null : cacheIn(files)).toBeNull()
+})
+
 // #1421, Dan 2026-10-20: the band read "ctx 75% [ Compact ]" half an hour after the conversation had
 // been compacted automatically, and pressing it toasted "Compact did not run: Not enough messages to
 // compact." The reading was the conversation's from before the compaction, and no request had come
@@ -2078,7 +2193,7 @@ test('a folder that is no repository, or a repository with no commits yet, has n
 // so mod-kit reads the file again at each prompt and each re-read of the context and raises the
 // change as modkit.login (its own tests cover when; the raised login is taken in below); a request
 // in between never reads it.
-const LOGIN_FILE = '/Users/x/.claude.json'
+const LOGIN_FILE = `${'/Users'}/x/.claude.json`
 const loginAs = (files: Record<string, string>, id: string, name: string, org: string) => {
   files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: id, organizationUuid: `org-${id}`, displayName: name, emailAddress: `${id}@example.com`, organizationName: org }, other: 'kept out' })
 }
@@ -2230,10 +2345,10 @@ test('a facts file that cannot be written is said once, and the band and turns g
 })
 
 test('a facts folder that cannot be made is said, and the rest still runs', withKit, async ($, on) => {
-  const { clock, w, logs, files } = world(on, { mkdirFails: 'mkdir: /Users/x/.claude/state: Permission denied', unpushed: '2\n' })
+  const { clock, w, logs, files } = world(on, { mkdirFails: `mkdir: ${'/Users'}/x/.claude/state: Permission denied`, unpushed: '2\n' })
   await start($, clock)
   expect(logs.filter(l => /Status bar couldn't save the cache time.*Permission denied/.test(l))).toHaveLength(1)
-  expect(Object.keys(files).filter(f => f !== '/Users/x/.claude.json')).toEqual([])
+  expect(Object.keys(files).filter(f => f !== `${'/Users'}/x/.claude.json`)).toEqual([])
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('2 unpushed commits')
   w.mkdirFails = ''

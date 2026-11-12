@@ -27,6 +27,19 @@
 // arguments, in its own file or from a file that sends it. A file whose send cannot be traced (any
 // other language, a text template, a send the reading cannot find, a module used whole) is held as
 // before. A python docstring is never message text (#2574).
+//
+// Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
+// refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
+// what the Slack drafts gate prints on stderr, and edits to a script its docstrings name, were held
+// as Slack wording. A marker is now told apart by how it is written (matchedAt). A name (an
+// endpoint, an SDK, a setting) written as one alternative of a pattern, or as the middle of a glob,
+// is only being matched; written any other way (in an address, after a dot or a $, as a whole
+// string, as a bare word) it is used, as before. A file is no sender only when every marker it
+// carries is matched that way, or sits in a comment, AND the file makes no request and starts no
+// program that could (makesRequest), so a file that matches an endpoint and then calls it is still
+// one. Only shell, python, JavaScript and TypeScript are read for this: in any other language a
+// marker anywhere is a sender, as before. No file is named or exempted. Not recognised, so still
+// held: a sentence that spells an endpoint out, a list of bare names, a pattern in a regex literal.
 
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
@@ -90,13 +103,12 @@ export const codeOf = (path: string, text: string): string => withoutComments(te
 
 // Each marker is written so this file's own source does not match it: a dot or underscore escaped
 // or in a class, so the guard's rules are not themselves read as a Slack poster.
-export const MARKERS: RegExp[] = [
-  /hooks\.slack\.com/,
-  /chat[._]postMessage/,
-  /@slack\//,
-  /slack[_]sdk/,
-  /slack-go\//,
-  /SLACK[_]\w*(WEBHOOK|TOKEN|CHANNEL)/i,
+//
+// The markers that are a name: a webhook's host, the chat API's method, a Slack SDK, a Slack setting.
+// A name can be written only to be matched (matchedAt).
+const NAMES: RegExp[] = [/hooks\.slack\.com/, /chat[._]postMessage/, /@slack\//, /slack[_]sdk/, /slack-go\//, /SLACK[_]\w*(WEBHOOK|TOKEN|CHANNEL)/i]
+// The markers that are a send helper named for Slack, called or imported, which is always a use.
+const HELPERS: RegExp[] = [
   /\b(send|post|notify|alert)\w*slack\w*\s*\(/i,
   // The same helper imported without being called, as a test asserting its wording does. Only an
   // import or require line counts, so the name in a comment or a config key is not a post.
@@ -105,9 +117,101 @@ export const MARKERS: RegExp[] = [
   /\bslack\w*\.(send|post|notify|chat)\w*\s*\(/i,
   /\bslack\w*(send|post|notify|message|alert)\w*\s*\(/i,
 ]
+export const MARKERS: RegExp[] = [...NAMES, ...HELPERS]
 
-/** Whether a file's text posts to Slack: a webhook, the chat API, a Slack SDK, a Slack env setting, or a send helper named for Slack. */
+/** Whether a text carries a Slack marker: a webhook, the chat API, a Slack SDK, a Slack env setting, or a send helper named for Slack. */
 export const slackMarked = (text: string): boolean => MARKERS.some(m => m.test(text))
+
+// Each marker as it is searched for every place it stands, the names first as MARKERS has them.
+const EVERY = MARKERS.map(m => new RegExp(m.source, `${m.flags}g`))
+
+// A bar that separates a pattern's alternatives: one bar, never the two of an "or" in code.
+const barAt = (code: string, i: number, out: 1 | -1): boolean => code[i] === '|' && code[i + out] !== '|'
+/**
+ * Whether the name at [at, to) of a file's code is only being matched (#2662), by how it is written:
+ * the middle of a glob, a star at each side (`*name*`), or one alternative of a pattern, a bar at
+ * one side and at the other a bar, the group's bracket, an anchor or the string's quote
+ * (`'other|name'`). The name is taken to the end of its word first, so a longer name it starts is
+ * judged whole. Anything else is a use: an address (a slash beside it), a setting read (a `$`, a
+ * dot or a brace before it), a method called, a whole quoted string, a bare word. This file's own
+ * source spells no marker out, here included, so the guard never reads itself as a sender.
+ */
+const matchedAt = (code: string, at: number, to: number): boolean => {
+  while (at > 0 && /\w/.test(code[at - 1] as string)) at--
+  while (to < code.length && /\w/.test(code[to] as string)) to++
+  const [l, r] = [code[at - 1] ?? '', code[to] ?? '']
+  if (l === '*' && r === '*') return true
+  const [lBar, rBar] = [barAt(code, at - 1, -1), barAt(code, to, 1)]
+  return (lBar && (rBar || /[)$'"`]/.test(r))) || (rBar && /[(^'"`]/.test(l))
+}
+
+/** The languages a file is read in for whether it makes a request (#2662). */
+export type RequestLanguage = 'shell' | 'python' | 'js'
+/** Which of them a file is written in, by its extension, or its shebang when it has none; none for any other language. */
+export const requestLanguage = (path: string, text: string): RequestLanguage | undefined => {
+  const ext = extOf(path)
+  const end = text.indexOf('\n')
+  const shebang = ext === undefined && text.startsWith('#!') ? text.slice(0, end < 0 ? text.length : end) : ''
+  if (ext === 'py' || /python/.test(shebang)) return 'python'
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || /\b(ba|z|da|k)?sh\b/.test(shebang)) return 'shell'
+  if (ext === undefined ? /\b(node|deno|bun)\b/.test(shebang) : JS.has(ext)) return 'js'
+  return undefined
+}
+
+import { fileReach } from './mod-kit/reaches.ts'
+
+// What makes a request, or starts a program that could, in each language (#2662). Each is wide on
+// purpose: a sentence that reads like one of these keeps its file a sender, which only holds an edit
+// that was held before. Python and JavaScript reach the network or another program only through a
+// module they import or a call they make, which mod-kit's file reader judges (fileReach, #2710: the
+// one judge of what code can do lives in mod-kit, #712), so a program's name in their strings, a
+// pattern or a comment is data (a gate's list of the programs it refuses) and never counts. A shell
+// script's words are what it runs, and its inline python or node sits in its quotes, so that is
+// read whole.
+// A program that makes a request, followed by what it is handed; HTTPie's http and https; bash's own
+// /dev/tcp; and, where a command starts, any program named for Slack (a helper a script calls with
+// no brackets, which no marker sees).
+const SHELL_REQUEST =
+  /(^|[^\w.-])(curl|wget|xh|httpie|curlie|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|ftp|rsync|sendmail|mailx?|openssl)[ \t]+\S|(^|[\s;&|(])https?[ \t]+[-:\w"'$]|\/dev\/(tcp|udp)\/|(^|[;&|(){]|\b(then|do|else|if|while|until|exec|eval|command|xargs|sudo|nohup|time)[ \t])[ \t]*[\w.\/~$-]*slack[\w.\/-]*([ \t]+\S|[ \t]*$)/im
+
+/** Whether a file's code makes a request, or starts a program that could. Inline python or JavaScript in a shell script is the script's own text, so it is read there too. */
+const makesRequest = (lang: RequestLanguage, code: string): boolean =>
+  lang === 'python'
+    ? fileReach('python', code) !== undefined
+    : lang === 'js'
+      ? fileReach('node', code) !== undefined
+      : SHELL_REQUEST.test(code) || fileReach('python', code, { whole: true }) !== undefined || fileReach('node', code, { whole: true }) !== undefined
+
+// Whether a file's code only names what it matches: every marker in it a name being matched, and
+// nothing in it making a request. Never so in a language not read for requests. The names are read
+// first and the reading stops at the first one that is used, so a file that posts, which is nearly
+// every file carrying a marker, costs what finding its marker did before. Only a file read to the
+// end as matching pays more (2026-11-10, load 22: the 179 KB drafts gate 0.9 ms before, 2.8 to
+// 3.1 ms now; 500 of those would be 1.6 s of SCAN_MS).
+const onlyMatches = (lang: RequestLanguage | undefined, code: string): boolean => {
+  if (lang === undefined) return false
+  for (const m of EVERY.slice(0, NAMES.length)) for (const x of code.matchAll(m)) if (!matchedAt(code, x.index ?? 0, (x.index ?? 0) + x[0].length)) return false
+  return !HELPERS.some(m => m.test(code)) && !makesRequest(lang, code)
+}
+
+/**
+ * Where a file's code names a Slack send (#2662): every marker in it, or none when the file only
+ * names what it matches, as a gate naming the endpoints it refuses does. `lang` is none for a
+ * language not read for requests, where every marker counts as before.
+ */
+export const sendMarks = (lang: RequestLanguage | undefined, code: string): number[] =>
+  onlyMatches(lang, code) ? [] : EVERY.flatMap(m => [...code.matchAll(m)].map(x => x.index ?? 0))
+
+/**
+ * Whether a file posts to Slack: its code (comments left out) carries a marker, and the file does
+ * more than name what it matches (sendMarks). `inComments` for the file being edited or written to,
+ * which a marker in a comment has always made a sender: it still does, unless the file only names
+ * what it matches, a comment naming an endpoint being no more a send than a pattern matching it.
+ */
+export const isSender = (path: string, text: string, inComments = false): boolean => {
+  const code = codeOf(path, text)
+  return slackMarked(inComments ? text : code) && !onlyMatches(requestLanguage(path, text), code)
+}
 
 /**
  * What the repository is searched for before any file is read, case ignored: every marker names
@@ -317,6 +421,20 @@ export const handsOn = (rel: string, text: string): boolean => {
   return /(^|\n)[ \t]*export[\s{*]/.test(text) || /(^|[^.\w$])(module\.exports|exports\.[\w$]+\s*=)/.test(text)
 }
 
+// The paths of a JavaScript or TypeScript file's local imports, as written: a relative or aliased
+// path, never a bare package.
+const localSpecs = (text: string): string[] =>
+  [...withoutComments(text, false).matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)]
+    .map(m => m[1] as string)
+    .filter(spec => spec.startsWith('.') || spec.includes('/'))
+
+/**
+ * Every module a file imports, as the file names it (#2637): each local JavaScript or TypeScript
+ * import path whole, and each python module. Two files of one name in different folders are two
+ * modules here, where importTerms gives one word for both.
+ */
+export const moduleSpecs = (text: string): string[] => [...new Set([...localSpecs(text), ...importedModules(withoutComments(text, true))])]
+
 /**
  * The words a search for the modules a file imports looks for (#2361): the last name of each local
  * JavaScript or TypeScript import (a relative or aliased path, never a bare package), its folder's for
@@ -324,10 +442,7 @@ export const handsOn = (rel: string, text: string): boolean => {
  */
 export const importTerms = (text: string): string[] => {
   const out = new Set<string>()
-  const code = withoutComments(text, false)
-  for (const m of code.matchAll(/(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g)) {
-    const spec = m[1] as string
-    if (!spec.startsWith('.') && !spec.includes('/')) continue
+  for (const spec of localSpecs(text)) {
     const segs = spec.split('/').filter(s => s && s !== '.' && s !== '..')
     const stem = stemOf(segs[segs.length - 1] ?? '')
     const term = PACKAGE.has(stem) ? (segs[segs.length - 2] ?? '') : stem
@@ -530,7 +645,7 @@ const FILLED_MARK = '\u0000'
 /** A string with each value filled in at run time made a mark, a ${...} read to its own closing brace however much code is inside it (#2371). */
 const markFilled = (s: string): string => s.replace(new RegExp(SUBST, 'g'), ` ${FILLED_MARK} `).replace(FILLED, ` ${FILLED_MARK} `)
 /** The fixed parts of a string: the words between the values filled in at run time, never the code that fills them. */
-const fixedParts = (s: string): string[] => markFilled(s).split(FILLED_MARK)
+export const fixedParts = (s: string): string[] => markFilled(s).split(FILLED_MARK)
 
 /** Whether a string reads as text a person reads: two words, or a word beside a filled in value; never a key, a path, a URL or a class list. */
 export const isProse = (s: string): boolean => {
@@ -600,6 +715,84 @@ export const sqlText = (s: string): boolean => SQL_SHAPES.some(r => r.test(s))
 
 /** Whether a string is message text: prose, and neither a select list, code, nor SQL. */
 export const isMessage = (s: string): boolean => isProse(s) && !selectList(s) && !codeText(s) && !sqlText(s)
+
+// claude-config#2720. On 2026-11-10 four alert messages were written into a new copy module that no
+// file sent yet, so the guard, which held wording by whether a Slack send reaches it, let them in
+// unasked; they were held only later, at the edit importing the module, which the question then
+// blamed. A module of message copy is now known by what it is, by its path or by its shape, and its
+// new wording held when it is written, even while nothing sends it. Only where nothing sends it:
+// a module a sender imports is still judged by what that sender sends (#2570).
+
+// The words of a path part: split at anything but a letter or digit, and where a lower case letter
+// or digit meets a capital, so quietFeedCopy is quiet, feed, copy.
+const wordsOf = (s: string): string[] =>
+  s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+// A name ending in one of these is copy: outage-copy, quietFeedCopy, wording. Starting with one is
+// a verb (copy-assets, copyFiles), which is not.
+const COPY_WORDS = new Set(['copy', 'copies', 'wording', 'wordings'])
+// Words naming an alert, and words naming a message, which together name a module of alert copy
+// (slack-messages, alertText, alerts/templates). Either alone names many other things: a Slack gate,
+// a list of alerts, an error module.
+const ALERT_WORDS = new Set(['slack', 'alert', 'alerts', 'alarm', 'alarms', 'notify', 'notifier'])
+const MESSAGE_WORDS = new Set(['message', 'messages', 'msg', 'msgs', 'text', 'texts', 'template', 'templates', 'notice', 'notices', 'blocks'])
+
+/** Whether a repository path names a module of message copy (#2720): a name ending in copy or wording, a copy folder, or alert and message words together. */
+const copyByPath = (rel: string): boolean => {
+  const segs = rel.split('/')
+  const dirs = segs.slice(0, -1)
+  const stem = wordsOf(stemOf(segs[segs.length - 1] ?? ''))
+  if (COPY_WORDS.has(stem[stem.length - 1] ?? '') || dirs.some(d => COPY_WORDS.has(d.toLowerCase()))) return true
+  const words = [...dirs.flatMap(wordsOf), ...stem]
+  return words.some(w => ALERT_WORDS.has(w)) && words.some(w => MESSAGE_WORDS.has(w))
+}
+
+// Slack's own formatting in a string: a link with its label (<https://x|label>, <${url}|label>), a
+// mention of a channel or group (<!here>, <!channel>, <!subteam^ID>), or a Block Kit text type. Only
+// a Slack message is written this way.
+const SLACK_LINK = /<(?:https?:\/\/|mailto:|\$\{|\{|#|@)[^<>|\s]*\|[^<>\n]+>/
+const SLACK_MENTION = /<!(?:here|channel|everyone|subteam\^)[^<>\s]*>/
+
+// A top level declaration that only builds a string: a function returning one string or template
+// straight away, as a copy builder does (`(feed) => \`The ${feed} feed...\``, `return f"..."`). A
+// function that does other work and prints or throws a message on the way is not one: measured on
+// this repository on 2026-11-10, counting those (and shell scripts) read 16 of its 665 code files as
+// copy modules, scripts and mods among them; this reads 1, mod-kit's typed answer wording (#2720).
+const JS_BUILDER =
+  /^(?:export\s+)?(?:(?:async\s+)?function\s*[\w$]+\s*\([^)]*\)\s*(?::[^{]*)?\{\s*return\s*\(?\s*[`'"]|(?:const|let|var)\s+[\w$]+\s*(?::[^=\n]*)?=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*(?::[^=\n]*)?=>\s*\(?\s*[`'"])/
+const PY_BUILDER = /^(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->[^:]*)?:\s*(?:\n\s+(?:"""[\s\S]*?"""|'''[\s\S]*?'''))?\s*\n\s+return\s+[rRbBuUfF]*["']/
+
+// A shell script is a program, never a module of copy another file imports.
+const SHELL_SCRIPT = new Set(['sh', 'bash', 'zsh'])
+
+/**
+ * Whether a file is a module of message copy (#2720), by its repository path or by its shape: Slack
+ * formatting in any of its strings, or, in JavaScript, TypeScript or python, mostly functions that
+ * only build message text with values filled in (two or more, and at least half its top level
+ * declarations). A test, a prose file, a shell script and a UI component never are: a test sends
+ * nothing (#2290), and a screen's text is not posted (#2519).
+ */
+export const copyModule = (rel: string, text: string): boolean => {
+  const ext = extOf(rel)
+  if (testFile(rel) || isProseFile(rel) || uiComponent(rel) || ext === undefined || SHELL_SCRIPT.has(ext)) return false
+  if (copyByPath(rel)) return true
+  const lang = languageOf(rel, text)
+  const strings = stringsOf(text, lang !== 'c', lang === 'c' && isJs(rel)).filter(s => !s.query)
+  // Block Kit's text type, as a pattern so this file holds no such string and is not read as copy.
+  if (strings.some(s => /^mrkdwn$/.test(s.text) || (isMessage(s.text) && (SLACK_LINK.test(s.text) || SLACK_MENTION.test(s.text))))) return true
+  const python = lang === 'python'
+  if (!python && !(lang === 'c' && isJs(rel))) return false
+  const r = modelReading(text, python, tokenRanges(text, python))
+  const builders = r.decls.filter(d => {
+    // The file's own text, where a python docstring is a string the pattern steps over.
+    if (!(python ? PY_BUILDER : JS_BUILDER).test(text.slice(d.from, d.to))) return false
+    return strings.some(s => s.start >= d.from && s.start < d.to && isMessage(s.text) && fixedParts(s.text).length > 1)
+  })
+  return builders.length >= 2 && builders.length * 2 >= r.decls.length
+}
 
 /** Whether a file is a CI workflow, whose names, needs, descriptions and commands a pipeline runs rather than posts. */
 export const ciWorkflow = (path: string): boolean =>
@@ -1005,6 +1198,33 @@ export const removalKey = (file: string, removed: string[]): string => `removal:
  * there are another call.
  */
 export const shellKey = (command: string, paths: string[]): string => `shell:${hash(JSON.stringify([command, [...new Set(paths)].sort()]))}`
+/**
+ * Where his approval of one edit the guard could not trace is kept (#2709): by the file and the
+ * whole text the edit finds there and leaves, so it lets through that one edit and no other. Any
+ * other edit to the file, or the same edit to a file that has changed since, is asked about again.
+ */
+export const untracedKey = (file: string, before: string, after: string): string => `untraced:${hash(JSON.stringify([file, before, after]))}`
+
+/** The lines an edit adds and takes away, each exactly as written and in its order, blank lines left out (#2709). */
+export const changedLines = (before: string, after: string): { added: string[]; removed: string[] } => {
+  const lines = (t: string) => t.split('\n').filter(l => l.trim())
+  const counted = (ls: string[]) => {
+    const m = new Map<string, number>()
+    for (const l of ls) m.set(l, (m.get(l) ?? 0) + 1)
+    return m
+  }
+  // The lines of `ls` left once each line `other` also holds has been matched off, one for one.
+  const beyond = (ls: string[], other: string[]) => {
+    const left = counted(other)
+    return ls.filter(l => {
+      const n = left.get(l) ?? 0
+      if (n > 0) left.set(l, n - 1)
+      return n === 0
+    })
+  }
+  const [was, now] = [lines(before), lines(after)]
+  return { added: beyond(now, was), removed: beyond(was, now) }
+}
 
 /**
  * The text a call leaves in a file it edits, from the file as it is: a Write's content, an Edit's
@@ -1061,6 +1281,9 @@ export const mentionsStore = (text: string): boolean => /plugins\/store/.test(te
 
 const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 
+/** What a held module of message copy that no file uses yet is called on the card, refusals and question (#2720). */
+export const UNWIRED = 'a module of message copy not yet wired to Slack'
+
 /** What changes, in the words the refusal and card name it by. */
 export const changeText = (added: string[], removed: string[]): string =>
   added.length ? `adds Slack message text Dan has not approved: ${listed(added)}` : `takes Slack message text away: ${listed(removed)}`
@@ -1068,27 +1291,67 @@ export const changeText = (added: string[], removed: string[]): string =>
 /**
  * What is held, as the card and both refusals open. A shell command carries no wording the guard
  * can read before it runs, so it is named as that rather than as an empty list taken away. A
- * template another file sends (#2248) names that file, its sender, so Dan sees what posts it.
+ * template another file sends (#2248) names that file, its sender, so Dan sees what posts it. An
+ * edit that adds no text of its own and brings another file's to a send (#2637) names that file,
+ * `from`, as where the text is. A module of message copy no file uses yet (#2720), `unwired`, is
+ * named as that, so Dan can tell it from a live send (his choice of words, 2026-11-11).
  */
-export const heldText = (file: string, added: string[], removed: string[], sender?: string): string =>
-  added.length || removed.length
-    ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : ''} ${changeText(added, removed)}`
+export const heldText = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  from
+    ? `This edit to ${file} makes ${sender && sender !== file ? sender : 'it'} send Slack message text from ${from} that Dan has not approved: ${listed(added)}`
+    : added.length || removed.length
+    ? `This edit to ${file}${sender ? `, which ${sender} sends to Slack,` : unwired ? `, ${UNWIRED},` : ''} ${changeText(added, removed)}`
     : `This shell command writes to ${file}, which ${sender ? `${sender} sends to Slack` : 'posts to Slack'}, and the wording it leaves cannot be read until it runs`
 
-const blocked = (file: string, added: string[], removed: string[], sender?: string): string =>
-  `Blocked: t${heldText(file, added, removed, sender).slice(1)}`
+export const blocked = (file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `Blocked: t${heldText(file, added, removed, sender, from, unwired).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
-export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
-  `${blocked(file, added, removed, sender)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const refusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `${blocked(file, added, removed, sender, from, unwired)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
-export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string): string =>
-  `${blocked(file, added, removed, sender)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+export const agentRefusal = (id: string, file: string, added: string[], removed: string[], sender?: string, from?: string, unwired?: boolean): string =>
+  `${blocked(file, added, removed, sender, from, unwired)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+
+/**
+ * An edit the guard could not trace (#2709): the trace stopped at one of its limits, which it meets
+ * the same way on every try, or its search ran out of time (#2796), which on a busy Mac it does on
+ * every try. What it changes, line by line, and why the guard stopped.
+ */
+export const untracedText = (file: string, added: string[], removed: string[], why: string): string => {
+  const parts = [...(added.length ? [`adds ${listed(added)}`] : []), ...(removed.length ? [`takes away ${listed(removed)}`] : [])]
+  const what = parts.length ? parts.join(' and ') : 'changes only blank lines or the order of its lines'
+  return `This edit to ${file} ${what}, and the Slack alert guard could not trace whether that reaches Slack: ${why}`
+}
+
+// Why trying again does not help: a limit the trace met is met on every try; a search that ran out of
+// time (#2796, `late`) may finish on a quieter Mac, but ran out about 20 times on a busy one, so it is
+// never told to try again either.
+const noRetry = (late?: boolean) => (late ? 'The search can run out of time again' : 'Trying again is held the same way')
+
+/** The main session's refusal of an untraced edit: ask Dan, who sees the lines the guard shows him. */
+export const untracedRefusal = (id: string, file: string, added: string[], removed: string[], why: string, late?: boolean): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. ${noRetry(late)}, so Dan decides this one edit. Ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}"} and no answers filled in. The guard words the question and shows him the lines. Send this call again, unchanged, once he answers ${APPROVE}.`
+
+/** A subagent's refusal of an untraced edit: it may not ask Dan, so it stops and reports. */
+export const untracedAgentRefusal = (id: string, file: string, added: string[], removed: string[], why: string, late?: boolean): string =>
+  `Blocked: t${untracedText(file, added, removed, why).slice(1)}. ${noRetry(late)}, and only the main session can ask Dan to approve this one edit. Stop and report to the main session that call ${id} waits on Dan approving an edit the Slack alert guard could not trace.`
+
+/** The question for an untraced edit: the file, that the guard could not trace it, why, and its exact lines. */
+export const untracedQuestion = (file: string, added: string[], removed: string[], why: string): string => {
+  const lines = [...(added.length ? [`Adds:\n${added.join('\n')}`] : []), ...(removed.length ? [`Takes away:\n${removed.join('\n')}`] : [])]
+  const shown = lines.length ? lines.join('\n\n') : 'Changes only blank lines or the order of its lines.'
+  return `The Slack alert guard could not trace whether this edit to ${file} reaches Slack. Approve this one edit? Approving sends nothing: it only lets that edit go ahead.\n\nWhy: ${why}\n\n${shown}`
+}
 
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets
- * the held edit through, so the question never asks to post (claude-config#2284).
+ * the held edit through, so the question never asks to post (claude-config#2284). For wording an
+ * edit brings in from another file (#2637), `from` is the file that holds it. For a module of
+ * message copy no file uses yet (#2720), `unwired`, the file is named as that.
  */
-export const question = (file: string, rendered: string): string =>
-  `Approve the wording of an automated Slack alert defined in ${file}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`
+export const question = (file: string, rendered: string, from?: string, unwired?: boolean): string =>
+  from
+    ? `Approve the wording of an automated Slack alert defined in ${from}, which the held edit to ${file} brings into use? Approving sends nothing: it only lets that edit go ahead.\n\n${rendered}`
+    : `Approve the wording of an automated Slack alert defined in ${file}${unwired ? `, ${UNWIRED}` : ''}? Approving sends nothing: it only lets the held edit to that file go ahead.\n\n${rendered}`

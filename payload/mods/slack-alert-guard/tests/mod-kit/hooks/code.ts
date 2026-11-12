@@ -1,5 +1,6 @@
 import type { ModKitPythonText } from '../types/index.d.ts'
 import type { Lang } from './program.ts'
+import { pythonText } from './quoted.ts'
 
 // What inline code can do, judged per language from that language's own surface (lessons review
 // of #714 at fad450f). Built for no build, which refuses code that can write a file or run a
@@ -684,43 +685,12 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
   return PARSES.test(out) ? undefined : out
 }
 
-/**
- * Where a python program holds text rather than code (#1171, the one scanner for it): each comment
- * after its `#`, and each string literal between its quotes, `formatted` for an f-string or a
- * t-string, whose braces hold code. Read as python reads it: a backslash keeps a string open (in a
- * raw string too), one with a single quote ends at its line, and one never closed runs to the end.
- * What each reader does with a span is its own rule: codeOnly blanks comments and blocks spanning
- * lines for the design round guard (#1165), and ask before saving takes a mention of lasting memory
- * in text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText.
- */
-export const pythonText = (code: string): ModKitPythonText[] => {
-  const out: ModKitPythonText[] = []
-  let i = 0
-  while (i < code.length) {
-    const ch = code[i] as string
-    if (ch === '#') {
-      const end = code.indexOf('\n', i)
-      const to = end === -1 ? code.length : end
-      out.push({ kind: 'comment', from: i + 1, to })
-      i = to
-      continue
-    }
-    if (ch !== "'" && ch !== '"') {
-      i++
-      continue
-    }
-    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(code.slice(Math.max(0, i - 3), i))?.[1] ?? ''
-    const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
-    let j = i + q.length
-    while (j < code.length && !code.startsWith(q, j) && (q.length === 3 || code[j] !== '\n')) j += code[j] === '\\' ? 2 : 1
-    const to = Math.min(j, code.length)
-    out.push({ kind: /[fFtT]/.test(prefix) ? 'formatted' : 'string', from: i + q.length, to })
-    i = to + (code.startsWith(q, to) ? q.length : 0)
-  }
-  return out
-}
+// Where a python program holds text rather than code is read by pythonText, which lives in
+// quoted.ts beside mod-kit's other readers of quoted strings, so the file reader (reaches.ts) and a
+// mod's byte for byte copy of it can read python's strings without this file (#2710).
+export { pythonText }
 // A one line literal that is only a path (#1194): one with no space in it, or one from the root, the
-// home folder or the folder the program runs in (`/Users/dan/Documents - Dan Pro/...`, `~/...`,
+// home folder or the folder the program runs in (`/Users/<name>/Documents - Dan Pro/...`, `~/...`,
 // `./...`), whose spaces are a folder's. A literal holding a space anywhere else reads as a sentence
 // unless the program uses it as a path (pathUses).
 const pathShaped = (body: string): boolean => {

@@ -2,7 +2,8 @@
 #
 # db-write-ask.sh
 # Claude Code PreToolUse(Bash|mcp__.*)
-# hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536).
+# hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
+# and before an edge function deploy that turns JWT verification off, or may (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql, on both Macs, and
@@ -29,6 +30,15 @@
 #     names. The list, and why the connector's other tools are left out, is in
 #     lib/db-write-calls.py. The Supabase CLI's branches and projects subcommands that do the same
 #     in a shell (create, delete, pause, unpause, update) are asked about with them.
+#   - Since #2660, one kind of call that changes no database: a Supabase edge function deploy that
+#     turns JWT verification off, or may, which publishes a function the platform lets anyone call
+#     without signing in. deploy_edge_function with verify_jwt false on any Supabase server, with
+#     the function and the project named; a verify_jwt that is neither true nor false is asked
+#     about too, and one that is true or left out is passed, since the connector's schema gives
+#     true as its default. And every `supabase functions deploy` in a shell, whatever its flags
+#     (Dan, 2026-11-10: "Ask on every shell deploy"), since the setting can sit in the project's
+#     supabase/config.toml, which no flag shows and this hook never reads. lib/db-write-calls.py
+#     says where each of these was read, and what this cannot see.
 #   - Fail closed: a call this cannot classify is asked about, never passed. That covers a missing
 #     or non text query, a payload it cannot read whose raw text names a database tool, and
 #     lib/sql-read-only.py failing to load (then even a select is asked about, naming the file),
@@ -37,6 +47,16 @@
 #     variable in a statement, and lib/db-write-calls.py or lib/shell-words.py failing to load.
 #     The registration carries onFailure block, so a crash or a timeout refuses the call rather than
 #     letting a write through unasked.
+#
+# WHAT IT LETS THROUGH (permissionDecision "allow"), since #2763: one `supabase db push` that Dan has
+# already answered Apply for in the /db-apply skill's picker, in this session, for that migration
+# file unchanged and that project (lib/db-apply-approval.py says exactly when), in a command that
+# is that push and nothing else but cd. One decision, apply this migration, had been put to him up
+# to four times. The skill's ad hoc write, a `supabase db query -f <file>` that writes, is let
+# through the same way when his Apply named that file and project (Dan, 2026-11-11). Every other
+# push or write is asked about, the question saying why no Apply covers it. In
+# the same kind of command a `db query -f` file is read and judged by the one predicate, so a
+# read back from a file is not asked about either (lib/db-write-calls.py, "ONE SUPABASE RUN").
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
 # unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
@@ -158,6 +178,11 @@ def sf_notice():
             + ("that rule" if len(hits) == 1 else "those rules") + " from that file on that Mac; it is not synced, "
             "so no session or sync removes it (claude-config#2521).")
 
+def release(reason):
+    """Let the call through: Dan has already answered for it (claude-config#2763)."""
+    sys.stdout.write("allow\x1f" + reason.replace("\x1f", " ").replace("\x00", ""))
+    sys.exit()
+
 def emit(decision_reason=None, message=None):
     """Hand the verdict to the shell, which builds the JSON through lib/hook-notice.sh: "ask", the
     reason and the notice, or "note" and the notice, split by the unit separator, which is taken
@@ -170,8 +195,15 @@ def emit(decision_reason=None, message=None):
         sys.stdout.write("note\x1f" + plain(message))
     sys.exit()
 
-def ask(why, issue="2521"):
-    emit("db-write-ask.sh asks before this database call: " + why + " (claude-config#" + issue + ")", sf_notice())
+DATABASE_CALL = "database call"
+# The one kind of call asked about that changes no database: an edge function deploy that turns
+# JWT verification off, or may (claude-config#2660).
+DEPLOY = "edge function deploy"
+
+def ask(why, issue="2521", what=DATABASE_CALL):
+    """Ask, saying which kind of call it is and the issue that decided it; issue may name two,
+    for a command that holds both kinds."""
+    emit("db-write-ask.sh asks before this " + what + ": " + why + " (claude-config#" + issue + ")", sf_notice())
 
 # Which other calls reach a database, and which statements they carry (claude-config#2536).
 calls, calls_why = part("db_write_calls_shared", "db-write-calls.py")
@@ -186,6 +218,10 @@ if not isinstance(tool, str):
     named = [t for t in WATCHED if t in raw]
     m = re.search(r"\"tool_name\"\s*:\s*\"([^\"\\\\]*)\"", raw)
     said = m.group(1) if m else ""
+    if not named and said.startswith("mcp__") and calls is not None and calls.named_as_function_deploy(said):
+        # An edge function deploy whose verify_jwt cannot be read (claude-config#2660).
+        ask("the hook payload could not be read as a tool call, and its text names " + said
+            + ", so whether the deploy keeps JWT verification on could not be told", "2660", DEPLOY)
     if not named and said.startswith("mcp__") and (calls is None or calls.named_as_database_call(said)):
         named = [said]
     if not named and said == "Bash" and (calls is None or calls.CLIENT_WORD.search(raw)):
@@ -251,16 +287,51 @@ if tool == "Bash":
     sw, sw_why = part("shell_words_shared", "shell-words.py")
     if sw is None:
         ask(sw_why + ", so the command, which names a database client, could not be read", "2536")
+    cwd = d.get("cwd")
     try:
-        found = calls.bash_findings(command, judge, sw)
+        found = calls.bash_findings(command, judge, sw, cwd if isinstance(cwd, str) else "")
     except Exception as e:
         ask("the command names a database client and could not be read (" + type(e).__name__
             + "), so the call could not be classified as read only", "2536")
     if not found:
         sys.exit()
+    # A `supabase db push`, or a `supabase db query` write from a -f file, that is the whole of its
+    # command is let through when the Apply Dan answered in the /db-apply picker in this session
+    # covers it, and asked about, saying why, when none does (claude-config#2763). A finding is
+    # Applicable only in a command that holds nothing else but cd, so letting it through lets
+    # nothing else through with it.
+    pushes = [f for f in found if calls.is_applicable(f)]
+    if pushes:
+        ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
+        kept, released = [], []
+        for f in found:
+            if not calls.is_applicable(f):
+                kept.append(f)
+                continue
+            if ap is None:
+                ok, why = False, ap_why
+            else:
+                try:
+                    ok, why = ap.covered(f.workdir, f.flags, d.get("session_id"), d.get("transcript_path"), f.file)
+                except Exception as e:
+                    ok, why = False, "whether Dan applied it could not be checked (" + type(e).__name__ + ")"
+            if ok:
+                released.append(why)
+            else:
+                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why, f[1]))
+        if not kept:
+            release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
+        found = kept
     shown = [why + ("" if s is None else ". " + said(s)) for why, s in found[:FINDINGS_SHOWN]]
     more = len(found) - len(shown)
-    ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""), "2536")
+    # An edge function deploy is not a database call, so the question says which of the two the
+    # command holds, or both, and names the issue behind each (claude-config#2660).
+    deploys = [f for f in found if calls.is_function_deploy(f)]
+    kinds = ([DATABASE_CALL] if len(deploys) < len(found) else []) + ([DEPLOY] if deploys else [])
+    issues = ((["2536"] if len(deploys) < len(found) else []) + (["2660"] if deploys else [])
+              + (["2763"] if pushes else []))
+    ask("; ".join(shown) + ("; and " + str(more) + " more in the same command" if more else ""),
+        ", claude-config#".join(issues), " and ".join(kinds))
 
 # A Supabase tool that changes a database with no statement to judge: a branch merge, reset, rebase
 # or delete, a new branch or project, a pause or a restore (claude-config#2632). The library builds
@@ -272,6 +343,18 @@ except Exception as e:
               "could not be told")
 if change is not None:
     ask(change, "2632")
+
+# A Supabase edge function deploy with JWT verification off, which publishes a function the
+# platform lets anyone call without signing in (claude-config#2660). It changes no database, and
+# is the one deploy asked about: one that keeps verification on is passed. The library builds the
+# sentence, with the function and the project the input names.
+try:
+    deploy = calls.supabase_open_deploy(tool, ti)
+except Exception as e:
+    deploy = (tool + " could not be read (" + type(e).__name__ + "), so whether the deploy keeps JWT "
+              "verification on could not be told")
+if deploy is not None:
+    ask(deploy, "2660", DEPLOY)
 
 try:
     found = calls.mcp_finding(tool, ti, judge)
@@ -296,6 +379,12 @@ if [ "$rc" -eq 0 ]; then
       exit 0 ;;
     "note$US"*)
       hook_notice_json "${out#note$US}"
+      exit 0 ;;
+    "allow$US"*)
+      # Dan's /db-apply Apply covers this push (claude-config#2763). The reason keeps only
+      # characters that need no escaping, as read-only-query-allow.sh's approval does.
+      reason="${out#allow$US}"
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
       exit 0 ;;
   esac
 fi

@@ -317,7 +317,7 @@
         ]
       },
       {
-        "matcher": "mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)",
+        "matcher": "mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)|Bash",
         "hooks": [
           {
             "type": "command",
@@ -551,6 +551,22 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/session-notes-folder.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/checkout-behind-notice.sh",
+            "timeout": 15
           }
         ]
       }

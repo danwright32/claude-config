@@ -13,15 +13,17 @@ const WRITES: Record<string, unknown> = {
   // #2254: a findings note, its text holding $PWD, *.ts and a question mark, to the installed spool
   // helper; the same note chained with a write, sent to a copy of the helper in a checkout, and the
   // helper's other subcommand. Written out in full, since the shell reader suite reads this block alone.
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && sed -i \'\' \'s/a/b/\' src/lib/slack.ts': { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }], stdout: [{ word: '$OUT/big.ts' }] },
+  // So each home path builds its root inline, ${'/Users'}, never from a constant outside the block,
+  // which that suite would not have (#2754: no line here may hold a literal home path).
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && sed -i \'\' \'s/a/b/\' src/lib/slack.ts': { files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254" && echo hi > "$OUT/big.ts"': { files: [{ word: '$OUT/big.ts' }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }], stdout: [{ word: '$OUT/big.ts' }] },
   'bash payload/hooks/lib/issue-spool.sh note . "reads $PWD and every *.ts file, so why?" "builder 2254"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'payload/hooks/lib/issue-spool.sh', path: '/w/app/payload/hooks/lib/issue-spool.sh', args: [{ word: 'note', path: '/w/app/note' }, { word: '.', path: '/w/app' }, { word: 'reads $PWD and every *.ts file, so why?' }, { word: 'builder 2254', path: '/w/app/builder 2254' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'append', path: '/w/app/append' }, { word: '.', path: '/w/app' }, { word: '$RECORD' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh append . "$RECORD"': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'append', path: '/w/app/append' }, { word: '.', path: '/w/app' }, { word: '$RECORD' }] }] },
   // #2636: the end of turn review's clear line, handed the project folder whose spool key it reads.
-  'bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app /Users/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: '/Users/dan/.claude/projects/app/s1.jsonl', path: '/Users/dan/.claude/projects/app/s1.jsonl' }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
-  "bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app /Users/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest && sed -i '' 's/a/b/' src/big.ts": { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: '/Users/dan/.claude/projects/app/s1.jsonl', path: '/Users/dan/.claude/projects/app/s1.jsonl' }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
-  'bash ~/.claude/hooks/lib/issue-spool.sh sweep-stamps src/ review.': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: '/Users/dan/.claude/hooks/lib/issue-spool.sh', args: [{ word: 'sweep-stamps', path: '/w/app/sweep-stamps' }, { word: 'src/', path: '/w/app/src' }, { word: 'review.', path: '/w/app/review.' }] }] },
+  [`bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest`]: { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: `${'/Users'}/dan/.claude/projects/app/s1.jsonl`, path: `${'/Users'}/dan/.claude/projects/app/s1.jsonl` }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
+  [`bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest && sed -i '' 's/a/b/' src/big.ts`]: { files: [{ word: 'src/big.ts', path: '/w/app/src/big.ts', edits: true }], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }, { word: `${'/Users'}/dan/.claude/projects/app/s1.jsonl`, path: `${'/Users'}/dan/.claude/projects/app/s1.jsonl` }, { word: '/tmp/review.s1.manifest', path: '/tmp/review.s1.manifest' }] }] },
+  'bash ~/.claude/hooks/lib/issue-spool.sh sweep-stamps src/ review.': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: '~/.claude/hooks/lib/issue-spool.sh', path: `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`, args: [{ word: 'sweep-stamps', path: '/w/app/sweep-stamps' }, { word: 'src/', path: '/w/app/src' }, { word: 'review.', path: '/w/app/review.' }] }] },
   'bash payload/hooks/lib/issue-spool.sh clear /w/app': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'payload/hooks/lib/issue-spool.sh', path: '/w/app/payload/hooks/lib/issue-spool.sh', args: [{ word: 'clear', path: '/w/app/clear' }, { word: '/w/app', path: '/w/app' }] }] },
   // #2246: a write whose unreadable word, and so the question about it, is longer than the store's 256 characters.
   [`echo hi > "$OUT/${'a'.repeat(300)}.ts"`]: { files: [{ word: `$OUT/${'a'.repeat(300)}.ts` }], changes: [], unnamed: [], stdout: [{ word: `$OUT/${'a'.repeat(300)}.ts` }] },
@@ -593,7 +595,7 @@ test('a shell command writing no file, a new file or only files that are no sour
   expect(w.judged().length).toBe(0)
 })
 
-test('a shell command whose file cannot be read is held saying so, may only proceed, and the unchanged command then runs', KIT, async ($, on) => {
+test('a shell command whose file cannot be read is held saying so, may not restructure, and the unchanged command runs once it proceeds', KIT, async ($, on) => {
   const w = world($, on)
   const why = refusal(await bash($ as never, w, BUILT))
   expect(why).toContain('cannot be read')
@@ -607,6 +609,34 @@ test('a shell command whose file cannot be read is held saying so, may only proc
   expect((await bash($ as never, w, BUILT, {}, 'b2')).result).toBe('done')
   // Another command is decided on its own.
   expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b3'))).toContain('cannot be read')
+})
+
+test('a held command naming no file can be folded into an open structural issue the hold listed, recorded with its number, and never into one it did not list (#2706)', KIT, async ($, on) => {
+  // #41 is an open tech-debt issue naming src/lib/slack.ts; #42 names a file but is no structural issue.
+  const w = world($, on)
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('cannot be read')
+  expect(why).toContain('"decision": "fold", "issue": <one of #41>')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 42 }))).toContain('#41')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 99 }))).toContain('#41')
+  expect(w.records().filter(x => x.kind === 'decided')).toEqual([])
+  expect(refusal(await bash($ as never, w, BUILT, {}, 'b2'))).toContain('cannot be read')
+  const d = await decide($ as never, { call: 'b2', decision: 'fold', issue: 41 })
+  expect(said(d)).toContain('#41 is folded into this work')
+  expect(said(d)).toContain('Send the Bash command again, unchanged.')
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ v: 3, decision: 'fold', issue: 41, path: '$OUT/big.ts', call: 'b2' })
+  // The unchanged command then runs, as it would after proceed; another is judged on its own.
+  expect((await bash($ as never, w, BUILT, {}, 'b3')).result).toBe('done')
+  expect(refusal(await bash($ as never, w, 'echo hi > "$OUT/other.ts"', {}, 'b4'))).toContain('cannot be read')
+})
+
+test('a held command naming no file lists the session\'s own structural issue too, so its own restructure can be folded in (#2706)', KIT, async ($, on) => {
+  // The branch is #41's own, so #41 does not hold; the fast growing src/big.ts still holds the command.
+  const w = world($, on, { branch: '41-split-slack' })
+  const why = refusal(await bash($ as never, w, BUILT))
+  expect(why).toContain('<one of #41>')
+  await decide($ as never, { call: 'b1', decision: 'fold', issue: 41 })
+  expect(w.records().find(x => x.kind === 'decided')).toMatchObject({ decision: 'fold', issue: 41 })
 })
 
 test('a script handed a double quoted regex ending in a dollar sign the shell leaves as text runs unjudged; one handed a word the shell expands is held (#2320)', KIT, async ($, on) => {
@@ -1040,7 +1070,7 @@ test('a reader that fails lets the command through, kept in the error file and s
 // #2636: the end of turn review's clear line names the project folder only as the project whose spool
 // key the installed helper reads, and writes under ~/.claude-issue-spool. It was held once per large
 // file under that folder, each proceed claiming only the file it named, so the next send named the next.
-const CLEAR = 'bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app /Users/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest'
+const CLEAR = `bash ~/.claude/hooks/lib/issue-spool.sh clear /w/app ${'/Users'}/dan/.claude/projects/app/s1.jsonl /tmp/review.s1.manifest`
 
 test('the spool clear line goes through with nothing judged, its folder only the project whose key the helper reads (#2636)', KIT, async ($, on) => {
   const w = world($, on)

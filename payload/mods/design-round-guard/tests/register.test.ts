@@ -33,8 +33,19 @@ const modKit: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout)
       }
+      // #2726: the first N reads of what a command writes fail as every hook in flight does when Claude
+      // Code replaces its hooks worker after a missed heartbeat, in the engine's own words, N named by
+      // a plugin in the fold, kit-stalls-<N>. A stand-in for one of the engine's own nouns that throws
+      // never reaches the hook as written, so the failure is thrown here.
+      let stalls = Number(e.plugins.map(p => /^kit-stalls-(\d+)$/.exec(p)?.[1]).find(n => n !== undefined) ?? 0)
       const modkit = {
-        writes: async (input: { command: string; cwd: string; home: string }) => ask('writes', input),
+        writes: async (input: { command: string; cwd: string; home: string }) => {
+          if (stalls > 0) {
+            stalls--
+            throw new Error('no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)')
+          }
+          return ask('writes', input)
+        },
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
@@ -96,10 +107,12 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit] }
+// #2726: the same, with the first n reads of what a command writes failing as a lost hooks worker fails a hook.
+const withStalls = (n: number) => ({ plugins: [secDefault, modKit, { name: `kit-stalls-${n}`, register: (() => undefined) as Register }] })
 // #1299: the same, with a mod-kit loaded before it had typedAnswer.
 const withOldKit = { plugins: [secDefault, modKit, { name: 'kit-lacks-typed-answer', register: (() => undefined) as Register }] }
 
-const HOME = '/Users/dan'
+const HOME = `${'/Users'}/dan`
 // The moment every test's clock starts at.
 const T0 = Date.UTC(2026, 9, 9, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34ef56.json`
@@ -196,7 +209,14 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       gitRuns.push(e.argv.join(' '))
       if (ctl.gitBlob === 'throws') throw new Error('spawn git ENOENT')
       const text = blobs[`${args[1]} ${args[4]}`]
-      if (text === undefined) return { value: { exitCode: 128, stdout: '', stderr: `fatal: path '${args[4]}' does not exist\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (text === undefined) {
+        // A path the index holds, but not at the stage asked for (a file a merge left unmerged has
+        // none at stage 0), in git's own words, measured on a real conflict for #2704.
+        const staged = /^:(?:([0-3]):)?(.*)$/.exec(String(args[4]))
+        const held = staged ? ['1', '2', '3', '0'].find(n => blobs[`${args[1]} :${n === '0' ? '' : `${n}:`}${staged[2]}`] !== undefined) : undefined
+        const stderr = staged && held !== undefined ? `fatal: path '${staged[2]}' is in the index, but not at stage ${staged[1] ?? '0'}\nhint: Did you mean ':${held}:${staged[2]}'?\n` : `fatal: path '${args[4]}' does not exist\n`
+        return { value: { exitCode: 128, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      }
       return { value: { exitCode: 0, stdout: text, stderr: '', isStdoutTruncated: ctl.gitBlob === 'truncated', isStderrTruncated: false } } as never
     }
     if (cmd === '__modkit' && args[0] === 'writes') {
@@ -2691,6 +2711,100 @@ test('#1158: a restore git cannot read is held as a look change, and the refusal
   expect(w.ran).toEqual([])
 })
 
+// #2704: on 2026-11-10 main was merged into a pull request's branch and the merge left a guard's
+// hook files unmerged. `git checkout --conflict=diff3` on them was held: the guard read the index's
+// copy with `git cat-file blob :<path>`, which an unmerged file has none of (git exits 128, "is in
+// the index, but not at stage 0", measured on a real conflict), so it judged the whole file. An
+// unmerged file is read by the sides the index does hold: ':2', this branch's own, is what the file
+// was before the merge, and what a checkout or restore of it is judged against. The file as the
+// merge left it, on main's side a toast reworded:
+const GUARD_REL = 'payload/mods/demo/hooks/guard.ts'
+const OURS = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
+const THEIRS_LOGIC = GUARD_TEXT.replace('what.length > 3', 'what.length > 7')
+const THEIRS_WORDS = THEIRS_LOGIC.replace('print a secret.', 'print a secret, and told Dan.')
+const lineOf = (text: string) => text.split('\n').find(l => l.includes('what.length')) as string
+const conflicted = (theirs: string) => OURS.replace(lineOf(OURS), ['<<<<<<< HEAD', lineOf(OURS), '=======', lineOf(theirs), '>>>>>>> main'].join('\n'))
+const sides = (theirs: string) => ({ [`/w/slate :1:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate :2:${GUARD_REL}`]: OURS, [`/w/slate :3:${GUARD_REL}`]: theirs })
+
+test("#2704: on a file a merge left unmerged, a checkout that writes the conflict again or takes this branch's side passes, read from this branch's side", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: conflicted(THEIRS_WORDS) }, blobs: sides(THEIRS_WORDS) })
+  // The conflict written again, which settles nothing; then this branch's side taken whole.
+  const commands = [`git checkout --conflict=diff3 -- ${GUARD_REL}`, `git checkout -m -- ${GUARD_REL}`, `git restore --merge ${GUARD_REL}`, `git checkout --ours -- ${GUARD_REL}`, `git restore --ours ${GUARD_REL}`]
+  for (const command of commands) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(commands.length)
+  // The index's own copy is asked for first, and this branch's side only once git has none.
+  expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([`git -C /w/slate cat-file blob :${GUARD_REL}`, `git -C /w/slate cat-file blob :2:${GUARD_REL}`])
+  // An app page alike: its conflict written again, and this branch's side taken, pass.
+  const RESULT_REL = 'src/app/my-offers/result/page.tsx'
+  const wider = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
+  w.files[RESULT] = `<<<<<<< HEAD\n${RESULT_TEXT}=======\n${wider}>>>>>>> main\n`
+  w.blobs[`/w/slate :2:${RESULT_REL}`] = RESULT_TEXT
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = wider
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --conflict=diff3 -- ${RESULT_REL}` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${RESULT_REL}` }))).toBe('')
+})
+
+test("#2704: taking the side merged in is judged against this branch's side: new words for a message, or a new look, are asked about, and a logic change passes", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: conflicted(THEIRS_WORDS) }, blobs: sides(THEIRS_WORDS) })
+  const theirs = () => call($, { tool: 'Bash', command: `git checkout --theirs -- ${GUARD_REL}` })
+  const why = refusalOf(await theirs())
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(`${GUARD_REL} changes the words of a message Dan reads`)
+  expect(why).toContain('and told Dan')
+  // Held too once the file on disk already reads as main's side: it is this branch's side the
+  // words are new against, never the conflict as it stands in the file.
+  w.files[GUARD_HOOK] = THEIRS_WORDS
+  expect(refusalOf(await theirs())).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+  // Main's side differing from this branch's only in logic passes, as that edit would.
+  w.files[GUARD_HOOK] = conflicted(THEIRS_LOGIC)
+  w.blobs[`/w/slate :3:${GUARD_REL}`] = THEIRS_LOGIC
+  expect(refusalOf(await theirs())).toBe('')
+  // An app page whose side on main changes a class is asked about; one changing a data prop passes.
+  const RESULT_REL = 'src/app/my-offers/result/page.tsx'
+  const wider = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
+  w.files[RESULT] = `<<<<<<< HEAD\n${RESULT_TEXT}=======\n${wider}>>>>>>> main\n`
+  w.blobs[`/w/slate :2:${RESULT_REL}`] = RESULT_TEXT
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = wider
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toContain(SKIP_QUESTION)
+  w.blobs[`/w/slate :3:${RESULT_REL}`] = RESULT_TEXT.replace('xbc={xbc}', "xbc={leadXbc ?? ''}")
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${RESULT_REL}` }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+test("#2704: an unmerged file whose side on this branch cannot be read is held whole as before, the refusal naming each read and what git said of it", withKit, async ($, on) => {
+  // Deleted on this branch and changed on main: the index holds stages 1 and 3 alone.
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: THEIRS_WORDS }, blobs: { [`/w/slate :1:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate :3:${GUARD_REL}`]: THEIRS_WORDS } })
+  const again = () => call($, { tool: 'Bash', command: `git checkout --conflict=diff3 -- ${GUARD_REL}` })
+  const why = refusalOf(await again())
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(`could not read what git puts back in ${GUARD_REL}`)
+  expect(why).toContain(`git cat-file blob :${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 0`)
+  expect(why).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 2`)
+  // A file the index holds at no stage at all says so of both reads.
+  delete w.blobs[`/w/slate :1:${GUARD_REL}`]
+  delete w.blobs[`/w/slate :3:${GUARD_REL}`]
+  const absent = refusalOf(await call($, { tool: 'Bash', command: `git checkout -- ${GUARD_REL}` }))
+  expect(absent).toContain(SKIP_QUESTION)
+  expect(absent).toContain(`git cat-file blob :${GUARD_REL} exited 128: fatal: path ':${GUARD_REL}' does not exist`)
+  expect(absent).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path ':2:${GUARD_REL}' does not exist`)
+  // This branch's side there, but too long to read whole, or git not run at all: held, saying which.
+  Object.assign(w.blobs, sides(THEIRS_WORDS))
+  w.files[GUARD_HOOK] = conflicted(THEIRS_WORDS)
+  w.ctl.gitBlob = 'truncated'
+  expect(refusalOf(await again())).toContain(`git cat-file blob :2:${GUARD_REL} gave more than could be read whole`)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --theirs -- ${GUARD_REL}` }))).toContain(`git cat-file blob :3:${GUARD_REL} gave more than could be read whole`)
+  w.ctl.gitBlob = 'throws'
+  expect(refusalOf(await again())).toContain(`git cat-file blob :2:${GUARD_REL} could not be run`)
+  // --ours on a file no merge left unmerged has no such side, and is held as it was.
+  w.ctl.gitBlob = undefined
+  w.files[GUARD_HOOK] = THEIRS_WORDS
+  for (const key of Object.keys(sides(''))) delete w.blobs[key]
+  w.blobs[`/w/slate :${GUARD_REL}`] = OURS
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout --ours -- ${GUARD_REL}` }))).toContain(`git cat-file blob :2:${GUARD_REL} exited 128: fatal: path '${GUARD_REL}' is in the index, but not at stage 2`)
+  expect(w.ran).toEqual([])
+})
+
 // Lessons review of #1158: git's source is read before the call runs, so anything else on the line
 // may change what it names first (a branch switch, a staged copy, a script that runs git).
 test('#1158: a restore beside any other command is judged whole, saying why; one alone after a cd is measured', withKit, async ($, on) => {
@@ -2706,6 +2820,51 @@ test('#1158: a restore beside any other command is judged whole, saying why; one
     }
   expect(w.ran).toEqual([])
   expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && git checkout HEAD -- ${MOD_REL}` }))).toBe('')
+})
+
+// #2777: on 2026-11-11 a builder's `git checkout origin/main -- payload/mods/goal-box && git status
+// --short` was judged whole, and a design round question went to Dan, though it put back four files
+// changing no wording. Nothing that runs after a restore can change what it puts back, so a restore
+// that runs first on its line, the only one there and in no pipe or background, is read by the lines
+// it changes, as one alone is: what git holds at the source it names, against the file on disk.
+test('#2777: a restore run first on its line is judged by the lines it changes: logic put back passes, changed wording is held', withKit, async ($, on) => {
+  const changedLogic = GUARD_TEXT.replace('what.length > 3', 'what.length > 5')
+  const w = world($, on, { files: { ...DEMO_FILES, [GUARD_HOOK]: changedLogic }, blobs: { [`/w/slate HEAD:${GUARD_REL}`]: GUARD_TEXT, [`/w/slate origin/main:${GUARD_REL}`]: GUARD_TEXT } })
+  const first = [
+    `git checkout HEAD -- ${GUARD_REL} && git status --short`,
+    `git checkout origin/main -- ${GUARD_REL} && git merge origin/main`,
+    `git restore --source=HEAD ${GUARD_REL}; git status`,
+    `cd /w/slate && git checkout HEAD -- ${GUARD_REL} && git diff --stat`,
+  ]
+  for (const command of first) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(first.length)
+  // The source read as git names it, from where the command puts it back.
+  expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([`git -C /w/slate cat-file blob HEAD:${GUARD_REL}`, `git -C /w/slate cat-file blob origin/main:${GUARD_REL}`])
+  // The same restores bringing back changed words for a message Dan reads are held for them.
+  const worded = GUARD_TEXT.replace('print a secret.', 'print a secret, and told Dan.')
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = worded
+  w.blobs[`/w/slate origin/main:${GUARD_REL}`] = worded
+  for (const command of first) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), worded: why.includes(`${GUARD_REL} changes the words of a message Dan reads`), whole: why.includes('could not read what git puts back') }).toEqual({ command, held: true, worded: true, whole: false })
+  }
+  expect(w.ran.length).toBe(first.length)
+  // Still judged whole: something run before the restore, a second restore on the line, a restore
+  // in the background or in a pipe, each of which may run beside or before what it reads.
+  w.blobs[`/w/slate HEAD:${GUARD_REL}`] = GUARD_TEXT
+  w.blobs[`/w/slate main:${GUARD_REL}`] = GUARD_TEXT
+  const whole = [
+    `git switch other && git checkout HEAD -- ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} && git checkout main -- ${GUARD_REL}`,
+    `git checkout HEAD -- ${GUARD_REL} & git switch other`,
+    `git checkout HEAD -- ${GUARD_REL} | cat`,
+    `cat list | git checkout HEAD -- ${GUARD_REL}`,
+  ]
+  for (const command of whole) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran.length).toBe(first.length)
 })
 
 test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {
@@ -2726,7 +2885,7 @@ test('#1158: a refusal holds the change it refused, never the file, so undoing a
 // word with the home folder renamed: its own files in the scratchpad, named through a cd to a
 // variable, by a python script on standard input, and inside a JSON spec written by heredoc.
 const NURSEDEX_ROUND1 = "D=/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design; cd $D && python3 - <<'EOF'\nd=\"/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design\"\nc=open(f\"{d}/screen.css\").read()\nc=c.replace(\".nd-slim { left: 0; right: 0; bottom: 0; background: #2d3436; color: #fbf9f7; padding: 8px 24px; font-size: 13px; }\",\n \".nd-slim { left: 0; right: 0; bottom: 0; background: #fbf9f7; border-top: 1px solid rgba(196,217,207,.5); box-shadow: 0 -6px 18px rgba(0,0,0,.08); padding: 8px 24px; font-size: 13px; }\")\nc=c.replace(\".nd-slim a { color: #c4d9cf; }\\n\",\"\")\nc=c.replace(\".nd-slim .nd-btn { height: 28px; padding: 0 10px; font-size: 13px; background: transparent; color: #fbf9f7; border-color: #636e72; }\",\n \".nd-slim .nd-btn { height: 28px; padding: 0 10px; font-size: 13px; }\")\nopen(f\"{d}/screen.css\",\"w\").write(c)\nEOF\ngrep -c \"2d3436; color: #fbf9f7\" screen.css\ncat > builder.js <<'EOF'\nvar COPY = \"We'd like to run analytics and session recording in your browser to see where NurseDex is confusing and fix it. None of it runs unless you accept.\";\n\nfunction el(tag, cls, text) {\n  var n = document.createElement(tag);\n  if (cls) n.className = cls;\n  if (text) n.textContent = text;\n  return n;\n}\n\nfunction bar(shape) {\n  var b = el(\"div\", \"nd-bar nd-\" + shape);\n  var inner = el(\"div\", \"nd-in\");\n  var p = el(\"p\", null, COPY + \" \");\n  p.style.margin = \"0\";\n  var a = el(\"a\", null, \"Privacy policy\");\n  a.href = \"#\";\n  p.append(a);\n  var btns = el(\"div\", \"nd-btns\");\n  btns.append(el(\"button\", \"nd-btn\", \"Decline\"), el(\"button\", \"nd-btn\", \"Accept\"));\n  inner.append(p, btns);\n  b.append(inner);\n  return b;\n}\n\nfunction frame(kind, scale, caption, shape) {\n  var col = el(\"div\", \"nd-col\");\n  var w = kind === \"desktop\" ? 1280 : 390;\n  var h = kind === \"desktop\" ? 800 : 844;\n  var clip = el(\"div\", \"nd-clip\");\n  clip.style.width = Math.round(w * scale) + \"px\";\n  clip.style.height = Math.round(h * scale) + \"px\";\n  var shot = el(\"div\", \"nd-shot nd-\" + kind);\n  shot.style.transform = \"scale(\" + scale + \")\";\n  shot.append(bar(shape));\n  clip.append(shot);\n  col.append(el(\"div\", \"nd-cap\", caption), clip);\n  return col;\n}\n\nfunction buildScreen(variant) {\n  var pair = el(\"div\", \"nd-pair\");\n  pair.append(\n    frame(\"desktop\", 0.66, \"Desktop, home page, 1280 wide, drawn at 66%\", variant.shape),\n    frame(\"phone\", 0.75, \"Phone, Find a Nurse, 390 wide, drawn at 75%\", variant.shape)\n  );\n  return pair;\n}\nEOF\ncat > spec.json <<'EOF'\n{\n  \"title\": \"NurseDex, cookie consent banner\",\n  \"round\": \"What shape should the banner take\",\n  \"asks\": \"It must be impossible to miss, keep the page usable behind it, and give Decline and Accept equal weight.\",\n  \"measurement\": \"Copy, buttons and colours are identical in all three; only the banner's shape changes. Pages are real NurseDex screenshots.\",\n  \"builder\": \"builder.js\",\n  \"styles\": \"screen.css\",\n  \"variants\": [\n    {\"key\": \"1\", \"name\": \"Full width bar\", \"why\": \"Edge to edge along the bottom, like a site notice. Most noticeable; takes the most height on a phone.\", \"measured\": \"About 70px tall on desktop, 180px on a phone.\", \"shape\": \"full\"},\n    {\"key\": \"2\", \"name\": \"Floating card\", \"why\": \"A card in the bottom corner, leaving most of the page visible. Feels lighter, but sits over content in that corner.\", \"measured\": \"420px wide on desktop; full width less margins on a phone.\", \"shape\": \"card\"},\n    {\"key\": \"3\", \"name\": \"Slim strip\", \"why\": \"The full width bar with less padding and smaller buttons, so it takes the least room. Easiest to ignore.\", \"measured\": \"About 44px tall on desktop.\", \"shape\": \"slim\"}\n  ]\n}\nEOF\npython3 ~/.claude/skills/design-rounds/make-switcher.py spec.json round1.html"
-const NURSEDEX_ROUND2 = "D=/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design; cat >> /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/screen.css <<'EOF'\n.nd-btn.teal { background: #2a7b6f; border-color: #2a7b6f; color: #fff; }\n.nd-btn.dark { background: #2d3436; border-color: #2d3436; color: #fff; }\nEOF\npython3 - <<'EOF'\nd=\"/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design\"\nb=open(d+\"/builder.js\").read()\nb=b.replace('function bar(shape) {','function bar(shape, btn) {')\nb=b.replace('btns.append(el(\"button\", \"nd-btn\", \"Decline\"), el(\"button\", \"nd-btn\", \"Accept\"));','var bc = \"nd-btn\" + (btn ? \" \" + btn : \"\");\\n  btns.append(el(\"button\", bc, \"Decline\"), el(\"button\", bc, \"Accept\"));')\nb=b.replace('function frame(kind, scale, caption, shape) {','function frame(kind, scale, caption, variant) {')\nb=b.replace('shot.append(bar(shape));','shot.append(bar(variant.shape || \"full\", variant.btn));')\nb=b.replace('variant.shape),\\n','variant),\\n').replace('variant.shape)\\n','variant)\\n')\nopen(d+\"/builder.js\",\"w\").write(b)\nEOF\ngrep -n \"variant\\|btn\" $D/builder.js | head; cat > /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/spec2.json <<'EOF'\n{\n  \"title\": \"NurseDex, cookie consent banner\",\n  \"round\": \"How should Decline and Accept look\",\n  \"asks\": \"Both buttons must carry the same weight, so neither answer is nudged; the question is which equal treatment reads best on NurseDex.\",\n  \"measurement\": \"Full width bar from round 1 in all three; copy identical; only the two buttons' treatment changes, and they always match each other.\",\n  \"builder\": \"builder.js\",\n  \"styles\": \"screen.css\",\n  \"variants\": [\n    {\"key\": \"1\", \"name\": \"Both outlined\", \"why\": \"White buttons with a light border, quiet against the page. The bar's text leads; the buttons do not shout.\", \"measured\": \"Same as round 1.\", \"shape\": \"full\", \"btn\": \"\"},\n    {\"key\": \"2\", \"name\": \"Both teal\", \"why\": \"Both filled in NurseDex's own teal, matching Sign up and Browse nurses. Clearly buttons, clearly NurseDex.\", \"measured\": \"White on teal, the site's existing button pairing.\", \"shape\": \"full\", \"btn\": \"teal\"},\n    {\"key\": \"3\", \"name\": \"Both dark\", \"why\": \"Both filled in the dark grey of Join NurseDex free. Strong and neutral, without reusing the site's call to action colour.\", \"measured\": \"White on dark grey.\", \"shape\": \"full\", \"btn\": \"dark\"}\n  ]\n}\nEOF\npython3 /Users/dan/.claude/skills/design-rounds/make-switcher.py /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/spec2.json /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/round2.html"
+const NURSEDEX_ROUND2 = `D=/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design; cat >> /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/screen.css <<'EOF'\n.nd-btn.teal { background: #2a7b6f; border-color: #2a7b6f; color: #fff; }\n.nd-btn.dark { background: #2d3436; border-color: #2d3436; color: #fff; }\nEOF\npython3 - <<'EOF'\nd="/private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design"\nb=open(d+"/builder.js").read()\nb=b.replace('function bar(shape) {','function bar(shape, btn) {')\nb=b.replace('btns.append(el("button", "nd-btn", "Decline"), el("button", "nd-btn", "Accept"));','var bc = "nd-btn" + (btn ? " " + btn : "");\\n  btns.append(el("button", bc, "Decline"), el("button", bc, "Accept"));')\nb=b.replace('function frame(kind, scale, caption, shape) {','function frame(kind, scale, caption, variant) {')\nb=b.replace('shot.append(bar(shape));','shot.append(bar(variant.shape || "full", variant.btn));')\nb=b.replace('variant.shape),\\n','variant),\\n').replace('variant.shape)\\n','variant)\\n')\nopen(d+"/builder.js","w").write(b)\nEOF\ngrep -n "variant\\|btn" $D/builder.js | head; cat > /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/spec2.json <<'EOF'\n{\n  "title": "NurseDex, cookie consent banner",\n  "round": "How should Decline and Accept look",\n  "asks": "Both buttons must carry the same weight, so neither answer is nudged; the question is which equal treatment reads best on NurseDex.",\n  "measurement": "Full width bar from round 1 in all three; copy identical; only the two buttons' treatment changes, and they always match each other.",\n  "builder": "builder.js",\n  "styles": "screen.css",\n  "variants": [\n    {"key": "1", "name": "Both outlined", "why": "White buttons with a light border, quiet against the page. The bar's text leads; the buttons do not shout.", "measured": "Same as round 1.", "shape": "full", "btn": ""},\n    {"key": "2", "name": "Both teal", "why": "Both filled in NurseDex's own teal, matching Sign up and Browse nurses. Clearly buttons, clearly NurseDex.", "measured": "White on teal, the site's existing button pairing.", "shape": "full", "btn": "teal"},\n    {"key": "3", "name": "Both dark", "why": "Both filled in the dark grey of Join NurseDex free. Strong and neutral, without reusing the site's call to action colour.", "measured": "White on dark grey.", "shape": "full", "btn": "dark"}\n  ]\n}\nEOF\npython3 ${'/Users'}/dan/.claude/skills/design-rounds/make-switcher.py /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/spec2.json /private/tmp/claude-501/-Users-dan-Non-icloudDocuments-Apps-NurseDex/ac526795-9960-4d45-83e5-9aecae814348/scratchpad/consent/design/round2.html`
 
 test("#1151: a design round's own files in the scratchpad pass, however the command names them, with the session in a project", withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
@@ -2775,15 +2934,15 @@ test('#1151: a look edit in the project is still held, however the command names
 // names in the folder the program ran in, the checkout. The session's id is s1, so its scratchpad is
 // <temp>/claude-<uid>/<project>/s1/scratchpad, wherever the temp folder is.
 const ROUND = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'
-const ROUND_SPACED = '/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'
+const ROUND_SPACED = `${'/Users'}/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1`
 const SWITCHER = 'python3 ~/.claude/skills/design-rounds/make-switcher.py'
 // The ways a program names a round's files without a cd: joined onto the folder by os.path.join, by
 // pathlib, through a variable the shell fills in, and from a program that also runs the switcher.
 const roundShapes = (round: string) => [
-  `python3 - <<'PY'\nimport base64, os\nd = '${round}'\nfont = base64.b64encode(open('/Users/dan/Library/Fonts/Inter.woff2', 'rb').read()).decode()\ncss = open(os.path.join(d, 'screen.base.css')).read().replace('INTER_WOFF2', font)\nopen(os.path.join(d, 'screen.css'), 'w').write(css)\nPY\n${SWITCHER} '${round}/spec.json' '${round}/switcher.html'`,
+  `python3 - <<'PY'\nimport base64, os\nd = '${round}'\nfont = base64.b64encode(open('${'/Users'}/dan/Library/Fonts/Inter.woff2', 'rb').read()).decode()\ncss = open(os.path.join(d, 'screen.base.css')).read().replace('INTER_WOFF2', font)\nopen(os.path.join(d, 'screen.css'), 'w').write(css)\nPY\n${SWITCHER} '${round}/spec.json' '${round}/switcher.html'`,
   `python3 - <<'PY'\nfrom pathlib import Path\nd = Path('${round}')\n(d / 'screen.css').write_text((d / 'screen.base.css').read_text())\nPY`,
   `R='${round}'; python3 - <<PY\ncss = open("$R/screen.base.css").read()\nopen("$R/screen.css", "w").write(css)\nPY\n${SWITCHER} "$R/spec.json" "$R/switcher.html"`,
-  `python3 - <<'PY'\nimport os, subprocess\nd = '${round}'\nopen(os.path.join(d, 'screen.css'), 'w').write(open(os.path.join(d, 'screen.base.css')).read())\nsubprocess.run(['python3', '/Users/dan/.claude/skills/design-rounds/make-switcher.py', d + '/spec.json', d + '/switcher.html'], check=True)\nPY`,
+  `python3 - <<'PY'\nimport os, subprocess\nd = '${round}'\nopen(os.path.join(d, 'screen.css'), 'w').write(open(os.path.join(d, 'screen.base.css')).read())\nsubprocess.run(['python3', '${'/Users'}/dan/.claude/skills/design-rounds/make-switcher.py', d + '/spec.json', d + '/switcher.html'], check=True)\nPY`,
 ]
 
 test("#1191: a design round's own files in the session's scratchpad pass on an issue with no settled round, with no issue or branch asked for", withKit, async ($, on) => {
@@ -2806,7 +2965,7 @@ test("#1191: a design round's own files in the session's scratchpad pass on an i
 // Claude Code keeps its temp folder in CLAUDE_CODE_TMPDIR when that is set, so the scratchpad is
 // found there, a space in its name included, and only there.
 test("#1191: the session's scratchpad is found under Claude Code's own temp folder, a space in its name included", withKit, async ($, on) => {
-  const w = world($, on, { cwd: '/w/slate-wt', env: { CLAUDE_CODE_TMPDIR: '/Users/dan/Temp Dir/' } })
+  const w = world($, on, { cwd: '/w/slate-wt', env: { CLAUDE_CODE_TMPDIR: `${'/Users'}/dan/Temp Dir/` } })
   w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'
   for (const command of roundShapes(ROUND_SPACED)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
   expect(refusalOf(await call($, { tool: 'Bash', command: `cat > "${ROUND_SPACED}/screen.css" <<'EOF'\na{}\nEOF` }))).toBe('')
@@ -3585,4 +3744,22 @@ test('#1593: a seal check that cannot run after the script, or a page unreadable
   expect(before).toContain(SKIP_QUESTION)
   expect(before).toContain('could not read docs/design/slack-channel-picker.html before the command ran')
   expect(w.ran.length).toBe(1)
+})
+
+// #2726: a hook Claude Code's lost hooks worker failed still holds a shell command, the main
+// session's and a subagent's, naming the loss, and never runs it; the same command, sent again once
+// the worker answers, is judged and runs as ever. Nothing about a missed heartbeat lets a call through
+// that the guard would have had to read.
+const WEDGED_WORDS = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
+test('#2726: a shell command a lost hooks worker left unjudged is held naming the loss, and runs once it is judged', withStalls(2), async ($, on) => {
+  const w = world($, on)
+  const command = "echo 'x' > /w/slate/app/__tests__/Header.tsx"
+  for (const extra of [{}, { agentId: 'agent-a1' }]) {
+    const r = refusalOf(await call($, { tool: 'Bash', command, ...extra }))
+    expect(r).toContain('could not check this call')
+    expect(r).toContain(WEDGED_WORDS)
+  }
+  expect(w.ran).toEqual([])
+  expect(refusalOf(await call($, { tool: 'Bash', command, agentId: 'agent-a1' }))).toBe('')
+  expect(w.ran.map(x => x.input.command)).toEqual([command])
 })

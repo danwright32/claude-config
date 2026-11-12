@@ -1109,6 +1109,23 @@ check "#2559 and starts no Xcode cache sweep and offers no disk-full skill" \
 n_full_again="$(full_nudge "$((T0 + 60))")"
 check "#2559 and is not said again on the next prompt" \
   "$([ -z "$n_full_again" ] && echo ok || echo "said: $n_full_again")"
+# Said once each time the state changes, not once per session (#2635, as #2559 asked): swap that
+# recovers and then fills again is a new state, so the same session hears it again. The recovery
+# itself is a healthy answer, said nowhere, but it must still be remembered.
+recover_nudge(){   # recover_nudge <epoch>: the same session, swap back to small on a disk with room
+  payload sess-swapfull | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$1" FREE_SPACE_STATE_DIR="$NS_SWAPFULL" \
+    FREE_SPACE_PATH=/fixture FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" FREE_SPACE_SWAP_CMD="$SWAP_SMALL" \
+    FREE_SPACE_TOP_CMD="$TOP_BUSY" FREE_SPACE_DERIVED_DATA_SWEEP="$SWEEP_SPY" bash "$NUDGE" 2>&1
+}
+n_recovered="$(recover_nudge "$((T0 + 120))")"
+check "#2635 swap back to normal says nothing" \
+  "$([ -z "$n_recovered" ] && echo ok || echo "said: $n_recovered")"
+n_full_refilled="$(full_nudge "$((T0 + 180))")"
+check "#2635 and swap filling again in the same session is said again" \
+  "$(grep -q 'swap is nearly full' <<< "$n_full_refilled" && echo ok || echo "said: ${n_full_refilled:-nothing}")"
+n_full_refilled_again="$(full_nudge "$((T0 + 240))")"
+check "#2635 and then not on the next prompt" \
+  "$([ -z "$n_full_refilled_again" ] && echo ok || echo "said: $n_full_refilled_again")"
 
 # When the warning speaks it clears Xcode's build caches whose project folder is gone, on its own:
 # Dan's decision on claude-config#1369, 2026-10-20. Which folders those are is decided by
@@ -1134,7 +1151,8 @@ PLIST
 # (L290), with lib/hang-wait.sh's ceiling, which only a sweep that never finishes reaches. It was 30
 # s, the ceiling that failed 16 of 16 loaded copies of test-derived-data-sweep.sh (#1577, on 2026-10-23; #1620).
 sweep_finished() {   # sweep_finished <state dir>
-  hang_wait "[ -f '$1/last-result' ] && [ ! -e '$1/in-progress' ]"
+  local _sf_dir="$1"   # read when the condition is evaluated: one built from a value is unreadable to the Slack drafts gate (#2538)
+  hang_wait '[ -f "$_sf_dir/last-result" ] && [ ! -e "$_sf_dir/in-progress" ]'
 }
 run_logs() { find "$1" -name 'run-*.log' 2>/dev/null | wc -l | tr -d ' '; }
 dd_nudge() {   # dd_nudge <session> <derived data root> <sweep state> [VAR=value...] -> prints all output

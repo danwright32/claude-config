@@ -93,6 +93,28 @@ n_table="$(awk '/^const KIT = new Map/,/^\]\)/' "$ROOT/payload/mods/collision-gu
 n_carried="$(grep -c '^  {"method"' "$ROOT/payload/mods/mod-kit/tests/kit-table.test.ts")"
 [ "$n_table" = "$n_carried" ] && [ "$n_table" -gt 0 ] && ok || bad "every table entry is carried ($n_table in the table, $n_carried carried)"
 
+# 5. The generated test is under mods/, which check-home-paths reads (#2754), so a table entry naming
+# a path under a home directory must not come out as one. The table writes it as /Users\/name, which
+# JSON and JS both read as /Users/name, and the tool has to keep that escape, not undo it. The path
+# here is assembled so this file does not hold one either.
+D="$(mk homepath)"
+H="/Users""/someone"
+python3 - "$D/payload/mods/collision-guard/tests/register.test.ts" <<'PY'
+import sys
+p = sys.argv[1]
+t = open(p).read()
+start = t.index('const KIT = new Map<string, unknown>([') + len('const KIT = new Map<string, unknown>([')
+row = '\n  ["git {\\"words\\":[\\"rm\\",\\"/Users\\/someone/a.ts\\"]}", null],'
+open(p, 'w').write(t[:start] + row + t[start:])
+PY
+out="$(python3 "$TOOL" "$D" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && grep -q 'someone/a.ts' "$D/payload/mods/mod-kit/tests/kit-table.test.ts" && ok \
+  || bad "the tool writes a test carrying the home path entry (rc $rc)" "$out"
+grep -qF "$H" "$D/payload/mods/mod-kit/tests/kit-table.test.ts" \
+  && bad "the generated test holds no literal home directory path" "$(grep -nF "$H" "$D/payload/mods/mod-kit/tests/kit-table.test.ts")" || ok
+out="$(python3 "$TOOL" "$D" --check 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "and the escaped test it wrote is current by --check (rc $rc)" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

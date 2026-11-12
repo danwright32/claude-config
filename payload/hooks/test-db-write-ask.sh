@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # send-gate: scans settings.hooks.json
 # Tests for the hook that asks Dan before any database SQL call that is not read only
-# (claude-config#2521), and before a Supabase tool that changes a database with no SQL (#2632).
+# (claude-config#2521), before a Supabase tool that changes a database with no SQL (#2632), and
+# before an edge function deploy that turns JWT verification off (#2660).
 #
 # On 2026-11-09 #2356's live checks sent `update <table> set <column> = <column> where false` to a
 # production database through the claude.ai Supabase connector's execute_sql on both Macs, and auto
@@ -406,7 +407,85 @@ expect_bash "supabase projects list only reads" none 'supabase projects list'
 expect_bash "supabase projects api-keys only reads" none 'supabase projects api-keys --project-ref abcdefgh'
 expect_bash "supabase projects --help runs nothing" none 'supabase projects --help'
 expect_bash "supabase branches delete --help runs nothing" none 'supabase branches delete --help'
-expect_bash "supabase functions deploy changes no database" none 'supabase functions deploy hello'
+# A deploy with JWT verification off publishes a function the platform lets anyone call without
+# signing in, which is not a change to a database and is asked about all the same
+# (claude-config#2660). In a shell the setting can sit in the project's supabase/config.toml, where
+# no flag shows it and the hook never reads, so Dan decided on 2026-11-10 ("Ask on every shell
+# deploy") that every `supabase functions deploy` is asked about, whatever its flags. That reverses
+# #2632's "supabase functions deploy changes no database", which this check held as a pass. The
+# flag and the subcommands are from `supabase functions deploy --help` and `supabase functions
+# --help`, CLI 2.75.0.
+expect_bash "a plain function deploy, naming no function" ask 'supabase functions deploy'
+expect_bash "a function deploy naming its function" ask 'supabase functions deploy hello'
+expect_bash "a function deploy with --no-verify-jwt" ask 'supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt before the function's name" ask 'supabase functions deploy --no-verify-jwt hello'
+expect_bash "--no-verify-jwt with no function named, which deploys them all" ask 'supabase functions deploy --no-verify-jwt'
+expect_bash "--no-verify-jwt=true" ask 'supabase functions deploy hello --no-verify-jwt=true'
+expect_bash "--no-verify-jwt behind a project ref" ask 'supabase --project-ref abcdefgh functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt behind a deploy flag that takes a value" ask 'supabase functions -j 2 deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt through npx" ask 'npx supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt in the second command of a line" ask 'cd app && supabase functions deploy hello --no-verify-jwt'
+expect_bash "--no-verify-jwt set to false and then given bare" ask 'supabase functions deploy hello --no-verify-jwt=false --no-verify-jwt'
+expect_bash "--no-verify-jwt with a value that is neither true nor false" ask 'supabase functions deploy hello --no-verify-jwt=maybe'
+expect_bash "an older CLI's --verify-jwt=false" ask 'supabase functions deploy hello --verify-jwt=false'
+expect_bash "a deploy with --no-verify-jwt=false is asked about as any deploy is" ask 'supabase functions deploy hello --no-verify-jwt=false'
+expect_bash "a deploy with --verify-jwt=true is asked about as any deploy is" ask 'supabase functions deploy hello --verify-jwt=true'
+expect_bash "a deploy with its other flags" ask 'supabase functions deploy hello --project-ref abcdefgh --use-api -j 4 --import-map ./import_map.json'
+expect_bash "a plain deploy through npx" ask 'npx supabase functions deploy hello'
+expect_bash "a plain deploy behind a workdir" ask 'supabase --workdir app functions deploy hello'
+expect_bash "a deploy --no-verify-jwt --help runs nothing" none 'supabase functions deploy --no-verify-jwt --help'
+expect_bash "a deploy --help runs nothing" none 'supabase functions deploy --help'
+expect_bash "a mention of a deploy runs nothing" none 'echo "then run supabase functions deploy hello"'
+expect_bash "supabase functions new only writes a file here" none 'supabase functions new hello'
+expect_bash "supabase functions download" none 'supabase functions download hello'
+expect_bash "supabase functions serve --no-verify-jwt runs on this Mac only" none 'supabase functions serve --no-verify-jwt'
+expect_bash "supabase functions serve of a function named deploy" none 'supabase functions serve deploy --no-verify-jwt'
+expect_bash "supabase functions list" none 'supabase functions list --project-ref abcdefgh'
+expect_bash "a db reset is still asked about with the flag beside it" ask 'supabase db reset --no-verify-jwt'
+OPEN_DEPLOY='supabase functions deploy hello --no-verify-jwt --project-ref abcdefgh'
+reason="$(reason_of "$(bash_payload "$OPEN_DEPLOY")")"
+case "$reason" in
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"JWT verification off"*"without signing in"*"claude-config#2660"*) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" ok ;;
+  *) check "the question about a --no-verify-jwt deploy names the function, the project and what is turned off" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a --no-verify-jwt deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a --no-verify-jwt deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy --no-verify-jwt')")"
+case "$reason" in
+  *"all functions"*"the linked project"*"JWT verification off"*) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" ok ;;
+  *) check "a --no-verify-jwt deploy naming no function or project says all functions and the linked project" "reason: ${reason:0:400}" ;;
+esac
+# A deploy whose flags do not turn verification off says where the setting it cannot see is kept,
+# and never says verification is off or on.
+reason="$(reason_of "$(bash_payload 'supabase functions deploy')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming no function says all functions and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"supabase functions deploy publishes all functions"*"the linked project"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming no function says all functions and where the setting is kept" ok ;;
+  *) check "a plain deploy naming no function says all functions and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --project-ref abcdefgh')")"
+case "$reason" in
+  *"JWT verification off"*) check "a plain deploy naming its function names it, the project and where the setting is kept" "it says verification is off: ${reason:0:400}" ;;
+  *"asks before this edge function deploy"*"edge function hello"*"project abcdefgh"*"config.toml"*"claude-config#2660"*) check "a plain deploy naming its function names it, the project and where the setting is kept" ok ;;
+  *) check "a plain deploy naming its function names it, the project and where the setting is kept" "reason: ${reason:0:400}" ;;
+esac
+case "$reason" in *"database call"*) check "the question about a plain deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about a plain deploy does not call it a database call" ok ;; esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello --no-verify-jwt=false')")"
+case "$reason" in
+  *"JWT verification off"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "it says verification is off: ${reason:0:400}" ;;
+  *"--no-verify-jwt=false"*"edge function hello"*"config.toml"*) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" ok ;;
+  *) check "a deploy with --no-verify-jwt=false names the flag and does not say verification is off" "reason: ${reason:0:400}" ;;
+esac
+reason="$(reason_of "$(bash_payload 'supabase functions deploy hello world -j 2 --no-verify-jwt')")"
+case "$reason" in
+  *"edge functions hello, world "*) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" ok ;;
+  *) check "a --no-verify-jwt deploy of two functions names both, and not the value of -j" "reason: ${reason:0:400}" ;;
+esac
+# One command line holding a database write and an open deploy is one question about both.
+reason="$(reason_of "$(bash_payload 'supabase db reset && supabase functions deploy hello --no-verify-jwt')")"
+case "$reason" in
+  *"database call and edge function deploy"*"supabase db reset"*"JWT verification off"*"claude-config#2536"*"claude-config#2660"*) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" ok ;;
+  *) check "a db reset and a --no-verify-jwt deploy in one command are both in the question" "reason: ${reason:0:400}" ;;
+esac
 # The branch and project rule is added to the db and migration one, never read in its place, so no
 # command asked about before #2632 lost its question to a branches or projects word beside it.
 expect_bash "a db reset is asked about whatever stands before it" ask 'supabase projects list db reset'
@@ -532,10 +611,72 @@ for t in $change_tools; do
     *) check "$t from the library's table is asked about, its sentence filled in" "$(decision "$r") ${reason:0:240}" ;;
   esac
 done
+
+# --- an edge function deploy with JWT verification off (claude-config#2660) ---------------------
+# deploy_edge_function with verify_jwt false publishes a function the platform lets anyone call
+# without signing in. #2632 left every deploy unasked, as code and not a database; this one case is
+# asked about, naming the function and the project. The payloads are in the shape the connector's
+# schema declares (read 2026-11-10): project_id, name, entrypoint_path, verify_jwt and files, all
+# required, verify_jwt a boolean whose default is true. Every id is invented.
+DEPLOY="${SB}deploy_edge_function"
+BODY='"entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]'
+deploy_payload() {  # deploy_payload <tool> <the fields before the entrypoint and files>
+  tool_payload "$1" "{$2, $BODY}"
+}
+expect_change "a deploy with verify_jwt false is asked about, naming the function and the project" "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')" "asks before this edge function deploy" "$DEPLOY" "edge function hello" "project exampleprodproject" "JWT verification off" "without signing in" "claude-config#2660"
+reason="$(reason_of "$(deploy_payload "$DEPLOY" '"project_id": "exampleprodproject", "name": "hello", "verify_jwt": false')")"
+case "$reason" in *"database call"*) check "the question about an open deploy does not call it a database call" "reason: ${reason:0:400}" ;; *) check "the question about an open deploy does not call it a database call" ok ;; esac
+expect_change "the project level Supabase server's deploy with verify_jwt false" "$(deploy_payload mcp__supabase__deploy_edge_function '"project_id": "p", "name": "hello", "verify_jwt": false')" "mcp__supabase__deploy_edge_function" "edge function hello" "JWT verification off"
+expect_change "a camel case deployEdgeFunction with verifyJwt false" "$(deploy_payload mcp__supabase__deployEdgeFunction '"project_id": "p", "name": "hello", "verifyJwt": false')" "edge function hello" "JWT verification off"
+expect_change "a deploy with no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "no_verify_jwt": true')" "JWT verification off"
+expect_change "a deploy whose verify_jwt is the text false" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "false"')" "JWT verification off"
+expect_change "a deploy with verify_jwt true and no_verify_jwt true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": true, "no_verify_jwt": true')" "JWT verification off"
+# A value that is neither true nor false is asked about as one that could not be read, never
+# passed: what the server makes of it was not measured.
+expect_change "a deploy whose verify_jwt is null" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": null')" "edge function hello" "could not be told"
+expect_change "a deploy whose verify_jwt is 0" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": 0')" "could not be told"
+expect_change "a deploy whose verify_jwt is the text true" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": "true"')" "could not be told"
+expect_change "a deploy whose verify_jwt is a list" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": [false]')" "could not be told"
+expect_change "a deploy whose input is not an object" "$(tool_payload "$DEPLOY" 'null')" "$DEPLOY" "could not be told" "claude-config#2660"
+expect_change "an open deploy naming no function or project says none is named" "$(tool_payload "$DEPLOY" '{"verify_jwt": false}')" "edge function (none named)" "project (none named)"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" "\"project_id\": \"p\", \"name\": \"$long_id\", \"verify_jwt\": false")")"
+reason="$(field "$r" reason)"
+case "$(decision "$r")|$reason" in
+  *"$long_id"*) check "a very long function name is cut in the question, with its length said" "the whole 300 characters are in the question" ;;
+  "ask rc=0|"*"300 characters in all"*) check "a very long function name is cut in the question, with its length said" ok ;;
+  *) check "a very long function name is cut in the question, with its length said" "$(decision "$r") ${reason:0:240}" ;;
+esac
+r="$(cd "$WORK" && printf '{"tool_name": "mcp__claude_ai_Supabase__deploy_edge_function", "tool_input": {"name": "hello", "verify_jwt": fal' | env -u CLAUDE_HOME HOME="$EMPTY_HOME" bash "$HOOK" 2>/dev/null; printf '\nrc=%s' "$?")"
+case "$(decision "$r")|$(field "$r" reason)" in
+  "ask rc=0|"*deploy_edge_function*"JWT verification"*"claude-config#2660"*) check "a cut short payload naming deploy_edge_function is asked about, naming it" ok ;;
+  *) check "a cut short payload naming deploy_edge_function is asked about, naming it" "$(decision "$r") $(field "$r" reason)" ;;
+esac
+# A deploy that keeps verification on is passed, as before #2660: verify_jwt true, and verify_jwt
+# left out, since the schema's default is true. So is one whose own code mentions the setting, a
+# tool that only reads a function, and the same tool name on a server that is not Supabase's.
+while IFS=$'\t' read -r t input; do
+  [ -n "$t" ] || continue
+  expect "$t keeping JWT verification on is not asked about" none "$(tool_payload "$t" "$input")"
+done <<'TOOLS'
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "index.ts", "content": "Deno.serve(() => new Response(1))"}]}
+mcp__supabase__deployEdgeFunction	{"project_id": "p", "name": "hello", "verifyJwt": true, "noVerifyJwt": false}
+mcp__claude_ai_Supabase__deploy_edge_function	{"project_id": "p", "name": "hello", "entrypoint_path": "index.ts", "verify_jwt": true, "files": [{"name": "config.toml", "content": "[functions.hello]\nverify_jwt = false"}, {"name": "index.ts", "content": "// \"verify_jwt\": false\nDeno.serve(() => new Response(1))"}]}
+mcp__claude_ai_Supabase__get_edge_function	{"project_id": "p", "function_slug": "hello"}
+mcp__claude_ai_Supabase__list_edge_functions	{"project_id": "p"}
+mcp__acme_hosting__deploy_edge_function	{"name": "hello", "verify_jwt": false, "note": "moved from supabase"}
+TOOLS
+rm -rf "$WORK/part"; mkdir -p "$WORK/part/hooks"
+cp "$HOOK" "$WORK/part/hooks/"; cp -R "$DIR/lib" "$WORK/part/hooks/lib"; rm -f "$WORK/part/hooks/lib/db-write-calls.py"
+r="$(run "$WORK/part/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-write-calls.py missing, an open deploy is asked about" ok || check "with lib/db-write-calls.py missing, an open deploy is asked about" "$(decision "$r")"
+rm -rf "$WORK/part"
+
 # Decided in #2632 as no change to a database, so none of them may be asked about: an edge function
-# deploy and its secret change code and configuration, a notebook is saved without being run
-# (run_notebook is asked about, always), feedback goes to Supabase, and the rest only read. And the
-# same tool names on a server that is not Supabase's are another product's branches.
+# deploy that keeps JWT verification on (one that turns it off is asked about, above) and its
+# secret change code and configuration, a notebook is saved without being run (run_notebook is
+# asked about, always), feedback goes to Supabase, and the rest only read. And the same tool names
+# on a server that is not Supabase's are another product's branches.
 while IFS=$'\t' read -r t input; do
   [ -n "$t" ] || continue
   expect "$t is not asked about" none "$(tool_payload "$t" "$input")"
@@ -553,7 +694,7 @@ mcp__github__merge_branch	{"owner": "o", "repo": "supabase-app", "base": "main",
 mcp__linear__delete_branch	{"note": "the supabase reset_branch tool"}
 TOOLS
 # The read hook never approves any of these, so the two hooks still cannot disagree about one.
-for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')"; do
+for p in "$(tool_payload mcp__acme_warehouse__run_sql '{"sql": "select 1"}')" "$(bash_payload 'psql -c "select 1"')" "$(tool_payload mcp__supabase__execute_sql '{"query": "select 1"}')" "$(tool_payload mcp__claude_ai_Supabase__merge_branch '{"branch_id": "examplebranch1"}')" "$(deploy_payload "$DEPLOY" '"project_id": "p", "name": "hello", "verify_jwt": false')"; do
   a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$p")")"
   [ "$a" = "none rc=0" ] && check "the read hook gives no decision on a call outside its own tools" ok || check "the read hook gives no decision on a call outside its own tools" "$a"
 done
@@ -608,6 +749,215 @@ PY
 )"
 [ -z "$unscreened" ] && check "every client, tool and key the classifier knows holds a screen word" ok || check "every client, tool and key the classifier knows holds a screen word" "not screened: $unscreened"
 
+# --- one Apply covers one migration (claude-config#2763) -----------------------------------------
+# Applying one migration through /db-apply was a dry run, a push and a read back, each asked about
+# after Dan had already answered the skill's own Apply or Cancel picker. Now: a dry run and a read
+# from a file are approved by the read hook and never asked about; a push of the migration Dan's
+# Apply names, to the project it names, unchanged since, in the session he gave it in, is let
+# through; anything else is asked about as before. Dan, 2026-11-11: one Apply stays good for its
+# migration file and project until the session ends. His answer is read from the session's own
+# transcript, where Claude Code writes the picker's input and his choice. Every id is invented.
+APPLY="$WORK/apply"
+PROJ="$APPLY/proj"
+mkdir -p "$PROJ/supabase/migrations" "$PROJ/supabase/.temp" "$APPLY/elsewhere"
+printf 'create table a (id int);\n' > "$PROJ/supabase/migrations/001_first.sql"
+printf 'alter table a add column note text;\n' > "$PROJ/supabase/migrations/002_note.sql"
+printf 'exampleprojectref000' > "$PROJ/supabase/.temp/project-ref"
+printf 'select count(*) from a;\n' > "$APPLY/readback.sql"
+printf 'update a set note = 1;\n' > "$APPLY/write.sql"
+cp "$APPLY/readback.sql" "$PROJ/readback.sql"
+MIG="$PROJ/supabase/migrations/002_note.sql"
+sha_of() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+# transcript <file> <session id> <migration> <sha256> <project ref> <answer> [prefilled]: a session
+# transcript holding one /db-apply picker and Dan's answer, in the shape Claude Code writes them
+# (read from this Mac's transcripts on 2026-11-11: the picker's input on an assistant entry, his
+# choice in toolUseResult.answers on the user entry that carries its tool_result). The picker's
+# "pending" is the dry run's list of migrations it would push: by default the one migration named,
+# PENDING="a.sql,b.sql" sets another list, and PENDING=none leaves the key out.
+transcript() {
+  python3 - "$@" <<'PY'
+import json, os, sys
+path, sid, mig, sha, ref, answer = sys.argv[1:7]
+prefilled = len(sys.argv) > 7
+q = "Apply migration 002_note.sql to project " + ref + "?"
+ask = {"questions": [{"question": q, "header": "Migration", "multiSelect": False,
+                      "options": [{"label": "Apply", "description": "Run it"}, {"label": "Cancel", "description": "Do not"}]}],
+       "metadata": {"source": "db-apply", "migration": mig, "sha256": sha, "project_ref": ref}}
+pending = os.environ.get("PENDING")
+if pending is None:
+    ask["metadata"]["pending"] = [os.path.basename(mig)]
+elif pending != "none":
+    ask["metadata"]["pending"] = [p for p in pending.split(",") if p]
+if prefilled:
+    ask["answers"] = {q: "Apply"}
+lines = [
+    {"type": "user", "sessionId": sid, "message": {"role": "user", "content": "apply the migration"}},
+    {"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_apply1", "name": "AskUserQuestion", "input": ask}]}},
+    {"type": "user", "sessionId": sid, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_apply1", "content": "answered"}]},
+     "toolUseResult": {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}},
+]
+with open(path, "w") as f:
+    for l in lines:
+        f.write(json.dumps(l) + "\n")
+PY
+}
+# apply_payload <command> <cwd> <session id> <transcript>: a Bash call as Claude Code sends it.
+apply_payload() {
+  python3 -c 'import json, sys; print(json.dumps({"session_id": sys.argv[3], "transcript_path": sys.argv[4], "hook_event_name": "PreToolUse", "cwd": sys.argv[2], "tool_name": "Bash", "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$@"
+}
+NONE_T="$APPLY/no-apply.jsonl"
+printf '{"type": "user", "sessionId": "s1", "message": {"role": "user", "content": "hi"}}\n' > "$NONE_T"
+GOOD_T="$APPLY/apply.jsonl"
+transcript "$GOOD_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both() {  # both <label> <want read hook> <want this hook> <payload>
+  local a b
+  a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$4")")"
+  b="$(decision "$(run "$HOOK" "$EMPTY_HOME" "$4")")"
+  [ "$a|$b" = "$2 rc=0|$3 rc=0" ] && check "$1" ok || check "$1" "wanted read hook $2, this hook $3; got read hook $a, this hook $b"
+}
+PUSH='supabase db push --linked --yes'
+
+# The issue's set, through both hooks.
+both "a dry run is approved and never asked about" allow none "$(apply_payload 'supabase db push --linked --dry-run' "$PROJ" s1 "$NONE_T")"
+both "a select in a file is approved and never asked about" allow none "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
+both "a select in a file named from the directory it runs in" allow none "$(apply_payload 'supabase db query --linked -f readback.sql' "$PROJ" s1 "$NONE_T")"
+both "a select in a file, after a cd to its directory" allow none "$(apply_payload "cd $PROJ && supabase db query --linked -f readback.sql" "$APPLY/elsewhere" s1 "$NONE_T")"
+both "a write in a file is asked about" none ask "$(apply_payload "supabase db query --linked --yes -f $APPLY/write.sql" "$PROJ" s1 "$NONE_T")"
+both "a push with no Apply on record is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NONE_T")"
+both "a push of the migration Dan applied, to his project, is let through" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+both "the same push from a cd to the project is let through" none allow "$(apply_payload "cd $PROJ && $PUSH" "$APPLY/elsewhere" s1 "$GOOD_T")"
+both "the same push named by --workdir is let through" none allow "$(apply_payload "supabase db push --linked --yes --workdir $PROJ" "$APPLY/elsewhere" s1 "$GOOD_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")" reason)"
+case "$reason" in *002_note.sql*exampleprojectref000*) check "the release names the migration and the project" ok ;; *) check "the release names the migration and the project" "reason: ${reason:0:300}" ;; esac
+# It lets the push through again in the same session (until the session ends, Dan's answer).
+both "the Apply still covers a second push in the same session" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+
+# What the Apply does not cover is asked about, saying why.
+OTHER_T="$APPLY/other-file.jsonl"
+transcript "$OTHER_T" s1 "$PROJ/supabase/migrations/001_first.sql" "$(sha_of "$PROJ/supabase/migrations/001_first.sql")" exampleprojectref000 Apply
+both "a push after an Apply for a different migration file is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$OTHER_T")"
+PROJ_T="$APPLY/other-project.jsonl"
+transcript "$PROJ_T" s1 "$MIG" "$(sha_of "$MIG")" otherprojectref00000 Apply
+both "a push to a different project than the Apply named is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$PROJ_T")"
+EDIT_T="$APPLY/edited.jsonl"
+transcript "$EDIT_T" s1 "$MIG" "$(printf 'alter table a add column other text;\n' | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" exampleprojectref000 Apply
+both "a push of a migration edited since the Apply is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$EDIT_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$EDIT_T")")" reason)"
+case "$reason" in *"applies the pending migrations"*changed*) check "the question says the file changed since the Apply" ok ;; *) check "the question says the file changed since the Apply" "reason: ${reason:0:400}" ;; esac
+both "an Apply from another session (lapsed) is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s2 "$GOOD_T")"
+CANCEL_T="$APPLY/cancel.jsonl"
+transcript "$CANCEL_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Cancel
+both "a push after Dan answered Cancel is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$CANCEL_T")"
+FILLED_T="$APPLY/prefilled.jsonl"
+transcript "$FILLED_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply prefilled
+both "a picker whose answer was filled in by the caller records nothing" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$FILLED_T")"
+both "a transcript that cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$APPLY/missing.jsonl")"
+both "a push with --include-seed is asked about" none ask "$(apply_payload "supabase db push --linked --yes --include-seed" "$PROJ" s1 "$GOOD_T")"
+both "a push with --db-url is asked about" none ask "$(apply_payload 'supabase db push --yes --db-url postgresql://x' "$PROJ" s1 "$GOOD_T")"
+both "a push chained to another command is asked about" none ask "$(apply_payload "$PUSH && rm -f note.txt" "$PROJ" s1 "$GOOD_T")"
+both "a push after a command that could rewrite the migration is asked about" none ask "$(apply_payload "cp $PROJ/supabase/migrations/001_first.sql $MIG; $PUSH" "$PROJ" s1 "$GOOD_T")"
+both "a push from a directory held in a variable is asked about" none ask "$(apply_payload 'cd "$P" && supabase db push --linked --yes' "$PROJ" s1 "$GOOD_T")"
+# A migration added after the Apply would be pushed with it, so it is asked about.
+printf 'drop table a;\n' > "$PROJ/supabase/migrations/003_later.sql"
+both "a push with a migration newer than the applied one is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+rm -f "$PROJ/supabase/migrations/003_later.sql"
+# A push sends every migration the database has not had, so the Apply records the dry run's list of
+# pending migrations, and covers the push only when that list is the one migration Dan applied
+# (Dan held #2800 for this, 2026-11-11). An older migration never applied would otherwise go with it.
+OLDER_T="$APPLY/older-pending.jsonl"
+PENDING="001_first.sql,002_note.sql" transcript "$OLDER_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose dry run also listed an older pending migration is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")")" reason)"
+case "$reason" in *001_first.sql*) check "the question names the other pending migration" ok ;; *) check "the question names the other pending migration" "reason: ${reason:0:400}" ;; esac
+NOLIST_T="$APPLY/no-pending.jsonl"
+PENDING=none transcript "$NOLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded no pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NOLIST_T")"
+EMPTYLIST_T="$APPLY/empty-pending.jsonl"
+PENDING="" transcript "$EMPTYLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded an empty pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$EMPTYLIST_T")"
+WRONGLIST_T="$APPLY/other-pending.jsonl"
+PENDING="001_first.sql" transcript "$WRONGLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose recorded pending migration is not the one applied is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$WRONGLIST_T")"
+PATHLIST_T="$APPLY/path-pending.jsonl"
+PENDING="$MIG" transcript "$PATHLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a pending list naming the applied migration by its full path covers the push" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$PATHLIST_T")"
+mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
+both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
+
+# The skill's ad hoc write path (`supabase db query --linked --yes -f change.sql`) is covered by
+# the same Apply, keyed the same way: the session, the file by path and sha256, and the project
+# (Dan, 2026-11-11, folded into #2763).
+CHANGE="$PROJ/change.sql"
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+CHANGE_T="$APPLY/change.jsonl"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+WRITE_Q='supabase db query --linked --yes -f change.sql'
+both "an ad hoc write from the file Dan applied, to his project, is let through" none allow "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+both "the same write named by its full path after a cd is let through" none allow "$(apply_payload "cd $PROJ && supabase db query --linked --yes -f $CHANGE" "$APPLY/elsewhere" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *change.sql*exampleprojectref000*) check "the release of a write names the file and the project" ok ;; *) check "the release of a write names the file and the project" "reason: ${reason:0:300}" ;; esac
+both "an ad hoc write with no Apply on record is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$NONE_T")"
+both "an ad hoc write after an Apply for the migration, not this file, is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$GOOD_T")"
+CHANGE_PROJ_T="$APPLY/change-other-project.jsonl"
+transcript "$CHANGE_PROJ_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" otherprojectref00000 Apply
+both "an ad hoc write to a different project than the Apply named is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_PROJ_T")"
+both "an ad hoc write from another session (lapsed) is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s2 "$CHANGE_T")"
+both "an ad hoc write with --db-url is asked about" none ask "$(apply_payload "supabase db query --yes --db-url postgresql://x -f change.sql" "$PROJ" s1 "$CHANGE_T")"
+both "an ad hoc write with a statement beside the file is asked about" none ask "$(apply_payload "$WRITE_Q 'delete from a'" "$PROJ" s1 "$CHANGE_T")"
+printf 'do $$ begin delete from a; end $$;\n' > "$CHANGE"
+both "an ad hoc write from a file edited since the Apply is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
+
+# The commands the skill itself tells a session to run, read from its text, so the skill cannot
+# drift into a shape the hooks never let through (L562).
+SKILL_MD="$DIR/../skills/db-apply/SKILL.md"
+skill_cmd() { grep -m 1 -E "^[[:space:]]*$1\$" "$SKILL_MD" | sed 's/^[[:space:]]*//'; }
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --yes|none|allow|GOOD_T' 'supabase db query --linked --yes -f change\.sql|none|allow|CHANGE_T'; do
+  IFS='|' read -r pat ra rb tv <<< "$want"
+  c="$(skill_cmd "$pat")"
+  if [ -z "$c" ]; then check "the skill documents a command matching $pat" "none found in SKILL.md"; continue; fi
+  both "the skill's own [$c] after its Apply" "$ra" "$rb" "$(apply_payload "$c" "$PROJ" s1 "${!tv}")"
+done
+# The picker metadata the skill documents must carry every key the approval library reads, so a key
+# added there (such as "pending", #2800) cannot leave the skill writing pickers that cover nothing.
+skill_meta="$(grep -m 1 -E '^\{"source": "db-apply"' "$SKILL_MD")"
+lib_keys="$(grep -oE 'meta\.get\("[a-z_]+"\)' "$DIR/lib/db-apply-approval.py" | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u | tr '\n' ' ')"
+missing="$(python3 -c 'import json, sys
+try:
+    m = json.loads(sys.argv[1])
+except ValueError:
+    print("no metadata JSON line in SKILL.md"); sys.exit()
+print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys")"
+case "$lib_keys" in *pending*) check "the approval library reads the pending list" ok ;; *) check "the approval library reads the pending list" "keys read: $lib_keys" ;; esac
+[ -z "$missing" ] && check "the skill's documented picker metadata names every key the approval reads" ok || check "the skill's documented picker metadata names every key the approval reads" "missing: $missing"
+
+# A -f file that cannot be read is asked about, as is one the same command could write first.
+both "a -f file that does not exist is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/nosuch.sql" "$PROJ" s1 "$NONE_T")"
+mkdir -p "$APPLY/a-folder.sql"
+both "a -f path that is a folder is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/a-folder.sql" "$PROJ" s1 "$NONE_T")"
+both "a -f file written by the same command is asked about" none ask "$(apply_payload "echo 'delete from a;' > $APPLY/readback.sql; supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
+both "a relative -f file with --workdir is asked about" none ask "$(apply_payload "supabase db query --linked --workdir $PROJ -f readback.sql" "$APPLY" s1 "$NONE_T")"
+both "a read from a file with a redirection is read by neither hook, so it is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql > $APPLY/out.txt" "$PROJ" s1 "$NONE_T")"
+# With the predicate missing, a read from a file is asked about too.
+r="$(run "$WORK/nolib/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/sql-read-only.py missing, a select in a file is asked about" ok || check "with lib/sql-read-only.py missing, a select in a file is asked about" "$(decision "$r")"
+# Without lib/db-apply-approval.py beside it, an Applied push is asked about, naming the library.
+mkdir -p "$WORK/noapply/hooks/lib"
+cp "$HOOK" "$WORK/noapply/hooks/"
+for f in "$DIR"/lib/*; do case "$f" in */db-apply-approval.py) ;; *) cp -R "$f" "$WORK/noapply/hooks/lib/" ;; esac; done
+r="$(run "$WORK/noapply/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-apply-approval.py missing, an Applied push is asked about" ok || check "with lib/db-apply-approval.py missing, an Applied push is asked about" "$(decision "$r")"
+case "$(field "$r" reason)" in *db-apply-approval.py*) check "the question names the missing approval library" ok ;; *) check "the question names the missing approval library" "$(field "$r" reason)" ;; esac
+# apply_migration and the branch and project tools are still asked about, Apply or not (#2632).
+expect "apply_migration is still asked about" ask "$(payload "$MIG_TOOL" "alter table a add column note text")"
+expect "merge_branch is still asked about" ask "$(tool_payload "${SB}merge_branch" '{"branch_id": "b9"}')"
+
 # --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
@@ -624,7 +974,9 @@ want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_
         "Bash", "mcp__supabase__execute_sql", "mcp__acme_warehouse__run_sql", "mcp__claude_ai_Supabase__query_logs",
         # Since #2632: the Supabase tools that change a database with no statement.
         "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
-        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch"]
+        "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch",
+        # Since #2660: an edge function deploy, asked about when it turns JWT verification off.
+        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction"]
 never = ["Edit", "Write", "Read", "Monitor", "Agent"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":

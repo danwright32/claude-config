@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for require-tests-before-push.sh: the docs-only classifier (docs_style_for / diff_docs_only)
-# sourced out of the hook, and the whole gate driven end to end as a subprocess. The is_test /
+# copied out of the hook into a scratch script that runs each case as a process of its own, and the
+# whole gate driven end to end as a subprocess. The is_test /
 # is_source file classifier moved to lib/source-class.sh (shared with simplify-before-push.sh); its
 # cases live in test-source-class.sh and this suite no longer asserts on it directly (the end to end
 # runs exercise it through the real hook, which sources the lib itself).
@@ -17,13 +18,36 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/require-tests-before-push.sh"
 
-# docs_style_for / diff_docs_only are this gate's own, so they are pulled out of the hook. is_test /
-# is_source are not used here: they moved to lib/source-class.sh and test-source-class.sh covers them.
-eval "$(sed -n '/^docs_style_for() {/,/^}/p' "$HOOK")"
-eval "$(sed -n '/^diff_docs_only() {/,/^}/p' "$HOOK")"
-
+# docs_style_for / diff_docs_only / py_docstrings_as_comments are this gate's own, so they are
+# pulled out of the hook. is_test / is_source are not used here: they moved to lib/source-class.sh
+# and test-source-class.sh covers them.
+#
+# The definitions are copied into a scratch script that runs the one named in its arguments, and
+# each is called through it as a process of its own, rather than evaluated into this shell. An
+# eval here ends what the Slack drafts gate can follow of this suite's variables, so it could not
+# work out the files sourced further down (claude-config#2538). Every case below reaches the
+# hook's own definition all the same, and anything a case changes for one call (HOOK_DIR, a
+# stand in mktemp on PATH) is handed to that process.
+FNS_DIR="$(mktemp -d)"
+FNS="$FNS_DIR/hook-functions.sh"
+{
+  sed -n '/^docs_style_for() {/,/^}/p; /^diff_docs_only() {/,/^}/p; /^py_docstrings_as_comments() {/,/^}/p' "$HOOK"
+  printf '%s\n' '"$@"'
+} > "$FNS"
 pass=0
 fail=0
+# A function the copy missed would fail every call, which each "expected NOT docs-only" case would
+# then count as a pass, so each must be found before any case is believed (L98).
+for fn in docs_style_for diff_docs_only py_docstrings_as_comments; do
+  grep -q "^$fn() {" "$FNS" || { fail=$((fail+1)); echo "FAIL: $fn() was not found in $HOOK, so the cases calling it prove nothing"; }
+done
+docs_style_for() { bash "$FNS" docs_style_for "$@"; }
+diff_docs_only() { bash "$FNS" diff_docs_only "$@"; }
+MKTEMP_STANDIN=""
+py_docstrings_as_comments() {
+  HOOK_DIR="$HOOK_DIR" PATH="${MKTEMP_STANDIN:+$MKTEMP_STANDIN:}$PATH" bash "$FNS" py_docstrings_as_comments "$@"
+}
+
 want_docsonly()    { if printf '%s' "$2" | diff_docs_only "$1"; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected DOCS-ONLY ($1): [$2]"; fi; }
 want_notdocsonly() { if printf '%s' "$2" | diff_docs_only "$1"; then fail=$((fail+1)); echo "FAIL: expected NOT-docs-only ($1): [$2]"; else pass=$((pass+1)); fi; }
 want_style()       { local got; got="$(docs_style_for "$1")"; if [ "$got" = "$2" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: style $1 expected $2 got $got"; fi; }
@@ -97,7 +121,6 @@ want_notdocsonly slash "$(printf -- 'diff --git a/i.js b/i.js\n--- a/i.js\n+++ b
 # statement, code on the docstring's own line, a file either image of which does not parse, and a
 # diff not covering the file from its first line.
 HOOK_DIR="$DIR"
-eval "$(sed -n '/^py_docstrings_as_comments() {/,/^}/p' "$HOOK")"
 want_pydocs()    { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: #2247 expected DOCS-ONLY: [$1]"; fi; }
 want_notpydocs() { if printf '%s' "$1" | py_docstrings_as_comments | diff_docs_only hash; then fail=$((fail+1)); echo "FAIL: #2247 expected NOT-docs-only: [$1]"; else pass=$((pass+1)); fi; }
 PYH='diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n'
@@ -152,21 +175,27 @@ for PYCASE in missing short dies; do
   want_pydocs "$PYCOMMENT"
 done
 HOOK_DIR="$DIR"
+# The function runs as a process of its own, so a stand in mktemp reaches it as a command first on
+# its PATH (MKTEMP_STANDIN, read by the py_docstrings_as_comments wrapper at the top).
+mkdir -p "$PYFAKE/mktemp-fails" "$PYFAKE/mktemp-unwritable"
+printf '%s\n' '#!/bin/sh' 'exit 1' > "$PYFAKE/mktemp-fails/mktemp"
+printf '%s\n' '#!/bin/sh' "echo '$PYFAKE/no-such-dir/x'" > "$PYFAKE/mktemp-unwritable/mktemp"
+chmod +x "$PYFAKE/mktemp-fails/mktemp" "$PYFAKE/mktemp-unwritable/mktemp"
 # No scratch file can be made: the diff passes through untouched, judged as before.
-mktemp() { return 1; }
+MKTEMP_STANDIN="$PYFAKE/mktemp-fails"
 want_notpydocs "$PYDOC_OK"
 want_pydocs "$PYCOMMENT"
 # A scratch file is made but the diff cannot be written to it: nothing goes on, which is never
 # documentation, so even a comment change is refused rather than judged on part of its diff.
-mktemp() { printf '%s\n' "$PYFAKE/no-such-dir/x"; }
+MKTEMP_STANDIN="$PYFAKE/mktemp-unwritable"
 want_notpydocs "$PYCOMMENT"
-unset -f mktemp
+MKTEMP_STANDIN=""
 rm -rf "$PYFAKE"
 
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
 #
-# The unit tests above source pure classifiers out of the hook, so they cannot
+# The unit tests above run pure classifiers copied out of the hook, so they cannot
 # see a gate that has stopped gating: both #733 bugs shipped behind a fully
 # green unit suite. Everything below runs the hook as a subprocess with a JSON
 # payload on stdin, exactly as Claude Code invokes it.
@@ -242,7 +271,7 @@ PATH_STUB="$STUB_DIR:$PATH_NOCLAUDE"
 # so it cannot append to an array in this shell: a tracking array would silently
 # stay empty and leak every repo it made.
 TMPROOT="$(mktemp -d)"
-cleanup() { rm -rf "$STUB_DIR" "$TMPROOT"; }
+cleanup() { rm -rf "$STUB_DIR" "$TMPROOT" "$FNS_DIR"; }
 trap cleanup EXIT
 
 # The gate records every push it reaches (claude-config#1075). Pointed at a throwaway ledger so a

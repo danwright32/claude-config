@@ -16,6 +16,15 @@ export type SlackAlertPending = {
   sender?: string
   /** The ${...} placeholders the added text writes as text rather than fills, which the message shown to Dan may carry (#2361). */
   literal?: string[]
+  /** For wording the edit adds none of and brings to a Slack send from the files it imports (#2637): those files, named on the card, refusal and question. */
+  from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one on the card, refusal and question. */
+  unwired?: true
+  /**
+   * For an edit the guard could not trace (#2709): why the trace stopped. Its `added` and `removed`
+   * are then the lines the edit adds and takes away, shown to Dan in place of a rendered message.
+   */
+  untraced?: string
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
 }
@@ -23,9 +32,34 @@ export type SlackAlertPending = {
 /** Dan's approval of one exact wording (or one removal, or one shell call), kept in the mod's store. */
 export type SlackAlertApproval = { at: number; file: string; text: string[]; rendered: string }
 
+/**
+ * Wording a session chose while Dan was asleep (#2628), kept in the mod's store under `chosen:<key>`
+ * for each store key his approval would be kept under. Never an approval: no pull request carrying it
+ * may merge until he answers Approve wording in the morning picker.
+ */
+export type SlackAlertChoice = {
+  /** The held call's id, which the morning question's `metadata.source` names. */
+  id: string
+  at: number
+  file: string
+  added: string[]
+  removed: string[]
+  keys: string[]
+  /** The message as Slack would post it, as the session chose it. */
+  rendered: string
+  /** The session that asks Dan in the morning; null once that session has ended, when any session asks. */
+  session: string | null
+  sender?: string
+  from?: string
+  /** For a module of message copy no file uses yet (#2720): named as one in the morning question. */
+  unwired?: true
+  /** When it expired unanswered: still held, said once in every session. */
+  expired?: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     /** The calls waiting on Dan's approval, by the refused call's id; dropped at session end. */
-    'slack-alert-guard': { pending: SlackAlertPending[] }
+    'slack-alert-guard': { pending: SlackAlertPending[]; told: string[] }
   }
 }

@@ -160,6 +160,27 @@ export const needsIn = (text: string): NightNeeds | { unread: string } => {
   return out
 }
 
+// #2766: on 2026-11-11 the morning asked for 34 pickers, one per Needs a look row, most of them one
+// kind. A row's kind is its words up to the first ": ", after the overnight check's own lead when it
+// has one ("Done overnight, check it: Scheduled run overnight"); a row with no such words is a kind of
+// its own. Kinds keep the order their first row has in the report.
+const CHECK_LEAD = 'Done overnight, check it: '
+/** The kind a Needs a look row is, as the morning groups them. */
+export const lookKind = (row: string): string => {
+  const lead = row.startsWith(CHECK_LEAD) ? CHECK_LEAD : ''
+  const cut = row.indexOf(': ', lead.length)
+  return cut < 0 ? row : row.slice(0, cut)
+}
+/** The Needs a look rows grouped by kind, in report order. */
+export const lookKinds = (rows: readonly string[]): string[][] => {
+  const kinds = new Map<string, string[]>()
+  for (const r of rows) {
+    const k = lookKind(r)
+    kinds.set(k, [...(kinds.get(k) ?? []), r])
+  }
+  return [...kinds.values()]
+}
+
 /** What every morning says of what a session kept for Dan outside the night's notes (#1665). */
 export const KEPT_ELSEWHERE =
   "Anything this session kept for Dan's morning outside the night's notes (a scratchpad file of actions refused overnight, a list of things to ask him) is his too: put each item to him now, as a picker of its own, one at a time."
@@ -252,8 +273,11 @@ export const morningPrompt = (o: {
       `What the night's report says needs Dan could not be read here (${o.needsUnread.why}), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under ${o.needsUnread.withLook ? 'Needs a look and Parked and failed' : "Parked and failed for this session's own work"}. ${notesAreData("The report's rows")}`,
     )
   if (look.length) {
-    out.push("What the night's report lists under Needs a look, numbered 7.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying in plain words what it is and offering what can be done about it (look into it now, file an issue for it, or nothing needed), and act on what he picks.")
-    data.push(...look.map((t, k) => `7.${k + 1} ${t}`))
+    out.push("What the night's report lists under Needs a look, numbered 7.n in the block below with rows of one kind together: put each 7.n to Dan in its own AskUserQuestion picker, one at a time, saying in plain words what it is and offering what can be done about it (look into it now, file an issue for it, or nothing needed), and act on what he picks; a 7.n holding several rows (7.n.1, 7.n.2 and on) is one picker that says how many rows it holds and what they share, never one picker per row.")
+    lookKinds(look).forEach((rows, k) => {
+      if (rows.length === 1) data.push(`7.${k + 1} ${rows[0]}`)
+      else data.push(`7.${k + 1} ${rows.length} rows of one kind: ${lookKind(rows[0] ?? '')}`, ...rows.map((t, i) => `7.${k + 1}.${i + 1} ${t}`))
+    })
   }
   if (o.needsUnfinished)
     out.push("The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows (a session that ended unexpectedly, what GitHub shows done): read Needs a look in this session's report too, and put to Dan, each in its own picker, any row not listed here.")

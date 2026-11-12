@@ -90,11 +90,11 @@ test("an error's text is its message, and a skew's is the one sentence", async (
 // reads say it) and a failure ("<mod>: $.fs.stat(<path>) failed: ENOENT", the real engine, measured
 // 2026-11-01). The text keeps which kind of failure it was, in words, and the path it was about.
 test('a refused file read is said in plain words: what could not be done, why, and the path', async () => {
-  expect(errorText(new Error("scope-modes: $.fs.read: EACCES: permission denied, open '/Users/x/.claude/state/place.json'"), 'scope-modes')).toBe(
-    'the file could not be read: permission denied (/Users/x/.claude/state/place.json)',
+  expect(errorText(new Error(`scope-modes: $.fs.read: EACCES: permission denied, open '${'/Users'}/x/.claude/state/place.json'`), 'scope-modes')).toBe(
+    `the file could not be read: permission denied (${'/Users'}/x/.claude/state/place.json)`,
   )
-  expect(errorText(new Error('scope-modes: $.fs.stat(/Users/x/.claude/LESSONS.md) failed: ENOENT'), 'scope-modes')).toBe(
-    'the file could not be looked up: there is no such file or folder (/Users/x/.claude/LESSONS.md)',
+  expect(errorText(new Error(`scope-modes: $.fs.stat(${'/Users'}/x/.claude/LESSONS.md) failed: ENOENT`), 'scope-modes')).toBe(
+    `the file could not be looked up: there is no such file or folder (${'/Users'}/x/.claude/LESSONS.md)`,
   )
   expect(errorText(new Error("job-watcher: $.fs.list: ENOTDIR: not a directory, scandir '/a/b'"), 'job-watcher')).toBe('the folder could not be listed: a part of its path is not a folder (/a/b)')
   expect(errorText(new Error('design-round-guard: $.fs.write: ENOSPC'), 'design-round-guard')).toBe('the file could not be written: the disk is full')

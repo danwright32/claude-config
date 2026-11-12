@@ -19,6 +19,9 @@ import {
   callKey,
   callText,
   cannotCheck,
+  caughtCall,
+  caughtCheck,
+  passesByShape,
   changedRuns,
   contractOf,
   card,
@@ -659,6 +662,31 @@ const putBack = async ($: EngineInterface, path: string, tree: string, from: str
   }
 }
 
+// #2704: what git puts back, and what it is judged against, read for a file a merge may have left
+// unmerged. Such a file has no copy in the index to put back (`:<path>`, stage 0, which git refuses
+// with exit 128), only the sides of the conflict: ':2', this branch's own, which is what the file was
+// before the merge, and ':3', what is merged in. The file on disk is then the conflict as git wrote
+// it, no screen at all, so the change is judged against this branch's side (`ours`), never the disk.
+// With no side named ('') git refuses the path, or with -m or --conflict writes the conflict again,
+// settling nothing either way, so the text it is judged as leaving is this branch's side too;
+// --ours leaves that side; --theirs leaves the other, judged against this branch's side where that
+// can be read and against the disk, as before, where it cannot. Stage 2 being there is itself what
+// says the file is unmerged, so git's words are never parsed. With neither the index's copy nor
+// this branch's side to read, the reason names both reads and what git said of each, and the whole
+// file is judged as before. A ref (HEAD, main) is read as putBack reads it.
+const putBackOrOurs = async ($: EngineInterface, path: string, tree: string, from: string): Promise<{ text: string; ours?: string } | { why: string }> => {
+  const back = await putBack($, path, tree, from)
+  if (from === '') {
+    if ('text' in back) return back
+    const ours = await putBack($, path, tree, ':2')
+    return 'text' in ours ? { text: ours.text, ours: ours.text } : { why: `${back.why}; nor this branch's side of a merge: ${ours.why}` }
+  }
+  if ('why' in back || (from !== ':2' && from !== ':3')) return back
+  if (from === ':2') return { text: back.text, ours: back.text }
+  const ours = await putBack($, path, tree, ':2')
+  return 'text' in ours ? { text: back.text, ours: ours.text } : back
+}
+
 // #1933: whether git has never tracked the file at `path` in the checkout `tree`, by its own index
 // (`git ls-files`, which names a tracked file, a staged one included, and prints nothing for any
 // other). Matched literally, so a name holding a pattern's characters is no pattern, and in any case,
@@ -677,14 +705,29 @@ const neverTracked = async ($: EngineInterface, path: string, tree: string): Pro
 // review of #1158): putBack reads the source as it stands now, and any other command on the line may
 // change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
 // restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
-// before it aside, is measured; anything else is judged whole, saying so. So is git told to read
+// before it aside, is measured, or with `first` one run first on its line (#2777, below); anything
+// else is judged whole, saying so. So is git told to read
 // another index, repository or setting: a GIT_ variable set on the line (which the command reader
 // drops from a command's words), or any of git's own options before the subcommand but -C, whose
 // folder mod-kit already follows (lessons review).
-const restoreAlone = async ($: EngineInterface, command: string): Promise<string | undefined> => {
+// A `&` that runs what is before it in the background: not one of `&&`, nor a redirection's (`2>&1`,
+// `&>`, `|&`). One inside quotes reads as one too, so such a line is judged whole, as before.
+const BACKGROUND = /(^|[^&>|<])&(?![&>])/
+// With `first` (#2777), a restore that runs first on its line is measured too: nothing run after it
+// can change what it puts back. Only where it is the line's one git checkout or restore, so every
+// source a target names is that restore's, and runs neither in a pipe nor in the background, where
+// what follows it on the line may run beside it.
+const restoreAlone = async ($: EngineInterface, command: string, first = false): Promise<string | undefined> => {
   try {
-    const rest = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
-    const words = rest.length === 1 ? (rest[0]?.words ?? []) : []
+    const all = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
+    const restores = async () => {
+      let n = 0
+      for (const c of all) if (['checkout', 'restore'].includes((await $.modkit.git({ words: c.words }))?.sub ?? '')) n++
+      return n
+    }
+    const piped = all.some(c => c.pipedFrom !== undefined)
+    const alone = all.length === 1 || (first && !piped && !BACKGROUND.test(command) && (await restores()) === 1)
+    const words = alone ? (all[0]?.words ?? []) : []
     const g = words.length ? await $.modkit.git({ words }) : undefined
     if (!(g?.sub === 'checkout' || g?.sub === 'restore')) return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
     const before = words.slice(1, words.indexOf(g.sub, 1))
@@ -720,8 +763,9 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
     return after === undefined ? undefined : { before, after }
   }
   if (notAlone !== undefined) return { unread: notAlone }
-  const back = await putBack($, t.path, tree, t.from)
-  return 'why' in back ? { unread: back.why } : { before, after: back.text }
+  // A file a merge left unmerged is judged against this branch's side of it (#2704), never the disk.
+  const back = await putBackOrOurs($, t.path, tree, t.from)
+  return 'why' in back ? { unread: back.why } : { before: back.ours ?? before, after: back.text }
 }
 
 // Whether changing a React screen file from `before` to `after` changes nothing on screen, the one
@@ -835,13 +879,16 @@ const drawingChange = async (
   } catch {
     return 'held'
   }
-  const now = files.find(f => f.name === name)?.text
+  let now = files.find(f => f.name === name)?.text
   let after: string | undefined
   if (t.from !== undefined) {
     if (notAlone !== undefined) return { unread: notAlone }
-    const back = await putBack($, t.path, tree, t.from)
+    const back = await putBackOrOurs($, t.path, tree, t.from)
     if ('why' in back) return { unread: back.why }
     after = back.text
+    // A file a merge left unmerged is judged against this branch's side of it (#2704), never the
+    // conflict on disk, which is no TypeScript and draws nothing.
+    if (back.ours !== undefined) now = back.ours
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
     // Held where the file draws or sends a message now. One that only sends a message is held for a
@@ -1053,7 +1100,7 @@ const judge = async ($: EngineInterface, tool: string, input: Record<string, unk
 
 const judged = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<Verdict> => {
   // Only the shell, and a tool carrying a file path it may write, can change a file at all.
-  if (tool !== 'Bash' && (READS_ONLY.has(tool) || !pathsOf(input).length)) return { pass: true }
+  if (passesByShape(tool, input)) return { pass: true }
   const at = await whereOf($)
   const { targets, storeMentioned } = await targetsOf($, tool, input, at)
   // By its path, or by its name where the reader could not follow the folder (lessons review of #991).
@@ -1066,8 +1113,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // Per checkout, what a refusal says of a git checkout or restore whose lines could not be read (#1158),
   // or of a shell write to a mod hook file, which cannot be read before it runs (#1341).
   const unreadIn = new Map<string, string[]>()
-  // restoreAlone's answer for this call once asked; null until then.
+  // restoreAlone's answer for this call once asked, strictly for a settled design record, whose
+  // refusal says a restore alone goes through, and with a restore run first on its line for a file
+  // judged by its lines (#2777); null until then.
   let notAlone: string | undefined | null = null
+  let notFirst: string | undefined | null = null
   const unsureFiles: string[] = []
   // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
   const watch: Watched[] = []
@@ -1231,9 +1281,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         unreadIn.set(tree, notes)
       }
     }
-    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+    // A restore whose lines are measured may run first on its line rather than alone (#2777).
+    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notFirst === null) notFirst = await restoreAlone($, String(input.command ?? ''), true)
     if (modTs) {
-      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined, watch)
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined, watch)
       if (drawn === 'pass') continue
       if (drawn !== 'held' && 'worded' in drawn) worded.push({ file: relTo(t.path, tree), words: drawn.worded })
       else if (drawn !== 'held') {
@@ -1252,7 +1303,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // restore putting back only such lines (#1158). One whose lines git could not give is judged
     // whole, and the refusal says why.
     // restoreAlone is asked above, once per call, and only of one that puts back a file judged by its lines.
-    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
+    const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notFirst ?? undefined)
     if (change && 'unread' in change) {
       const said = unreadPutBack(relTo(t.path, tree), change.unread)
       const notes = unreadIn.get(tree) ?? []
@@ -1726,7 +1777,11 @@ export const register: Register = on => {
     } catch (err) {
       return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
     }
-  }).catch(($, e, next) => neverThrows(() => ({ deny: cannotCheck(message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
+  // A failure after the call was passed on (most often Claude Code replacing its hooks worker while a
+  // long command ran) replays what the call settled to, outside neverThrows: it already ran, so a
+  // refusal saying it was stopped would be untrue and could have Claude run it twice (#2726, #2039).
+  // One before is answered as the hook would answer it where that needs no reading (caughtCall).
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => caughtCall(e, argsOf(e as unknown as Record<string, unknown>), message(next.error), () => next(e)), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
   // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
@@ -1774,7 +1829,9 @@ export const register: Register = on => {
     // with no card drawn and nothing left waiting on Dan (lessons review of #991).
     if (!e.tool_use_id) return { decision: 'deny', reason: previewed(v) }
     return { decision: 'deny', reason: await refuse($, v, { id: e.tool_use_id, tool: e.tool, agent: false, called: await keyOf($, e.tool, input) }) }
-  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
+  // A call passing by its shape is answered as above, by the verdicts beneath (#2726); every other is
+  // refused, `next` there running nothing whether or not the hook had read it.
+  }).catch(($, e, next) => neverThrows(() => caughtCheck(e.tool, (e.input ?? {}) as Record<string, unknown>, message(next.error), () => next(e)), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's two questions, asked in Claude Code's own dialog. The guard words each question and its
   // answers, and reads his choice from the dialog's own result, the one place it comes from him.

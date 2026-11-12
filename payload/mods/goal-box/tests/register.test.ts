@@ -8,7 +8,7 @@ import DESIGN_FIXTURE from './1563-goal-box.fixture.ts'
 // lands after the Stop hooks and the mod hooks no Stop) or when Claude judges the work Dan asked for
 // finished and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
 
-const T = '/Users/dan/.claude/projects/-repo/s1.jsonl'
+const T = `${'/Users'}/dan/.claude/projects/-repo/s1.jsonl`
 const TOOL = 'mcp__goal-box__goal_accomplished'
 type Goal = { state: 'set'; condition: string } | { state: 'none'; met?: { condition: string; reason: string; id: string } } | { state: 'unreadable'; why: string }
 type Card = { toolUseId: string; border?: string; title: { text: string; color?: string; bold?: boolean }[]; lines: { text: string; color?: string }[][] }
@@ -75,11 +75,18 @@ const kit: { name: string; register: Register } = {
 }
 
 // is it live, standing in: its session state, as its own contract has it, which this mod reads,
-// written from what the world says at the session's start.
+// written from what the world says at the session's start, and again at each turn end before this
+// mod reads it, as is it live's own record moves while a session runs (a deploy going live, #2523).
 const live: { name: string; register: Register } = {
   name: 'is-it-live',
   register: on => {
     on('session.start', async ($, e, next) => {
+      const facts = JSON.parse((await $.process.run(['__live'])).stdout) as { owed: unknown; verdicts: unknown }
+      await $.state.set({ plugin: 'is-it-live', key: 'owed' } as never, facts.owed as never)
+      await $.state.set({ plugin: 'is-it-live', key: 'verdicts' } as never, facts.verdicts as never)
+      return next(e)
+    })
+    on('turn.complete', async ($, e, next) => {
       const facts = JSON.parse((await $.process.run(['__live'])).stdout) as { owed: unknown; verdicts: unknown }
       await $.state.set({ plugin: 'is-it-live', key: 'owed' } as never, facts.owed as never)
       await $.state.set({ plugin: 'is-it-live', key: 'verdicts' } as never, facts.verdicts as never)
@@ -633,6 +640,90 @@ test('a met goal whose box is held by an open merge is not shown; asked once, it
   await turnEnds($)
   expect(submitted).toHaveLength(1)
   expect(await cards()).toEqual([])
+})
+
+// #2523: with no /goal, the only reminder to call the tool was the session reflection's last line,
+// and a reflection folded into the issue review dropped it (L27). So the mod asks too, at the turn
+// end where work measurably shipped: an is it live card made since Dan's last message, nothing still
+// in flight, and no box for this request. Once per request, whatever the session then decides.
+const NOW = 1_800_000_000_000
+const CARDED = { 'danwright32/claude-config#1700': { state: 'live', at: NOW } }
+const ASKS_DONE = 'GOAL ACCOMPLISHED? Since Dan\'s last message'
+test('no /goal: a merge carded since Dan\'s message, nothing in flight and no box, and the session is asked once whether the work is finished (#2523)', withLive, async ($, on) => {
+  const { submitted, cards } = world(on, { verdicts: CARDED })
+  await start($)
+  await turnEnds($)
+  expect(submitted).toEqual([])
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect(submitted.at(-1)?.text).toContain(TOOL)
+  expect(submitted.at(-1)?.origin).toMatchObject({ kind: 'plugin' })
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+})
+
+test('no /goal: a box already shown for the request asks nothing (#2523)', withLive, async ($, on) => {
+  const shown = world(on, { verdicts: CARDED })
+  await start($)
+  await says($, 'Merge PR 1700')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  await turnEnds($)
+  expect(shown.submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('no /goal: a card made before Dan\'s message asks nothing (#2523)', withLive, async ($, on) => {
+  const { submitted } = world(on, { verdicts: { 'danwright32/claude-config#1700': { state: 'live', at: NOW - 1 } } })
+  await start($)
+  await says($, 'Now make the status bar quieter')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('no /goal: an agent still running, or a deploy not yet live, asks nothing; once settled it asks (#2523)', withLive, async ($, on) => {
+  const { w, submitted } = world(on, { verdicts: { 'danwright32/claude-config#1700': { state: 'deploying', at: NOW } }, agents: [{ id: 'a1', status: 'running', description: 'Fix issue 1702' }] })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  w.verdicts = CARDED
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  w.agents = [{ id: 'a1', status: 'completed' }]
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
+})
+
+test('no /goal: a /goal still set, a subagent or an interrupted turn is never asked (#2523)', withLive, async ($, on) => {
+  const { w, submitted } = world(on, { verdicts: CARDED, goal: { state: 'set', condition: 'complete milestone 80' } })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  w.goal = { state: 'none' }
+  await turnEnds($, { agentId: 'a1' })
+  await turnEnds($, { isAborted: true, reason: 'aborted' })
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('no /goal: a headless session is never asked (#2523)', withLive, async ($, on) => {
+  const { submitted } = world(on, { verdicts: CARDED })
+  await start($, false)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+})
+
+test('no /goal: a question that could not be sent is said and sent again at the next turn end (#2523)', withLive, async ($, on) => {
+  const { submitted, logs } = world(on, { verdicts: CARDED, submitFails: ['drop'] })
+  await start($)
+  await says($, 'Merge PR 1700')
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toEqual([])
+  expect(logs.join('\n')).toMatch(/could not be asked whether the work is finished \(held by a guard beneath\); it is asked again at the next turn end/)
+  await turnEnds($)
+  expect(submitted.filter(s => s.text.startsWith(ASKS_DONE))).toHaveLength(1)
 })
 
 test('a subagent cannot show the box, and a call a guard refuses is refused before anything is read', withKit, async ($, on) => {

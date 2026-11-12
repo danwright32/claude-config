@@ -78,7 +78,7 @@ let shownLook = ''
 let shownCompact = ''
 let writtenId: string | undefined
 let toldSave = false
-// Whether a main turn is running: from its first request to its end. Every request it makes keeps
+// Whether a main turn is running: from the turn's start to its end. Every request it makes keeps
 // the cache warm, so the cache warning and the cache row wait for it to end (#697).
 let turnRunning = false
 // A Compact pressed while a turn ran, to run when it ends (#1278); cleared by Cancel or by running.
@@ -664,10 +664,27 @@ const cacheMoved = async ($: EngineInterface) => {
   await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
 }
 
+// When a Stop hook's context was stored on this conversation with no request yet seen after it
+// (#2726): taken as a request's time once a response follows, dropped by any request heard first.
+let heldContextAt: number | null = null
+
+// A main request went out at `at`: the hour of cache starts again from it. The file and the band
+// follow off the request's path, so a slow disk never holds a request up.
+const restartCache = async ($: EngineInterface, at: number) => {
+  heldContextAt = null
+  try {
+    await $.state.set(cacheRef, at + CACHE_MS)
+    $.clock.after(0, () => void cacheMoved($))
+  } catch (err) {
+    $.ui.log(`status-bar: could not restart the cache clock: ${msg(err)}`, { to: 'debug' })
+  }
+}
+
 // A compaction replaces the conversation, so the hour being counted belonged to one that is gone:
 // the clock starts again from nothing, as after a /clear, and the Compact row's cache line (the
 // time left and "send any message", #1596) goes with it (#697).
 const cacheReplaced = async ($: EngineInterface) => {
+  heldContextAt = null
   await $.state.set(cacheRef, null)
   toastedFor = null
   await cacheMoved($)
@@ -793,21 +810,46 @@ export const register: Register = on => {
 
   // The hour of cache starts again at every main request (the spec's "measured from the last
   // request", #697), so a long turn keeps it warm on the status line as each of its requests really
-  // does. A subagent's request carries its own conversation, not this one. The file and the band
-  // follow off the request's path, so a slow disk never holds a request up.
-  on('turn.step', async function* ($, e, next) {
+  // does. A subagent's request carries its own conversation, not this one.
+  //
+  // #2726, Dan 2026-11-11: heard from the moments just before a request goes out, never from the
+  // request itself. A turn.step hook carries the model's stream through the hooks worker, and Claude
+  // Code drops pieces of a tool call's input when it replaces that worker mid stream, so the bar
+  // takes the turn's start (its first request), each tool result (the request after it), and a Stop
+  // hook's context once a response shows a request followed it. Measured on headless runs, each is
+  // 6 to 19 ms before its request (148 ms once, with a settings hook running at the turn's start),
+  // so the hour reads that much early: the harmless side, a warning a moment soon, never late.
+  on('turn.start', async ($, e, next) => {
     if (interactive && e.agentId === undefined) {
       // Also what takes this conversation's quiet background commands off the band while Claude
       // works (#1583): cacheMoved below draws the band again from it.
       await setTurnRunning($, true)
-      try {
-        await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
-        $.clock.after(0, () => void cacheMoved($))
-      } catch (err) {
-        $.ui.log(`status-bar: could not restart the cache clock: ${msg(err)}`, { to: 'debug' })
-      }
+      await restartCache($, await $.clock.now())
     }
-    return yield* next(e)
+    return next(e)
+  })
+
+  // The request after a tool call goes out once the results are stored; with several calls at once
+  // the last result's row is the one just before it. A tool result is only ever inside a turn, so it
+  // also writes again a turn's start whose write failed (#1703).
+  on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    if (interactive && e.agentId === undefined) {
+      await setTurnRunning($, true)
+      await restartCache($, await $.clock.now())
+    }
+    return next(e)
+  })
+
+  // A Stop hook that sends the turn on stores its context and the request follows with no tool
+  // result before it; one that lets the turn end stores one too, and no request follows. So the row
+  // is held, and taken at its own time only once a response is stored after it (#2726).
+  on('session.append', { door: 'hook-context' }, async ($, e, next) => {
+    if (interactive && e.agentId === undefined) heldContextAt = await $.clock.now()
+    return next(e)
+  })
+  on('session.append', { door: 'response' }, async ($, e, next) => {
+    if (interactive && e.agentId === undefined && heldContextAt !== null) await restartCache($, heldContextAt)
+    return next(e)
   })
 
   // #2082: a prompt Dan sends himself once the session's Compact has started, at the terminal or
@@ -979,6 +1021,7 @@ export const register: Register = on => {
     // for the conversation it ended is dropped with it (#1278), and so is that conversation's context
     // reading, as after a compaction (#1421).
     if (e.reason === 'clear') {
+      heldContextAt = null
       await $.state.set(cacheRef, null)
       toastedFor = null
       await setTurnRunning($, false)

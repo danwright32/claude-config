@@ -44,6 +44,7 @@ import {
   sweepKeys,
   type Held,
   couldHold,
+  repoIssues,
   heldUnder,
   shellKey,
   shellTargets,
@@ -484,7 +485,7 @@ test('a shell write whose file cannot be named is unread, with why; a name that 
 })
 
 // #2254: `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"`, as mod-kit's reader
-// answers it with cwd /w/app and home /Users/dan (measured 2026-11-04): the finding, holding $PWD and
+// answers it with cwd /w/app and home /Users/<name> (measured 2026-11-04): the finding, holding $PWD and
 // *.ts, has no path, so it was judged a file built as the command runs.
 const FINDING = { word: 'reads $PWD and every *.ts file it holds, so why?' }
 const noteRun = (what: string, path: string, verb = 'note') => ({
@@ -493,14 +494,14 @@ const noteRun = (what: string, path: string, verb = 'note') => ({
   path,
   args: [{ word: verb, path: `/w/app/${verb}` }, { word: '.', path: '/w/app' }, FINDING, { word: 'builder 2254', path: '/w/app/builder 2254' }],
 })
-const SPOOL = '/Users/dan/.claude/hooks/lib/issue-spool.sh'
+const SPOOL = `${'/Users'}/dan/.claude/hooks/lib/issue-spool.sh`
 
 test("a findings note to the installed spool helper writes no file of the repository, so its words are not judged (#2254)", () => {
-  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([])
+  expect(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }, `${'/Users'}/dan`)).toEqual([])
   // `~/.claude/hooks/lib/issue-spool.sh note ...`, run directly.
-  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, '/Users/dan')).toEqual([])
+  expect(shellTargets({ ...NONE, runs: [noteRun('a script file run directly', SPOOL)] }, `${'/Users'}/dan`)).toEqual([])
   // Anything else in the same command is still judged: `<note> && sed -i '' 's/a/b/' src/lib/slack.ts`.
-  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, '/Users/dan')).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
+  expect(shellTargets({ ...NONE, files: [{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts', edits: true }], runs: [noteRun('a bash script file', SPOOL)] }, `${'/Users'}/dan`)).toEqual([{ word: 'src/lib/slack.ts', path: '/w/app/src/lib/slack.ts' }])
 })
 
 test('only the installed helper, only its note, and only with a home known: every other run is judged as before (#2254)', () => {
@@ -508,11 +509,11 @@ test('only the installed helper, only its note, and only with a home known: ever
   // No home given: nothing is exempt.
   expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL)] }))).toEqual([FINDING.word])
   // A copy of the helper inside a checkout, which may be any script.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', '/w/app/payload/hooks/lib/issue-spool.sh')] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
   // Another subcommand of the installed helper.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a bash script file', SPOOL, 'append')] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
   // The helper handed to another interpreter.
-  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, '/Users/dan'))).toEqual([FINDING.word])
+  expect(unread(shellTargets({ ...NONE, runs: [noteRun('a python3 script', SPOOL)] }, `${'/Users'}/dan`))).toEqual([FINDING.word])
 })
 
 // #2636: `bash ~/.claude/hooks/lib/issue-spool.sh clear <project> <transcript> <stamp>`, the end of turn
@@ -527,13 +528,13 @@ const clearRun = (path: string, verb = 'clear', what = 'a bash script file') => 
 test("the project folder the installed spool helper reads a key from is no write, and only that argument (#2636)", () => {
   const words = (t: ShellTarget[]) => t.map(x => x.word)
   for (const verb of SPOOL_KEY_COMMANDS.filter(v => v !== 'note')) {
-    expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, verb)] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'].map(w => (w === 'clear' ? verb : w)))
+    expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, verb)] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app/s1.jsonl'].map(w => (w === 'clear' ? verb : w)))
   }
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a script file run directly')] }, '/Users/dan'))).toEqual(['clear', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a script file run directly')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app/s1.jsonl'])
   // A subcommand handed a folder it may change, a copy in a checkout, another interpreter, no home: judged as before.
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'sweep-stamps')] }, '/Users/dan'))).toEqual(['sweep-stamps', '/w/app', '/w/app/s1.jsonl'])
-  expect(words(shellTargets({ ...NONE, runs: [clearRun('/w/app/payload/hooks/lib/issue-spool.sh')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
-  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a python3 script file')] }, '/Users/dan'))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'sweep-stamps')] }, `${'/Users'}/dan`))).toEqual(['sweep-stamps', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun('/w/app/payload/hooks/lib/issue-spool.sh')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
+  expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL, 'clear', 'a python3 script file')] }, `${'/Users'}/dan`))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
   expect(words(shellTargets({ ...NONE, runs: [clearRun(SPOOL)] }))).toEqual(['clear', '/w/app', '/w/app/s1.jsonl'])
 })
 
@@ -627,7 +628,7 @@ test("a held Bash command is named as a command that writes the file, and is sen
   expect(r).not.toContain('Before editing it')
 })
 
-test('a command whose file cannot be read is held saying so, and can only proceed: there is no file to fold into or restructure', () => {
+test('a command whose file cannot be read is held saying so, and with no issue listed can only proceed: there is no file to fold into or restructure', () => {
   const card = holdCard(UNREAD)
   expect(card.reason).toContain('cannot be read')
   expect(card.reason).toContain('$OUT')
@@ -640,6 +641,58 @@ test('a command whose file cannot be read is held saying so, and can only procee
   expect(decideProblem({ decision: 'restructure' }, UNREAD)).toContain('Edit or Write')
   expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
   expect(decideProblem({ decision: 'proceed', reason: 'This command only regenerates the build log, which no issue names.' }, UNREAD)).toBeUndefined()
+})
+
+// #2706: a command whose files cannot be named lists the repository's open structural issues that
+// name files, and may be decided as a fold into one of them; any other issue is refused.
+const LISTED: Held = { ...UNREAD, shown: [{ n: 41, how: 'repo', structural: ['tech-debt'], priority: 'p2' }, { n: 57, how: 'repo', structural: ['refactor'], priority: 'p3' }] }
+
+test('a command whose file cannot be read may fold into an open structural issue the hold listed, and into no other (#2706)', () => {
+  expect(decideProblem({ decision: 'fold', issue: 41 }, LISTED)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 57 }, LISTED)).toBeUndefined()
+  expect(decideProblem({ decision: 'fold', issue: 42 }, LISTED)).toContain('#41, #57')
+  expect(decideProblem({ decision: 'fold', issue: '41' }, LISTED)).toContain('as a number')
+  // Still no file to restructure, and nothing listed means nothing to fold into.
+  expect(decideProblem({ decision: 'restructure' }, LISTED)).toContain('Edit or Write')
+  expect(decideProblem({ decision: 'fold', issue: 41 }, UNREAD)).toContain('cannot be read')
+  const r = holdRefusal(LISTED)
+  expect(r).toContain('"decision": "fold", "issue": <one of #41, #57>')
+  expect(r).toContain('"decision": "proceed"')
+  expect(r).not.toContain('"decision": "restructure"')
+  expect(r).toContain('Edit or Write')
+  expect(r).toContain('Then send the Bash command again, unchanged.')
+})
+
+// The two messages a person reads name the fold the hold offers Claude (#2706 wording, Dan's
+// choice 2026-11-11), in the hold's words; with nothing listed each says what it always did.
+test('refusing restructure for a command whose file cannot be read names the fold into a listed issue (#2706)', () => {
+  const r = decideProblem({ decision: 'restructure' }, LISTED)
+  expect(r).toContain('no file to restructure')
+  expect(r).toContain('fold the structural fix for one of #41, #57 into this work')
+  expect(r).toContain('Edit or Write')
+  expect(r).not.toContain('no file to fold')
+  const none = decideProblem({ decision: 'restructure' }, UNREAD)
+  expect(none).toBe('This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.')
+})
+
+test('the card for a command whose file cannot be read names the fold into a listed issue (#2706)', () => {
+  const card = holdCard(LISTED)
+  expect(card.reason).toBe(holdCard(UNREAD).reason)
+  expect(card.safeWay).toBe('Claude proceeds with a reason, folds the structural fix for one of #41, #57 into this work, or makes the change with Edit or Write, which the area check can judge.')
+  expect(holdCard(UNREAD).safeWay).toBe('Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.')
+})
+
+test('the issues a command whose files cannot be named may fold into are the open structural ones naming a file, the session\'s own included (#2706)', () => {
+  const issues: CachedIssue[] = [
+    { n: 57, structural: ['refactor'], priority: 'p4', refs: ['src/a.ts'] },
+    { n: 41, structural: ['tech-debt'], priority: 'p2', refs: ['src/lib/slack.ts'] },
+    { n: 42, structural: [], priority: 'p2', refs: ['src/stripe.ts'] },
+    { n: 60, structural: ['tech-debt'], priority: 'p1', refs: [] },
+  ]
+  expect(repoIssues(issues)).toEqual([
+    { n: 41, how: 'repo', structural: ['tech-debt'], priority: 'p2' },
+    { n: 57, how: 'repo', structural: ['refactor'], priority: 'p4' },
+  ])
 })
 
 // #2407: a folder handed to a script is judged only when the script's own text can write there.

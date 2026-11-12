@@ -372,6 +372,18 @@ export const couldHold = (f: { issues: readonly CachedIssue[]; own: readonly num
 }
 
 /**
+ * The issues a held command whose files cannot be named may be folded into (#2706): every open
+ * structural issue naming a file in the repository, by number, at any priority and the session's own
+ * included, since a builder whose task is the structural fix runs exactly the commands that restructure
+ * most files. A fold only records which fix the work belongs to; the command runs as proceed lets it.
+ */
+export const repoIssues = (issues: readonly CachedIssue[]): Match[] =>
+  issues
+    .filter(i => i.structural.length > 0 && i.refs.length > 0)
+    .map(i => ({ n: i.n, how: 'repo' as const, structural: i.structural, priority: i.priority }))
+    .sort((a, b) => a.n - b.n)
+
+/**
  * A command's own key, so its unchanged resend after a decision runs and any other command is judged:
  * a full SHA-256 of its whole text, since a short hash lets another command sharing it pass unjudged
  * (#2142 lessons review: two commands differing in one number shared the 32 bit one first used).
@@ -436,7 +448,8 @@ export const issuesRead = (stdout: string): IssuesRead => {
 export const toCached = (rows: readonly IssueRow[], refs: Readonly<Record<string, string[]>>): CachedIssue[] =>
   rows.map(r => ({ n: r.number, ...labelFacts(r.labels), refs: refs[String(r.number)] ?? [] }))
 
-export type MatchHow = 'path' | 'suffix' | 'basename' | 'folder'
+/** How an issue was matched: to the file (path, suffix, basename, folder), or to the repository a command whose files cannot be named writes in (#2706). */
+export type MatchHow = 'path' | 'suffix' | 'basename' | 'folder' | 'repo'
 export type Match = { n: number; how: MatchHow; structural: string[]; priority: string | null }
 
 const baseOf = (p: string) => p.slice(p.lastIndexOf('/') + 1)
@@ -771,13 +784,21 @@ export const reasonProblem = (reason: unknown): string | undefined => {
 }
 
 const issueList = (h: Held) => h.shown.map(m => `#${m.n}`).join(', ')
+/** The fold a command whose files cannot be named may take (#2706), as the refusal and the card say it. */
+const foldWay = (h: Held, verb: 'fold' | 'folds' = 'fold') => `${verb} the structural fix for one of ${issueList(h)} into this work`
 
 /** Why a decision cannot be taken for this held edit, or undefined when it can. */
 export const decideProblem = (input: { decision?: unknown; reason?: unknown; issue?: unknown }, h: Held): string | undefined => {
   const d = input.decision
   if (typeof d !== 'string' || !(DECISIONS as readonly string[]).includes(d)) return `"${String(d)}" is not a decision: give "decision" as proceed, fold or restructure.`
   if (d === 'proceed') return reasonProblem(input.reason)
-  if (h.unread) return 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
+  // A command whose files cannot be named folds only into an issue its hold listed (#2706), and the
+  // refusal names that fold whenever the hold listed one.
+  if (h.unread && !(d === 'fold' && h.shown.length)) {
+    return h.shown.length
+      ? `This command writes a file whose name cannot be read, so there is no file to restructure: proceed with a reason, ${foldWay(h)}, or make the change with Edit or Write, which the area check can judge.`
+      : 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
+  }
   if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
@@ -799,7 +820,9 @@ export const holdCard = (h: Held): { reason: string; safeWay: string; note?: str
   if (h.unread) {
     return {
       reason: `This command writes a file whose name cannot be read before it runs (${h.unread.why}), and ${h.repo} has files the area check would hold.`,
-      safeWay: 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
+      safeWay: h.shown.length
+        ? `Claude proceeds with a reason, ${foldWay(h, 'folds')}, or makes the change with Edit or Write, which the area check can judge.`
+        : 'Claude proceeds with a reason, or makes the change with Edit or Write, which the area check can judge.',
     }
   }
   const parts: string[] = []
@@ -816,8 +839,9 @@ export const holdRefusal = (h: Held): string => {
   const facts = [c.reason, c.note].filter(Boolean).join(' ')
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
   const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
-  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways[0]}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
+  // For a command whose files cannot be named, the issues are the repository's it may fold into (#2706).
   if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
+  if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
   ways.push(
     h.agent === null
       ? `${call('"decision": "restructure"')} to ask Dan whether to restructure first`

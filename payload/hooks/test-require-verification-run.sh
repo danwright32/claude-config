@@ -90,6 +90,8 @@ case "$*" in
   *"/files"*) answer files.json ;;
   *"/comments"*) answer comments.json ;;
   *"/compare/"*) answer compare.json ;;
+  *"/contents/pr-"*) answer listing.json ;;
+  *" repos/acme/widget") answer repo.json ;;
   *) echo "fake gh: no answer for: $*" >&2; exit 1 ;;
 esac
 SH
@@ -117,6 +119,12 @@ areas = {"schema": "verification-areas/1", "mode": mode, "url": "http://127.0.0.
          "areas": [{"name": "invoices", "guide": ".claude/verification/guides/invoices.md", "owns": ["src/invoices/**"]},
                    {"name": "clients", "guide": ".claude/verification/guides/clients.md", "owns": ["src/clients/**"]}],
          "exempt": [{"glob": "docs/**", "why": "documentation only"}]}
+if spec.get("screens"):
+    # The pictures check (#2516): invoices declares one screen, shot with a seed declared made up.
+    areas["seeds"] = {"demo": {"synthetic": True, "why": "made up invoices from the fixture seed"}}
+    areas["areas"][0]["screens"] = [{"name": "list", "path": "/invoices", "seed": "demo"}]
+    if spec.get("shots_mode"):
+        areas["screenshots"] = {"mode": spec["shots_mode"]}
 if spec.get("areas") != "absent":
     w(os.path.join(fake, "areas.json"), spec.get("areas_text") or json.dumps(areas))
 w(os.path.join(fake, "guide-invoices.md"), GUIDE)
@@ -145,6 +153,26 @@ if not spec.get("no_receipt"):
     # The record posted is the one record render wrote (#1572), unless the case edits it afterwards.
     if not spec.get("unrendered"):
         v.remember_rendered(rid, [dict(rec, checks=[dict(c, result="fail") for c in rec["checks"]])] if spec.get("edited") else [rec], home)
+if spec.get("block"):
+    # A pictures block as screenshots.py publish and render make it, its pictures added in COMMIT.
+    import screenshots as s
+    COMMIT = "c" * 40
+    parsed = v.parse_areas(json.dumps(areas))
+    req = s.required_shots(parsed, ["invoices"])
+    folder = "pr-%d/%s" % (pr, HEAD)
+    base_rid = "20261022T225000Z-3333333-d4e5f6"
+    w(os.path.join(home, "receipts", base_rid, "receipt.json"), json.dumps({
+        "schema": "verification-receipt/1", "receipt_id": base_rid, "head_sha": BASE, "areas": ["invoices"]}))
+    m = {"schema": s.SCHEMA, "repo": "acme/widget", "pr": pr, "head_sha": HEAD, "base_sha": BASE,
+         "head_receipt": rid, "base_receipt": base_rid, "mode": "images", "link": None, "commit": COMMIT,
+         "folder": folder, "no_visible_change": False,
+         "screens": [{"area": "invoices", "screen": "list", "path": "/invoices", "seed": "demo", "synthetic": True}],
+         "shots": [dict(r, sha256="0" * 64, url=s.image_url("acme/widget", COMMIT, folder, r["name"])) for r in req]}
+    view = json.load(open(os.path.join(fake, "view.json")))
+    view["body"] = s.render_into_body(m, view["body"], home=home)
+    w(os.path.join(fake, "view.json"), json.dumps(view))
+    w(os.path.join(fake, "listing.json"), json.dumps([{"name": r["name"], "type": "file"} for r in req]))
+    w(os.path.join(fake, "repo.json"), json.dumps({"full_name": "acme/widget", "private": False}))
 PY
 
 N=0
@@ -349,6 +377,38 @@ vr_redirected() {  # $1 = what, $2 = command
 vr_redirected "a merge behind an error redirection" "2>/dev/null $MERGE 7 --squash --match-head-commit $HEAD"
 vr_redirected "a merge behind an output redirection" "> /dev/null $MERGE 7 --squash --match-head-commit $HEAD"
 vr_redirected "a merge behind input and an assignment" "</dev/null A=1 $MERGE 7 --squash --match-head-commit $HEAD"
+
+echo "require-verification-run: the screenshots check (#2516) warns first, blocks when switched, and has its own override"
+setup '{"screens": true}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)"
+if denied "$out"; then fail "warn mode screenshots refused the merge: ${out:0:400}"
+elif says "$ctx" "invoices list base 1440 light" && says "$ctx" "invoices list head 1280 dark" && says "$ctx" "warn mode"; then pass
+else fail "a UI pull request with no pictures did not warn, naming each one, behind a passing block mode run: ${out:0:600}"; fi
+setup '{"screens": true, "shots_mode": "block"}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "screenshots in block mode with none in the body" "$out" "invoices list head 1440 light" "ALLOW_NO_SCREENSHOTS=1"
+out="$(run_hook "ALLOW_NO_SCREENSHOTS=1 $MERGE 7 --squash --match-head-commit $HEAD")"
+ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)"
+if denied "$out"; then fail "ALLOW_NO_SCREENSHOTS=1 did not let the merge through: ${out:0:400}"
+elif says "$ctx" "overridden"; then pass
+else fail "the screenshots override was not said to the session: ${out:0:400}"; fi
+setup '{"screens": true, "shots_mode": "block", "block": true}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "a rendered pictures block whose files the branch holds, in block mode" "$out"
+grep -q "contents/pr-7/$HEAD?ref=cccccccccccccccccccccccccccccccccccccccc" "$FAKE/log" && grep -q " repos/acme/widget$" "$FAKE/log" \
+  && pass || fail "the pictures folder and the repository's visibility were not read: $(cat "$FAKE/log")"
+setup '{"screens": true, "shots_mode": "block", "block": true}'
+printf '[]' > "$FAKE/listing.json"
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a pictures block whose files the branch does not hold" "$out" "do not resolve"
+setup '{"screens": true, "shots_mode": "block", "block": true}'
+printf 'gh: Server Error (HTTP 502)\n' > "$FAKE/listing.json.fail"
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "the pictures folder cannot be listed" "$out" "HTTP 502"
+setup '{}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "block mode with no screens declared stays silent" "$out"
 
 echo "require-verification-run: warn mode allows, says the verdict, and tallies it by pull request"
 for pr in 1 2 3 4 5; do

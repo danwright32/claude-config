@@ -2,7 +2,7 @@
 #
 # The ONE home of this record's shape, for its one writer (claude-sync, after a pull's mirror) and
 # its one reader (rule-files-changed.sh, on every prompt), so the two cannot come to read it
-# differently (L83, L370). Functions only; it sets no variable of its own.
+# differently (L83, L370). Functions, and the one variable MODS_REPLACED_REL, the record's place under a config dir.
 #
 # WHY IT EXISTS. A running session keeps the mod code it loaded until Claude Code reloads that mod,
 # and Claude Code does not always: a headless session (claude -p, an SDK host) watches no mod folder
@@ -18,10 +18,13 @@
 # state/ is this Mac's own and is never synced, so the record cannot reach the other Mac, whose
 # pulls are its own.
 
-# mods_replaced_path_into <variable> <config dir>: sets the variable to the record's path without a
+# The record's place under a config dir, spelt once. The functions here join it to the dir with no
 # subshell, which the per prompt reader cannot afford; mods_replaced_file prints it for everyone else.
-mods_replaced_path_into(){ printf -v "$1" '%s/state/mods-replaced.tsv' "$2"; }
-mods_replaced_file(){ local p; mods_replaced_path_into p "$1"; printf '%s' "$p"; }
+# It is never set through printf -v "$1": a helper binding its caller's variable by a name only
+# running can tell leaves the Slack drafts gate sure of no variable in a script that sources this
+# file, so every path the script sources after it was refused unread (claude-config#2538).
+MODS_REPLACED_REL="state/mods-replaced.tsv"
+mods_replaced_file(){ printf '%s/%s' "$1" "$MODS_REPLACED_REL"; }
 
 # mods_replaced_note <config dir> <applied list> <stamp>
 # The applied list is claude-sync's own, "<added|updated|removed> TAB <path under the config dir>".
@@ -34,7 +37,7 @@ mods_replaced_note(){
   [ -s "$applied" ] || return 0
   names="$(awk -F '\t' '$2 ~ /^mods\/[^\/]+\/./ { split($2, p, "/"); if (!(p[2] in seen)) { seen[p[2]] = 1; print p[2] } }' "$applied")"
   [ -n "$names" ] || return 0
-  mods_replaced_path_into rec "$home"
+  rec="$home/$MODS_REPLACED_REL"
   mkdir -p "${rec%/*}" 2>/dev/null || return 1
   tmp="$rec.tmp.$$"
   # The names reach awk through its environment, never -v: macOS awk refuses a newline in a -v value
@@ -66,7 +69,7 @@ mods_replaced_note(){
 # names a path or a dot name, or carries no stamp, is skipped: it is not one this file's writer wrote.
 mods_replaced_lines(){
   local rec n s
-  mods_replaced_path_into rec "$1"
+  rec="$1/$MODS_REPLACED_REL"
   [ -f "$rec" ] || return 0
   while IFS=$'\t' read -r n s; do
     case "$n" in ''|.*|*/*) continue ;; esac

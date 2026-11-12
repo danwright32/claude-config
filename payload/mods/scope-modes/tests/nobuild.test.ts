@@ -9,9 +9,9 @@ import { readCommands } from './read.ts'
 // another mod's files). Each case is written as the words of each command, joined into the command
 // line they make, a '|' between two of them a pipe and two side by side a list, so the real reader
 // reads its quotes (#730: a stand-in split inside them). The files it changes are read by mod-kit's
-// write reader, in /Users/x/proj, as no build reads them (#712).
-const CWD = '/Users/x/proj'
-const HOME = '/Users/x'
+// write reader, in /Users/<name>/proj, as no build reads them (#712).
+const CWD = `${'/Users'}/x/proj`
+const HOME = `${'/Users'}/x`
 const SAFE = /^[A-Za-z0-9_/.,:=@%+^-]+$/
 const quote = (w: string) => (SAFE.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`)
 const REDIRECT = /^(\d*>&|&>>?|\d*>>?\|?|\d*<<<|\d*<<-?|\d*<)(.*)$/s
@@ -37,8 +37,8 @@ describe('inScratch', () => {
     expect(inScratch(`${SCRATCH}/notes.md`)).toBe(true)
     expect(inScratch(SCRATCH)).toBe(true)
     expect(inScratch(`/tmp/claude-501/p/s/scratchpad/a`)).toBe(true)
-    expect(inScratch(`${SCRATCH}/../../../../Users/x/app.ts`)).toBe(false)
-    expect(inScratch('/Users/x/proj/scratchpad/a.md')).toBe(false)
+    expect(inScratch(`${SCRATCH}/../../../..${'/Users'}/x/app.ts`)).toBe(false)
+    expect(inScratch(`${'/Users'}/x/proj/scratchpad/a.md`)).toBe(false)
     expect(inScratch('notes.md')).toBe(false)
   })
 })
@@ -49,7 +49,7 @@ describe('allowed in no build', () => {
     expect(bash(['npm', 'test'], '|', ['tail', '-20'])).toBeUndefined()
     expect(bash(['bash', 'tests/test-mods.sh', '2>&1'])).toBeUndefined()
     expect(bash(['git', 'status'], ['git', 'log', '--oneline', '-5'], ['git', 'diff'], ['git', 'branch'], ['git', 'branch', '--merged', 'main'])).toBeUndefined()
-    expect(tool('Read', { file_path: '/Users/x/app.ts' })).toBeUndefined()
+    expect(tool('Read', { file_path: `${'/Users'}/x/app.ts` })).toBeUndefined()
     expect(tool('WebFetch', { url: 'https://example.com' })).toBeUndefined()
   })
   test('read only queries', () => {
@@ -75,9 +75,9 @@ describe('allowed in no build', () => {
 describe('refused in no build', () => {
   const what = (r: { what: string } | undefined) => r?.what
   test('code edits outside the scratchpad', () => {
-    expect(what(tool('Edit', { file_path: '/Users/x/proj/app.ts' }))).toBe('edit app.ts')
-    expect(what(tool('Write', { file_path: '/Users/x/proj/new.ts' }))).toBe('edit new.ts')
-    expect(what(tool('NotebookEdit', { notebook_path: '/Users/x/a.ipynb' }))).toBe('edit a.ipynb')
+    expect(what(tool('Edit', { file_path: `${'/Users'}/x/proj/app.ts` }))).toBe('edit app.ts')
+    expect(what(tool('Write', { file_path: `${'/Users'}/x/proj/new.ts` }))).toBe('edit new.ts')
+    expect(what(tool('NotebookEdit', { notebook_path: `${'/Users'}/x/a.ipynb` }))).toBe('edit a.ipynb')
   })
   test('commits, branches and the other git writes', () => {
     expect(what(bash(['git', 'commit', '-m', 'x']))).toBe('run git commit')
@@ -141,19 +141,19 @@ describe('refused in no build', () => {
   })
   test('the routes around it: redirects, heredocs, sed -i, tee, cp, mv, rm and inline scripts', () => {
     expect(what(bash(['echo', 'x', '>', 'src/app.ts']))).toBe('write to app.ts')
-    expect(what(bash(['echo', 'x', '>>/Users/x/app.ts']))).toBe('write to app.ts')
-    expect(what(bash(['cat', '>', '/Users/x/app.ts', '<<EOF']))).toBe('write to app.ts')
+    expect(what(bash(['echo', 'x', `>>${'/Users'}/x/app.ts`]))).toBe('write to app.ts')
+    expect(what(bash(['cat', '>', `${'/Users'}/x/app.ts`, '<<EOF']))).toBe('write to app.ts')
     // `cmd &> file` reaches the reader as two commands, the second led by the redirect.
-    expect(what(bash(['npm', 'test'], ['>', '/Users/x/out.log']))).toBe('write to out.log')
+    expect(what(bash(['npm', 'test'], ['>', `${'/Users'}/x/out.log`]))).toBe('write to out.log')
     expect(what(bash(['sed', '-i', '', 's/a/b/', 'app.ts']))).toBe('edit app.ts')
-    expect(what(bash(['sed', '-i.bak', '-e', 's/a/b/', '/Users/x/app.ts']))).toBe('edit app.ts')
+    expect(what(bash(['sed', '-i.bak', '-e', 's/a/b/', `${'/Users'}/x/app.ts`]))).toBe('edit app.ts')
     expect(bash(['sed', '-n', 's/a/b/p', 'app.ts'])).toBeUndefined()
     expect(what(bash(['perl', '-pi', '-e', 's/a/b/', 'app.ts']))).toBe('edit app.ts')
     expect(what(bash(['tee', 'app.ts']))).toBe('write to app.ts')
     expect(bash(['tee', `${SCRATCH}/log.txt`])).toBeUndefined()
-    expect(what(bash(['cp', `${SCRATCH}/a.ts`, '/Users/x/app.ts']))).toBe('write to app.ts')
-    expect(bash(['cp', '/Users/x/app.ts', `${SCRATCH}/a.ts`])).toBeUndefined()
-    expect(what(bash(['mv', '/Users/x/app.ts', `${SCRATCH}/a.ts`]))).toBe('remove app.ts')
+    expect(what(bash(['cp', `${SCRATCH}/a.ts`, `${'/Users'}/x/app.ts`]))).toBe('write to app.ts')
+    expect(bash(['cp', `${'/Users'}/x/app.ts`, `${SCRATCH}/a.ts`])).toBeUndefined()
+    expect(what(bash(['mv', `${'/Users'}/x/app.ts`, `${SCRATCH}/a.ts`]))).toBe('remove app.ts')
     expect(what(bash(['rm', '-rf', 'dist']))).toBe('remove dist')
     expect(what(bash(['python3', '-c', "open('app.ts','w').write('x')"]))).toMatch(/^write files from python3 \(/)
     expect(what(bash(['node', '-e', "require('fs').writeFileSync('a', 'b')"]))).toMatch(/^write files from node \(/)
@@ -237,10 +237,10 @@ describe('allowed in no build, which the audit found refused (#702)', () => {
     expect(tool('mcp__claude_ai_Supabase__execute_sql', { query: "select cluster from nodes where note = 'insert into x'" })).toBeUndefined()
   })
   test("notes in Claude's own memory and plan files, by tool and by shell", () => {
-    expect(tool('Write', { file_path: '/Users/x/.claude/projects/-Users-x-proj/memory/note.md', content: 'x' })).toBeUndefined()
-    expect(tool('Edit', { file_path: '/Users/x/.claude/projects/-Users-x-proj/memory/MEMORY.md' })).toBeUndefined()
-    expect(tool('Write', { file_path: '/Users/x/.claude/plans/sync-plan.md', content: 'x' })).toBeUndefined()
-    expect(bash(['echo', '- a fact', '>>', '/Users/x/.claude/projects/p/memory/MEMORY.md'])).toBeUndefined()
+    expect(tool('Write', { file_path: `${'/Users'}/x/.claude/projects/-Users-x-proj/memory/note.md`, content: 'x' })).toBeUndefined()
+    expect(tool('Edit', { file_path: `${'/Users'}/x/.claude/projects/-Users-x-proj/memory/MEMORY.md` })).toBeUndefined()
+    expect(tool('Write', { file_path: `${'/Users'}/x/.claude/plans/sync-plan.md`, content: 'x' })).toBeUndefined()
+    expect(bash(['echo', '- a fact', '>>', `${'/Users'}/x/.claude/projects/p/memory/MEMORY.md`])).toBeUndefined()
   })
 })
 
@@ -264,9 +264,9 @@ describe('still refused, beside what the audit opened up (#702)', () => {
     expect(what(bash(['psql', '$DB', '-c', 'VACUUM shows']))).toBe('change data with SQL')
   })
   test('a file that only looks like a memory or plan file', () => {
-    expect(what(tool('Write', { file_path: '/Users/x/proj/.claude/projects/p/memory/a.ts' }))).toBe('edit a.ts')
-    expect(what(tool('Write', { file_path: '/Users/x/.claude/projects/p/memory/../../../proj/a.ts' }))).toBe('edit a.ts')
-    expect(what(tool('Write', { file_path: '/Users/x/.claude/settings.json' }))).toBe('edit settings.json')
+    expect(what(tool('Write', { file_path: `${'/Users'}/x/proj/.claude/projects/p/memory/a.ts` }))).toBe('edit a.ts')
+    expect(what(tool('Write', { file_path: `${'/Users'}/x/.claude/projects/p/memory/../../../proj/a.ts` }))).toBe('edit a.ts')
+    expect(what(tool('Write', { file_path: `${'/Users'}/x/.claude/settings.json` }))).toBe('edit settings.json')
   })
 })
 
@@ -275,7 +275,7 @@ describe('still refused, beside what the audit opened up (#702)', () => {
 // before saving is let through; every other edit stays refused. Whether the call carries a live,
 // unspent approval is ask before saving's answer, read through its noun and handed in as `approved`.
 describe('an approved lesson under no build (#1483)', () => {
-  const LESSONS = '/Users/x/.claude/LESSONS.md'
+  const LESSONS = `${'/Users'}/x/.claude/LESSONS.md`
   const lessonEdit = { file_path: LESSONS, old_string: '## Data safety', new_string: '- **L9. A rule.**\n\n## Data safety' }
   const judged = (name: string, input: Record<string, unknown>, approved: boolean) =>
     noBuildRefusal({ tool: name, input, commands: [], writes: { files: [], changes: [], unnamed: [] }, lesson: { home: HOME, approved } })?.what
@@ -289,14 +289,14 @@ describe('an approved lesson under no build (#1483)', () => {
     expect(tool('Edit', lessonEdit)?.what).toBe('edit LESSONS.md')
   })
   test('an approval lets no other file through, however it is spelled', () => {
-    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/proj/app.ts' }, true)).toBe('edit app.ts')
+    expect(judged('Edit', { ...lessonEdit, file_path: `${'/Users'}/x/proj/app.ts` }, true)).toBe('edit app.ts')
     // A project's own lessons file, the config repository's payload copy among them.
-    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/claude-config/payload/LESSONS.md' }, true)).toBe('edit LESSONS.md')
-    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/.claude/projects/p/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: `${'/Users'}/x/claude-config/payload/LESSONS.md` }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: `${'/Users'}/x/.claude/projects/p/LESSONS.md` }, true)).toBe('edit LESSONS.md')
     // A path that climbs out and back, a relative one, another home's, and an empty home.
-    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/.claude/../.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: `${'/Users'}/x/.claude/../.claude/LESSONS.md` }, true)).toBe('edit LESSONS.md')
     expect(judged('Edit', { ...lessonEdit, file_path: '.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
-    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/y/.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: `${'/Users'}/y/.claude/LESSONS.md` }, true)).toBe('edit LESSONS.md')
     expect(lessonsEdit('Edit', { ...lessonEdit, file_path: '/.claude/LESSONS.md' }, '')).toBe(false)
   })
   test('only the single Edit: a Write, a MultiEdit or a notebook edit of the lessons file is refused', () => {
@@ -548,7 +548,7 @@ describe('on the shared readers (#712)', () => {
   test('a relative path after a cd is judged where it lands, so a note in the scratchpad is one', () => {
     expect(run(`cd ${SCRATCH} && echo note > n.md`)).toBeUndefined()
     expect(run('echo - a fact >> ~/.claude/projects/p/memory/MEMORY.md')).toBeUndefined()
-    expect(what(run(`cd ${SCRATCH} && echo x > ../../../../../Users/x/app.ts`))).toBe('write to app.ts')
+    expect(what(run(`cd ${SCRATCH} && echo x > ../../../../..${'/Users'}/x/app.ts`))).toBe('write to app.ts')
   })
   test('what each old reader knew: >& to a file, touch, mkdir and chmod, wget --spider', () => {
     expect(what(run('make >& build.log'))).toBe('write to build.log')

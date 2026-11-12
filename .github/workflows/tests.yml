@@ -9,9 +9,10 @@ name: tests
 #
 # Pushes are watched on main only, with pull requests covering everything on its way there. That is
 # a filter on WHERE, not on WHAT, so it creates none of the blind spot above: every change still
-# gets a full unfiltered run, once. Watching every push as well ran the suite TWICE for every
-# commit on a branch with a PR open, since both triggers fire, and the second run tells you nothing
-# the first did not.
+# gets a full unfiltered run, once (a push to main whose exact tree a pull request run already
+# passed stands on that run, #2717, below at the deal job). Watching every push as well ran the
+# suite TWICE for every commit on a branch with a PR open, since both triggers fire, and the second
+# run tells you nothing the first did not.
 #
 # By hand too (claude-config#2463): `gh workflow run tests.yml --ref <branch>` runs a branch with
 # no pull request open, which is how a change to this workflow can be measured before anyone is
@@ -70,11 +71,23 @@ jobs:
     # Every job here exceeds the suite's own thirty minute ceiling, which test-claude-sync.sh holds
     # for every job in the file (#210). The deal itself takes seconds.
     timeout-minutes: 35
+    # The reuse check below reads the Actions API (artifacts and runs), which the workflow's own
+    # contents: read token cannot. Granted to this job alone, read only (claude-config#2690).
+    permissions:
+      contents: read
+      actions: read
     outputs:
       timings-key: ${{ steps.timings-cache.outputs.cache-matched-key }}
       parts: ${{ steps.deal.outputs.parts }}
       count: ${{ steps.deal.outputs.count }}
       dealt: ${{ steps.deal.outputs.dealt }}
+      # Empty for a full run. Set only when tools/ci-reuse-green-tree.sh proved an earlier green run
+      # of exactly this tree; then every part and the fan in skip their work and say which run.
+      reused-run: ${{ steps.reuse.outputs.reused-run }}
+      reused-sha: ${{ steps.reuse.outputs.reused-sha }}
+      reused-url: ${{ steps.reuse.outputs.reused-url }}
+      tree: ${{ steps.reuse.outputs.tree }}
+      tested-sha: ${{ steps.reuse.outputs.tested-sha }}
     steps:
       # First, as in the parts job, where the runner reads it (claude-config#1901).
       - name: Record when the job started
@@ -84,6 +97,42 @@ jobs:
       # the same tag, and on a major that runs on Node 24 rather than the deprecated Node 20
       # (claude-config#597). tests/test-ci-workflow.sh refuses a tag, or a major still on Node 20.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A REPEAT RUN OF A TREE THAT ALREADY PASSED (claude-config#2690). Dan chose on 2026-11-10 to
+      # keep the merge gate that refuses a head behind main (#766) and make the run that follows
+      # `gh pr update-branch` cheap instead, when the tree it produces has already passed: on a pull
+      # request whose exact tree has an earlier green run of this workflow in this repository (never
+      # a fork's), the parts and the fan in still run and report under their own names (L305), but
+      # skip their work and say in their logs which run and commit they stood on. Proof only, never
+      # a path (L312); the helper says what the proof is, and ANY doubt, an API failure included, is
+      # the full suite. A push to main reuses only a PULL REQUEST run of its exact tree, the run its
+      # merge followed (Dan, 2026-11-10, #2717), so every tree on main still has a verdict of its own
+      # (#594); a sync push, a push elsewhere and a run by hand run in full. The tree is the
+      # checkout's, so for a pull request it is GitHub's merge commit, the tree this run would test.
+      # A helper that exits non zero is a full run too, whatever it printed before failing.
+      - name: A green run of this exact tree
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_EVENT: ${{ github.event_name }}
+          REUSE_REF: ${{ github.ref }}
+          REUSE_REPO: ${{ github.repository }}
+          REUSE_RUN_ID: ${{ github.run_id }}
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          sha="$(git rev-parse HEAD)"
+          echo "This run tests commit $sha, tree $tree."
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          echo "tested-sha=$sha" >> "$GITHUB_OUTPUT"
+          set +e
+          REUSE_TREE="$tree" bash tools/ci-reuse-green-tree.sh > "$RUNNER_TEMP/reuse.out"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "The reuse check itself exited $rc, so nothing it printed is used: running the full suite."
+            : > "$RUNNER_TEMP/reuse.out"
+          fi
+          cat "$RUNNER_TEMP/reuse.out" >> "$GITHUB_OUTPUT"
 
       # What the last runs MEASURED, carried between them (claude-config#203, #144). Two stores
       # live here: what each suite cost, which decides the order the runner launches them in, and
@@ -249,10 +298,23 @@ jobs:
       - name: Record when the job started
         run: echo "HOOK_TESTS_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
 
+      # On a reuse (claude-config#2690) this is the only step after the first that runs, so the
+      # check still reports under its own name and its log says what it stood on rather than reading
+      # as a fresh pass. Every other step here carries the opposite condition, and
+      # tests/test-ci-workflow.sh refuses a step that does not.
+      - name: Reused a green run of this exact tree
+        if: needs.deal.outputs.reused-run != ''
+        env:
+          RUN_URL: ${{ needs.deal.outputs.reused-url }}
+          RUN_SHA: ${{ needs.deal.outputs.reused-sha }}
+          TREE: ${{ needs.deal.outputs.tree }}
+        run: echo "NOT RUN AGAIN. Tree $TREE already passed in run $RUN_URL on commit $RUN_SHA, so this part's suites were not run in this run."
+
       # Pinned to a commit, with the version beside it, so the code that runs cannot change under
       # the same tag, and on a major that runs on Node 24 rather than the deprecated Node 20
       # (claude-config#597). tests/test-ci-workflow.sh refuses a tag, or a major still on Node 20.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.deal.outputs.reused-run == ''
         with:
           # History IS needed now: the changed-section step below diffs this push against its base
           # to work out which sections to run on their own, and a shallow clone has no base commit
@@ -265,7 +327,7 @@ jobs:
       # neither does this.
       - name: Restore what the deal was made from
         id: timings-cache
-        if: needs.deal.outputs.timings-key != ''
+        if: needs.deal.outputs.reused-run == '' && needs.deal.outputs.timings-key != ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/claude-config
@@ -273,6 +335,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Record the environment the suite is judged in
+        if: needs.deal.outputs.reused-run == ''
         # Printed rather than assumed. Several checks shell out to pgrep, mktemp, rsync, jq and
         # perl, and a version difference here is the first thing worth seeing when a run fails on
         # the runner but passes on a Mac.
@@ -312,18 +375,22 @@ jobs:
       # the design rounds suites to report unmeasured.
       - name: Where the separate headless Chrome goes
         id: hidden-chrome
+        if: needs.deal.outputs.reused-run == ''
         run: echo "root=$HOME/$(jq -r .root payload/skills/design-rounds/score/shared-playwright.json)" >> "$GITHUB_OUTPUT"
 
       - name: Restore the separate headless Chrome
+        if: needs.deal.outputs.reused-run == ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.hidden-chrome.outputs.root }}
           key: design-score-playwright-${{ runner.os }}-${{ hashFiles('payload/skills/design-rounds/score/shared-playwright.json') }}
 
       - name: Install the separate headless Chrome
+        if: needs.deal.outputs.reused-run == ''
         run: bash payload/skills/design-rounds/score/install-playwright.sh
 
       - name: Install the pinned TypeScript compiler
+        if: needs.deal.outputs.reused-run == ''
         # tools/check-mod-noun-waits.sh resolves every call a mod's noun makes with this compiler's
         # own checker (#895) and refuses outright when it cannot load it, so tests/test-mods.sh
         # needs it here. The lockfile pins the version and carries the linux-x64 binary.
@@ -332,9 +399,11 @@ jobs:
       # What is in the store now came from the deal; anything newer than this was written by this
       # part's suites, and only that is handed to the suite job to merge.
       - name: Mark the store before the suites run
+        if: needs.deal.outputs.reused-run == ''
         run: touch "$RUNNER_TEMP/before-suites"
 
       - name: Every suite of this part
+        if: needs.deal.outputs.reused-run == ''
         # ONE step, and no list. This used to be four steps naming four directories, which is the
         # hand maintained list the runner itself refuses to keep (L96) written one level up in a
         # file nobody reads when adding a test. Written down 2026-08-21, payload/skills/milestone/
@@ -390,6 +459,7 @@ jobs:
           bash payload/hooks/run-all-tests.sh 2>&1 | tee "$RUNNER_TEMP/run-all-tests.log"
 
       - name: The measured timings were actually used
+        if: needs.deal.outputs.reused-run == ''
         # #203 and #144 both decide how work is divided from stored measurements, and the cache
         # step above carries those between runs. Nothing noticed it STOPPING. The runner prints a
         # passing suite's own output nowhere, so if the cache key scheme broke or the store stopped
@@ -463,6 +533,7 @@ jobs:
       # part ran can never overwrite the fresh one. Kept only from a passing part, as the single job
       # kept its cache only on a pass.
       - name: Collect what this part measured
+        if: needs.deal.outputs.reused-run == ''
         run: |
           mkdir -p "$RUNNER_TEMP/measured"
           if [ -d "$HOME/.cache/claude-config" ]; then
@@ -477,6 +548,7 @@ jobs:
           tar -C "$RUNNER_TEMP/measured" -cf "$RUNNER_TEMP/measured.tar" .
 
       - name: Hand what this part measured to the suite job
+        if: needs.deal.outputs.reused-run == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: part-timings-${{ matrix.part }}
@@ -486,7 +558,7 @@ jobs:
 
       - name: Each changed suite section, run on its own
         # In the last part only, so it runs once per push as it did in the single job (#2463).
-        if: matrix.part == fromJSON(needs.deal.outputs.count)
+        if: needs.deal.outputs.reused-run == '' && matrix.part == fromJSON(needs.deal.outputs.count)
         # The suite's sections are independent: every one after the prelude runs alone, and the
         # single real dependency left is declared with a `# needs:` comment. How many that is is
         # not written down here: it changes, and a number in a comment goes stale silently (#140).
@@ -545,10 +617,23 @@ jobs:
             exit 1
           fi
 
+      # On a reuse (claude-config#2690) the verdict above still runs, and this says, in the log and
+      # on the run's summary page, which run and commit the green stands on. Nothing below runs.
+      - name: Reused a green run of this exact tree
+        if: needs.deal.outputs.reused-run != ''
+        env:
+          RUN_URL: ${{ needs.deal.outputs.reused-url }}
+          RUN_SHA: ${{ needs.deal.outputs.reused-sha }}
+          TREE: ${{ needs.deal.outputs.tree }}
+        run: |
+          msg="NOT RUN AGAIN. Tree $TREE already passed in run $RUN_URL on commit $RUN_SHA, so no suite ran in this run and this green is that run's."
+          echo "$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
       # The store the deal read, then each part's new records over it, saved as the one entry the
       # next run's deal restores. Saved only here, once every part has passed.
       - name: Restore what the deal was made from
-        if: needs.deal.outputs.timings-key != ''
+        if: needs.deal.outputs.reused-run == '' && needs.deal.outputs.timings-key != ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/claude-config
@@ -556,12 +641,14 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Fetch what each part measured
+        if: needs.deal.outputs.reused-run == ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: part-timings-*
           path: ${{ runner.temp }}/parts
 
       - name: Merge every part's records into the store
+        if: needs.deal.outputs.reused-run == ''
         env:
           COUNT: ${{ needs.deal.outputs.count }}
         run: |
@@ -576,7 +663,34 @@ jobs:
           echo "The store now holds $(find "$HOME/.cache/claude-config/suite-timings" -type f 2>/dev/null | wc -l) suite record(s)."
 
       - name: Save the merged store for the next run
+        if: needs.deal.outputs.reused-run == ''
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/claude-config
           key: claude-config-timings-${{ github.run_id }}
+
+      # LAST, so only a full run whose every step passed records its tree for a later run to stand on
+      # (claude-config#2690), and never a run that itself reused, so a reuse always points at a run
+      # that ran the suites. The record holds the commit this run tested (for a pull request, the
+      # merge commit GitHub made), which the helper reads back from GitHub by its sha before trusting
+      # it. The name is the tree, the one key a later run can look up. Kept a week: the merge line
+      # it serves is hours long, and a missing record only means a full run.
+      - name: Write down the tree this run proved
+        if: needs.deal.outputs.reused-run == ''
+        env:
+          TREE: ${{ needs.deal.outputs.tree }}
+          SHA: ${{ needs.deal.outputs.tested-sha }}
+        run: |
+          [[ "$TREE" =~ ^[0-9a-f]{40}$ ]] && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "The deal handed over tree '$TREE' and commit '$SHA', so there is nothing true to record." >&2; exit 1; }
+          mkdir -p "$RUNNER_TEMP/green-tree"
+          printf 'sha=%s\ntree=%s\nrun=%s\n' "$SHA" "$TREE" "$GITHUB_RUN_ID" > "$RUNNER_TEMP/green-tree/tested.txt"
+          cat "$RUNNER_TEMP/green-tree/tested.txt"
+
+      - name: Record that this tree passed
+        if: needs.deal.outputs.reused-run == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: green-tree-${{ needs.deal.outputs.tree }}
+          path: ${{ runner.temp }}/green-tree/tested.txt
+          retention-days: 7
+          if-no-files-found: error

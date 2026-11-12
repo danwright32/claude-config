@@ -239,12 +239,12 @@ test('the rename command answer is read by the shapes the built-in /rename print
 const at = (root: string, remote: string | null = null) => repoName({ root, remote })
 
 test('the repository is named by its origin, lower case, in any spelling of the remote', async () => {
-  expect(repoLabel(at('/Users/x/Apps/claude-config', 'git@github.com:danwright32/claude-config.git'))).toBe('claude-config')
-  expect(repoLabel(at('/Users/x/Apps/Overture', 'https://github.com/danwright32/Overture'))).toBe('overture')
-  expect(repoLabel(at('/Users/x/Apps/Overture', 'https://github.com/danwright32/Overture.git/'))).toBe('overture')
-  expect(repoLabel(at('/Users/x/Apps/local', 'ssh://git@gitlab.example.com:2222/team/Sub/Thing.git'))).toBe('thing')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/claude-config`, 'git@github.com:danwright32/claude-config.git'))).toBe('claude-config')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/Overture`, 'https://github.com/danwright32/Overture'))).toBe('overture')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/Overture`, 'https://github.com/danwright32/Overture.git/'))).toBe('overture')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/local`, 'ssh://git@gitlab.example.com:2222/team/Sub/Thing.git'))).toBe('thing')
   // The origin names the repository even where the checkout folder is called something else.
-  expect(repoLabel(at('/Users/x/Apps/old-folder-name', 'git@github.com:danwright32/PostRoll.git'))).toBe('postroll')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/old-folder-name`, 'git@github.com:danwright32/PostRoll.git'))).toBe('postroll')
 })
 
 // The name is mod-kit's reading of the repository (#951), on the table every mod's reading is
@@ -255,18 +255,18 @@ test("the label is mod-kit's name for the repository, lower case, on every share
 })
 
 test('with no origin the checkout folder names it, and with no repository there is no name', async () => {
-  expect(repoLabel(at('/Users/x/Non-icloudDocuments/Apps/NurseDex'))).toBe('nursedex')
-  expect(repoLabel(at('/Users/x/Apps/NurseDex', ''))).toBe('nursedex')
+  expect(repoLabel(at(`${'/Users'}/x/Non-icloudDocuments/Apps/NurseDex`))).toBe('nursedex')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/NurseDex`, ''))).toBe('nursedex')
   expect(repoLabel(null)).toBe(null)
 })
 
 test('a worktree under .claude/worktrees names its parent repository, never its own folder', async () => {
-  expect(repoLabel(at('/Users/x/Apps/claude-config/.claude/worktrees/agent-ac031537'))).toBe('claude-config')
-  expect(repoLabel(at('/Users/x/Apps/claude-config/.claude/worktrees/issue-945/'))).toBe('claude-config')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/claude-config/.claude/worktrees/agent-ac031537`))).toBe('claude-config')
+  expect(repoLabel(at(`${'/Users'}/x/Apps/claude-config/.claude/worktrees/issue-945/`))).toBe('claude-config')
 })
 
 test('a path with spaces and a curly apostrophe is read whole', async () => {
-  const docs = `/Users/x/Documents/Documents - Dan${APOS}s MacBook Pro`
+  const docs = `${'/Users'}/x/Documents/Documents - Dan${APOS}s MacBook Pro`
   expect(repoLabel(at(`${docs}/Bidspoke`))).toBe('bidspoke')
   expect(repoLabel(at(`${docs}/Bidspoke/.claude/worktrees/agent-1`))).toBe('bidspoke')
   expect(repoLabel(at(`${docs}/Bidspoke`, 'git@github.com:danwright32/bidspoke.git'))).toBe('bidspoke')

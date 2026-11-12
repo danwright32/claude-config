@@ -218,7 +218,7 @@ wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L
   # Only while a review is PENDING: with no marker nothing is running, so there is nothing to wait
   # for and the absence is the answer.
   local f; f="$(final_of "$1")"
-  hang_wait "[ -e '$f' ] || [ ! -e '$f.pending' ]"
+  hang_wait '[ -e "$f" ] || [ ! -e "$f.pending" ]'   # written out: one built from a value is unreadable to the Slack drafts gate (#2538)
   [ -e "$f" ] || return 1
   # The review file is not the runner's last act: it then appends the outcome ledger row and only
   # then removes its input (ai-review-run.py; a review in groups removes its run's parts folder after
@@ -227,7 +227,7 @@ wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L
   # on 2026-10-13 with a 2 s pause put in front of ar_pr_ledger, which failed 18 checks of this
   # suite). So the wait ends on the input being gone.
   local n="${f##*/}"; n="${n%.txt}"
-  hang_wait "! { [ -e '$AI_REVIEW_STATE_DIR/$n.diff' ] || compgen -G '$AI_REVIEW_STATE_DIR/parts/$n.*' >/dev/null; }"
+  hang_wait '! { [ -e "$AI_REVIEW_STATE_DIR/$n.diff" ] || compgen -G "$AI_REVIEW_STATE_DIR/parts/$n.*" >/dev/null; }'
   return 0
 }
 # Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
@@ -586,7 +586,11 @@ check_eq "the redactor leaves a commit id, a long name, and flags without a lite
 # With its rule file missing the redactor withholds and fails, never passes the text through (L42).
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$WORKDIR/norules" ai-review-common.sh >/dev/null \
   || bad "#2204 ai-review-common.sh could not be installed with what it sources"
-out="$(printf 'Error: the key %s\n' "$SK" | bash -c '. "$1" && ar_redact' _ "$WORKDIR/norules/ai-review-common.sh")"; rc=$?
+# Driven by a script written beside the copy and run as a process of its own, which sources the
+# copy from its own directory. Sourcing the copy from here names a path made at run time, which the
+# Slack drafts gate cannot work out (claude-config#2538).
+printf '%s\n' '. "${BASH_SOURCE[0]%/*}/ai-review-common.sh" && ar_redact' > "$WORKDIR/norules/drive-norules.sh"
+out="$(printf 'Error: the key %s\n' "$SK" | bash "$WORKDIR/norules/drive-norules.sh")"; rc=$?
 check_eq "a redactor without its rules fails" "1" "$rc"
 check_not "a redactor without its rules never passes the text through" "$SK" "$out"
 check "and says it withheld it" "withheld" "$out"
@@ -692,7 +696,7 @@ reviews_busy(){ bash -c ". '$DIR/lib/merge-turn.sh' && . '$DIR/lib/merge-phase.s
 reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a running review published no phase record in ${HANG_S}s"
+hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 a running review published no phase record in ${HANG_S}s"
 rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 rec="$(cat "$rec_file" 2>/dev/null)"
 check "#1730 the record says a review is running" "phase review" "$rec"
@@ -703,34 +707,34 @@ check_eq "#1730 good until its deadline plus the slack, never open ended" "$((st
 check_eq "#1730 a reader believes it busy, by its pid compared whole (#1959)" "$rpid" "$(reviews_busy | cut -f1)"
 : > "$HOLD"
 wait_final "$HEAD_SHA" || bad "#1730 the held review did not finish once let go"
-hang_wait "! compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 a review that finished left its phase record behind"
+hang_wait '! compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 a review that finished left its phase record behind"
 check_eq "#1730 and once it has finished nothing is busy" "" "$(reviews_busy)"
 # A reviewer killed outright is not believed busy afterwards, whatever its record says.
 reset_state; rm -rf "$MWR_PHASE_DIR"
 HOLD="$WORKDIR/hold-3g3b"; rm -f "$HOLD"
 FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || bad "#1730 the second review published no phase record in ${HANG_S}s"
+hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || bad "#1730 the second review published no phase record in ${HANG_S}s"
 rec_file=""; for rec_file in "$MWR_PHASE_DIR"/[0-9]*; do break; done; rpid="${rec_file##*/}"
 check_eq "#1730 control: busy while it runs" "$rpid" "$(reviews_busy | cut -f1)"
 kill -KILL "$rpid" 2>/dev/null
 # Gone: not running, or killed and not yet reaped (state Z), read whole rather than piped into a
 # matcher that can leave early under pipefail.
 gone_pid(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) return 0 ;; *) return 1 ;; esac; }
-hang_wait "gone_pid '$rpid'" || bad "#1730 the killed reviewer was still running"
+hang_wait 'gone_pid "$rpid"' || bad "#1730 the killed reviewer was still running"
 check_eq "#1730 a reviewer killed outright is not believed busy" "" "$(reviews_busy)"
 : > "$HOLD"
 # A KILLED REVIEW'S INPUT (claude-config#1745). The reviewer removed its copy of the changes only in
 # its own `finally`, which a SIGKILL never reaches, so killed reviews left their inputs behind and the
 # next reset waited on them; this case used to remove it by hand. The runner around the reviewer now
 # removes it however the reviewer ended.
-hang_wait "! compgen -G '$AI_REVIEW_STATE_DIR/*.diff' >/dev/null"
+hang_wait '! compgen -G "$AI_REVIEW_STATE_DIR/*.diff" >/dev/null'
 check_eq "#1745 a reviewer killed with SIGKILL leaves no input behind" "" "$(compgen -G "$AI_REVIEW_STATE_DIR/*.diff")"
 # The runner killed outright too: nothing of the review is left to clean up, so the next review to
 # start sweeps an input whose reviewer, judged by pid and start time, is gone.
 held_review(){ # held_review <hold file> -> prints the reviewer's pid once its phase record is up
   rm -rf "$MWR_PHASE_DIR"; rm -f "$1"
   FAKE_CLAUDE_HOLD="$1" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
-  hang_wait "compgen -G '$MWR_PHASE_DIR/[0-9]*' >/dev/null" || return 1
+  hang_wait 'compgen -G "$MWR_PHASE_DIR/[0-9]*" >/dev/null' || return 1
   local f; for f in "$MWR_PHASE_DIR"/[0-9]*; do printf '%s' "${f##*/}"; return 0; done
 }
 head_input="$AI_REVIEW_STATE_DIR/$(basename "$(final_of "$HEAD_SHA")" .txt).diff"
@@ -739,7 +743,7 @@ rpid="$(held_review "$HOLD")" || bad "#1745 the held review published no phase r
 rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
 check "#1745 control: the held review's input is there while it runs" "yes" "$([ -e "$head_input" ] && echo yes)"
 kill -KILL "$rrun" "$rpid" 2>/dev/null
-hang_wait "gone_pid '$rpid' && gone_pid '$rrun'" || bad "#1745 the killed review was still running"
+hang_wait 'gone_pid "$rpid" && gone_pid "$rrun"' || bad "#1745 the killed review was still running"
 check "#1745 control: with its runner killed too, the input is left" "yes" "$([ -e "$head_input" ] && echo yes)"
 prr start --dir "$REPO" --sha "$BASE_SHA" >/dev/null
 check_eq "#1745 the next review to start sweeps the input of a reviewer that is gone" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
@@ -753,10 +757,10 @@ check "#1745 a running reviewer's input survives another review's sweep" "yes" "
 # Stopped with SIGTERM after its runner was killed outright, the reviewer removes its own input.
 rrun="$(ps -o ppid= -p "$rpid" 2>/dev/null | tr -d ' ')"
 kill -KILL "$rrun" 2>/dev/null
-hang_wait "gone_pid '$rrun'" || bad "#1745 the runner was still running"
+hang_wait 'gone_pid "$rrun"' || bad "#1745 the runner was still running"
 kill -TERM "$rpid" 2>/dev/null
-hang_wait "gone_pid '$rpid'" || bad "#1745 the reviewer did not stop on SIGTERM"
-hang_wait "[ ! -e '$head_input' ]"
+hang_wait 'gone_pid "$rpid"' || bad "#1745 the reviewer did not stop on SIGTERM"
+hang_wait '[ ! -e "$head_input" ]'
 check_eq "#1745 a reviewer stopped with SIGTERM removes its own input" "no" "$([ -e "$head_input" ] && echo yes || echo no)"
 : > "$HOLD"
 # SIGINT at its default is Python's own default_int_handler, never SIG_DFL, so a check for SIG_DFL
@@ -817,7 +821,7 @@ for flag in --dir --sha --base-ref --pr; do
   bash "$LIB" check "$flag" >"$WORKDIR/trail.out" 2>&1 &
   pid=$!
   # Waited on with the hang ceiling: it was 5 s, which bash starting under load can pass (#1620; a setting, not a measurement).
-  hang_wait "! kill -0 $pid 2>/dev/null"
+  hang_wait '! kill -0 "$pid" 2>/dev/null'
   if kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; bad "$flag given last hangs instead of being refused"
   else
@@ -901,7 +905,9 @@ bash -c '. "$1" && ar_readkeys_valid "$2" 0123456789abcdef' _ "$DIR/lib/ai-revie
 # Never rewritten, only appended: every key issued, first and seventieth, still reads (a trim raced
 # concurrent appends and dropped keys that had been shown; lessons review of #795).
 firstk="$(bash -c '. "$1"; ar_readkeys_issue "$2"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
-lastk="$(bash -c '. "$1"; for i in $(seq 1 70); do k="$(ar_readkeys_issue "$2")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
+# The file is taken from its positional before the loop, so the Slack drafts gate can work out the
+# path sourced (claude-config#2538).
+lastk="$(bash -c 'f="$2"; . "$1"; for i in $(seq 1 70); do k="$(ar_readkeys_issue "$f")"; done; printf %s "$k"' _ "$DIR/lib/ai-review-common.sh" "$fk")"
 bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$firstk" && ok || bad "an early key stops reading after many showings"
 bash -c '. "$1" && ar_readkeys_valid "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$fk" "$lastk" && ok || bad "the newest key does not read"
 rm -f "$WORKDIR"/key.*
@@ -1337,11 +1343,21 @@ QNAME="$(printf 'caf\303\251.gen')"
 printf '*.gen linguist-generated\n' > "$QREPO/.gitattributes"; printf 'a\n' > "$QREPO/$QNAME"
 QG add -A; QG commit -q -m base; QB="$(QG rev-parse HEAD)"
 printf 'b\n' > "$QREPO/$QNAME"; QG commit -q -am change; QH="$(QG rev-parse HEAD)"
-qgen="$(cd "$QREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_generated_paths '$QB' '$QH'")"
+# Each library call below hands the library's path and the arguments in as positionals rather than
+# writing them into the string, so the Slack drafts gate can work out the path sourced in the
+# directory the call runs in (claude-config#2538).
+qgen="$(cd "$QREPO" && bash -c '. "$1"; ar_generated_paths "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$QB" "$QH")"
 check_eq "#591 a generated file with a non-ASCII name is found by its real name" "$QNAME" "$qgen"
 # A git too old for check-attr --source refuses it, and the working tree's attributes are read
 # instead: the pipe through tr must not hide that refusal and skip the fallback.
-qold="$(cd "$QREPO" && bash -c "git(){ case \" \$* \" in *' --source '*) echo 'error: unknown option source' >&2; return 129 ;; esac; command git \"\$@\"; }; . '$DIR/lib/ai-review-common.sh'; ar_generated_paths '$QB' '$QH'")"
+# The old git is a stand in first on PATH, which passes everything else to the real one.
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORKDIR/oldgit"
+printf '%s\n' '#!/bin/sh' \
+  'case " $* " in *" --source "*) echo "error: unknown option source" >&2; exit 129 ;; esac' \
+  "exec '$REAL_GIT' \"\$@\"" > "$WORKDIR/oldgit/git"
+chmod +x "$WORKDIR/oldgit/git"
+qold="$(cd "$QREPO" && PATH="$WORKDIR/oldgit:$PATH" bash -c '. "$1"; ar_generated_paths "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$QB" "$QH")"
 check_eq "#591 and on a git with no check-attr --source, the working tree's attributes still find it" "$QNAME" "$qold"
 
 # ===========================================================================================
@@ -1512,7 +1528,7 @@ check "#583 and naming, uncut, what it would have left out" "scripts/fixtures/bi
 check_not "#583 never saying a review left them out, since none ran" "Not read by this review" "$out"
 check_eq "#583 and no reviewer ran" "0" "$(calls)"
 # The proof is the content: a copy is identical only to the file at the same path in mod-kit.
-cand="$(cd "$REPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DATA_BASE' '$DATA_SHA'")"
+cand="$(cd "$REPO" && bash -c '. "$1"; ar_left_out_candidates "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$DATA_BASE" "$DATA_SHA")"
 check "#583 the identical copy is a candidate" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$cand"
 check_not "#583 the drifted copy is not" "drift.ts" "$cand"
 check_not "#583 code under fixtures is not" "helper.sh" "$cand"
@@ -1527,7 +1543,7 @@ MG add .gitattributes old.gen new.gen; MG commit -q -m base; MB="$(MG rev-parse 
 printf 'old.gen linguist-generated\nnew.gen linguist-generated\n' > "$MREPO/.gitattributes"
 printf 'b\n' > "$MREPO/old.gen"; printf 'b\n' > "$MREPO/new.gen"
 MG commit -q -am change; MH="$(MG rev-parse HEAD)"
-mcand="$(cd "$MREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$MB' '$MH'")"
+mcand="$(cd "$MREPO" && bash -c '. "$1"; ar_left_out_candidates "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$MB" "$MH")"
 check "#583 a file the base already marked generated is a candidate" "old.gen" "$mcand"
 check_not "#583 a file marked generated only by this branch is not" "new.gen" "$mcand"
 
@@ -1560,7 +1576,7 @@ seal_page "the edited one" | sed 's/the edited one/the edited one, by hand/' > "
 seal_page "unsealed" | sed '$d' > "$DREPO/docs/design/unsealed.html"
 seal_page "outside docs/design" > "$DREPO/src/page.html"
 DG add docs src; DG commit -q -m pages; DH="$(DG rev-parse HEAD)"
-dcand="$(cd "$DREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && bash -c '. "$1"; ar_left_out_candidates "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$DB" "$DH")"
 check "#1696 a sealed design round page is a candidate" $'docs/design/picker.html\tdesign\t' "$dcand"
 check "#1696 named as a settled design round page in the left out note" "settled design round page" "$dcand"
 check "#1696 one in a folder under docs/design, of any case, too" "docs/design/older/round.HTML" "$dcand"
@@ -1577,25 +1593,29 @@ design_tree(){   # $1 = a name, $2 = the stand-in design_file.py or nothing for 
   mkdir -p "$t/hooks" "$t/skills/design-rounds"
   cp -R "$DIR/lib" "$t/hooks/lib"
   [ -z "$2" ] || cp "$2" "$t/skills/design-rounds/design_file.py"
+  # The copy is driven by a script written beside it and run as a process of its own, which
+  # sources the copy from its own directory and runs the call it is handed. Sourcing the copy from
+  # here names a path made at run time, which the Slack drafts gate cannot work out (#2538).
+  printf '%s\n' '. "${BASH_SOURCE[0]%/*}/ai-review-common.sh" || exit' '"$@"' > "$t/hooks/lib/drive-copy.sh"
   printf '%s' "$t/hooks/lib"
 }
 DLIB="$(design_tree none "")"
-dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && bash "$DLIB/drive-copy.sh" ar_left_out_candidates "$DB" "$DH")"
 check_not "#1696 with no design_file.py to check the seal, no page is" "docs/design" "$dcand"
 printf 'import sys\nsys.exit(0)\n' > "$WORKDIR/silent_design_file.py"
 DLIB="$(design_tree silent "$WORKDIR/silent_design_file.py")"
-dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && bash "$DLIB/drive-copy.sh" ar_left_out_candidates "$DB" "$DH")"
 check_not "#1696 nor with an older design_file.py that exits 0 saying nothing" "docs/design" "$dcand"
 # A checker that calls every page sealed, beside a copy of the lib: the control that the scratch tree
 # is what decides, so the two checks above measure their stand-ins and not the real check.
 printf 'import sys\nsys.stdin.read()\nprint("sealed")\n' > "$WORKDIR/always_sealed.py"
 DLIB="$(design_tree always "$WORKDIR/always_sealed.py")"
-dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && bash "$DLIB/drive-copy.sh" ar_left_out_candidates "$DB" "$DH")"
 check "#1696 the checker beside the lib copy decides (control)" "docs/design/unsealed.html" "$dcand"
 # And no setting reaches past the installed check, under a test run's marker or not: the setting
 # #1711 added is exported with the same always sealed program, and the real lib still reads the
 # unsealed and hand edited pages and leaves out only the sealed one.
-dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-test-pr-review.$$}" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-test-pr-review.$$}" bash -c '. "$1"; ar_left_out_candidates "$2" "$3"' _ "$DIR/lib/ai-review-common.sh" "$DB" "$DH")"
 check_not "#1696 an exported AR_DESIGN_FILE_PY does not change the verdict, so an unsealed page is still read" "unsealed.html" "$dcand"
 check_not "#1696 and a page edited after its seal is still read" "edited.html" "$dcand"
 check "#1696 while the installed check still leaves out the sealed page" "docs/design/picker.html" "$dcand"
@@ -1858,7 +1878,7 @@ check "#2307 and the start line still names it" "docs/page.html line 1 (19.5 KB)
 # like file headers, and the line on each side of the change.
 EMB_LOG="$WORKDIR/embedded.log"; rm -f "$EMB_LOG"
 filt="$(printf '%s\n' 'diff --git a/x.txt b/x.txt' '--- a/x.txt' '+++ b/x.txt' '@@ -5,3 +5,3 @@ head' ' keep' "-$(b64run 1200)" "--- a/not-a-header $(b64run 1100)" '+++ b/also-content' "+$(b64run 1300)" \
-  | AR_EMBEDDED_LOG="$EMB_LOG" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_elide_embedded")"
+  | AR_EMBEDDED_LOG="$EMB_LOG" bash -c '. "$1"; ar_elide_embedded' _ "$DIR/lib/ai-review-common.sh")"
 check "#2307 a removed run is named by its line in the base" "-[base64 left out of this review: 1.1 KB, x.txt line 6 of the base]" "$filt"
 check "#2307 a removed line that looks like a header is still content" "--- a/not-a-header [base64 left out of this review: 1.0 KB, x.txt line 7 of the base]" "$filt"
 check "#2307 an added run is named by its line in the head" "+[base64 left out of this review: 1.2 KB, x.txt line 7]" "$filt"
@@ -1871,11 +1891,15 @@ FREPO="$WORKDIR/fullfail"; rm -rf "$FREPO"; git init -q "$FREPO"
 git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m base
 printf 'small\n' > "$FREPO/a.txt"; git -C "$FREPO" add a.txt
 git -C "$FREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m add
-ffok="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_append_full_files '$WORKDIR/ff-ok.txt' HEAD~1 HEAD 100000")"
+ffok="$(cd "$FREPO" && bash -c '. "$1"; ar_append_full_files "$2" HEAD~1 HEAD 100000' _ "$DIR/lib/ai-review-common.sh" "$WORKDIR/ff-ok.txt")"
 check_eq "#2307 a full file that reads cleanly is counted as read" "1 0" "$ffok"
-ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; git(){ if [ \"\$1\" = show ]; then return 128; fi; command git \"\$@\"; }; ar_append_full_files '$WORKDIR/ff-fail.txt' HEAD~1 HEAD 100000")"
+# A git that cannot show is a stand in first on PATH, which passes everything else to the real one.
+mkdir -p "$WORKDIR/noshowgit"
+printf '%s\n' '#!/bin/sh' '[ "$1" = show ] && exit 128' "exec '$(command -v git)' \"\$@\"" > "$WORKDIR/noshowgit/git"
+chmod +x "$WORKDIR/noshowgit/git"
+ffout="$(cd "$FREPO" && PATH="$WORKDIR/noshowgit:$PATH" bash -c '. "$1"; ar_append_full_files "$2" HEAD~1 HEAD 100000' _ "$DIR/lib/ai-review-common.sh" "$WORKDIR/ff-fail.txt")"
 check_eq "#2307 a full file git could not show is left out and named, never counted as read" "0 1 a.txt" "$ffout"
-ffout="$(cd "$FREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_elide_embedded(){ cat >/dev/null; return 1; }; ar_append_full_files '$WORKDIR/ff-fail2.txt' HEAD~1 HEAD 100000")"
+ffout="$(cd "$FREPO" && bash -c 'out="$2"; . "$1"; ar_elide_embedded(){ cat >/dev/null; return 1; }; ar_append_full_files "$out" HEAD~1 HEAD 100000' _ "$DIR/lib/ai-review-common.sh" "$WORKDIR/ff-fail2.txt")"
 check_eq "#2307 and so is one the filter failed on" "0 1 a.txt" "$ffout"
 
 # One file whose own diff is over what a group can hold is read in consecutive parts.

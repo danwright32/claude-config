@@ -96,7 +96,14 @@ rm -f "$TMP/ran"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$TMP/lone" bounded-run.sh >/dev/null \
   || check "#2204 bounded-run.sh could be installed with what it sources" "the install refused"
 rm -f "$TMP/lone/whole-number.sh"   # the copy without it, on purpose
-lone="$(bash -c '. "$1/bounded-run.sh"; bounded_run 30 sh -c ": > \"$2\""; printf "%s|%s" "$BOUNDED_RC" "$BOUNDED_OUT"' _ "$TMP/lone" "$TMP/ran")"
+# Driven by a script written beside the copy and run as a process of its own, which sources the
+# copy from its own directory. Sourcing the copy from here instead names a path made at run time,
+# which the Slack drafts gate cannot work out (claude-config#2538).
+printf '%s\n' \
+  '. "${BASH_SOURCE[0]%/*}/bounded-run.sh"' \
+  'bounded_run 30 sh -c ": > \"$1\""' \
+  'printf "%s|%s" "$BOUNDED_RC" "$BOUNDED_OUT"' > "$TMP/lone/drive-lone.sh"
+lone="$(bash "$TMP/lone/drive-lone.sh" "$TMP/ran")"
 case "$lone" in
   125\|*whole-number.sh*) check "with lib/whole-number.sh missing it runs nothing, comes back 125 and names the file" "$([ ! -e "$TMP/ran" ] && echo ok || echo "it ran the command")" ;;
   *) check "with lib/whole-number.sh missing it runs nothing, comes back 125 and names the file" "said [$lone]" ;;

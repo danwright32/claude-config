@@ -20,7 +20,10 @@
 #      every tree.
 #   4. A failing rsync's status reaches the caller.
 #   5. Wired, not just built (L3): a real sync, run under an rsync that counts itself, starts one rsync
-#      per step for the mirrored trees, never one per tree.
+#      per step for the mirrored trees and skills, never one per tree.
+# Since claude-config#2661 skills is one of the trees: its bare plugin names and .trash, which rsync
+# drops at ANY depth, go in as "/NAME" plus "/**/NAME" so they still reach every depth of skills and
+# nothing outside it, and the equivalence in 1 holds that against the unanchored originals.
 # The helpers are read out of claude-sync itself, never copied, so this tests the shipped code.
 set -uo pipefail
 
@@ -33,7 +36,8 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
-SCRIPT="${SCRIPT:-$ROOT/claude-sync}"
+# The claude-sync beside this suite, never one the environment names (claude-config#2538).
+SCRIPT="$ROOT/claude-sync"
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); echo "ok: $1"; }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,25p' | sed 's/^/    /'; return 0; }
@@ -41,24 +45,40 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-mirror-rsync.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- the shipped helpers and the shipped excludes, read out of claude-sync ----
-LIB="$WORK/lib.sh"
-{
-  awk '/^LOCAL_FILE_GLOBS=/,/^unset _mv$/' "$SCRIPT"
-  awk '/^MR_[A-Z_]*=/' "$SCRIPT"
-  awk '/^mirror_rsync_[a-z_]*\(\)/,/^}$/' "$SCRIPT"
-} > "$LIB"
-if grep -q '^mirror_rsync_go()' "$LIB" && grep -q '^COMMON_EXCLUDES=' "$LIB"; then
+# They are extracted into a file made here, and this suite then runs a second time, in a bash of
+# its own started from a driver written beside that file, which sources it and then this file with
+# MIRROR_RSYNC_HELPERS set. Sourcing the extracted file from here names a path made at run time,
+# which the Slack drafts gate cannot work out (claude-config#2538).
+if [ -z "${MIRROR_RSYNC_HELPERS:-}" ]; then
+  LIB="$WORK/lib.sh"
+  {
+    awk '/^LOCAL_FILE_GLOBS=/,/^unset _mv$/' "$SCRIPT"
+    awk '/^MR_[A-Z_]*=/' "$SCRIPT"
+    awk '/^mirror_rsync_[a-z_]*\(\)/,/^}$/' "$SCRIPT"
+  } > "$LIB"
+  if ! grep -q '^mirror_rsync_go()' "$LIB" || ! grep -q '^COMMON_EXCLUDES=' "$LIB"; then
+    bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+    echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
+  fi
+  printf '%s\n' '. "${BASH_SOURCE[0]%/*}/lib.sh" || exit 1' 'MIRROR_RSYNC_HELPERS=1' '. "$1"' > "$WORK/drive.sh"
+  bash "$WORK/drive.sh" "$DIR/test-mirror-rsync.sh"
+  exit $?
+fi
+# Here in the second run, with the helpers loaded, which is checked rather than assumed (L98).
+if declare -F mirror_rsync_go >/dev/null && declare -p COMMON_EXCLUDES >/dev/null 2>&1; then
   ok "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them"
 else
-  bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+  bad "claude-sync defines mirror_rsync_go and COMMON_EXCLUDES where this suite reads them" "the driver did not load them"
   echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
 fi
-# shellcheck source=/dev/null
-. "$LIB"
 set -u
 
+# skills' own excludes, from the one list the tool reads them from (claude-config#2661).
+# shellcheck source=/dev/null
+. "$ROOT/payload/hooks/lib/unmanaged-skills.sh" || { bad "payload/hooks/lib/unmanaged-skills.sh loads"; echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1; }
+
 # ---- 1. equivalence, per flag set and per rsync ----
-TREES=(hooks agents commands audits mods)
+TREES=(hooks agents commands audits mods skills)
 mkfix(){ # mkfix <root>: a source and a destination differing in every way an apply or a send meets
   local r="$1"
   mkdir -p "$r/src/hooks/lib" "$r/src/agents/.claude-plugin/types" "$r/src/mods/m1" "$r/src/audits" \
@@ -80,11 +100,25 @@ mkfix(){ # mkfix <root>: a source and a destination differing in every way an ap
   echo au > "$r/src/audits/a.md"                                     # a tree empty at the other end
   echo cmd > "$r/dst/commands/only-here.md"                          # a tree with no source: untouched
   echo ROOT > "$r/dst/settings.json"; chmod 600 "$r/dst/settings.json"   # beside the trees: untouched
+  # skills, whose plugin names and .trash are excluded at ANY depth and synced/ only at the top.
+  mkdir -p "$r/src/skills/s1/wrangler" "$r/src/skills/wrangler" "$r/src/skills/s1/.trash" "$r/src/skills/synced" \
+           "$r/src/skills/s1/deep/synced" "$r/src/skills/refused" \
+           "$r/dst/skills/s1/wrangler" "$r/dst/skills/wrangler" "$r/dst/skills/.trash" "$r/dst/skills/s1/old" "$r/dst/skills/refused"
+  echo s1 > "$r/src/skills/s1/SKILL.md"; echo s1-old > "$r/dst/skills/s1/SKILL.md"
+  echo nested-plugin > "$r/src/skills/s1/wrangler/f"; echo here > "$r/dst/skills/s1/wrangler/keep"
+  echo top-plugin > "$r/src/skills/wrangler/x"; echo here > "$r/dst/skills/wrangler/y"
+  echo trash > "$r/src/skills/s1/.trash/z"; echo here > "$r/dst/skills/.trash/old"
+  echo platform > "$r/src/skills/synced/m"; echo nested-synced > "$r/src/skills/s1/deep/synced/n"
+  echo stale > "$r/dst/skills/s1/old/gone.md"
+  echo refused-src > "$r/src/skills/refused/SKILL.md"; echo refused-dst > "$r/dst/skills/refused/SKILL.md"
+  echo plugin-name-in-hooks > "$r/src/hooks/wrangler"                # the same name in another tree
   find "$r" -exec touch -h -t 202101010000 {} +
   touch -t 202001010000 "$r/dst" "$r/dst/hooks" "$r/src/hooks/lib" "$r/src/hooks/a.sh"
 }
 # The excludes each tree carries of its own, as the callers build them.
-tree_ex(){ case "$1" in hooks) echo --exclude=/held.sh ;; mods) echo --exclude=/m2/ ;; esac; }
+tree_ex(){ case "$1" in hooks) echo --exclude=/held.sh ;; mods) echo --exclude=/m2/ ;; skills) skill_excludes; echo --exclude=/refused ;; esac; }
+# How every caller hands a tree to the combined call: skills' bare names through mirror_rsync_add_any_depth.
+add_tree(){ local d="$1" src="$2"; shift 2; if [ "$d" = skills ]; then mirror_rsync_add_any_depth "$d" "$src" "$@"; else mirror_rsync_add "$d" "$src" "$@"; fi; }
 state(){ # state <dir> [-]: every entry's name, mode, size and time (none with "-"), then every file's bytes
   local gnu="%n %a %Y %s" bsd="%N %p %m %z"
   [ "${2:-}" = - ] && { gnu="%n %a %s"; bsd="%N %p %z"; }
@@ -119,7 +153,7 @@ for R in ${RSYNCS[@]+"${RSYNCS[@]}"}; do
     for d in "${TREES[@]}"; do
       [ -d "$WORK/many/src/$d" ] || continue
       # shellcheck disable=SC2046
-      mirror_rsync_add "$d" "$WORK/many/src/$d" $(tree_ex "$d")
+      add_tree "$d" "$WORK/many/src/$d" $(tree_ex "$d")
     done
     # shellcheck disable=SC2086
     o="$(PATH="$rdir:$PATH" mirror_rsync_go "$WORK/many/dst" $flags 2>/dev/null)"; rc=$?
@@ -146,7 +180,16 @@ for R in ${RSYNCS[@]+"${RSYNCS[@]}"}; do
             && [ -f "$WORK/many/dst/mods/m1/main-to-dev-repos.txt" ] && [ -f "$WORK/many/dst/commands/only-here.md" ] \
             && [ "$(cat "$WORK/many/dst/settings.json")" = ROOT ]; then
            ok "$name: the fixture's held back, excluded and deleted files moved as each rule says"
-         else bad "$name: the fixture's held back, excluded and deleted files moved as each rule says" "$(state "$WORK/many/dst" -)"; fi ;;
+         else bad "$name: the fixture's held back, excluded and deleted files moved as each rule says" "$(state "$WORK/many/dst" -)"; fi
+         # skills' bare names left out at every depth of skills and nowhere else, synced/ only at the top.
+         m="$WORK/many/dst"
+         if [ ! -e "$m/skills/s1/wrangler/f" ] && [ -f "$m/skills/s1/wrangler/keep" ] && [ ! -e "$m/skills/wrangler/x" ] \
+            && [ -f "$m/skills/wrangler/y" ] && [ ! -e "$m/skills/s1/.trash/z" ] && [ -f "$m/skills/.trash/old" ] \
+            && [ ! -e "$m/skills/synced" ] && [ "$(cat "$m/skills/s1/deep/synced/n" 2>/dev/null)" = nested-synced ] \
+            && [ "$(cat "$m/skills/refused/SKILL.md")" = refused-dst ] && [ ! -e "$m/skills/s1/old/gone.md" ] \
+            && [ "$(cat "$m/skills/s1/SKILL.md")" = s1 ] && [ "$(cat "$m/hooks/wrangler" 2>/dev/null)" = plugin-name-in-hooks ]; then
+           ok "$name: skills' plugin names and .trash are left out at every depth of skills only"
+         else bad "$name: skills' plugin names and .trash are left out at every depth of skills only" "$(cd "$m" && find skills hooks/wrangler | sort)"; fi ;;
     esac
   done
 done
@@ -213,6 +256,21 @@ elif case "$o" in *anchored*) true ;; *) false ;; esac; then
 else
   bad "an unanchored exclude for one tree is refused, saying why" "$o"
 fi
+# skills' bare names are kept to the tree through mirror_rsync_add_any_depth; a pattern with a slash
+# in it means something else unanchored, so it is still refused rather than rewritten (#2661).
+mirror_rsync_reset
+if mirror_rsync_add_any_depth skills "$WORK/ln/src/hooks" --exclude=wrangler --exclude=/synced >/dev/null 2>&1 \
+   && [ "${MR_EX_VAL[*]}" = "--exclude=/wrangler --exclude=/**/wrangler --exclude=/synced" ]; then
+  ok "a bare name for skills becomes the pair that matches it at every depth of skills alone"
+else
+  bad "a bare name for skills becomes the pair that matches it at every depth of skills alone" "${MR_EX_VAL[*]:-none}"
+fi
+mirror_rsync_reset
+if o="$(mirror_rsync_add_any_depth skills "$WORK/ln/src/hooks" --exclude=a/b 2>&1)"; then
+  bad "an unanchored pattern holding a slash is refused, not rewritten" "accepted: $o"
+else
+  ok "an unanchored pattern holding a slash is refused, not rewritten"
+fi
 
 # ---- 4. a failing rsync's status reaches the caller ----
 mkdir -p "$WORK/fail/bin"
@@ -243,14 +301,15 @@ mkdir -p "$SYNC_SCRATCH_ROOT"; printf '{"prependPlugins": []}\n' > "$SYNC_MANAGE
 unset SYNC_NO_GIT
 git init -q --bare "$WORK/bare.git"
 git clone -q "$WORK/bare.git" "$WORK/repoA" 2>/dev/null
-H="$WORK/homeA"; mkdir -p "$H/hooks" "$H/agents" "$H/commands"
+H="$WORK/homeA"; mkdir -p "$H/hooks" "$H/agents" "$H/commands" "$H/skills/s1"
 echo 'echo hi' > "$H/hooks/h.sh"; chmod +x "$H/hooks/h.sh"; echo A > "$H/agents/a.md"; echo C > "$H/commands/c.md"
+printf -- '---\nname: s1\ndescription: a skill\n---\nbody\n' > "$H/skills/s1/SKILL.md"
 echo '# rules' > "$H/CLAUDE.md"; echo '{"hooks":{}}' > "$H/settings.json"
 # An rsync that writes down the trees it was handed, then runs the real one.
 REAL_RSYNC="$(command -v rsync)"; mkdir -p "$WORK/count/bin"
 cat > "$WORK/count/bin/rsync" <<COUNT
 #!/bin/sh
-n=""; for a in "\$@"; do case "\$a" in */hooks|*/hooks/) n="\$n hooks" ;; */agents|*/agents/) n="\$n agents" ;; */commands|*/commands/) n="\$n commands" ;; esac; done
+n=""; for a in "\$@"; do case "\$a" in */hooks|*/hooks/) n="\$n hooks" ;; */agents|*/agents/) n="\$n agents" ;; */commands|*/commands/) n="\$n commands" ;; */skills|*/skills/) n="\$n skills" ;; esac; done
 [ -n "\$n" ] && echo "\$n" >> "$WORK/count/log"
 exec "$REAL_RSYNC" "\$@"
 COUNT
@@ -260,15 +319,15 @@ echo '# rules v2' > "$H/CLAUDE.md"; echo 'echo hi2' > "$H/hooks/h.sh"
 : > "$WORK/count/log"
 PATH="$WORK/count/bin:$PATH" CLAUDE_HOME="$H" SYNC_REPO="$WORK/repoA" bash "$SCRIPT" sync > "$WORK/sync2.out" 2>&1; rc=$?
 calls="$(grep -c . "$WORK/count/log" 2>/dev/null)"; calls="${calls:-0}"
-alone="$(grep -cvE '^ *hooks agents commands$|^ *agents commands hooks$' "$WORK/count/log" 2>/dev/null)"; alone="${alone:-0}"
+alone="$(grep -cvE '^ *hooks agents commands skills$|^ *agents commands hooks skills$' "$WORK/count/log" 2>/dev/null)"; alone="${alone:-0}"
 sent="$(git -C "$WORK/bare.git" show HEAD:payload/hooks/h.sh 2>/dev/null)"
 case "$sent" in *hi2*) sent=1 ;; *) sent="" ;; esac
 if [ "$rc" -ne 0 ] || [ -z "$sent" ]; then
   bad "fixture: the counted sync ran and sent the edit" "exit $rc: $(cat "$WORK/sync2.out")"
 elif [ "$calls" -ge 2 ] && [ "$alone" -eq 0 ]; then
-  ok "a sync names hooks, agents and commands in one rsync per step ($calls steps)"
+  ok "a sync names hooks, agents, commands and skills in one rsync per step ($calls steps)"
 else
-  bad "a sync names hooks, agents and commands in one rsync per step, never one per tree" "$(cat "$WORK/count/log")"
+  bad "a sync names hooks, agents, commands and skills in one rsync per step, never one per tree" "$(cat "$WORK/count/log")"
 fi
 
 echo "passed: $pass, failed: $fail"
