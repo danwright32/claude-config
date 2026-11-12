@@ -1830,12 +1830,15 @@ test('a session with nobody at the prompt is never held for a draft (#2436)', wi
 // GitHub, answering the text of each pull request and the issues it closes as gh does
 // (closingIssuesReferences as measured on claude-config#2587, 2026-11-10), over `merged`.
 const ISSUE_URL = (n: number) => `https://github.com/${REPO}/issues/${n}`
-const withText = (prs: number[], text: Record<number, { body?: string; closes?: number[] }>, issues: Record<number, string> = {}): Partial<World> => ({
+// The question the mod asks GitHub for a merged pull request's text, and since #2849 when it opened.
+const TEXT_FIELDS = 'title,body,comments,closingIssuesReferences,createdAt'
+const withText = (prs: number[], text: Record<number, { body?: string; closes?: number[]; created?: number }>, issues: Record<number, string> = {}): Partial<World> => ({
   prView: argv => {
-    if (!argv.includes('title,body,comments,closingIssuesReferences')) return merged(...prs)(argv)
+    if (!argv.includes(TEXT_FIELDS)) return merged(...prs)(argv)
     const t = text[Number(argv[3])] ?? {}
     const closes = (t.closes ?? []).map(n => ({ id: `I_${n}`, number: n, repository: { id: 'R_1', name: 'scheduler', owner: { id: 'O_1', login: 'acme-hq' } }, url: ISSUE_URL(n) }))
-    return { exitCode: 0, stdout: JSON.stringify({ title: 'Filter bookings by venue', body: t.body ?? '', comments: [], closingIssuesReferences: closes }) }
+    const created = t.created === undefined ? {} : { createdAt: new Date(t.created).toISOString() }
+    return { exitCode: 0, stdout: JSON.stringify({ title: 'Filter bookings by venue', body: t.body ?? '', comments: [], closingIssuesReferences: closes, ...created }) }
   },
   issueView: argv => {
     if (!argv.includes('title,body,comments')) return undefined
@@ -1923,7 +1926,7 @@ test('a draft saved for a pasted thread is remembered: an unrelated merge asks n
 })
 
 test('a pull request GitHub cannot be asked about for a pasted thread is said, and asks for no reply (#2578)', withKit, async ($, on) => {
-  const w = world(on, { prView: argv => (argv.includes('title,body,comments,closingIssuesReferences') ? { exitCode: 1, stdout: '', stderr: 'HTTP 502' } : merged(412)(argv)) })
+  const w = world(on, { prView: argv => (argv.includes(TEXT_FIELDS) ? { exitCode: 1, stdout: '', stderr: 'HTTP 502' } : merged(412)(argv)) })
   await start($)
   await underWay($)
   await says($, `look into this alert ${THREAD}`)
@@ -1945,8 +1948,9 @@ test('a session that started from a thread still asks after every merge, and the
 // for a fresh draft in it after every merge, its unrelated ones too (on 2026-11-10 an alert thread's
 // session went on to merge other work, and was asked twice in twenty minutes). The session may say
 // ONCE, by calling the unrelated_merges tool, that its later merges have nothing to do with the
-// thread; no draft is then held for them. It is the session's own act, never inferred, kept in that
-// session's state only, and a merge that landed before it is still owed its reply.
+// thread; no draft is then held for them. It is the session's own act, never inferred, and kept in
+// that session's state only. Since #2849 it clears a merge that has already landed too, since that
+// is when a session learns the merge is unrelated.
 const UNRELATED = 'mcp__is-it-live__unrelated_merges'
 const unrelated = async ($: unknown, more: Record<string, unknown> = {}) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: UNRELATED, tool_use_id: 'u1', ...more } as never)) as Out
@@ -1971,17 +1975,20 @@ test('before the session says its later merges are unrelated, a merge holds the 
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
-test('a merge that landed before the session said its later merges are unrelated is still owed its reply (#2653)', withKit, async ($, on) => {
+// #2849 reversed this test's old title, "a merge that landed before the session said its later
+// merges are unrelated is still owed its reply": Dan, 2026-11-12, let the tool clear a merge already
+// landed, since a session learns a merge is unrelated once it has landed and the hold asks.
+test('saying the merges are unrelated after one has landed settles the hold for it, and for later ones (#2653, #2849)', withKit, async ($, on) => {
   world(on, { prView: merged(412, 413) })
   await start($)
   await says($, `Geoff answered in ${THREAD}, build what he asked for`)
   await mergeAndCard($, 412)
-  expect((await unrelated($)).deny).toBeUndefined()
   expect((await turnEnd($)).block).toContain(SOURCE)
-  // Still held for it after a later, unrelated merge lands, until its draft is saved.
+  const r = await unrelated($)
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r)).not.toContain('still owed')
+  expect((await turnEnd($)).block).toBeUndefined()
   await mergeAndCard($, 413)
-  expect((await turnEnd($)).block).toContain(SOURCE)
-  await draft($)
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
@@ -2014,4 +2021,103 @@ test('saying the later merges are unrelated is refused with no thread to be unre
   expect((await unrelated($, { agentId: 'a1' })).deny).toBeDefined()
   await mergeAndCard($, 412)
   expect((await turnEnd($)).block).toContain(SOURCE)
+})
+
+// ---- #2849: with more than one Slack thread, a merge owes its reply to the latest one pasted before its work began ----
+// On 2026-11-12 a session opened from one alert's thread, Dan pasted a second alert's link and asked
+// for a fix, and after it merged the hold asked three turn ends running for a reply in the FIRST
+// thread, which already held an unsent draft about its own alert. Dan chose the same day: follow the
+// most recent link. A merge owes its reply in the thread pasted most recently before the work on it
+// began, read as before its pull request opened, and a draft in an earlier thread does not settle it.
+const CH2 = 'C0SECOND'
+const TS2 = '1731000000.000200'
+const THREAD2 = `https://acme.slack.com/archives/${CH2}/p1731000000000200`
+const SOURCE2 = `slack_send_message_draft with channel_id "${CH2}" and thread_ts "${TS2}"`
+const MINUTE = 60_000
+
+test('a session given two thread links whose merge follows the second is asked for the second thread, and a draft only in the first does not settle it (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], { 412: { created: T0 + 2 * MINUTE } }))
+  await start($)
+  await says($, `The booking alert fired in ${THREAD}, look into it`)
+  await w.clock.advance(MINUTE)
+  await says($, `now this one: ${THREAD2}, fix it`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE2)
+  expect(held).not.toContain(SOURCE)
+  expect(held).toContain(`${REPO}#412`)
+  // The reply is owed by the most recent link, not by the pull request naming the thread, so the
+  // session can still say the merge is unrelated.
+  expect(held).toContain(UNRELATED)
+  await draft($)
+  expect(String((await turnEnd($)).block)).toContain(SOURCE2)
+})
+
+test('a draft saved in the second thread settles the hold, with GitHub giving no time the pull request opened (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], {}))
+  await start($)
+  await says($, `The booking alert fired in ${THREAD}, look into it`)
+  await w.clock.advance(MINUTE)
+  await says($, `now this one: ${THREAD2}, fix it`)
+  await mergeAndCard($, 412)
+  expect(String((await turnEnd($)).block)).toContain(SOURCE2)
+  await draft($, { channel_id: CH2, thread_ts: TS2 })
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge whose pull request opened before the second link was pasted still owes the first thread (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], { 412: { created: T0 + MINUTE / 2 } }))
+  await start($)
+  await says($, `The booking alert fired in ${THREAD}, look into it`)
+  await w.clock.advance(MINUTE)
+  await says($, `now this one: ${THREAD2}, fix it`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).not.toContain(SOURCE2)
+})
+
+test('a pull request linking the first thread owes it its reply, though a second was pasted since (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], { 412: { body: `Fixes the alert in ${THREAD}`, created: T0 + 2 * MINUTE } }))
+  await start($)
+  await says($, `The booking alert fired in ${THREAD}, look into it`)
+  await w.clock.advance(MINUTE)
+  await says($, `for later: ${THREAD2}`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).not.toContain(SOURCE2)
+})
+
+test('two links in the opening prompt are each owed a reply after a merge, as before (#2849)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  await start($)
+  await says($, `Two alerts, ${THREAD} and ${THREAD2}, both from the same fault`)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held).toContain(SOURCE2)
+})
+
+test('saying the merges are unrelated after one landed settles the reply owed to the second thread (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], { 412: { created: T0 + 2 * MINUTE } }))
+  await start($)
+  await says($, `The booking alert fired in ${THREAD}, look into it`)
+  await w.clock.advance(MINUTE)
+  await says($, `now this one: ${THREAD2}, fix it`)
+  await mergeAndCard($, 412)
+  expect(String((await turnEnd($)).block)).toContain(SOURCE2)
+  expect((await unrelated($)).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a session that started from no thread, given two links once under way, is asked nothing after a merge linking neither (#2849)', withKit, async ($, on) => {
+  const w = world(on, withText([412], { 412: { created: T0 + 3 * MINUTE } }))
+  await start($)
+  await underWay($)
+  await says($, `look into this alert ${THREAD}`)
+  await w.clock.advance(MINUTE)
+  await says($, `and this one ${THREAD2}`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toBeUndefined()
 })

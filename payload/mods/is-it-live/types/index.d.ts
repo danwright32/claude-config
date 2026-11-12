@@ -75,9 +75,10 @@ declare module 'claude-code' {
       /** #2578: how many prompts Dan has typed in this session, counted only as far as 2. */
       prompts: number
       /**
-       * #2653: the session said, by calling the unrelated_merges tool, that its later merges have
-       * nothing to do with the thread it started from; `landed` is the landed step when it did,
-       * absent when no merge had landed. Merges after it owe that thread no draft.
+       * #2653: the session said, by calling the unrelated_merges tool, that its merges have nothing
+       * to do with the threads it was given. Since #2849 no merge then owes the reply the most recent
+       * thread is owed (`defaulted`), those already landed included. `landed`, the landed step when
+       * it was said, was read until #2849 and is no longer written or read.
        */
       unrelated: { landed?: number }
     }
@@ -87,13 +88,13 @@ declare module 'claude-code' {
 /**
  * A Slack thread a session started from (#2436): its channel and its parent message's time, the
  * link Dan pasted when he pasted one, how it was found, when (ms since the epoch), and the step at
- * which its last draft reply was saved (`settled`). For a thread the
- * session started from, a merge landing at a later step owes it a draft, until the session says its
- * later merges are unrelated (`unrelated`, #2653), after which only the merges landed by then and a
- * card's message for the thread do; for one marked `mid`, only a merge for it, recorded in
- * `related`, does (#2578).
- * Every draft saved to the thread settles it, whichever prompt led to it, so the card's own message
- * for a requester in that thread (#2435) settles it too, with no second record.
+ * which its last draft reply was saved (`settled`). In a session started from a thread, every merge
+ * owes a reply in the thread pasted most recently before its work began (`defaulted`, #2849), or in
+ * the threads it started from that its pull request links, until the session says its merges are
+ * unrelated (`unrelated`, #2653). A merge whose pull request links a thread marked `mid` owes that
+ * thread instead, recorded in `related` (#2578), and a card's message for a thread is owed whatever
+ * was said. Every draft saved to the thread settles it, whichever prompt led to it, so the card's own
+ * message for a requester in that thread (#2435) settles it too, with no second record.
  */
 export type IsItLiveThread = {
   channel: string
@@ -101,7 +102,11 @@ export type IsItLiveThread = {
   link?: string
   from: 'link' | 'read'
   at: number
+  /** #2849: the step it was recorded at, the same for every link in one prompt; absent on a thread recorded before #2849. */
+  step?: number
   settled?: number
+  /** #2849: the step of the latest merge that owes it the session's reply by the most recent link, or by its pull request linking a thread the session started from. */
+  defaulted?: number
   /**
    * #2578: recorded once the session was under way (after Dan's first prompt, or after a merge), so
    * only a merge for it owes it a reply, never every merge of the session.

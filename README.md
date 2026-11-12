@@ -6459,10 +6459,20 @@ Its hold names those PRs and never says the session started there, and a draft s
 until the next merge for it. A card asking for no draft keeps the earlier card's record of one
 asked for (#2515), so a card for another PR to the same thread or person still says its draft
 replaces it.
+In a session started from a thread, a merge whose PR links no pasted thread owes its reply to the
+thread pasted most recently before its work began, not the one the session started from (#2849,
+Dan, 2026-11-12: "follow the most recent link"), and a draft in an earlier thread does not settle
+it. The mod reads work as begun when GitHub says the PR opened (asked with the PR's text, so only
+while a thread pasted mid session is recorded); where GitHub gave no time, the latest thread
+recorded when the merge landed is chosen. Links pasted in one prompt are owed together, a PR opened
+before any link was pasted owes the threads the session started from, and a PR linking a thread
+the session started from owes that one. The session may say once, with the `unrelated_merges`
+tool, that its merges have nothing to do with the threads (#2653); since #2849 that clears the
+merges already landed as well as later ones, though never a reply a PR's link or a card asks for.
 
 </td><td>
 
-#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630
+#617, #663, #707, #771, #1244, #1271, #2435, #2436, #2515, #2578, #2630, #2653, #2849
 
 </td></tr>
 <tr><td>
