@@ -137,14 +137,29 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   const dialog: { answer?: string; afk?: boolean } = {}
   const cards: Record<string, unknown>[] = []
   const toasts: string[] = []
-  const clock = mock.clock(on, { now: T0 })
+  // Every read of the clock first charges the real time spent since the last charge (#2805), so
+  // computing between calls to the world, such as tracing senders through a large module, counts
+  // against a deadline checked inside that work, as it does in a session. The mock clock registers
+  // the one clock.now handler, so it is registered through this wrapper, which puts the charge
+  // ahead of it. wall is declared below; it is only called once a read happens.
+  let readClock: () => Promise<number> = async () => NaN
+  const clockOn = ((name: string, handler: (...a: never[]) => unknown) => {
+    if (name !== 'clock.now') return on(name as never, handler as never)
+    const charged = async (...a: never[]) => {
+      await wall()
+      return handler(...a)
+    }
+    readClock = async () => ((await charged()) as { value: number }).value
+    return on(name as never, charged as never)
+  }) as unknown as On
+  const clock = mock.clock(clockOn, { now: T0 })
   // The wall (#2719): once started, every call the guard makes to the world first moves the test
   // clock on by the real time spent since the last one, so the guard's own reading and tracing of a
   // file is charged against its deadline as it is in a session, where git and reads cost little and
   // the work between them is the time. Started just before the call it measures.
   let wallAt: number | undefined
-  const wallStart = () => {
-    wallAt = performance.now()
+  const wallStart = (spentMs = 0) => {
+    wallAt = performance.now() - spentMs
   }
   const wall = async () => {
     if (wallAt === undefined) return
@@ -336,7 +351,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
   })
-  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart }
+  return { files, store, ctl, ran, asked, dialog, cards, toasts, gits, printed, night: night2, ghs, clock, reads: () => reads, wallStart, readClock: () => readClock() }
 }
 type W = ReturnType<typeof world>
 
@@ -2588,4 +2603,30 @@ test('a search for what an edit brings to a send that runs out of time says so, 
   expect(late).toContain(`what this edit to ${MONITOR} brings to a Slack send was not searched within ${SCAN_MS / 1000} seconds`)
   expect(late).not.toContain('could not name the repository')
   expect(w.ran).toEqual([])
+})
+
+test('the test clock charges computing time to a clock read: work between calls to the world moves it once the wall is started (#2805)', withKit, async ($, on) => {
+  const w = world($, on)
+  const before = await w.readClock()
+  // Not started: computing costs nothing, as in every test that does not judge the wall.
+  const idle = performance.now()
+  while (performance.now() - idle < 30) { /* busy */ }
+  expect(await w.readClock()).toBe(before)
+  // Started: the same computing is charged by the next read, with no call to the world between.
+  w.wallStart()
+  const busy = performance.now()
+  while (performance.now() - busy < 30) { /* busy */ }
+  expect((await w.readClock()) - before).toBeGreaterThanOrEqual(30)
+  // A read straight after costs next to nothing more.
+  const at = await w.readClock()
+  expect((await w.readClock()) - at).toBeLessThan(25)
+})
+
+test('a CPU bound trace is charged against the search deadline on the test clock: reading the clock after SCAN_MS of computing finds the deadline passed (#2805)', withKit, async ($, on) => {
+  const w = world($, on)
+  const deadline = (await w.readClock()) + SCAN_MS
+  // Computing that began SCAN_MS ago, as a trace through a huge module would have, with no call to
+  // the world in between (what #2808's check before each sender reads the clock for).
+  w.wallStart(SCAN_MS)
+  expect(await w.readClock()).toBeGreaterThanOrEqual(deadline)
 })
