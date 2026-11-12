@@ -1978,6 +1978,51 @@ test('a copy module in no repository, in a test, or already used by a screen or 
   expect(w.ran.length).toBe(4)
 })
 
+// claude-config#2773: a shell command putting wording into a module of message copy, by a heredoc
+// or an append, passed where the same Write or Edit is held (#2720); and a shell command creating a
+// new file was not judged at all, since the file was not there to read.
+const UNWIRED_SHELL = (file: string) => `This shell command writes to ${file}, a module of message copy not yet wired to Slack, and the wording it leaves cannot be read until it runs`
+test('a shell command writing a module of message copy nothing sends yet is held as the Write would be: a heredoc making one, an append to one, a copy of one (#2773)', withKit, async ($, on) => {
+  const SCRATCH_QUIET = '/private/tmp/scratch/quiet.ts'
+  const LATE = '/w/app/src/lib/ops/late-copy.ts'
+  const w = world($, on, { files: { [SCRATCH_QUIET]: QUIET_TEXT, [LATE]: 'export const late = (id: string) => `Booking ${id} is late`\n' } })
+  // A heredoc making a new copy module, known by its shape under a name that says nothing.
+  const SHAPED = '/w/app/src/lib/monitor/quiet.ts'
+  const heredoc = { tool: 'Bash', command: `cat > ${SHAPED} <<'EOF'\n${QUIET_TEXT}EOF` }
+  const held = refusalOf(await call($, heredoc))
+  expect(held).toContain(UNWIRED_SHELL(SHAPED))
+  expect(held).not.toContain('sends to Slack')
+  expect(idIn(held)).toBeDefined()
+  expect(String(w.cards.at(-1)?.reason)).toContain(UNWIRED_SHELL(SHAPED))
+  // Dan approves it, and the same command goes through.
+  await ask($, w, held, APPROVE, { rendered: QUIET_SHOWN })
+  expect(refusalOf(await call($, heredoc))).toBe('')
+  // An append to a copy module already there, known by its name.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'export const gone = (id: string) => \`Booking \${id} was cancelled\`\\n' >> ${LATE}` }))).toContain(UNWIRED_SHELL(LATE))
+  // A copy of one into the repository, judged by the file it copies.
+  const COPIED = '/w/app/src/lib/monitor/feed.ts'
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${SCRATCH_QUIET} ${COPIED}` }))).toContain(UNWIRED_SHELL(COPIED))
+  expect(w.ran.length).toBe(1)
+})
+
+test('a shell command creating a new file is judged as a Write of it is: one posting to Slack or one a sender reads is held; an ordinary module, a test, a scratch file pass (#2773)', withKit, async ($, on) => {
+  const PY = '/w/app/jobs/late.py'
+  const w = world($, on, { files: { [PY]: 'from slack_sdk import WebClient\nbody = open("templates/late.txt").read()\n' } })
+  // A new script that posts to Slack by itself.
+  const NOTIFY = '/w/app/scripts/notify-late.ts'
+  const posts = refusalOf(await call($, { tool: 'Bash', command: `cat > ${NOTIFY} <<'EOF'\n${ALERT_TEXT}EOF` }))
+  expect(posts).toContain(`This shell command writes to ${NOTIFY}, which posts to Slack`)
+  // A new text template a sender already reads.
+  const TXT = '/w/app/templates/late.txt'
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'Booking is late\\n' > ${TXT}` }))).toContain(`which ${PY} sends to Slack`)
+  expect(w.ran).toEqual([])
+  // An ordinary new module, a new test, and a copy module in no repository pass.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /w/app/src/lib/ops/late.ts <<'EOF'\nexport const late = (id: string) => \`Booking \${id} is running late\`\nEOF` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /w/app/src/lib/monitor/quiet.test.ts <<'EOF'\n${QUIET_TEXT}EOF` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /private/tmp/scratch/quiet-copy.ts <<'EOF'\n${QUIET_TEXT}EOF` }))).toBe('')
+  expect(w.ran.length).toBe(3)
+})
+
 // The send edit judged for what it brings in (#2637), from a module that is not one of message copy:
 // one message among other values, so only the send asks.
 const FEEDS = '/w/app/src/lib/monitor/feeds.ts'

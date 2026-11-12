@@ -1059,6 +1059,18 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
   }
 }
 
+/**
+ * What a shell write puts in a file, as near as can be told before it runs (#2773): a copy of one file
+ * puts that file's text there; anything else is guessed from the command's lines after its first,
+ * where a heredoc's body is, which is empty for a one line command.
+ */
+const writtenBy = async ($: EngineInterface, f: { sources?: string[] }, command: string): Promise<string> => {
+  const [source] = f.sources ?? []
+  if (f.sources?.length === 1 && source !== undefined && (await $.fs.exists(source)) && (await $.fs.stat(source)).kind === 'file') return String(await $.fs.read(source))
+  const cut = command.indexOf('\n')
+  return cut < 0 ? '' : command.slice(cut + 1)
+}
+
 const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): Promise<Verdict> => {
   const command = typeof input.command === 'string' ? input.command : ''
   if (!command) return PASS
@@ -1075,8 +1087,12 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     for (const f of w.files) {
       if (f.path === undefined) continue
       if (isOwnRecord(f.path)) return { own: true }
-      if (!(await $.fs.exists(f.path))) continue
-      const text = String(await $.fs.read(f.path))
+      const exists = await $.fs.exists(f.path)
+      // What the command puts in the file cannot be read until it runs (#2773), so it is read from
+      // the one file it copies, or else from the command's lines after its first, where a heredoc's
+      // body is. A file the command makes is judged by that as a Write of it is, never skipped.
+      const written = await writtenBy($, f, command)
+      const text = exists ? String(await $.fs.read(f.path)) : written
       const code = inScope(f.path, text)
       // A code file or a text template (#2248), in a git repository and no test: held when it posts to
       // Slack itself or another file in its repository sends it there.
@@ -1090,6 +1106,11 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
       if ('unchecked' in found && !found.untraced) return found
       if ('unchecked' in found || 'posts' in found || 'maybe' in found) return { hold: { file: f.path, added: [], removed: [], keys } }
       if ('senders' in found) return { hold: { file: f.path, added: [], removed: [], keys, sender: firstSender(found) } }
+      // A module of message copy no file uses yet (#2720), held as a Write or Edit putting wording in
+      // it is (#2773): judged by what it holds and by what the command adds to it.
+      const rel = 'none' in found && found.unused ? found.rel : undefined
+      if (rel !== undefined && (copyModule(rel, text) || (exists && copyModule(rel, `${text}\n${written}`))))
+        return { hold: { file: f.path, added: [], removed: [], keys, unwired: true } }
     }
     return PASS
   } catch (err) {
