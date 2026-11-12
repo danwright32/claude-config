@@ -122,3 +122,4 @@ which is NOT loaded into the session.
 - L783. A self baselined detector that never stores an anomaly can never accept a deliberate change; build a rebaseline path tied to the change.
 - L785. Suppress repeat pages in the alerter, never by omitting a still true finding, or an alerter reading empty as recovery sends a false all clear.
 - L813. A rate monitor judging a sub-day window against whole days must match clock hours, and page only on a shift improbable at its count.
+- L850. A record that an alert was sent must be renewed while its condition stands, or the alert repeats when the record's fixed expiry lapses.
