@@ -224,7 +224,7 @@ nothing on screen changes, build no switcher, and close one of two ways.
   question about it, one AskUserQuestion with
   `"metadata": { "source": "design-round-guard:<the id the refusal named>", "onScreen": "Nothing on screen changes: <what the edit does instead, in plain words>", "contract": 3 }`
   and the question "Skip design rounds for this issue?". The guard words it, and its answer
-  **Not a look or wording change** lets that one edit through, recorded as his word, while
+  **Not a look change** lets that one edit through, recorded as his word, while
   every other look changing edit stays held. Then send the refused call again, unchanged.
 - **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 

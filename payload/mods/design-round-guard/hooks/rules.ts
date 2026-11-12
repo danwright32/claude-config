@@ -19,10 +19,12 @@ export const SKIP_NO = 'Run /design-rounds'
 export const SETTLED_YES = 'Settled'
 export const SETTLED_NO = 'Not yet'
 /**
- * The skip question's third answer (#1010): this one refused edit changes neither the look nor any
- * wording. Since #1859 a hold can be for a message's words alone, so it names wording too (#1911).
+ * The skip question's third answer (#1010): this one refused edit does not change the look. #1911
+ * named wording too while a hold could be for a message's words alone; since #2845 none is, so the
+ * answers name only the look again. Only the guard words them, so no question's metadata changes and
+ * the contract stays as it is.
  */
-export const NOT_LOOK = 'Not a look or wording change'
+export const NOT_LOOK = 'Not a look change'
 
 /**
  * The version of what this guard and the design rounds skill agree a question carries (#1057): its
@@ -1357,9 +1359,21 @@ export const logicOnlyChange = (before: string, after: string): boolean => {
   return !changed.some(m => m.startsWith('bare|') || STYLE_MODULE.test(m.slice(m.indexOf('|') + 1)))
 }
 
-/** An automatic pass of a logic only edit (#2294), kept with the call: what it let through, and why. */
-export const autoPassWhy = (files: readonly string[]): string =>
-  `The guard read this edit to ${listed(files)} itself and found it changes only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import. So this guard let it through with no design round and nothing asked (#2294); another check may still have refused it.`
+/**
+ * An automatic pass kept with the call, what it let through and why: an edit changing only logic
+ * (#2294), and, in `worded`, mod hook files changing only the words of a message a person reads,
+ * with the words messageWords names (#2845). `files` names every file the pass let through.
+ */
+export const autoPassWhy = (files: readonly string[], worded: readonly { file: string; words: string }[] = []): string => {
+  const end = 'So this guard let it through with no design round and nothing asked'
+  const logic = files.filter(f => !worded.some(w => w.file === f))
+  const logicSaid = 'only logic: no JSX, text, comment, number, true or false, style word, stylesheet or swapped import'
+  if (!worded.length) return `The guard read this edit to ${listed(files)} itself and found it changes ${logicSaid}. ${end} (#2294); another check may still have refused it.`
+  const named = worded.filter(w => w.words).map(w => `"${w.words}"`)
+  const wordsSaid = `only the words of a message the mod shows${named.length ? ` (${named.join(', ')})` : ''}, nothing it draws; words are copy, not design (Dan, 2026-11-12)`
+  const said = logic.length ? `${listed(worded.map(w => w.file))} changes ${wordsSaid}, and ${listed(logic)} changes ${logicSaid}` : `it changes ${wordsSaid}`
+  return `The guard read this edit to ${listed(files)} itself and found ${said}. ${end} (${logic.length ? '#2294, ' : ''}#2845); another check may still have refused it.`
+}
 
 /**
  * What a refusal says of a mod hook file a shell command writes that could not be read before it ran
@@ -1380,7 +1394,7 @@ export const targetUnread = (file: string, why: string): string =>
 /**
  * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
  * with it cannot be read before it runs, so it was judged as a write of that file, as an Edit of it
- * would be. Dan's Not a look or wording change lets one such call through where the script only reads it.
+ * would be. Dan's Not a look change lets one such call through where the script only reads it.
  */
 export const scriptUnread = (script: string, file: string): string =>
   `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
@@ -1486,12 +1500,10 @@ type ModRead = {
   // What function k returns: its expression body, or each of its own `return`s' values.
   returns: (k: number) => Span[]
   cutCode: (s: Span) => string
-  // #2161: what each string, template text and JSX text holds, where it is; the file as written, and
-  // with strings and comments blanked; and the innermost bracket open around an offset.
+  // What each string, template text and JSX text holds, where it is, and the file as written
+  // (#2788 counts the strings a change touched).
   strings: Span[]
   text: string
-  blank: string
-  inner: (at: number) => number | undefined
   // #2223: found once rather than by a scan per question. The functions holding an offset, innermost
   // first; function k's locals named x, in order; the functions named x; the top level statements
   // (types aside) named x.
@@ -2456,7 +2468,6 @@ const readMod = (f: ModFile): ModRead | null => {
       .map(k => strings[k] as Span)
       .filter(([x, y]) => heard([x, y]))
       .map(([x, y]) => text.slice(x, y))
-  const inner = (at: number): number | undefined => openAround(at, (_, c) => c > at)
   // #2223: the functions and the top level statements (types aside) by name, each in order.
   const fnsBy = new Map<string, number[]>()
   fns.forEach((g, k) => {
@@ -2474,7 +2485,7 @@ const readMod = (f: ModFile): ModRead | null => {
   }
   const fnsNamed = (x: string): readonly number[] => fnsBy.get(x) ?? none
   const topsNamed = (x: string): readonly Statement[] => topsBy.get(x) ?? []
-  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode, strings: spans.strings, text, blank, inner, around, localsOf, fnsNamed, topsNamed }
+  return { name: f.name, statements, imports, units, messages, stringsIn, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode, strings: spans.strings, text, around, localsOf, fnsNamed, topsNamed }
 }
 
 /**
@@ -2504,11 +2515,8 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
 // line builder, and each top level declaration drawn) and the values followed into them, apart, with
 // the file as read (no `r` for a file not among `files`). Null where any of the mod's files cannot be
 // read. With `seeds` 'messages' the same reading starts from where a message a person reads is handed
-// its words (#1823) rather than from what is drawn. `reached` is every place read so in each of the
-// mod's files, with the file as read: the seeds, the top level declarations reached and the values
-// followed (#2161, which asks what a message reads beside what it says). `wide` follows what a call
-// is handed too (`String(why)`'s `why`), which is no part of the look or the words but may read a key.
-const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units', wide = false): { r?: ModRead; parts: Span[]; followed: Span[]; reached: [ModRead, Span][] } | null => {
+// its words (#1823) rather than from what is drawn.
+const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'messages' = 'units'): { r?: ModRead; parts: Span[]; followed: Span[] } | null => {
   const read = new Map<string, ModRead>()
   for (const f of files) {
     const r = readMod(f)
@@ -2655,14 +2663,14 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
       // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
       // handed is the data it shows, so its parameters are its inputs, as a called function's are.
       const builder = own === undefined && !r.code(u).startsWith('<') ? r.fns.findIndex(f => (u[0] <= f.from && f.to <= u[1]) || f.body === u[0]) : -1
-      for (const { name: x, at } of r.refsAt(u, !wide, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
+      for (const { name: x, at } of r.refsAt(u, true, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
     }
   while (queue.length || spans.length) {
     const next = spans.pop()
     if (next) {
       const [file, s, inputs] = next
       const r = read.get(file) as ModRead
-      for (const { name: x, at, call } of r.refsAt(s, !wide)) {
+      for (const { name: x, at, call } of r.refsAt(s, true)) {
         if (call && callee(file, x, at)) continue
         reach(file, x)
         bind(file, x, at, inputs)
@@ -2673,21 +2681,15 @@ const drawnOf = (files: readonly ModFile[], name: string, seeds: 'units' | 'mess
     const r = read.get(file) as ModRead
     for (const s of r.topsNamed(x)) for (const y of r.refs([s.from, s.to])) reach(file, y)
   }
-  const reached: [ModRead, Span][] = []
-  for (const g of read.values()) {
-    for (const u of g[seeds]) reached.push([g, u])
-    for (const s of g.statements) if (s.name !== undefined && drawn.has(`${g.name}\n${s.name}`)) reached.push([g, [s.from, s.to]])
-    for (const s of extra.get(g.name)?.values() ?? []) reached.push([g, s])
-  }
   const r = read.get(name)
-  if (!r) return { parts: [], followed: [], reached }
+  if (!r) return { parts: [], followed: [] }
   const parts = new Map(r[seeds].map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
   // A followed value given the same way twice (two returns of `undefined`) is one value (#1576),
   // which drawnParts reads as one.
-  return { r, parts: [...parts.values()], followed: [...followed.values()], reached }
+  return { r, parts: [...parts.values()], followed: [...followed.values()] }
 }
 
 // The names each import in `text` binds, as the file and the name it takes them from; type only
@@ -2730,17 +2732,13 @@ const importBindings = (text: string): Map<string, string> | null => {
  * drawn, a value followed into one, whole, the data it hands a call included) and outside every
  * function that draws (the innermost one around a drawing call or element, a render hook's handler
  * among them, where a new local naming the card is asked about as Dan chose for #1248); every name
- * what is drawn uses is imported from the same file under the same name as before; the wording of
- * every message a person reads (a toast, a notification, a transcript line, a stop's or refusal's
- * reason, a tool's result) is the same, followed into each message as values are followed into what
- * is drawn (Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
- * about"), so #1245's notification helper stays held as #1248 recorded; and drawsChange finds the
- * drawn parts unchanged. A JSX element or a colour in those lines, a text or mod file the reader
- * cannot follow, and no change at all are never so.
+ * what is drawn uses is imported from the same file under the same name as before; and drawsChange
+ * finds the drawn parts unchanged. The words of a message a person reads are not looked at: since
+ * #2845 (Dan, 2026-11-12: "any words") a message's words are copy, never a look change, which
+ * reverses #1823's "message wording should be asked about". A JSX element or a colour in those lines,
+ * a text or mod file the reader cannot follow, and no change at all are never so.
  */
-// `words` false leaves the messages' wording out (#1859), to tell a hold for wording alone from one
-// for what is drawn; every judgement reads it with the wording.
-export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string, words = true): boolean => {
+export const modHookDrawingUntouched = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
   const reading = modHookReading(before, after)
   if (!reading || reading.verdict === 'drawn') return false
   const others = files.filter(f => f.name !== name)
@@ -2770,50 +2768,18 @@ export const modHookDrawingUntouched = (files: readonly ModFile[], name: string,
   const now = importBindings(after)
   if (!was || !now) return false
   for (const x of names) if (was.get(x) !== now.get(x)) return false
-  if (words && !messageWordingSame(others, name, before, after)) return false
   return !drawsChange(others, name, before, after)
 }
 
-/**
- * Whether the wording of every message a person reads from the mod hook file `name` (MESSAGE_CALL,
- * MESSAGE_KEY) is the same before and after a change, read beside the mod's other hook files `files`
- * (#1823): each string, template text and JSX text reaching one, followed into each message as values
- * are followed into what is drawn. When a message is shown may change; what it says may not. Only the
- * strings a person reads count (readMod's heard), never one a message is only computed from (#1841)
- * nor a one word tag its place shows to be one (#1864); a .tsx or .jsx file is read so too since
- * #1864 (Dan approved the one hold that releases, 2026-10-28). False where any of the texts cannot be
- * read.
- */
-export const messageWordingSame = (files: readonly ModFile[], name: string, before: string, after: string): boolean => {
-  const w = messageWordings(files, name, before, after)
-  return !!w && w.said.length === w.says.length && w.said.every((x, i) => x === w.says[i])
-}
-
-/**
- * The words of every message a person reads from the mod hook file `name` before and after a change,
- * each once and sorted, as messageWordingSame compares them; null where any of the texts cannot be
- * read. #1859 names the words that changed from these (heldWords).
- */
-export const messageWordings = (files: readonly ModFile[], name: string, before: string, after: string): { said: string[]; says: string[] } | null => {
-  const others = files.filter(f => f.name !== name)
-  const said = messageReading(others, name, before)
-  const says = messageReading(others, name, after)
-  return said && says ? { said: said.words, says: says.words } : null
-}
-
-// One text of the mod hook file `name` as messageWordings reads it, beside the mod's other hook files
-// `others`: the file as read, the words of every message a person reads from it, each once and
-// sorted, and every place in the mod's files that reading reached (#2161). Null where any of the
-// texts cannot be read.
-type MessageReading = { r: ModRead; words: string[]; reached: [ModRead, Span][] }
+// One text of the mod hook file `name` as messageWords reads it, beside the mod's other hook files
+// `others`: the file as read, and the words of every message a person reads from it, each once and
+// sorted. Null where any of the texts cannot be read. Since #2845 these words only name what an
+// automatic pass let through; no change to them is ever held.
+type MessageReading = { r: ModRead; words: string[] }
 const messageReading = (others: readonly ModFile[], name: string, text: string): MessageReading | null => {
   const d = drawnOf([...others, { name, text }], name, 'messages')
   if (!d?.r) return null
   const r = d.r
-  // The same reading following what each call is handed as well, for what the key reading reads
-  // (#2161): `const why = printed(line).unresolved; $.ui.toast(String(why))` reads the key.
-  const wide = drawnOf([...others, { name, text }], name, 'messages', true)
-  if (!wide) return null
   // Everything a call is handed of each top level function that sends a message, itself or through
   // another such function (the goal tracker's waitingOnYou, through notifySoon's promise, to
   // notify's terminal-notifier, which the values followed do not reach).
@@ -2831,239 +2797,22 @@ const messageReading = (others: readonly ModFile[], name: string, text: string):
     }
   }
   const spans: Span[] = [...d.parts, ...d.followed]
-  const handed: Span[] = []
-  for (const x of sends) for (const p of r.calls.get(x) ?? []) handed.push(...(r.args(p) ?? []))
-  spans.push(...handed)
-  // What the key reading reads (#2161): every place reached, what each sending function is handed,
-  // and the parameters of each function inside one, from its start to its body, so a parameter
-  // taking a record apart (`({ unresolved: why }) =>`) is read too.
-  const sent = fnsAt.filter(s => sends.has(s.name as string))
-  const heads = r.fns.filter(f => sent.some(s => s.from <= f.from && f.to <= s.to)).map(f => [r, [f.from, f.body]] as [ModRead, Span])
+  for (const x of sends) for (const p of r.calls.get(x) ?? []) spans.push(...(r.args(p) ?? []))
   // Each wording once: the same words moved into a helper, or said from one more place, say
   // nothing new (the goal tracker's "is waiting on you", 2026-10-05).
-  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort(), reached: [...d.reached, ...wide.reached, ...handed.map(s => [r, s] as [ModRead, Span]), ...heads] }
+  return { r, words: [...new Set(spans.flatMap(s => r.stringsIn(s)))].sort() }
 }
 
-// #2161: a whole record handed to a message, its keys or values taken without naming them, or a key
-// read by reflection, which the key reading below cannot follow, so each may read any reason key.
-const WHOLE_RECORD = /\bJSON\s*\.\s*stringify\b|\bObject\s*\.\s*(?:keys|values|entries|getOwnPropertyNames|getOwnPropertyDescriptors?|assign)\b|\bReflect\s*\.\s*[A-Za-z]/
-// #2161: a word before a `[` that makes it a list, never an access (`of [...parts]`, `return [a]`).
-const LIST_AFTER = /(?<![\w$.])(?:of|in|return|typeof|case|yield|await|void|delete|instanceof|new|else|do|throw|extends|keyof|readonly)\s*$/
-
-// #2161: whether `e`, code of `g` (strings blanked) read at `at`, is always a number, so an index by
-// it is never a record's key: a number, `.length`, a name numberIs finds, and arithmetic of them, a
-// ternary's two branches each one. Anything else may be a string, so is not.
-const numberExpr = (g: ModRead, e: string, at: number, seen: Set<string>): boolean => {
-  let x = e.trim().replace(/\s+as\s+number$/, '')
-  while (x.startsWith('(') && shutAt(x, 0) === x.length - 1) x = x.slice(1, -1).trim()
-  // A ternary at this depth: its condition may be anything, its branches must each be numbers.
-  let depth = 0
-  let ask = -1
-  for (let i = 0; i < x.length; i++) {
-    const c = x[i] as string
-    if (c === '(' || c === '[' || c === '{') depth++
-    else if (c === ')' || c === ']' || c === '}') depth--
-    else if (depth === 0 && c === '?' && x[i + 1] !== '.' && x[i + 1] !== '?' && x[i - 1] !== '?') ask = ask < 0 ? i : ask
-    else if (depth === 0 && c === ':' && ask >= 0) return numberExpr(g, x.slice(ask + 1, i), at, seen) && numberExpr(g, x.slice(i + 1), at, seen)
-  }
-  const TOKEN = /\s+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?|[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*|\+\+|--|\*\*|[-+*/%()]/gy
-  let seenAll = 0
-  for (const m of x.matchAll(TOKEN)) {
-    if (m.index !== seenAll) return false
-    seenAll += m[0].length
-    const t = m[0]
-    if (!/^[A-Za-z_$]/.test(t)) continue
-    if (/\.\s*length$/.test(t)) continue
-    if (!/^[A-Za-z_$][\w$]*$/.test(t) || !numberIs(g, t, at, seen)) return false
-  }
-  return x.length > 0 && seenAll === x.length
-}
-
-// #2161: whether the name `v`, as code of `g` at `at` sees it, always holds a number: a parameter of
-// the innermost function binding it typed `: number`, or a local whose every declaration and later
-// assignment there (readMod's locals) is a number by numberExpr. A name bound nowhere is not.
-const numberIs = (g: ModRead, v: string, at: number, seen: Set<string>): boolean => {
-  if (seen.has(v)) return true
-  seen.add(v)
-  const name = v.replace(/\$/g, '\\$')
-  for (const [f, k] of g.around(at)) {
-    if (f.params.some(ps => ps.includes(v)))
-      return new RegExp(`(?<![\\w$.])${name}\\s*\\??\\s*:\\s*number\\s*(?=[,)=])`).test(g.blank.slice(f.from, f.body))
-    const mine = g.localsOf(k, v)
-    if (!mine.length) continue
-    return mine.every(({ span: [a, b] }) => {
-      const t = g.blank.slice(a, b).trim()
-      const decl = new RegExp(`^(?:const|let|var)\\s+${name}\\s*(?::\\s*([^=]*?))?\\s*(=(?![=>]))?\\s*([^]*)$`).exec(t)
-      if (decl) return decl[1]?.trim() === 'number' || (!!decl[2] && numberExpr(g, decl[3] as string, at, seen))
-      const put = new RegExp(`^${name}\\s*([-+*/|&?]*)=\\s*([^]*)$`).exec(t)
-      if (!put) return false
-      return /^[-*/|&]$/.test(put[1] as string) || numberExpr(g, put[2] as string, at, seen)
-    })
-  }
-  return false
-}
-
-// #2161: the key each access by brackets in `g` from `a` to `b` reads: the key, for one quoted whole
-// (any quote, a template with no substitution in it); null for any other, which may read any key. An
-// index always a number (numberExpr), never a record's key, and a type's empty `[]` are left out.
-const bracketReads = (g: ModRead, [a, b]: Span): (string | null)[] => {
-  const out: (string | null)[] = []
-  for (let o = g.blank.indexOf('[', a); o !== -1 && o < b; o = g.blank.indexOf('[', o + 1)) {
-    const lead = g.blank.slice(Math.max(0, o - 40), o)
-    if (!/(?:[\w$)\]]|\?\.)\s*$/.test(lead) || LIST_AFTER.test(lead)) continue
-    const c = shutAt(g.blank, o)
-    if (c === undefined) {
-      out.push(null)
-      continue
-    }
-    const key = g.text.slice(o + 1, c).trim()
-    if (key === '' || /^(?:0[xob][\da-f_]+|\d[\d_]*(?:\.\d+)?(?:e[+-]?\d+)?)n?$/i.test(key) || numberExpr(g, g.blank.slice(o + 1, c), o, new Set())) continue
-    const q = /^(['"`])([^]*)\1$/.exec(key)
-    const plain = q && !/[\\'"`]/.test(q[2] as string) && !(q[1] === '`' && (q[2] as string).includes('${'))
-    out.push(plain ? (q[2] as string) : null)
-  }
-  return out
-}
-
-// #2161: whether `g` spreads something into an object (`{ ...made }`) or a call (`f(...made)`) at
-// `i`, which copies or hands on every key it has unnamed; never a list's or a parameter list's rest.
-// A parameter list is one a function readMod found opens with (an arrow's, or a `function`'s first),
-// never one a `:` follows, which is as often a ternary's other branch (`ok ? say(...made) : ''`).
-const spreadsAt = (g: ModRead, i: number): boolean => {
-  const o = g.inner(i)
-  if (o === undefined) return false
-  if (g.blank[o] === '{') return !g.fns.some(f => f.body === o)
-  if (g.blank[o] !== '(') return false
-  return !g.fns.some(f => f.from === o || (f.from < o && o < f.body && /^function\b\s*\*?\s*[\w$]*\s*$/.test(g.blank.slice(f.from, o))))
-}
-// #2161: a member read (`d.unresolved`) that is the whole value of a field, the field's key captured.
-const COPIED_INTO = /[{,]\s*([A-Za-z_$][\w$]*)\s*:\s*[A-Za-z_$][\w$]*(?:\s*\??\.\s*[A-Za-z_$][\w$]*)*\s*\??\.\s*$/
-
-// The bracket closing the one opened at `o` in `blank`, whose strings and comments are blanked.
-const shutAt = (blank: string, o: number): number | undefined => {
-  let depth = 0
-  for (let i = o; i < blank.length; i++) {
-    const c = blank[i]
-    if (c === '(' || c === '[' || c === '{') depth++
-    else if ((c === ')' || c === ']' || c === '}') && --depth === 0) return i
-  }
-  return undefined
-}
-
-// #2161: whether position `i` of `g` sits in a pattern taking a record apart, which reads each key it
-// names however it is spelled (`const { unresolved: why } = made`, one nested in another, or a
-// parameter's `({ unresolved: why }) =>`), never in an object literal defining one. A record or list
-// that an `=` follows is one, and so is one in a parameter list (an arrow, a return type or a body
-// after its parentheses, as readMod's picker reading tells them). A function's body ends the walk.
-const inPattern = (g: ModRead, i: number): boolean => {
-  for (let o = g.inner(i); o !== undefined; o = g.inner(o)) {
-    if (g.fns.some(f => f.body === o)) return false
-    const c = shutAt(g.blank, o)
-    if (c === undefined) return true
-    const after = g.blank.slice(c + 1, c + 40).trimStart()
-    if (g.blank[o] === '(') return /^(?:=>|:|\{)/.test(after)
-    if (g.blank[o] !== '{' && g.blank[o] !== '[') return false
-    if (/^=(?![=>])/.test(after)) return true
-  }
-  return false
-}
-
-/**
- * Whether the words a change to the mod hook file `name` brings into its messages are only the
- * reasons a refusal or reader gives, which nothing a person reads is handed (#2161; Dan, 2026-11-03,
- * approving this narrowing: mod-kit's #2141 shell reader was held for its `{ unresolved: '...' }`
- * reasons, swept in because a `text` key beside them is a message's key and its value was followed
- * whole). `was` and `now` are the file before and after, as messageReading reads them. True only
- * where no word is taken away, so a changed wording stays held; where every copy of each new word in
- * `now` is a string that is, itself, the value of a field of an object literal (a ternary's branch or
- * a template's part of it), outside any call in that value, any message and anything drawn, whose key
- * a person never reads (not WORD_KEY, so `deny`, `reason` and `text` stay held as #1864 recorded);
- * and where nothing the message reading reaches, in any of the mod's files, reads such a key, but to
- * define it or copy it whole into another such key, which is then read the same way (a pattern
- * taking the record apart, `const { unresolved: why } = made` or a parameter's, reads it). drawsChange has
- * already found nothing new drawn. A key read by a quoted name (`made['unresolved']`, any quote) is
- * read as the dot reads it, but never counted a copy. Not followed, so held: a record handed whole to
- * a message or taken apart unnamed (JSON.stringify, Object.keys, values or entries, Reflect, in the
- * file anywhere or anywhere reached), a key read by brackets holding anything but a quoted name or a
- * number (`made[k]`; numberExpr), and a record spread into an object or a call, anywhere reached.
- */
-const reasonsOnly = (was: MessageReading, now: MessageReading): boolean => {
-  if (was.words.some(x => !now.words.includes(x))) return false
-  const added = new Set(now.words.filter(x => !was.words.includes(x)))
-  if (!added.size) return false
-  const r = now.r
-  const keys = new Set<string>()
-  const found = new Set<string>()
-  for (const s of r.strings) {
-    const word = r.text.slice(s[0], s[1])
-    if (!added.has(word)) continue
-    const k = reasonKey(r, s)
-    if (k === undefined) return false
-    keys.add(k)
-    found.add(word)
-  }
-  if (found.size !== added.size) return false
-  if (WHOLE_RECORD.test(r.blank) || now.reached.some(([g, [a, b]]) => WHOLE_RECORD.test(g.blank.slice(a, b)))) return false
-  const queue = [...keys]
-  for (let k = queue.pop(); k !== undefined; k = queue.pop()) {
-    // A key is word characters and `$`, which a pattern would read as an end anchor and match nothing.
-    const at = new RegExp(`(?<![\\w$])${k.replace(/\$/g, '\\$')}(?![\\w$])`, 'g')
-    for (const [g, [a, b]] of now.reached)
-      for (const m of g.blank.slice(a, b).matchAll(at)) {
-        const i = a + (m.index as number)
-        const lead = g.blank.slice(Math.max(0, i - 200), i)
-        const rest = g.blank.slice(i + k.length, i + k.length + 200)
-        if (/[{,]\s*$/.test(lead) && /^\s*:/.test(rest) && !inPattern(g, i)) continue
-        const into = COPIED_INTO.exec(lead)
-        if (!into || !/^\s*[,}]/.test(rest) || WORD_KEY.test(into[1] as string)) return false
-        if (!keys.has(into[1] as string)) {
-          keys.add(into[1] as string)
-          queue.push(into[1] as string)
-        }
-      }
-  }
-  // A key read by brackets: quoted, as the dot reads it; any other may be every reason key. A record
-  // spread into an object or a call hands every key on unnamed.
-  for (const [g, s] of now.reached) {
-    if (bracketReads(g, s).some(k => k === null || keys.has(k))) return false
-    for (let i = g.blank.indexOf('...', s[0]); i !== -1 && i < s[1]; i = g.blank.indexOf('...', i + 3)) if (spreadsAt(g, i)) return false
-  }
-  return true
-}
-
-// The key of the object literal field whose value is the string at `s`, itself (#2161), or undefined
-// where it is anything else: inside a call, an array or a tagged template in that value, in a
-// function's body, a message or anything drawn, or under a key a person reads (WORD_KEY).
-const reasonKey = (r: ModRead, [x, y]: Span): string | undefined => {
-  const o = r.inner(x)
-  if (o === undefined || r.blank[o] !== '{' || r.fns.some(f => f.body === o)) return undefined
-  if ([...r.messages, ...r.units].some(([a, b]) => a <= x && y <= b)) return undefined
-  const q = x - 1
-  if (r.blank[q] === '`' && /[\w$)\]]/.test(r.blank.slice(0, q).trimEnd().slice(-1))) return undefined
-  // The field the string is in: from the last comma at the object's own depth.
-  let sep = o
-  let depth = 0
-  for (let i = o + 1; i < x; i++) {
-    const c = r.blank[i] as string
-    if (c === '(' || c === '[' || c === '{') depth++
-    else if (c === ')' || c === ']' || c === '}') depth--
-    else if (c === ',' && depth === 0) sep = i
-  }
-  const m = /^\s*([A-Za-z_$][\w$]*)\s*:/.exec(r.blank.slice(sep + 1, x))
-  const k = m?.[1]
-  return k === undefined || WORD_KEY.test(k) ? undefined : k
-}
-
-// The longest the words a hold names may run (#1859): one short phrase the refusal can carry.
+// The longest the words a record names may run (#1859): one short phrase.
 const WORDS_SHOWN = 60
 
 /**
- * The words a hold for a message's wording names (#1859): the longest of the words a person reads
- * that the change brings in, or, where it brings in none with a letter, of those it takes away, else
- * the longest it changes at all; on one line, spaces run together, and cut to WORDS_SHOWN characters.
- * Empty where what changed is only spaces.
+ * The words an automatic pass for a message's words names (#1859, #2845): the longest of the words a
+ * person reads that the change brings in, or, where it brings in none with a letter, of those it
+ * takes away, else the longest it changes at all; on one line, spaces run together, and cut to
+ * WORDS_SHOWN characters. Empty where what changed is only spaces.
  */
-export const heldWords = (said: readonly string[], says: readonly string[]): string => {
+export const namedWords = (said: readonly string[], says: readonly string[]): string => {
   const added = says.filter(x => !said.includes(x))
   const gone = said.filter(x => !says.includes(x))
   const lettered = (xs: string[]) => xs.filter(x => /\p{L}/u.test(x))
@@ -3071,6 +2820,34 @@ export const heldWords = (said: readonly string[], says: readonly string[]): str
   const longest = [...pool].sort((a, b) => b.length - a.length)[0] ?? ''
   const one = longest.replace(/\s+/g, ' ').trim()
   return one.length > WORDS_SHOWN ? `${one.slice(0, WORDS_SHOWN - 3).trimEnd()}...` : one
+}
+
+/**
+ * The words of the messages a person reads from the mod hook file `name` (MESSAGE_CALL, MESSAGE_KEY)
+ * that changing it from `before` to `after` (undefined for a file not there, read as one with no
+ * text) adds, rewords or takes away, read beside the mod's other hook files `files`, as namedWords
+ * names them; undefined where no message's words change. Only the strings a person reads count
+ * (readMod's heard: never one a message is only computed from, #1841, nor a one word tag, #1864; an
+ * answer's label and description and a question's text and header are, #1925 and #1934), and only
+ * the words of a string the change touched (#2788), so a change to code alone is never named as
+ * words it left exactly as they were. Empty where the messages cannot be read. Since #2845 (Dan,
+ * 2026-11-12: "any words") this names what an automatic pass let through and decides no hold.
+ */
+export const messageWords = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): string | undefined => {
+  if (before === after) return undefined
+  const others = files.filter(f => f.name !== name)
+  const was = messageReading(others, name, before ?? '')
+  const now = messageReading(others, name, after ?? '')
+  if (!was || !now) return ''
+  const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i])
+  if (same(was.words, now.words)) return undefined
+  // #2788: a word the reading reaches on one side only counts where its string is one the change
+  // touched; one whose string stands in both texts as many times reads as reached or not by the
+  // reading alone, and is left as it was.
+  const touched = stringsTouched(was.r, now.r)
+  const said = was.words.filter(x => now.words.includes(x) || touched.has(x))
+  const says = now.words.filter(x => was.words.includes(x) || touched.has(x))
+  return same(said, says) ? undefined : namedWords(said, says)
 }
 
 /**
@@ -3088,48 +2865,27 @@ export const drawsChange = (files: readonly ModFile[], name: string, before: str
 }
 
 /**
- * Why a change to a mod's .ts hook file is held (#1859), so the refusal claims only what was
- * measured (L11): `look` where it changes what the mod draws, or where its messages' words
- * cannot be read; `worded`, the words heldWords names, where only the wording of a message a person
- * reads changes; undefined where it passes.
+ * What changing a mod's plain TypeScript hook file changes (#1859, #2845): `look` where it changes
+ * what the mod draws, or where that cannot be read; `words`, as messageWords names them, where it
+ * changes only the words of a message a person reads; undefined where neither.
  */
-export type HookHold = { look: true } | { worded: string }
-/** A file, as a refusal names it, held only for a message's wording (#1859), with the words heldWords names. */
+export type HookChange = { look: true } | { words: string }
+/** A file an automatic pass let through because only a message's words changed (#2845), with the words messageWords names. */
 export type Worded = { file: string; words: string }
 /**
- * Whether, and why, changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before`
- * to `after` (undefined for a file not there) is asked about, read beside the mod's other hook files
- * in `files`: where it changes what the mod draws (drawsChange, #1275), or the wording of a message a
- * person reads from it (messageWordingSame, the one reading #1823 gave a mod's .tsx and .jsx files;
- * #1841, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked about").
- * A file made or taken away is read as one with no text, so its messages' words are new or gone. When
- * a message is sent, the logic around it, and a tool's or schema's description, which only Claude
- * reads, pass; and only the words a person reads count (Dan, 2026-10-28: "Narrow it first"), so a
- * regular expression, a value compared, a command's words or a separator a message is computed from
- * passes. A file any of them cannot be read in is held. The one reading of such a change: the yes or
- * no wrapper that stood beside it, which only tests called, is gone (#1911). New words a message
- * reading reaches only as the reasons a refusal or reader gives, in fields no person reads, pass too
- * (reasonsOnly, #2161; Dan, 2026-11-03); a record handed whole to a message stays held. Only the
- * words of a string the change adds, rewords or takes away count (#2788): a change to code alone,
- * which the message reading may follow less far after it than before, is never held for words it
- * left exactly as they were.
+ * What changing the mod's plain TypeScript hook file `name` (isModHookTs) from `before` to `after`
+ * (undefined for a file not there) changes, read beside the mod's other hook files in `files`. Only
+ * `look`, a change to what the mod draws (drawsChange, #1275), is held. A change to the words of a
+ * message a person reads (a toast, a notification, a refusal's reason, a tool's result, a picker's
+ * question or answers) is `words`: it passes with nothing asked and is kept on record as an automatic
+ * pass naming them (#2845; Dan, 2026-11-12: "any words"). That reverses the holds #1841 (Dan,
+ * 2026-10-27: "message wording should be asked about"), #1925 and #1934 made, and so #2161's
+ * narrowing of them, which is gone. A file made or taken away is read as one with no text.
  */
-export const modHookTsHold = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookHold | undefined => {
+export const modHookTsChange = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): HookChange | undefined => {
   if (drawsChange(files, name, before, after)) return { look: true }
-  const others = files.filter(f => f.name !== name)
-  const was = messageReading(others, name, before ?? '')
-  const now = messageReading(others, name, after ?? '')
-  if (!was || !now) return { look: true }
-  if (was.words.length === now.words.length && was.words.every((x, i) => x === now.words[i])) return undefined
-  if (reasonsOnly(was, now)) return undefined
-  // #2788: a word the reading reaches on one side only counts where its string is one the change
-  // touched; one whose string stands in both texts as many times reads as reached or not by the
-  // reading alone, and is left as it was.
-  const touched = stringsTouched(was.r, now.r)
-  const said = was.words.filter(x => now.words.includes(x) || touched.has(x))
-  const says = now.words.filter(x => was.words.includes(x) || touched.has(x))
-  if (said.length === says.length && said.every((x, i) => x === says[i])) return undefined
-  return { worded: heldWords(said, says) }
+  const words = messageWords(files, name, before, after)
+  return words === undefined ? undefined : { words }
 }
 
 // #2788: the text of every string, template text and JSX text in a file that stands in `a` and `b` a
@@ -3154,7 +2910,7 @@ export const callText = (tool: string, input: Record<string, unknown>, at: { cwd
 
 /**
  * What a refused call is known by, so the same call sent again is recognised when Dan has answered
- * Not a look or wording change for it: the tool and every key of its input, in a fixed order, with the folder it
+ * Not a look change for it: the tool and every key of its input, in a fixed order, with the folder it
  * runs in and the session, hashed (cyrb53). The folder because a shell command's relative path names
  * another file elsewhere; the session so his word about one edit does not stand for ever (lessons
  * review of #1010). The hash only finds the record: the record keeps callText, and a call is let
@@ -3283,37 +3039,13 @@ export const settledUnchecked = (file: string, why: string): string =>
  */
 export const ROUND_FILES = `A design round's own working files (its builder, stylesheet, spec and switcher) go in this session's scratchpad, which the guard never holds: if this is one, write it there, naming it by its full path or after a cd there.`
 
-// The files held only for a message's words (#1859), in the order `files` names them, each once.
-const wordedIn = (files: readonly string[], worded: readonly Worded[]): Worded[] =>
-  [...new Set(files)].flatMap(f => {
-    const w = worded.find(x => x.file === f)
-    return w ? [w] : []
-  })
-// Those words, quoted in brackets, or nothing where none could be named.
-const quoted = (words: readonly Worded[]): string => {
-  const said = words.filter(w => w.words).map(w => `"${w.words}"`)
-  return said.length ? ` (${said.join(', ')})` : ''
-}
-// Whether every file held is held for a message's words alone (#1859).
-const wordsAlone = (files: readonly string[], worded: readonly Worded[]): boolean => files.length > 0 && files.every(f => worded.some(w => w.file === f))
-// What a hold says each file changes (#1859, L11): how the screen looks, or, for a file held only
-// because a message's words changed, those words, never the look.
-const changesWhat = (files: readonly string[], worded: readonly Worded[]): string => {
-  const words = wordedIn(files, worded)
-  const look = files.filter(f => !words.some(w => w.file === f))
-  return [
-    ...(look.length ? [`${listed(look)} changes how the screen looks`] : []),
-    ...(words.length ? [`${listed(words.map(w => w.file))} changes the words of a message Dan reads${quoted(words)}`] : []),
-  ].join('; ')
-}
-
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
-export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], worded: readonly Worded[] = []): string => {
+export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
   const s = named(subjects)
   return (
-    `Blocked: ${changesWhat(files, worded)}, and ${s} has no design round Dan has settled, nor his word to skip one. ${wordsAlone(files, worded) ? 'Dan decides first' : 'Dan decides the look'}, so take one of these two ways on and no other. ` +
+    `Blocked: ${listed(files)} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
-    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when neither the look nor any wording changes, lets this one edit through. ` +
+    `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when the look does not change, lets this one edit through. ` +
     unreadSaid(unread) +
     `${ROUND_FILES} ` +
     leaveIt(files)
@@ -3321,18 +3053,16 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
 }
 
 /** What a check with no call id reads ($.tool.check): the call would be refused, and making it says how to go on. */
-export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = [], worded: readonly Worded[] = []): string =>
-  `Blocked: ${changesWhat(files, worded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
+export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
+  `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
   unreadSaid(unread) +
   `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}". ${ROUND_FILES}`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
-export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = [], worded: readonly Worded[] = []): string => {
-  const sentence = wordsAlone(files, worded)
-    ? 'one plain sentence saying which message Dan reads changes, and from what words to what'
-    : 'one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes'
+export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
+  const sentence = 'one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes'
   return (
-    `Blocked: ${changesWhat(files, worded)}, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
+    `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
     unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and ${sentence}, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
@@ -3346,36 +3076,33 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
 // what changes on screen, and a result row already drawn is not drawn again, so the plain sentence
 // itself comes in the question that follows (#1138), and the card says that it will.
 const CARD_LEAD = 'Claude wants to make an edit that may change how something looks on screen'
-// For an edit held only for a message's words (#1859), the card says that instead, naming them.
-const cardLead = (files: readonly string[], worded: readonly Worded[]): string =>
-  wordsAlone(files, worded) ? `Claude wants to make an edit that changes the words of a message you read${quoted(wordedIn(files, worded))}` : CARD_LEAD
 
 /** The card Dan sees for a refused look changing edit, drawn by mod-kit as every guard's is. */
-export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[], worded: readonly Worded[] = []) => ({
-  reason: `${cardLead(files, worded)}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
+export const card = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
+  reason: `${CARD_LEAD}, for ${named(subjects)}, which has no settled design round. The file is ${listed(files)}.`,
   safeWay: `Claude tells you in plain words what would change, then starts /design-rounds or asks whether to skip them for this issue, or whether this edit changes the look at all.`,
 })
 
 /** The card when the issue or branch cannot be told. */
-export const unsureCard = (files: readonly string[], worded: readonly Worded[] = []) => ({
-  reason: `${cardLead(files, worded)}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
+export const unsureCard = (files: readonly string[]) => ({
+  reason: `${CARD_LEAD}, and the design round guard could not tell which issue or branch it belongs to. The file is ${listed(files)}.`,
   safeWay: 'Claude checks out the issue branch, or asks you.',
 })
 
 /** The card when the record of Dan's answers cannot be read. */
-export const unreadableCard = (files: readonly string[], worded: readonly Worded[] = []) => ({
-  reason: `${cardLead(files, worded)}, and the design round guard could not read its record of your answers. The file is ${listed(files)}.`,
+export const unreadableCard = (files: readonly string[]) => ({
+  reason: `${CARD_LEAD}, and the design round guard could not read its record of your answers. The file is ${listed(files)}.`,
   safeWay: 'Claude tries again, or tells you.',
 })
 
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
-export const unsure = (files: readonly string[], why: string, worded: readonly Worded[] = []): string =>
-  `Blocked: ${changesWhat(files, worded)}, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
+export const unsure = (files: readonly string[], why: string): string =>
+  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
   `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
-export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string, worded: readonly Worded[] = []): string =>
-  `Blocked: ${changesWhat(files, worded)}, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
+export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>
+  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
 
 /** A write to the guard's own record: only Dan's answers may write it. */
 export const forged = (path: string): string =>
@@ -3435,32 +3162,22 @@ export type ShellOutcome =
   | { file: string; failed: string; kept: string }
   | { file: string; unread: string }
 // `record`, for a settled design under docs/design a script run was handed (#1593): what the change
-// did is said as the page no longer being sealed, never as a mod's drawing (L11). `words`, for a change
-// held only for a message's wording (#1859), the words heldWords names: said as those words changing,
-// never as what the mod draws. A file that could not be read after says it cannot tell which.
-export const shellOutcome = (o: ShellOutcome, record = false, words?: string): string => {
-  const quote = words ? ` ("${words}")` : ''
-  const did = record
-    ? `left ${o.file} no settled design exactly as make-settled.py wrote it`
-    : words !== undefined
-      ? `changed the words of a message Dan reads in ${o.file}${quote}`
-      : `changed what the mod draws in ${o.file}`
+// did is said as the page no longer being sealed, never as a mod's drawing (L11). A file that could
+// not be read after says it cannot tell which.
+export const shellOutcome = (o: ShellOutcome, record = false): string => {
+  const did = record ? `left ${o.file} no settled design exactly as make-settled.py wrote it` : `changed what the mod draws in ${o.file}`
   const notUndone = `The command ran and ${did}, and that change was NOT undone:`
-  const why = record
-    ? 'it left no settled design exactly as make-settled.py wrote it'
-    : words !== undefined
-      ? `it changed the words of a message Dan reads${quote}`
-      : 'it changed what the mod draws on screen'
+  const why = record ? 'it left no settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws on screen'
   if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: ${why}. What the command wrote there is kept at ${o.undone}.`
   if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
   if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`
   if ('failed' in o) return `${notUndone} putting the earlier text back failed (${o.failed}). The file still holds what the command wrote, also kept at ${o.kept}.`
-  const unknown = record ? 'it is still a settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws or the words of a message Dan reads'
+  const unknown = record ? 'it is still a settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws'
   return `The command ran, and the design round guard could not read ${o.file} after it (${o.unread}), so whether ${unknown} is unknown; the file was left as the command left it.`
 }
 /** A check after a shell write that itself failed (#1296): the command ran, and nothing was undone. */
 export const shellUnchecked = (why: string): string =>
-  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws, the words of a message Dan reads, or a settled design under docs/design (${why}), so nothing was undone. Check the files the command wrote, and tell Dan.`
+  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws or a settled design under docs/design (${why}), so nothing was undone. Check the files the command wrote, and tell Dan.`
 
 /** What a refusal says of a settled design under docs/design a script run took away (#1593). */
 export const RECORD_REMOVED = 'the command took it away'
@@ -3512,9 +3229,9 @@ export const skipIssueProblem = (issue: unknown): string | undefined =>
     : `${JSON.stringify(issue)} is not an issue number: give metadata "issue" as the number of the issue the refused builder works on, or leave it out to name its branch. Nothing was asked.`
 
 export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
-  { label: SKIP_YES, description: `Edits that change the look or wording go ahead on ${named(subjects)} without a design round; the next issue asks again` },
-  { label: SKIP_NO, description: 'Nothing that changes the look or wording is edited until you settle a design round' },
-  { label: NOT_LOOK, description: 'Neither the look nor any wording changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
+  { label: SKIP_YES, description: `Edits that change the look go ahead on ${named(subjects)} without a design round; the next issue asks again` },
+  { label: SKIP_NO, description: 'Nothing that changes the look is edited until you settle a design round' },
+  { label: NOT_LOOK, description: 'The look does not change, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
 
 // Dan typed an answer to the skip question instead of choosing one (#1138): said to him and to
@@ -3540,9 +3257,9 @@ export const settledTypedSaid = (typed: string): string =>
   'Take what he typed as the feedback for the next design round and act on it, answering anything it asks; ' +
   'ask him whether the design is settled only once he has seen that round.'
 
-/** Dan's Not a look or wording change, kept with the refused call (#1010): what it let through, and why. */
+/** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>
-  `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} changes neither the look nor any wording, so it went ahead with no design round.`
+  `Dan answered "${NOT_LOOK}" to "${SKIP_QUESTION}": this edit to ${listed(files)} does not change the look, so it went ahead with no design round.`
 
 /** The design rounds skill's closing question as Dan reads it. */
 export const settledQuestion = (subjects: readonly DesignRoundSubject[]): string =>

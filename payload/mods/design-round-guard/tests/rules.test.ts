@@ -20,13 +20,13 @@ import {
   isModHook,
   isModHookTs,
   drawsChange,
-  modHookTsHold,
+  modHookTsChange,
   shellOutcome,
   shellUnchecked,
   card,
   unsureCard,
   unreadableCard,
-  messageWordingSame,
+  messageWords,
   modHookLogicOnly,
   modHookDrawingUntouched,
   onScreenProblem,
@@ -846,16 +846,20 @@ const STEPS_NEW = [
   '',
   STEPS_OLD,
 ].join('\n')
-test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
+test("#1248, #2845: the refused helper is read past the line test for the card it names; its notification's words pass, named", () => {
   if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
-  // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
-  // Still so since #1823 (Dan, 2026-10-27: "message wording should be asked about"): the helper
-  // draws nothing, but the notification it sends Dan is new wording, so it stays held.
-  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
-  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
-  // And once it is there, rewording the notification is held too.
+  // Dan, 2026-10-16: the line fix only, no word exempted, so the line test still asks about the
+  // helper naming the card. #1823 then held the notification it sends Dan as new wording (Dan,
+  // 2026-10-27: "message wording should be asked about"); #2845 reverses that (Dan, 2026-11-12:
+  // "any words"). The helper draws nothing, so it passes, and its words are named for the record.
   const withHelper = STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW)
-  expect(modHookDrawingUntouched([], 'register.tsx', withHelper, withHelper.replace('is pinned. Next, step', 'is on the card. Next, step'))).toBe(false)
+  expect(modHookLogicOnly(STEPS_BEFORE, withHelper)).toBe(false)
+  expect(modHookDrawingUntouched([], 'register.tsx', STEPS_BEFORE, withHelper)).toBe(true)
+  expect(messageWords([], 'register.tsx', STEPS_BEFORE, withHelper)).not.toBe(undefined)
+  // And once it is there, rewording the notification passes too, named.
+  const reworded = withHelper.replace('is pinned. Next, step', 'is on the card. Next, step')
+  expect(modHookDrawingUntouched([], 'register.tsx', withHelper, reworded)).toBe(true)
+  expect(messageWords([], 'register.tsx', withHelper, reworded)).not.toBe(undefined)
   // Added directly above the line naming the card, a helper naming no drawing word passes: the
   // untouched line below it is no longer read.
   expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
@@ -974,25 +978,28 @@ test('#1823: the held Edit adding names to the imports draws nothing new, though
   expect(modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit('const publishBand', `${helper}const publishBand`))).toBe(true)
 })
 
-// #1823, Dan, 2026-10-27: "Timing wording can go through, but message wording should be asked
-// about". Where or when the card shows, and words only Claude reads, pass; the wording of a message
-// a person sees (a toast, a transcript line, a stop reason, a notification, a tool result) is held.
-test('#1823: a placement change and a tool description pass; the wording of a message Dan sees is held', () => {
-  const judged = (from: string, to: string) => modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, msEdit(from, to))
+// #1823 held the wording of a message a person sees in a mod's .tsx hook file (Dan, 2026-10-27:
+// "message wording should be asked about"); #2845 reverses it (Dan, 2026-11-12: "any words"). A
+// change to those words draws nothing new, so it passes, and messageWords names it for the record;
+// where or when the card shows, and words only Claude reads, pass with nothing to name.
+test('#1823, #2845: a placement change and a tool description pass unnamed; the wording of a message Dan sees passes, named', () => {
+  const judged = (from: string, to: string) => {
+    const after = msEdit(from, to)
+    if (!modHookDrawingUntouched(MS_FILES, 'register.tsx', MS_TSX, after)) return 'draws'
+    return messageWords(MS_FILES, 'register.tsx', MS_TSX, after) === undefined ? 'passes' : 'words'
+  }
   // Where the card goes, and a description of the tool, which only Claude reads.
-  expect(judged('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')).toBe(true)
-  expect(judged('as a card he works through.', 'as a card Dan works through, one step at a time.')).toBe(true)
-  // A debug log line, which nobody sees in the session, and when the toast is shown, its words alike.
-  expect(judged('the card went to the band', 'the steps card went to the band')).toBe(true)
-  expect(judged('  if (failed) $.ui.toast(', '  if (failed && failed.length) $.ui.toast(')).toBe(true)
-  // A toast's words, a transcript line's, and a stop reason's, each held for its wording.
-  expect(judged('could not be moved to the band', 'could not go back to the band')).toBe(false)
-  expect(judged('Manual steps moved the card to the band.', 'Manual steps put the card in the band.')).toBe(false)
-  expect(judged('Put it on the card with', 'Pin it on the steps card with')).toBe(false)
-  // A tool result Claude hands back, which shows in Dan's transcript.
-  expect(judged('Pinned the card "', 'Put the card up: "')).toBe(false)
-  // What a slash command answers Dan with.
-  expect(judged('No steps card is pinned for this project.', 'No steps card is up in this project.')).toBe(false)
+  expect(judged('const PANE_COLUMNS = 144', 'const PANE_COLUMNS = 110')).toBe('passes')
+  expect(judged('as a card he works through.', 'as a card Dan works through, one step at a time.')).toBe('passes')
+  // A debug log line, which nobody sees in the session, and when the toast is shown.
+  expect(judged('the card went to the band', 'the steps card went to the band')).toBe('passes')
+  expect(judged('  if (failed) $.ui.toast(', '  if (failed && failed.length) $.ui.toast(')).toBe('passes')
+  // A toast's words, a transcript line's, a stop reason's, a tool result's and a slash command's reply.
+  expect(judged('could not be moved to the band', 'could not go back to the band')).toBe('words')
+  expect(judged('Manual steps moved the card to the band.', 'Manual steps put the card in the band.')).toBe('words')
+  expect(judged('Put it on the card with', 'Pin it on the steps card with')).toBe('words')
+  expect(judged('Pinned the card "', 'Put the card up: "')).toBe('words')
+  expect(judged('No steps card is pinned for this project.', 'No steps card is up in this project.')).toBe('words')
 })
 
 // #1823: the goal tracker pages Dan by running terminal-notifier, its title reaching it through a
@@ -1015,10 +1022,14 @@ const NOTIFY_TSX = [
   '}',
   '',
 ].join('\n')
-test("#1823: a notification's title reaching terminal-notifier through a promise is wording, held when it changes", () => {
-  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('the steps card is waiting on you', 'the steps card needs you'))).toBe(false)
+test("#1823, #2845: a notification's title reaching terminal-notifier through a promise is wording, named when it changes, never held", () => {
+  const needs = NOTIFY_TSX.replace('the steps card is waiting on you', 'the steps card needs you')
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, needs)).toBe(true)
+  expect(messageWords([], 'register.tsx', NOTIFY_TSX, needs)).toBe('the steps card needs you')
   // When it is sent is no wording.
-  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, NOTIFY_TSX.replace('{ timeoutMs: 10_000 }', '{ timeoutMs: 20_000 }'))).toBe(true)
+  const later = NOTIFY_TSX.replace('{ timeoutMs: 10_000 }', '{ timeoutMs: 20_000 }')
+  expect(modHookDrawingUntouched([], 'register.tsx', NOTIFY_TSX, later)).toBe(true)
+  expect(messageWords([], 'register.tsx', NOTIFY_TSX, later)).toBe(undefined)
 })
 
 test('#1823: an edit naming the card that changes what is drawn is still held', () => {
@@ -1042,12 +1053,13 @@ test('#1823: an edit naming the card that changes what is drawn is still held', 
   expect(modHookDrawingUntouched([...MS_FILES, { name: 'place.ts', text: "const x = 'open" }], 'register.tsx', MS_TSX, msEdit(MS_IMPORTS_OLD, MS_IMPORTS_NEW))).toBe(false)
 })
 
-// What modHookTsHold says of a change to a mod's .ts hook file (#1859): held for what it draws,
-// held only for a message's words, or passed. #1911 moved every test of the old yes or no wrapper
-// (modHookTsShows) here, so each now says which hold it expects, not only that there is one.
-const holdOf = (...a: Parameters<typeof modHookTsHold>): 'look' | 'worded' | 'passes' => {
-  const h = modHookTsHold(...a)
-  return h === undefined ? 'passes' : 'look' in h ? 'look' : 'worded'
+// What modHookTsChange says of a change to a mod's .ts hook file (#1859, #2845): `look`, held for
+// what it draws; `words`, a change to a message's words only, which passes recorded naming them; or
+// `passes`, neither. Until #2845 `words` was held too; these tests now defend the reading that names
+// the words in the record, and that a look change is still told apart from them.
+const changeOf = (...a: Parameters<typeof modHookTsChange>): 'look' | 'words' | 'passes' => {
+  const h = modHookTsChange(...a)
+  return h === undefined ? 'passes' : 'look' in h ? 'look' : 'words'
 }
 
 // #1841: a mod's .ts hook file was judged only by what it draws (drawsChange), so the wording of a
@@ -1086,13 +1098,13 @@ test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts
     if (after === SECRET_TS) throw new Error(`no ${from}`)
     return after
   }
-  const judged = (from: string, to: string) => holdOf([], 'register.ts', SECRET_TS, edit(from, to))
+  const judged = (from: string, to: string) => changeOf([], 'register.ts', SECRET_TS, edit(from, to))
   // drawsChange, all a .ts hook file was judged by, lets the toast's new words through.
   expect(drawsChange([], 'register.ts', SECRET_TS, edit('Blocked a command that', 'Stopped a command that'))).toBe(false)
   // A toast's words, a refusal's reason, and a tool's result, each held for its wording.
-  expect(judged('Blocked a command that', 'Stopped a command that')).toBe('worded')
-  expect(judged('Blocked: this would print', 'Stopped: this would show')).toBe('worded')
-  expect(judged('Kept the job running.', 'The job stays up.')).toBe('worded')
+  expect(judged('Blocked a command that', 'Stopped a command that')).toBe('words')
+  expect(judged('Blocked: this would print', 'Stopped: this would show')).toBe('words')
+  expect(judged('Kept the job running.', 'The job stays up.')).toBe('words')
   // When the toast is shown, and what decides it, pass.
   expect(judged('what.length > 3', 'what.length > 5')).toBe('passes')
   // A tool's description and its schema's, read only by Claude, pass: a schema property named
@@ -1101,14 +1113,14 @@ test("#1841: the wording of a toast, a refusal or a tool's result in a mod's .ts
   expect(judged('Why it must keep running.', 'Why it has to keep running.')).toBe('passes')
   expect(judged('The background job id', 'The id of the background job')).toBe('passes')
   // What it draws is still held, and a change to nothing at all is none.
-  expect(holdOf([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toBe('look')
-  expect(holdOf([], 'register.ts', SECRET_TS, SECRET_TS)).toBe('passes')
+  expect(changeOf([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toBe('look')
+  expect(changeOf([], 'register.ts', SECRET_TS, SECRET_TS)).toBe('passes')
   // A file made with a message says new words, and one taken away takes them; one with none passes.
-  expect(holdOf([], 'register.ts', undefined, SECRET_TS)).toBe('worded')
-  expect(holdOf([], 'register.ts', SECRET_TS, undefined)).toBe('worded')
-  expect(holdOf([], 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe('passes')
+  expect(changeOf([], 'register.ts', undefined, SECRET_TS)).toBe('words')
+  expect(changeOf([], 'register.ts', SECRET_TS, undefined)).toBe('words')
+  expect(changeOf([], 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe('passes')
   // A mod file beside it that cannot be read holds every edit.
-  expect(holdOf([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
+  expect(changeOf([{ name: 'place.ts', text: "const x = 'open" }], 'register.ts', SECRET_TS, edit('what.length > 3', 'what.length > 5'))).toBe('look')
 })
 
 // #1925: on 2026-10-29 the #1904 builder's Edit adding "or wording" to the skip question's answers in
@@ -1140,25 +1152,25 @@ const ANSWERS_TS = [
   "  next({ questions: [{ question: 'Is this design settled?', options: [{ value: 'yes', description: 'Edits that change the look go ahead' }] }] })",
   '',
 ].join('\n')
-test("#1925: an answer's description and label, which Dan reads in the picker, are held as wording; a tool's or a schema's description still passes", () => {
+test("#1925, #2845: an answer's description and label, which Dan reads in the picker, are named as wording, never held; a tool's or a schema's description passes unnamed", () => {
   const edit = (from: string, to: string) => {
     const after = ANSWERS_TS.replace(from, to)
     if (after === ANSWERS_TS) throw new Error(`no ${from}`)
     return after
   }
-  const judged = (from: string, to: string) => holdOf([], 'rules.ts', ANSWERS_TS, edit(from, to))
+  const judged = (from: string, to: string) => changeOf([], 'rules.ts', ANSWERS_TS, edit(from, to))
   // The #1904 builder's edit, to an answer's description beside its label, and the same to its label.
-  expect(judged('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited')).toBe('worded')
-  expect(judged('go ahead on ${named} without', 'go ahead on ${named} with no')).toBe('worded')
-  expect(judged("label: 'Run /design-rounds'", "label: 'Start /design-rounds'")).toBe('worded')
-  expect(judged("export const SKIP_YES = 'Skip them'", "export const SKIP_YES = 'Skip the rounds'")).toBe('worded')
+  expect(judged('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited')).toBe('words')
+  expect(judged('go ahead on ${named} without', 'go ahead on ${named} with no')).toBe('words')
+  expect(judged("label: 'Run /design-rounds'", "label: 'Start /design-rounds'")).toBe('words')
+  expect(judged("export const SKIP_YES = 'Skip them'", "export const SKIP_YES = 'Skip the rounds'")).toBe('words')
   // An answer given by a conditional inside a call's parentheses, which is no parameter's pattern.
-  expect(judged('Only this answer is shown', 'Only this one answer is shown')).toBe('worded')
+  expect(judged('Only this answer is shown', 'Only this one answer is shown')).toBe('words')
   // An answer in an options list, which names no label of its own.
-  expect(judged("description: 'Edits that change the look go ahead' }", "description: 'Edits to the look go ahead' }")).toBe('worded')
-  // The refusal names the words it held for.
-  const hold = modHookTsHold([], 'rules.ts', ANSWERS_TS, edit('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited'))
-  expect(hold && 'worded' in hold ? hold.worded : '').toContain('Nothing that changes the look or wording')
+  expect(judged("description: 'Edits that change the look go ahead' }", "description: 'Edits to the look go ahead' }")).toBe('words')
+  // The record names the words.
+  const hold = modHookTsChange([], 'rules.ts', ANSWERS_TS, edit('Nothing that changes the look is edited', 'Nothing that changes the look or wording is edited'))
+  expect(hold && 'words' in hold ? hold.words : '').toContain('Nothing that changes the look or wording')
   // A tool's description, and its schema's, read only by Claude, pass: properties named label and
   // description among them, whose values are schemas, not answers.
   expect(judged('Ask Dan whether to skip', 'Ask Dan if he wants to skip')).toBe('passes')
@@ -1207,25 +1219,25 @@ const Q_REGISTER_TS = [
   "export const askOne = (next: Next) => next({ question: 'Keep this answer?', options: [] })",
   '',
 ].join('\n')
-test("#1934: a question's text and header, which Dan reads in the picker, are held as wording, in the file asking it or the one it is worded in; a tool's schema naming them still passes", () => {
+test("#1934, #2845: a question's text and header, which Dan reads in the picker, are named as wording, never held, in the file asking it or the one it is worded in; a tool's schema naming them passes unnamed", () => {
   const edited = (text: string, from: string, to: string) => {
     const after = text.replace(from, to)
     if (after === text) throw new Error(`no ${from}`)
     return after
   }
-  const inRegister = (from: string, to: string) => holdOf([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, from, to))
-  const inRules = (from: string, to: string) => holdOf([{ name: 'register.ts', text: Q_REGISTER_TS }], 'rules.ts', Q_RULES_TS, edited(Q_RULES_TS, from, to))
+  const inRegister = (from: string, to: string) => changeOf([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, from, to))
+  const inRules = (from: string, to: string) => changeOf([{ name: 'register.ts', text: Q_REGISTER_TS }], 'rules.ts', Q_RULES_TS, edited(Q_RULES_TS, from, to))
   // A question and header written where it is asked, in a questions list or beside options.
-  expect(inRegister('Is this design settled?', 'Is the design settled?')).toBe('worded')
-  expect(inRegister("header: 'Settled'", "header: 'Design settled'")).toBe('worded')
-  expect(inRegister('Keep this answer?', 'Keep that answer?')).toBe('worded')
+  expect(inRegister('Is this design settled?', 'Is the design settled?')).toBe('words')
+  expect(inRegister("header: 'Settled'", "header: 'Design settled'")).toBe('words')
+  expect(inRegister('Keep this answer?', 'Keep that answer?')).toBe('words')
   // One handed in as a parameter (asked's `question`), worded in another file, and the header's constant.
-  expect(inRules("'Skip design rounds for this issue?'", "'Skip the design rounds for this issue?'")).toBe('worded')
-  expect(inRules('It changes ${named}.', 'It would change ${named}.')).toBe('worded')
-  expect(inRules("HEADER = 'Design round'", "HEADER = 'Design rounds'")).toBe('worded')
-  // The refusal names the words it held for.
-  const hold = modHookTsHold([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, 'Is this design settled?', 'Is the design settled?'))
-  expect(hold && 'worded' in hold ? hold.worded : '').toContain('Is the design settled?')
+  expect(inRules("'Skip design rounds for this issue?'", "'Skip the design rounds for this issue?'")).toBe('words')
+  expect(inRules('It changes ${named}.', 'It would change ${named}.')).toBe('words')
+  expect(inRules("HEADER = 'Design round'", "HEADER = 'Design rounds'")).toBe('words')
+  // The record names the words.
+  const hold = modHookTsChange([{ name: 'rules.ts', text: Q_RULES_TS }], 'register.ts', Q_REGISTER_TS, edited(Q_REGISTER_TS, 'Is this design settled?', 'Is the design settled?'))
+  expect(hold && 'words' in hold ? hold.words : '').toContain('Is the design settled?')
   // A tool's schema describing question and header properties, read only by Claude, passes.
   expect(inRules('The question to put to him.', 'The question to ask him.')).toBe('passes')
   expect(inRules('A short header above it.', 'A header above it.')).toBe('passes')
@@ -1233,71 +1245,48 @@ test("#1934: a question's text and header, which Dan reads in the picker, are he
   expect(inRegister('multiSelect: false }] })\n    return', 'multiSelect: true }] })\n    return')).toBe('passes')
 })
 
-// #1859: a hold made only because a message's words changed said the edit "changes how the screen
-// looks", and a shell write's that it "changed what the mod draws", claiming more than the check
-// measured (L11). The check says why it held (modHookTsHold), naming the words, and every refusal,
-// card and shell outcome says that reason; a real look change still says the look.
-test("#1859: a hold for a message's words alone says so, naming the words, and never the screen's look; a look change still says the look", () => {
+// #1859 named the words a hold for them alone was made for; since #2845 nothing is held for words,
+// and the same naming (messageWords, namedWords) is what an automatic pass's record says. Every
+// refusal, card and shell outcome now says only the look, and nothing says a message's words.
+test("#1859, #2845: a change to a message's words alone is read as words, named; a look change is read and said as the look", () => {
   const reworded = SECRET_TS.replace('Blocked a command that', 'Stopped a command that')
-  const hold = modHookTsHold([], 'register.ts', SECRET_TS, reworded)
-  const words = hold && 'worded' in hold ? hold.worded : ''
+  const hold = modHookTsChange([], 'register.ts', SECRET_TS, reworded)
+  const words = hold && 'words' in hold ? hold.words : ''
   expect(words).toContain('Stopped a command that')
   // A look change, logic alone, and words taken away.
-  expect(modHookTsHold([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toEqual({ look: true })
-  expect(modHookTsHold([], 'register.ts', SECRET_TS, SECRET_TS.replace('what.length > 3', 'what.length > 5'))).toBe(undefined)
-  const gone = modHookTsHold([], 'register.ts', SECRET_TS, SECRET_TS.replace("result: 'Kept the job running.'", "result: ''"))
-  expect(gone && 'worded' in gone ? gone.worded : '').toContain('Kept the job running.')
+  expect(modHookTsChange([], 'row.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toEqual({ look: true })
+  expect(modHookTsChange([], 'register.ts', SECRET_TS, SECRET_TS.replace('what.length > 3', 'what.length > 5'))).toBe(undefined)
+  const gone = modHookTsChange([], 'register.ts', SECRET_TS, SECRET_TS.replace("result: 'Kept the job running.'", "result: ''"))
+  expect(gone && 'words' in gone ? gone.words : '').toContain('Kept the job running.')
   // Long words are shortened, their spaces run together.
   const long = SECRET_TS.replace('Blocked a command that would print a secret.', `Stopped ${'a very long sentence   '.repeat(8)}that ends here.`)
-  const shortened = modHookTsHold([], 'register.ts', SECRET_TS, long)
-  const said = shortened && 'worded' in shortened ? shortened.worded : ''
+  const shortened = modHookTsChange([], 'register.ts', SECRET_TS, long)
+  const said = shortened && 'words' in shortened ? shortened.words : ''
   expect(said.length).toBeLessThan(80)
   expect(said.includes('  ')).toBe(false)
   expect(said.startsWith('Stopped a very long')).toBe(true)
+  // The record names them (#2845), beside any file changed in logic alone.
+  const file = 'payload/mods/demo/hooks/guard.ts'
+  expect(autoPassWhy([file], [{ file, words }])).toContain(`only the words of a message the mod shows ("${words}")`)
+  const mixed = autoPassWhy(['app/page.tsx', file], [{ file, words }])
+  expect(mixed).toContain(`${file} changes only the words`)
+  expect(mixed).toContain('app/page.tsx changes only logic')
+  expect(mixed).toContain('#2294, #2845')
+  expect(DASHES.test(mixed)).toBe(false)
 
   const subjects = [{ key: 'k', label: 'issue #1859 in claude-config' }]
-  const file = 'payload/mods/demo/hooks/guard.ts'
-  const worded = [{ file, words }]
   const LOOK = 'changes how the screen looks'
-  const WORDS = 'changes the words of a message Dan reads'
-  for (const r of [
-    refusal('t1', [file], subjects, [], worded),
-    agentRefusal([file], subjects, 't2', [], worded),
-    checked([file], subjects, [], worded),
-    unsure([file], 'a detached head names no branch', worded),
-    unreadable([file], subjects, 'EIO', worded),
-  ]) {
-    expect({ r, words: r.includes(WORDS) && r.includes('Stopped a command that') }).toEqual({ r, words: true })
-    expect({ r, look: r.includes(LOOK) }).toEqual({ r, look: false })
-    expect(DASHES.test(r)).toBe(false)
-  }
-  for (const c of [card([file], subjects, worded), unsureCard([file], worded), unreadableCard([file], worded)]) {
-    expect({ c: c.reason, words: c.reason.includes('Stopped a command that') }).toEqual({ c: c.reason, words: true })
-    expect({ c: c.reason, look: c.reason.includes('looks on screen') }).toEqual({ c: c.reason, look: false })
-  }
-  // A real look change says the look, and never a message's words.
-  for (const r of [refusal('t3', ['app/page.tsx'], subjects), agentRefusal(['app/page.tsx'], subjects, 't4'), checked(['app/page.tsx'], subjects)]) {
+  // A look change says the look, and nothing names a message's words any more.
+  for (const r of [refusal('t3', ['app/page.tsx'], subjects), agentRefusal(['app/page.tsx'], subjects, 't4'), checked(['app/page.tsx'], subjects), unsure(['app/page.tsx'], 'a detached head names no branch'), unreadable(['app/page.tsx'], subjects, 'EIO')]) {
     expect(r).toContain(`app/page.tsx ${LOOK}`)
-    expect(r.includes(WORDS)).toBe(false)
+    expect(r.includes('words of a message')).toBe(false)
   }
   expect(card(['app/page.tsx'], subjects).reason.startsWith('Claude wants to make an edit that may change how something looks on screen')).toBe(true)
-  // Both at once: each file is said with its own reason.
-  const both = refusal('t5', ['app/page.tsx', file], subjects, [], worded)
-  expect(both).toContain(`app/page.tsx ${LOOK}`)
-  expect(both).toContain(`${file} ${WORDS}`)
-  expect(both.includes(`${file} ${LOOK}`)).toBe(false)
-
-  // A shell write held for a message's words says so, never what the mod draws.
-  for (const o of [{ file, undone: '/s/kept' }, { file, unkept: 'no scratchpad' }, { file, changed: '/s/kept' }, { file, failed: 'EIO', kept: '/s/kept' }]) {
-    const s = shellOutcome(o, false, words)
-    expect({ s, words: s.includes('the words of a message Dan reads') && s.includes('Stopped a command that') }).toEqual({ s, words: true })
-    expect({ s, draws: s.includes('what the mod draws') }).toEqual({ s, draws: false })
+  for (const o of [{ file, undone: '/s/kept' }, { file, unkept: 'no scratchpad' }, { file, changed: '/s/kept' }, { file, failed: 'EIO', kept: '/s/kept' }, { file, unread: 'EIO' }]) {
     expect(shellOutcome(o)).toContain('what the mod draws')
+    expect(shellOutcome(o).includes('words of a message')).toBe(false)
   }
-  // One that could not be read after says it cannot tell which of the two it was, and so does a check
-  // after a shell write that itself failed.
-  expect(shellOutcome({ file, unread: 'EIO' })).toContain('what the mod draws or the words of a message Dan reads')
-  expect(shellUnchecked('EIO')).toContain('the words of a message Dan reads')
+  expect(shellUnchecked('EIO').includes('words of a message')).toBe(false)
 })
 
 // #1841, Dan, 2026-10-28 ("Narrow it first"): only the words a person reads count. Replayed, about 50
@@ -1324,11 +1313,11 @@ const FRONT_TS = [
   '}',
   '',
 ].join('\n')
-test('#1841: a string a message is only computed from passes; the words of the message are still held', () => {
+test('#1841, #2845: a string a message is only computed from passes unnamed; the words of the message are named', () => {
   const judged = (from: string, to: string) => {
     const after = FRONT_TS.replace(from, to)
     if (after === FRONT_TS) throw new Error(`no ${from}`)
-    return holdOf([], 'register.ts', FRONT_TS, after)
+    return changeOf([], 'register.ts', FRONT_TS, after)
   }
   // A regular expression, a typeof tag, a value compared, a type's union, a command's words and
   // flags, what a string is split by, and a separator with no letter in it.
@@ -1341,10 +1330,10 @@ test('#1841: a string a message is only computed from passes; the words of the m
   expect(judged("['-g', '--background']", "['-g', '-j', '--background']")).toBe('passes')
   expect(judged("what ? ', ' : ''", "what ? '; ' : ''")).toBe('passes')
   // The words: the toast's, a word it is joined with, what it says of the window, and the refusal's.
-  expect(judged('Blocked bringing', 'Stopped bringing')).toBe('worded')
-  expect(judged(".join(' and ')", ".join(' or ')")).toBe('worded')
-  expect(judged("'its window'", "'the window'")).toBe('worded')
-  expect(judged('would be brought to the front${', 'would come forward${')).toBe('worded')
+  expect(judged('Blocked bringing', 'Stopped bringing')).toBe('words')
+  expect(judged(".join(' and ')", ".join(' or ')")).toBe('words')
+  expect(judged("'its window'", "'the window'")).toBe('words')
+  expect(judged('would be brought to the front${', 'would come forward${')).toBe('words')
 })
 
 // #1841 read a .tsx or .jsx hook file's messages whole, since read only for its words one edit #1823
@@ -1366,13 +1355,13 @@ test('#1864: a compared button name a message is computed from passes in a .ts a
     "  const p = element.split(':')[1]\n  const field = p === 'copy' ? 'value' : p === 'copy-link' ? 'url' : undefined",
   )
   expect(after).not.toBe(text)
-  expect(messageWordingSame([], 'register.tsx', text, after)).toBe(true)
-  expect(messageWordingSame([], 'register.ts', text, after)).toBe(true)
-  expect(holdOf([], 'register.ts', text, after)).toBe('passes')
-  // Its words are held either way.
-  expect(messageWordingSame([], 'register.tsx', text, text.replace('Copied the', 'Copied your'))).toBe(false)
-  expect(holdOf([], 'register.ts', text, text.replace('Copied the', 'Copied your'))).toBe('worded')
-  expect(messageWordingSame([], 'register.tsx', text, text.replace("? 'value'", "? 'text'"))).toBe(false)
+  expect(messageWords([], 'register.tsx', text, after)).toBe(undefined)
+  expect(messageWords([], 'register.ts', text, after)).toBe(undefined)
+  expect(changeOf([], 'register.ts', text, after)).toBe('passes')
+  // Its words are read as words either way.
+  expect(messageWords([], 'register.tsx', text, text.replace('Copied the', 'Copied your'))).toContain('Copied your')
+  expect(changeOf([], 'register.ts', text, text.replace('Copied the', 'Copied your'))).toBe('words')
+  expect(messageWords([], 'register.tsx', text, text.replace("? 'value'", "? 'text'"))).toBe('text')
 })
 
 // #1864: six edits #1852's reading still held changed only a one word tag nobody reads. Each is cut
@@ -1432,7 +1421,7 @@ const PRINTF_TS = [
 ].join('\n')
 const tagEdit = (text: string, from: string, to: string) => {
   if (text.split(from).length !== 2) throw new Error(`the fixture holds ${from} other than once`)
-  return holdOf([], 'register.ts', text, text.replace(from, to))
+  return changeOf([], 'register.ts', text, text.replace(from, to))
 }
 test('#1864: an edit changing only a one word tag in a .ts hook file passes', () => {
   // A record's tag, as a property's value or one of a choice's answers.
@@ -1448,15 +1437,15 @@ test('#1864: an edit changing only a one word tag in a .ts hook file passes', ()
   expect(tagEdit(PRINTF_TS, String.raw`['t', '\t']])`, String.raw`['t', '\t'], ['a', '\x07'], ['b', '\b']])`)).toBe('passes')
 })
 
-test('#1864: a one word message, and words beside a tag, are still held', () => {
+test('#1864, #2845: a one word message, and words beside a tag, are still named as words, never held', () => {
   // A toast or a refusal saying one word.
-  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('Saved')\n  return undefined")).toBe('worded')
-  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('saved')\n  return undefined")).toBe('worded')
-  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ deny: 'refused' }")).toBe('worded')
-  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ decision: 'block', reason: 'refused' }")).toBe('worded')
+  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('Saved')\n  return undefined")).toBe('words')
+  expect(tagEdit(TAGS_TS, '  return undefined', "  $.ui.toast('saved')\n  return undefined")).toBe('words')
+  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ deny: 'refused' }")).toBe('words')
+  expect(tagEdit(TAGS_TS, "{ deny: 'mutant' }", "{ decision: 'block', reason: 'refused' }")).toBe('words')
   // The words of the record holding the argv, and an argv entry joined into a sentence.
-  expect(tagEdit(TAGS_TS, 'Reading the log of', 'Reading the history of')).toBe('worded')
-  expect(tagEdit(TAGS_TS, '(${step.why})', "(${step.why}, ${['ran', 'git'].join(' ')})")).toBe('worded')
+  expect(tagEdit(TAGS_TS, 'Reading the log of', 'Reading the history of')).toBe('words')
+  expect(tagEdit(TAGS_TS, '(${step.why})', "(${step.why}, ${['ran', 'git'].join(' ')})")).toBe('words')
   // A table of words picked by a key, a one word answer of a function typed only as a string, and a
   // word handed to a function that says it.
   const words = (from: string, to: string) =>
@@ -1476,16 +1465,16 @@ test('#1864: a one word message, and words beside a tag, are still held', () => 
       from,
       to,
     )
-  expect(words("drop: 'dropped'", "drop: 'removed'")).toBe('worded')
-  expect(words("? 'step' :", "? 'item' :")).toBe('worded')
-  expect(words("said($, 'moved')", "said($, 'closed')")).toBe('worded')
+  expect(words("drop: 'dropped'", "drop: 'removed'")).toBe('words')
+  expect(words("? 'step' :", "? 'item' :")).toBe('words')
+  expect(words("said($, 'moved')", "said($, 'closed')")).toBe('words')
   // A list of one word (lessons review at 324ee11).
-  expect(words("['done']", "['finished']")).toBe('worded')
+  expect(words("['done']", "['finished']")).toBe('words')
 })
 
 // #1841 (lessons review at 74900c0): a message's words given to a variable with = or added with +=
-// are no value compared, so they are still held.
-test('#1841: words assigned or appended before they are said are still held', () => {
+// are no value compared, so they are words. Since #2845 words pass, named for the record.
+test('#1841, #2845: words assigned or appended before they are said are still named as words', () => {
   const text = [
     "import type { EngineInterface } from 'claude-code'",
     'export const warn = async ($: EngineInterface, n: number) => {',
@@ -1495,9 +1484,9 @@ test('#1841: words assigned or appended before they are said are still held', ()
     '}',
     '',
   ].join('\n')
-  expect(holdOf([], 'register.ts', text, text.replace("'Blocked a command'", "'Stopped a command'"))).toBe('worded')
-  expect(holdOf([], 'register.ts', text, text.replace("' that would print a secret'", "' that would show a secret'"))).toBe('worded')
-  expect(holdOf([], 'register.ts', text, text.replace('n > 1', 'n > 3'))).toBe('passes')
+  expect(changeOf([], 'register.ts', text, text.replace("'Blocked a command'", "'Stopped a command'"))).toBe('words')
+  expect(changeOf([], 'register.ts', text, text.replace("' that would print a secret'", "' that would show a secret'"))).toBe('words')
+  expect(changeOf([], 'register.ts', text, text.replace('n > 1', 'n > 3'))).toBe('passes')
 })
 
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was
@@ -2198,25 +2187,26 @@ test('#1904: an issue the skip question names that is not a whole positive numbe
   expect(skipIssueProblem(1859)).toBe(undefined)
 })
 
-// #1911: since #1859 the skip question can be about a message's words alone, so the answers Dan picks
-// from name wording beside the look, where they named only the look.
-test("#1911: the skip question's answers name wording beside the look", () => {
-  expect(NOT_LOOK).toBe('Not a look or wording change')
-  const [yes, no, third] = skipOptions([{ key: 'k', label: 'issue #978 in slate' }])
-  expect(yes?.description).toContain('change the look or wording')
-  expect(no?.description).toContain('changes the look or wording')
+// #1911 had the answers Dan picks from name wording beside the look while a hold could be for a
+// message's words alone. Since #2845 none is, so they name the look only again, and so do the
+// refusal and the reason kept with his answer: naming wording would claim a check that is gone (L11).
+test("#2845: the skip question's answers, the refusal and the reason kept name only the look, never wording", () => {
+  expect(NOT_LOOK).toBe('Not a look change')
+  const options = skipOptions([{ key: 'k', label: 'issue #978 in slate' }])
+  const [yes, no, third] = options
+  expect(yes?.description).toContain('change the look go ahead')
+  expect(no?.description).toContain('changes the look is edited')
   expect(third?.label).toBe(NOT_LOOK)
-  // What it says it means, and the reason kept with it, name both too (lessons review of 83729c4):
-  // "nothing on screen changes" read false for a hold that was only ever about a message's words.
-  expect(third?.description).toContain('Neither the look nor any wording changes')
-  expect(notLookWhy(['hooks/rules.ts'])).toContain('changes neither the look nor any wording')
+  expect(third?.description).toContain('The look does not change')
+  const said = [...options.flatMap(o => [o.label, o.description]), notLookWhy(['hooks/rules.ts']), refusal('t1', ['app/page.tsx'], [{ key: 'k', label: 'issue #978 in slate' }])]
+  expect(said.filter(s => /wording/i.test(s))).toEqual([])
 })
 
-// #1911: modHookTsShows had become a yes or no wrapper over modHookTsHold that only tests called; its
-// tests moved to modHookTsHold (holdOf above), and the wrapper is gone.
-test('#1911: the guard keeps one reading of a .ts hook change, modHookTsHold, with no wrapper beside it', () => {
-  expect(Object.keys(allRules).includes('modHookTsShows')).toBe(false)
-  expect(typeof allRules.modHookTsHold).toBe('function')
+// #1911 made modHookTsHold the one reading of a .ts hook change, with no wrapper; since #2845 that
+// reading is modHookTsChange, and neither name it replaced is left.
+test('#1911, #2845: the guard keeps one reading of a .ts hook change, modHookTsChange, with no wrapper beside it', () => {
+  expect(Object.keys(allRules).filter(k => ['modHookTsShows', 'modHookTsHold', 'messageWordingSame', 'messageWordings', 'heldWords'].includes(k))).toEqual([])
+  expect(typeof allRules.modHookTsChange).toBe('function')
 })
 
 // #2038: moving a hook that toasts into a named top level const and registering it as
@@ -2271,24 +2261,24 @@ const SAVE_AFTER = [
   '}',
   '',
 ].join('\n')
-test('#2038: a hook moved into a named const and registered with on(...).catch passes, its event name no message words; a real wording change there is still held', () => {
+test('#2038, #2845: a hook moved into a named const and registered with on(...).catch passes, its event name no message words; a real wording change there is still named', () => {
   const edited = (text: string, from: string, to: string) => {
     const after = text.replace(from, to)
     if (after === text) throw new Error(`no ${from}`)
     return after
   }
   // The logic only move, as #2026 made it, and the event name and filter beside the reference changed after it.
-  expect(modHookTsHold([], 'register.ts', SAVE_BEFORE, SAVE_AFTER)).toBe(undefined)
-  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "on('tool.call'", "on('tool.check'"))).toBe('passes')
-  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, '{ tool: TOOL_NAMES }, saveCall', "{ tool: 'Write' }, saveCall"))).toBe('passes')
+  expect(modHookTsChange([], 'register.ts', SAVE_BEFORE, SAVE_AFTER)).toBe(undefined)
+  expect(changeOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "on('tool.call'", "on('tool.check'"))).toBe('passes')
+  expect(changeOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, '{ tool: TOOL_NAMES }, saveCall', "{ tool: 'Write' }, saveCall"))).toBe('passes')
   // Controls: the toast's words, the refusal's words, and the words the catch's refusal is made from
-  // are each still held, in the moved hook and in the catch beside it.
-  const toast = modHookTsHold([], 'register.ts', SAVE_BEFORE, edited(SAVE_AFTER, 'it reads as a lasting memory', 'it looks like a lasting memory'))
-  expect(toast && 'worded' in toast ? toast.worded : '').toContain('it looks like a lasting memory')
-  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "'Not saved: ask Dan first.'", "'Not saved: ask Dan.'"))).toBe('worded')
-  expect(holdOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, 'Could not check this call', 'Could not judge this call'))).toBe('worded')
+  // are each still named as words (held before #2845), in the moved hook and in the catch beside it.
+  const toast = modHookTsChange([], 'register.ts', SAVE_BEFORE, edited(SAVE_AFTER, 'it reads as a lasting memory', 'it looks like a lasting memory'))
+  expect(toast && 'words' in toast ? toast.words : '').toContain('it looks like a lasting memory')
+  expect(changeOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, "'Not saved: ask Dan first.'", "'Not saved: ask Dan.'"))).toBe('words')
+  expect(changeOf([], 'register.ts', SAVE_AFTER, edited(SAVE_AFTER, 'Could not check this call', 'Could not judge this call'))).toBe('words')
   // A callback on what a function of the mod returns still takes its values from the words handed
-  // to that function, so those words, said in a toast, are held as before.
+  // to that function, so those words, said in a toast, are named as before.
   const listed = [
     "import type { EngineInterface, Register } from 'claude-code'",
     'const lines = (...xs: string[]) => xs.map(x => x.trim())',
@@ -2299,7 +2289,7 @@ test('#2038: a hook moved into a named const and registered with on(...).catch p
     '}',
     '',
   ].join('\n')
-  expect(holdOf([], 'register.ts', listed, edited(listed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  expect(changeOf([], 'register.ts', listed, edited(listed, 'Saved the note.', 'Stored the note.'))).toBe('words')
   // Only the engine's `on`, register's first parameter, is read so (Dan, 2026-11-01, narrowing
   // #2043): a callback on what any other function handed in returns is still read through the words
   // handed to it, so those words, said in a toast, are held.
@@ -2315,168 +2305,24 @@ test('#2038: a hook moved into a named const and registered with on(...).catch p
     '}',
     '',
   ].join('\n')
-  expect(holdOf([], 'register.ts', handed, edited(handed, 'Saved the note.', 'Stored the note.'))).toBe('worded')
+  expect(changeOf([], 'register.ts', handed, edited(handed, 'Saved the note.', 'Stored the note.'))).toBe('words')
   const inRegister = edited(SAVE_AFTER, 'export const register: Register = on => {', 'export const register: Register = (on, tellLater: (w: string) => Promise<string>) => {')
   const later = edited(inRegister, '  on(\'tool.call\'', "  tellLater('Saved for later.').then(t => $.ui.toast(t))\n  on('tool.call'")
-  expect(holdOf([], 'register.ts', later, edited(later, 'Saved for later.', 'Kept for later.'))).toBe('worded')
+  expect(changeOf([], 'register.ts', later, edited(later, 'Saved for later.', 'Kept for later.'))).toBe('words')
 })
 
-// #2161 (Dan, 2026-11-03, approving the narrowing): mod-kit's #2141 edit was held for its words,
-// though every new one is a reason its shell reader gives (`{ unresolved: '...' }`) that nothing
-// draws or says: a `text` key beside them is a message's key, so the reading followed each value
-// whole and swept the reasons in. A new word passes where only such a key holds it and no message
-// reads that key; one a drawing call or message can reach stays held.
+// #2161 (Dan, 2026-11-03) passed mod-kit's #2141 edit, whose new words are reasons its shell reader
+// gives (`{ unresolved: '...' }`), while other new words were held. Since #2845 no word is held, so
+// that narrowing and the key reading behind it are gone: the edit passes however its words are
+// reached, and only a reason handed to something the mod draws is still held, as the look.
 const plus = (text: string, ...lines: string[]) => `${text}${lines.join('\n')}\n`
-// Replaces `from` once, and fails where it is not there, so no case passes on an edit never made.
-const swapIn = (text: string, from: string, to: string) => {
-  if (!text.includes(from)) throw new Error(`not in the fixture: ${from}`)
-  return text.replace(from, () => to)
-}
 
-test('#2161: new words only a refusal reason holds, which nothing reads, pass', () => {
-  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBeUndefined()
-  // Read beside another of the mod's files that never reads the reason.
-  const other = { name: 'other.ts', text: "import { HELD } from './commands.ts'\nexport const x = 1\n" }
-  expect(holdOf([other], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBe('passes')
-})
-
-test('#2161: a near copy whose new reason reaches a drawing call or a message is still held', () => {
-  // Handed to a band row.
+test('#2161, #2845: the held #2141 edit passes, and so does any reason a message reads; one handed to a band row is held as the look', () => {
+  expect(changeOf([], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).not.toBe('look')
+  expect(changeOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).unresolved)'))).toBe('words')
+  expect(changeOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(JSON.stringify(printed(line)))'))).toBe('words')
   const row = "export const row = ($: EngineInterface, why: string) => $.modkit.bandRow([{ text: why }])"
-  expect(holdOf([], 'commands.ts', plus(HELD_2141_BEFORE, row), plus(HELD_2141_AFTER, row, 'export const shownWhy = ($: EngineInterface, line: Line) => row($, printed(line).unresolved)'))).toBe('look')
-  // Said in a toast, or put under a message's key.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).unresolved)'))).toBe('worded')
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const shown = (line: Line) => ({ text: printed(line).unresolved })'))).toBe('worded')
-  // Said in a toast from another of the mod's files.
-  const teller = { name: 'tell.ts', text: "import type { EngineInterface } from 'claude-code'\nimport { printed } from './commands.ts'\nexport const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).unresolved)\n" }
-  expect(holdOf([teller], 'commands.ts', HELD_2141_BEFORE, swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed ='))).toBe('worded')
-  // Copied under another key a toast then reads.
-  expect(
-    holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const shown = (line: Line) => ({ why: printed(line).unresolved })', 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(shown(line).why)')),
-  ).toBe('worded')
-  // The whole reason handed to a message.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(JSON.stringify(printed(line)))'))).toBe('worded')
-})
-
-test('#2161: a new reason handed through a call, under a message key or beside a word gone is still held', () => {
-  // Handed to a function inside the reason's value.
-  const shouted = plus(swapIn(HELD_2141_AFTER, "{ unresolved: 'a here string with no text' }", "{ unresolved: shout('a here string with no text') }"), 'const shout = (w: string) => w.trim()')
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, shouted)).toBe('worded')
-  // Under a key a person reads: a refusal's deny stays held as #1864 recorded.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, swapIn(HELD_2141_AFTER, "{ unresolved: 'a here string with no text' }", "{ deny: 'a here string with no text' }"))).toBe('worded')
-  // A toast's words taken away beside the new reasons.
-  const toast = "export const tell = ($: EngineInterface) => $.ui.toast('Saved the note.')"
-  expect(holdOf([], 'commands.ts', plus(HELD_2141_BEFORE, toast), HELD_2141_AFTER)).toBe('worded')
-  // A new word said in a toast beside the new reasons.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, "export const tell = ($: EngineInterface) => $.ui.toast('Saved the note.')"))).toBe('worded')
-})
-
-test('#2161: a reason key spelled with a dollar sign is read like any other, so a toast reading it is still held', () => {
-  const dollared = HELD_2141_AFTER.split('unresolved').join('un$resolved')
-  if (dollared === HELD_2141_AFTER) throw new Error('the fixture has no unresolved key to respell')
-  // Nothing reads it: passes, as the plain key does.
-  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, dollared)).toBeUndefined()
-  // A toast reads it: held, never missed because the key was read as a pattern.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(dollared, 'export const tell = ($: EngineInterface, line: Line) => $.ui.toast(printed(line).un$resolved)'))).toBe('worded')
-})
-
-test('#2161: a pattern taking the reason apart under a new name reads its key, so a toast saying it is still held', () => {
-  // Declared: `const { unresolved: why } = ...`, alone and nested in another pattern.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => {', '  const { unresolved: why } = printed(line)', '  $.ui.toast(why)', '}'))).toBe('worded')
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line) => {', '  const { got: { unresolved: why } } = { got: printed(line) }', '  $.ui.toast(why)', '}'))).toBe('worded')
-  // A parameter's: `({ unresolved: why }) =>`, its type named so only the pattern reads the key.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const say = ($: EngineInterface, { unresolved: why }: Printed) => $.ui.toast(why ?? \'\')', 'export const tell = ($: EngineInterface, line: Line) => say($, printed(line))'))).toBe('worded')
-})
-
-// Each way of reaching a reason record's key the dot does not spell, as a toast is handed it, from
-// the file itself and from another of the mod's files (`P` is the record, `k` a key nobody names).
-const READ_FORMS: [string, string][] = [
-  ['quoted', "P['unresolved']"],
-  ['double quoted', 'P["unresolved"]'],
-  ['template quoted', 'P[`unresolved`]'],
-  ['quoted through an optional chain', "P?.['unresolved']"],
-  ['computed', 'P[k as keyof Printed]'],
-  ['computed expression', "P[(k + '') as keyof Printed]"],
-  ['keys', "Object.keys(P).join(' ')"],
-  ['values', "Object.values(P).join(' ')"],
-  ['entries', 'Object.entries(P)'],
-  ['reflect', 'Reflect.get(P, k)'],
-  ['spread into an object', 'said({ ...P })'],
-  ['spread into a call', 'listed(...(P as unknown as string[]))'],
-]
-const TOLD = (expr: string) => [
-  'const said = (p: object) => p',
-  'const listed = (...ws: string[]) => ws',
-  `export const tell = ($: EngineInterface, line: Line, k: string) => $.ui.toast(String(${expr.replace('P', 'printed(line)')}))`,
-]
-const tellerOf = (expr: string) => ({
-  name: 'tell.ts',
-  text: ["import type { EngineInterface } from 'claude-code'", "import { printed } from './commands.ts'", ...TOLD(expr), ''].join('\n'),
-})
-
-// Dan, 2026-11-03: any value that can reach a toast stays held. A key read by a quoted name is read
-// as the dot reads it; one the scan cannot name (computed, the record's keys or values taken, a
-// reflective get, the record spread into another object or a call) may be any reason key, so each
-// such reach holds them all.
-test('#2161: a reason record reached by a quoted, computed, enumerated, reflected or spread read is still held', () => {
-  const exported = swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed =')
-  const got = READ_FORMS.flatMap(([form, expr]) => [
-    [`${form}, in the file`, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...TOLD(expr)))],
-    [`${form}, in another file`, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)],
-  ])
-  expect(got).toEqual(got.map(([form]) => [form, 'worded']))
-  // Taken into a local first, and enumerated in a helper whose result a toast is handed.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'export const tell = ($: EngineInterface, line: Line, k: string) => {', '  const why = printed(line)[k as keyof Printed]', '  $.ui.toast(why)', '}'))).toBe('worded')
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, 'const all = (p: object) => Object.keys(p).map(k => Reflect.get(p, k))', "export const tell = ($: EngineInterface, line: Line) => $.ui.toast(all(printed(line)).join(' '))"))).toBe('worded')
-})
-
-// A spread inside a call hands every key on unnamed wherever the call sits: a ternary's branch (whose
-// `:` once read as a return type, so the call as a parameter list), a logical's side, a list or
-// another call. A rest parameter of a function, a return type after it, is no spread.
-test('#2161: a record spread into a call in a ternary, a logical, a list or a call is still held', () => {
-  const tell = (expr: string) => [
-    'const say = (...ws: string[]): string => ws.join(\' \')',
-    'export const tell = ($: EngineInterface, line: Line, ok: boolean) => {',
-    '  const made = printed(line) as unknown as string[]',
-    `  $.ui.toast(${expr})`,
-    '}',
-  ]
-  const forms = ["ok ? say(...made) : ''", "ok ? '' : say(...made)", "ok && say(...made) || ''", "[say(...made)].join('')", 'String(say(...made))']
-  const got = forms.map(expr => [expr, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell(expr)))])
-  expect(got).toEqual(forms.map(expr => [expr, 'worded']))
-  // A ternary that spreads nothing, beside the same rest parameter, still passes.
-  expect(holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell("ok ? say(made[0] ?? '') : ''")))).toBe('passes')
-})
-
-// A reason key read off any expression, not only a plain name, is read as the dot reads it: a call's
-// result, a parenthesised expression or an await, then taken into a local a toast says through a call.
-test('#2161: a reason key read off a call result, a parenthesis or an await is still held', () => {
-  const tell = (expr: string) => [
-    'const got = async (line: Line) => printed(line)',
-    'export const tell = async ($: EngineInterface, line: Line) => {',
-    `  const why = ${expr}`,
-    '  $.ui.toast(String(why))',
-    '}',
-  ]
-  const forms = [
-    'printed(line).unresolved',
-    'printed(line)?.unresolved',
-    "printed(line)['unresolved']",
-    '(printed(line)).unresolved',
-    '(await got(line)).unresolved',
-    '(await got(line))?.unresolved',
-  ]
-  const got = forms.map(expr => [expr, holdOf([], 'commands.ts', HELD_2141_BEFORE, plus(HELD_2141_AFTER, ...tell(expr)))])
-  expect(got).toEqual(forms.map(expr => [expr, 'worded']))
-})
-
-// The near copies that read no reason key: an index by a number, or a key quoted by another name,
-// so #2141's own edit, which indexes its words by position, still passes.
-test('#2161: an index by a number or another quoted key is no read of a reason key', () => {
-  expect(modHookTsHold([], 'commands.ts', HELD_2141_BEFORE, HELD_2141_AFTER)).toBeUndefined()
-  const exported = swapIn(HELD_2141_AFTER, 'const printed =', 'export const printed =')
-  for (const expr of ['line[0]', "P['text']", 'P["text"]'])
-    expect([expr, holdOf([tellerOf(expr)], 'commands.ts', HELD_2141_BEFORE, exported)]).toEqual([expr, 'passes'])
+  expect(changeOf([], 'commands.ts', plus(HELD_2141_BEFORE, row), plus(HELD_2141_AFTER, row, 'export const shownWhy = ($: EngineInterface, line: Line) => row($, printed(line).unresolved)'))).toBe('look')
 })
 
 // #2223: reading a mod hook file costs time in step with its size. Every edit to a 180 KB hook file
@@ -2508,7 +2354,7 @@ test('#2223: four times as much mod hook code takes under six times as long to r
     const before = file(n)
     const after = before.replace('rows.map(r => r.trim())', 'rows.map(r => r.trim() + "")')
     const start = performance.now()
-    expect(modHookTsHold([], 'rows.ts', before, after)).toBeUndefined()
+    expect(modHookTsChange([], 'rows.ts', before, after)).toBeUndefined()
     return performance.now() - start
   }
   timed(10)
@@ -2610,20 +2456,20 @@ const UNTRACED_HELPER = [
   '}',
 ]
 test('#2788: wrapping a verdict in a helper and adding a comment with apostrophes, changing no string, passes', () => {
-  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER))).toBeUndefined()
+  expect(modHookTsChange([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER))).toBeUndefined()
   // The helper without its comment passes alike.
-  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER.slice(2)))).toBeUndefined()
+  expect(modHookTsChange([], 'register.ts', UNTRACED_BEFORE, untracedWrapped(UNTRACED_HELPER.slice(2)))).toBeUndefined()
 })
-test('#2788: the same change carrying new words for a message, or a message reworded or taken away, is still held', () => {
-  // The helper's comment beside a new message in a string: held for the string, never the comment.
+test('#2788, #2845: the same change carrying new words for a message, or a message reworded or taken away, is named as words', () => {
+  // The helper's comment beside a new message in a string: named for the string, never the comment.
   const told = untracedWrapped([...UNTRACED_HELPER.slice(0, 4), "  return { unchecked: 'Dan has not approved this edit yet' }", '}'])
-  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, told)).toEqual({ worded: 'Dan has not approved this edit yet' })
+  expect(modHookTsChange([], 'register.ts', UNTRACED_BEFORE, told)).toEqual({ words: 'Dan has not approved this edit yet' })
   // The message the helper is wrapped around, reworded in the same edit, and reworded with no helper.
   const reworded = untracedWrapped(UNTRACED_HELPER).replace('so what this edit brings could not be told', 'so what this edit brings is unknown')
-  expect(holdOf([], 'register.ts', UNTRACED_BEFORE, reworded)).toBe('worded')
+  expect(changeOf([], 'register.ts', UNTRACED_BEFORE, reworded)).toBe('words')
   const rewordedAlone = UNTRACED_BEFORE.replace('so what this edit brings could not be told', 'so what this edit brings is unknown')
-  expect(modHookTsHold([], 'register.ts', UNTRACED_BEFORE, rewordedAlone)).toEqual({ worded: 'is in, so what this edit brings is unknown' })
+  expect(modHookTsChange([], 'register.ts', UNTRACED_BEFORE, rewordedAlone)).toEqual({ words: 'is in, so what this edit brings is unknown' })
   // A message's own words taken away, the helper beside it.
   const gone = untracedWrapped(UNTRACED_HELPER).replace('return { deny: `Blocked: ${v.unchecked}` }', 'return { deny: v.unchecked }')
-  expect(holdOf([], 'register.ts', UNTRACED_BEFORE, gone)).toBe('worded')
+  expect(changeOf([], 'register.ts', UNTRACED_BEFORE, gone)).toBe('words')
 })
