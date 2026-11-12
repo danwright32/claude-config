@@ -222,8 +222,8 @@ def py_marker(text):
         at += len(ln)
 
     def offset(line, col):  # ast's column is a UTF-8 byte offset into its line
-        raw = lines[line - 1].encode("utf-8")
-        return starts[line - 1] + len(raw[:col].decode("utf-8", "replace"))
+        raw = lines[line - 1].encode("utf-8", "surrogatepass")  # a lone surrogate keeps its place
+        return starts[line - 1] + len(raw[:col].decode("utf-8", "surrogatepass"))
     spans = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

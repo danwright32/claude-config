@@ -579,8 +579,9 @@ def make(interpreter, shells, awks, senders):
             if self.git_out(scratch, ["init", "-q", "--bare"]) is None:
                 return None
             try:
-                with open(os.path.join(scratch, "objects", "info", "alternates"), "w") as f:
-                    f.write(os.path.join(common.decode("utf-8", "replace").strip(), "objects") + "\n")
+                # The repository's own path as git printed it, bytes kept, whatever they are.
+                with open(os.path.join(scratch, "objects", "info", "alternates"), "wb") as f:
+                    f.write(common.strip() + b"/objects\n")
             except OSError:
                 return None
             if self.git_out(scratch, ["fetch", "-q", "--no-tags", "--", url, f"+{ref}:refs/pull"],

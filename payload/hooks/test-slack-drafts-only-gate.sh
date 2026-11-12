@@ -3669,6 +3669,16 @@ read_refused() {
     *) check "$1 (judged, not a crash)" ok ;;
   esac
 }
+# The runners and builders are read by lib/program-runs.py, a base of the gate's Judge as
+# lib/program-writes.py is; a copy of it anywhere else would leave the gate on the old reading.
+cat > "$T/program-runs-check.py" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import slack_drafts_only_gate as gate
+where = {os.path.basename(getattr(gate.Judge, n).__code__.co_filename) for n in ("py_runner", "note_build", "built_from")}
+print("ok" if where == {"program-runs.py"} else "the Judge's runners and builders are from %r, not lib/program-runs.py" % where)
+PY
+check "the gate reads runners and builds with lib/program-runs.py" "$(python3 "$T/program-runs-check.py" "$DIR" 2>&1)"
 C="$T/c2844"
 mkdir -p "$C/src" "$C/qsrc" "$C/esrc"
 printf '%s\n' 'import { send } from "./lib/send.js";' 'send();' > "$C/src/main.ts"
