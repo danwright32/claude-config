@@ -120,18 +120,27 @@ HELPER="${MERGE_HELPER:-$DIR/../../hooks/lib/merge-when-ready.sh}"
 GLOBAL_RULES="${GLOBAL_RULES_FILE:-$DIR/../../CLAUDE.md}"
 usage_line="$(grep -m1 'echo "usage: ' "$HELPER")"
 required="$(printf '%s' "$usage_line" | sed 's/.*\$SELF //; s/".*//; s/\[[^]]*\]//g')"
-check "#2563 the helper's usage names a required argument" "$([ -n "${required// /}" ] && echo ok || echo "none parsed from: $usage_line")"
+case "$required" in
+  *[![:space:]]*) parsed=ok ;;
+  *) parsed="none parsed from: $usage_line" ;;
+esac
+check "#2563 the helper's usage names a required argument" "$parsed"
+# ok when the text holds the words, else the reason given. Matched with case, never a pipe into
+# grep -q, which can stop reading early and fail the pipeline under pipefail.
+holds() { case "$1" in *"$2"*) echo ok ;; *) echo "$3" ;; esac; }
 for f in "$SKILL" "$GLOBAL_RULES"; do
-  cmd_line="$(grep -F 'merge-when-ready.sh' "$f" | head -1)"
+  cmd_line="$(grep -m1 -F 'merge-when-ready.sh' "$f")"
   for tok in $required; do
     case "$tok" in
       "<pr>") want='merge-when-ready.sh <' ;;
       *) want="$tok" ;;
     esac
-    check "#2563 $(basename "$(dirname "$f")")/$(basename "$f") command carries required $tok" "$(printf '%s' "$cmd_line" | grep -F -q -- "$want" && echo ok || echo "missing $want")"
+    check "#2563 $(basename "$(dirname "$f")")/$(basename "$f") command carries required $tok" "$(holds "$cmd_line" "$want" "missing $want")"
   done
-  check "#2563 $(basename "$f") says it runs from inside a checkout" "$(printf '%s' "$cmd_line" | grep -F -q 'inside a checkout' && echo ok || echo 'no checkout requirement')"
-  check "#2563 $(basename "$f") names the merge method and how it is chosen" "$(printf '%s' "$cmd_line" | grep -F -q -- '--squash' && printf '%s' "$cmd_line" | grep -F -q 'its history uses' && echo ok || echo 'no merge method rule')"
+  check "#2563 $(basename "$f") says it runs from inside a checkout" "$(holds "$cmd_line" 'inside a checkout' 'no checkout requirement')"
+  method="$(holds "$cmd_line" '--squash' 'no merge method rule')"
+  [ "$method" = ok ] && method="$(holds "$cmd_line" 'its history uses' 'no merge method rule')"
+  check "#2563 $(basename "$f") names the merge method and how it is chosen" "$method"
 done
 
 echo ""
