@@ -3648,6 +3648,185 @@ for runs in "git status && bash run.sh" "git fetch . posting && bash run.sh" "gi
   allowed "a git command that writes nothing that posts, or a ref that names nothing, leaves run.sh as it is on disk: $runs"
 done
 
+echo "slack drafts only: a file a compiler builds, one a Python runner runs, and what a revert, stash, worktree, clone or pull writes are read (claude-config#2844)"
+
+# Routes by which a command ran a file the gate never read (measured through this wrapper on main at
+# d7d723f, 2026-11-12: every shape in each refused list below passed). A file tsc or esbuild builds
+# and the command then runs was read as it was on disk, or not at all where it was not there yet; a
+# script or module handed to a runner from the standard library or installed (runpy, pdb, cProfile,
+# profile, trace, unittest, pytest) was not read; nor was a file a revert, a stash pop or apply, a new
+# linked worktree or a clone writes; and a pull was read against its branch as last fetched. Each
+# refused shape has an allowed twin that differs only in whether the file posts. Nothing here is run.
+# A refusal here must be the file read, never the gate failing to judge the call: a word it could not
+# work out once reached git as a NUL, and the crash refused the call as unjudgeable, which reads the
+# same as a refusal to a check that looks only at the exit code.
+read_refused() {
+  refused "$1"
+  case "$ERR" in
+    *"could not judge"*|*Traceback*) check "$1 (judged, not a crash)" "the gate crashed: ${ERR:0:300}" ;;
+    *) check "$1 (judged, not a crash)" ok ;;
+  esac
+}
+C="$T/c2844"
+mkdir -p "$C/src" "$C/qsrc" "$C/esrc"
+printf '%s\n' 'import { send } from "./lib/send.js";' 'send();' > "$C/src/main.ts"
+mkdir -p "$C/src/lib"
+printf '%s\n' "export function send() { fetch('https://slack.com/api/chat.postMessage'); }" > "$C/src/lib/send.ts"
+printf '%s\n' 'import { say } from "./lib/say.js";' 'say();' > "$C/qsrc/main.ts"
+mkdir -p "$C/qsrc/lib"
+printf '%s\n' "export function say() { console.log('hi'); }" > "$C/qsrc/lib/say.ts"
+printf '%s\n' '{' '  // where the build goes' '  "compilerOptions": { "outDir": "dist", "rootDir": "src", },' '  "include": ["src"]' '}' > "$C/tsconfig.json"
+printf '%s\n' '{ "compilerOptions": { "outDir": "qdist" }, "include": ["qsrc/**/*"] }' > "$C/tsconfig.quiet.json"
+printf '%s\n' "fetch('https://slack.com/api/chat.postMessage');" > "$C/esrc/post.ts"
+printf '%s\n' "console.log('hi');" > "$C/esrc/quiet.ts"
+run_c() { run_raw "$(payload Bash "$(bash_input "$1")" "$C")"; }
+
+for runs in "tsc && node dist/main.js" "npx tsc && node dist/lib/send.js" "tsc -p . && node dist/main.js" \
+  "tsc --outDir out src/main.ts && node out/main.js" "tsc src/main.ts && node src/main.js" \
+  "esbuild src/main.ts --bundle --outdir=build && node build/main.js" \
+  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/post.js" "tsc; node dist/main.js"; do
+  run_c "$runs"
+  read_refused "a file a compiler builds from a source that posts is read as that source: $runs"
+done
+for runs in "tsc -p tsconfig.quiet.json && node qdist/main.js" "tsc --outDir out qsrc/main.ts && node out/main.js" \
+  "tsc qsrc/main.ts && node qsrc/main.js" "esbuild qsrc/main.ts --bundle --outdir=build && node build/main.js" \
+  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/quiet.js" "tsc && node elsewhere.js" \
+  "tsc --noEmit && node dist/main.js"; do
+  run_c "$runs"
+  allowed "a file a compiler builds from a source that does not post passes: $runs"
+done
+run_c "tsc && node dist/main.js"
+says "the refusal names the source the compiler builds from" "src/main.ts"
+
+P="$T/p2844"
+mkdir -p "$P/tp" "$P/tq" "$P/tc" "$P/deep/pkg"
+PY_POST_2844="urllib.request.urlopen('https://slack.com/api/chat.postMessage')"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/post.py"
+printf '%s\n' "print('hi')" > "$P/plain.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/postmod.py"
+printf '%s\n' "print('hi')" > "$P/quietmod.py"
+printf '%s\n' "import unittest, postmod" "class T(unittest.TestCase):" "    def test_a(self): pass" > "$P/test_post.py"
+printf '%s\n' "import unittest, quietmod" "class T(unittest.TestCase):" "    def test_a(self): pass" > "$P/test_quiet.py"
+: > "$P/tp/__init__.py"
+: > "$P/tq/__init__.py"
+printf '%s\n' "import unittest, postmod" "def test_a(): pass" > "$P/tp/test_send.py"
+printf '%s\n' "import unittest, quietmod" "def test_a(): pass" > "$P/tq/test_say.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/tc/conftest.py"
+printf '%s\n' "def test_a(): pass" > "$P/tc/test_c.py"
+: > "$P/deep/pkg/__init__.py"
+printf '%s\n' "import postmod" "def test_a(): pass" > "$P/deep/pkg/check_post.py"
+printf '%s\n' "https://slack.com/api/chat.postMessage" > "$P/hook.txt"
+run_p() { run_raw "$(payload Bash "$(bash_input "$1")" "$P")"; }
+
+for runs in "python3 -m runpy postmod" "python3 -m pdb post.py" "python3 -m pdb -c continue post.py" \
+  "python3 -m pdb -m postmod" "python3 -m cProfile post.py" "python3 -m cProfile -o prof.out -s cumtime post.py" \
+  "python3 -m cProfile -m postmod" "python3 -m profile post.py" "python3 -m trace --count post.py" \
+  "python3 -m trace --trace --module postmod" "python3 -m unittest test_post" "python3 -m unittest test_post.T.test_a" \
+  "python3 -m unittest test_post.py" "python3 -m unittest -v tp.test_send" "python3 -m unittest discover -s tp -t ." \
+  "python3 -m unittest discover" "python3 -m unittest" "python3 -m unittest discover -p 'check_*.py' -s deep -t deep" \
+  "python3 -m pytest tp" "python3 -m pytest tp/test_send.py::test_a" "pytest tp" "pytest -q -k test_a tp/test_send.py" \
+  "pytest tc" "cd tp && pytest" "uv run pytest tp" "python3 -m pytest"; do
+  run_p "$runs"
+  read_refused "a file a Python runner from the standard library or installed runs is read: $runs"
+done
+for runs in "python3 -m runpy quietmod" "python3 -m pdb plain.py" "python3 -m pdb -c continue plain.py" \
+  "python3 -m pdb -m quietmod" "python3 -m cProfile plain.py" "python3 -m cProfile -o prof.out -s cumtime plain.py" \
+  "python3 -m cProfile -m quietmod" "python3 -m profile plain.py" "python3 -m trace --count plain.py" \
+  "python3 -m trace --trace --module quietmod" "python3 -m unittest test_quiet" "python3 -m unittest test_quiet.T.test_a" \
+  "python3 -m unittest test_quiet.py" "python3 -m unittest discover -s tq -t ." "python3 -m pytest tq" \
+  "pytest tq/test_say.py::test_a" "pytest tq" "cd tq && pytest" "python3 -m unittest nosuch_2844" \
+  "python3 -m cProfile plain.py hook.txt" "python3 -m timeit 'x = 1'" "python3 -m json.tool hook.txt" \
+  "pytest --ignore tp tq" "python3 -m unittest discover -s tq"; do
+  run_p "$runs"
+  allowed "a file a Python runner runs that does not post passes: $runs"
+done
+run_p "python3 -m cProfile post.py"
+says "the refusal names the runner" "cProfile"
+# A project whose pytest config puts its root on the import path (pythonpath) and names its tests
+# (testpaths), as PostRoll's does: its tests import the project's own modules, which bare pytest
+# finds only through that setting, and an import the gate cannot find is refused as unfollowable.
+mkdir -p "$P/pp/lib2844" "$P/pp/tests" "$P/pp/tests2"
+printf '%s\n' '[tool.pytest.ini_options]' 'testpaths = ["tests"]' 'pythonpath = ["."]' > "$P/pp/pyproject.toml"
+printf '%s\n' "print('hi')" > "$P/pp/lib2844/say.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/pp/lib2844/send.py"
+printf '%s\n' "import lib2844.say" "def test_a(): pass" > "$P/pp/tests/test_say.py"
+printf '%s\n' "import lib2844.send" "def test_a(): pass" > "$P/pp/tests2/test_send.py"
+run_raw "$(payload Bash "$(bash_input "pytest")" "$P/pp")"
+allowed "pytest with no paths runs its testpaths, with its pythonpath on the import path, which import nothing that posts"
+run_raw "$(payload Bash "$(bash_input "pytest tests2")" "$P/pp")"
+read_refused "pytest handed a folder whose tests import, through its pythonpath, a module that posts"
+
+# A repository whose latest commit made run.sh post (so a revert of it leaves the quiet text) and
+# whose commit before that made it quiet over a posting one (so a revert of that leaves the posting
+# text); a stash holding a run.sh that posts and one holding a run.sh that does not; and a bare remote
+# whose main has moved past what the clone last fetched to a run.sh that posts.
+R="$T/r2844"
+git init -q -b main "$R"
+gc() { git -C "$R" -c user.name=t -c user.email=t@example.invalid "$@"; }
+printf '%s\n' "$POST" > "$R/run.sh"
+gc add run.sh; gc commit -q -m posting
+printf '%s\n' "echo quiet" > "$R/run.sh"
+gc add run.sh; gc commit -q -m quieted
+printf '%s\n' "echo hello" > "$R/other.sh"
+gc add other.sh; gc commit -q -m other
+QUIETED="$(git -C "$R" rev-parse HEAD~1)"
+OTHER="$(git -C "$R" rev-parse HEAD)"
+printf '%s\n' "$POST" > "$R/run.sh"
+gc stash push -q -m posting
+printf '%s\n' "echo stashed" > "$R/run.sh"
+gc stash push -q -m quiet
+gc branch posted "$QUIETED~1"
+run_r() { run_raw "$(payload Bash "$(bash_input "$1")" "$R")"; }
+
+for runs in "git revert --no-edit $QUIETED && bash run.sh" "git revert -n $QUIETED; bash run.sh" \
+  "git stash pop stash@{1} && bash run.sh" "git stash apply 1 && bash run.sh" \
+  "git worktree add ../w2844 $QUIETED~1 && bash ../w2844/run.sh" \
+  "git worktree add -b b2844 ../w2844b $QUIETED~1 && cd ../w2844b && bash run.sh" \
+  "git clone -q -b posted . ../k2844 && bash ../k2844/run.sh"; do
+  run_r "$runs"
+  read_refused "a file a revert, stash, worktree or clone writes from text that posts is read as git holds it: $runs"
+done
+for runs in "git revert --no-edit $OTHER && bash run.sh" "git stash pop && bash run.sh" "git stash apply stash@{0} && bash run.sh" \
+  "git worktree add ../w2844 && bash ../w2844/run.sh" "git worktree add --detach ../w2844 $OTHER && bash ../w2844/other.sh" \
+  "git clone -q . ../k2844 && bash ../k2844/run.sh" "git stash list && bash run.sh" "git worktree add ../w2844 && bash run.sh" \
+  'for n in a b; do git worktree add -q --detach "wt/$n" HEAD; done; bash run.sh' \
+  'git worktree add ../w2844 "$NOPE_2844" && bash ../w2844/run.sh' 'git stash branch b2844 "$NOPE_2844" && bash run.sh'; do
+  run_r "$runs"
+  allowed "a file a revert, stash, worktree or clone writes from text that does not post passes: $runs"
+done
+run_r "git clone -q https://example.invalid/r2844.git ../k2844 && bash ../k2844/run.sh"
+read_refused "a file a clone of a remote writes is downloaded, so what it holds cannot be read"
+says "the refusal names the clone" "git clone"
+run_r "git clone -q https://example.invalid/r2844.git ../k2844 && bash run.sh"
+allowed "a file outside what a clone writes is read as it is on disk"
+run_r "git stash pop stash@{1} && bash run.sh"
+says "the refusal says where the text came from" "git stash"
+
+# A pull is read against what it fetches: the remote's main moves on to a run.sh that posts after the
+# clone last fetched it, and a second remote's main moves on to one that does not.
+B="$T/b2844.git"; B2="$T/b2844q.git"; L="$T/l2844"
+git init -q --bare -b main "$B"
+git -C "$R" push -q "$B" "$OTHER:refs/heads/main"
+git clone -q "$B" "$L" 2>/dev/null
+git clone -q "$B" "$T/u2844" 2>/dev/null
+printf '%s\n' "$POST" > "$T/u2844/other.sh"
+git -C "$T/u2844" -c user.name=t -c user.email=t@example.invalid commit -q -am moved
+git -C "$T/u2844" push -q origin main
+git clone -q --bare "$B" "$B2" 2>/dev/null
+git -C "$B2" update-ref refs/heads/main "$OTHER"
+git -C "$L" remote add quiet "$B2"
+run_l() { run_raw "$(payload Bash "$(bash_input "$1")" "$L")"; }
+for runs in "git pull && bash other.sh" "git pull origin main && bash other.sh" "git pull -q --ff-only && bash other.sh"; do
+  run_l "$runs"
+  read_refused "a file a pull brings from the remote, which posts, is read as the remote holds it: $runs"
+done
+for runs in "git pull quiet main && bash other.sh" "git pull && bash run.sh" "git fetch && bash other.sh"; do
+  run_l "$runs"
+  allowed "a pull that brings nothing that posts passes: $runs"
+done
+if git -C "$L" for-each-ref | grep -q 'gate'; then check "a pull read leaves no ref behind" "a ref was left: $(git -C "$L" for-each-ref)"
+else check "a pull read leaves no ref behind" ok; fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

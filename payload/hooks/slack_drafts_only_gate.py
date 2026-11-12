@@ -43,7 +43,10 @@ Limits, stated so nobody reads more into a pass than it measured: a JavaScript i
 through a path alias (`@/lib/x`), a Python module in the standard library or installed (whether
 imported or run with `python3 -m`, whose local module is followed as an import is, claude-config#2827),
 and an import of another language's files are
-not followed; a program run by bare name from the PATH is not read; a file run, rather than sourced,
+not followed, except that a runner from the standard library or installed (runpy, pdb, cProfile,
+profile, trace, unittest, pytest) is read by the script, module or tests it runs (lib/program-runs.py,
+claude-config#2844); a program run by bare name from the PATH is not read, pytest apart; a file run,
+rather than sourced,
 through a variable or a substitution whose value the gate cannot work out is not read
 (claude-config#2678); a shell script's data reaching a
 program through a pipe, code written into the shell script itself (a heredoc, a -c string), and a
@@ -51,10 +54,14 @@ shell script's writes are not counted as acting on a data file; a file written i
 is followed through the shell's own writes (a redirection, tee, a copy, a download), dd and an
 archive that can be read, and is otherwise unreadable once a program names it (claude-config#2772),
 so one written by a name the program builds at run time, or by a program the gate counts as never
-writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk, as is a file a
-compiler writes without naming it; a file a git checkout, switch, hard reset, merge, pull, rebase or
-cherry pick writes is read as the ref holds it as well as on disk, but only a ref the repository
-holds before the command runs (claude-config#2827); a write to a path in a variable inside a
+writing (NON_WRITERS, GIT_READS in lib/program-writes.py), is read as it was on disk; a file tsc or
+esbuild builds is read as the source it is built from (lib/program-runs.py, claude-config#2844), and
+one any other compiler writes without naming it as it was on disk; a file a git checkout, switch,
+hard reset, merge, pull, rebase, cherry pick, revert, stash, new linked worktree or clone of a local
+repository writes is read as git holds it as well as on disk (claude-config#2827, #2844), a pull's as
+its fetch brings it where that fetch answers within FETCH_TIMEOUT (else as its branch was last
+fetched), and the files a clone of a remote writes are unreadable, as a download's are; a build or git
+command inside a script on disk, or in a package script, is not followed; a write to a path in a variable inside a
 script on disk is not followed (claude-config#2721); and deliberate obfuscation (an endpoint
 assembled from pieces, an import path built at run time) is not the threat this answers.
 The threat is a session that means well choosing the quickest way to post.
@@ -798,6 +805,9 @@ WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_U
 # The files any other program writes by name (claude-config#2772): note_program and its readers.
 _program_writes = load_lib("program_writes", "program-writes.py")
 ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
+# The files a runner or a compiler runs without the command naming them (claude-config#2844).
+_program_runs = load_lib("program_runs", "program-runs.py")
+ProgramRuns = _program_runs.make()
 
 
 def draft_advice(where):
@@ -854,7 +864,7 @@ def budget_clock():
     return time.monotonic, BUDGET_SECONDS
 
 
-class Judge(WrittenPaths, ProgramWrites):
+class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def __init__(self, sw):
         self.sw = sw
         # The walk's clock and budget (budget_clock), the moment it started, and the script whose
@@ -915,6 +925,9 @@ class Judge(WrittenPaths, ProgramWrites):
         # The git commands that write tracked files they do not name, each the ref its files are read
         # from (note_git in lib/program-writes.py, claude-config#2827).
         self.made_git = []
+        # The compilers run earlier in this call, each the outputs it builds and their sources
+        # (note_build in lib/program-runs.py, claude-config#2844).
+        self.made_built = []
 
     @staticmethod
     def shell_scope(text, cwd, script, cwd_known=True):
@@ -1084,7 +1097,7 @@ class Judge(WrittenPaths, ProgramWrites):
 
     def is_file(self, path):
         """Whether path is a file to read: on disk, or made by an earlier command of this call."""
-        return os.path.isfile(path) or bool(self.made_from(path))
+        return os.path.isfile(path) or bool(self.made_from(path)) or bool(self.made_built and self.built_from(path))
 
     def content(self, path, limit=MAX_FILE):
         """The bytes a read of path finds: what an earlier command of this call made it from, then the
@@ -1116,10 +1129,11 @@ class Judge(WrittenPaths, ProgramWrites):
                 pass
         return out[:limit]
 
-    def unread(self, path, with_maybe=True):
+    def unread(self, path, with_maybe=True, skip=None):
         """For a file written earlier in this command with text that cannot be worked out
         (claude-config#2721), why it cannot be judged; None for any other file. with_maybe False
-        leaves out a file a program only may have written (lib/program-writes.py)."""
+        leaves out a file a program only may have written (lib/program-writes.py), and skip one only
+        the program it names may have written: a compiler naming the source it reads (#2844)."""
         names, maybe, found = [], [], False
         for kind, _, label in self.made_from(path) or ():
             if kind == "unknown":
@@ -1127,7 +1141,7 @@ class Judge(WrittenPaths, ProgramWrites):
                 # "" is a word of a script read as commands, not a command this call ran (#2793).
                 if label and label not in names:
                     names.append(label)
-            elif kind == "maybe" and with_maybe and label not in maybe:
+            elif kind == "maybe" and with_maybe and label not in maybe and label != skip:
                 maybe.append(label)
         if found and not names:
             return ("is written earlier in this command, but what wrote it could not be told, so what it "
@@ -1529,12 +1543,12 @@ class Judge(WrittenPaths, ProgramWrites):
         if pieces:
             self.made[real] = pieces
 
-    def script(self, word, d, depth, shell_hint, lang=None, label=None, sourced=False):
+    def script(self, word, d, depth, shell_hint, lang=None, label=None, sourced=False, built=None):
         """The reason a script file posts, or None. lang ("js" or "py") is the language of the
         program running it, taken for a file with no extension of its own. label names the file in
         the reason, "the script <word>" unless its role is otherwise (every_file, claude-config#2786).
         sourced is True for a file a source or . command reads, whose exports reach the commands
-        after it.
+        after it. built names the compiler the file is read as a source of (claude-config#2844).
 
         Under a command sh_placed wrote out (placing), a file found clean is not read again where it
         is read the same way: a suite runs one hook by a variable hundreds of times, and each of those
@@ -1548,9 +1562,19 @@ class Judge(WrittenPaths, ProgramWrites):
         this."""
         label = label or f"the script {word}"
         path = self.resolve(word, d)
+        # A file a compiler run earlier in this call builds is read as each source it is built from,
+        # at the source's own place, so its imports resolve as the compiler's do (claude-config#2844),
+        # and then as it is on disk, which the build replaces. built names that compiler, whose own
+        # naming of its input is not a write (it writes only its outputs).
+        for src, how in self.built_from(path) if self.made_built else ():
+            shown = os.path.relpath(src, d) if d and src.startswith(os.path.abspath(d) + os.sep) else src
+            reason = self.script(src, d, depth, shell_hint, lang, f"{label} (which {how} builds from {shown})",
+                                 built=how)
+            if reason:
+                return reason
         if not self.is_file(path):
             return None  # nothing there to run
-        unread = self.unread(path)
+        unread = self.unread(path, skip=built)
         if unread:
             return f"{label} {unread}"
         edited = self.code_names(path, MARKER) if self.made_code else None
@@ -1561,7 +1585,7 @@ class Judge(WrittenPaths, ProgramWrites):
             return None  # /nudge, the one exemption (Dan, 2026-11-05), unless this call overwrote it
         key = None
         if self.placing and not (self.made or self.made_dirs or self.made_unknown or self.made_maybe
-                                 or self.made_code or self.made_git):
+                                 or self.made_code or self.made_git or self.made_built):
             # A directory that is not there (a cd the reader kept as written, `cd "$WORK"`) is one
             # directory to this: no relative path is found under any of them.
             there = not d or os.path.isdir(d)
@@ -3850,7 +3874,7 @@ class Judge(WrittenPaths, ProgramWrites):
         name = os.path.basename(first.strip("'\""))
         if not first or first in ("source", ".") or not (
                 re.search(r"[$`/]", first) or name in SHELLS or name in LAUNCHERS or name in PACKAGERS
-                or name in SENDERS or name == "uv" or INTERPRETER.match(name)):
+                or name in SENDERS or name == "uv" or INTERPRETER.match(name) or name in _program_runs.PYTESTS):
             return None
         toks = self.sh_tokens(rest)
         if not toks or toks[0][0] != "word":
@@ -3888,6 +3912,10 @@ class Judge(WrittenPaths, ProgramWrites):
             name = os.path.basename(words[0])
         if name in PACKAGERS:
             return self.package(name, words, d, depth)
+        if name in _program_runs.PYTESTS:
+            # pytest run by its own name: the test files it collects (claude-config#2844).
+            return self.py_runner(words[0], name, "pytest", words[1:], d, depth, os.path.abspath(d or os.getcwd()),
+                                  module=False)
         hit = MARKER.search(text)
         if name in SENDERS:
             if hit:
@@ -4073,7 +4101,8 @@ class Judge(WrittenPaths, ProgramWrites):
             return None
         found = self.resolve_py(0, mod, ("__main__",), here, here)
         if not found:
-            return None
+            # A runner from the standard library or installed is read by what it runs (#2844).
+            return self.py_runner(program, name, mod, after, d, depth, here)
         label = f"{name} -m {mod}"
         main = os.path.basename(found[-1]) == "__main__.py"
         code = f"import {mod}.__main__" if main else f"import {mod}"

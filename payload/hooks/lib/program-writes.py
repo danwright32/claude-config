@@ -24,10 +24,11 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
     write any file. A data file a program only may have written is still read as it is on disk when
     it is handed to a script (the gate's data rule, #2362), or every analysis that names its input
     twice would be refused.
-  * A git checkout, switch, hard reset, merge, pull, rebase or cherry pick writes tracked files it
-    does not name (GIT_TREE_WRITERS, claude-config#2827): each file the ref writes is read as the ref
-    holds it, beside what is on disk, asked of git (note_git, git_guesses). Only a ref the repository
-    holds before the command runs is read, so a pull is read against its branch as last fetched.
+  * A git checkout, switch, hard reset, merge, pull, rebase, cherry pick, revert, stash, new linked
+    worktree or clone writes tracked files it does not name (GIT_TREE_WRITERS, claude-config#2827,
+    #2844): each file it writes is read as git holds it, beside what is on disk, asked of git (note_git,
+    git_guesses). A pull's ref is fetched first into a scratch repository, so what the fetch brings is
+    read (git_fetch); a clone of anything but a local repository is a download, and unreadable.
   * NON_WRITERS never write a file they are handed, and naming a file and then running it is
     everyday with them (`chmod +x run.sh && ./run.sh`), so their words are not read as writes; nor
     are git's subcommands that leave the working tree as it is (GIT_READS), the files handed to a
@@ -81,7 +82,23 @@ GIT_TREE_WRITERS = {
                       "--server-option", "--upload-pack"}),
     "rebase": ("diff", {"-s", "-X", "--strategy", "--strategy-option", "-x", "--exec", "--onto"}),
     "cherry-pick": ("commit", {"-m", "--mainline", "-X", "--strategy", "--strategy-option"}),
+    # claude-config#2844: a revert writes what the commit's parent held; a stash pop or apply what the
+    # stash holds, and a stash push what HEAD holds; a new linked worktree and a clone every file the
+    # ref holds, in the folder they make.
+    "revert": ("revert", {"-m", "--mainline", "-X", "--strategy", "--strategy-option", "-s", "--cleanup"}),
+    "stash": ("stash", {"-m", "--message", "--pathspec-from-file"}),
+    "worktree": ("tree", {"-b", "-B", "--reason"}),
+    "clone": ("tree", {"-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--reference",
+                       "--reference-if-able", "--separate-git-dir", "--depth", "--shallow-since",
+                       "--shallow-exclude", "-c", "--config", "--server-option", "-j", "--jobs", "--template",
+                       "--filter", "--bundle-uri", "--ref-format", "--revision"}),
 }
+# A word naming a git revision that bash leaves as it is, though the gate's reader does not work it out:
+# a reflog entry (stash@{1}, HEAD@{2}, @{-1}; bash expands braces only around a comma or ..) or an
+# ancestor (HEAD~2, main^; bash expands a tilde only at the start of a word).
+GIT_REV_WORD = re.compile(r"(?!~)(?:[\w./~^:+-]|@\{[\w.:-]*\}|@)+")
+# How long a pull's fetch may take, well inside the gate's own 11 second budget (git_fetch).
+FETCH_TIMEOUT = 4
 # A git operation already under way: it takes no ref.
 GIT_UNDER_WAY = frozenset({"--abort", "--continue", "--skip", "--quit", "--edit-todo", "--show-current-patch"})
 # Programs that copy into the folder or file their last word names.
@@ -175,7 +192,11 @@ def make(interpreter, shells, awks, senders):
             if found and found[0] in GIT_READS:
                 return None
             if found and found[0] in GIT_TREE_WRITERS:
-                self.note_git([v if v is not None else "\0" for v in vals[1:]], d)
+                # A revision bash leaves as written (GIT_REV_WORD) is read as written.
+                self.note_git([v if v is not None else a if GIT_REV_WORD.fullmatch(a) else "\0"
+                               for a, v in zip(args[1:], vals[1:])], d)
+            # A compiler's outputs, read as their sources when run (lib/program-runs.py, #2844).
+            self.note_build(name, vals, d)
             if name in TARS or name == "unzip":
                 self.note_unpack(name, args, vals, d)
             elif name in UNPACKERS:
@@ -258,19 +279,23 @@ def make(interpreter, shells, awks, senders):
 
         def note_git(self, words, d):
             """A git subcommand that writes tracked files without naming them (GIT_TREE_WRITERS,
-            claude-config#2827): each file the ref holds (a checkout, a switch, a hard reset), or
-            changed (a merge, a pull, a rebase, a cherry pick), is read as that ref holds it, beside
-            what is on disk (git_guesses). Before #2827 it was read only as it was on disk before the
-            command, so `git checkout feature && bash run.sh` ran feature's run.sh unread.
+            claude-config#2827, #2844): each file the ref holds (a checkout, a switch, a hard reset, a
+            stash push, a new linked worktree, a clone), or changed (a merge, a pull, a rebase, a cherry
+            pick, a revert, a stash pop or apply), is read as git leaves it, beside what is on disk
+            (git_guesses). Before #2827 it was read only as it was on disk before the command, so
+            `git checkout feature && bash run.sh` ran feature's run.sh unread; before #2844 the same
+            held for a revert, a stash, a worktree and a clone.
 
             Marking every tracked file unreadable instead (#2827's open question) would refuse
             `git pull && bash any.sh`, the everyday shape, whatever the pull brings; reading what the
-            ref holds refuses only a file whose incoming text posts. Only a ref the repository holds
-            now can be read: a pull is read against what it would merge as that is before it fetches
-            (the branch tracked, or the remote's branch as last fetched). A ref that names nothing, a
-            word that cannot be worked out and a directory that is not a repository leave the files
-            as they are on disk, as before; a file the command names is noted as before (note_named),
-            so nothing refused before passes."""
+            ref holds refuses only a file whose incoming text posts. A ref is read as the repository
+            holds it before the command runs, except a pull's, which is fetched into a scratch
+            repository first, so what the fetch brings is read (git_fetch); a clone of a local
+            repository is read there, and a clone of anything else is downloaded, so every file under
+            the folder it makes is unreadable, as a download's is. A ref that names nothing, a word
+            that cannot be worked out and a directory that is not a repository leave the files as
+            they are on disk, as before; a file the command names is noted as before (note_named), so
+            nothing refused before passes."""
             words = list(words)
             sub, front, after = self.sw.git_path(words)
             mode, valued = GIT_TREE_WRITERS[sub]
@@ -286,7 +311,7 @@ def make(interpreter, shells, awks, senders):
                 if front[k].split("=", 1)[0] in ("--git-dir", "--work-tree"):
                     return  # a repository set apart from the folder: not worked out here
                 k += 1
-            positional, onto, flags, k = [], [], set(), 0
+            positional, onto, flags, values, k = [], [], set(), {}, 0
             while k < len(after):
                 w = after[k]
                 if w == "--":
@@ -297,15 +322,19 @@ def make(interpreter, shells, awks, senders):
                 if w.startswith("-") and w != "-":
                     key = w.split("=", 1)[0]
                     flags.add(key)
+                    takes = key in valued and "=" not in w
+                    value = w.split("=", 1)[1] if "=" in w else (after[k + 1] if takes and k + 1 < len(after) else "\0")
+                    values[key] = value
                     if key == "--onto":
                         onto.append(w.split("=", 1)[1] if "=" in w else (after[k + 1] if k + 1 < len(after) else "\0"))
-                    k += 2 if key in valued and "=" not in w else 1
+                    k += 2 if takes else 1
                     continue
                 positional.append(w)
                 k += 1
             if flags & GIT_UNDER_WAY:
                 return
             refs = []  # (the ref to read, as the refusal names it)
+            entry = {}  # what each entry this command notes holds beyond its ref
             if sub == "checkout":
                 if len(positional) != 1:
                     return  # none: a new branch at HEAD; more: a ref and the paths it writes, named
@@ -320,72 +349,254 @@ def make(interpreter, shells, awks, senders):
                 refs = positional or ["@{upstream}"]
             elif sub == "pull":
                 if not positional:
-                    refs = ["@{upstream}"]
+                    refs, entry["fetch"] = ["@{upstream}"], (None, None)
                 else:
-                    specs = [s.split(":", 1)[0] for s in positional[1:]]
+                    specs = [s.split(":", 1)[0].lstrip("+") for s in positional[1:]]
                     specs = [s[len("refs/heads/"):] if s.startswith("refs/heads/") else s for s in specs]
                     if positional[0] == ".":
                         refs = specs
                     else:
-                        refs = [f"{positional[0]}/{s}" for s in specs] or ["@{upstream}"]
+                        for s in specs or [None]:
+                            self.made_git.append(self.git_entry(where, f"{positional[0]}/{s}" if s else "@{upstream}",
+                                                                mode, f"git {sub} {positional[0]}" + (f" {s}" if s else ""),
+                                                                fetch=(positional[0], s)))
+                        return
             elif sub == "rebase":
                 refs = onto + (positional[:1] or ["@{upstream}"])
             elif sub == "cherry-pick":
                 refs = [r for r in positional if ".." not in r and not r.startswith("^")]
+            elif sub == "revert":
+                refs = [r for r in positional if ".." not in r and not r.startswith("^")]
+                parent = values.get("-m") or values.get("--mainline") or "1"
+                entry["parent"] = parent if parent.isdigit() else "1"
+            elif sub == "stash":
+                action, rest = (positional[0], positional[1:]) if positional else ("push", [])
+                if action in ("pop", "apply"):
+                    ref = rest[0] if rest else "stash@{0}"
+                    refs = [f"stash@{{{ref}}}" if ref.isdigit() else ref]
+                elif action == "branch":
+                    ref = rest[1] if len(rest) > 1 else "stash@{0}"
+                    ref = f"stash@{{{ref}}}" if ref.isdigit() else ref
+                    self.made_git.append(self.git_entry(where, ref + "^1", "tree", "git stash branch"))
+                    refs = [ref]
+                elif action in ("push", "save"):
+                    # The tracked files go back to what HEAD holds (with --keep-index, what the index
+                    # holds, which HEAD's text over-reads rather than misses).
+                    self.made_git.append(self.git_entry(where, "HEAD", "tree", "git stash"))
+                    return
+                else:
+                    return  # list, show, drop, clear, create, store: the working tree is left as it is
+            elif sub == "worktree":
+                if not positional or positional[0] != "add" or len(positional) < 2:
+                    return
+                if flags & {"--no-checkout", "--orphan"} or "\0" in positional[1]:
+                    return  # nothing checked out, or a folder that cannot be worked out
+                at = os.path.join(where, os.path.expanduser(positional[1]))
+                new = values.get("-b") or values.get("-B")
+                if len(positional) > 2:
+                    specs = [positional[2]]
+                elif new or "--detach" in flags:
+                    specs = ["HEAD"]
+                else:
+                    # Named after its folder: that branch where it exists, a new one at HEAD where not.
+                    specs = ["refs/heads/" + os.path.basename(os.path.normpath(at)), "HEAD"]
+                self.made_git.append(self.git_entry(where, specs, "tree", f"git worktree add {positional[1]}", at=at))
+                return
+            elif sub == "clone":
+                if flags & {"-n", "--no-checkout", "--bare", "--mirror"} or not positional:
+                    return
+                repo = positional[0]
+                folder = positional[1] if len(positional) > 1 else self.clone_folder(repo)
+                if not folder or "\0" in repo or "\0" in folder:
+                    return
+                at = os.path.join(where, os.path.expanduser(folder))
+                local = repo[len("file://"):] if repo.startswith("file://") else repo
+                local = os.path.join(where, os.path.expanduser(local))
+                if re.match(r"[A-Za-z][\w+.-]*://", repo) and not repo.startswith("file://") or not os.path.isdir(local):
+                    # A remote: what the clone writes is downloaded, so it cannot be read, as a download's
+                    # file is not (note_unreadable).
+                    real = os.path.realpath(at)
+                    self.made_unknown.append((glob_escape(real.rstrip("/")) + "/*", "git clone, which downloads it"))
+                    return
+                branch = values.get("-b") or values.get("--branch") or values.get("--revision")
+                spec = branch if branch and "\0" not in branch else "HEAD"
+                self.made_git.append(self.git_entry(local, spec, "tree", f"git clone {repo}", at=at))
+                return
             for ref in refs:
                 if not ref or "\0" in ref:
                     continue
                 # Asked of git only once a later command reads a file (git_guesses), so a pull that
                 # runs nothing after it costs no git call.
                 label = f"git {sub} {ref}" if ref in positional or ref in onto else f"git {sub}"
-                self.made_git.append({"where": where, "spec": "@{-1}" if ref == "-" else ref, "mode": mode,
-                                      "label": label, "root": None, "sha": None, "names": None, "blobs": {}})
+                if sub == "stash":
+                    label = f"git stash {positional[0] if positional else 'push'}" + (f" {positional[1]}" if len(positional) > 1 else "")
+                self.made_git.append(self.git_entry(where, "@{-1}" if ref == "-" else ref, mode, label, **entry))
+
+        @staticmethod
+        def git_entry(where, spec, mode, label, at=None, fetch=None, parent=None):
+            """One note_git entry: the folder git is asked in, the ref (or refs, the first that names a
+            commit) whose files are read, how its files are listed (git_names), the name a refusal gives
+            it, the folder its files land in where that is not the repository's own (a new worktree, a
+            clone), and for a pull what to fetch, for a revert which parent it goes back to."""
+            return {"where": where, "spec": spec, "mode": mode, "label": label, "root": None, "sha": None,
+                    "names": None, "blobs": {}, "at": os.path.realpath(at) if at else None, "fetch": fetch,
+                    "parent": parent, "git": None, "head": None}
+
+        @staticmethod
+        def clone_folder(repo):
+            """The folder git clone makes when it is not named: the repository's last name, past any
+            trailing slash, /.git and .git, as git guesses it."""
+            name = repo.rstrip("/")
+            if name.endswith("/.git"):
+                name = name[:-len("/.git")]
+            name = re.split(r"[/:]", name)[-1]
+            for suffix in (".git", ".bundle"):
+                if name.endswith(suffix):
+                    name = name[:-len(suffix)]
+            return name or None
 
         def git_resolve(self, e):
             """The repository and commit a note_git entry reads, asked of git on first use: root and
-            sha stay empty ("") where the folder is not a repository or the ref names no commit."""
+            sha stay empty ("") where the folder is not a repository or the ref names no commit. git is
+            the folder later questions are asked in: the repository, or the scratch one a pull's fetch
+            lands in. head is the commit HEAD names, which a pull, merge or rebase diffs against."""
             out = self.git_out(e["where"], ["rev-parse", "--show-toplevel"])
             e["root"] = os.path.realpath(out.decode("utf-8", "replace").strip()) if out else ""
-            sha = self.git_out(e["root"], ["rev-parse", "--verify", "--quiet", "--end-of-options",
-                                           e["spec"] + "^{commit}"]) if e["root"] else None
-            e["sha"] = sha.decode("utf-8", "replace").strip() if sha else ""
+            e["git"] = e["root"]
+            if not e["root"] and e["at"]:
+                # A clone of a bare repository, whose folder has no working tree to name.
+                bare = self.git_out(e["where"], ["rev-parse", "--is-bare-repository"])
+                e["git"] = e["where"] if bare and bare.strip() == b"true" else ""
+            if not e["git"]:
+                e["sha"] = ""
+                return
+            head = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+            e["head"] = head.decode("utf-8", "replace").strip() if head else ""
+            fetched = self.git_fetch(e) if e["fetch"] else None
+            if fetched:
+                e["git"], e["sha"] = fetched
+                return
+            e["sha"] = ""
+            for spec in e["spec"] if isinstance(e["spec"], list) else [e["spec"]]:
+                sha = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                                              spec + "^{commit}"])
+                if sha:
+                    e["sha"] = sha.decode("utf-8", "replace").strip()
+                    break
+            if e["sha"] and e["mode"] == "revert":
+                parent = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet",
+                                                 f"{e['sha']}^{e['parent'] or '1'}"])
+                e["parent_sha"] = parent.decode("utf-8", "replace").strip() if parent else ""
+                if not e["parent_sha"]:
+                    e["sha"] = ""  # a root commit: its revert deletes files, writing none
+
+        def git_fetch(self, e):
+            """(the scratch repository, the commit) a pull's fetch brings, fetched there rather than in
+            the repository itself, or None where it cannot be (no upstream, a remote that answers no,
+            past FETCH_TIMEOUT), when the ref as last fetched is read instead, as before #2844. The
+            scratch repository borrows the repository's objects (alternates), so only what is new is
+            fetched, and nothing in the repository changes: no ref, no FETCH_HEAD, no object."""
+            import atexit
+            import shutil
+            import tempfile
+            remote, ref = e["fetch"]
+            root = e["root"]
+            if remote is None:
+                cur = self.git_out(root, ["symbolic-ref", "-q", "--short", "HEAD"])
+                cur = cur.decode("utf-8", "replace").strip() if cur else ""
+                if not cur:
+                    return None
+                remote = self.git_out(root, ["config", f"branch.{cur}.remote"])
+                ref = self.git_out(root, ["config", f"branch.{cur}.merge"])
+                remote = remote.decode("utf-8", "replace").strip() if remote else ""
+                ref = ref.decode("utf-8", "replace").strip() if ref else ""
+            if not remote or remote == "." or not ref or "\0" in remote + ref:
+                return None
+            url = self.git_out(root, ["remote", "get-url", "--", remote])
+            url = url.decode("utf-8", "replace").strip() if url else remote
+            if not re.match(r"[A-Za-z][\w+.-]*://|[^/]+:", url) and os.path.exists(os.path.join(root, url)):
+                url = os.path.realpath(os.path.join(root, url))
+            common = self.git_out(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+            if not common:
+                return None
+            scratch = tempfile.mkdtemp(prefix="slack-gate-pull.")
+            atexit.register(shutil.rmtree, scratch, True)
+            if self.git_out(scratch, ["init", "-q", "--bare"]) is None:
+                return None
+            try:
+                with open(os.path.join(scratch, "objects", "info", "alternates"), "w") as f:
+                    f.write(os.path.join(common.decode("utf-8", "replace").strip(), "objects") + "\n")
+            except OSError:
+                return None
+            if self.git_out(scratch, ["fetch", "-q", "--no-tags", "--", url, f"+{ref}:refs/pull"],
+                            timeout=FETCH_TIMEOUT) is None:
+                return None
+            sha = self.git_out(scratch, ["rev-parse", "--verify", "--quiet", "refs/pull^{commit}"])
+            return (scratch, sha.decode("utf-8", "replace").strip()) if sha else None
 
         @staticmethod
-        def git_out(where, args):
-            """git's output for a read only git command run in where, or None where it fails. The
-            session's GIT_ variables are left out, so a hook run inside a git operation reads the
-            repository the command names, not the one git set for the hook."""
+        def git_out(where, args, timeout=5):
+            """git's output for a git command run in where, or None where it fails. The session's GIT_
+            variables are left out, so a hook run inside a git operation reads the repository the
+            command names, not the one git set for the hook; and git never stops to ask for a
+            password (a fetch that would ask fails instead)."""
             import subprocess  # here, not at the top: only a git command that writes tracked files needs it
             env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+            env.update(GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND="ssh -o BatchMode=yes", GCM_INTERACTIVE="never")
             try:
-                p = subprocess.run(["git", "-C", where] + args, capture_output=True, env=env, timeout=5,
+                p = subprocess.run(["git", "-C", where] + args, capture_output=True, env=env, timeout=timeout,
                                    stdin=subprocess.DEVNULL)
-            except (OSError, subprocess.SubprocessError):
-                return None
+            except (OSError, ValueError, subprocess.SubprocessError):
+                return None  # ValueError: a word that could not be worked out, held as a NUL
             return p.stdout if p.returncode == 0 else None
+
+        def git_names(self, e):
+            """{each file a note_git entry writes, relative to where it lands: the object git_guesses
+            reads it from}. "tree" writes every file the commit holds; "diff" those it changed since it
+            parted from HEAD; "commit" those the commit changed; "revert" those too, as its parent held
+            them; "stash" those the stash changed from its base, and the untracked files it holds."""
+            sha, mode = e["sha"], e["mode"]
+
+            def listed(args, at):
+                out = self.git_out(e["git"], args)
+                names = set(out.decode("utf-8", "replace").split("\0")) - {""} if out else set()
+                return {n: f"{at}:{n}" for n in names}
+            if mode == "tree":
+                return listed(["ls-tree", "-r", "-z", "--name-only", sha], sha)
+            if mode == "diff":
+                if not e["head"]:
+                    return {}
+                return listed(["diff", "--name-only", "-z", "--no-renames", f"{e['head']}...{sha}"], sha)
+            if mode == "commit":
+                return listed(["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", sha], sha)
+            if mode == "revert":
+                return listed(["diff-tree", "--name-only", "-r", "-z", "--no-renames", e["parent_sha"], sha],
+                              e["parent_sha"])
+            names = listed(["diff", "--name-only", "-z", "--no-renames", f"{sha}^1", sha], sha)
+            untracked = self.git_out(e["git"], ["rev-parse", "--verify", "--quiet", f"{sha}^3"])
+            if untracked:
+                names.update(listed(["ls-tree", "-r", "-z", "--name-only", f"{sha}^3"], f"{sha}^3"))
+            return names
 
         def git_guesses(self, real):
             """For made_from: the text each git command noted by note_git leaves in the file at real,
-            as ("text", it, label) pieces, where the ref writes that file and holds it other than it is
-            on disk. The files a ref writes, and each one's text, are asked of git once."""
+            as ("text", it, label) pieces, where the command writes that file and git holds it other
+            than it is on disk. The files a command writes, and each one's text, are asked of git once."""
             out = []
             for e in self.made_git:
                 if e["sha"] is None:
                     self.git_resolve(e)
-                if not e["sha"] or not real.startswith(e["root"] + os.sep):
+                at = e["at"] or e["root"]
+                if not e["sha"] or not at or not real.startswith(at + os.sep):
                     continue
-                rel = real[len(e["root"]) + 1:]
+                rel = real[len(at) + 1:]
                 if e["names"] is None:
-                    args = {"tree": ["ls-tree", "-r", "-z", "--name-only", e["sha"]],
-                            "diff": ["diff", "--name-only", "-z", "--no-renames", "HEAD..." + e["sha"]],
-                            "commit": ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root",
-                                       e["sha"]]}[e["mode"]]
-                    listed = self.git_out(e["root"], args)
-                    e["names"] = set(listed.decode("utf-8", "replace").split("\0")) - {""} if listed else set()
-                if rel not in e["names"]:
+                    e["names"] = self.git_names(e)
+                obj = e["names"].get(rel)
+                if obj is None:
                     continue
                 if rel not in e["blobs"]:
-                    blob = self.git_out(e["root"], ["cat-file", "blob", f"{e['sha']}:{rel}"])
+                    blob = self.git_out(e["git"], ["cat-file", "blob", obj])
                     try:
                         with open(real, "rb") as f:
                             same = blob is not None and f.read(len(blob) + 1) == blob
@@ -793,3 +1004,4 @@ def make(interpreter, shells, awks, senders):
             return (archive or None), dest_raw, dest, renames
 
     return ProgramWrites
+
