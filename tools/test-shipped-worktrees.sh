@@ -225,7 +225,9 @@ nobody_in_vanished(){
 hang_wait nobody_in_vanished || bad "a process was still standing in the vanished worktree, so it could not be removed"
 rm -rf "$WT/vanished"
 vanished_listed(){
-  git -C "$R" worktree list --porcelain 2>/dev/null | grep -qx "worktree $WT/vanished" && [ ! -d "$WT/vanished" ]
+  # Read in full, then matched: grep -q on a pipe under pipefail kills git mid write (L183).
+  local all; all="$(git -C "$R" worktree list --porcelain 2>/dev/null)"
+  grep -qx "worktree $WT/vanished" <<< "$all" && [ ! -d "$WT/vanished" ]
 }
 if hang_wait vanished_listed; then ok; else bad "git does not list the vanished worktree with its directory gone, so the fixture was not built"; fi
 
