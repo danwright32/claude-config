@@ -645,8 +645,10 @@ SH_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 SH_COMPOUND = re.compile(r"^(?:(?:if|then|elif|else|fi|do|done|while|until|for|select|case|esac|function|coproc|time|!)"
                          r"(?=[\s;&|()]|$)|[{}()]|\[\[)")
 SH_FUNC_DEF = re.compile(r"^[A-Za-z_][\w:.-]*\s*\(\s*\)")
-SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let|printf)\b"
-              r"[^\n;&|]*?(?<![\w$]){0}\b|\$\{{{0}:?=")
+# printf binds a name only through -v (claude-config#2683): read like the others, every suite's
+# closing `printf 'SUITE-RESULT passed=...'` bound SUITE, and a quoted `make-settled.py` bound py.
+SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let)\b"
+              r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
 # export and readonly with no = keep a name's value, so sh_binds does not count them as binding it.
 SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
 
@@ -660,6 +662,39 @@ SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
 # but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
 # 973,000, and sh_locals asks once per local (claude-config#2784).
 @functools.lru_cache(maxsize=None)
+def sh_comment_at(text, at):
+    """Whether offset at in shell text is on a line that is only a comment: its first character past
+    the indent is a # (claude-config#2683)."""
+    start = text.rfind("\n", 0, at) + 1
+    return text[start:at + 1].lstrip(" \t").startswith("#")
+
+
+# A case branch's pattern at the front of its first command: (a|b) or a|b), each alternative one word.
+SH_CASE_PATTERN = re.compile(r"\A\s*\(?[^\s()|;&<>]+(?:\s*\|\s*[^\s()|;&<>]+)*\)\s*")
+# What may stand in front of a command on its line, past which a word is still in command position:
+# an assignment (IFS= read) or a redirection (<"$f" read), each as one word.
+SH_LEAD_WORD = re.compile(r"""(?:(?<=[\s;&|(){}!`])|^)(?:[A-Za-z_]\w*(?:\[[^\]\n]*\])?\+?=|\d*(?:[<>]{1,2}|>&|<&)&?)"""
+                          r"""(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*\Z""")
+# The words after which the next word is a command.
+SH_CMD_AFTER = re.compile(r"(?:^|[\s;&|(){}!`])(?:then|do|else|elif|if|while|until|time|command|builtin|exec|!)\Z")
+
+
+def sh_command_at(text, start, at):
+    """Whether the word at offset at, on the line starting at start, is in command position: nothing
+    before it on the line but assignments and redirections, or after a separator (; & | ( ) { } ! a
+    backquote, $( ) or a keyword that a command follows (claude-config#2683). A word inside a quoted
+    sentence is in none of those places, unless the sentence holds one itself, which is read as a
+    command: so a binding is never missed, only a sentence sometimes taken for one."""
+    before = text[start:at]
+    while True:
+        before = before.rstrip(" \t")
+        m = SH_LEAD_WORD.search(before)
+        if not m or m.start() == len(before):
+            break
+        before = before[:m.start()]
+    return not before or before[-1] in ";&|(){}!`" or bool(SH_CMD_AFTER.search(before))
+
+
 def sh_bind_patterns(name):
     n = re.escape(name)
     return (re.compile(n + r"(?<![\w$]" + n + r")(?:\[[^\]\n]*\])?\+?="),
@@ -2622,9 +2657,12 @@ class Judge(WrittenPaths, ProgramWrites):
         if name not in text:
             return False
         assigns, arithmetic, binders = sh_bind_patterns(name)
-        if len(assigns.findall(text)) > allowed:
+        # A line that is only a comment binds nothing (claude-config#2683): `# the case reads HOOK for
+        # its verdict` read as `read ... HOOK`. Only a whole line is taken as one, its first character
+        # past the indent a #, which no command, word or expansion ($#, ${#x}) starts with.
+        if sum(1 for m in assigns.finditer(text) if not sh_comment_at(text, m.start())) > allowed:
             return True
-        if arithmetic.search(text):
+        if any(not sh_comment_at(text, m.start()) for m in arithmetic.finditer(text)):
             return True
         # A binder never spans a line (no newline can sit inside one), so only the lines that hold the
         # name are read, each by its own bounds: a lookbehind and \b still see the text around them,
@@ -2635,8 +2673,18 @@ class Judge(WrittenPaths, ProgramWrites):
             start = text.rfind("\n", 0, at) + 1
             end = text.find("\n", at)
             end = len(text) if end < 0 else end
-            if any(not SH_VALUE_KEPT.match(m.group(0)) for m in binders.finditer(text, start, end)):
-                return True
+            pos = start if not text[start:end].lstrip(" \t").startswith("#") else end
+            while pos < end:
+                m = binders.search(text, pos, end)
+                if not m:
+                    break
+                # A builtin binds only where it is the command (claude-config#2683): `check "and does
+                # not declare itself unrunnable" "it printed SUITE-NOT-RUN"` read as `declare ...
+                # SUITE`. A word in a sentence is not one; ${NAME:=} assigns wherever it expands.
+                if not SH_VALUE_KEPT.match(m.group(0)) and (m.group(0).startswith("$")
+                                                             or sh_command_at(text, start, m.start())):
+                    return True
+                pos = m.start() + 1
             at = text.find(name, end + 1)
         return False
 
@@ -2647,6 +2695,10 @@ class Judge(WrittenPaths, ProgramWrites):
         a value such as $(( ... )) stays one word, and a name is one only with no $ or ` in it."""
         if re.search(r"\(\([^()]*\$\{?\w+\}?\s*(?:[-+*/%&|^]|<<|>>)?=(?!=)", text):
             return True
+        # A case branch's pattern comes with its first command (`unset) : ;;` read as unset ":"), and
+        # a word closed by ) can open nothing but a pattern, so the command is read past it
+        # (claude-config#2683: the gate suite's own ur_lose ended its walk at line 28).
+        text = SH_CASE_PATTERN.sub("", text, count=1)
         toks = self.sh_tokens(self.rest_of(text)[0])
         words, k = [], 0
         while k < len(toks):
@@ -2673,6 +2725,11 @@ class Judge(WrittenPaths, ProgramWrites):
         if w0 == "let":
             return any(re.search(r"[$`]", a) for a in args)
         if w0 in ("declare", "typeset", "local", "export", "readonly"):
+            if w0 in ("declare", "typeset") and any(re.fullmatch(r"-[A-Za-z]*[fFp][A-Za-z]*", a) for a in args):
+                # declare -F, -f and -p only print what is defined, or (-fx) mark a function, and bind
+                # no variable (claude-config#2683): `declare -F "$f" >/dev/null`, how a suite asks
+                # whether a sourced file defined a function, ended the walk of every script after it.
+                return False
             for a in args:
                 if a[:1] in ("-", "+"):
                     if a[0] == "-" and "n" in a[1:]:
@@ -2968,11 +3025,29 @@ class Judge(WrittenPaths, ProgramWrites):
                             any(blocks[x]["kind"] in ("loop", "func") for x in stack_j[len(stack):]):
                         b = items[j][1]["start"]
                         break
-                    if not self.sh_keeps(head_j):
+                    if not self.sh_keeps(head_j) and not self.sh_sources_without(head_j, n, s, known, script,
+                                                                                 items[j][1]["start"]):
                         b = items[j][1]["start"] + 1
                         break
                 out.setdefault(n, []).append((p["end"], b, v))
         return out
+
+    def sh_sources_without(self, head, n, s, known, script, at):
+        """Whether head sources a file whose path is worked out (from what is known at offset at in s)
+        and which binds n nowhere, a file it sources included (sh_bound_in), so a local n keeps its
+        value past it (claude-config#2683: plan-council's post-discussion.sh sources catch-all.sh
+        between its `local ensure=...` and the line that runs "$ensure"). A function the file defines
+        that sets n can only set it when called, and a call is a command this does not let past."""
+        if self.sh_source_target(head) is None:
+            return False
+        v, bad = self.sh_source_word(head, SH_UNKNOWN_DIR, lambda x: self.sh_home(x, s, self.sh_at(known, x, at)),
+                                     script)
+        if bad or v is None or not os.path.isabs(os.path.expanduser(v)):
+            return False
+        path = os.path.expanduser(v)
+        if not self.is_file(path):
+            return False
+        return n not in self.sh_bound_in(path, {n}, SH_UNKNOWN_DIR, False, v, 1, set())
 
     def sh_keeps(self, head):
         """Whether a command certainly sets no shell variable but those it spells out: nothing, a
@@ -3613,6 +3688,15 @@ class Judge(WrittenPaths, ProgramWrites):
         does not change what the rest of this command is judged with. Each command is one step of
         the walk's budget (tick)."""
         self.tick()
+        # The first command of a function body on the opener's own line (`run() { bash post.sh; }`)
+        # comes from the reader with the opener in front, which made `run()` its program, so the bash
+        # it runs was never judged (claude-config#2832). It is judged from past the opener, as the
+        # same command on a line of its own is.
+        lead = text.lstrip()
+        if SH_FUNC_DEF.match(lead) or re.match(r"function\s+[A-Za-z_][\w:.-]*", lead):
+            body = self.sh_strip_openers(text)
+            if body:
+                text = body
         rest, assigns = self.rest_of(text)
         words = self.words_of(rest)
         self.sh_note(text, words, assigns, d)

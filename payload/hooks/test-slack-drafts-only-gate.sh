@@ -3115,6 +3115,80 @@ for cmd in "python3 -m json.tool \"\$NOT_SET_2683/x.json\"" "bash -c 'echo hi' _
   allowed "switched on: a variable in a word that is not the file run is left alone: $cmd"
 done
 
+# ---- #2683: what the switch refused that a script sets plainly ----
+# Switched on across every tracked script on 2026-11-12 it refused 185, 64 of them where the script
+# sets the path plainly from its own folder. These are the shapes of those, each in the posting tree
+# (where reading the file refuses it as the post it is) and the quiet one (where reading it lets it
+# through), and each beside the one change that really makes the value uncertain, which stays refused.
+# Taken from the scripts, not copied: every suite ends `printf 'SUITE-RESULT passed=...'`, read as
+# printf binding SUITE (test-sleep-claim-notes-clock.sh, test-project-list-nudge-wiring.sh);
+# lib/ai-review-common.sh prints a quoted `make-settled.py` beside its `local py`; and a comment
+# saying what a test reads.
+ur_plain() { # ur_plain <name> <line>...: a script in both trees, its first lines UR_TOP
+  local name="$1" tree; shift
+  for tree in posts quiet; do
+    printf '%s\n' '#!/bin/bash' "$UR_TOP" "$@" > "$UR/$tree/tests/$name.sh"
+  done
+}
+ur_plain suite 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' 'run' \
+  "printf 'SUITE-RESULT passed=%d failed=%d\\n' 0 0"
+ur_plain sealed 'sealed() {' '  local py="$ROOT/tools/lib/act.py" out' '  [ -f "$py" ] || return 1' \
+  '  out="$(echo x | python3 -I "$py" 2>/dev/null)" || return 1' '}' 'sealed' "printf '%s\\n' 'sealed by make-settled.py'"
+ur_plain comment 'HOOK="$ROOT/tools/lib/act.sh"' '# Each case read HOOK for its verdict.' 'check() {' '  bash "$HOOK"' '}' 'check'
+# `declare -F f >/dev/null`, asking whether a sourced file defined a function, binds nothing
+# (pr-review-push-gate.sh, test-push-scope.sh, test-bad-byte-locale.sh).
+ur_plain declf 'HOOK="$ROOT/tools/lib/act.sh"' 'for f in check run; do' '  declare -F "$f" >/dev/null || echo "$f"' 'done' \
+  'bash "$HOOK"'
+# A builtin's name in a sentence (test-project-list-nudge-wiring.sh: "and does not declare itself
+# unrunnable" beside "SUITE-NOT-RUN"), and a case pattern named like one (this suite's own ur_lose).
+ur_plain prose 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' 'run' \
+  'echo "and does not declare itself unrunnable" "it printed SUITE-NOT-RUN"'
+ur_plain casepat 'SUITE="$DIR/../tools/lib/act.sh"' 'lose() { case "$1" in' "  evald) printf '%s\\n' x ;;" '  unset) : ;;' 'esac; }' 'run() {' '  bash "$SUITE"' '}' 'run'
+# A local kept past a sourced file that binds nothing (plan-council's post-discussion.sh).
+for tree in posts quiet; do
+  printf '%s\n' 'CATCH_ALL=Ungrouped' > "$UR/$tree/tools/lib/names.sh"
+  printf '%s\n' 'ensure=/nowhere/else.sh' > "$UR/$tree/tools/lib/rebinds.sh"
+done
+ur_plain localsrc 'fields() {' '  local ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/names.sh"' '  bash "$ensure"' '}' 'fields'
+# The same shapes where the name really is bound again, so its value is not certain.
+ur_plain suite-read 'SUITE="$DIR/../tools/lib/act.sh"' 'read -r SUITE < /dev/null' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain suite-printfv 'SUITE="$DIR/../tools/lib/act.sh"' 'printf -v SUITE %s "$1"' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain sealed-read 'sealed() {' '  local py="$ROOT/tools/lib/act.py"' '  read -r py < /dev/null' '  python3 "$py"' '}' 'sealed'
+ur_plain localsrc-rebinds 'fields() {' '  local ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/rebinds.sh"' '  bash "$ensure"' '}' 'fields'
+ur_plain declf-assign 'HOOK="$ROOT/tools/lib/act.sh"' 'declare HOOK="$1"' 'bash "$HOOK"'
+ur_plain read-ifs 'SUITE="$DIR/../tools/lib/act.sh"' 'IFS= read -r SUITE < /dev/null' 'run() {' '  bash "$SUITE"' '}' 'run'
+ur_plain read-chained 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' '[ -n "$1" ] && read -r SUITE < /dev/null' 'run'
+ur_plain read-case 'SUITE="$DIR/../tools/lib/act.sh"' 'case "$1" in' '  x) read -r SUITE < /dev/null ;;' 'esac' 'run() {' '  bash "$SUITE"' '}' 'run'
+for shape in suite sealed comment declf localsrc prose casepat; do
+  run_ur refuse "bash $UR/posts/tests/$shape.sh"
+  says "switched on: a path the script sets plainly is read, and a file that posts refused as the post ($shape)" \
+    "REFUSED: this command posts to Slack"
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  allowed "switched on: the same path to a file that does not post is read and let through ($shape)"
+  run_bash "bash $UR/posts/tests/$shape.sh"
+  says "switched off: the file is read too, so one that posts is refused ($shape)" "REFUSED: this command posts to Slack"
+done
+# #2832: the first command of a function body on the opener's own line was never judged, so
+# `run() { bash post.sh; }` then `run` went through where the same body on its own lines was refused.
+for tree in posts quiet; do
+  printf '%s\n' '#!/bin/bash' "run() { bash $UR/$tree/tools/lib/act.sh; }" 'run' > "$UR/$tree/tests/oneline.sh"
+  printf '%s\n' '#!/bin/bash' "function run { python3 $UR/$tree/tools/lib/act.py; }" 'run' > "$UR/$tree/tests/oneline-kw.sh"
+  printf '%s\n' '#!/bin/bash' "$UR_TOP" 'run() { bash "$ROOT/tools/lib/act.sh"; }' 'run' > "$UR/$tree/tests/oneline-var.sh"
+  printf '%s\n' '#!/bin/bash' "run() { echo hi; bash $UR/$tree/tools/lib/act.sh; }" 'run' > "$UR/$tree/tests/oneline-second.sh"
+done
+for shape in oneline oneline-kw oneline-var oneline-second; do
+  run_bash "bash $UR/posts/tests/$shape.sh"
+  says "the first command of a one line function body is judged: one that runs a posting file is refused ($shape, #2832)" \
+    "REFUSED: this command posts to Slack"
+  run_bash "bash $UR/quiet/tests/$shape.sh"
+  allowed "and one that runs a file that does not post is allowed ($shape, #2832)"
+done
+for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \
+    "a path the gate cannot work out"
+done
+
 # ---- #2569: the patterns sh_binds builds are compiled once per name ----
 # The merge helper's own script has a few thousand names, and sh_binds built three patterns per name
 # on every call. re keeps only 512 compiled patterns, so a profile of the gate judging
