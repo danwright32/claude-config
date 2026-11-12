@@ -1564,12 +1564,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         path = self.resolve(word, d)
         # A file a compiler run earlier in this call builds is read as each source it is built from,
         # at the source's own place, so its imports resolve as the compiler's do (claude-config#2844),
-        # and then as it is on disk, which the build replaces. built names that compiler, whose own
-        # naming of its input is not a write (it writes only its outputs).
-        for src, how in self.built_from(path) if self.made_built else ():
+        # and then as it is on disk, which the build replaces. built names the program the command ran
+        # (the compiler, or the launcher in front of it, npx tsc), whose own naming of its input is not
+        # a write (it writes only its outputs).
+        for src, how, writer in self.built_from(path) if self.made_built else ():
             shown = os.path.relpath(src, d) if d and src.startswith(os.path.abspath(d) + os.sep) else src
             reason = self.script(src, d, depth, shell_hint, lang, f"{label} (which {how} builds from {shown})",
-                                 built=how)
+                                 built=writer)
             if reason:
                 return reason
         if not self.is_file(path):
@@ -4090,11 +4091,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         certainly the program, as a script word held_slot places is, so a data file is read where the
         module can act on it and a code file where it can run what it is handed (handed_code).
 
-        A module in the standard library or installed, or one found nowhere, is not read, and nor are
-        the files after it, as for a program run by bare name from the PATH: whether py_compile, black
-        or pytest runs what it is handed is not something the gate knows, and counting them all as
-        running it refuses `python3 -m py_compile` on any file naming an endpoint, this gate's own
-        source among them. A module named by a variable or a
+        A module in the standard library or installed, or one found nowhere, is read by what it runs
+        where it is a runner the gate knows (runpy, pdb, cProfile, profile, trace, unittest, pytest:
+        py_runner in lib/program-runs.py, claude-config#2844). Any other is not read, and nor are the
+        files after it, as for a program run by bare name from the PATH: whether py_compile or black
+        runs what it is handed is not something the gate knows, and counting them all as running it
+        refuses `python3 -m py_compile` on any file naming an endpoint, this gate's own source among
+        them. A module named by a variable or a
         substitution is not read, as a script path that cannot be worked out is not."""
         mod, after = module
         if not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", mod):

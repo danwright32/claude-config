@@ -415,7 +415,7 @@ def make():
             """A compiler run (BUILDERS, or one a launcher runs): its outputs are read as the sources
             they are built from, when a later command of this call runs one (built_from). vals are its
             words as worked out, None for one that cannot be."""
-            words = list(vals)
+            words, writer = list(vals), name  # the program the command runs, a launcher included
             if name in LAUNCHERS:
                 k = 1
                 while k < len(words) and words[k] is not None and words[k].startswith("-"):
@@ -428,7 +428,7 @@ def make():
                 return  # a word that cannot be worked out: what it builds is not known
             entry = self.tsc_entry(words[1:], d) if name == "tsc" else self.esbuild_entry(words[1:], d)
             if entry:
-                entry["label"] = name
+                entry["label"], entry["writer"] = name, writer
                 self.made_built.append(entry)
 
         def tsc_entry(self, words, d):
@@ -603,11 +603,11 @@ def make():
             out = []
             for e in self.made_built:
                 if "configs" in e:
-                    out += [(src, e["label"]) for src in self.tsc_built(e, real, stem, ext)]
+                    out += [(src, e["label"], e["writer"]) for src in self.tsc_built(e, real, stem, ext)]
                     continue
                 for o, src in e["entries"]:
                     if e["outfile"] and os.path.realpath(e["outfile"]) == real:
-                        out.append((src, e["label"]))
+                        out.append((src, e["label"], e["writer"]))
                     elif e["outdir"]:
                         od = os.path.realpath(e["outdir"])
                         if not real.startswith(od + os.sep):
@@ -615,12 +615,12 @@ def make():
                         want = os.path.join(od, o) if o else \
                             os.path.join(od, os.path.relpath(os.path.splitext(src)[0], e["outbase"]))
                         if e["names"] or os.path.normpath(want) == stem:
-                            out.append((src, e["label"]))
+                            out.append((src, e["label"], e["writer"]))
             seen, found = set(), []
-            for src, how in out:
+            for src, how, writer in out:
                 if src not in seen and os.path.isfile(src):
                     seen.add(src)
-                    found.append((src, how))
+                    found.append((src, how, writer))
             return found
 
         def tsc_built(self, e, real, stem, ext):

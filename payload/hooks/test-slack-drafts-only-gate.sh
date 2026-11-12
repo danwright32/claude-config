@@ -3684,11 +3684,13 @@ run_c() { run_raw "$(payload Bash "$(bash_input "$1")" "$C")"; }
 for runs in "tsc && node dist/main.js" "npx tsc && node dist/lib/send.js" "tsc -p . && node dist/main.js" \
   "tsc --outDir out src/main.ts && node out/main.js" "tsc src/main.ts && node src/main.js" \
   "esbuild src/main.ts --bundle --outdir=build && node build/main.js" \
-  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/post.js" "tsc; node dist/main.js"; do
+  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/post.js" "tsc; node dist/main.js" \
+  "npx tsc --outDir out src/main.ts && node out/main.js"; do
   run_c "$runs"
   read_refused "a file a compiler builds from a source that posts is read as that source: $runs"
 done
 for runs in "tsc -p tsconfig.quiet.json && node qdist/main.js" "tsc --outDir out qsrc/main.ts && node out/main.js" \
+  "npx tsc --outDir out qsrc/main.ts && node out/main.js" \
   "tsc qsrc/main.ts && node qsrc/main.js" "esbuild qsrc/main.ts --bundle --outdir=build && node build/main.js" \
   "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/quiet.js" "tsc && node elsewhere.js" \
   "tsc --noEmit && node dist/main.js"; do
@@ -3816,6 +3818,7 @@ git clone -q --bare "$B" "$B2" 2>/dev/null
 git -C "$B2" update-ref refs/heads/main "$OTHER"
 git -C "$L" remote add quiet "$B2"
 run_l() { run_raw "$(payload Bash "$(bash_input "$1")" "$L")"; }
+L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
 for runs in "git pull && bash other.sh" "git pull origin main && bash other.sh" "git pull -q --ff-only && bash other.sh"; do
   run_l "$runs"
   read_refused "a file a pull brings from the remote, which posts, is read as the remote holds it: $runs"
@@ -3824,8 +3827,9 @@ for runs in "git pull quiet main && bash other.sh" "git pull && bash run.sh" "gi
   run_l "$runs"
   allowed "a pull that brings nothing that posts passes: $runs"
 done
-if git -C "$L" for-each-ref | grep -q 'gate'; then check "a pull read leaves no ref behind" "a ref was left: $(git -C "$L" for-each-ref)"
-else check "a pull read leaves no ref behind" ok; fi
+L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
+if [ "$L_AFTER" = "$L_BEFORE" ]; then check "a pull read leaves the repository's refs and files as they were" ok
+else check "a pull read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
 
 echo
 echo "passed: $pass, failed: $fail"
