@@ -3669,6 +3669,21 @@ that have since been deleted, and the gate lets a missing script through. The wo
 been replayed. The gate on main that day refused 187 more commands and timed out on 48 more than the
 gate at #2640, which #2784, #2785 and #2786 follow up.
 
+A file a program writes by name and the same command then runs (#2772) is followed where its text
+can be read and refused where it cannot, in `lib/program-writes.py`. dd and an archive tar or unzip
+unpacks are followed by what they write. A file that code edits or names (`sed -i`, a `python3 -c`
+or heredoc, `node -e`, an awk `print >`) is judged as that code, the files it reads and what was
+there before, where the code is seen unable to fetch or run anything; otherwise, and for any other
+program naming it (`sort -o`, `rsync`, `base64 -o`), it is refused as unreadable. Programs that
+never write what they are handed (`chmod`, `grep`, git's reading subcommands) and the files handed
+to a script on disk are not counted. Measured on 2026-11-12 by replaying 3 days of this Mac's Bash
+calls (about 21,000 distinct, each with more than one command): the first version refused 135 more
+than main, almost all a script edited and then run, or a word like `owner/repo` read as a file; the
+third refused 2 more, both a sed replacement naming a file it does not write. That last change only
+narrows what sed and awk are read as writing, and both pass on what shipped, so it refuses no more
+than main on that replay. `claude-sync lesson L174` takes 1.9 s through the wrapper on both (5
+readings each at load average 10 to 18).
+
 When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
 to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
 with `gh pr merge` directly once every check is green, without deleting the branch (the helper

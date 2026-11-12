@@ -76,6 +76,10 @@ COMPRESSED = re.compile(r"\.(gz|tgz|bz2|xz|zst|Z|lzma|lz4)$")
 SEDS = frozenset({"sed", "gsed"})
 MAX_MEMBERS = 2000
 MAX_UNPACKED = 8 * 1024 * 1024
+# The files a sed program writes (w, W, the w flag of s) and an awk program prints into (> and >>).
+# Read liberally: a name taken from elsewhere in the program only reads one more file as the program.
+SED_WRITES = re.compile(r"(?:^|[;\n{}0-9$/])\s*[wW]\s+([^\s;}'\"]+)")
+AWK_WRITES = re.compile(r">>?\s*\"([^\"]+)\"|>>?\s*([^\s;}'\"()]+)")
 # Perl or Ruby code that can fetch, run or load something, or names a module or file handle at all.
 PERL_ACTS = re.compile(r"`|%x|\b(system|exec|qx|open|popen|sysopen|require|use|do|eval|fork|socket|syscall|"
                        r"readpipe|spawn|load|pipe|IO|Net|URI|LWP|HTTP|Socket|Kernel|Process|File|Dir|"
@@ -180,8 +184,8 @@ def make(interpreter, shells, awks, senders):
             out = [("maybe", None, label) for pat, label in self.made_maybe
                    if fnmatch.fnmatchcase(real, pat) or fnmatch.fnmatchcase(path, pat)]
             bases = {os.path.basename(path), os.path.basename(real)}
-            for text, label, d, follow, inputs in self.made_code:
-                if any(names_file(text, b) for b in bases):
+            for text, label, d, follow, inputs, writes in self.made_code:
+                if any(names_file(writes, b) for b in bases):
                     out += self.code_pieces(text, label, d, real, inputs) if follow else [("maybe", None, label)]
             return out
 
@@ -252,14 +256,23 @@ def make(interpreter, shells, awks, senders):
                 follow = not PERL_ACTS.search(text)
             else:
                 follow = False
-            self.made_code.append((text, label, d, follow, ()))
+            # The text naming the files the code can write: all of it for a program that opens files
+            # by any name, only the targets of w and of print > for sed and awk, whose replacement
+            # text names files it never writes (`sed -i 's/a.tsv/b.tsv/' run.sh` writes run.sh).
+            if lang == "sed":
+                writes = " ".join(m for m in SED_WRITES.findall(text))
+            elif lang == "awk":
+                writes = " ".join(a or b for a, b in AWK_WRITES.findall(text))
+            else:
+                writes = text
+            self.made_code.append((text, label, d, follow, (), writes))
 
         def code_inputs(self, start, d, values):
             """Give the code noted since start the files its program reads besides the ones it names:
             sed's and awk's input files, the arguments python3 -c is handed."""
             paths = tuple(os.path.realpath(self.resolve(v, d)) for v in values
                           if v and not v.startswith("-") and len(v) < 1024)
-            self.made_code[start:] = [c[:4] + (paths,) for c in self.made_code[start:]]
+            self.made_code[start:] = [c[:4] + (paths,) + c[5:] for c in self.made_code[start:]]
 
         def code_pieces(self, text, label, d, real, inputs=()):
             """What a file that code names may hold once the code ran: the code itself, holding
@@ -341,7 +354,7 @@ def make(interpreter, shells, awks, senders):
                 self.note_named(raw, value, d, label)
                 return
             real = os.path.realpath(self.resolve(value, d))
-            pieces = [p for text, lab, cd, _, ins in codes for p in self.code_pieces(text, lab, cd, real, ins)]
+            pieces = [p for text, lab, cd, _, ins, _ in codes for p in self.code_pieces(text, lab, cd, real, ins)]
             self.note_file(value, d, pieces, append=True)
 
         def note_runner(self, name, args, vals, d, stdin):
