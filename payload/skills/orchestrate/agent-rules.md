@@ -20,6 +20,7 @@ You are one of several agents, each working one item while the orchestrator sess
   `git -C <repo> fetch origin`
   `git -C <repo> worktree add <worktree path> -b <branch> origin/main`
   The worktree path is the one your brief names, inside the repository's own `.claude/worktrees/` folder. Never put a worktree under `/tmp`, `/private/tmp` or the scratchpad: a restart of the Mac empties them, and an uncommitted fix goes with it (claude-config#2490).
+- Then read `git -C <worktree path> config --get core.hooksPath`. When it names a folder that is not there in the worktree, run the install that creates it in the worktree before your first commit (`pnpm install` beside a `pnpm-lock.yaml`, and likewise for yarn, bun or npm). Until that folder exists git runs none of the repository's own hooks, on a commit or a push, and `push-scope-notice.sh` refuses your push (claude-config#2070, #2098).
 - Use absolute literal paths, one plain command per call: no shell variables, no loops.
 - Test first with `superpowers:test-driven-development`. The test goes in the same commit as the fix and covers a failure path, not only the happy path. Run the project's whole suite, typecheck and build.
 - Write the commit message to a file and commit with `git commit -F <file>`. End it with the `Claude-Session:` line from your brief. Nothing may say or suggest Claude wrote the work.

@@ -13,6 +13,15 @@
 # 2.1.274 (session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name,
 # tool_input, tool_use_id). The Slack tool names are the ones the two integrations list today: the
 # Slack plugin's mcp__plugin_slack_slack__* and the claude.ai connector's mcp__claude_ai_Slack__*.
+#
+# Probing the gate by hand (claude-config#2794): drive it the way this suite does, by piping a
+# hook payload into the wrapper, never by importing slack_drafts_only_gate from a Python script.
+# The rule's own source names Slack's posting endpoints, so the gate refuses any script that
+# imports it as one that posts, and setting PYTHONPATH only changes which refusal comes back
+# (measured 2026-11-11). For example:
+#   jq -n --arg c 'node tools/x.mjs a.ts' '{hook_event_name:"PreToolUse",tool_name:"Bash",
+#     tool_input:{command:$c},cwd:"."}' | bash payload/hooks/slack-drafts-only-gate.sh; echo $?
+# Exit 0 is allowed and 2 is refused, with the reason on stderr.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -25,6 +34,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/slack-drafts-only-gate.sh"
+# The gate's switched off refusal (#2683) is switched on only where run_ur asks for it, never by
+# whatever the caller's environment holds.
+unset SLACK_GATE_UNWORKED_PATHS
 NUDGE="$(cd "$DIR/.." && pwd)/skills/nudge/nudge.py"
 
 pass=0
@@ -1916,6 +1928,133 @@ PY
 written="$(python3 "$T/written-paths-check.py" "$DIR" 2>&1)"
 check "lib/written-paths.py reads an unknown write's path as the text after its last unknown part" "$written"
 
+echo "slack drafts only: a file a program writes by name and the same command runs is followed or refused (claude-config#2772)"
+
+# #2721 followed the shell's own writes (a redirection, tee, a copy, a download). A program writing a
+# file it names (python3 -c "open(...)", sed -i, dd of=, tar x) was not followed, so the script it
+# wrote was read from disk as it was before the command (measured through this wrapper on main at
+# 91d1174, 2026-11-12: every shape in the refused list below passed). dd and an archive whose members
+# can be read are followed by what they write; every other program that names the file, or code that
+# names it, leaves it unreadable, and running it is refused. Nothing here is run.
+# post.tar and post.zip hold post-run.sh, which posts; plain.tar holds plain-run.sh, which does not.
+mkdir -p "$T/cp/arc" "$T/cp/sub"
+printf '%s\n' "$POST" > "$T/cp/arc/post-run.sh"
+printf '%s\n' "echo hello" > "$T/cp/arc/plain-run.sh"
+tar -cf "$T/cp/post.tar" -C "$T/cp/arc" post-run.sh
+tar -cf "$T/cp/plain.tar" -C "$T/cp/arc" plain-run.sh
+python3 -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1], "w"); z.write(sys.argv[2], "post-run.sh"); z.close()' \
+  "$T/cp/post.zip" "$T/cp/arc/post-run.sh"
+rm -rf "$T/cp/arc"
+printf '%s\n' "import sys" "print(sys.argv[1])" > "$T/cp/gen.py"
+PY_OPEN="python3 - <<'EOF'
+open('run.sh', 'w').write(open('post.txt').read())
+EOF
+bash run.sh"
+
+# The controls first: these pass on main and must still pass, so a refusal below is the write being
+# read and not every program or every run being refused (L159).
+for runs in "printf 'log\n' > out.log && cat out.log" "bash plain.txt" "chmod +x plain.txt && ./plain.txt" \
+  "grep -c echo plain.txt && bash plain.txt" "bash -n plain.txt && bash plain.txt" "head -3 plain.txt; bash plain.txt" \
+  "git diff plain.txt; git add plain.txt && bash plain.txt" "timeout 30 bash plain.txt; bash plain.txt" \
+  "python3 -c \"open('out.log', 'w').write('x')\" && bash plain.txt" "sed -n 1,5p plain.txt && bash plain.txt" \
+  "sed -i '' 's/a/b/' notes.txt && bash plain.txt" "dd if=plain.txt of=run.sh && bash run.sh" \
+  "tar -xf plain.tar && bash plain-run.sh" "tar -tf post.tar && bash plain.txt" \
+  "tar -xf post.tar -C sub && bash plain.txt" "unzip -o post.zip -d sub && bash plain.txt" \
+  "node -e \"require('fs').writeFileSync('out.json', '{}')\" && bash plain.txt" \
+  "python3 gen.py out.txt && bash plain.txt" "shellcheck plain.txt && bash plain.txt"; do
+  run_cp "$runs"
+  allowed "a program that writes another file, or only reads the one run, passes: $runs"
+done
+# Editing a script and running it is the everyday shape (a replay of 3 days of this Mac's commands,
+# 2026-11-12: 82 of them, by sed -i or a python3 heredoc). Code that can do no more than read and
+# write files can only write what it holds and the files it reads, so the file is judged as those.
+PY_EDIT="python3 - <<'EOF'
+p = 'plain.txt'
+s = open(p).read()
+open(p, 'w').write(s.replace('hello', 'hi'))
+EOF
+bash plain.txt"
+for runs in "sed -i '' 's/hello/x/' plain.txt && bash plain.txt" "sed -i.bak -e 's/hello/x/' plain.txt; bash plain.txt" \
+  "$PY_EDIT" "sed -n 1p plain.txt > first.txt && bash plain.txt" \
+  "python3 -c \"open('run.sh', 'w').write('echo hi')\" && bash run.sh" \
+  "sed -i '' \"s/hello/\\\${MT:-b}/\" plain.txt && bash plain.txt" "perl -pi -e 's/hello/x/' plain.txt && bash plain.txt" \
+  "python3 gen.py run.sh && bash run.sh" "printf 'echo hi\n' > t.sh && python3 gen.py t.sh; bash t.sh" \
+  "mk() { python3 -c 'import sys; print(sys.argv[1])' \"\$1\"; }; mk a > out.json; bash plain.txt" \
+  "sed -i '' 's/old.sh/run2.sh/' tools/post.sh; bash run2.sh" \
+  "gzip -dc run.sh.gz > out.txt; bash run.sh" "gunzip -c run.sh.gz > out.txt; bash run.sh"; do
+  run_cp "$runs"
+  allowed "a script edited by code that only reads and writes files is judged by that code: ${runs:0:120}"
+done
+
+for runs in "python3 -c \"open('run.sh','w').write(open('post.txt').read())\" && bash run.sh" \
+  "python3 -c \"import shutil; shutil.copy('post.txt', 'run.sh')\" && bash run.sh" "$PY_OPEN" \
+  "node -e \"require('fs').copyFileSync('post.txt', 'run.sh')\" && bash run.sh" \
+  "python3 -c \"\$CODE_2772\" && bash plain.txt" \
+  "cp plain.txt run.sh && sed -i '' 'r post.txt' run.sh && bash run.sh" \
+  "sed -i '' 's#echo hello#$POST#' plain.txt && bash plain.txt" "sed -n 'w run.sh' post.txt && bash run.sh" \
+  "python3 -c \"import urllib.request as u; open('run.sh', 'w').write(u.urlopen('https://example.com/x').read().decode())\" && bash run.sh" \
+  "python3 - <<'EOF'
+p = 'plain.txt'
+open(p, 'a').write('$POST')
+EOF
+bash plain.txt" \
+  "perl -pi -e '\$_ = qx(cat post.txt)' plain.txt && bash plain.txt" "perl -pi -e 's#echo hello#$POST#' plain.txt && bash plain.txt" \
+  "awk '{print > \"run.sh\"}' post.txt && bash run.sh" \
+  "dd if=post.txt of=run.sh && bash run.sh" "dd of=run.sh < post.txt 2>/dev/null && bash run.sh" \
+  "dd if=plain.txt of=run.sh skip=1 && bash run.sh" \
+  "tar -xf post.tar && bash post-run.sh" "tar xf post.tar && bash post-run.sh" \
+  "tar -xf post.tar -C sub && bash sub/post-run.sh" "unzip -o post.zip && bash post-run.sh" \
+  "unzip -q post.zip -d sub && bash sub/post-run.sh" \
+  "curl -s https://example.com/a.tgz | tar -xz && bash plain.txt" \
+  "rsync post.txt run.sh && bash run.sh" "ditto post.txt run.sh && bash run.sh" \
+  "rsync -a tools/ copy/ && bash copy/post.sh" "sort -o run.sh post.txt && bash run.sh" \
+  "base64 -d -i enc.txt -o run.sh && bash run.sh" "gunzip run.sh.gz && bash run.sh" \
+  "git checkout -- plain.txt && bash plain.txt" "git -C . restore plain.txt; bash plain.txt" \
+  "sed -n 's/x/y/gw run.sh' post.txt && bash run.sh" "unzip -o post.zip -dsub && bash sub/post-run.sh"; do
+  run_cp "$runs"
+  refused "a file a program writes by name and the same command runs is judged or refused: $runs"
+done
+run_cp "dd if=post.txt of=run.sh && bash run.sh"
+says "dd is followed to what it copies" "chat.postMessage"
+# Following a writer only ever adds to what a file is read as: what main refused stays refused.
+for runs in "curl -s -o run.sh https://example.com/x && dd if=plain.txt of=run.sh && bash run.sh" \
+  "dd if=plain.txt > run.sh && bash run.sh" "dd if=plain.txt | tee run.sh && bash run.sh" \
+  "curl -s -o plain-run.sh https://example.com/x; tar -xf plain.tar; bash plain-run.sh"; do
+  run_cp "$runs"
+  refused "a file main read as unreadable is still refused after a writer this follows: $runs"
+done
+run_cp "tar -xf post.tar && bash post-run.sh"
+says "a member of an archive that can be read is judged by what it holds" "chat.postMessage"
+# A zip whose deflated member is corrupt raised zlib.error out of the walk, so the wrapper refused
+# the call as one the gate could not judge (lessons review at ab828cb; reproduced at abdb311). It
+# now leaves the folder it unpacks into unreadable, and says so.
+python3 -c '
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED); z.writestr("plain-run.sh", "echo hello\n" * 200); z.close()
+b = bytearray(open(sys.argv[1], "rb").read())
+for i in range(42, 62): b[i] ^= 0xff
+open(sys.argv[1], "wb").write(bytes(b))' "$T/cp/bad.zip"
+run_cp "unzip -o bad.zip && bash plain.txt"
+refused "a file under a folder a corrupt zip unpacks into is refused"
+says "and the refusal is the unreadable one, not the gate failing" "may be written earlier in this command by unzip"
+run_cp "perl -pi -e '\$_ = qx(cat post.txt)' plain.txt && bash plain.txt"
+says "the refusal says the program may have written it" "may be written earlier in this command by perl"
+run_cp "python3 -c \"import urllib.request as u; open('run.sh', 'w').write(u.urlopen('https://example.com/x').read().decode())\" && bash run.sh"
+says "code that can fetch leaves the file it names unreadable" "may be written earlier in this command by python3"
+run_cp "sed -i '' 's#echo hello#$POST#' plain.txt && bash plain.txt"
+says "a sed edit is judged by its program" "chat.postMessage"
+# The reading above lives in lib/program-writes.py, which the gate takes as a base of its Judge, as
+# it does lib/written-paths.py; a copy of it anywhere else would leave the gate on the old reading.
+cat > "$T/program-writes-check.py" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import slack_drafts_only_gate as gate
+code = getattr(gate.Judge, "note_program", None)
+where = os.path.basename(code.__code__.co_filename) if code else None
+print("ok" if where == "program-writes.py" else "the Judge's note_program is from %r, not lib/program-writes.py" % where)
+PY
+check "the gate reads a program's writes with lib/program-writes.py" "$(python3 "$T/program-writes-check.py" "$DIR" 2>&1)"
+
 echo "slack drafts only: a data file handed to a script is judged as data, and named by its role (claude-config#2786)"
 
 # The #2642 replay found 48 refusals of local analysis, like `python3 enrich.py calls.jsonl >
@@ -2049,6 +2188,19 @@ done
 run_rs "node load.mjs alert.ts old.txt new.txt"
 says "a source file refused for the helper it is handed to names the helper" "the script load.mjs"
 says "and the source file by its role, with the import that posts" "is handed alert.ts, which imports ./slack"
+
+# A word of a log line read as commands is not a program the call ran: the refusal must not name it as
+# the writer of a file (claude-config#2793). Only a command parsed from the command line itself is named.
+printf '%s\n' 'FAIL: a check wrote > made.sh' 'sh made.sh' > "$T/df/run.log"
+run_df "bash run.log"
+refused "a log read as a script, writing a file it then runs, is still refused"
+case "$ERR" in *"by FAIL:"*) check "a log line's first word is not named as the writer" "stderr said it: ${ERR:0:400}" ;;
+  *) check "a log line's first word is not named as the writer" ok ;; esac
+says "and the refusal says the writer could not be told" "could not be told"
+run_df "$GET; python3 runs.py rows.jsonl"
+says "a writer parsed from the command line is still named" "is written earlier in this command by curl"
+run_df "printf '%s' 'echo hi' > made.sh; cp made.sh copy.sh; sh made.sh"
+allowed "a file made by printf from the command line and then run still passes"
 
 echo "slack drafts only: /nudge is the one script let through"
 
@@ -2627,6 +2779,128 @@ PY
 )"
   check "the gate is registered under PreToolUse for Bash and every Slack tool, to block" "$wiring"
 fi
+
+# ---- #2683: a file run or sourced by a path the gate cannot work out, refused only when switched on ----
+# #2678's probe found every way of running a file allowed once the gate could not work out its path:
+# after an eval, after a wait on a condition it cannot read, through a variable nothing sets. Refusing
+# that is built behind a switch that ships off (Dan, 2026-11-10: measure first, as #2538 does for
+# sourcing), so with it off every verdict is what it was, and the measurement turns it on through
+# SLACK_GATE_UNWORKED_PATHS=refuse. Each shape is in a tree whose files all post, so a pass with the
+# switch off is the file left unread, exactly as before.
+run_ur() { # run_ur <switch value> <command>: run_bash with SLACK_GATE_UNWORKED_PATHS set to that value
+  local errf; errf="$(mktemp "${TMPDIR:-/tmp}/slack-gate-err.XXXXXXXX")"
+  OUT="$(payload Bash "$(bash_input "$2")" | SLACK_GATE_UNWORKED_PATHS="$1" bash "$HOOK" 2>"$errf")"; RC=$?
+  ERR="$(cat "$errf")"; rm -f "$errf"
+}
+UR="$T/ur"
+for tree in posts quiet; do
+  mkdir -p "$UR/$tree/tests" "$UR/$tree/tools/lib"
+done
+printf '%s\n' 'import json, urllib.request' \
+  'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=json.dumps({"text": "hi"}).encode())' \
+  > "$UR/posts/tools/lib/act.py"
+printf '%s\n' '#!/bin/bash' 'curl -s -X POST https://slack.com/api/chat.postMessage -d channel=C1 -d text=hi' \
+  > "$UR/posts/tools/lib/act.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST", body: "{}" });' > "$UR/posts/tools/lib/act.js"
+printf '%s\n' 'print("hi")' > "$UR/quiet/tools/lib/act.py"
+printf '%s\n' '#!/bin/bash' 'echo hi' > "$UR/quiet/tools/lib/act.sh"
+printf '%s\n' 'console.log("hi");' > "$UR/quiet/tools/lib/act.js"
+chmod +x "$UR/posts/tools/lib/act.sh" "$UR/quiet/tools/lib/act.sh"
+UR_TOP='DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+UP=..'
+# The ways the walk loses ROOT (#2678's probe): an eval, a wait whose condition it cannot read
+# (lib/hang-wait.sh evaluates it in the caller's shell), and a variable nothing in the script sets.
+ur_lose() { case "$1" in
+  evald) printf '%s\n' 'eval "$1"' ;;
+  hang) printf '%s\n' ". \"$DIR/lib/hang-wait.sh\" || exit 1" 'hang_wait "$cond" 1 || exit 1' ;;
+  unset) : ;;
+esac; }
+# The ways of running a file: <name>:<line, with @V@ for the folder holding the tools, and @U@ for
+# the way up to it from the script's own, spelt from BASH_SOURCE>.
+UR_FORMS=('python3:python3 "@V@/tools/lib/act.py"' 'python3B:python3 -B "@V@/tools/lib/act.py"'
+  'bash:bash "@V@/tools/lib/act.sh"' 'sh:sh "@V@/tools/lib/act.sh"' 'node:node "@V@/tools/lib/act.js"'
+  'source:source "@V@/tools/lib/act.sh"' 'dot:. "@V@/tools/lib/act.sh"' 'direct:"@V@/tools/lib/act.sh"'
+  'subst:out="$(python3 "@V@/tools/lib/act.py" 2>&1)"' 'bsource:python3 "${BASH_SOURCE[0]%/*}/@U@/tools/lib/act.py"')
+for tree in posts quiet; do
+  for lose in evald hang unset; do
+    v='$ROOT' u='$UP'; [ "$lose" = unset ] && v='$NOT_SET_2683' u='$NOT_SET_2683'
+    for form in "${UR_FORMS[@]}"; do
+      line="${form#*:}"; line="${line//@V@/$v}"; line="${line//@U@/$u}"
+      { printf '%s\n' '#!/bin/bash' "$UR_TOP"; ur_lose "$lose"; printf '%s\n' "$line"; } > "$UR/$tree/tests/$lose-${form%%:*}.sh"
+    done
+  done
+done
+for lose in evald hang unset; do
+  for form in "${UR_FORMS[@]}"; do
+    f="$UR/posts/tests/$lose-${form%%:*}.sh"
+    run_bash "bash $f"
+    allowed "switched off by default: a file run by a path the gate cannot work out is let through unread ($lose, ${form%%:*})"
+    run_ur refuse "bash $f"
+    refused "switched on: a file run by a path the gate cannot work out is refused ($lose, ${form%%:*})"
+    says "it says it could not check, not that it found a post ($lose, ${form%%:*})" "REFUSED: the gate could not check whether this command posts to Slack"
+    says "it names the path it could not work out ($lose, ${form%%:*})" "a path the gate cannot work out"
+  done
+done
+# Not only a file that posts: the gate cannot read it, so it cannot tell one that does not.
+run_ur refuse "bash $UR/quiet/tests/unset-python3.sh"
+refused "switched on: a file that does not post, run by a path the gate cannot work out, is refused too"
+# The reason names the script, its line, and the variable.
+run_ur refuse "bash $UR/posts/tests/unset-bash.sh"
+says "it names the script and line it stopped at" "the script $UR/posts/tests/unset-bash.sh, line 5, runs"
+says "it names the variable that is not certain" "\$NOT_SET_2683 is not certain there"
+says "it says what to do" "Write the path so it can be worked out"
+run_ur refuse "bash $UR/posts/tests/evald-node.sh"
+says "past an eval it names the line where the walk stopped" "since the gate stops following the script's variables at line 5: eval \"\$1\""
+run_ur refuse "bash $UR/posts/tests/evald-source.sh"
+says "a sourced file is named as sourced" "line 6, sources \"\$ROOT/tools/lib/act.sh\", a path the gate cannot work out"
+# As a command typed: a variable the command never sets.
+run_bash "python3 \"\$NOT_SET_2683/act.py\""
+allowed "switched off: a command running a file through a variable it never sets is let through"
+run_ur refuse "python3 \"\$NOT_SET_2683/act.py\""
+refused "switched on: a command running a file through a variable it never sets is refused"
+says "and says so of this command" "this command runs \"\$NOT_SET_2683/act.py\", a path the gate cannot work out"
+# A program named by a variable alone is how a function runs the command it is handed, and a suite its
+# stand in; refusing it newly refused 261 more of this repository's scripts (2026-11-12), so it is
+# left as it was, as is the string an eval runs. A path holding a slash is a file run, and is refused.
+printf '%s\n' '#!/bin/bash' 'run() { local cmd="$1"; $cmd 2>/dev/null; }' 'run "$NOT_SET_2683"' \
+  '"$NOT_SET_2683" --version' 'A=1 "$NOT_SET_2683"' 'eval "$NOT_SET_2683"' > "$UR/posts/tests/bare.sh"
+run_ur refuse "bash $UR/posts/tests/bare.sh"
+allowed "switched on: a program named by a variable alone, or the string an eval runs, is left as before"
+printf '%s\n' '#!/bin/bash' 'eval "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/eval-path.sh"
+run_ur refuse "bash $UR/posts/tests/eval-path.sh"
+refused "switched on: an eval running a file by a path it cannot work out is refused"
+# An assignment is not a program, however the shared reader splits it; a program past env's is found.
+printf '%s\n' '#!/bin/bash' 'A+="$NOT_SET_2683/x.sh"' 'a[1]="$NOT_SET_2683/x.sh"' 'a+=("$NOT_SET_2683/x.sh")' \
+  'b=("$NOT_SET_2683/x.sh" y)' 'case "$1" in /*) a+=("${1#/}") ;; esac' > "$UR/posts/tests/assigns.sh"
+run_ur refuse "bash $UR/posts/tests/assigns.sh"
+allowed "switched on: appends and array assignments built from a variable are not read as runs"
+printf '%s\n' '#!/bin/bash' 'env "PATH=$NOT_SET_2683/bin:$PATH" "$NOT_SET_2683/tools/lib/act.sh"' > "$UR/posts/tests/env-path.sh"
+run_bash "bash $UR/posts/tests/env-path.sh"
+allowed "switched off: a file run past env's assignment by a path it cannot work out is let through"
+run_ur refuse "bash $UR/posts/tests/env-path.sh"
+says "switched on: the file run past env's quoted assignment is the one named" "runs \"\$NOT_SET_2683/tools/lib/act.sh\", a path the gate cannot work out"
+# Any other value, or none, is off.
+for value in "" 0 off yes 1; do
+  run_ur "$value" "bash $UR/posts/tests/unset-python3.sh"
+  allowed "only the value refuse switches it on (SLACK_GATE_UNWORKED_PATHS='$value')"
+done
+# What the switch leaves alone, with it on: a path it can work out, a file it can read, and code that
+# names no file to run.
+run_ur refuse "ROOT=$UR/quiet; python3 \"\$ROOT/tools/lib/act.py\""
+allowed "switched on: a path built from a variable the command sets is worked out, not refused"
+run_ur refuse "bash $UR/quiet/tests/hang-python3.sh"
+refused "switched on: a wait on a condition it cannot read loses the path, so it is refused"
+run_ur refuse "python3 $UR/posts/tools/lib/act.py"
+says "switched on: a literal path to a file that posts is refused as the post it is" "REFUSED: this command posts to Slack"
+run_ur refuse "python3 $UR/quiet/tools/lib/act.py"
+allowed "switched on: a literal path to a file that does not post is allowed"
+for cmd in "python3 -m json.tool \"\$NOT_SET_2683/x.json\"" "bash -c 'echo hi' _ \"\$NOT_SET_2683\"" \
+           "python3 $UR/quiet/tools/lib/act.py \"\$NOT_SET_2683/data.json\"" "echo \"\$NOT_SET_2683/x.sh\"" \
+           "bash < \"$UR/quiet/tools/lib/act.sh\"" "cat \"\$NOT_SET_2683/x.sh\" | wc -l"; do
+  run_ur refuse "$cmd"
+  allowed "switched on: a variable in a word that is not the file run is left alone: $cmd"
+done
 
 # ---- #2569: the patterns sh_binds builds are compiled once per name ----
 # The merge helper's own script has a few thousand names, and sh_binds built three patterns per name

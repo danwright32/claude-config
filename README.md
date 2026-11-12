@@ -1472,6 +1472,21 @@ itself. A hook git runs is an executable file named after one. On 2026-11-03 eac
 repositories pointed at a folder holding an executable `pre-push`, so no agent push there is
 refused.
 
+To measure a Mac, run `bash ~/.claude/hooks/measure-hooks-path.sh <folder> [<folder>...]` with the
+folders the repositories live in (claude-config#2098). It lists every working tree, linked worktrees
+included wherever they are, with where `core.hooksPath` is set and to what, and the gate's own verdict
+on a push from there for the main session and for an agent. Finding no repository, or a verdict the
+gate gave as an error, exits non zero rather than reporting no refusals. On the personal MacBook on
+2026-11-12 it found 36 working trees, 7 setting the key, all folders with a runnable hook, `/dev/null`
+nowhere, and no push refused. The work MacBook has not been measured yet.
+
+No hook runs the install when a worktree is created (claude-config#2098): Claude Code's worktree
+creation hook replaces its own creation of the worktree in every project rather than adding a step
+after it, and a worktree made for reading needs no install. Instead the orchestrate agent rules tell
+an agent to read `core.hooksPath` right after `git worktree add` and run the install in the worktree
+before its first commit, because until the folder exists git runs none of the repository's hooks on a
+commit either, and this refusal only arrives at the push.
+
 Every merge gate judges a merge however it is made (claude-config#1181): `gh pr merge`, a repo's own
 merge tool, the GitHub API's merge endpoint (`gh api -X PUT repos/<owner>/<name>/pulls/<n>/merge`,
 any method but GET, any spelling), and a GraphQL mutation that merges a pull request
@@ -2410,7 +2425,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Thirty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2891,6 +2906,17 @@ anything
 2026-11-10: 0.007 to 0.008 seconds, five readings of the hook alone on a plain `git push` at load
 average 8; it reads every Bash call since #2536, and one holding none of its database words leaves
 before python3 starts
+
+</td></tr>
+<tr><td>
+
+`read-only-query-allow.sh` (#2763)
+
+</td><td>
+
+2026-11-11: 0.015 to 0.047 seconds, five readings of the hook alone on a plain `git push` at load
+averages of 24 to 28, so mostly the machine; it reads every Bash call since #2763, and one that never
+names supabase leaves after reading its input, before loading anything
 
 </td></tr>
 </tbody>
@@ -3668,6 +3694,21 @@ that have since been deleted, and the gate lets a missing script through. The wo
 been replayed. The gate on main that day refused 187 more commands and timed out on 48 more than the
 gate at #2640, which #2784, #2785 and #2786 follow up.
 
+A file a program writes by name and the same command then runs (#2772) is followed where its text
+can be read and refused where it cannot, in `lib/program-writes.py`. dd and an archive tar or unzip
+unpacks are followed by what they write. A file that code edits or names (`sed -i`, a `python3 -c`
+or heredoc, `node -e`, an awk `print >`) is judged as that code, the files it reads and what was
+there before, where the code is seen unable to fetch or run anything; otherwise, and for any other
+program naming it (`sort -o`, `rsync`, `base64 -o`), it is refused as unreadable. Programs that
+never write what they are handed (`chmod`, `grep`, git's reading subcommands) and the files handed
+to a script on disk are not counted. Measured on 2026-11-12 by replaying 3 days of this Mac's Bash
+calls (about 21,000 distinct, each with more than one command): the first version refused 135 more
+than main, almost all a script edited and then run, or a word like `owner/repo` read as a file; the
+third refused 2 more, both a sed replacement naming a file it does not write. That last change only
+narrows what sed and awk are read as writing, and both pass on what shipped, so it refuses no more
+than main on that replay. `claude-sync lesson L174` takes 1.9 s through the wrapper on both (5
+readings each at load average 10 to 18).
+
 When the call it ran out of time on runs `lib/merge-when-ready.sh`, the refusal goes on to say what
 to do instead (#2576): not to retry in a loop, and after one more refusal of the same kind to merge
 with `gh pr merge` directly once every check is green, without deleting the branch (the helper
@@ -3702,6 +3743,11 @@ What it approves:
   never is, its query tool included.
 - The claude.ai Supabase `execute_sql` when its query is one statement starting with `select`, `with`,
   `explain` or `show`, against any project.
+- Since #2763, a Bash command that is one Supabase CLI run and nothing else but a `cd`: a `supabase db
+  query` whose every statement, in its words or in the `-f` file it names (which the hook reads), passes
+  the same rule, or a `supabase db push --dry-run`. A pipe, a redirection, a second command or a flag
+  it does not know leaves the call to the usual check. `db-write-ask.sh` reads the same command with
+  the same library, so a call approved here is never asked about there.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
 comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
@@ -3822,6 +3868,26 @@ rule lets those writes skip auto mode entirely, and the work MacBook's file held
 2026-11-09. The file is not synced and the hook changes nothing in it, so the rule is removed by hand
 on that Mac. The message comes on each call of one of those tools and on every database question,
 never on a read it passes.
+
+One Apply covers one migration (#2763). Applying a migration through `/db-apply` was a dry run, a push
+and a read back, each asked about after Dan had answered the skill's own Apply or Cancel picker, so one
+decision reached him up to four times. Now a `supabase db push` that is the whole of its command (a
+`cd` before it aside) is let through, answered "allow", when Dan answered Apply in a picker carrying
+the skill's metadata (`source` `db-apply`, the migration's absolute path, its sha256, the project
+ref, and `pending`, the list of migrations the skill's dry run said the push would apply) in the same
+session. `hooks/lib/db-apply-approval.py` reads his answer from the session
+transcript, and requires the push to go to that project (its `supabase/.temp/project-ref`), the file
+to be unchanged and still the newest migration in the folder, and no flag beyond `--linked`, `--yes`,
+`--workdir` and `--debug`. One Apply holds until the session ends (Dan, 2026-11-11). Every other push
+is asked about, the question saying why no Apply covers it. The skill's ad hoc write, `supabase db
+query --linked --yes -f <file>` alone in its command, is let through the same way when the Apply named
+that file and project and the file is unchanged (Dan, 2026-11-11). A push sends every migration the
+database has not had, so the skill copies the dry run's list onto the picker and shows it in the
+question, and the push is let through only when that list is exactly the one migration Dan applied:
+a missing, empty or longer list, or one naming another file, is asked about, the question naming the
+other migrations, so an older migration never applied cannot ride along (Dan, 2026-11-11, #2800).
+What it cannot see: a change on the database between the dry run and the push, or a migration file
+added after the dry run under an older version than the applied one.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as
@@ -6486,9 +6552,11 @@ since #1158 a checkout or restore of a `.tsx` or `.jsx` file is judged by the li
 with `git cat-file blob` from where git puts the file back, by the same rule as an Edit and one run
 of changed lines at a time, so undoing an edit the guard let through passes; since #2704 a file a
 merge left unmerged, which has no copy in the index, is read from this branch's side of the merge
-and judged against that side rather than the conflict on disk; one git cannot read, or
-one beside any other command on the line (a cd aside), which may change what it puts back first, is
-judged whole with the refusal saying why), a program whose text names the files it writes, and a
+and judged against that side rather than the conflict on disk; since #2777 one run first on its
+line, the line's only checkout or restore and in no pipe or background, is measured the same way,
+since nothing after it can change what it puts back; one git cannot read, or one after any other
+command on the line (a cd aside), which may change what it puts back first, is judged whole with the
+refusal saying why), a program whose text names the files it writes, and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6719,6 +6787,9 @@ command taking away a hook file git has never tracked, by `git ls-files`, passes
 made there by mistake holds no words of the mod as it ships; a tracked one, or one git cannot answer
 for, is judged as before); when a message is sent, the logic around it, and a tool's or its input
 schema's description pass, a property the schema names `reason` or `text` being no message. Since
+#2788 only the words of a string the change adds, rewords or takes away count, so a change to code
+alone passes even where the reading follows a message less far after it than before (a verdict
+handed through a helper that hands it straight back), and a comment holds no string. Since
 #1925 the words Dan reads in a mod's picker are a message's too: an answer's label and description
 (an object beside a `label`, or in an `options` list), and since #1934 the question's own text and
 header (an object in a `questions` list, or one with a `question` beside its `options`). Only the
@@ -7037,7 +7108,12 @@ morning otherwise); git in a throwaway repository under the temp folder (a path 
 `mktemp` makes in the same line) and a force push to another temp path go ahead, and inline code is
 refused for git only where it would run git, never for the word in prose (#1124). At wake, the
 overnight check reads GitHub and the disk for issues created, milestones touched, LESSONS.md changes
-and deploy runs since sleep began, and notes each for the top of the report. What may merge and
+and deploy runs since sleep began, and notes each for the top of the report. It lists only what
+needs Dan (#2766): a run started by a schedule, or dispatched by a cron (a bot started it), that
+passed, was skipped or is still running, a deploy that passed for a merge the night's notes account
+for, and a milestone change made from any account gh is logged in to on the Mac are counted instead,
+in one line it writes every time it runs, so a final report with no note of the check says it did
+not run. A failed, cancelled or timed out run is listed. What may merge and
 deploy overnight is per repository (#843): this Mac's own `mods/sleep-repos.local.json` (#1568)
 lists `mergeOnly` (never deploy; a merge runs only where `mergeDeploys` is false, and true or unsaid
 leaves the green PR open) and `mayDeploy`, and `waitOwners` names owners every repository of which

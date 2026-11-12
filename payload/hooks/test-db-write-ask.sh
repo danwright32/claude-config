@@ -749,6 +749,215 @@ PY
 )"
 [ -z "$unscreened" ] && check "every client, tool and key the classifier knows holds a screen word" ok || check "every client, tool and key the classifier knows holds a screen word" "not screened: $unscreened"
 
+# --- one Apply covers one migration (claude-config#2763) -----------------------------------------
+# Applying one migration through /db-apply was a dry run, a push and a read back, each asked about
+# after Dan had already answered the skill's own Apply or Cancel picker. Now: a dry run and a read
+# from a file are approved by the read hook and never asked about; a push of the migration Dan's
+# Apply names, to the project it names, unchanged since, in the session he gave it in, is let
+# through; anything else is asked about as before. Dan, 2026-11-11: one Apply stays good for its
+# migration file and project until the session ends. His answer is read from the session's own
+# transcript, where Claude Code writes the picker's input and his choice. Every id is invented.
+APPLY="$WORK/apply"
+PROJ="$APPLY/proj"
+mkdir -p "$PROJ/supabase/migrations" "$PROJ/supabase/.temp" "$APPLY/elsewhere"
+printf 'create table a (id int);\n' > "$PROJ/supabase/migrations/001_first.sql"
+printf 'alter table a add column note text;\n' > "$PROJ/supabase/migrations/002_note.sql"
+printf 'exampleprojectref000' > "$PROJ/supabase/.temp/project-ref"
+printf 'select count(*) from a;\n' > "$APPLY/readback.sql"
+printf 'update a set note = 1;\n' > "$APPLY/write.sql"
+cp "$APPLY/readback.sql" "$PROJ/readback.sql"
+MIG="$PROJ/supabase/migrations/002_note.sql"
+sha_of() { python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"; }
+# transcript <file> <session id> <migration> <sha256> <project ref> <answer> [prefilled]: a session
+# transcript holding one /db-apply picker and Dan's answer, in the shape Claude Code writes them
+# (read from this Mac's transcripts on 2026-11-11: the picker's input on an assistant entry, his
+# choice in toolUseResult.answers on the user entry that carries its tool_result). The picker's
+# "pending" is the dry run's list of migrations it would push: by default the one migration named,
+# PENDING="a.sql,b.sql" sets another list, and PENDING=none leaves the key out.
+transcript() {
+  python3 - "$@" <<'PY'
+import json, os, sys
+path, sid, mig, sha, ref, answer = sys.argv[1:7]
+prefilled = len(sys.argv) > 7
+q = "Apply migration 002_note.sql to project " + ref + "?"
+ask = {"questions": [{"question": q, "header": "Migration", "multiSelect": False,
+                      "options": [{"label": "Apply", "description": "Run it"}, {"label": "Cancel", "description": "Do not"}]}],
+       "metadata": {"source": "db-apply", "migration": mig, "sha256": sha, "project_ref": ref}}
+pending = os.environ.get("PENDING")
+if pending is None:
+    ask["metadata"]["pending"] = [os.path.basename(mig)]
+elif pending != "none":
+    ask["metadata"]["pending"] = [p for p in pending.split(",") if p]
+if prefilled:
+    ask["answers"] = {q: "Apply"}
+lines = [
+    {"type": "user", "sessionId": sid, "message": {"role": "user", "content": "apply the migration"}},
+    {"type": "assistant", "sessionId": sid, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_apply1", "name": "AskUserQuestion", "input": ask}]}},
+    {"type": "user", "sessionId": sid, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_apply1", "content": "answered"}]},
+     "toolUseResult": {"questions": ask["questions"], "answers": {q: answer}, "annotations": {}}},
+]
+with open(path, "w") as f:
+    for l in lines:
+        f.write(json.dumps(l) + "\n")
+PY
+}
+# apply_payload <command> <cwd> <session id> <transcript>: a Bash call as Claude Code sends it.
+apply_payload() {
+  python3 -c 'import json, sys; print(json.dumps({"session_id": sys.argv[3], "transcript_path": sys.argv[4], "hook_event_name": "PreToolUse", "cwd": sys.argv[2], "tool_name": "Bash", "tool_input": {"command": sys.argv[1], "description": "d"}}))' "$@"
+}
+NONE_T="$APPLY/no-apply.jsonl"
+printf '{"type": "user", "sessionId": "s1", "message": {"role": "user", "content": "hi"}}\n' > "$NONE_T"
+GOOD_T="$APPLY/apply.jsonl"
+transcript "$GOOD_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both() {  # both <label> <want read hook> <want this hook> <payload>
+  local a b
+  a="$(decision "$(run "$READ_HOOK" "$EMPTY_HOME" "$4")")"
+  b="$(decision "$(run "$HOOK" "$EMPTY_HOME" "$4")")"
+  [ "$a|$b" = "$2 rc=0|$3 rc=0" ] && check "$1" ok || check "$1" "wanted read hook $2, this hook $3; got read hook $a, this hook $b"
+}
+PUSH='supabase db push --linked --yes'
+
+# The issue's set, through both hooks.
+both "a dry run is approved and never asked about" allow none "$(apply_payload 'supabase db push --linked --dry-run' "$PROJ" s1 "$NONE_T")"
+both "a select in a file is approved and never asked about" allow none "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
+both "a select in a file named from the directory it runs in" allow none "$(apply_payload 'supabase db query --linked -f readback.sql' "$PROJ" s1 "$NONE_T")"
+both "a select in a file, after a cd to its directory" allow none "$(apply_payload "cd $PROJ && supabase db query --linked -f readback.sql" "$APPLY/elsewhere" s1 "$NONE_T")"
+both "a write in a file is asked about" none ask "$(apply_payload "supabase db query --linked --yes -f $APPLY/write.sql" "$PROJ" s1 "$NONE_T")"
+both "a push with no Apply on record is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NONE_T")"
+both "a push of the migration Dan applied, to his project, is let through" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+both "the same push from a cd to the project is let through" none allow "$(apply_payload "cd $PROJ && $PUSH" "$APPLY/elsewhere" s1 "$GOOD_T")"
+both "the same push named by --workdir is let through" none allow "$(apply_payload "supabase db push --linked --yes --workdir $PROJ" "$APPLY/elsewhere" s1 "$GOOD_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")" reason)"
+case "$reason" in *002_note.sql*exampleprojectref000*) check "the release names the migration and the project" ok ;; *) check "the release names the migration and the project" "reason: ${reason:0:300}" ;; esac
+# It lets the push through again in the same session (until the session ends, Dan's answer).
+both "the Apply still covers a second push in the same session" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+
+# What the Apply does not cover is asked about, saying why.
+OTHER_T="$APPLY/other-file.jsonl"
+transcript "$OTHER_T" s1 "$PROJ/supabase/migrations/001_first.sql" "$(sha_of "$PROJ/supabase/migrations/001_first.sql")" exampleprojectref000 Apply
+both "a push after an Apply for a different migration file is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$OTHER_T")"
+PROJ_T="$APPLY/other-project.jsonl"
+transcript "$PROJ_T" s1 "$MIG" "$(sha_of "$MIG")" otherprojectref00000 Apply
+both "a push to a different project than the Apply named is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$PROJ_T")"
+EDIT_T="$APPLY/edited.jsonl"
+transcript "$EDIT_T" s1 "$MIG" "$(printf 'alter table a add column other text;\n' | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')" exampleprojectref000 Apply
+both "a push of a migration edited since the Apply is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$EDIT_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$EDIT_T")")" reason)"
+case "$reason" in *"applies the pending migrations"*changed*) check "the question says the file changed since the Apply" ok ;; *) check "the question says the file changed since the Apply" "reason: ${reason:0:400}" ;; esac
+both "an Apply from another session (lapsed) is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s2 "$GOOD_T")"
+CANCEL_T="$APPLY/cancel.jsonl"
+transcript "$CANCEL_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Cancel
+both "a push after Dan answered Cancel is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$CANCEL_T")"
+FILLED_T="$APPLY/prefilled.jsonl"
+transcript "$FILLED_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply prefilled
+both "a picker whose answer was filled in by the caller records nothing" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$FILLED_T")"
+both "a transcript that cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$APPLY/missing.jsonl")"
+both "a push with --include-seed is asked about" none ask "$(apply_payload "supabase db push --linked --yes --include-seed" "$PROJ" s1 "$GOOD_T")"
+both "a push with --db-url is asked about" none ask "$(apply_payload 'supabase db push --yes --db-url postgresql://x' "$PROJ" s1 "$GOOD_T")"
+both "a push chained to another command is asked about" none ask "$(apply_payload "$PUSH && rm -f note.txt" "$PROJ" s1 "$GOOD_T")"
+both "a push after a command that could rewrite the migration is asked about" none ask "$(apply_payload "cp $PROJ/supabase/migrations/001_first.sql $MIG; $PUSH" "$PROJ" s1 "$GOOD_T")"
+both "a push from a directory held in a variable is asked about" none ask "$(apply_payload 'cd "$P" && supabase db push --linked --yes' "$PROJ" s1 "$GOOD_T")"
+# A migration added after the Apply would be pushed with it, so it is asked about.
+printf 'drop table a;\n' > "$PROJ/supabase/migrations/003_later.sql"
+both "a push with a migration newer than the applied one is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+rm -f "$PROJ/supabase/migrations/003_later.sql"
+# A push sends every migration the database has not had, so the Apply records the dry run's list of
+# pending migrations, and covers the push only when that list is the one migration Dan applied
+# (Dan held #2800 for this, 2026-11-11). An older migration never applied would otherwise go with it.
+OLDER_T="$APPLY/older-pending.jsonl"
+PENDING="001_first.sql,002_note.sql" transcript "$OLDER_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose dry run also listed an older pending migration is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$OLDER_T")")" reason)"
+case "$reason" in *001_first.sql*) check "the question names the other pending migration" ok ;; *) check "the question names the other pending migration" "reason: ${reason:0:400}" ;; esac
+NOLIST_T="$APPLY/no-pending.jsonl"
+PENDING=none transcript "$NOLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded no pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NOLIST_T")"
+EMPTYLIST_T="$APPLY/empty-pending.jsonl"
+PENDING="" transcript "$EMPTYLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose Apply recorded an empty pending list is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$EMPTYLIST_T")"
+WRONGLIST_T="$APPLY/other-pending.jsonl"
+PENDING="001_first.sql" transcript "$WRONGLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a push whose recorded pending migration is not the one applied is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$WRONGLIST_T")"
+PATHLIST_T="$APPLY/path-pending.jsonl"
+PENDING="$MIG" transcript "$PATHLIST_T" s1 "$MIG" "$(sha_of "$MIG")" exampleprojectref000 Apply
+both "a pending list naming the applied migration by its full path covers the push" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$PATHLIST_T")"
+mv "$PROJ/supabase/.temp/project-ref" "$PROJ/supabase/.temp/project-ref.away"
+both "a push whose linked project cannot be read is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
+mv "$PROJ/supabase/.temp/project-ref.away" "$PROJ/supabase/.temp/project-ref"
+
+# The skill's ad hoc write path (`supabase db query --linked --yes -f change.sql`) is covered by
+# the same Apply, keyed the same way: the session, the file by path and sha256, and the project
+# (Dan, 2026-11-11, folded into #2763).
+CHANGE="$PROJ/change.sql"
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+CHANGE_T="$APPLY/change.jsonl"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+WRITE_Q='supabase db query --linked --yes -f change.sql'
+both "an ad hoc write from the file Dan applied, to his project, is let through" none allow "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+both "the same write named by its full path after a cd is let through" none allow "$(apply_payload "cd $PROJ && supabase db query --linked --yes -f $CHANGE" "$APPLY/elsewhere" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *change.sql*exampleprojectref000*) check "the release of a write names the file and the project" ok ;; *) check "the release of a write names the file and the project" "reason: ${reason:0:300}" ;; esac
+both "an ad hoc write with no Apply on record is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$NONE_T")"
+both "an ad hoc write after an Apply for the migration, not this file, is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$GOOD_T")"
+CHANGE_PROJ_T="$APPLY/change-other-project.jsonl"
+transcript "$CHANGE_PROJ_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" otherprojectref00000 Apply
+both "an ad hoc write to a different project than the Apply named is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_PROJ_T")"
+both "an ad hoc write from another session (lapsed) is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s2 "$CHANGE_T")"
+both "an ad hoc write with --db-url is asked about" none ask "$(apply_payload "supabase db query --yes --db-url postgresql://x -f change.sql" "$PROJ" s1 "$CHANGE_T")"
+both "an ad hoc write with a statement beside the file is asked about" none ask "$(apply_payload "$WRITE_Q 'delete from a'" "$PROJ" s1 "$CHANGE_T")"
+printf 'do $$ begin delete from a; end $$;\n' > "$CHANGE"
+both "an ad hoc write from a file edited since the Apply is asked about" none ask "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
+case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
+
+# The commands the skill itself tells a session to run, read from its text, so the skill cannot
+# drift into a shape the hooks never let through (L562).
+SKILL_MD="$DIR/../skills/db-apply/SKILL.md"
+skill_cmd() { grep -m 1 -E "^[[:space:]]*$1\$" "$SKILL_MD" | sed 's/^[[:space:]]*//'; }
+printf 'do $$ begin update a set note = 1 where id = 7; end $$;\n' > "$CHANGE"
+transcript "$CHANGE_T" s1 "$CHANGE" "$(sha_of "$CHANGE")" exampleprojectref000 Apply
+for want in 'supabase db push --dry-run|allow|none|NONE_T' 'supabase db push --yes|none|allow|GOOD_T' 'supabase db query --linked --yes -f change\.sql|none|allow|CHANGE_T'; do
+  IFS='|' read -r pat ra rb tv <<< "$want"
+  c="$(skill_cmd "$pat")"
+  if [ -z "$c" ]; then check "the skill documents a command matching $pat" "none found in SKILL.md"; continue; fi
+  both "the skill's own [$c] after its Apply" "$ra" "$rb" "$(apply_payload "$c" "$PROJ" s1 "${!tv}")"
+done
+# The picker metadata the skill documents must carry every key the approval library reads, so a key
+# added there (such as "pending", #2800) cannot leave the skill writing pickers that cover nothing.
+skill_meta="$(grep -m 1 -E '^\{"source": "db-apply"' "$SKILL_MD")"
+lib_keys="$(grep -oE 'meta\.get\("[a-z_]+"\)' "$DIR/lib/db-apply-approval.py" | sed -E 's/.*"([a-z_]+)".*/\1/' | sort -u | tr '\n' ' ')"
+missing="$(python3 -c 'import json, sys
+try:
+    m = json.loads(sys.argv[1])
+except ValueError:
+    print("no metadata JSON line in SKILL.md"); sys.exit()
+print(" ".join(k for k in sys.argv[2].split() if k not in m))' "$skill_meta" "$lib_keys")"
+case "$lib_keys" in *pending*) check "the approval library reads the pending list" ok ;; *) check "the approval library reads the pending list" "keys read: $lib_keys" ;; esac
+[ -z "$missing" ] && check "the skill's documented picker metadata names every key the approval reads" ok || check "the skill's documented picker metadata names every key the approval reads" "missing: $missing"
+
+# A -f file that cannot be read is asked about, as is one the same command could write first.
+both "a -f file that does not exist is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/nosuch.sql" "$PROJ" s1 "$NONE_T")"
+mkdir -p "$APPLY/a-folder.sql"
+both "a -f path that is a folder is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/a-folder.sql" "$PROJ" s1 "$NONE_T")"
+both "a -f file written by the same command is asked about" none ask "$(apply_payload "echo 'delete from a;' > $APPLY/readback.sql; supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
+both "a relative -f file with --workdir is asked about" none ask "$(apply_payload "supabase db query --linked --workdir $PROJ -f readback.sql" "$APPLY" s1 "$NONE_T")"
+both "a read from a file with a redirection is read by neither hook, so it is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql > $APPLY/out.txt" "$PROJ" s1 "$NONE_T")"
+# With the predicate missing, a read from a file is asked about too.
+r="$(run "$WORK/nolib/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/sql-read-only.py missing, a select in a file is asked about" ok || check "with lib/sql-read-only.py missing, a select in a file is asked about" "$(decision "$r")"
+# Without lib/db-apply-approval.py beside it, an Applied push is asked about, naming the library.
+mkdir -p "$WORK/noapply/hooks/lib"
+cp "$HOOK" "$WORK/noapply/hooks/"
+for f in "$DIR"/lib/*; do case "$f" in */db-apply-approval.py) ;; *) cp -R "$f" "$WORK/noapply/hooks/lib/" ;; esac; done
+r="$(run "$WORK/noapply/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")")"
+[ "$(decision "$r")" = "ask rc=0" ] && check "with lib/db-apply-approval.py missing, an Applied push is asked about" ok || check "with lib/db-apply-approval.py missing, an Applied push is asked about" "$(decision "$r")"
+case "$(field "$r" reason)" in *db-apply-approval.py*) check "the question names the missing approval library" ok ;; *) check "the question names the missing approval library" "$(field "$r" reason)" ;; esac
+# apply_migration and the branch and project tools are still asked about, Apply or not (#2632).
+expect "apply_migration is still asked about" ask "$(payload "$MIG_TOOL" "alter table a add column note text")"
+expect "merge_branch is still asked about" ask "$(tool_payload "${SB}merge_branch" '{"branch_id": "b9"}')"
+
 # --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys

@@ -5,6 +5,7 @@
 # neither half: a tool call's input then runs with 15 to 22 characters missing (measured, 3 of 5
 # probe runs). The status bar's relay was the only one, and Dan moved it off turn.step on 2026-11-11;
 # this keeps the exposure from coming back.
+#   - The scan tokenises with the pinned TypeScript compiler's scanner, never by matching quotes (#2779).
 #   - The scanner reads every hook source file under payload/mods/*/hooks (tests folders aside), and
 #     finds every place the file names turn.step outside a comment.
 #   - Each must be an on('turn.step', ...) call written inline; one whose every yield passes the
@@ -34,13 +35,30 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+# The pinned compiler (#1496), linked in for a checkout that lacks it. Without it the files cannot be
+# read, which fails rather than passes (L98, L411).
+TS_DIR="${CHECK_MODS_TS_DIR:-$ROOT/tools/typescript}"
+PINNED_TS_WHY=""
+if . "$ROOT/tools/lib/pinned-compiler.sh" 2>/dev/null; then
+  pinned_compiler_ensure "$TS_DIR" >/dev/null 2>&1 || true
+else
+  PINNED_TS_WHY="tools/lib/pinned-compiler.sh is missing"
+fi
+if [ ! -f "$TS_DIR/node_modules/typescript/dist/ast/index.js" ]; then
+  echo "FAIL: the pinned TypeScript compiler is not in $TS_DIR, so the turn.step relay scan could not read any file ${PINNED_TS_WHY}"
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
+
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/test-mods-turn-step-relay.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 cat >"$TMP/scan.mjs" <<'JS'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
-const [mods] = process.argv.slice(2)
+import { pathToFileURL } from 'node:url'
+const [mods, tsDir] = process.argv.slice(2)
+const ast = await import(pathToFileURL(join(tsDir, 'node_modules', 'typescript', 'dist', 'ast', 'index.js')).href)
 const files = []
 const walk = d => {
   for (const n of readdirSync(d).sort()) {
@@ -54,20 +72,36 @@ for (const mod of readdirSync(mods).sort()) {
   if (existsSync(h) && statSync(h).isDirectory()) walk(h)
 }
 // Two copies of the text, the same length: comments blanked, and comments and string contents blanked.
+// The pinned TypeScript compiler's own scanner reads the file, so where a string, a template (nested
+// ones, and ${...} expressions, included), a regular expression or a comment starts and ends is the
+// language's answer, never a guess at the next quote or backtick (#2779). Positions in the two copies
+// are the file's own, so a character offset into either is an offset into the file.
+const SK = ast.SyntaxKind
+const VALUE_END = new Set([SK.Identifier, SK.NumericLiteral, SK.BigIntLiteral, SK.StringLiteral, SK.NoSubstitutionTemplateLiteral,
+  SK.TemplateTail, SK.RegularExpressionLiteral, SK.CloseParenToken, SK.CloseBracketToken, SK.CloseBraceToken, SK.ThisKeyword,
+  SK.SuperKeyword, SK.TrueKeyword, SK.FalseKeyword, SK.NullKeyword, SK.PlusPlusToken, SK.MinusMinusToken, SK.PrivateIdentifier])
 const mask = text => {
   const code = text.split(''), bare = text.split('')
-  let i = 0
+  const sc = ast.createScanner(true, ast.LanguageVariant.Standard, text)
   const blank = (a, b, both) => { for (let k = a; k < b; k++) if (text[k] !== '\n') { bare[k] = ' '; if (both) code[k] = ' ' } }
-  while (i < text.length) {
-    const c = text[i], d = text[i + 1]
-    if (c === '/' && d === '/') { const e = text.indexOf('\n', i); const end = e < 0 ? text.length : e; blank(i, end, true); i = end }
-    else if (c === '/' && d === '*') { const e = text.indexOf('*/', i + 2); const end = e < 0 ? text.length : e + 2; blank(i, end, true); i = end }
-    else if (c === "'" || c === '"' || c === '`') {
-      let j = i + 1
-      while (j < text.length && text[j] !== c) { if (text[j] === '\\') j++; j++ }
-      blank(i + 1, j, false); i = j + 1
-    } else i++
+  const stack = []   // 'b' for an open brace, 't' for a ${ inside a template
+  let prev, last = 0
+  for (let tok = sc.scan(); tok !== SK.EndOfFile; tok = sc.scan()) {
+    if (tok === SK.SlashToken || tok === SK.SlashEqualsToken) { if (!VALUE_END.has(prev)) tok = sc.reScanSlashToken() }
+    else if (tok === SK.CloseBraceToken && stack[stack.length - 1] === 't') tok = sc.reScanTemplateToken(false)
+    const a = sc.getTokenStart(), b = sc.getTokenEnd()
+    blank(last, a, true)   // whatever the scanner skipped between tokens: comments (and white space)
+    last = b
+    if (tok === SK.OpenBraceToken) stack.push('b')
+    else if (tok === SK.CloseBraceToken) stack.pop()
+    else if (tok === SK.TemplateHead) { stack.push('t'); blank(a + 1, b - 2, false) }
+    else if (tok === SK.TemplateMiddle) blank(a + 1, b - 2, false)
+    else if (tok === SK.TemplateTail) { stack.pop(); blank(a + 1, b - 1, false) }
+    else if (tok === SK.NoSubstitutionTemplateLiteral || tok === SK.StringLiteral) blank(a + 1, b - 1, false)
+    else if (tok === SK.RegularExpressionLiteral) blank(a, b, false)
+    prev = tok
   }
+  blank(last, text.length, true)
   return { code: code.join(''), bare: bare.join('') }
 }
 const lineOf = (text, at) => text.slice(0, at).split('\n').length
@@ -113,7 +147,7 @@ for (const f of files) {
 console.log(JSON.stringify({ read }))
 JS
 
-scan(){ node --no-warnings "$TMP/scan.mjs" "$1" 2>&1; }
+scan(){ node --no-warnings "$TMP/scan.mjs" "$1" "$TS_DIR" 2>&1; }
 fixture(){   # $1 = mod name; the hook file's text on stdin
   mkdir -p "$TMP/fx/$1/payload/mods/$1/hooks"
   cat >"$TMP/fx/$1/payload/mods/$1/hooks/register.ts"
@@ -201,6 +235,21 @@ export const register = on => { on('turn.start', ($, e, next) => next(e)) }
 TS
 out="$(scan "$TMP/fx/comment-only/payload/mods")"
 case "$out" in *verdict*) check "a comment naming turn.step is not read as a hook" "$out" ;; *'{"read":1}'*) check "a comment naming turn.step is not read as a hook" ok ;; *) check "a comment naming turn.step is not read as a hook" "$out" ;; esac
+
+# A template nested inside ${...} (L1: fails on a reader that ends a template at the next backtick).
+fixture nested-template <<'TS'
+const label = `a ${ x ? `b ${ y }` : '`' } c`; export const register = on => { on('turn.step', async function* ($, e, next) { return yield* next(e) }) }
+TS
+verdict nested-template '"verdict":"relay"'
+fixture nested-template-two <<'TS'
+const a = `${`${'`'}`}`, b = `}${'`'}`; export const register = on => { on('turn.step', async function* ($, e, next) { return yield* next(e) }) }
+TS
+verdict nested-template-two '"verdict":"relay"'
+# A regex literal holding a quote or backtick, and a division, do not open a string.
+fixture regex-literal <<'TS'
+const r = /['"`]/g, h = 4 / 2 / 1; export const register = on => { on('turn.step', async function* ($, e, next) { return yield* next(e) }) }
+TS
+verdict regex-literal '"verdict":"relay"'
 
 # The real tree.
 out="$(scan "$ROOT/payload/mods")"; rc=$?
