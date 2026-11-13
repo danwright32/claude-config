@@ -7834,10 +7834,10 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A shell write is read for the files it writes: a copy of one code file is judged
 by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
 into a folder passes. git failing to say which repository a self posting file is in, or a file
-that cannot be read, holds the call as could not check, which trying again may get past. git
-killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is told
-as a timeout, not a refusal: send the call again in about a minute, and after three in a row tell
-Dan (#2792). A shell write to a path the write reader cannot name is outside it.
+that cannot be read, holds the call as could not check, which trying again may get past. git or
+gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
+told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
+tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
@@ -7848,7 +7848,7 @@ a `wording` note, and the call sent again goes through; a choice lets wording th
 sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
 chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
-not check.
+not check, and a diff gh did not give within its time as a timeout (#2792).
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata
