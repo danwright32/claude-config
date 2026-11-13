@@ -305,6 +305,61 @@ EOF
   fi
 fi
 
+# A PUSH THAT CHANGES THE SLACK ALERT GUARD RUNS tests/test-slack-alert-guard-real-gate.sh FIRST
+# (claude-config#2834, Dan's choice on 2026-11-13). That suite holds the guard's real rules to the
+# real drafts gate, and checks the guard's own source carries no Slack marker, comments included, so
+# the guard never reads itself as a file that posts. It ran only in the full suite, and the mod's own
+# tests cannot read its source files, so on 2026-11-12 PR #2826 passed every mod test and failed CI
+# at merge over one comment naming the webhook host. Only a push whose files (lib/push-changes.sh,
+# as above) include one under payload/mods/slack-alert-guard/ pays for it. It runs against the tree
+# the push DELIVERS, written out with git archive into a throwaway folder, never the working copy.
+# MEASURED on this Mac 2026-11-13, five samples at load averages of 16 to 20: the whole step took
+# 1.1 to 1.2 seconds, about half writing out payload/ and half the suite. A tree it could not write out
+# refuses, since a suite nobody ran is not one that passed (L98), and so does the suite failing,
+# node missing included, with the suite's own lines, which name each file and what was wrong.
+_sc_sag_suite="tests/test-slack-alert-guard-real-gate.sh"
+if [ "$_sc_pc_rc" -eq 0 ] && grep -q '^payload/mods/slack-alert-guard/' <<< "$PC_FILES"; then
+  _sc_sag_tree="$(pc_push_tree)"
+  _sc_sag_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-slack-guard.XXXXXXXX" 2>/dev/null)" || _sc_sag_dir=""
+  _sc_sag_rc=0; _sc_sag_out=""
+  if [ -z "$_sc_sag_tree" ] || [ -z "$_sc_sag_dir" ] \
+     || ! git cat-file -e "$_sc_sag_tree:$_sc_sag_suite" 2>/dev/null \
+     || ! git archive -o "$_sc_sag_dir/tree.tar" "$_sc_sag_tree" payload "$_sc_sag_suite" 2>/dev/null \
+     || ! tar -x -f "$_sc_sag_dir/tree.tar" -C "$_sc_sag_dir" 2>/dev/null; then
+    _sc_sag_rc=unread
+  else
+    _sc_sag_out="$(bash "$_sc_sag_dir/$_sc_sag_suite" 2>&1 < /dev/null)"; _sc_sag_rc=$?
+  fi
+  [ -n "$_sc_sag_dir" ] && rm -rf "$_sc_sag_dir"
+  if [ "$_sc_sag_rc" = unread ]; then
+    {
+      echo "PUSH BLOCKED: this push changes the Slack alert guard, and $_sc_sag_suite could not be"
+      echo "written out from the tree the push delivers, so the guard's reading of its own source was"
+      echo "not checked (claude-config#2834). Run git status in the repository, fix what it reports,"
+      echo "then push again."
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  elif [ "$_sc_sag_rc" -ne 0 ]; then
+    {
+      echo "PUSH BLOCKED: this push changes the Slack alert guard, and $_sc_sag_suite failed on the"
+      echo "tree the push delivers (claude-config#2834):"
+      echo ""
+      # Its FAIL lines, or, from a suite that stopped before printing any, its last lines (L10).
+      _sc_sag_fails="$(printf '%s\n' "$_sc_sag_out" | grep -E '^FAIL')" \
+        || _sc_sag_fails="$(printf '%s\n' "$_sc_sag_out" | tail -n 20)"
+      printf '%s\n' "$_sc_sag_fails" | sed 's/^/  /'
+      echo ""
+      echo "Take the Slack marker out of each file named above, comments included: a webhook host, the"
+      echo "chat API's method name, a Slack SDK, a Slack env setting, or a send helper named for Slack."
+      echo "The guard reads any of them in its own source as a file that posts to Slack. Any other"
+      echo "failure is the guard's reading of the real drafts gate; run the suite to see it whole."
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  fi
+fi
+
 # Every suite that reads the repository's own files, committed or NOT (claude-config#522). Picked
 # from what git tracks, a scanner just written was not run until the push after the one that added
 # it, and it is the one most likely to be wrong (L456). Read into a variable rather than piped into

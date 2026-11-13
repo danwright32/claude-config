@@ -7893,7 +7893,9 @@ out, a list of bare endpoint names, a pattern in a regex literal. No longer held
 matches an endpoint and leaves the posting to another file whose code names nothing of Slack, and,
 as the file being edited, one whose only marker is in a comment and that makes no request.
 `tests/test-slack-alert-guard-real-gate.sh` holds the real drafts gate, and the guard's own source,
-to this.
+to this. The mod's own tests cannot read its source files, so `hooks/scanners-before-push.sh` runs
+that suite before any push that changes a file under `payload/mods/slack-alert-guard/`, against the
+tree the push delivers, and refuses the push when it fails (claude-config#2834).
 Claude then shows Dan the whole message, every variable filled in from a realistic
 example, and asks with `AskUserQuestion`, carrying the message in `metadata.rendered`; the guard
 words the question and its two answers, Approve wording and Change wording, itself. An approval is
