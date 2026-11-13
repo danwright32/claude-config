@@ -467,7 +467,8 @@ for _mt_f in $(grep -rl -e 'merge-turn\.sh' "$DIR/lib" "$DIR"/*.sh 2>/dev/null |
   done
 done
 check_eq "#2835 no file sourcing merge-turn.sh redefines one of its functions" "" "$_mt_clash"
-check_eq "#2835 (fixture) the scan read merge-turn.sh's functions" "yes" "$(printf '%s\n' "$_mt_funcs" | grep -qx turn_look && echo yes)"
+case $'\n'"$_mt_funcs"$'\n' in *$'\n'turn_look$'\n'*) _mt_read=yes ;; *) _mt_read=no ;; esac
+check_eq "#2835 (fixture) the scan read merge-turn.sh's functions" "yes" "$_mt_read"
 
 # turn_line_moved: the ONE answer to whether the line moved between two looks, read by the merge helper's
 # time in line (#1697) and the full suite slot's wait (#2835), so the two can never disagree on it.
