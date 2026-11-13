@@ -2401,7 +2401,8 @@ GATE_PY="$DIR/slack_drafts_only_gate.py"
 PERL_ASCII="perl -ne 'print \"\$ARGV:\$.: \$_\" if /[^\\x00-\\x7F]/; close ARGV if eof'"
 for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
   "perl -lne 'print if /slack/' notes.md post.sh" "perl -ne 'print if 1 .. 3' post.py" \
-  "perl -nle 'print length' post.sh | sort -n" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
+  "perl -nle 'print length' post.sh | sort -n" "perl -ne 'print \"\$ARGV: \$_\" if eof(ARGV)' notes.md post.sh" \
+  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
   "python3 -c 'import sys; print(len(open(sys.argv[1]).read()))' post.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read().count(\"slack\"))' post.py $GATE_PY" \
   "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' post.js" \
@@ -2452,6 +2453,13 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'print' -e 'system(\"sh post.sh\")' notes.md" "perl -e 'print 1' -e 'system(\$_)' post.sh" \
   "perl -F'/(?{system(qw(sh))})/' -ane 'print' notes.md" \
   "perl -ne 'BEGIN { (\$x, @ARGV) = (1, \"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { @{ARGV} = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \${ARGV}[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \${ARGV[0]} = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { *ARGV = [\"sh post.sh |\"] } print' notes.md" \
+  "perl -ne 'BEGIN { @ ARGV = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$ ARGV [0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { @{\"AR\".\"GV\"} = (\"sh post.sh |\") } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read())' post.sh > run.sh; sh run.sh" \
@@ -2529,6 +2537,9 @@ cp "$T/si/x.js" "$T/si/x.mjs"
 printf '%s\n' 'console.log(1);' > "$T/si/clean.js"
 cp "$T/si/clean.js" "$T/si/clean.mjs"
 cp "$T/si/clean.js" "$T/si/app.js"
+# node runs a module of any extension as CommonJS, so a loader's value may be shaped like data.
+for ext in txt md json; do cp "$T/si/x.js" "$T/si/x.$ext"; cp "$T/si/clean.js" "$T/si/clean.$ext"; done
+cp "$T/si/x.js" "$T/si/xnoext"; cp "$T/si/clean.js" "$T/si/cleannoext"
 printf '%s\n' 'url = "https://slack.com/api/chat.postMessage"' 'data = "text=hi"' > "$T/si/slack.curlrc"
 printf '%s\n' 'url = "https://example.com/"' > "$T/si/clean.curlrc"
 si_pair() { # si_pair <command with FILE> <file that posts> <clean file> <what the refusal says>
@@ -2573,6 +2584,18 @@ done
 for shape in "node -e 1 --experimental-loader ./FILE" "node -e 1 --experimental-loader=./FILE" \
   "node -e 1 --some-future-flag=./FILE" "node -e 1 --some-future-flag ./FILE" "node -e 1 -x ./FILE"; do
   si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
+# A loaded file is read as code whatever it is named: node runs `-r ./x.txt` as CommonJS, so the
+# shortcut that hands a data shaped file to the code as its data must not take an option's value
+# (#2886 review, round 4: `node -e 1 -r ./payload.txt` read the module as data and passed).
+for ext in txt md json; do
+  for shape in "node -e 1 -r ./FILE" "node -e 1 --require ./FILE" "node -e 1 --require=./FILE" \
+    "node -e 1 --some-future-flag ./FILE"; do
+    si_pair "$shape" "x.$ext" "clean.$ext" "x.$ext"
+  done
+done
+for shape in "node -e 1 -r ./FILE" "node -e 1 --require=./FILE"; do
+  si_pair "$shape" xnoext cleannoext "xnoext"
 done
 # What a command prints that cannot be read, piped into a shell or an interpreter as its code, is
 # refused: the gate cannot see what it runs.

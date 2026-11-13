@@ -155,10 +155,19 @@ LOADS_NOTHING = {
 # perl -e code the gate sees cannot act (perl_acts, claude-config#2691): switches that only read lines
 # (-n, -p, -l, -a, -0, -F, -w), and code naming none of perl's ways to run a command, load or evaluate
 # code, write or rename a file, or open one (the two argument open runs a command), no module by name
-# (`::`), no backtick, no in place edit ($^I), and no use of @ARGV or an element of it, whose names
-# perl's <> opens with the two argument open (a name ending in | runs a command).
+# (`::`), no backtick, no in place edit ($^I), and no variable reached through a block (`@{...}`,
+# `${...}`), which is how a name is spelled in braces or computed at run time.
+#
+# Nor any ARGV but the reads PERL_ARGV_READS lists: @ARGV holds the names perl's <> opens with the two
+# argument open, where a name ending in | runs a command, and perl spells that array many ways (`@ARGV`,
+# `@ ARGV`, `@{ARGV}`, `${ARGV}[0]`, `*ARGV = [...]`, `$#ARGV`), so listing the spellings that set it
+# misses the next one (#2886 review, a fourth round of one class). What is listed instead is what only
+# reads: the scalar $ARGV, the name of the file being read, and the ARGV filehandle given to close or
+# eof, or read by <ARGV>. Any other ARGV left in the code is taken to act.
 PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
-PERL_ACTS = re.compile(r"`|::|\$\^I|\$\{\^|@ARGV|\$ARGV\s*\[|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
+PERL_ARGV_READS = re.compile(r"\$ARGV\b(?!\s*[\[{])|\b(?:close|eof)\s*\(?\s*ARGV\b|<ARGV>")
+PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|\$#\s*\{")
+PERL_ACTS = re.compile(r"`|::|\$\^I|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
                        r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
                        r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
                        r"dbmopen|tie|dump|ioctl|fcntl|glob|push|unshift|splice)\b")
@@ -193,6 +202,12 @@ def perl_acts(words):
     hit = PERL_ACTS.search(code)
     if hit:
         return f"uses {hit.group(0)}, which can run a command, load code or write a file"
+    block = PERL_BLOCK.search(code)
+    if block:
+        return (f"reaches a variable through a block ({block.group(0)}...), which can name @ARGV, whose names "
+                "perl's <> opens as a command")
+    if "ARGV" in PERL_ARGV_READS.sub("", code):
+        return "uses ARGV beyond reading the current file's name, so it may set what perl's <> opens as a command"
     for m in re.finditer(r"(?<![\w$@%&\\])s\s*([^\w\s])", code):
         d, i, seen = m.group(1), m.end(), 0
         while d not in "{[(<" and i < len(code) and seen < 2:
@@ -4677,10 +4692,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
-            if (code or past) and (actor or self.data_shaped(path)):
+            # An option's value after the code is read as code whatever it is named: node runs
+            # `-r ./x.txt` as CommonJS, so the data shortcut below must not take it (#2886 review).
+            loaded = options_read and option is not None and not (safe and safe.fullmatch(option))
+            if (code or past) and not loaded and (actor or self.data_shaped(path)):
                 data.append((w, path, False))
                 continue
-            loaded = options_read and option is not None and not (safe and safe.fullmatch(option))
             if after_held and code and not loaded:
                 data.append((w, path, True))
                 continue
