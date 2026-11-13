@@ -4297,11 +4297,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 # node runs the LAST -e or -p it is given (measured 2026-11-13), and only the first is
                 # read here, so where another code option follows, the files keep the reading they had
                 # (any code shaped file read as code). perl_acts reads every -e; Python takes a second
-                # -c as an argument.
+                # -c as an argument. A code option glued to its code (`--eval=...`) counts too: node
+                # runs it in place of the -e before it (measured 2026-11-13, #2886 review).
                 fam = self.family(name)
                 code_words, letters, _ = OPTIONS.get(fam, (set(), "", VALUED))
                 held = fam in ("py", "perl") or not any(
-                    w in code_words or (letters and re.fullmatch(rf"-[A-Za-z]{{1,4}}[{letters}]", w)) for w in after)
+                    w.split("=", 1)[0] in code_words or (letters and re.fullmatch(rf"-[A-Za-z]{{1,4}}[{letters}]", w))
+                    for w in after)
                 if fam == "perl":
                     # The option holding the code; a word that is not one (a redirection moved the
                     # count) is kept as an unknown switch, so the code is taken to act.

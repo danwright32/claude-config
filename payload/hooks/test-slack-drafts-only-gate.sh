@@ -2451,6 +2451,14 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
 done
 run_rf "perl -ne 'system(\$_)' post.sh"
 says "a perl one-liner refused names what it can do" "the code given to perl"
+# node runs the last code option, the glued long form included (`--eval=...` ran in place of the -e
+# before it, measured with node 2026-11-13), so a file after it keeps the reading it had before #2691
+# (lessons review of #2886: only the bare -e, --eval, -p, --print words counted as a second option).
+for runs in "node -e 'console.log(1)' --eval='require(process.argv[1])' ./post.js" \
+  "node -e 'console.log(1)' --print='require(process.argv[1])' ./post.js"; do
+  run_rf "$runs"
+  refused "a file after a second, glued code option is read as code: $runs"
+done
 
 echo "slack drafts only: an output redirect target is written, not read (claude-config#2771)"
 
