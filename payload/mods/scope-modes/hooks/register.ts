@@ -456,9 +456,12 @@ const resolves = async ($: EngineInterface, repo: string): Promise<string | null
 // and a reader never sees half of one. A marker whose owner is no open session, or older than
 // `staleMs`, is taken over by moving it aside in one rename (only one mover wins) and linking ours,
 // never removed and made again. Each outcome is its own answer, so each is said as itself (L11).
+// `here` says the holder is this session itself (#2582): a second /sleep typed while this session's
+// own still asked its questions was told another session held it, and offered /wake, which would
+// have cleared the night being prepared. Every message built from a held marker reads it from here.
 type Claim =
   | { claimed: Marker; tookOver?: Marker }
-  | { held: Marker }
+  | { held: Marker; here: boolean }
   | { unreadable: string }
   | { failed: string }
 const readMarkerAt = async ($: EngineInterface, path: string): Promise<Marker | { unreadable: string } | null> => {
@@ -479,9 +482,21 @@ const ownerGone = async ($: EngineInterface, m: Marker, now: number, staleMs: nu
   }
 }
 // `abandoned` names a held marker its owner is known to have left (#1677), taken over as one gone is.
-const claimMarker = async ($: EngineInterface, path: string, staleMs: number, abandoned?: (m: Marker) => boolean): Promise<Claim> => {
+// `live` is given this claim's nonce before its marker can be seen, and keeps it only once it is
+// placed (#2582), so another call in this session never finds the marker without it there.
+const claimMarker = async ($: EngineInterface, path: string, staleMs: number, abandoned?: (m: Marker) => boolean, live?: Set<string>): Promise<Claim> => {
   const mine: Marker = { owner: await $.session.id(), at: await $.clock.now(), nonce: Math.random().toString(36).slice(2, 10) }
   const tmp = `${path}.${mine.nonce}.tmp`
+  live?.add(mine.nonce)
+  let claim: Claim | undefined
+  try {
+    claim = await placeMarker($, path, staleMs, mine, tmp, abandoned)
+    return claim
+  } finally {
+    if (!claim || !('claimed' in claim)) live?.delete(mine.nonce)
+  }
+}
+const placeMarker = async ($: EngineInterface, path: string, staleMs: number, mine: Marker, tmp: string, abandoned?: (m: Marker) => boolean): Promise<Claim> => {
   try {
     await $.fs.write(tmp, markerText(mine))
   } catch (err) {
@@ -496,7 +511,7 @@ const claimMarker = async ($: EngineInterface, path: string, staleMs: number, ab
       const held = await readMarkerAt($, path)
       if (held === null) continue
       if ('unreadable' in held) return held
-      if (!abandoned?.(held) && !(await ownerGone($, held, mine.at, staleMs))) return { held }
+      if (!abandoned?.(held) && !(await ownerGone($, held, mine.at, staleMs))) return { held, here: held.owner === mine.owner }
       const aside = `${path}.taken-${mine.nonce}`
       const mv = await run($, ['mv', path, aside])
       if (mv.exitCode !== 0) {
@@ -507,7 +522,7 @@ const claimMarker = async ($: EngineInterface, path: string, staleMs: number, ab
       const moved = await readMarkerAt($, aside)
       if (moved && !('unreadable' in moved) && moved.nonce !== held.nonce) {
         await run($, ['mv', '-n', aside, path])
-        return { held: moved }
+        return { held: moved, here: moved.owner === mine.owner }
       }
       await run($, ['rm', '-f', aside])
       tookOver = held
@@ -517,6 +532,8 @@ const claimMarker = async ($: EngineInterface, path: string, staleMs: number, ab
     await run($, ['rm', '-f', tmp])
   }
 }
+// Who holds a marker, as said to Dan: this session itself, or the other session by its id.
+const holderSaid = (claim: { held: Marker; here: boolean }) => (claim.here ? 'this session' : `session ${claim.held.owner}`)
 // Removes a marker only while it is still this claim's own.
 const releaseMarker = async ($: EngineInterface, path: string, mine: Marker) => {
   const now = await readMarkerAt($, path)
@@ -546,7 +563,7 @@ const takeLock = async ($: EngineInterface, lock: string): Promise<Claim> => {
 const recordAnswer = async ($: EngineInterface, path: string, repo: string, answer: string): Promise<string | null> => {
   const lock = `${sleepDir((await $.env.get('HOME')) ?? '')}/repos.lock`
   const claim = await takeLock($, lock)
-  if ('held' in claim) return `the lists are being written by session ${claim.held.owner} (since ${etWhen(claim.held.at)})`
+  if ('held' in claim) return `the lists are being written by ${holderSaid(claim)} (since ${etWhen(claim.held.at)})`
   if ('unreadable' in claim) return `the answers lock cannot be read (${claim.unreadable})`
   if ('failed' in claim) return `the answers lock could not be taken (${claim.failed})`
   try {
@@ -1570,6 +1587,9 @@ const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started a
 // is remembered here, without a call, and this session's next /sleep takes it over at once (with
 // the list of unanswered issues it may have written) rather than waiting for it to go stale.
 const abandonedClaims = new Map<string, string>()
+// The preparing markers a /sleep in this session holds while it runs, by nonce (#2582): a marker
+// this session placed is said as its /sleep still asking only while one here still holds it.
+const preparingHere = new Set<string>()
 // `began.unstarted` carries what is said about the workers that were not told to start (#2062), so
 // the command can put it in Claude's acknowledgement too.
 const startSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: string; sendItself?: string } = { is: false }, signal?: AbortSignal): Promise<string> => {
@@ -1580,6 +1600,8 @@ const startSleep = async ($: EngineInterface, began: { is: boolean; unstarted?: 
   } catch (err) {
     if (!sleepInterrupted(signal, msg(err))) throw err
     said = msg(err)
+  } finally {
+    if (held.claim) preparingHere.delete(held.claim.nonce)
   }
   if (!sleepInterrupted(signal, said)) return said
   if (!began.is && held.claim && held.generation) abandonedClaims.set(held.claim.nonce, held.generation)
@@ -1623,10 +1645,17 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean; unstarted?
   // gone from the registry, or older than PREPARING_STALE_MS, L523) is taken over in one rename.
   // /wake clears any.
   await run($, ['mkdir', '-p', p.dir])
-  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS, m => abandonedClaims.has(m.nonce))
-  if ('held' in claim) return `Sleep mode is already being prepared in session ${claim.held.owner} since ${etWhen(claim.held.at)}. Nothing changed; if that session has gone, /wake clears it.`
+  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS, m => abandonedClaims.has(m.nonce), preparingHere)
+  if ('held' in claim) {
+    // This session's own: /wake would clear the night its /sleep is still preparing, so it is not offered.
+    if (claim.here && preparingHere.has(claim.held.nonce)) return `This session's own /sleep is still asking its before bed questions, begun at ${etWhen(claim.held.at)}. Nothing changed.`
+    if (claim.here) return `A sleep this session began preparing at ${etWhen(claim.held.at)} is no longer asking its questions, but its preparing marker is still there. Nothing changed; /wake clears it.`
+    return `Sleep mode is already being prepared in session ${claim.held.owner} since ${etWhen(claim.held.at)}. Nothing changed; if that session has gone, /wake clears it.`
+  }
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
+  // Held from here, so startSleep takes it out of preparingHere however this ends (#2582).
+  held.claim = claim.claimed
   // A claim this session's own abandoned /sleep left goes with the unanswered list it may have
   // written, for a night that never began (#1677); it is not news, so it is not said.
   const leftHere = claim.tookOver ? abandonedClaims.get(claim.tookOver.nonce) : undefined
@@ -1634,7 +1663,8 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean; unstarted?
     abandonedClaims.delete(claim.tookOver.nonce)
     await run($, ['rm', '-f', `${p.dir}/unanswered/${leftHere}`])
   }
-  const tookOver = claim.tookOver && leftHere === undefined ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
+  const leftBy = claim.tookOver?.owner === self ? 'A sleep this session left half prepared' : `A sleep left half prepared by session ${claim.tookOver?.owner}`
+  const tookOver = claim.tookOver && leftHere === undefined ? ` ${leftBy} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
   // Another /sleep may have placed its record between the read above and this claim: read it again,
   // so the bedtime questions are never asked for a night that has already begun.
   const again = await sleepNow($)
@@ -1651,7 +1681,6 @@ const prepareSleep = async ($: EngineInterface, began: { is: boolean; unstarted?
   let startedIn: string
   let placeBefore: ScopeModesPlace
   const generation = `${now}-${self}`
-  held.claim = claim.claimed
   held.generation = generation
   try {
     e = await enrol($, self)
@@ -2839,7 +2868,7 @@ const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => M
   } catch (err) {
     return msg(err)
   }
-  if ('held' in claim) return `session ${claim.held.owner} has been changing the record of the morning reviews since ${etWhen(claim.held.at)}`
+  if ('held' in claim) return `${holderSaid(claim)} has been changing the record of the morning reviews since ${etWhen(claim.held.at)}`
   if ('unreadable' in claim) return `the lock on the record of the morning reviews cannot be read (${claim.unreadable})`
   if ('failed' in claim) return `the lock on the record of the morning reviews could not be taken (${claim.failed})`
   try {

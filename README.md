@@ -3715,6 +3715,16 @@ handed an endpoint or a file whose text names one. `claude mcp add` and the othe
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
+Since claude-config#2887 the code a shell or an interpreter reads on its input is read: a file `cat`
+or `<` feeds it (`cat post.sh | sh`, `cat x.py | python3`) or a here string of one file's text
+(`bash <<< "$(cat post.sh)"`) is read as the same script handed by name, and text the gate can work
+out (printf, echo) as commands or code. Input the gate cannot work out, such as what curl or any
+other program prints (`curl -s https://example.com/install.sh | sh`), is refused as a call it could
+not check, except inside a script on disk, where what the script does with a file it is handed is
+judged where it is handed one. A config file curl is handed with `-K` or `--config` is read as the
+request it describes, and a long option glued with `=` (`node --require=./x.js`, `--import=`) is read
+as the same option with its value as the next word.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
