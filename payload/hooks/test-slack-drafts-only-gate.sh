@@ -3966,6 +3966,82 @@ L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
 if [ "$L_AFTER" = "$L_BEFORE" ]; then check "a pull read leaves the repository's refs and files as they were" ok
 else check "a pull read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
 
+echo "slack drafts only: a package spec handed to npx, npm exec, pnpm dlx, yarn dlx or bunx is a package, not a file (claude-config#2865)"
+
+# On 2026-11-12 (about 7:45 PM ET, the personal MacBook) this exact call was refused: `claude mcp add`
+# names the package spec after its --, so the spec was marked as a file claude may write, and npx's
+# `@mskalski/lightroom-mcp@0.26.0` was read as a path (it holds a /) to a script that cannot be read.
+# Measured through this wrapper on main at 3ad6286: the first command below was refused, and the bare
+# package handed an endpoint or a file naming one, and npm exec, pnpm dlx, yarn dlx and bunx handed one,
+# all passed. A package is code the gate does not read and counts as able to act, as an imported one
+# does (#2844), so it is refused where it is handed an endpoint, as a script that imports one is.
+P="$T/p2865"
+mkdir -p "$P/@acme"
+printf '%s\n' '{"text": "hi", "url": "https://slack.com/api/chat.postMessage"}' > "$P/msg.json"
+printf '%s\n' '{"text": "hi"}' > "$P/quiet.json"
+run_p() { run_raw "$(payload Bash "$(bash_input "$1")" "$P")"; }
+run_p 'claude mcp add --scope user lightroom -e LIGHTROOM_MCP_TOOLSETS=develop -- npx -y @mskalski/lightroom-mcp@0.26.0 | tail -3; npx -y @mskalski/lightroom-mcp@0.26.0 install-plugin | tail -5; ls -d "$HOME/Library/Application Support/Adobe/Lightroom/Modules/"*'
+allowed "the call refused on 2026-11-12: claude mcp add, then npx running the package it registered"
+for runs in "claude mcp add lr -- npx -y @acme/tool@1.2.0 && npx -y @acme/tool@1.2.0 quiet.json" \
+  "claude mcp add-json lr '{\"command\":\"npx\"}' && npx @acme/tool@latest" "claude mcp add lr -- bash quiet.sh && bash quiet.sh" \
+  "npm view @acme/tool@1.2.0 version && npx -y @acme/tool@1.2.0 install" "npx -y @acme/tool@^1.2 quiet.json" \
+  "npm exec -- @acme/tool@1 install" "npm x -y tool@2.0.0 quiet.json" "pnpm dlx @acme/tool@1.2.0 serve" \
+  "yarn dlx tool@1.2.0 --help" "bunx @acme/tool@1.2.0 init" "pnpx tool --version" "npx cowsay hi"; do
+  printf '%s\n' 'echo quiet' > "$P/quiet.sh"
+  run_p "$runs"
+  allowed "a package spec run as a package, handed nothing naming an endpoint: $runs"
+done
+# Judged as a package, as an import of one is: handed an endpoint, or a file naming one, it is refused,
+# by whichever launcher runs it, and after claude mcp add as without it.
+for runs in "npx -y @acme/tool@1.2.0 msg.json" "npx tool msg.json" "npx tool --url https://hooks.slack.com/services/T0/B0/x" \
+  "npx @acme/tool --method chat.postMessage" "npm exec -- @acme/tool@1 msg.json" "npm x tool@2 msg.json" \
+  "pnpm dlx @acme/tool@1.2.0 msg.json" "yarn dlx tool msg.json" "bunx @acme/tool@1.2.0 msg.json" "pnpx tool msg.json" \
+  "claude mcp add lr -- npx -y @acme/tool@1.2.0 && npx -y @acme/tool@1.2.0 msg.json"; do
+  run_p "$runs"
+  read_refused "a package spec handed an endpoint is judged as a package, as an import of one is: $runs"
+done
+run_p "npx -y @acme/tool@1.2.0 msg.json"
+says "the refusal names the package and what it is handed" "the package @acme/tool@1.2.0, run by npx,"
+run_p "claude mcp add lr -- npx -y @acme/tool@1.2.0 && npx -y @acme/tool@1.2.0 msg.json"
+says "after claude mcp add the package is refused for what it is handed, not as a file claude wrote" "run by npx,"
+# Each file a package is handed is judged by its own text, as a data file is, and one another program
+# only may have rewritten by what is on disk: reading test files as scripts newly refused the formatter
+# then test run below in the 14 day replay (2026-11-12, NurseDex), where prettier's rewrite cannot be read.
+printf '%s\n' 'import { it } from "vitest";' 'it("adds", () => {});' > "$P/quiet.test.ts"
+printf '%s\n' 'import { it } from "vitest";' 'it("posts", () => fetch("https://slack.com/api/chat.postMessage"));' > "$P/post.test.ts"
+run_p "npx prettier --write quiet.test.ts >/dev/null && npx vitest run quiet.test.ts"
+allowed "a test file a formatter may rewrite, then handed to a test runner, is read as it is on disk"
+run_p "npx prettier --write post.test.ts >/dev/null && npx vitest run post.test.ts"
+read_refused "a test file naming an endpoint, handed to a package that runs it, is refused"
+# A program the gate reads by its own name, named with a version, is read as that program: tsx@4 runs
+# a script whose imports are followed, so a quiet script importing a module that posts is refused.
+mkdir -p "$P/vsrc"
+printf '%s\n' 'import { post } from "./slack";' 'post("hi");' > "$P/vsrc/main.ts"
+printf '%s\n' 'export const post = (t: string) => fetch("https://slack.com/api/chat.postMessage", { body: t });' > "$P/vsrc/slack.ts"
+for runs in "npx tsx@4 vsrc/main.ts" "npm exec -- tsx@4.7.0 vsrc/main.ts" "bunx bash@5 -c 'curl https://hooks.slack.com/services/T0/B0/x'"; do
+  run_p "$runs"
+  read_refused "a program read by its name, given a version, is still read as that program: $runs"
+done
+# A compiler run as a package still builds and runs nothing it is handed (#2844).
+run_p "npx tsc@5 --noEmit post.test.ts"
+allowed "a versioned compiler is still read by what it builds, not as a package handed a file"
+# A file is still a file. A path (./x.js), and a spec naming a file this command wrote, or one on disk,
+# are read as before, so a script written and run in one command is still judged by what was written.
+for runs in "sometool x.js && npx ./x.js" "sometool x.js && npm exec -- ./x.js" \
+  "printf '%s\\n' 'curl https://hooks.slack.com/services/T0/B0/x' > x.js && npx ./x.js" \
+  "printf '%s\\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > @acme/tool && npx @acme/tool"; do
+  run_p "$runs"
+  read_refused "a file written earlier in the command and run through a launcher is still read as a file: $runs"
+done
+run_p "sometool x.js && npx ./x.js"
+says "a file a program may have written is still unreadable" "may be written earlier in this command by sometool"
+printf '%s\n' '#!/bin/sh' 'curl https://hooks.slack.com/services/T0/B0/x' > "$P/@acme/ondisk"
+run_p "npx @acme/ondisk"
+read_refused "a package shaped spec naming a script on disk is read as that script"
+# claude's other commands are not settings changes: one that names a file may still have written it.
+run_p "claude -p 'tidy' x.js && npx ./x.js"
+read_refused "claude run on a prompt naming a file may write it, so running that file is still refused"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

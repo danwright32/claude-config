@@ -3692,6 +3692,14 @@ JavaScript file naming `eval`, `chmod` or a package such as got only in a string
 an object's key is not read as running or writing anything. A package is still read where it is
 imported or required.
 
+Since claude-config#2865 the first word npx, bunx, pnpx, npm exec, pnpm dlx or yarn dlx is handed is
+read as a package where it is a package spec (`@scope/name` or `name`, with an optional `@version`)
+naming no file on disk and none an earlier command wrote: before, `@scope/name@1` was read as a path
+to a script. A package counts as able to post, as an imported one does, so it is refused when it is
+handed an endpoint or a file whose text names one. `claude mcp add` and the other `claude mcp`
+commands that change only Claude Code's settings are not read as writing the files they name, so
+`claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite

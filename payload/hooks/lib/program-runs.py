@@ -66,6 +66,14 @@ BUN_VALUED = frozenset({"--outfile", "--outdir", "--target", "--format", "--root
                         "--chunk-naming", "--asset-naming", "--public-path", "-e", "--external", "--define",
                         "--loader", "--env", "--conditions", "--banner", "--footer", "--packages", "--drop"})
 LAUNCHERS = frozenset({"npx", "bunx", "pnpx"})
+# The first word npx, bunx, pnpx, npm exec, pnpm dlx or yarn dlx is handed, where it names a package
+# (package_run, #2865): `@scope/name` or `name`, with an optional `@version`, holding no path separator
+# but the scope's. npm reads such a word as a package, never as a file.
+PACKAGE_SPEC = re.compile(r"(@[A-Za-z0-9][\w.~-]*/)?[A-Za-z0-9][\w.~-]*(@[\w.^~<>=*|+-]+)?")
+# What a package run by name can do, said as acts() says it: the gate reads no package, so it counts as
+# able to send a request or run code, as a package a script imports does (#2844).
+PACKAGE_ACTS = ("is a package, which the gate does not read, so it counts as able to send a request or run "
+                "code, as a package a script imports does")
 # The source extensions each output extension is built from, as tsc and esbuild name outputs.
 BUILT_FROM = {".js": (".ts", ".tsx", ".js", ".jsx"), ".mjs": (".mts", ".mjs"), ".cjs": (".cts", ".cjs"),
               ".jsx": (".tsx", ".jsx")}
@@ -123,10 +131,63 @@ def ts_glob(pattern):
     return re.compile(rx + "$")
 
 
-def make():
-    """The base class for the gate's Judge (module docstring)."""
+def make(marker, judged_by_name):
+    """The base class for the gate's Judge (module docstring). marker is the gate's MARKER, the
+    endpoints it refuses, and judged_by_name its judged_by_name(), whether it reads a program by its
+    own name (an interpreter, a shell, a sender), which a launcher's word is then left to."""
 
     class ProgramRuns:
+        # ---- Packages a launcher runs -----------------------------------------------------------
+
+        @staticmethod
+        def unversioned(word):
+            """A launcher's first word with its @version dropped where the rest is a program the gate
+            reads by its own name (npx tsx@4, bunx bash@5), so it is read as that program, its
+            imports followed; the word as it is otherwise (#2865, lessons review at e11e1f8)."""
+            m = PACKAGE_SPEC.fullmatch(word)
+            if not m or m.group(1) or not m.group(2):
+                return word
+            base = word[:-len(m.group(2))]
+            return base if judged_by_name(base) else word
+
+        def package_run(self, words, d, depth, launcher):
+            """The reason a package a launcher runs posts, None where it does not, or False where
+            words[0] is not a package (#2865), which the caller then reads as before.
+
+            words is what the launcher runs, its own options gone, and launcher names it (npx, npm
+            exec, pnpm dlx). A package spec (PACKAGE_SPEC) is read as the package npm reads it as, never
+            as a file: before #2865 `@scope/name@1` was read as a path, holding a /, so a command
+            earlier in the call naming it (claude mcp add -- npx -y @scope/name@1) made it a script that
+            may be written, and the call was refused. A spec naming a file on disk, or one an earlier
+            command wrote (not a program that only names it), is still read as that file, as is any
+            path (./x.js). So is a program the gate reads by its own name (npx tsx), and a compiler
+            (npx tsc, read by what it builds).
+
+            A package counts as able to act, as an import of one does (#2844): handed an endpoint, or
+            a file naming one, it is refused. Each file it is handed is judged by its own text, as a
+            data file is (every_file's actor), and a file another program only may have written by
+            what is on disk: reading code files as scripts, imports followed, newly refused `npx
+            prettier --write x.test.ts && npx vitest run x.test.ts` in the 14 day replay (2026-11-12),
+            where what prettier rewrites cannot be read."""
+            spec = words[0]
+            if not PACKAGE_SPEC.fullmatch(spec):
+                return False
+            name = re.sub(r"(?<=.)@.*$", "", spec)
+            base = name.rsplit("/", 1)[-1]
+            if spec == base and judged_by_name(base):
+                return False  # judged by name where the caller reaches it (npx tsx, npm exec -- bash)
+            path = self.resolve(spec, d)
+            if os.path.lexists(path) or any(kind != "maybe" for kind, _, _ in self.made_from(path) or ()):
+                return False
+            if name in BUILDERS:
+                return None  # a build runs nothing it is handed; what it builds is read where run (#2844)
+            label = f"the package {spec}, run by {launcher},"
+            hit = marker.search(" ".join(words[1:]))
+            if hit:
+                return f"{label} {PACKAGE_ACTS}, and is run with {hit.group(0)} in its arguments"
+            return self.every_file(words, d, depth, False, actor=(label, PACKAGE_ACTS))
+
+
         # ---- Python runners -------------------------------------------------------------------
 
         def py_runner(self, program, name, mod, after, d, depth, here, module=True):
