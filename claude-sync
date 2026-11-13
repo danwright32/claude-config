@@ -5109,8 +5109,12 @@ LOOP_INPUT
   # Said once per path AND content, like the refusal below (third review of #1022). The send that
   # says it normally commits the file, so it is not met again; but a later step can still hold it
   # back (a hook whose suite fails), and the watcher then meets the same copy on every save.
-  local _ra_list _ra_p _ra_stamp _ra_kind
+  # Each list is read and set back by its own name, never through a name held in a variable
+  # (printf -v "$kind"), which the Slack drafts gate cannot follow, so it would leave every path
+  # this script sources unread (claude-config#2538).
+  local _ra_list _ra_p _ra_stamp _ra_kind _ra_in
   for _ra_kind in readded rewritten; do
+    if [ "$_ra_kind" = readded ]; then _ra_in="$readded"; else _ra_in="$rewritten"; fi
     _ra_list=""
     while IFS= read -r _ra_p; do
       [ -n "$_ra_p" ] || continue
@@ -5118,8 +5122,9 @@ LOOP_INPUT
       grep -qxF -- "$_ra_stamp" "$RESURRECTED_REPORTED_FILE" 2>/dev/null && continue
       printf '%s\n' "$_ra_stamp" >> "$RESURRECTED_REPORTED_FILE" 2>/dev/null || true
       _ra_list+="$_ra_p"$'\n'
-    done <<< "${!_ra_kind}"
-    printf -v "$_ra_kind" '%s' "$(semicolon_list "$_ra_list")"
+    done <<< "$_ra_in"
+    _ra_list="$(semicolon_list "$_ra_list")"
+    if [ "$_ra_kind" = readded ]; then readded="$_ra_list"; else rewritten="$_ra_list"; fi
   done
   if [ -n "$readded" ]; then
     echo "claude-sync: publishing $readded although the shared config deleted it, because this Mac's copy holds changes the shared config never had, so it is work that exists only here. If putting it back was not meant, delete it on this Mac and the next send removes it again." >&2
