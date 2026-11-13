@@ -6486,6 +6486,10 @@ thread, under any Slack server and from any part of the session (the card's mess
 requester, #2435, included), settles it until the next merge. Which came first is kept as a count
 of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+A thread Slack says no longer exists, a draft to it answering `invalid_thread_ts` or a read of it
+`thread_not_found` (#2787: on 2026-11-11 a deleted first post drew the hold at every turn end), is
+owed nothing more in that session: the next turn end tells Dan once, in a toast carrying the reply
+that could not be saved, and asks no more. No draft DM is offered in its place.
 The mod never calls a Slack tool.
 Only a thread recorded at the session's start owes a reply after every merge (#2578: on
 2026-11-09 one alert link pasted hours into a session drew three asks for unrelated merges). A
