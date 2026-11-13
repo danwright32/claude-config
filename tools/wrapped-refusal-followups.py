@@ -26,7 +26,9 @@ in US Eastern time (the last day not included):
   gate's own test of a command.
 
 A transcript it cannot read, or one listed and gone before it could be read, is counted beside the
-totals, each cause on its own line, so a short total says why it is short (claude-config#2239).
+totals, each cause on its own line, so a short total says why it is short (claude-config#2239). A
+call is only ever read from an assistant line and its result from a user line: any other line that
+holds one (api-request-blob) echoes it with no time of its own (claude-config#2239).
 
 It prints counts and shapes only. A command is read in memory and handed to the gate on its input,
 and never printed, written or copied: transcripts hold other projects' commands, paths and names.
@@ -145,17 +147,22 @@ def read_transcripts(root, since):
                     content = msg.get("content") if isinstance(msg, dict) else None
                     if not isinstance(content, list):
                         continue
+                    # A call is made in an assistant line and answered in a user line. Any other line
+                    # holding one only echoes it: Claude Code's api-request-blob lines repeat earlier
+                    # messages under the same ids, with no timestamp, and an echo read first gave a
+                    # refused call no time, so it fell outside every period (claude-config#2239).
+                    kind = d.get("type")
                     for b in content:
                         if not isinstance(b, dict):
                             continue
-                        if b.get("type") == "tool_use" and b.get("name") == "Bash":
+                        if kind == "assistant" and b.get("type") == "tool_use" and b.get("name") == "Bash":
                             cid = b.get("id")
                             cmd = (b.get("input") or {}).get("command")
                             if not isinstance(cid, str) or not isinstance(cmd, str):
                                 continue
                             seq.append(cid)
                             fcalls.setdefault(cid, (parse_ts(d.get("timestamp")), cmd))
-                        elif b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+                        elif kind == "user" and b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
                             text = result_text(b.get("content"))
                             refused = bool(REFUSAL.search(text)) and GATE_ISSUE in text
                             fresults.setdefault(b["tool_use_id"], (b.get("is_error") is True, refused))
