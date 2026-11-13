@@ -149,20 +149,30 @@ PERL_ACTS = re.compile(r"`|::|\$\^I|\$\{\^|@ARGV|\$ARGV\s*\[|\b(?:system|exec|qx
                        r"dbmopen|tie|dump|ioctl|fcntl|glob|push|unshift|splice)\b")
 
 
-def perl_acts(code, switches):
+PERL_CODE = re.compile(r"-[nlpaw0-9]*[eE]")
+
+
+def perl_acts(words):
     """How perl -e code can act on the files it is handed, as acts() phrases it, or None where it is
-    seen unable to (claude-config#2691). switches are the command's words around the code; any
-    switch beyond those that only read lines (a module by -M or -m, an in place edit by -i, -x, -d)
-    counts as acting. The code acts when it names one of PERL_ACTS, or a substitution whose
-    replacement is evaluated (s///e) or whose form the reading cannot follow. What is left can only
-    read the files it is handed, match and print. A write counts even where acts() is asked only
-    whether the code can run what it is handed (runs_only): the reading does not tell the two apart,
-    so it refuses more rather than less. Deliberate obfuscation is not what this answers."""
-    for w in switches:
-        if w.startswith("-") and not PERL_SWITCH.fullmatch(w):
+    seen unable to (claude-config#2691). words are the command's words after perl. Every word after
+    a switch ending in e or E is code, the second -e of `perl -e '...' -e '...'` as much as the first;
+    any other switch beyond those that only read lines (a module by -M or -m, an in place edit by -i,
+    -x, -d) counts as acting, as does an argument perl's <> would open as a command or for writing.
+    The code acts when it names one of PERL_ACTS, or a substitution whose replacement is evaluated
+    (s///e) or whose form the reading cannot follow. What is left can only read the files it is
+    handed, match and print. A write counts even where acts() is asked only whether the code can run
+    what it is handed (runs_only): the reading does not tell the two apart, so it refuses more rather
+    than less. Deliberate obfuscation is not what this answers."""
+    codes, is_code = [], False
+    for w in words:
+        if is_code:
+            codes.append(w)
+        elif w.startswith("-") and not PERL_SWITCH.fullmatch(w):
             return f"is run with perl's {w} switch, which can load a module or write a file"
-        if re.search(r"^\s*[|<>+&]|\|\s*$", w):
+        elif re.search(r"^\s*[|<>+&]|\|\s*$", w):
             return f"is handed {w!r}, which perl's <> opens as a command or for writing"
+        is_code = not is_code and bool(PERL_CODE.fullmatch(w))
+    code = "\n".join(codes)
     hit = PERL_ACTS.search(code)
     if hit:
         return f"uses {hit.group(0)}, which can run a command, load code or write a file"
@@ -174,6 +184,8 @@ def perl_acts(code, switches):
         if seen < 2 or "e" in re.match(r"[a-z]*", code[i:]).group(0):
             return "uses a substitution whose replacement may be run as code (s///e)"
     return None
+
+
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
@@ -4131,10 +4143,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 # judged as a data file's (#2439, claude-config#2691). perl -e code is read for what it
                 # can do (perl_acts) rather than taken to act.
                 given = (label, code, here)
-                if self.family(name) == "perl":
-                    switches = before + words[1 + len(before):2 + len(before)] + after
-                    given += (lambda runs_only=False: perl_acts(code, switches),)
-                return self.every_file([words[0]] + after, d, depth, False, lang, inline=given, held_code=True)
+                # node runs the LAST -e or -p it is given (measured 2026-11-13), and only the first is
+                # read here, so where another code option follows, the files keep the reading they had
+                # (any code shaped file read as code). perl_acts reads every -e; Python takes a second
+                # -c as an argument.
+                fam = self.family(name)
+                code_words, letters, _ = OPTIONS.get(fam, (set(), "", VALUED))
+                held = fam in ("py", "perl") or not any(
+                    w in code_words or (letters and re.fullmatch(rf"-[A-Za-z]{{1,4}}[{letters}]", w)) for w in after)
+                if fam == "perl":
+                    # The option holding the code; a word that is not one (a redirection moved the
+                    # count) is kept as an unknown switch, so the code is taken to act.
+                    opt = words[1 + len(before)] if len(words) > 1 + len(before) else ""
+                    perl_words = before + [opt if PERL_CODE.fullmatch(opt) else "-?", code] + after
+                    given += (lambda runs_only=False: perl_acts(perl_words),)
+                return self.every_file([words[0]] + after, d, depth, False, lang, inline=given, held_code=held)
             module = self.py_module(words) if lang == "py" else None
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)

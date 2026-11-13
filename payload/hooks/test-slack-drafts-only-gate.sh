@@ -2401,7 +2401,7 @@ GATE_PY="$DIR/slack_drafts_only_gate.py"
 PERL_ASCII="perl -ne 'print \"\$ARGV:\$.: \$_\" if /[^\\x00-\\x7F]/; close ARGV if eof'"
 for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
   "perl -lne 'print if /slack/' notes.md post.sh" "perl -ne 'print if 1 .. 3' post.py" \
-  "perl -nle 'print length' post.sh | sort -n" \
+  "perl -nle 'print length' post.sh | sort -n" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
   "python3 -c 'import sys; print(len(open(sys.argv[1]).read()))' post.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read().count(\"slack\"))' post.py $GATE_PY" \
   "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' post.js" \
@@ -2426,7 +2426,8 @@ done
 for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh" "bash < post.sh" \
   "python3 post.py" "perl post.sh" "node post.js" \
   "node -e 'console.log(1)' -r ./post.js" "node -e 'console.log(1)' --require ./post.js" \
-  "node -e 'require(process.argv[1])' ./post.js" \
+  "node -e 'require(process.argv[1])' ./post.js" "node -e 'console.log(1)' -e 'require(process.argv[1])' ./post.js" \
+  "node -e 'console.log(1)' -p 'require(process.argv[1])' ./post.js" \
   "python3 -c 'import sys; exec(open(sys.argv[1]).read())' post.py" \
   "python3 -c 'import runpy, sys; runpy.run_path(sys.argv[1])' post.py" \
   "$(printf '%s\n' "python3 - post.py <<'EOF'" 'import sys' 'exec(open(sys.argv[1]).read())' 'EOF')" \
@@ -2438,6 +2439,7 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'CORE::system(\$_)' post.sh" "perl -ne '@ARGV = (\"post.sh\"); print' notes.md" \
   "perl -ne 'BEGIN { \$ARGV[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'print' notes.md 'sh post.sh |'" "perl -ne 'print' notes.md '| sh post.sh'" \
+  "perl -ne 'print' -e 'system(\"sh post.sh\")' notes.md" "perl -e 'print 1' -e 'system(\$_)' post.sh" \
   "perl -ne 'BEGIN { (\$x, @ARGV) = (1, \"sh post.sh |\") } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \

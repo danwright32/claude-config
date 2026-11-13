@@ -3660,7 +3660,9 @@ perl go on reading their options there, Python does not). And `perl -e` code is 
 do: a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`, `-F`, `-w`) and whose code
 names none of perl's ways to run a command, load or evaluate code, open, write or rename a file
 (`system`, backticks, `qx`, `open`, `do`, `require`, `use`, `eval`, `s///e`, `unlink`, a `::` name, `$^I`,
-a change to `@ARGV`, and the rest of `PERL_ACTS`) is seen unable to act. So `perl -ne 'print if /x/'`
+any use of `@ARGV` or `$ARGV[...]`, and the rest of `PERL_ACTS`), in every `-e` it is given, and that is
+handed no argument perl's `<>` would open as a command or for writing (`'sh x |'`), is seen unable to
+act. So `perl -ne 'print if /x/'`
 over files that name an endpoint passes, and the same one-liner with `system`, `-MLWP::Simple` or `-i`
 is refused. Code in another language the gate does not read (`ruby -e`) is still taken to act.
 
