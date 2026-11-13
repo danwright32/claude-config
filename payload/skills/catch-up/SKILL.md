@@ -1,8 +1,7 @@
 ---
 name: catch-up
-description: Full Claude Code capability audit, enumerates every feature available, maps each against your actual usage and config, surfaces what you're missing, highlights recent launches, and produces an exhaustive personalized report. User-invoked only: the agent will never auto-fire this.
+description: Full Claude Code capability audit, enumerates every feature available, maps each against your actual usage and config, surfaces what you're missing, highlights recent launches, and produces an exhaustive personalized report. Use when Dan asks what Claude Code can do that he is not using, or types /catch-up.
 allowed-tools: Read, Glob, Grep, Bash, WebFetch, Agent
-disable-model-invocation: true
 effort: high
 ---
 
