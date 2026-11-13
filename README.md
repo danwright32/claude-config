@@ -2216,8 +2216,12 @@ the report gives both sets of lengths in bands around the 20 character floor (un
 matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
 2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
 characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
-the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
-MacBook's were not read, so run the report there too.
+the floor, so it decided no finding and stays at 20 (#1701). Read again over the 2107 reviews kept
+on 2026-11-12, 6 of 1425 findings were placed by part of a line, at 57 to 168 characters, each on
+the right line. The first quote under 20 appeared: a 15 character setting name whose nearest
+occurrence was a longer setting it starts, so a floor of 15 or less would have placed it on the
+wrong row. The floor refused it and stays at 20. That is one Mac's records: the work MacBook's were
+not read, so run the report there too (#1689).
 
 A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
 in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
@@ -2227,6 +2231,17 @@ said then, because a review in a worktree records the worktree folder as its `re
 folder is gone by the time anyone reads the report. Of those 8 misses, worked out afterwards by
 finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
 of a line, and 4 did neither (altered or paraphrased quotes).
+
+Since #2237 those two shapes are placed rather than marked, on the line the quote starts on, after
+the whole line, its marker and part of a line have all found nothing: across a line break when the
+quote is inside the file's lines read on as one (blank lines skipped), and past the end of a line
+when at least its first 20 characters end a line, the same floor part of a line is held to. On the
+personal MacBook, over every review held on 2026-11-13, 13 of the 23 quotes that matched no line
+whole or in part were one of these (5 across, 8 past the end, 6 of those a comment's sentence quoted
+without the marker starting its next line), and in all 13 the line the quote starts on was the line
+the finding was about. The other 10 did neither and stay unplaced. Each review records the two as
+`across` and `past_end` in `placement=`, and the report counts them under how placed; a mark now only
+ever says neither, and the report's shape count reads the older marks.
 
 #### Scoring the review itself
 
@@ -7802,7 +7817,9 @@ docstring is never message text (#2574).
 No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
 a template, copy module or script whose own code names nothing of Slack, however a sender reaches
 it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
-write into a folder. The card, refusal and question name only the file that holds the text.
+write into a folder. The question names only the file that holds the text. The card and both
+refusals also name the send in it that the held text reaches, by what it calls and its line
+(#2586), or, when the file is held whole, say that no send could be traced and why.
 A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
 2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
 prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
