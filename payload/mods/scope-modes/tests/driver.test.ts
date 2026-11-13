@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
-  LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
+  LIMITS, REST_RESUME, RESUME, activeMs, blockTold, busyWords, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, SLEEP_START, sendItselfAsk, startFailKind, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,
 } from '../hooks/driver.ts'
 
@@ -184,6 +184,58 @@ describe('the circuit breaker (H3)', () => {
   })
   test('a progress reading that cannot be taken is no progress, so the breaker still trips', () => {
     expect(decideStop(input({ driver: ok(after({ idleBlocks: LIMITS.breakerBlocks })), fingerprint: null })).kind).toBe('stop')
+  })
+  // #2511 (2026-11-08, 11:41 to 11:45 PM ET): the session held a claim a builder subagent was working
+  // in its own worktree; three turns waiting on the builder read as no progress, the breaker failed
+  // the claim, and the builder's work shipped the next morning under Failed.
+  test('a turn ending while its own subagent or kept job is still working rests until it reports, never counted by the breaker (#2511)', () => {
+    const r = decideStop(input({ driver: ok(after({ idleBlocks: LIMITS.breakerBlocks, blocks: 4 })), claim: held(), busy: '1 subagent' }))
+    expect(r.kind).toBe('rest')
+    expect(r.release).toBeUndefined()
+    const rec = r.record as DriverRecord
+    expect(rec.stopped).toBe(null)
+    expect(rec.idleBlocks).toBe(0)
+    expect(rec.progressAt).toBe(T0)
+    expect(rec.resumeAt).toBe(T0 + LIMITS.busyRestMs)
+    expect(rec.waitingOn).toBe('1 subagent')
+    // Counted against the night's cap, so work that never reports cannot rest the night away.
+    expect(rec.blocks).toBe(5)
+    // Not a wait on a limit: the claim's active time goes on counting toward its stuck limit.
+    expect(rec.waits).toEqual([])
+    expect(r.kind === 'rest' && r.reload).toBe(false)
+    expect(r.notes).toEqual([{ kind: 'heartbeat', repo: 'o/r', issue: 7 }])
+    // The time breaker too: past its active minutes with nothing new, still a rest while work runs.
+    expect(decideStop(input({ driver: ok(after()), now: T0 + LIMITS.breakerMs, busy: '1 kept job' })).kind).toBe('rest')
+  })
+  test('a claim whose builder stopped or hung (no background work counted) is still failed by the breaker (#2511)', () => {
+    // Stopped, or hung past the job watcher's quiet time: either way register.ts counts no work.
+    for (const busy of [null, undefined]) {
+      const r = decideStop(input({ driver: ok(after({ idleBlocks: LIMITS.breakerBlocks })), claim: held(), busy }))
+      expect(r.kind === 'stop' && r.release).toEqual({ issue: 7, state: 'failed', why: `circuit breaker: ${LIMITS.breakerBlocks} blocks in a row with no new commit, claim or note` })
+    }
+  })
+  test('once the background work is over, the breaker counts afresh from the rest, and trips as before (#2511)', () => {
+    let d: DriverReading = ok(decideStop(input({ driver: ok(after({ idleBlocks: LIMITS.breakerBlocks })), claim: held(), busy: '1 subagent' })).record as DriverRecord)
+    for (let n = 1; n <= LIMITS.breakerBlocks; n++) {
+      const r = decideStop(input({ driver: d, now: T0 + n * MIN, claim: held(), busy: null }))
+      expect(r.kind).toBe('block')
+      expect(r.record?.waitingOn).toBe(null)
+      d = ok(r.record as DriverRecord)
+    }
+    const r = decideStop(input({ driver: d, now: T0 + (LIMITS.breakerBlocks + 1) * MIN, claim: held(), busy: null }))
+    expect(r.kind === 'stop' && r.release?.state).toBe('failed')
+  })
+  test('a claim past its stuck time is parked even while its subagent runs, and the night cap still stops (#2511)', () => {
+    const stuck = decideStop(input({ driver: ok(after()), claim: held(1, T0 - LIMITS.stuckMs), busy: '1 subagent', fingerprint: 'notes=1;refs=' }))
+    expect(stuck.kind).toBe('block')
+    expect(stuck.release).toEqual({ issue: 7, state: 'parked', why: expect.stringMatching(/past the 2 hours an issue gets$/) })
+    const capped = decideStop(input({ driver: ok(after({ blocks: LIMITS.nightCap })), busy: '1 subagent' }))
+    expect(capped.kind === 'stop' && capped.why).toBe(`this session reached the night's cap of ${LIMITS.nightCap} blocks`)
+  })
+  test('a park the watchdog made is kept for the Stop after the rest, never lost to it (#2511)', () => {
+    const r = decideStop(input({ driver: ok(after({ parked: 'The watchdog parked #7.' })), busy: '1 subagent' }))
+    expect(r.kind).toBe('rest')
+    expect(r.record?.parked).toBe('The watchdog parked #7.')
   })
   test('active minutes with nothing new trip it; time spent waiting on a limit does not count', () => {
     const at = T0 + LIMITS.breakerMs
@@ -467,6 +519,42 @@ describe('mods out of step', () => {
     const old = readDriver(JSON.stringify(before1281), 'g1', 's1')
     expect(old.state === 'ok' && !old.record.rested && !old.record.restDue).toBe(true)
     for (const o of [{ rested: 'yes' }, { restDue: 1 }]) expect(readDriver(JSON.stringify({ ...after(), ...o }), 'g1', 's1').state).toBe('unreadable')
+  })
+  test('the rest for mods out of step loads them again; a rest on background work does not (#2511)', () => {
+    const skewed = decideStop(input({ claim: held(), skew: SKEW }))
+    expect(skewed.kind === 'rest' && skewed.reload).toBe(true)
+    const busy = decideStop(input({ claim: held(), busy: '1 subagent' }))
+    expect(busy.kind === 'rest' && busy.reload).toBe(false)
+  })
+})
+
+describe('resting on background work (#2511)', () => {
+  test('the work is counted in words, never in the session\'s own: none is null', () => {
+    expect(busyWords(0, 0)).toBe(null)
+    expect(busyWords(1, 0)).toBe('1 subagent')
+    expect(busyWords(2, 0)).toBe('2 subagents')
+    expect(busyWords(0, 1)).toBe('1 kept job')
+    expect(busyWords(1, 3)).toBe('1 subagent and 3 kept jobs')
+  })
+  test('the counter keeps what a rest waits on; one from before it reads as none, and a damaged one is unreadable', () => {
+    const r = readDriver(JSON.stringify(after({ waitingOn: '1 subagent' })), 'g1', 's1')
+    expect(r.state === 'ok' && r.record.waitingOn).toBe('1 subagent')
+    const { waitingOn: _w, ...before2511 } = after()
+    const old = readDriver(JSON.stringify(before2511), 'g1', 's1')
+    expect(old.state === 'ok' && (old.record.waitingOn ?? null)).toBe(null)
+    expect(readDriver(JSON.stringify({ ...after(), waitingOn: 3 }), 'g1', 's1').state).toBe('unreadable')
+  })
+  test('a session started again after a rest on background work is told to check on it, never told an API error passed', () => {
+    const d = decideStop(input({ claim: held(), busy: '1 subagent and 1 kept job' })).record as DriverRecord
+    expect(resumeWords(d)).toBe('Sleep mode: this session rested while its own background work ran (1 subagent and 1 kept job), and nothing has reported back yet. Check on that work before redoing anything, then carry on with the overnight work.')
+    expect(resumeWords({ ...d, waitingOn: null })).toBe(RESUME)
+    expect(resumeWords({ ...d, restDue: true })).toBe(REST_RESUME)
+  })
+  test('an API error after a rest on background work is resumed as the API error\'s wait, never as the rest (lessons review)', () => {
+    const rested = decideStop(input({ claim: held(), busy: '1 subagent' })).record as DriverRecord
+    const f = decideFailure({ now: T0 + MIN, self: 's1', generation: 'g1', repo: 'o/r', driver: ok(rested), error: 'rate_limit', message: 'API Error: 429', weekly: 50, claim: held() })
+    expect(f.kind).toBe('wait')
+    expect(resumeWords(f.record as DriverRecord)).toBe(RESUME)
   })
 })
 

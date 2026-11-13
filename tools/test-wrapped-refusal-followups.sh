@@ -128,6 +128,41 @@ check "a run that read every transcript says none was left out" "transcripts tha
 check "a run that read every transcript says none was gone" "transcripts gone before they could be read (deleted or moved after being listed): 0" "$out"
 absent "a run that read every transcript gives no shortfall warning" "every total below leaves out" "$out"
 
+# A line that ECHOES a call is no call (claude-config#2239). Claude Code writes `api-request-blob`
+# lines, with no timestamp, that repeat earlier messages, tool calls and results included, under the
+# same ids. Read as calls, the echo seen first (path order) gave a refused call no time, so it fell
+# outside every period: 19 of the 191 rows the gate recorded for 2026-10-23 to 2026-11-04 looked
+# untraced for that reason alone. The same fixture with echoes added, one in a file read before the
+# call's own and one ahead of the call in its own file, must measure exactly what the plain one did.
+E="$WORK/echoes"
+mkdir -p "$E"
+cp -R "$P/." "$E/"
+python3 - "$E" <<'PY'
+import json, os, sys
+E = sys.argv[1]
+GATE = "PreToolUse:Bash hook error: [/h/.claude/hooks/check-wrapped-commands.sh]: "
+REFUSAL = GATE + "BLOCKED: this command runs a script by its path: it runs a script file. It also names git, gh or rtk (claude-config#1478)."
+def echo(cid, cmd, result):
+    return json.dumps({"type": "api-request-blob", "hash": "h-" + cid, "sessionId": "s", "message": {"role": "user", "content": [
+        {"type": "tool_use", "id": cid, "name": "Bash", "input": {"command": cmd}},
+        {"type": "tool_result", "tool_use_id": cid, "content": result, "is_error": True}]}})
+# Read before s2.jsonl, whose call b10 it echoes.
+with open(os.path.join(E, "-proj-b", "0-echo.jsonl"), "w") as f:
+    f.write(echo("b10", "./deploy-zq.sh && git push", REFUSAL) + "\n")
+# Ahead of the call it echoes, in the call's own file.
+path = os.path.join(E, "-proj-a", "s1.jsonl")
+body = open(path).read()
+with open(path, "w") as f:
+    f.write(echo("b2", "bash ./build-zq.sh && git push origin feature-zq", REFUSAL) + "\n" + body)
+PY
+out="$(python3 "$TOOL" --root "$E" --ledger "$L/refusals.tsv" --since 2026-10-23 --until 2026-11-04 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a run with echoed calls exits $rc"; echo "${out:0:3000}"; }
+check "an echoed call is not a second call" "Bash calls: 17" "$out"
+check "a refusal whose echo is read first keeps its own time and is counted" "refused by the wrapped command gate: 8 (47.1% of Bash calls), in 7 episodes" "$out"
+check "an echo ahead of a refusal does not move its episode" "taught, the git, gh or rtk part ran on its own and succeeded: 3" "$out"
+check "the refusal echoed from another file still ends its session" "ended, the refusal was the transcript's last Bash call: 1" "$out"
+check "the echoed refusal keeps its shape" "1  direct, script-file" "$out"
+
 # A transcript that cannot be opened, and one gone between being listed and being read, are each
 # counted beside the totals, never skipped silently (claude-config#2239).
 U="$WORK/unread"

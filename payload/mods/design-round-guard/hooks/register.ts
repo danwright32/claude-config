@@ -54,8 +54,9 @@ import {
   scriptUnread,
   scriptNamesFile,
   scriptUnplaced,
-  scriptUnreadable,
-  scriptLanguage,
+  scriptsRunIn,
+  type ScriptRun,
+  UNPLACED,
   asProgram,
   mentionedModHookFiles,
   leavesGitAlone,
@@ -297,7 +298,15 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   names, and a look changing file it names from the top of the disk or home, are judged the same; a
 //   relative look changing name there is not (measured noise, scriptsRun). A name its code writes
 //   where the folder cannot be followed, or a script that cannot be read, is held as could not check.
-//   A shell script's own commands, and a script named through a variable, are not read (as before).
+//   A shell script's own commands, and a script named through a variable, were not read until #2855.
+// - Since #2855: four more routes are read by the same reading (rules.ts scriptsRunIn): a shell
+//   script's own commands (`bash x.sh`, `./x.sh`, `source x.sh`) and the scripts it runs, two deep,
+//   each file they write by a name the reader places judged as a write of it; a script named through a
+//   variable the command sets to one literal; a script the command writes first from a heredoc, read
+//   as that text; and each local module a python or node script imports. Over 14 days of this Mac's
+//   commands and the repository's scripts none newly held a command. A destination a variable the
+//   script does not set fills in, a loop's or the environment's variable naming a script, and a module
+//   found only through sys.path or an installed package are not read (docs/mods-design.md).
 // - Since #2830: a git checkout or restore beside other commands is measured by what git puts back
 //   wherever nothing before it, or beside it in a pipe or the background, can change its source: a
 //   command that only reads, git reading only, or another restore of named paths (rules.ts
@@ -568,7 +577,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A write the words do not name, or a destination the reader could not follow, may be the record
   // when the command names the plugin store at all: refused, failing closed as ask before saving does
   // for lasting memory (lessons review of #991).
-  // A python or node script file the command runs (#2847), read for what its own code writes, as
+  // A python or node script file the command runs (#2847), and since #2855 a shell script, a script
+  // it runs and a module a script imports (scriptsRunIn), read for what its own code writes, as
   // mod-kit reads inline code: each file its code names and writes is judged as a write of it. Where
   // its code does not name every file it writes, each mod hook file its text names is judged too, as
   // a shell write to it is (read again once it ran, so one only read passes), and so is a look
@@ -585,8 +595,24 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       targets.push({ word: s.word, unread: s.unread, inScript: s.word })
       continue
     }
-    const read = await $.modkit.writes({ command: asProgram(s.lang, s.text), cwd: s.folder ?? UNPLACED, home: at.home })
+    const read = await $.modkit.writes({ command: s.lang === 'shell' ? s.text : asProgram(s.lang, s.text), cwd: s.folder ?? UNPLACED, home: at.home })
     const named = scratch || namesScratchpad(s.text, at.session, at.temps)
+    // #2855: a shell script's own commands, read as mod-kit reads a command line: each file they write,
+    // take away or empty by a name the reader places is judged as a write of it. A name placed only
+    // under a folder that cannot be followed is held as could not check. A destination named by a
+    // variable the script does not set to one value, a pattern or a command's output is not judged
+    // (over 14 days of this Mac's commands such names were a test's fixture folder or the script's own
+    // arguments, which #1586 judges already), and nor is what git puts back there.
+    if (s.lang === 'shell')
+      for (const f of [...read.files, ...read.changes.filter(c => c.does === 'remove' || c.does === 'truncate')]) {
+        if (!f.path) continue
+        if (f.path.startsWith(`${UNPLACED}/`)) {
+          const rel = f.path.slice(UNPLACED.length + 1)
+          if (shapeKind(rel) !== null || isModHookTs(rel)) targets.push({ word: rel, unread: scriptUnplaced(s.word, rel), inScript: s.word })
+          continue
+        }
+        targets.push({ path: f.path, word: f.word, inScript: s.word, ...('does' in f && f.does === 'remove' ? { removes: true as const } : {}) })
+      }
     for (const u of read.unnamed) {
       if (u.targets) {
         for (const p of u.targets)
@@ -622,54 +648,30 @@ const programGuesses = async ($: EngineInterface, read: string, folder: string |
   return out
 }
 
-// #2847: the folder a script's code is read in where the folder it runs in cannot be followed, so a
-// relative name its code writes comes back under it and is told apart as one that cannot be placed.
-// No real folder: mod-kit's write reader reads names only, and nothing is ever opened there.
-const UNPLACED = '/design-round-guard-folder-not-known'
-// #2847: the most of a script file read for what its own code writes. A script a session writes is
-// far smaller; a larger file run by name (a package's bundled tool) is no script of the session's.
-const SCRIPT_MAX = 512 * 1024
-// A command run by its own name that is a script file, as mod-kit's write reader reads one (#1586):
-// one named by its folder (`./gen`, `scripts/gen.py`) or ending in a script language's extension.
-const runsByName = (w: string | undefined) => w !== undefined && (/^\.\.?\//.test(w) || /\.(?:py|[cm]?js|[cm]?ts)$/i.test(w))
-
-// #2847: each python or node script file a command runs, with its text and the folder it runs in
-// (mod-kit's `folder`, absent where a cd before it cannot be followed), or why one that is there could
-// not be read. A script named through a variable or a command's output, or by a relative name where
-// the folder is unknown, cannot be found, nor can one not there (nothing to run, or one the same
-// command writes first, which is read as it stands); each is left as #1586 leaves it, judged by the
-// files it is handed. Inline code and a script on standard input are read already, as programs.
-type ScriptRun = { word: string; path: string; lang: 'python' | 'node'; folder: string | undefined; text: string } | { word: string; unread: string }
-const scriptsRun = async ($: EngineInterface, command: string, at: Where): Promise<ScriptRun[]> => {
-  const out: ScriptRun[] = []
-  for (const c of await $.modkit.pipeline({ command, cwd: at.cwd, home: at.home })) {
-    if (c.program !== undefined) continue
-    // A shell's script file (no `language`) is read as the commands it runs by no one here.
-    const word = c.script ? (c.script.stdin || c.language === undefined ? undefined : c.script.files[0]) : c.language === undefined && runsByName(c.words[0]) ? c.words[0] : undefined
-    if (word === undefined || /[$`*?[]/.test(word)) continue
-    const folder = c.folder ?? undefined
-    if (folder === undefined && !/^(\/|~\/)/.test(word)) continue
-    const path = resolvePath(word, folder ?? '/', at.home)
-    if (out.some(s => 'path' in s && s.path === path)) continue
-    let kind: { kind: string; size?: number }
-    try {
-      kind = (await $.fs.stat(path, { resolve: true })) as { kind: string; size?: number }
-    } catch {
-      continue
-    }
-    if (kind.kind !== 'file' || (kind.size ?? 0) > SCRIPT_MAX) continue
-    let text: string
-    try {
-      text = String(await $.fs.read(path))
-    } catch (err) {
-      out.push({ word, unread: scriptUnreadable(word, message(err)) })
-      continue
-    }
-    const lang = scriptLanguage(path, c.language)
-    if (lang) out.push({ word, path, lang, folder, text })
-  }
-  return out
-}
+// #2847, #2855: each script file a command runs whose own text is read for what it writes (rules.ts
+// scriptsRunIn, the one reading, which the #2855 sweep ran over this Mac's commands): python and node
+// scripts and the local modules they import, shell scripts and the scripts they run, a script named
+// through a variable the command sets, and one the command writes first from a heredoc. Here only how
+// it reaches mod-kit's pipeline and the disk: a stat that fails is nothing there to read, and a read
+// that fails says why, for a refusal that could not check it.
+const scriptsRun = ($: EngineInterface, command: string, at: Where): Promise<ScriptRun[]> =>
+  scriptsRunIn(
+    {
+      pipeline: (line, cwd) => $.modkit.pipeline({ command: line, cwd, home: at.home }),
+      writes: (line, cwd) => $.modkit.writes({ command: line, cwd, home: at.home }),
+      stat: async path => (await $.fs.stat(path, { resolve: true })) as { kind: string; size?: number },
+      read: async path => {
+        try {
+          return String(await $.fs.read(path))
+        } catch (err) {
+          throw new Error(message(err))
+        }
+      },
+    },
+    command,
+    at.cwd,
+    at.home,
+  )
 
 // Whether a Swift file is a SwiftUI view: the text the call carries, beside the file as it is now.
 // Text that cannot be had (a file the shell writes, a file that cannot be read) counts as one. A file

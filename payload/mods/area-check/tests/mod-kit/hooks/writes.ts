@@ -503,10 +503,36 @@ const TOOL_READS: ReadonlyMap<string, ReadonlySet<string>> = new Map(Object.entr
 // #1815 replay of 104,832 distinct Bash commands, prettier ran 102 times (61 --write, 34 --check) and
 // eslint 28, none with --fix. ruff is not listed: `fix = true` in its config makes `ruff check` fix
 // with no flag, so its flags alone cannot say it writes nothing; nor is black, run once.
+//
+// A test runner (#2823) is handed the tests to run, and rewrites them only when told to update their
+// snapshots: vitest -u or --update, jest -u or --updateSnapshot (--init writes its config), bun test
+// -u or --update-snapshots, and for pytest a plugin's update flag (syrupy and pytest-snapshot
+// --snapshot-update, pytest-regressions --force-regen and --regen-all, inline-snapshot
+// --inline-snapshot=...). unittest has none; node --test's --test-update-snapshots writes a separate
+// <test>.snapshot file, never a test it is handed. Each writes a report through an option of its
+// own (`outputs`; vitest's per reporter --outputFile.junit is --outputFile's). What a run with no
+// such flag still writes, named here because it is not read: a snapshot that does not exist yet
+// (into a __snapshots__ file, or an empty toMatchInlineSnapshot() filled in inside the test file
+// whose call an edit put there), a file the test's own code writes, and an update a config sets
+// (vitest's `update`, inline-snapshot's default flags). Before this, `npx vitest run <tests>` was held
+// for every file under a test folder it named, while `pytest <tests>`, `pnpm vitest` and `bunx
+// vitest` were never read as writing at all; the 14 day sweep is in the pull request closing #2823.
 const TOOL_EDITS: ReadonlyMap<string, { edits: ReadonlySet<string>; outputs: ReadonlySet<string> }> = new Map(Object.entries({
   prettier: { edits: new Set(['--write', '-w']), outputs: new Set(['--cache-location']) },
   eslint: { edits: new Set(['--fix', '--init']), outputs: new Set(['-o', '--output-file', '--cache-location', '--cache-file']) },
+  vitest: { edits: new Set(['-u', '--update']), outputs: new Set(['--outputFile', '--coverage.reportsDirectory']) },
+  jest: { edits: new Set(['-u', '--updateSnapshot', '--init']), outputs: new Set(['--outputFile', '--coverageDirectory', '--cacheDirectory']) },
+  pytest: {
+    edits: new Set(['--snapshot-update', '--force-regen', '--regen-all', '--inline-snapshot']),
+    // pytest-cov's --cov-report=xml:<file> names its file after a kind, so it is not read here.
+    outputs: new Set(['--basetemp', '--junitxml', '--junit-xml', '--log-file', '--resultlog', '--report-log', '--html', '--json-report-file']),
+  },
+  unittest: { edits: new Set(), outputs: new Set() },
+  'bun test': { edits: new Set(['-u', '--update-snapshots']), outputs: new Set(['--coverage-dir', '--reporter-outfile']) },
+  'node --test': { edits: new Set(), outputs: new Set(['--test-reporter-destination']) },
 }))
+// Whether an option is one a tool writes a file through, vitest's per reporter form included.
+const isOutput = (outputs: ReadonlySet<string>, name: string) => outputs.has(name) || (name.includes('.') && outputs.has(name.slice(0, name.indexOf('.'))))
 // A tool's name as npx is given it, without the version it asks for (prettier@3, @scope/pkg@1).
 const toolName = (name: string) => name.replace(/(?<=.)@[^/@]*$/, '')
 // Whether a word may become a flag the reader cannot see: past its command substitutions, which give
@@ -544,8 +570,10 @@ const toolArgs = (name: string, args: readonly string[]): string[] => {
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string
     const eq = a.indexOf('=')
-    if (modes.outputs.has(a) && args[i + 1] !== undefined) out.push(args[++i] as string)
-    else if (eq > 0 && modes.outputs.has(a.slice(0, eq))) out.push(a.slice(eq + 1))
+    // Written with =, the value is the file; only an option written alone takes the next word.
+    if (eq > 0) {
+      if (isOutput(modes.outputs, a.slice(0, eq))) out.push(a.slice(eq + 1))
+    } else if (isOutput(modes.outputs, a) && args[i + 1] !== undefined) out.push(args[++i] as string)
   }
   return scriptArgs(out)
 }
@@ -581,6 +609,17 @@ const npxTool = (args: readonly string[]): { name: string; args: number } | unde
     else if (!a.startsWith('-')) return { name: a, args: i + 1 }
   }
   return undefined
+}
+
+// The test runner bun or node carries (#2823), read as a tool run, as one npx runs is: `bun test` is
+// bun's runner, never a script file named test (`bun ./test` runs that file), and node given --test
+// before any script file runs each operand as a test file, none of them another's arguments. bun's
+// runner's arguments start after `test`; node's at its first word, so an output option among node's
+// own (--test-reporter-destination) is read. `script` is the script file the reader named, if any.
+const testRunner = (name: string, args: readonly string[], script: string | undefined): { name: string; args: number } | undefined => {
+  if (name === 'bun') return script === 'test' ? { name: 'bun test', args: args.indexOf('test', 1) + 1 } : undefined
+  const end = script === undefined ? args.length : args.indexOf(script, 1)
+  return args.slice(1, end < 0 ? args.length : end).includes('--test') ? { name: 'node --test', args: 1 } : undefined
 }
 
 /**
@@ -1072,7 +1111,9 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
           ...(textOnly(w) ? { unexpanded: true as const } : {}),
         }
       })
-    if (scriptFile) {
+    // bun's or node's test runner (#2823) runs no script file, so its words are read as a tool's below.
+    const runner = kind === 'node' ? testRunner(name, args, scriptFile) : undefined
+    if (scriptFile && !runner) {
       const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
       const handed = at < 0 ? [] : handedOf(scriptArgs(args.slice(at + 1)))
       if (handed.length) {
@@ -1082,11 +1123,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
     }
     // A module python runs with -m, or a tool npx runs (#1682): what either writes cannot be read
     // before it runs, as a script file's cannot, so each is a run, the module or tool its `script`,
-    // with no file of its own.
-    const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
+    // with no file of its own. So is bun's or node's test runner (#2823).
+    const tool = runner ?? (kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined)
     if (tool) {
       const handed = handedOf(toolArgs(tool.name, args.slice(tool.args)))
-      if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, tool: true, args: handed })
+      const what = runner ? `the test runner ${tool.name}` : kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx'
+      if (handed.length) runs.push({ what, script: tool.name, tool: true, args: handed })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script

@@ -71,9 +71,10 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, REST_RESUME, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
+  LIMITS, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
 } from './driver.ts'
+import { busyNow } from './busy.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
@@ -3322,6 +3323,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal), skew: skewMet,
+      busy: await busyNow($),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     // A rest is for the skew met so far: one met after it, in the turn it starts, is met anew (#1281).
@@ -3343,6 +3345,11 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
     // Said from what the queue answered, never before it (#925); its answer reaches the block only as data (#922).
     if (d.kind === 'block') return { block: blockTold(d, ended, { root: where.root, self: en.self }) }
+    // #2511: a rest on the session's own background work loads nothing again; its report, or the tick, starts it.
+    if (d.kind === 'rest' && !d.reload) {
+      $.ui.log(`scope-modes: the overnight driver let this session rest: ${d.why}`, { to: 'debug' })
+      return null
+    }
     if (d.kind === 'rest') {
       // #1281: this mod's own manifest touched, so it loads again once the session is idle, against
       // the mod-kit loaded by then (measured on 2.1.302: a touch alone reloads a mod, at idle). The
@@ -3390,7 +3397,8 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
 // time even mid turn (the watchdog), said at the next Stop. The session is started again outside
 // the one at a time queue, so the turn it starts can reach its own Stop.
 const driverTick = async ($: EngineInterface, seen: SleepReading) => {
-  // The words it is started again with: after an API error's wait, or after a rest (#1281).
+  // The words it is started again with, as resumeWords picks them: after an API error's wait, a rest
+  // for mods out of step (#1281), or a rest on its own background work (#2511).
   const resume = await oneAtATime(async (): Promise<string | null> => {
     const en = await enrolledNow($, seen)
     if (!en || stoppedHere.has(stopKey(en))) return null
@@ -3400,7 +3408,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     if (resumeDue(d, en.now)) {
       // Cleared and saved first, so a second tick never starts it twice.
       d.resumeAt = null
-      return (await saveDriver($, en, d)) === null ? (d.restDue ? REST_RESUME : RESUME) : null
+      return (await saveDriver($, en, d)) === null ? resumeWords(d) : null
     }
     if (d.stopped || d.resumeAt !== null) return null
     const c = await claimNow($, en)
@@ -3428,6 +3436,20 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     $.ui.log(`scope-modes: the overnight driver could not start the session again: ${msg(err)}`, { to: 'debug' })
   }
 }
+
+// A rest on the session's own background work (#2511) is over once a main loop turn starts: the
+// work's report starts one. Its resume is cleared then, so the minute's tick never starts a turn
+// still running with words saying nothing has reported back (#2885 lessons review). The API error's
+// wait and the rest for mods out of step expect no turn before their resume, so they are kept.
+const restEndsAtTurn = ($: EngineInterface) =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en) return
+    const r = await loadDriver($, en)
+    if (r.state !== 'ok' || !r.record.waitingOn) return
+    const unsaved = await saveDriver($, en, { ...r.record, resumeAt: null, waitingOn: null })
+    if (unsaved) $.ui.log(`scope-modes: a turn started after a rest on background work, but the rest could not be ended (${unsaved}), so its resume may still start a turn`, { to: 'debug' })
+  })
 
 // ---- Power for the night (#844) ----
 // /sleep refuses on battery, and holds `caffeinate -i` (no idle sleep) until the record's end, so the
@@ -5356,9 +5378,15 @@ export const register: Register = on => {
 
   // The first main turn after a morning prompt is the morning one (#1285): /wake's own prompt, the
   // turn "I'm up" started, or the one the minute submitted. Only the main loop raises turn.start.
+  // It also ends a rest on background work, whose report is what starts the turn (#2511).
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     if (morningPickers && morningPickers.turnId === undefined) morningPickers.turnId = e.turnId
+    try {
+      await restEndsAtTurn($)
+    } catch (err) {
+      $.ui.log(`scope-modes: a turn started, but whether it ended a rest on background work could not be read: ${msg(err)}`, { to: 'debug' })
+    }
     return r
   })
 
