@@ -84,7 +84,15 @@ import {
   leavesGitAlone,
   pathRestore,
   indexSource,
+  scriptOf,
+  scriptPath,
+  heredocFile,
+  importedFiles,
+  scriptsRunIn,
+  type ScriptIo,
+  MODULES_MAX,
 } from '../hooks/rules.ts'
+import { commandWrites, pipelineIn } from './mod-kit/hooks/writes.ts'
 import * as allRules from '../hooks/rules.ts'
 import { HELD_2141_AFTER, HELD_2141_BEFORE } from './held-2141-fixture.ts'
 
@@ -2495,6 +2503,104 @@ test('#2847: asProgram ends its heredoc on a word no line of the script is', () 
   expect(asProgram('python', "print('x')")).toBe("python3 - <<'DESIGN_ROUND_GUARD_SCRIPT'\nprint('x')\nDESIGN_ROUND_GUARD_SCRIPT")
   const tricky = "a = 1\nDESIGN_ROUND_GUARD_SCRIPT\nb = 2\n"
   expect(asProgram('node', tricky)).toBe(`node - <<'DESIGN_ROUND_GUARD_SCRIPT_'\n${tricky}DESIGN_ROUND_GUARD_SCRIPT_`)
+})
+
+// #2855: the four routes #2847 left unread, each read by one pure reading the guard and its sweep share.
+test('#2855: scriptOf finds a shell, python or node script a command runs, and never inline code or another language', () => {
+  const of = (command: string) => pipelineIn(command, '/w', '/h').map(c => scriptOf(c))
+  expect(of('bash x.sh a')).toEqual([{ word: 'x.sh', shell: true }])
+  expect(of('sh -x /n/y.sh')).toEqual([{ word: '/n/y.sh', shell: true }])
+  expect(of('source ./env.sh && . lib.sh')).toEqual([{ word: './env.sh', shell: true }, { word: 'lib.sh', shell: true }])
+  expect(of('python3 gen.py && node b.mjs && ./run.sh')).toEqual([{ word: 'gen.py' }, { word: 'b.mjs' }, { word: './run.sh' }])
+  expect(of("bash -c 'echo x' && python3 -c 'print(1)' && ruby x.rb && awk -f p.awk f && ls")).toEqual([undefined, undefined, undefined, undefined, undefined])
+  expect(of("bash <<'EOF'\necho x\nEOF")).toEqual([undefined])
+})
+
+test('#2855: scriptPath follows a variable the command sets to one literal, and nothing it cannot be sure of', () => {
+  expect(scriptPath('$N/step.py', 'N=/n/2845; python3 "$N/step.py"', '/w', '/h')).toBe('/n/2845/step.py')
+  expect(scriptPath('${N}/step.py', 'export N=/n; python3 "${N}/step.py"', '/w', '/h')).toBe('/n/step.py')
+  expect(scriptPath('$N/step.py', 'N=sub; python3 "$N/step.py"', '/w', '/h')).toBe('/w/sub/step.py')
+  expect(scriptPath('$HOME/x.sh', 'bash $HOME/x.sh', undefined, '/h')).toBe('/h/x.sh')
+  expect(scriptPath('$PWD/x.sh', 'bash $PWD/x.sh', '/w', '/h')).toBe('/w/x.sh')
+  // Set nowhere, set two ways, set from a command's output, a loop's, a pattern, or relative where the folder is unknown.
+  for (const [word, command, folder] of [
+    ['$N/a.py', 'python3 "$N/a.py"', '/w'],
+    ['$N/a.py', 'N=/a; N=/b; python3 "$N/a.py"', '/w'],
+    ['$N/a.py', 'N=$(pwd); python3 "$N/a.py"', '/w'],
+    ['$s/a.py', 'for s in /a /b; do python3 "$s/a.py"; done', '/w'],
+    ['/n/*.py', 'python3 /n/*.py', '/w'],
+    ['$PWD/x.sh', 'bash $PWD/x.sh', undefined],
+    ['x.sh', 'bash x.sh', undefined],
+  ] as [string, string, string | undefined][])
+    expect({ word, command, path: scriptPath(word, command, folder, '/h') }).toEqual({ word, command, path: undefined })
+})
+
+test('#2855: heredocFile gives the text cat writes from a heredoc into a file mod-kit places, and nothing it cannot be sure of', () => {
+  const each = (command: string) => {
+    const { files } = commandWrites(command, '/w', '/h')
+    return pipelineIn(command, '/w', '/h').map(c => heredocFile(c, files))
+  }
+  expect(each("cat > /n/a.py <<'EOF'\nprint($x)\nEOF")).toEqual([{ path: '/n/a.py', text: 'print($x)\n' }])
+  expect(each('cat <<EOF > b.py\nprint(1)\nEOF')).toEqual([{ path: '/w/b.py', text: 'print(1)\n' }])
+  expect(each("N=/n; cat > \"$N/c.py\" <<'EOF'\nprint(2)\nEOF")).toEqual([{ path: '/n/c.py', text: 'print(2)\n' }])
+  // A body the shell may change, an append, cat given a file too, another writer, and a file mod-kit cannot place.
+  for (const command of ['cat > /n/d.py <<EOF\nprint("$HOME")\nEOF', "cat >> /n/e.py <<'EOF'\nprint(1)\nEOF", "cat - x > /n/f.py <<'EOF'\n1\nEOF", "tee /n/g.sh <<'EOF'\necho hi\nEOF", "echo x > /n/h.py", "cat > \"$(pwd)/i.py\" <<'EOF'\n1\nEOF"])
+    expect({ command, made: each(command).filter(Boolean) }).toEqual({ command, made: [] })
+})
+
+test('#2855: importedFiles names the local modules python and node would load, in the order each tries them', () => {
+  expect(importedFiles('python', 'import json, helper as h\nfrom tools.edit import go\nfrom . import sib\nfrom ..up import x\n# import nothing\n', '/n/sub', '/n')).toEqual([
+    ['/n/json.py', '/n/json/__init__.py'],
+    ['/n/helper.py', '/n/helper/__init__.py'],
+    ['/n/tools/edit.py', '/n/tools/edit/__init__.py'],
+    ['/n/tools/edit/go.py', '/n/tools/edit/go/__init__.py'],
+    ['/n/sub/sib.py', '/n/sub/sib/__init__.py'],
+    ['/n/up.py', '/n/up/__init__.py'],
+    ['/n/up/x.py', '/n/up/x/__init__.py'],
+  ])
+  const node = importedFiles('node', "import { a } from './lib/a.mjs'\nconst b = require('../b')\nawait import('./c.js')\nimport 'node:fs'\nimport x from 'pkg'\n", '/n/s', '/n/s')
+  expect(node.map(g => g[0])).toEqual(['/n/s/lib/a.mjs', '/n/b', '/n/s/c.js'])
+  expect(node[0]?.[1]).toBe('/n/s/lib/a.mts')
+  expect(node[1]).toContain('/n/b.ts')
+  expect(node[1]).toContain('/n/b/index.js')
+})
+
+test('#2855: scriptsRunIn reads each route, says which script brought a file in, and stops at its limits', async () => {
+  const disk: Record<string, string> = {
+    '/n/edit.sh': 'sed -i "" s/a/b/ /w/app/x.css\nbash /n/inner.sh\n',
+    '/n/inner.sh': 'bash /n/deeper.sh\n',
+    '/n/deeper.sh': 'echo deep\n',
+    '/n/step.py': 'import helper\n',
+    '/n/helper.py': 'import step\n',
+    '/n/locked.py': 'UNREADABLE',
+    '/n/tool': 'binary',
+  }
+  const io: ScriptIo = {
+    pipeline: async (command, cwd) => pipelineIn(command, cwd, '/h'),
+    writes: async (command, cwd) => commandWrites(command, cwd, '/h'),
+    stat: async p => (p in disk ? { kind: 'file', size: (disk[p] ?? '').length } : undefined),
+    read: async p => {
+      if (disk[p] === 'UNREADABLE') throw new Error('EACCES')
+      return disk[p] as string
+    },
+  }
+  const runs = await scriptsRunIn(io, "bash /n/edit.sh && python3 /n/step.py && N=/n; python3 $N/locked.py; ./tool; cat > /n/new.sh <<'EOF'\necho fresh\nEOF\nbash /n/new.sh", '/n', '/h')
+  expect(runs.map(r => ('unread' in r ? `${r.word}: unread` : `${r.word}: ${r.lang}`))).toEqual([
+    '/n/edit.sh: shell',
+    '/n/inner.sh, which /n/edit.sh runs,: shell',
+    '/n/step.py: python',
+    'helper.py, which /n/step.py imports,: python',
+    '$N/locked.py: unread',
+    '/n/new.sh: shell',
+  ])
+  expect(runs.find(r => 'text' in r && r.path === '/n/new.sh')).toMatchObject({ text: 'echo fresh\n' })
+  // deeper.sh is past SHELL_DEPTH; step.py, imported back by helper.py, is read once; ./tool has no script extension.
+  expect(runs.some(r => r.word.startsWith('/n/deeper.sh'))).toBe(false)
+  // Past MODULES_MAX the rest of a script's imports are not read.
+  const many: Record<string, string> = { '/m/main.py': Array.from({ length: MODULES_MAX + 5 }, (_, i) => `import m${i}`).join('\n') }
+  for (let i = 0; i < MODULES_MAX + 5; i++) many[`/m/m${i}.py`] = ''
+  const wide = await scriptsRunIn({ ...io, stat: async p => (p in many ? { kind: 'file', size: 1 } : undefined), read: async p => many[p] as string }, 'python3 /m/main.py', '/m', '/h')
+  expect(wide.length).toBe(1 + MODULES_MAX)
 })
 
 test('#2847: mentionedModHookFiles names only a mod hook TypeScript file, never a declaration or other .ts', () => {

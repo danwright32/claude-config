@@ -3563,6 +3563,111 @@ test('#2847: a write the guard could not follow is refused for that, never as an
   expect(w.ran).toEqual([])
 })
 
+// #2855: four routes by which a script still changed a guarded file unread after #2847: a shell
+// script's own commands (`bash x.sh` running sed -i on a mod hook file), a script named through a
+// variable the command sets (`N=...; python3 "$N/step.py"`), a script the same command writes first
+// from a heredoc (read as it stood on disk, or not at all where it was new), and a local module a
+// script imports. Each is now read as #2847 reads a script file, and judged the same way.
+const EDIT_KEYS_SH = `sed -i '' 's/steps/rows/' ${KEYS}\n`
+const WRITE_PAGE_PY = "open('/w/slate/app/page.tsx', 'w').write('<main/>')\n"
+const WRITE_DATA_PY = "import json\njson.dump({}, open('/w/slate/data.json', 'w'))\n"
+
+test('#2855: a shell script whose own commands rewrite a mod hook file, or write a screen file, is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/edit.sh`]: EDIT_KEYS_SH, [`${NOTES}/page.sh`]: "printf '<main/>' > /w/slate/app/page.tsx\n", [`${NOTES}/outer.sh`]: `bash ${NOTES}/edit.sh\n` } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  for (const command of [`bash ${NOTES}/edit.sh`, `cd ${NOTES} && ./edit.sh`, `source ${NOTES}/edit.sh`, `sh ${NOTES}/outer.sh`]) {
+    expect({ command, undone: refusalOf(await call($, { tool: 'Bash', command })).includes('was undone') }).toEqual({ command, undone: true })
+    expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  }
+  const ran = w.ran.length
+  for (const command of [`bash ${NOTES}/page.sh`, `cd /w/slate && bash ${NOTES}/page.sh`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes(`cannot read what ${NOTES}/page.sh writes to app/page.tsx, which its own code names`) }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran.length).toBe(ran)
+})
+
+test('#2855: a shell script writing only files the guard does not judge, a file named by a variable, or leaving a mod hook file as it was runs', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      ...WITH_SCRATCH,
+      [`${NOTES}/notes.sh`]: "printf 'x' > /w/slate/notes.txt\nrm -f /w/slate/build/out.log\n",
+      // A destination named by a variable the script's own text does not set to one value is not read:
+      // its arguments are judged as #1586 judges them, and a fixture folder is no project's screen.
+      [`${NOTES}/fixture.sh`]: 'T=$(mktemp -d)\nprintf x > "$T/app/page.tsx"\nfor f in "$@"; do cat "$f"; done\n',
+      [`${NOTES}/edit.sh`]: EDIT_KEYS_SH,
+    },
+  })
+  const commands = [`bash ${NOTES}/notes.sh`, `bash ${NOTES}/fixture.sh`, `bash ${NOTES}/edit.sh`, 'bash /w/notes/none.sh']
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(commands.length)
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
+test('#2855: a script named through a variable the command sets is read; one only the environment names is not', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/gen.py`]: WRITE_PAGE_PY, [`${NOTES}/keys.py`]: REWRITE_KEYS, [`${NOTES}/data.py`]: WRITE_DATA_PY } })
+  for (const command of [`N=${NOTES}; python3 "$N/gen.py"`, `N=${NOTES} && python3 "\${N}/gen.py" --dry`, `export N=${NOTES}\npython3 "$N/gen.py"`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('which its own code names') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran).toEqual([])
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `N=${NOTES}; python3 "$N/keys.py"` }))).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  w.ctl.shell = {}
+  // Left out, as neither can be judged precisely: a variable only the environment holds, and a
+  // loop's (most of the 313 script words not followed over 14 days of this Mac's commands).
+  const commands = [`N=${NOTES}; python3 "$N/data.py"`, 'python3 "$UNSET_DIR/gen.py"', `for d in ${NOTES}; do python3 "$d/gen.py"; done`]
+  for (const command of commands) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+})
+
+test('#2855: a script the same command writes from a heredoc is read as the text it writes', withKit, async ($, on) => {
+  // fresh.py is not on disk before the command; stale.py is, writing a screen file, and the command replaces it.
+  const w = world($, on, { files: { ...WITH_SCRATCH, [`${NOTES}/stale.py`]: WRITE_PAGE_PY } })
+  const heredoc = (file: string, text: string, run: string) => `cat > ${NOTES}/${file} <<'EOF'\n${text}EOF\n${run} ${NOTES}/${file}`
+  for (const command of [heredoc('fresh.py', WRITE_PAGE_PY, 'python3'), heredoc('fresh.sh', "printf x > /w/slate/app/page.tsx\n", 'bash'), `cd ${NOTES} && cat <<'EOF' > fresh.mjs\nimport { writeFileSync } from 'node:fs'\nwriteFileSync('/w/slate/app/page.tsx', 'x')\nEOF\nnode fresh.mjs`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('which its own code names') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran).toEqual([])
+  // What the command writes is what runs, so a script it rewrites to write data only runs, whatever stood there before.
+  for (const command of [heredoc('fresh.py', WRITE_DATA_PY, 'python3'), heredoc('stale.py', WRITE_DATA_PY, 'python3')])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+})
+
+test('#2855: a local module a python or node script imports is read for what its own code writes', withKit, async ($, on) => {
+  const w = world($, on, {
+    files: {
+      ...WITH_SCRATCH,
+      [`${NOTES}/step.py`]: 'import helper\nhelper.go()\n',
+      [`${NOTES}/helper.py`]: `def go():\n    ${WRITE_PAGE_PY}`,
+      [`${NOTES}/pkg_step.py`]: 'from tools.edit import go\ngo()\n',
+      [`${NOTES}/tools/__init__.py`]: '',
+      [`${NOTES}/tools/edit.py`]: `def go():\n    p = '${KEYS}'\n    open(p, 'w').write(open(p).read() + 'x')\n`,
+      [`${NOTES}/gen.mjs`]: "import { go } from './lib/write.mjs'\ngo()\n",
+      [`${NOTES}/lib/write.mjs`]: "import { writeFileSync } from 'node:fs'\nexport const go = () => writeFileSync('/w/slate/app/page.tsx', 'x')\n",
+      [`${NOTES}/safe.py`]: 'import json, store\nstore.save()\n',
+      [`${NOTES}/store.py`]: `def save():\n    ${WRITE_DATA_PY.split('\n')[1]}\nimport json\n`,
+      [`${NOTES}/locked_step.py`]: 'import locked\n',
+      [`${NOTES}/locked.py`]: 'UNREADABLE',
+    },
+  })
+  for (const command of [`python3 ${NOTES}/step.py`, `node ${NOTES}/gen.mjs`]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('imports, writes to app/page.tsx, which its own code names') }).toEqual({ command, held: true, said: true })
+  }
+  expect(w.ran).toEqual([])
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/pkg_step.py` }))).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  w.ctl.shell = {}
+  const locked = refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/locked_step.py` }))
+  expect(locked).toContain('locked.py, which')
+  expect(locked).toContain('could not be read for the files its own code writes')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `python3 ${NOTES}/safe.py` }))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
 // #1747: on 2026-10-25 a builder recording a finding with the spool helper's note was refused as a
 // look change. Its text named payload/hooks/lib/__pycache__/*.pyc, so the text, handed to the script
 // as an argument (#1586), read as a pattern that may name a screen file. A note appends one record to
