@@ -83,6 +83,7 @@ REFUSING=(
   chrome-loopback-post-gate.sh
   no-session-link-in-comments.sh
   slack-drafts-only-gate.sh
+  builder-model-gate.sh
   # It asks rather than refuses, but it fails closed (#2521): a crash or a timeout must stop a
   # database write, never let it through unasked.
   db-write-ask.sh
@@ -201,6 +202,8 @@ samples = {
     # Salesforce write is probed with no settings.local.json under the probe HOME, so it says nothing.
     "mcp__claude_ai_Supabase__execute_sql": {"project_id": "probe", "query": "select 1"},
     "mcp__claude_ai_SFDC_USE__createSobjectRecord": {"sobjectType": "Account", "fields": {}},
+    # For the builder model gate (#2027) an ordinary Agent call is a read only one, which it passes.
+    "Agent": {"description": "probe", "prompt": "find it", "subagent_type": "Explore"},
 }
 def top_level_alternatives(rx):
     # Split on the bars outside any group, so "a|b_(c|d)" is two alternatives, not three.
@@ -299,6 +302,7 @@ handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
 chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool
+builder-model-gate.sh Agent
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
 db-write-ask.sh Bash,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
