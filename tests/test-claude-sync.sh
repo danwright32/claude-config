@@ -24137,6 +24137,42 @@ done
 check "#2547 and the effort it shares for Fable is high, as Dan approved" \
   "[ \"\$(jq -r '.modelSettings[\"claude-fable-5-2\"].effortLevel' '$ME_R3/payload/settings.shared.json')\" = high ]"
 
+# The builder tiers (#2652): the orchestrate skill dispatches builders on sonnet, fable or opus, and
+# Claude Code runs an agent on another model at THAT model's own saved effort. So status also asks
+# which full model each alias the tiers name resolves to, and says when one has no shared effort.
+ME_TIER_MAP='opus=claude-opus-5-5,fable=claude-fable-5-2,sonnet=claude-sonnet-5-5'
+ME_T1="$WORK/me2652-repo"; me_repo "$ME_T1" '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}, "claude-fable-5-2": {"effortLevel": "high"}}}'
+mkdir -p "$ME_T1/payload/skills/orchestrate"
+cat > "$ME_T1/payload/skills/orchestrate/SKILL.md" <<'TIERS'
+- Sonnet, with `model: "sonnet"` on the Agent call, for three kinds.
+- Fable, with `model: "fable"`, for design.
+- Opus, with `model: "opus"`, for everything else.
+TIERS
+: > "$ME_LOG"
+out_t1="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP="$ME_TIER_MAP" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_T1" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+dbg "#2652 sonnet has no shared effort: $out_t1"
+check "#2652 a tier model with no shared effort is named, with its alias" \
+  "line_has \"\$out_t1\" 'no shared effort' 'claude-sonnet-5-5' 'sonnet'"
+check "#2652 and names the entry to add" \
+  "line_has \"\$out_t1\" '\"claude-sonnet-5-5\"' 'effortLevel' 'settings.shared.json'"
+check "#2652 and the tier models that do have one are not named" \
+  "! line_has \"\$out_t1\" 'builder tier model fable' && ! line_has \"\$out_t1\" 'builder tier model opus'"
+check "#2652 every alias the tiers name was asked about" \
+  "grep -q -- '--model sonnet' '$ME_LOG' && grep -q -- '--model fable' '$ME_LOG'"
+# Failure path: an alias the claude command cannot resolve is said as that, never as fine (L98).
+out_t2="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP='opus=claude-opus-5-5' CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_T1" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#2652 a tier alias that resolves to nothing is said as could not check" \
+  "line_has \"\$out_t2\" 'could not check' 'sonnet' 'named no model'"
+# The REAL files: every model the real tiers use has a shared effort, so status says nothing.
+ME_T3="$WORK/me2652-repo3"; mkdir -p "$ME_T3/payload/skills/orchestrate"
+cp "$(dirname "$SCRIPT")/payload/settings.shared.json" "$ME_T3/payload/settings.shared.json"
+cp "$(dirname "$SCRIPT")/payload/skills/orchestrate/SKILL.md" "$ME_T3/payload/skills/orchestrate/SKILL.md"
+out_t3="$(SYNC_CLAUDE_BIN="$ME_FAKE" ME_LOG="$ME_LOG" ME_MAP="$ME_TIER_MAP" CLAUDE_HOME="$ME_H" SYNC_REPO="$ME_T3" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#2652 the shared settings file shares an effort for every real builder tier model" \
+  "! grep -q 'no shared effort' <<< \"\$out_t3\" && ! grep -q 'could not check' <<< \"\$out_t3\""
+check "#2652 and the effort it shares for Sonnet is high, as Dan approved" \
+  "[ \"\$(jq -r '.modelSettings[\"claude-sonnet-5-5\"].effortLevel' '$ME_T3/payload/settings.shared.json')\" = high ]"
+
 section "== status says when the pinned TypeScript compiler is not installed (#833) =="
 # The strict mod type check needs the compiler pinned in tools/typescript, installed by hand once
 # per checkout, and without it the hook suite's type check says UNMEASURED on every run, which reads

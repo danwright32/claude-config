@@ -6171,53 +6171,84 @@ sync_claude_bin(){
 # reply costing 0, in under a second), and the stream's init line carries the full model the session
 # resolved. --bare loads no hooks or plugins, and no session file is kept. Every way of not getting an
 # answer is said as that, never as the model being fine (L98, L11).
+# Asks the claude command which full model an alias resolves to (empty alias: the default, so no
+# --model is passed). Sets RESOLVED_FULL on success, else RESOLVED_WHY saying why not.
+resolve_claude_model_alias(){   # $1 = alias, or empty for the default
+  local model="$1" bin out rc=0
+  RESOLVED_FULL=""; RESOLVED_WHY=""
+  bin="$(sync_claude_bin)"
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    RESOLVED_WHY="no claude command was found to ask (looked for ${bin:-claude on PATH})"
+    return 0
+  fi
+  # Each launch below keeps the rules out twice, by --bare here and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
+  # on the launch, and says why it leaves the prompt cache lifetime alone (claude-config#1681: the
+  # scan finds these launches through "$bin" and the -p in args).
+  local args=(-p --bare --no-session-persistence)
+  [ -n "$model" ] && args+=(--model "$model")
+  args+=(--output-format stream-json --verbose /model)
+  # Asked the way a new session on this Mac would resolve it, never with a model this process
+  # inherited from the session that started it.
+  if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
+    # prompt-cache-ok: nothing is cached at any lifetime, since /model is answered locally and sends no request to the model.
+    out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+  else
+    # prompt-cache-ok: nothing is cached at any lifetime, since /model is answered locally and sends no request to the model.
+    out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    RESOLVED_WHY="the claude command, asked for /model, did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped"
+  elif [ "$rc" -ne 0 ]; then
+    RESOLVED_WHY="the claude command, asked for /model, failed (exit $rc)"
+  else
+    RESOLVED_FULL="$(printf '%s\n' "$out" | jq -rs 'map(select(type == "object" and .type == "system" and .subtype == "init") | .model // empty | strings) | first // empty' 2>/dev/null || true)"
+    # A context window suffix ("[1m]") names how the session runs, not the settings key.
+    RESOLVED_FULL="${RESOLVED_FULL%%\[*}"
+    [ -n "$RESOLVED_FULL" ] || RESOLVED_WHY="the claude command, asked for /model, named no model in its answer"
+  fi
+  return 0
+}
+
+# The aliases the builder tiers dispatch on (#2652), read from the one home of the rule, never a hand
+# kept list: Claude Code runs an agent on another model at THAT model's own saved effort.
+tier_model_aliases(){
+  local skill="$SYNC_REPO/payload/skills/orchestrate/SKILL.md"
+  [ -f "$skill" ] || return 0
+  grep -o 'model: "[a-z]*"' "$skill" 2>/dev/null | sed 's/^model: "//; s/"$//' | sort -u || true
+}
+
 report_shared_effort_model(){
   local shared="$SYNC_REPO/payload/$SHARED_SETTINGS_FILE" settings="$CLAUDE_HOME/settings.json"
-  local names model bin out rc=0 full level why=""
+  local names model full level why="" alias heading="" listed
   [ -f "$shared" ] || return 0
   names="$(jq -r '(.modelSettings // {}) | if type == "object" then to_entries[] | select((.value | type) == "object" and .value.effortLevel != null) | .key else empty end' "$shared" 2>/dev/null)" || return 0
   [ -n "$names" ] || return 0
+  listed="$(printf '%s\n' "$names" | paste -sd',' - | sed 's/,/, /g')"
+  level="$(jq -r --arg m "${names%%$'\n'*}" '.modelSettings[$m].effortLevel' "$shared" 2>/dev/null || true)"
   model=""
   [ -f "$settings" ] && model="$(jq -r '.model // empty | strings' "$settings" 2>/dev/null || true)"
-  bin="$(sync_claude_bin)"
-  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-    why="no claude command was found to ask (looked for ${bin:-claude on PATH})"
-  else
-    # Each launch below keeps the rules out twice, by --bare here and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
-    # on the launch, and says why it leaves the prompt cache lifetime alone (claude-config#1681: the
-    # scan finds these launches through "$bin" and the -p in args).
-    local args=(-p --bare --no-session-persistence)
-    [ -n "$model" ] && args+=(--model "$model")
-    args+=(--output-format stream-json --verbose /model)
-    # Asked the way a new session on this Mac would resolve it, never with a model this process
-    # inherited from the session that started it.
-    if [ "$CLAUDE_HOME" = "$HOME/.claude" ]; then
-      # prompt-cache-ok: nothing is cached at any lifetime, since /model is answered locally and sends no request to the model.
-      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
-    else
-      # prompt-cache-ok: nothing is cached at any lifetime, since /model is answered locally and sends no request to the model.
-      out="$(cd / && run_bounded "$SYNC_CLAUDE_CHECK_TIMEOUT" env -u ANTHROPIC_MODEL CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 CLAUDE_CONFIG_DIR="$CLAUDE_HOME" "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
-    fi
-    if [ "$rc" -eq 124 ]; then
-      why="the claude command, asked for /model, did not answer within ${SYNC_CLAUDE_CHECK_TIMEOUT}s (SYNC_CLAUDE_CHECK_TIMEOUT) and was stopped"
-    elif [ "$rc" -ne 0 ]; then
-      why="the claude command, asked for /model, failed (exit $rc)"
-    else
-      full="$(printf '%s\n' "$out" | jq -rs 'map(select(type == "object" and .type == "system" and .subtype == "init") | .model // empty | strings) | first // empty' 2>/dev/null || true)"
-      # A context window suffix ("[1m]") names how the session runs, not the settings key.
-      full="${full%%\[*}"
-      [ -n "$full" ] || why="the claude command, asked for /model, named no model in its answer"
-    fi
-  fi
+  resolve_claude_model_alias "$model"
+  full="$RESOLVED_FULL"; why="$RESOLVED_WHY"
   if [ -n "$why" ]; then
     echo "--- the model this Mac runs ---"
     echo "  claude-sync could not check whether the shared effort in $SHARED_SETTINGS_FILE applies to the model settings.json runs (${model:-the default}): $why."
-    return 0
+  elif ! grep -qxF "$full" <<< "$names"; then
+    echo "--- the model this Mac runs ---"
+    echo "  settings.json's model (${model:-the default}) is $full on this Mac, and $SHARED_SETTINGS_FILE has no shared effort for it (it has one for $listed), so $full runs at its own default effort. To share it, add \"$full\": { \"effortLevel\": \"${level:-high}\" } under modelSettings in payload/$SHARED_SETTINGS_FILE."
   fi
-  grep -qxF "$full" <<< "$names" && return 0
-  level="$(jq -r --arg m "${names%%$'\n'*}" '.modelSettings[$m].effortLevel' "$shared" 2>/dev/null || true)"
-  echo "--- the model this Mac runs ---"
-  echo "  settings.json's model (${model:-the default}) is $full on this Mac, and $SHARED_SETTINGS_FILE has no shared effort for it (it has one for $(printf '%s\n' "$names" | paste -sd',' - | sed 's/,/, /g')), so $full runs at its own default effort. To share it, add \"$full\": { \"effortLevel\": \"${level:-high}\" } under modelSettings in payload/$SHARED_SETTINGS_FILE."
+  # The models the builder tiers dispatch on, each judged the same way.
+  for alias in $(tier_model_aliases); do
+    resolve_claude_model_alias "$alias"
+    if [ -z "$heading" ] && { [ -n "$RESOLVED_WHY" ] || ! grep -qxF "$RESOLVED_FULL" <<< "$names"; }; then
+      heading=1
+      echo "--- the models the builder tiers use ---"
+    fi
+    if [ -n "$RESOLVED_WHY" ]; then
+      echo "  claude-sync could not check whether the shared effort in $SHARED_SETTINGS_FILE applies to the builder tier model $alias: $RESOLVED_WHY."
+    elif ! grep -qxF "$RESOLVED_FULL" <<< "$names"; then
+      echo "  the builder tier model $alias is $RESOLVED_FULL, and $SHARED_SETTINGS_FILE has no shared effort for it (it has one for $listed), so $RESOLVED_FULL runs at its own default effort. To share it, add \"$RESOLVED_FULL\": { \"effortLevel\": \"${level:-high}\" } under modelSettings in payload/$SHARED_SETTINGS_FILE."
+    fi
+  done
   return 0
 }
 

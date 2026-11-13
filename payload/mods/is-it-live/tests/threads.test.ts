@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { draftSaved, isSlackTool, threadsIn } from '../hooks/threads.ts'
+import { draftSaved, isSlackTool, threadGone, threadsIn } from '../hooks/threads.ts'
 
 // #2436: the Slack thread a session starts from, read from a link Dan pastes, and what counts as a
 // draft reply saved to it.
@@ -35,4 +35,22 @@ test('a draft counts as saved only when Slack answered without an error (#2436)'
   expect(draftSaved({ text: 'attached_draft_exists', isError: true })).toBe(false)
   expect(draftSaved({ text: '{"ok":false,"error":"not_in_channel"}' })).toBe(false)
   expect(draftSaved({ deny: 'Blocked' })).toBe(false)
+})
+
+// #2787: on 2026-11-11 the post that started a thread had been deleted, so every draft to it answered
+// invalid_thread_ts and every read thread_not_found, and the turn end asked again after every turn.
+test('Slack saying the thread no longer exists names that error, and is no saved draft (#2787)', () => {
+  expect(threadGone({ text: 'invalid_thread_ts', isError: true })).toBe('invalid_thread_ts')
+  expect(threadGone({ text: '{"ok":false,"error":"thread_not_found"}' })).toBe('thread_not_found')
+  expect(threadGone({ text: 'Error: invalid_thread_ts' })).toBe('invalid_thread_ts')
+  expect(draftSaved({ text: '{"ok":false,"error":"invalid_thread_ts"}' })).toBe(false)
+  expect(draftSaved({ text: 'invalid_thread_ts' })).toBe(false)
+})
+
+test('any other answer, a refused call, or a thread whose messages only mention the error is not a thread gone (#2787)', () => {
+  expect(threadGone({ text: 'attached_draft_exists', isError: true })).toBeUndefined()
+  expect(threadGone({ text: '{"ok":false,"error":"not_in_channel"}' })).toBeUndefined()
+  expect(threadGone({ text: '{"channel_link":"https://app.slack.com/client/T1/C1"}' })).toBeUndefined()
+  expect(threadGone({ deny: 'Blocked: invalid_thread_ts' })).toBeUndefined()
+  expect(threadGone({ text: '{"messages":[{"text":"the draft failed with thread_not_found again"}]}' })).toBeUndefined()
 })

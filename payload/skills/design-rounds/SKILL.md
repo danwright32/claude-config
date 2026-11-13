@@ -329,9 +329,31 @@ outside the part being decided can never reach 100%.
 
 So capture the chrome before round one, in the main session (a subagent never drives the browser):
 open the product's page at the width the round is drawn at, signed in as the person the screen is
-for, and run `capture-chrome.js` (beside this skill) with Playwright's `browser_evaluate`. It answers
-with the page as one self contained document, every stylesheet, font and image inlined and every
-script taken out, and names anything it could not inline in its first comment. A theme the page's
+for, and run `capture-chrome.js` (beside this skill) by whichever route the session's browser tools
+give it. It makes the page one self contained document, every stylesheet, font and image inlined and
+every script taken out, and names anything it could not inline in its first comment.
+
+- **Playwright:** run it with `browser_evaluate`, the file's text as the function. It answers with
+  the document.
+- **Claude in Chrome** (claude-config#2774), in the tab the session opened and with nothing typed or
+  clicked:
+  1. Run the javascript tool on that tab with the file's text wrapped as
+     `await (<the file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html"})`.
+  2. The page saves the document itself, as a download into `~/Downloads`, and answers with one line:
+     the file name, its size in bytes, and the first comment.
+  3. Check the file is in `~/Downloads` at exactly that size (`stat -f %z`), then move it beside the
+     round. If it is not there, stop and tell Dan: Chrome may be set to ask where to save, or to ask
+     before a site's second download, and either is his to answer.
+
+**A capture never posts the page anywhere.** No receiver, on `127.0.0.1`, `localhost` or any other
+address, and no fetch, beacon or request carrying the page. Twice (2026-11-01 and 2026-11-11) a session
+capturing a production admin page in Dan's Chrome started a receiver on `127.0.0.1:8765` and had the
+page post a copy of itself there; the page's content security policy refused it and paged Dan, with
+nothing for him to act on. The download sends nothing over the network, so a policy has nothing to
+refuse. `hooks/chrome-loopback-post-gate.sh` refuses a Claude in Chrome script that names a loopback
+address beside a network call.
+
+A theme the page's
 own script stamped on `<html>` (a `data-theme`, a `dark` or `light` class) is taken out with the
 scripts, so the chrome follows the same theme rule as the built page; one in the markup the server
 sent is kept, and the first comment names the theme either way (claude-config#2045). Save it beside the

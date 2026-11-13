@@ -681,6 +681,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
+  judged chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool '{"text": "fetch(\"http://127.0.0.1:8765/@@\", {method: \"POST\", body: \"cut @@\"})", "action": "javascript_exec", "tabId": 7}' '{}' "notice chrome-loopback-post-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
   judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
   # It never refuses: it ASKS Dan about a database call it cannot classify, by Dan's decision on

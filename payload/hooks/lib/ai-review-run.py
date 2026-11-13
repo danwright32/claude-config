@@ -57,8 +57,8 @@ head that matches it, then drops the Quote line, so the stored review is one lin
 the `<path>:<line>: ` shape every reader parses. A finding it cannot place keeps its number, marked
 as unchecked (place_findings below); one whose quote matched nothing keeps that quote, whole up
 to 1000 characters, and its length (claude-config#1701). An ok review records how its findings
-were placed as `placement=` (whole line, without the diff's marker, part of a line, path corrected,
-not placed), and the length of each quote placed by part of a line as `part_quote_lengths=`,
+were placed as `placement=` (whole line, without the diff's marker, part of a line, across a line
+break, past the end of a line, path corrected, not placed), and the length of each quote placed by part of a line as `part_quote_lengths=`,
 which lib/ai-review-placement.py reports with the marks (claude-config#1368).
 
 TWO KINDS, one reviewer (claude-config#560). `--kind push` (the default) is the advisory review of
@@ -286,8 +286,9 @@ def count_findings(text):
 #
 # Each step after the first was added because this Mac's own reviews measured it (claude-config#1368,
 # lib/ai-review-placement.py, which reads the marks back): a quote matching no whole line is tried
-# without one leading diff marker, then as part of a line; and a cited path that is not a file at
-# the head is tried as the one changed file it fits. What each finding needed is counted, and the
+# without one leading diff marker, then as part of a line, then as running across lines or past the
+# end of one (claude-config#2237); and a cited path that is not a file at the head is tried as the
+# one changed file it fits. What each finding needed is counted, and the
 # review records the counts as `placement=` (placement_meta), since a placed finding carries no
 # trace of how, and a fallback that never fires reads exactly like one that is not there (L551).
 QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
@@ -302,8 +303,13 @@ QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
 # Kept at 20 for the short names it exists to refuse. Read again over the 1164 reviews started
 # 2026-10-25 to 2026-11-04: 9 of 814 placed by part of a line (the 8 recorded lengths 60 to 99 (4)
 # or 100 or more (4)), and the 8 misses kept whole 77 to 194 characters, so still nothing under 60.
-# The sample is this Mac's alone: the work MacBook keeps its own review records, not read here, so
-# re-read the report on both.
+# Read a third time over the 2107 reviews kept on 2026-11-12 (started 2026-10-28 on, as older ones
+# are swept): 6 of 1425 findings placed by part of a line, at 57 to 168 characters, each on the line
+# its finding is about. The first quote under 20 appeared: 15 characters, a setting's name whose
+# nearest occurrence to the cited number is a longer setting it starts, so any floor of 15 or less
+# would have moved that finding to the wrong row. 20 refused it, so the floor stays: nothing from
+# 20 to 56 was seen to decide either way. The sample is this Mac's alone: the work MacBook keeps
+# its own review records, not read here, so re-read the report on both (claude-config#1689).
 PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
 # Greedy, because the mark is the last thing place_findings writes on the line and a kept quote can
@@ -331,8 +337,9 @@ UNPLACED_KINDS = (
     ("no_file", re.compile(r"^\S+ is not a file at the reviewed head")),
     ("no_match", re.compile(r"^its quote matches no line of ")),
 )
-# How a quote miss sits against the file, as _miss_shape words it, each read only from the
-# runner's words before the quote (miss_shape), since the quote can hold any words at all.
+# How a quote miss sat against the file, each read only from the runner's words before the quote
+# (miss_shape), since the quote can hold any words at all. Marks written from #1701 to #2237 said
+# across or past the end; since #2237 such a quote is placed, so a mark only ever says neither.
 MISS_SHAPES = (
     ("across", re.compile(r", though it runs across lines [0-9]+ to [0-9]+(,|$)")),
     ("past_end", re.compile(r", though its first [0-9]+ characters end line [0-9]+ and the rest does not "
@@ -419,8 +426,10 @@ def mark_quote(why):
 
 def placement_meta(counts):
     """The `placement=` metadata value: how many were placed by the whole line, without the diff's
-    marker, by part of a line, and after their path was corrected, and how many were not placed."""
-    return ",".join(f"{k}:{counts.get(k, 0)}" for k in ("whole", "marker", "part", "path", "unplaced"))
+    marker, by part of a line, across a line break, past the end of a line, and after their path
+    was corrected, and how many were not placed."""
+    return ",".join(f"{k}:{counts.get(k, 0)}"
+                    for k in ("whole", "marker", "part", "across", "past_end", "path", "unplaced"))
 
 
 def part_lengths_meta(counts):
@@ -485,7 +494,8 @@ def _match(lines, quote):
     words saying what was tried. A whole line first, as given and then without one leading diff
     marker, and only then part of a line in the same order, so a real line that begins with + or -
     (a Markdown or YAML list item, a unary minus, a diff kept in the repository) and a line that IS
-    the quote both win over a line that merely contains it."""
+    the quote both win over a line that merely contains it. Only when none of those finds anything
+    is the quote read as running across lines or past the end of one (_spans)."""
     forms = [quote]
     # A quote copied from the diff can keep the diff's leading + or - (claude-config#1368). A quote
     # that is nothing but the marker is not retried, since the empty rest would match every blank
@@ -499,29 +509,33 @@ def _match(lines, quote):
     tried = f", as given or without its leading {quote[0]}" if len(forms) > 1 else ""
     if all(len(f) < PART_MIN for f in forms):
         return [], None, f"{tried}, and is too short to be placed by part of a line"
+    forms = [f for f in forms if len(f) >= PART_MIN]
     for form in forms:
-        if len(form) >= PART_MIN:
-            hits = [i for i, line in enumerate(lines, 1) if form in _normal(line)]
-            if hits:
-                return hits, "part", ""
-    return [], None, f"{tried}, whole or in part"
+        hits = [i for i, line in enumerate(lines, 1) if form in _normal(line)]
+        if hits:
+            return hits, "part", ""
+    across, past = _spans(lines, forms)
+    if across:
+        return across, "across", ""
+    if past:
+        return past, "past_end", ""
+    # Said in so many words, so a mark written before #2237, when an across or past the end quote
+    # was left unplaced and its mark said which, is never counted as neither (L540).
+    return [], None, f"{tried}, whole or in part, nor does it run across or past the end of any line"
 
 
-def _miss_shape(lines, quote, cited):
-    """The words saying how a quote that matched no line, whole or in part, sits against the file,
-    worked out while the reviewed head is in hand (claude-config#1701). A review of a worktree
-    records the worktree folder as its repo, and that folder is usually gone by the time anyone
-    reads the report, so the shape cannot be judged afterwards from the kept quote alone.
+def _spans(lines, forms):
+    """(across, past): the first line of each place a quote that matched no line, whole or in
+    part, runs across lines, and failing that each line whose end it starts with (claude-config
+    #2237). forms are the quote's forms of PART_MIN characters or more.
 
     Across: the quote is inside the file's lines read on as one, blank lines skipped, so it was
-    copied from more than one line. Past the end: at least PART_MIN of its first characters are the
-    end of a line and the rest does not follow it. Otherwise neither, said in so many words, so a
-    mark written before the shape was said is never counted as neither (L540). The occurrence
-    nearest the cited number wins, as it does for a placed finding."""
-    forms = [quote]
-    if quote[0] in "+-" and quote[1:].strip():
-        forms.append(_normal(quote[1:]))
-    forms = [f for f in forms if len(f) >= PART_MIN]
+    copied from more than one line; part of a line already failed, so every such place spans two
+    or more. Past the end: at least PART_MIN of its first characters are the end of a line and the
+    rest does not follow it, most often a comment's sentence quoted without the marker that starts
+    its next line. The finding is placed on the line the quote starts on, since that is where the
+    sentence it quotes begins: so it was in all 13 of this Mac's misses of these shapes to
+    2026-11-13, measured beside each finding at its reviewed head."""
     kept = [(n, _normal(line)) for n, line in enumerate(lines, 1) if line.strip()]
     starts, pos = [], 0
     for _, text in kept:
@@ -543,11 +557,10 @@ def _miss_shape(lines, quote, cited):
     for form in forms:
         at = joined.find(form)
         while at != -1:
-            across.append((line_at(at), line_at(at + len(form) - 1)))
+            across.append(line_at(at))
             at = joined.find(form, at + 1)
     if across:
-        first, last = min(across, key=lambda span: (abs(span[0] - cited), span[0]))
-        return f", though it runs across lines {first} to {last}"
+        return across, []
     past = []
     for form in forms:
         head = form[:PART_MIN]
@@ -555,12 +568,9 @@ def _miss_shape(lines, quote, cited):
             at = text.find(head)
             while at != -1:
                 if form.startswith(text[at:]):
-                    past.append((n, len(text) - at))
+                    past.append(n)
                 at = text.find(head, at + 1)
-    if past:
-        n, k = min(past, key=lambda hit: (abs(hit[0] - cited), hit[0], -hit[1]))
-        return f", though its first {k} characters end line {n} and the rest does not follow it"
-    return ", nor does it run across or past the end of any line"
+    return [], past
 
 
 def miss_shape(why):
@@ -575,7 +585,8 @@ def miss_shape(why):
 
 
 def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
-    """(path, line, how, None) for a placed finding, how being whole, marker or part and path the
+    """(path, line, how, None) for a placed finding, how being whole, marker, part, across or
+    past_end and path the
     one it was placed in, or (path, None, None, why) for one that cannot be placed."""
     if quote is None:
         return path, None, None, "it quoted no line"
@@ -593,8 +604,7 @@ def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
         return path, None, None, "the reviewed head could not be read to check it"
     hits, how, tried = _match(lines, quote)
     if not hits:
-        shape = _miss_shape(lines, quote, cited) if tried.endswith(", whole or in part") else ""
-        miss = f"its quote matches no line of {fixed or path} at the reviewed head{tried}{shape}{_kept_quote(quote)}"
+        miss = f"its quote matches no line of {fixed or path} at the reviewed head{tried}{_kept_quote(quote)}"
         # A corrected path is kept only when the quote proves it; otherwise the cited one stays,
         # and the mark says what was tried in its place.
         return path, None, None, (f"{path} is not a file at the reviewed head, and {miss}" if fixed else miss)
@@ -605,11 +615,12 @@ def place_findings(text, repo_dir, sha, changed=None):
     """(text, counts): each finding moved to the line its Quote names, its Quote line dropped, and
     every approximate `~N` written as a plain number. counts holds how many were placed and not,
     and of those placed, how many by the whole line, without the diff's marker, by part of a line,
-    and in a corrected path, and part_lengths the length of each quote placed by part of a line.
+    across a line break, past the end of a line, and in a corrected path, and part_lengths the length of each quote placed by part of a line.
     changed is the push's complete list of changed files, or None."""
     lines = text.splitlines()
     out, cache = [], {}
-    counts = {"placed": 0, "unplaced": 0, "whole": 0, "marker": 0, "part": 0, "path": 0, "part_lengths": []}
+    counts = {"placed": 0, "unplaced": 0, "whole": 0, "marker": 0, "part": 0, "across": 0, "past_end": 0,
+              "path": 0, "part_lengths": []}
     i = 0
     while i < len(lines):
         line = lines[i]

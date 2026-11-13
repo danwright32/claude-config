@@ -2216,8 +2216,12 @@ the report gives both sets of lengths in bands around the 20 character floor (un
 matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
 2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
 characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
-the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
-MacBook's were not read, so run the report there too.
+the floor, so it decided no finding and stays at 20 (#1701). Read again over the 2107 reviews kept
+on 2026-11-12, 6 of 1425 findings were placed by part of a line, at 57 to 168 characters, each on
+the right line. The first quote under 20 appeared: a 15 character setting name whose nearest
+occurrence was a longer setting it starts, so a floor of 15 or less would have placed it on the
+wrong row. The floor refused it and stays at 20. That is one Mac's records: the work MacBook's were
+not read, so run the report there too (#1689).
 
 A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
 in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
@@ -2227,6 +2231,17 @@ said then, because a review in a worktree records the worktree folder as its `re
 folder is gone by the time anyone reads the report. Of those 8 misses, worked out afterwards by
 finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
 of a line, and 4 did neither (altered or paraphrased quotes).
+
+Since #2237 those two shapes are placed rather than marked, on the line the quote starts on, after
+the whole line, its marker and part of a line have all found nothing: across a line break when the
+quote is inside the file's lines read on as one (blank lines skipped), and past the end of a line
+when at least its first 20 characters end a line, the same floor part of a line is held to. On the
+personal MacBook, over every review held on 2026-11-13, 13 of the 23 quotes that matched no line
+whole or in part were one of these (5 across, 8 past the end, 6 of those a comment's sentence quoted
+without the marker starting its next line), and in all 13 the line the quote starts on was the line
+the finding was about. The other 10 did neither and stay unplaced. Each review records the two as
+`across` and `past_end` in `placement=`, and the report counts them under how placed; a mark now only
+ever says neither, and the report's shape count reads the older marks.
 
 #### Scoring the review itself
 
@@ -3699,6 +3714,16 @@ to a script. A package counts as able to post, as an imported one does, so it is
 handed an endpoint or a file whose text names one. `claude mcp add` and the other `claude mcp`
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
+
+Since claude-config#2887 the code a shell or an interpreter reads on its input is read: a file `cat`
+or `<` feeds it (`cat post.sh | sh`, `cat x.py | python3`) or a here string of one file's text
+(`bash <<< "$(cat post.sh)"`) is read as the same script handed by name, and text the gate can work
+out (printf, echo) as commands or code. Input the gate cannot work out, such as what curl or any
+other program prints (`curl -s https://example.com/install.sh | sh`), is refused as a call it could
+not check, except inside a script on disk, where what the script does with a file it is handed is
+judged where it is handed one. A config file curl is handed with `-K` or `--config` is read as the
+request it describes, and a long option glued with `=` (`node --require=./x.js`, `--import=`) is read
+as the same option with its value as the next word.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
@@ -6486,6 +6511,10 @@ thread, under any Slack server and from any part of the session (the card's mess
 requester, #2435, included), settles it until the next merge. Which came first is kept as a count
 of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+A thread Slack says no longer exists, a draft to it answering `invalid_thread_ts` or a read of it
+`thread_not_found` (#2787: on 2026-11-11 a deleted first post drew the hold at every turn end), is
+owed nothing more in that session: the next turn end tells Dan once, in a toast carrying the reply
+that could not be saved, and asks no more. No draft DM is offered in its place.
 The mod never calls a Slack tool.
 Only a thread recorded at the session's start owes a reply after every merge (#2578: on
 2026-11-09 one alert link pasted hours into a session drew three asks for unrelated merges). A
@@ -6630,7 +6659,9 @@ cannot read, one beside a command that may move its source (a switch, an add, a 
 two where one reads the index, or a line writing inside .git, is judged whole with the refusal
 saying why), a program whose text names the files it writes (since #2847 also a python or node
 script file the command runs, its own code read as inline code is, a name its code writes where the
-folder cannot be followed held as could not check), and a
+folder cannot be followed held as could not check; since #2855 also a shell script's own commands
+and the scripts it runs, a script named through a variable the command sets, a script the command
+writes first from a heredoc, read as that text, and the local modules a script imports), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6950,7 +6981,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847
+#1954, #2261, #2830, #2845, #2847, #2855
 
 </td></tr>
 <tr><td>
@@ -7798,7 +7829,9 @@ docstring is never message text (#2574).
 No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
 a template, copy module or script whose own code names nothing of Slack, however a sender reaches
 it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
-write into a folder. The card, refusal and question name only the file that holds the text.
+write into a folder. The question names only the file that holds the text. The card and both
+refusals also name the send in it that the held text reaches, by what it calls and its line
+(#2586), or, when the file is held whole, say that no send could be traced and why.
 A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
 2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
 prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
@@ -7834,8 +7867,10 @@ session. The calls waiting on Dan are dropped at session end, and the guard's ow
 written by a call. A shell write is read for the files it writes: a copy of one code file is judged
 by that file's text, a copy of anything else (a video, a key) is never read (#2830), and a write
 into a folder passes. git failing to say which repository a self posting file is in, or a file
-that cannot be read, holds the call as could not check, which trying again may get past. A shell
-write to a path the write reader cannot name is outside it.
+that cannot be read, holds the call as could not check, which trying again may get past. git or
+gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
+told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
+tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as
@@ -7846,7 +7881,7 @@ a `wording` note, and the call sent again goes through; a choice lets wording th
 sleep mode is on. While any choice waits, a `gh pr merge`, a run of the merge helper or a `gh api`
 merge is read with `gh pr diff`, and a pull request whose added lines hold every fixed part of
 chosen wording is refused; a merge that cannot be read, or a diff gh cannot give, is held as could
-not check.
+not check, and a diff gh did not give within its time as a timeout (#2792).
 In the morning the session that chose it (once that one has ended, a session working in the
 repository it was made in, never one in another, #2833; any session when that repository cannot be
 read) is told at Dan's next message to ask with metadata

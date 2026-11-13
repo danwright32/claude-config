@@ -2,6 +2,7 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
+  hookFailed,
   agentRefusal,
   ciMessages,
   ciWorkflow,
@@ -308,6 +309,31 @@ test('a held edit names the wording it adds or takes away; a held shell command 
     expect(r).not.toContain('text away')
   }
   expect(refusal('t1', '/w/a/alert.ts', ['Deploy failed on production'], []).startsWith('Blocked: this edit to /w/a/alert.ts adds')).toBe(true)
+})
+
+// claude-config#2586: the guard knows which send a held line reaches, so its message says so, and
+// says plainly when it could not tell rather than claiming a send it did not find (L11).
+test('a held edit names the Slack send its text reaches, or says the send could not be traced and why (#2586)', () => {
+  const F = '/w/a/alert.ts'
+  expect(heldText(F, ['Deploy failed on production'], [], { sends: [{ callee: 'chat.postMessage', line: 12 }] })).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed on production", which reaches the Slack send chat.postMessage on line 12 of ${F}`,
+  )
+  expect(heldText(F, ['Deploy failed', 'Backup is late'], [], { sends: [{ callee: 'fetch', line: 3 }, { callee: 'client.chat_postMessage', line: 9 }] })).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed", "Backup is late", which reaches the Slack sends fetch on line 3 and client.chat_postMessage on line 9 of ${F}`,
+  )
+  expect(heldText(F, [], ['Deploy failed'], { sends: [{ callee: 'fetch', line: 4 }] })).toBe(
+    `This edit to ${F} takes Slack message text away: "Deploy failed", which reached the Slack send fetch on line 4 of ${F}`,
+  )
+  const untraced = heldText(F, ['Deploy failed'], [], { untraced: 'the edit does not match the file as it is now' })
+  expect(untraced).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed"; the guard could not trace which Slack send in it carries this text, because the edit does not match the file as it is now`,
+  )
+  expect(untraced).not.toContain('reaches')
+  // Both refusals and the card open with the same words, so each names the send too.
+  for (const r of [refusal('t1', F, ['Deploy failed'], [], { sends: [{ callee: 'fetch', line: 3 }] }), agentRefusal('t1', F, ['Deploy failed'], [], { sends: [{ callee: 'fetch', line: 3 }] })])
+    expect(r).toContain(`"Deploy failed", which reaches the Slack send fetch on line 3 of ${F}. `)
+  // A shell command's wording cannot be read, so no send is named for it.
+  expect(heldText(F, [], [], { sends: [{ callee: 'fetch', line: 3 }] })).not.toContain('line 3')
 })
 
 // claude-config#2361, #2364, #2290: hold only text a Slack send builds.
@@ -680,5 +706,18 @@ test('another file using a prompt: an import by its own name is no use, a model 
 test('only prose files are ruled out as senders', () => {
   for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
   for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
+})
+
+// #2792: a hook Claude Code cut off for running past its time is a timeout, said as one, with when to
+// send the call again; any other failure is could not check, in its own words.
+test('a hook that ran out of time is told as a timeout, not a refusal; any other failure as could not check (#2792)', () => {
+  const late = hookFailed({ kind: 'timeout', budget: 10_000 }, 'it ran out of time')
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).not.toContain('could not check')
+  const thrown = hookFailed({ kind: 'throw', message: 'the store could not be read' }, 'the store could not be read')
+  expect(thrown).toContain('could not check this call (the store could not be read)')
+  expect(thrown).not.toContain('timeout')
+  for (const odd of [undefined, null, 'timeout', { kind: 1 }]) expect(hookFailed(odd, 'unknown failure')).toContain('could not check')
 })
 

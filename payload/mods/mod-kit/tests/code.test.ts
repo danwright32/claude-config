@@ -1,7 +1,7 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
-import { codeOnly, codeVerdict, pythonText } from '../hooks/code.ts'
+import { codeOnly, codeVerdict, lookedBack, pythonText } from '../hooks/code.ts'
 
 // The per language judge of inline code (#712: moved here from scope-modes, so $.modkit.writes and
 // no build read code the same way). Its rules are pinned end to end through no build's own tests;
@@ -184,6 +184,27 @@ describe('codeOnly (#1165)', () => {
     expect(codeOnly('python', "from os import system\nsystem('''touch\napp/page.tsx''')")).toBeUndefined()
     expect(codeOnly('python', "exec('''open('app/page.tsx',\n'w')''')\nopen('x', 'w')")).toBeUndefined()
     expect(codeOnly('node', "require('fs').writeFileSync(p, `\napp/page.tsx`)")).toBeUndefined()
+  })
+  // #2855: the design rounds skill's make-switcher.py (888 lines, 14 page templates in triple quoted
+  // strings, 12 `.replace(` calls) took 1.4 to 4.1 seconds to read, where every other script took
+  // under 0.4. Each call's receiver, and each literal's place, was found by handing a regular
+  // expression the whole text before it, so every call read the file again; and `\s+$` there
+  // backtracked across each blanked template's run of spaces. Counted by lookedBack, the characters
+  // those readers read back, never the clock: summed over every call and literal, less than reading
+  // the program once.
+  test('looking back from each call and literal reads near it, never the whole program again (#2855)', () => {
+    const template = Array.from({ length: 400 }, (_, i) => `    <div class="row r${i}">{{CELL_${i}}} and some words of the page</div>`).join('\n')
+    const program = (calls: number) =>
+      `import json\nPAGE = """<!doctype html>\n${template}\n"""\npage = PAGE\n` +
+      // As make-switcher's: a snippet of the page with a space in it, so whether it is a path is asked.
+      Array.from({ length: calls }, (_, i) => `page = page.replace('<div class="row r${i}">', json.dumps(${i}))`).join('\n') +
+      "\nopen('out.html', 'w').write(page)\n"
+    for (const calls of [10, 40]) {
+      const code = program(calls)
+      lookedBack.chars = 0
+      codeOnly('python', code)
+      expect({ calls, length: code.length, read: lookedBack.chars, once: lookedBack.chars < code.length }).toEqual({ calls, length: code.length, read: lookedBack.chars, once: true })
+    }
   })
 })
 
