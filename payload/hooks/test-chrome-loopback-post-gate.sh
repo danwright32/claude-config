@@ -94,7 +94,7 @@ allowed "a script naming localhost with no network call goes through"
 run "${C}navigate" '{"url": "http://localhost:3000/", "tabId": 7}'
 allowed "navigating a tab to a local dev server is not this gate's business"
 
-echo "chrome loopback post gate: a script sending to a loopback address is refused"
+echo "chrome loopback post gate: a script naming a loopback address beside a network call is refused"
 
 # The call that paged Dan, in the shape the session made it.
 run "$JS" "$(js 'const html = document.documentElement.outerHTML; await fetch("http://127.0.0.1:8765/", {method: "POST", body: html}); "sent"')"
