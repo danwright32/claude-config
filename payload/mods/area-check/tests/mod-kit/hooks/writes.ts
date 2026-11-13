@@ -524,7 +524,8 @@ const TOOL_EDITS: ReadonlyMap<string, { edits: ReadonlySet<string>; outputs: Rea
   jest: { edits: new Set(['-u', '--updateSnapshot', '--init']), outputs: new Set(['--outputFile', '--coverageDirectory', '--cacheDirectory']) },
   pytest: {
     edits: new Set(['--snapshot-update', '--force-regen', '--regen-all', '--inline-snapshot']),
-    outputs: new Set(['--basetemp', '--junitxml', '--junit-xml', '--report-log', '--html', '--json-report-file']),
+    // pytest-cov's --cov-report=xml:<file> names its file after a kind, so it is not read here.
+    outputs: new Set(['--basetemp', '--junitxml', '--junit-xml', '--log-file', '--resultlog', '--report-log', '--html', '--json-report-file']),
   },
   unittest: { edits: new Set(), outputs: new Set() },
   'bun test': { edits: new Set(['-u', '--update-snapshots']), outputs: new Set(['--coverage-dir', '--reporter-outfile']) },

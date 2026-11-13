@@ -979,6 +979,8 @@ describe('writes: a test runner hands on the files it is handed only when a flag
     expect(words('npx jest tests/ --outputFile out.json')).toEqual([['out.json']])
     expect(words('python3 -m pytest tests/a --junitxml=r.xml')).toEqual([['r.xml']])
     expect(words('python3 -m pytest tests/a --basetemp tmp/run')).toEqual([['tmp/run']])
+    expect(words('python3 -m pytest tests/a --log-file=run.log')).toEqual([['run.log']])
+    expect(words('python3 -m pytest tests/a --resultlog run.txt')).toEqual([['run.txt']])
     expect(words('bun test tests/a --reporter-outfile out.xml')).toEqual([['out.xml']])
     expect(words('node --test --test-reporter-destination=out.txt tests/a tests/b')).toEqual([['out.txt']])
   })
