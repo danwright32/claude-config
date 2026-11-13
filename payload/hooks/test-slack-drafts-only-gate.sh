@@ -1614,8 +1614,24 @@ for tree in posts quiet; do
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' \
     'other() {' '  if [ -f /none ] && IFS=: read -r a b < /none \' '     && [ "$a" = 1 ]; then echo "$b"; fi' '}' 'go' \
     > "$T/sv/$tree/readcont.sh"
+  # The gate suite's own: an if opening on a subshell whose first command is a substitution.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" \
+    'if (d="$(cd /tmp && pwd -P)"; while [ "$d" != / ]; do d="$(dirname "$d")"; done; [ -n "$d" ]); then' '  :' 'fi' \
+    '. "$ROOT/lib/x.sh"' 'ROOT=/elsewhere' > "$T/sv/$tree/ifsubst.sh"
+  # test-merge-when-ready.sh's fake sleep: a function whose body is one subshell holding a case.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'nap(){ (' '  c=1' '  case "$c" in x|*[!0-9]*) echo no ;; esac' \
+    '  printf "%s\n" "$c"' ') }' 'nap' '. "$ROOT/lib/x.sh"' 'ROOT=/elsewhere' > "$T/sv/$tree/funcsubcase.sh"
+  # The gate suite's fixture writers: NAME= inside a quoted string, in a function called before the
+  # file is sourced, binds nothing.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' \
+    "mk() { local top='ROOT=/elsewhere'; printf '%s\\n' 'ROOT=\"\$(pwd)\"' 'read ROOT' >/dev/null; }" 'mk' 'go' \
+    > "$T/sv/$tree/quotedset.sh"
+  # test-scanners-before-push.sh: lib/hang-wait.sh sourced where the walk does not reach, and its
+  # waits on written out conditions, bind nothing the script's own values depend on.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' \
+    "waits() { . \"$DIR/lib/hang-wait.sh\"; hang_wait '[ -d \"\$ROOT\" ]'; }" 'go' > "$T/sv/$tree/hwunfollowed.sh"
 done
-for shape in filekept filefallback dirkept filenegated nestdefault readcont; do
+for shape in filekept filefallback dirkept filenegated nestdefault readcont ifsubst funcsubcase quotedset hwunfollowed; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "#2538 a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "#2538 and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
@@ -1631,6 +1647,50 @@ allowed "#2538 a path replaced where its file test fails is read as the replacem
 printf '%s\n' '#!/bin/bash' 'cd "$1"' 'P=lib/x.sh' '[ -f "$P" ] || P=none/x.sh' '. "./$P"' > "$T/sv/posts/filerel.sh"
 run_bash "cd $T/sv/posts && bash filerel.sh /nonexistent-2538"
 allowed "#2538 the refusal is off: a relative file test where the folder is not certain is not answered"
+# A quoted NAME=value handed to export, local or declare still binds it, and so does a trap's string;
+# a wait whose condition is built from a variable can bind anything. Each leaves ROOT unknown in go.
+for form in "export 'ROOT=/elsewhere'" "local x 'ROOT=/elsewhere'" "trap 'ROOT=/elsewhere' RETURN" \
+            ". \"$DIR/lib/hang-wait.sh\"; hang_wait \"\$c\""; do
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' "mk() { $form; }" 'mk' 'go' \
+    > "$T/sv/posts/stillbinds.sh"
+  run_bash "bash $T/sv/posts/stillbinds.sh"
+  allowed "#2538 the refusal is off: a name a quoted word or a wait can still bind is not worked out after it: $form"
+done
+for tree in posts quiet; do
+  # pr-merge-quiz.sh's and check-wrapped-commands.sh's: a function written above the line that sets
+  # the folder it sources from, and called only below it (one called from another such function too).
+  printf '%s\n' '#!/bin/bash' 'load() {' '  . "$HOOK_DIR/lib/x.sh"' '}' 'outer() { load; }' \
+    'case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac' \
+    'HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"' 'outer' > "$T/sv/$tree/bodyabove.sh"
+  # check-free-space.sh's: a local set, then chosen by a case on BASH_SOURCE, in a function.
+  printf '%s\n' '#!/bin/bash' 'load() {' '  local here="."' \
+    '  case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac' \
+    '  . "$here/lib/x.sh" 2>/dev/null || none() { :; }' '}' 'load' > "$T/sv/$tree/localcase.sh"
+  # rtk-rewrite.sh's: inside an if, a folder set and then replaced behind a test, then sourced.
+  printf '%s\n' '#!/bin/bash' 'if [ -n "${BASH_VERSION:-}" ]; then' \
+    '  d="${BASH_SOURCE[0]%/*}"; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.' '  . "$d/lib/x.sh"' 'fi' \
+    > "$T/sv/$tree/ifchained.sh"
+done
+for shape in bodyabove localcase ifchained; do
+  run_bash "bash $T/sv/posts/$shape.sh"
+  refused "#2538 a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
+  says "#2538 and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
+  run_bash "bash $T/sv/quiet/$shape.sh"
+  allowed "#2538 the same script sourcing a file that does not post: $shape.sh"
+done
+for form in 'load' 'x="$(load)"' 'trap load EXIT' '( load )' 'echo "load runs"' 'early() { load; }; early'; do
+  printf '%s\n' '#!/bin/bash' 'load() {' '  . "$HOOK_DIR/lib/x.sh"' '}' "$form" \
+    'case "${BASH_SOURCE[0]}" in */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;; *) HOOK_DIR=. ;; esac' \
+    'HOOK_DIR="$(cd "${HOOK_DIR:-/}" && pwd)"' 'load' > "$T/sv/posts/calledabove.sh"
+  run_bash "bash $T/sv/posts/calledabove.sh"
+  allowed "#2538 the refusal is off: a function mentioned before its folder is set is not read with that folder: $form"
+done
+for form in '[ -n "$UNSET_2538" ] || d=/elsewhere' 'case "$UNSET_2538" in x) d=/elsewhere ;; esac'; do
+  printf '%s\n' '#!/bin/bash' 'load() {' '  local d="${BASH_SOURCE[0]%/*}"' "  $form" '  . "$d/lib/x.sh"' '}' 'load' \
+    > "$T/sv/posts/localnot.sh"
+  run_bash "bash $T/sv/posts/localnot.sh"
+  allowed "#2538 the refusal is off: a local chosen by what the walk cannot answer is not worked out: $form"
+done
 # A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
 # Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
 # shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
@@ -3757,7 +3817,9 @@ if again:
 # sh_binds answers as the patterns it had did, over every name claude-sync binds or reads, on a
 # piece of it and on texts placed to catch a line's edges. Each pattern here runs over the whole text;
 # sh_binds reads only the lines holding the name. Since #2683 the rules are: printf binds only through
-# -v, a line that is only a comment binds nothing, and a builtin binds only in command position.
+# -v, a line that is only a comment binds nothing, and a builtin binds only in command position;
+# since #2538 a name inside a quoted string on its line binds nothing (sh_quoted_word_at), unless the
+# string is a word handed to export, local, declare, typeset or readonly, or a trap's.
 SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset|getopts|mapfile|readarray|let)\b"
               r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
 def comment(t, at):
@@ -3767,7 +3829,8 @@ def before(name, t, allowed=0):
     if name not in t:
         return False
     n = re.escape(name)
-    if sum(1 for m in re.finditer(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t) if not comment(t, m.start())) > allowed:
+    if sum(1 for m in re.finditer(r"(?<![\w$])" + n + r"(?:\[[^\]\n]*\])?\+?=", t)
+           if not comment(t, m.start()) and not gate.sh_quoted_word_at(t, m.start())) > allowed:
         return True
     if any(not comment(t, m.start()) for m in re.finditer(r"\(\([^()]*(?<![\w$])" + n + r"\b", t)):
         return True
@@ -3778,7 +3841,8 @@ def before(name, t, allowed=0):
             return False
         w = m.group(0)
         if not comment(t, m.start()) and not re.match(r"(?:export|readonly)\b", w) and (
-                w.startswith("$") or gate.sh_command_at(t, t.rfind("\n", 0, m.start()) + 1, m.start())):
+                w.startswith("$") or (gate.sh_command_at(t, t.rfind("\n", 0, m.start()) + 1, m.start())
+                                      and not gate.sh_quoted_word_at(t, m.end() - len(name)))):
             return True
         pos = m.start() + 1
 piece = text[200000:260000]
@@ -3786,7 +3850,14 @@ names = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", piece)))
 edges = ["x=1", "\nx=1", "$x=1", "ax=1", "x[1]=a\n", "local\nx", "read -r a x", "export x", "export x=1",
          "(( y +\n x ))", "((a)) x", "echo ${x:=d}", "for x in a", "a; read x", "x", "local y x\nexport x",
          "printf -v x %s", "y=x=1", "x+=1", "x\n=1", "readonly x;x=2", "# read x", "  # x=1", "printf 'x %s'",
-         'echo "now read x"', "IFS= read -r x", "if read x", "a # read x\nread x", "f() { local x; }"]
+         'echo "now read x"', "IFS= read -r x", "if read x", "a # read x\nread x", "f() { local x; }",
+         "local top='x=1'", "printf '%s' 'x=1'", "export 'x=1'", "trap 'x=1' EXIT", "echo \"x=1\"; x=2"]
+# What the quoted string rule decides, said outright rather than only matched against itself.
+told = {t: gate.Judge.sh_binds("x", t) for t in ("local top='x=1'", "printf '%s' 'x=1'", "export 'x=1'",
+                                                 "trap 'x=1' EXIT", "local a 'x=1'", "echo 'it''s' x=1")}
+if told != {"local top='x=1'": False, "printf '%s' 'x=1'": False, "export 'x=1'": True,
+            "trap 'x=1' EXIT": True, "local a 'x=1'": True, "echo 'it''s' x=1": True}:
+    wrong.append("a quoted NAME=value was read as %r" % told)
 bad = []
 for t in [piece] + edges:
     for name in (names if t is piece else ["x"]):
