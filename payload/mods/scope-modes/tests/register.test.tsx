@@ -6028,6 +6028,30 @@ test('a worker whose builder subagent is still working rests at each Stop, never
   expect(w.released).toEqual([['/repo', '7', 's1', 'failed', BREAKER]])
 })
 
+// #2885 lessons review: the work's report starts a turn, so the rest is over then. A turn running past
+// the rest's ten minutes must not be handed a resume prompt saying nothing has reported back.
+test('a rest on background work ends when its report starts a turn, so a turn running past the rest is never handed a resume prompt (#2511)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, agents: [{ id: 'a1', status: 'running' }] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: '1 subagent', resumeAt: T0 + 10 * MIN })
+  w.o.agents = [{ id: 'a1', status: 'completed' }]
+  await turnStart($, 'report', 'the builder reports back')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: null, resumeAt: null })
+  await clock.advance(15 * MIN)
+  expect(w.prompts).toEqual([])
+})
+
+test('a turn starting during a rest for mods out of step leaves its resume set, since that rest is ended by no report (#2511)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, agents: [{ id: 'a1', status: 'running' }] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  // The same record as a rest for mods out of step: a resume due, and no work waited on.
+  w.files[DRIVER] = JSON.stringify({ ...JSON.parse(w.files[DRIVER] as string), waitingOn: null, restDue: true })
+  await turnStart($, 't1')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ restDue: true, resumeAt: T0 + 10 * MIN })
+})
+
 const noWork: [string, Opts, typeof withJobs][] = [
   ['a builder that has ended', { agents: [{ id: 'a1', status: 'completed' }] }, withJobs],
   ['a builder listed as running but quiet past the job watcher\'s twenty minutes (hung)', { agents: [{ id: 'a1', status: 'running' }], quiet: [{ name: 'a builder', quietMs: 25 * MIN }] }, withJobs],

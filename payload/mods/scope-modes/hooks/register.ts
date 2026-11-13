@@ -3437,6 +3437,20 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
   }
 }
 
+// A rest on the session's own background work (#2511) is over once a main loop turn starts: the
+// work's report starts one. Its resume is cleared then, so the minute's tick never starts a turn
+// still running with words saying nothing has reported back (#2885 lessons review). The API error's
+// wait and the rest for mods out of step expect no turn before their resume, so they are kept.
+const restEndsAtTurn = ($: EngineInterface) =>
+  oneAtATime(async () => {
+    const en = await enrolledNow($)
+    if (!en) return
+    const r = await loadDriver($, en)
+    if (r.state !== 'ok' || !r.record.waitingOn) return
+    const unsaved = await saveDriver($, en, { ...r.record, resumeAt: null, waitingOn: null })
+    if (unsaved) $.ui.log(`scope-modes: a turn started after a rest on background work, but the rest could not be ended (${unsaved}), so its resume may still start a turn`, { to: 'debug' })
+  })
+
 // ---- Power for the night (#844) ----
 // /sleep refuses on battery, and holds `caffeinate -i` (no idle sleep) until the record's end, so the
 // Mac never sleeps under the work. The hold ends by itself at `until`, and is let go at wake.
@@ -5364,9 +5378,15 @@ export const register: Register = on => {
 
   // The first main turn after a morning prompt is the morning one (#1285): /wake's own prompt, the
   // turn "I'm up" started, or the one the minute submitted. Only the main loop raises turn.start.
+  // It also ends a rest on background work, whose report is what starts the turn (#2511).
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     if (morningPickers && morningPickers.turnId === undefined) morningPickers.turnId = e.turnId
+    try {
+      await restEndsAtTurn($)
+    } catch (err) {
+      $.ui.log(`scope-modes: a turn started, but whether it ended a rest on background work could not be read: ${msg(err)}`, { to: 'debug' })
+    }
     return r
   })
 
