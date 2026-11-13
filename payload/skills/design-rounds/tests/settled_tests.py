@@ -1035,6 +1035,70 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
     doc, tag, note, proc = capture_of("plain-page.html", '<html lang="en">', "")
     check("a page with no theme on <html> says nothing about a theme",
           "theme" not in note and "pinned" not in note and 'lang="en"' in tag, note + " | " + tag)
+
+    # The Claude in Chrome route (claude-config#2774). Twice a session capturing a production admin
+    # page in Dan's Chrome had the page POST a copy of itself to a receiver on 127.0.0.1; the page's
+    # content security policy refused it and paged Dan. Given {saveAs}, the capture saves itself as a
+    # download (a Blob through an anchor with a download attribute), sends nothing anywhere, and
+    # answers with one short line rather than the whole document. The anchor's click is recorded
+    # rather than followed, since a headless run has nowhere to save; every fetch, beacon and
+    # XMLHttpRequest send that carries a body is recorded too, so a capture that posts is seen.
+    write("save-probe.html", """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<style>header { background: rgb(20, 33, 61); }</style></head>
+<body><header>Larkspur</header><main id="main">x</main>
+<script>
+var clicked = [], posted = [];
+HTMLAnchorElement.prototype.click = function () {
+  clicked.push({download: this.download, href: this.href, attached: document.body.contains(this)});
+};
+var realFetch = window.fetch;
+window.fetch = function (url, init) {
+  if (init && (init.body || (init.method && String(init.method).toUpperCase() !== "GET"))) posted.push("fetch " + url);
+  return realFetch.apply(this, arguments);
+};
+navigator.sendBeacon = function (u) { posted.push("beacon " + u); return true; };
+var realSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send = function (body) { if (body) posted.push("xhr"); return realSend.apply(this, arguments); };
+var run = (%s);
+var out = {};
+run({saveAs: "chrome-probe.html"}).then(function (said) {
+  out.said = said;
+  var c = clicked[0] || {};
+  out.clicks = clicked.length; out.download = c.download || ""; out.href = (c.href || "").slice(0, 5); out.attached = !!c.attached;
+  return c.href ? realFetch(c.href).then(function (r) { return r.text(); }) : "";
+}).then(function (body) {
+  out.saved = body;
+  return run({saveAs: "../elsewhere.html"}).then(function () { out.bad = "accepted"; }, function (e) { out.bad = String(e && e.message || e); });
+}).then(function () {
+  out.posted = posted; out.clicksAfter = clicked.length;
+}, function (e) { out.error = String(e && e.message || e); }).then(function () {
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = JSON.stringify(out); document.body.append(pre);
+});
+</script></body></html>""" % snippet)
+    proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                           "--dump-dom", theme_base + "save-probe.html"], capture_output=True, text=True,
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
+    m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+    try:
+        saved = json.loads(html_unescape(m.group(1))) if m and proc.returncode == 0 else {}
+    except ValueError:
+        saved = {}
+    # An empty result shows Chrome's own output instead, since "{}" alone says nothing about why.
+    shown = repr(saved)[:600] if saved else proc.stdout[-600:] + proc.stderr[-300:]
+    check("#2774 given saveAs, the capture saves itself as one download of a Blob under that name",
+          saved.get("clicks") == 1 and saved.get("download") == "chrome-probe.html" and saved.get("href") == "blob:"
+          and saved.get("attached") is True, shown)
+    check("#2774 and the file it saves is the whole captured page",
+          saved.get("saved", "").startswith("<!doctype html>") and 'id="main"' in saved.get("saved", "")
+          and "rgb(20, 33, 61)" in saved.get("saved", ""), shown)
+    check("#2774 and it answers with one short line naming the file and its size, never the document",
+          saved.get("said", "").startswith("saved chrome-probe.html to the Downloads folder")
+          and str(len(saved.get("saved", "").encode("utf-8"))) + " bytes" in saved.get("said", "")
+          and "<html" not in saved.get("said", ""), shown)
+    check("#2774 and it sends nothing anywhere: no fetch, beacon or XMLHttpRequest carries a body",
+          saved.get("posted") == [] and "error" not in saved, shown)
+    check("#2774 a saveAs that is not a plain .html file name is refused, saving nothing",
+          "saveAs" in saved.get("bad", "") and saved.get("bad") != "accepted" and saved.get("clicksAfter") == 1, shown)
     theme_server.shutdown()
 
 # --- a settled frame follows its page's height, as a round's option does (claude-config#1816) --------
