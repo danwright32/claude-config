@@ -4611,9 +4611,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 written = bool(OUTPUT_REDIRECT.match(w))
                 continue
             if w.startswith("-") or w.startswith("+"):
-                w = self.glued_value(w)  # `--require=./x.js` is read as `--require ./x.js` (#2887)
-                if w is None:
+                # `--require=./x.js` is read as `--require ./x.js` (#2887), its option name included, so
+                # a module node loads by it after the code is code, not the code's data (#2886 review).
+                glued = self.glued_option(w)
+                if glued is None:
                     continue
+                option, w = glued
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
@@ -5460,12 +5463,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return "\n".join(bodies), True
 
     @staticmethod
-    def glued_value(w):
-        """The value of a long option that takes one, glued on with = (`--require=./x.js`), which the
-        program reads as the same option with its value as the next word; None for any other word
-        (claude-config#2887: node --require= and --import= loaded a module unread where -r did not)."""
+    def glued_option(w):
+        """(the option, its value) for a long option that takes one, glued on with = (`--require=./x.js`),
+        which the program reads as the same option with its value as the next word; None for any other
+        word (claude-config#2887: node --require= and --import= loaded a module unread where -r did not)."""
         name, eq, value = w.partition("=")
-        return value if eq and value and name.startswith("--") and name in VALUED else None
+        return (name, value) if eq and value and name.startswith("--") and name in VALUED else None
+
+    @classmethod
+    def glued_value(cls, w):
+        """The value glued_option finds, or None."""
+        glued = cls.glued_option(w)
+        return glued[1] if glued else None
 
     @staticmethod
     def family(name):

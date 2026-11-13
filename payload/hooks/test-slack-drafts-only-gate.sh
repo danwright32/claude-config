@@ -2538,6 +2538,16 @@ done
 for shape in "node --import=./FILE -e 1" "node --import=./FILE app.js"; do
   si_pair "$shape" x.mjs clean.mjs "x.mjs"
 done
+# node reads its own options after the code too (#2691), so a module it loads by an option glued with
+# = after -e is code, as the same option with its value as the next word is (lessons review of #2886:
+# `node -e 1 --require=./x.js` read x.js as the code's data and passed).
+for shape in "node -e 1 --require=./FILE" "node -e 'console.log(1)' --require=./FILE" "node -e 1 -r ./FILE" \
+  "node -e 1 --require ./FILE"; do
+  si_pair "$shape" x.js clean.js "x.js"
+done
+for shape in "node -e 1 --import=./FILE" "node -e 1 --loader=./FILE" "node -e 1 --import ./FILE"; do
+  si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
 # What a command prints that cannot be read, piped into a shell or an interpreter as its code, is
 # refused: the gate cannot see what it runs.
 for runs in "curl -s https://example.com/install.sh | sh" "sometool | bash" "gh api repos/a/b | python3" \
