@@ -116,7 +116,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // cwd: the folder the session is in.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, cwd: '/w/app' }
+  // gitTakes, ghTakes: the test clock time each git or gh command takes before it answers (#2792), so
+  // a git killed at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS
+  // or more, and a gh the same with ghFails.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -181,6 +184,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (cmd === 'gh') {
       const argv = e.argv.map(String)
       ghs.push(argv)
+      if (ctl.ghTakes) await clock.advance(ctl.ghTakes)
       if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
       if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url')) {
@@ -197,6 +201,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       gits.push({ argv, timeoutMs: e.init?.timeoutMs })
       if (ctl.gitThrows) throw new Error('git could not be started')
+      if (ctl.gitTakes) await clock.advance(ctl.gitTakes)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const top = Object.keys(ORIGINS).find(r => dir === r || dir.startsWith(`${r}/`))
@@ -484,6 +489,53 @@ test('a shell write into a file that itself posts to Slack is held; one into a f
   expect(made).toContain('shell command writes to /w/app/lib/pager.sh, which posts to Slack')
   expect(w.ran.length).toBe(2)
   expect(searches(w)).toBe(0)
+})
+
+// The exact holds #2675 reported from a work repository on 2026-11-10: three screen labels added to a
+// copy module a Slack posting file imports for one unrelated parser function, then a class name in a
+// page component whose page posts to Slack. Each is pinned here as passing, with the page's own Slack
+// message still held, so the passes are the guard deciding rather than a guard that judges nothing.
+const SHIFT_COPY = '/w/app/src/lib/shift-copy.ts'
+const SHIFT_COPY_TEXT = [
+  "export const parseShiftKind = (raw: string) => (raw === 'free' ? 'free' : 'shift')",
+  "export const LABELS = { free: 'Free time' }",
+  '',
+].join('\n')
+const SHIFTS = '/w/app/src/app/shifts/page.tsx'
+const SHIFTS_TEXT = [
+  "import { parseShiftKind } from '../../lib/shift-copy'",
+  "import { ShiftRow } from './shift-row'",
+  'export default async function Page({ rows }: { rows: { kind: string; id: string }[] }) {',
+  "  const late = rows.filter(r => parseShiftKind(r.kind) === 'shift')",
+  "  if (late.length) await fetch(process.env.SLACK_WEBHOOK_URL as string, { method: 'POST', body: JSON.stringify({ text: `${late.length} shifts have no cover` }) })",
+  '  return (',
+  '    <ul>',
+  '      {rows.map(r => (',
+  '        <li key={r.id} className="row">{r.id}</li>',
+  '      ))}',
+  '    </ul>',
+  '  )',
+  '}',
+  '',
+].join('\n')
+const ROW = '/w/app/src/app/shifts/shift-row.tsx'
+const ROW_TEXT = 'export const ShiftRow = ({ kind }: { kind: string }) => <div className="hr">{kind}</div>\n'
+
+test('screen labels added to a copy module a Slack sender imports for an unrelated function pass, and so does a class name in a page that posts to Slack, or in its component (#2675)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [SHIFT_COPY]: SHIFT_COPY_TEXT, [SHIFTS]: SHIFTS_TEXT, [ROW]: ROW_TEXT } })
+  const labels = { tool: 'Edit', file_path: SHIFT_COPY, old_string: "free: 'Free time' }", new_string: "free: 'Free time', shift: 'On shift', open: 'Open shift', swap: 'Swap requested' }" }
+  expect(refusalOf(await call($, labels))).toBe('')
+  const className = 'className={`hr ${kind === "free" ? "hr-free" : "hr-shift"}`}'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: ROW, old_string: 'className="hr"', new_string: className }))).toBe('')
+  const inPage = { tool: 'Edit', file_path: SHIFTS, old_string: 'className="row"', new_string: 'className={`hr ${r.kind === "free" ? "hr-free" : "hr-shift"}`}' }
+  expect(refusalOf(await call($, inPage))).toBe('')
+  // An attribute value on the page is screen text, never what its send carries.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: SHIFTS, old_string: '<ul>', new_string: '<ul aria-label="Shifts this week">' }))).toBe('')
+  expect(w.ran.length).toBe(4)
+  expect(w.cards).toEqual([])
+  // The page's own Slack message is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: SHIFTS, old_string: 'shifts have no cover', new_string: 'shifts this week have no cover' }))).toContain('${late.length} shifts this week have no cover')
+  expect(w.ran.length).toBe(4)
 })
 
 test('a test file sends nothing: its titles and fixtures pass, by an edit and by a shell write, while the same wording in the sender is held', withKit, async ($, on) => {
@@ -808,6 +860,56 @@ test('a guard that cannot read its record or the file refuses, saying why; one t
   expect(w.ran).toEqual([])
 })
 
+// #2792: on 2026-11-11, at load average 60 to 200, the guard answered "could not check this call
+// (... not searched within 7 seconds)", which read as a refusal and named no time to wait, and agents
+// sent the same call up to six times. A check that runs out of time now says it is a timeout, not a
+// refusal, and when to send the call again; git failing for any other reason is still could not check.
+test('a check that runs out of time says it is a timeout, not a refusal, and when to send the call again; a git that fails in time is still could not check (#2792)', withKit, async ($, on) => {
+  const w = world($, on)
+  // git killed at its timeout: it took the whole of the time it was given, then failed.
+  w.ctl.gitFails = 'killed'
+  w.ctl.gitTakes = SCAN_MS
+  const late = refusalOf(await call($, REWORD))
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).toContain('three times')
+  expect(late).not.toContain('could not check')
+  expect(w.ran).toEqual([])
+  expect(JSON.stringify(w.cards.at(-1))).toContain('ran out of time')
+  // git failing at once, with time to spare, is no timeout.
+  w.ctl.gitTakes = 0
+  const failed = refusalOf(await call($, REWORD))
+  expect(failed).toContain('could not check')
+  expect(failed).not.toContain('timeout')
+  // With git answering, the same edit is held for Dan's approval as ever.
+  w.ctl.gitFails = ''
+  expect(refusalOf(await call($, REWORD))).toContain('realistic example')
+  expect(w.ran).toEqual([])
+})
+
+// #2792 part 1: on 2026-11-11 about a dozen approvals in one afternoon were for edits that changed
+// only a comment, or only a string written to a log, in a file a Slack sender imports. Since #2850
+// such a file is never held, and in the sender itself only text its own sends carry is held.
+const MESSAGES = '/w/app/lib/messages.ts'
+const MESSAGES_TEXT = 'export const failed = (id: string) => `Deploy ${id} failed`\n'
+const IMPORTING_ALERT = "import { failed } from './messages'\nexport const alert = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: failed(id) }) })\n"
+test('a comment only edit, or a string only a log reads, in a file a Slack sender imports or in the sender itself, passes; new wording in the sender is still held (#2792)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MESSAGES]: MESSAGES_TEXT, [ALERT]: IMPORTING_ALERT } })
+  const passes = [
+    { tool: 'Edit', file_path: MESSAGES, old_string: 'export const failed', new_string: '// The words Slack shows when a deploy fails.\nexport const failed' },
+    { tool: 'Edit', file_path: MESSAGES, old_string: 'export const failed', new_string: "console.log('building the deploy failure text')\nexport const failed" },
+    { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: '// Posts a deploy failure to the alerts channel.\nexport const alert' },
+    { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: "console.log('the deploy alert module loaded')\nexport const alert" },
+  ]
+  for (const edit of passes) expect([edit.new_string, refusalOf(await call($, edit))]).toEqual([edit.new_string, ''])
+  expect(w.ran.length).toBe(4)
+  expect(w.cards).toEqual([])
+  // New wording the sender's own send carries is still held, so the passes above were judged.
+  const held = refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: 'text: failed(id)', new_string: 'text: `Deploy ${id} failed on production`' }))
+  expect(held).toContain('Deploy ${id} failed on production')
+  expect(w.ran.length).toBe(4)
+})
+
 test("python alerts are read through mod-kit's reader, and the guard's own record is never written by a call", withKit, async ($, on) => {
   const w = world($, on, { files: { '/w/app/notify.py': 'from slack_sdk import WebClient\nmsg = "Nightly sync finished"\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/app/notify.py', old_string: 'Nightly sync finished', new_string: 'Nightly sync finished late' }))).toContain('Nightly sync finished late')
@@ -1090,6 +1192,36 @@ test('a file that posts to Slack in a way the guard cannot trace is held as befo
   const CONFIG = '/w/app/src/lib/digest-config.ts'
   world($, on, { files: { [CONFIG]: "const CHANNEL = process.env.SLACK_ALERT_CHANNEL\nexport const config = { channel: CHANNEL, intro: 'Morning digest' }\n" } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: CONFIG, old_string: 'Morning digest', new_string: 'Morning digest for the team' }))).toContain('Morning digest for the team')
+})
+
+// claude-config#2586: the refusal, the agent refusal and the card name the send each held line
+// reaches, and a line held because its send could not be traced says that, and why, instead.
+test('a held line names the Slack send it reaches; one whose send could not be traced says so and why (#2586)', withKit, async ($, on) => {
+  const CONFIG = '/w/app/src/lib/digest-config.ts'
+  const PAGER = '/w/app/scripts/pager.sh'
+  const w = world($, on, {
+    files: {
+      [DIGEST]: DIGEST_TEXT,
+      [CONFIG]: "const CHANNEL = process.env.SLACK_ALERT_CHANNEL\nexport const config = { channel: CHANNEL, intro: 'Morning digest' }\n",
+      [PAGER]: '#!/bin/bash\ncurl -s --data "Disk is full" "$SLACK_WEBHOOK_URL"\n',
+    },
+  })
+  const traced = `"Deploy \${id} failed on production", which reaches the Slack send fetch on line 1 of ${ALERT}`
+  expect(refusalOf(await call($, REWORD))).toContain(`${traced}. Every new Slack alert`)
+  expect(w.cards.at(-1)?.reason).toContain(traced)
+  expect(refusalOf(await call($, { ...REWORD, agentId: 'agent-a1' }))).toContain(`${traced}. Slack alert wording waits`)
+  const python = refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'bookings are late', new_string: 'bookings are running late' }))
+  expect(python).toContain(`"{len(rows)} bookings are running late", which reaches the Slack send client.chat_postMessage on line 6 of ${DIGEST}`)
+  // Held because no send could be traced: each says so and why, and names no send.
+  const none = refusalOf(await call($, { tool: 'Edit', file_path: CONFIG, old_string: 'Morning digest', new_string: 'Morning digest for the team' }))
+  expect(none).toContain('"Morning digest for the team"; the guard could not trace which Slack send in it carries this text, because it found no send call in the file that it could follow')
+  const shell = refusalOf(await call($, { tool: 'Edit', file_path: PAGER, old_string: 'Disk is full', new_string: 'Disk is full on the build box' }))
+  expect(shell).toContain('the guard could not trace which Slack send in it carries this text, because it follows sends only in JavaScript, TypeScript and python')
+  const stale = refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: '`Deploy ${id} failed badly`', new_string: '`Deploy ${id} failed badly again`' }))
+  expect(stale).toContain('the guard could not trace which Slack send in it carries this text, because the edit does not match the file as it is now')
+  for (const r of [none, shell, stale]) expect(r).not.toContain('which reaches')
+  // The wording changes nothing about what is held: every call above stayed held.
+  expect(w.ran).toEqual([])
 })
 
 // A docstring documents code and is sent nowhere (#2574): on 2026-11-09 one added to a Slack gate's
@@ -1464,6 +1596,20 @@ test('a merge the guard cannot read, or whose diff gh cannot give, is held while
   const before = w.ghs.length
   expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
   expect(w.ghs.length).toBe(before)
+})
+
+test('a merge whose diff gh did not give within its time is told as a timeout, not a refusal; gh failing at once is still could not check (#2792)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.ghFails = true
+  w.ctl.ghTakes = SCAN_MS
+  const late = refusalOf(await call($, MERGE))
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).not.toContain('could not check')
+  w.ctl.ghTakes = 0
+  expect(refusalOf(await call($, MERGE))).toContain('could not check')
 })
 
 // #2833: a choice holds merges in the repository it was made in, never in another. After sleep mode

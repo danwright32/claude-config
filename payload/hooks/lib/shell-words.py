@@ -538,6 +538,14 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                 i += 1
                 continue
         elif k == "paren":
+            if c == "#" and f.get("array") and s[i - 1] in " \t\n(":
+                # A comment inside an array's ( ), as the shell reads one there too: an apostrophe in
+                # it opened a quote that ran on past the array (tools/check-mod-shared-parts.sh's
+                # PARTS, so no compound after it paired; claude-config#2683). It ends at the line
+                # break, "; " in the flattened form, as a comment between commands does.
+                j = s.find(line_break, i)
+                i = n if j < 0 else j
+                continue
             if c == "(":
                 frames.append({"k": "paren"})
                 i += 1
@@ -675,7 +683,8 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
                     open_commands("sub", i + 1)
                     i += 1
             else:
-                frames.append({"k": "paren"})
+                # NAME=( or NAME+=( opens an array, whose words may carry comments.
+                frames.append({"k": "paren", "array": s[i - 1:i] == "="})
                 i += 1
             continue
         if c == ")" and k in ("sub", "subst"):

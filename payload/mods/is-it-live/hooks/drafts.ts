@@ -2,7 +2,22 @@ import type { EngineInterface, On } from 'claude-code'
 import type { IsItLiveOwed, IsItLiveThread } from '../types/index.d.ts'
 import { MOD } from './card.ts'
 import { errorText } from './mod-kit/skew.ts'
-import { type Landing, assignLandings, draftHoldOf, draftLetGoOf, draftOwedFrom, draftSaved, isSlackTool, nameOfThread, owedThreads, threadKey, threadsIn } from './threads.ts'
+import {
+  type GoneError,
+  type Landing,
+  assignLandings,
+  draftHoldOf,
+  draftLetGoOf,
+  draftOwedFrom,
+  draftSaved,
+  isSlackTool,
+  nameOfThread,
+  owedThreads,
+  threadGone,
+  threadGoneOf,
+  threadKey,
+  threadsIn,
+} from './threads.ts'
 
 // The draft reply to the Slack thread a session started from (#2436; threads.ts says why). What
 // this file keeps, per session in $.state: the threads, the step a merge last landed at, each
@@ -143,6 +158,19 @@ async function settle($: EngineInterface, t: { channel: string; ts: string }): P
   await changeThreads($, ts => ts.map(x => (threadKey(x) === threadKey(t) ? (({ prs: _done, card: _saved, ...rest }) => ({ ...rest, settled: step }))(x) : x)))
 }
 
+// #2787: Slack said a recorded thread no longer exists, so no draft is owed to it again. The reply
+// kept is the one the draft call carried, else the card's message for the thread; the first answer
+// saying so is the one kept.
+async function markGone($: EngineInterface, t: { channel: string; ts: string }, error: GoneError, message: unknown): Promise<void> {
+  await changeThreads($, ts =>
+    ts.map(x => {
+      if (threadKey(x) !== threadKey(t) || x.gone !== undefined) return x
+      const said = typeof message === 'string' && message.trim() ? message : x.card?.message
+      return { ...x, gone: { error, ...(said ? { message: said } : {}) } }
+    }),
+  )
+}
+
 async function recorded($: EngineInterface, t: { channel: string; ts: string }): Promise<IsItLiveThread | undefined> {
   return ((await $.state.get(threadsRef)).value ?? []).find(x => threadKey(x) === threadKey(t))
 }
@@ -169,12 +197,29 @@ async function inFlight($: EngineInterface, owed: IsItLiveOwed[]): Promise<boole
   return waits.some(w => w.task === undefined || running.has(w.task))
 }
 
+// #2787: at the first turn end after Slack said a recorded thread no longer exists, Dan is told so
+// once, with the reply that could not be saved there, and the hold asks nothing more of it (owedThreads
+// leaves it out). Taken for Dan on 2026-11-12, as the issue recommended: no draft DM is offered in its
+// place. Marked told before the toast, so two turn ends at once say it once.
+async function tellGone($: EngineInterface): Promise<void> {
+  const untold = ((await $.state.get(threadsRef)).value ?? []).filter(t => t.gone !== undefined && t.gone.told !== true)
+  if (!untold.length) return
+  const keys = new Set(untold.map(threadKey))
+  let told: IsItLiveThread[] = []
+  await changeThreads($, ts => {
+    told = ts.filter(x => keys.has(threadKey(x)) && x.gone !== undefined && x.gone.told !== true)
+    return ts.map(x => (told.includes(x) && x.gone ? { ...x, gone: { ...x.gone, told: true as const } } : x))
+  })
+  for (const t of told) if (t.gone) $.ui.toast(threadGoneOf({ ...t, gone: t.gone }))
+}
+
 /**
  * The hold a turn end carries for threads owed a draft, or undefined. Held once per thread and
  * merge in a chain of turn ends, as the card's hold is, so a draft that cannot be saved never traps
  * the turn: the next end in the chain goes ahead, said.
  */
 export async function draftHold($: EngineInterface, e: { stop_hook_active?: boolean }, owed: IsItLiveOwed[]): Promise<string | undefined> {
+  await tellGone($)
   const unrelated = (await $.state.get(unrelatedRef)).value
   const due = owedThreads((await $.state.get(threadsRef)).value ?? [], (await $.state.get(landedRef)).value, unrelated)
   if (!due.length || (await inFlight($, owed))) return undefined
@@ -230,9 +275,17 @@ export function registerDrafts(on: On): void {
     const tool = String(e.tool)
     const reads = isSlackTool(tool, 'slack_read_thread')
     if (!reads && !isSlackTool(tool, 'slack_send_message_draft')) return next(e)
-    const input = e as unknown as { channel_id?: unknown; message_ts?: unknown; thread_ts?: unknown }
+    const input = e as unknown as { channel_id?: unknown; message_ts?: unknown; thread_ts?: unknown; message?: unknown }
     const done = await next(e)
     try {
+      // #2787: Slack saying a recorded thread no longer exists, to a draft or a read by anyone in
+      // the session, means no draft can ever be saved there, so the hold stands down for it.
+      const gone = threadGone(done)
+      if (gone !== undefined) {
+        const ts = reads ? input.message_ts : input.thread_ts
+        if (typeof input.channel_id === 'string' && typeof ts === 'string') await markGone($, { channel: input.channel_id, ts }, gone, reads ? undefined : input.message)
+        return done
+      }
       if (reads) {
         // The thread the main session reads when it has none is its starting point; a later one,
         // or one a subagent reads, is research. Read once the session is under way (after Dan's
