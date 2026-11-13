@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
 # send-gate: scans settings.hooks.json
-# Tests for the gate that refuses a Claude in Chrome script sending anything to a loopback address
-# (claude-config#2774).
+# Tests for the gate that refuses a Claude in Chrome script naming a loopback address beside a
+# network call (claude-config#2774).
 #
 # Twice (2026-11-01 and 2026-11-11) a session capturing a production admin page in Dan's Chrome
 # started a receiver on 127.0.0.1:8765 and had the page post a copy of itself there. The page's

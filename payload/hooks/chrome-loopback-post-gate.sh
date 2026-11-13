@@ -69,7 +69,7 @@ class Unreadable(Exception):
     pass
 
 def offence(inp):
-    """The loopback host a script sends to, or None."""
+    """The loopback host a script names beside a network call, or None."""
     if not isinstance(inp, dict):
         raise Unreadable("a javascript call input is not a JSON object")
     text = inp.get("text")
@@ -116,9 +116,9 @@ case "$verdict" in
     exit 0
     ;;
   unreadable$'\t'*)
-    hook_allow_notice "CHROME LOOPBACK POST GATE DID NOT RUN: chrome-loopback-post-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this Claude in Chrome script was let through without checking whether it sends to a loopback address."
+    hook_allow_notice "CHROME LOOPBACK POST GATE DID NOT RUN: chrome-loopback-post-gate.sh could not read the hook payload (${verdict#*$'\t'}), so this Claude in Chrome script was let through without checking whether it names a loopback address beside a network call."
     ;;
   *)
-    hook_allow_notice "CHROME LOOPBACK POST GATE DID NOT RUN: chrome-loopback-post-gate.sh failed (${verdict//$'\n'/ }), so this Claude in Chrome script was let through without checking whether it sends to a loopback address."
+    hook_allow_notice "CHROME LOOPBACK POST GATE DID NOT RUN: chrome-loopback-post-gate.sh failed (${verdict//$'\n'/ }), so this Claude in Chrome script was let through without checking whether it names a loopback address beside a network call."
     ;;
 esac
