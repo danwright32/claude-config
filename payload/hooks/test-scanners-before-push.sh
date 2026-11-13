@@ -1879,6 +1879,84 @@ out="$(H="$DL_NOLIB/scanners-before-push.sh" wn_fire "$RD" "git push -u origin d
   || check "#2330 a gate that cannot load the shared deadline check refuses the push, naming the file" "exit=$rc out=$out"
 git -C "$RD" checkout -q main
 
+# --- a push that changes the Slack alert guard runs tests/test-slack-alert-guard-real-gate.sh first,
+#     as the push delivers it (claude-config#2834, Dan's choice on 2026-11-13). On 2026-11-12 PR #2826
+#     passed all the mod's own tests and failed CI at merge, because a new comment in hooks/register.ts
+#     named the webhook host and the guard read its own code as a file that posts to Slack. The mod's
+#     tests cannot read its source, so the check runs here, and only for pushes touching the guard.
+sag_repo(){   # $1 = name -> prints the repo path, with a passing scanner and a README
+  local r; r="$(mkrepo "$1")"; git init -q --bare "$TMPROOT/$1-remote.git"
+  add_scanner "$r" alpha 0; printf 'readme\n' > "$r/README.md"; printf '%s' "$r"
+}
+sag_publish(){   # $1 = repo: commits everything and publishes it as main on its own bare remote
+  commit_all "$1"; git -C "$1" branch -M main
+  git -C "$1" remote add origin "$TMPROOT/$(basename "$1")-remote.git"
+  git -C "$1" push -q origin main >/dev/null 2>&1; git -C "$1" fetch -q origin >/dev/null 2>&1
+}
+sag_branch(){ git -C "$1" checkout -q main; git -C "$1" checkout -q -B "$2"; }   # $1 = repo  $2 = a branch cut fresh from main
+# A stand in for the guard's suite that records each run, so whether the gate ran it is read from
+# the record rather than from the gate's words.
+SAG_CALLS="$TMPROOT/sag-calls"
+RG="$(sag_repo sag-stub)"
+mkdir -p "$RG/payload/mods/slack-alert-guard/hooks"
+printf 'export const x = 1\n' > "$RG/payload/mods/slack-alert-guard/hooks/x.ts"
+printf '#!/usr/bin/env bash\necho called >> %q\necho "stand in guard suite ran"\nexit 0\n' "$SAG_CALLS" > "$RG/tests/test-slack-alert-guard-real-gate.sh"
+sag_publish "$RG"
+sag_branch "$RG" docs; printf 'more\n' >> "$RG/README.md"; commit_all "$RG"
+out="$(wn_fire "$RG" "git push -u origin docs")"; rc=$?
+[ "$rc" -eq 0 ] && [ ! -s "$SAG_CALLS" ] \
+  && check "#2834 a push that leaves the Slack alert guard alone never runs the guard's suite" ok \
+  || check "#2834 a push that leaves the Slack alert guard alone never runs the guard's suite" "exit=$rc calls=$(cat "$SAG_CALLS" 2>/dev/null) out=$out"
+# The control: the same stand in IS run by a push changing the guard, so the silence above is the
+# gate choosing not to run it, never a stand in that cannot record (L1).
+sag_branch "$RG" guard; printf 'export const y = 2\n' >> "$RG/payload/mods/slack-alert-guard/hooks/x.ts"; commit_all "$RG"
+out="$(wn_fire "$RG" "git push -u origin guard")"; rc=$?
+[ "$rc" -eq 0 ] && [ "$(grep -c . "$SAG_CALLS" 2>/dev/null)" = 1 ] \
+  && check "#2834 (control) a push changing the Slack alert guard runs the guard's suite, once" ok \
+  || check "#2834 (control) a push changing the Slack alert guard runs the guard's suite, once" "exit=$rc calls=$(cat "$SAG_CALLS" 2>/dev/null) out=$out"
+# The real suite against the guard's real source, copied from the checkout this suite sits in.
+SAG_REAL="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$SAG_REAL" ] && [ -f "$SAG_REAL/tests/test-slack-alert-guard-real-gate.sh" ]; then
+  RSG="$(sag_repo sag-real)"
+  mkdir -p "$RSG/payload/mods" "$RSG/payload/skills/nudge"
+  cp -R "$SAG_REAL/payload/mods/slack-alert-guard" "$RSG/payload/mods/"
+  cp "$SAG_REAL/payload/hooks/slack-drafts-only-gate.sh" "$SAG_REAL/payload/hooks/slack_drafts_only_gate.py" "$RSG/payload/hooks/"
+  cp "$SAG_REAL/payload/skills/nudge/nudge.py" "$RSG/payload/skills/nudge/"
+  cp "$SAG_REAL/tests/test-slack-alert-guard-real-gate.sh" "$RSG/tests/"
+  python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$RSG/payload/hooks/lib" suite-deadline.sh issue-spool.sh >/dev/null \
+    || check "#2834 the libraries the guard's suite reads could be installed in the fixture" "the install refused"
+  sag_publish "$RSG"
+  SAG_FILE="payload/mods/slack-alert-guard/hooks/register.ts"
+  # The webhook host, spelt in two halves so this suite is never itself read as naming it.
+  SAG_HOST="hooks.slack"; SAG_HOST="$SAG_HOST.com"
+  # The #2826 mistake: a comment in the guard's own source naming the webhook host.
+  sag_branch "$RSG" marked; printf '// posts nothing, only names %s\n' "$SAG_HOST" >> "$RSG/$SAG_FILE"; commit_all "$RSG"
+  out="$(wn_fire "$RSG" "git push -u origin marked")"; rc=$?
+  [ "$rc" -eq 2 ] && grep -q -F "$SAG_FILE" <<< "$out" && grep -q -F "Take the Slack marker out" <<< "$out" \
+    && check "#2834 a push putting a Slack marker in the guard's own source is refused, naming the file and the fix" ok \
+    || check "#2834 a push putting a Slack marker in the guard's own source is refused, naming the file and the fix" "exit=$rc out=$out"
+  grep -q -F "scan(s) passed" <<< "$out" \
+    && check "#2834 and refuses before any scanner suite is spent" "out=$out" \
+    || check "#2834 and refuses before any scanner suite is spent" ok
+  # Judged as the push DELIVERS it: taking the marker out of the working copy alone changes nothing
+  # the push carries, so the push is still refused.
+  git -C "$RSG" show "main:$SAG_FILE" > "$RSG/$SAG_FILE"
+  out="$(wn_fire "$RSG" "git push -u origin marked")"; rc=$?
+  [ "$rc" -eq 2 ] && grep -q -F "$SAG_FILE" <<< "$out" \
+    && check "#2834 the guard is judged as the push delivers it, not as the working copy holds it" ok \
+    || check "#2834 the guard is judged as the push delivers it, not as the working copy holds it" "exit=$rc out=$out"
+  git -C "$RSG" checkout -q -- "$SAG_FILE"
+  # The same push with the markers right: a comment that names nothing goes through.
+  sag_branch "$RSG" clean; printf '// a comment that names nothing\n' >> "$RSG/$SAG_FILE"; commit_all "$RSG"
+  out="$(wn_fire "$RSG" "git push -u origin clean")"; rc=$?
+  [ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" \
+    && check "#2834 a push changing the guard's source with no Slack marker in it is let through" ok \
+    || check "#2834 a push changing the guard's source with no Slack marker in it is let through" "exit=$rc out=$out"
+  git -C "$RSG" checkout -q main
+else
+  printf 'SUITE-PART-UNMEASURED the checks that a push changing the Slack alert guard runs its real suite (claude-config#2834): %s is not in a claude-config checkout, so the guard'"'"'s real source is not here to copy\n' "$DIR/.."
+fi
+
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a
 #     fixture's record in the real folder would be a test result a later real push trusts (L2).
