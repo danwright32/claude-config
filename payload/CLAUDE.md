@@ -222,6 +222,7 @@ On Daniels-MacBook-Pro-2 (personal MacBook):
 - `~/Non-icloudDocuments/Apps/NurseDex`
 - `~/Non-icloudDocuments/Apps/PostRoll`
 - `~/Non-icloudDocuments/Apps/playeditapp`
+- `~/Non-icloudDocuments/Apps/Intonation`: judging and correcting colour on Lightroom Classic concert galleries (private repo danwright32/Intonation, made 2026-11-13).
 - `~/Non-icloudDocuments/Apps/repo-digest`
 - `~/Non-icloudDocuments/Apps/claude-config`: this config and the sync tool, where they are developed
 - `~/claude-config-sync`: the clone the scheduled sync actually runs from
