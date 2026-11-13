@@ -2402,7 +2402,7 @@ PERL_ASCII="perl -ne 'print \"\$ARGV:\$.: \$_\" if /[^\\x00-\\x7F]/; close ARGV 
 for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
   "perl -lne 'print if /slack/' notes.md post.sh" "perl -ne 'print if 1 .. 3' post.py" \
   "perl -nle 'print length' post.sh | sort -n" "perl -ne 'print \"\$ARGV: \$_\" if eof(ARGV)' notes.md post.sh" \
-  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
+  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -ne 'print \"\$\$: \$_\"' notes.md post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
   "python3 -c 'import sys; print(len(open(sys.argv[1]).read()))' post.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read().count(\"slack\"))' post.py $GATE_PY" \
   "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' post.js" \
@@ -2412,11 +2412,14 @@ for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
 done
 # A plain word after an option known to load nothing is still the code's argument, not its value
 # (measured with node 22, 2026-11-13: each file below lands in process.argv and is never loaded), and
-# so is a word after --, which ends node's options, or after an option whose value is glued on.
+# so is a word after --, which ends node's options, or after an option whose value is glued on. A
+# shell given -c reads no options after the code at all (bash, sh, zsh, dash and ksh each put -x, --
+# and --rcfile in $0 and $1, measured 2026-11-13), so every word there is the code's argument.
 for reads in "node -e 'console.log(1)' --no-warnings ./post.js" "node -e 'read' --no-warnings notes.md" \
   "node -e 'console.log(1)' -- ./post.js" "node -e 'console.log(1)' --max-old-space-size=4096 ./post.js" \
   "node -e 'console.log(1)' --input-type=commonjs --no-deprecation ./post.js" \
-  "perl -ne 'print' -l post.sh" "python3 -c 'print(1)' -X ./post.py"; do
+  "perl -ne 'print' -l post.sh" "python3 -c 'print(1)' -X ./post.py" \
+  "bash -c 'wc -l \"\$@\"' -- ./post.sh" "bash -c 'wc -l \"\$@\"' _ -n ./post.sh" "sh -c 'wc -l \"\$1\"' -x ./post.sh"; do
   run_rf "$reads"
   allowed "a file after an option that loads nothing is the code's argument: $reads"
 done
@@ -2460,6 +2463,9 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'BEGIN { @ ARGV = (\"sh post.sh |\") } print' notes.md" \
   "perl -ne 'BEGIN { \$ ARGV [0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'BEGIN { @{\"AR\".\"GV\"} = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; @\$x = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$\$x[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; *\$x = [\"sh post.sh |\"] } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read())' post.sh > run.sh; sh run.sh" \

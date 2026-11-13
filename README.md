@@ -3673,13 +3673,15 @@ Code given inline (`python3 -c`, `node -e`, `perl -ne`, the code `python3 -` rea
 certainly the program, so every file after it is that code's argument in the same way (#2691), except
 a file named as the value of any option after the code, separate or glued with `=` and whatever its
 extension (`node -e '...' -r ./x.js` loads `x.js`, and `-r ./x.txt` runs `x.txt`; node, ruby and perl go
-on reading their options there, Python does not). Which options load a file is not a list the gate can
+on reading their options there; Python and a shell given `-c` do not, and a family whose parsing there
+is not measured is taken to). Which options load a file is not a list the gate can
 keep complete, so such a file is read as code unless the option is one known to load nothing
 (`LOADS_NOTHING`: `--`, `--no-warnings` and a few more for node, perl's reading switches). And `perl -e` code is read for what it can
 do: a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`, `-F`, `-w`) and whose code
 names none of perl's ways to run a command, load or evaluate code, open, write or rename a file
 (`system`, backticks, `qx`, `open`, `do`, `require`, `use`, `eval`, `s///e`, `unlink`, a `::` name, `$^I`,
-a variable reached through a block such as `@{...}` or `${...}`, and the rest of `PERL_ACTS`), and
+a variable reached through a block or another scalar such as `@{...}`, `${...}` or `@$x`, and the rest
+of `PERL_ACTS`), and
 that uses `ARGV` only as the scalar `$ARGV` or the filehandle given to `close`, `eof` or `<ARGV>` (any
 other spelling may set `@ARGV`, the names `<>` opens, and perl has many), in every `-e` it is given, and that is
 handed no argument perl's `<>` would open as a command or for writing (`'sh x |'`), is seen unable to

@@ -145,8 +145,11 @@ OPTIONS = {
 # only an option matched here leaves the word after it as the code's argument. Each is measured to load
 # nothing (node 22, 2026-11-13: a file after each landed in process.argv unrun; -- ends node's options;
 # --input-type takes only module or commonjs) or is perl's own reading switches, which take no separate
-# value (perl_acts reads the rest). A family not listed has none. Python is not read this way at all:
-# it stops at -c, so every word after the code is its argument.
+# value (perl_acts reads the rest). A family not listed has none. Python and the shell are not read
+# this way at all: Python stops at -c, and a shell given -c takes every word after the code as $0, $1
+# and on (bash, sh, zsh, dash and ksh measured 2026-11-13), so every word there is the code's argument.
+# Any other family (deno, php, osascript, whose option parsing after the code is not measured) is read
+# as one that goes on reading options, which refuses more rather than less.
 LOADS_NOTHING = {
     "js": re.compile(r"--|--no-warnings|--no-deprecation|--trace-warnings|--enable-source-maps|--input-type|"
                      r"--max-old-space-size|--stack-size"),
@@ -155,8 +158,8 @@ LOADS_NOTHING = {
 # perl -e code the gate sees cannot act (perl_acts, claude-config#2691): switches that only read lines
 # (-n, -p, -l, -a, -0, -F, -w), and code naming none of perl's ways to run a command, load or evaluate
 # code, write or rename a file, or open one (the two argument open runs a command), no module by name
-# (`::`), no backtick, no in place edit ($^I), and no variable reached through a block (`@{...}`,
-# `${...}`), which is how a name is spelled in braces or computed at run time.
+# (`::`), no backtick, no in place edit ($^I), and no variable reached through a block or another
+# scalar (`@{...}`, `${...}`, `@$x`), which is how a name is spelled in braces or computed at run time.
 #
 # Nor any ARGV but the reads PERL_ARGV_READS lists: @ARGV holds the names perl's <> opens with the two
 # argument open, where a name ending in | runs a command, and perl spells that array many ways (`@ARGV`,
@@ -166,7 +169,10 @@ LOADS_NOTHING = {
 # eof, or read by <ARGV>. Any other ARGV left in the code is taken to act.
 PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
 PERL_ARGV_READS = re.compile(r"\$ARGV\b(?!\s*[\[{])|\b(?:close|eof)\s*\(?\s*ARGV\b|<ARGV>")
-PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|\$#\s*\{")
+# A sigil followed by a block or by another scalar reaches a variable whose name may be computed
+# (`@{...}`, `${...}`, `@$x`, `$$x[0]`, `*$x`, `$#$x`); `$$` alone is the process id. `%` and `*` here
+# also match `$a % $b` and `$a * $b`: the reading refuses that arithmetic rather than tell them apart.
+PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|[@%*&]\s*\$|\$\$(?=[\w{])|\$#\s*[{$]")
 PERL_ACTS = re.compile(r"`|::|\$\^I|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
                        r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
                        r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
@@ -4655,10 +4661,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # options past -e, so `node -e '...' -r ./x.js` loads x.js (measured with node, 2026-11-13,
         # claude-config#2691). Which options load a file is not known in full, so the value of any
         # option there, separate or glued with =, is read as code unless the option is one known to
-        # load nothing (LOADS_NOTHING, #2886 review). Python stops at -c and -m, and every word after
-        # the code is its argument.
+        # load nothing (LOADS_NOTHING, #2886 review). Python stops at -c and -m, and a shell at -c's
+        # code, and every word after the code is its argument; any family not measured is taken to
+        # read options there.
         fam = self.family(prog)
-        options_read = bool(inline) and fam != "py"
+        options_read = bool(inline) and fam not in ("py", "shell")
         safe = LOADS_NOTHING.get(fam)
         last = None
         # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
