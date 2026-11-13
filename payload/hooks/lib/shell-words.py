@@ -1882,16 +1882,13 @@ def data_blanked(s, declared, home):
     return None
 
 
-# The guard's own test that text names git, gh or rtk (check-wrapped-commands.sh).
-DATA_GUARDED = re.compile(r"(^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$)")
-
-
-def data_set_aside(s, declared, home):
+def data_set_aside(s, declared, home, guarded):
     """s with every declared data call in it set aside (claude-config#1492), or None when it holds
     none. A declared call is a pipeline of the command itself, never inside a subshell, a
     substitution or a wrapper's string, that data_blanked reads in full (the call, only
     DATA_TOKEN_PREFIX in front, only 2>&1 and pipes into DATA_FILTERS behind) and whose blanked
-    text names none of git, gh and rtk. Each is replaced by `:`, which runs nothing, so the guard can
+    text names none of git, gh and rtk, by guarded, the guard's own test of that (its GUARDED_TEXT,
+    handed in so the two can never disagree). Each is replaced by `:`, which runs nothing, so the guard can
     judge the rest of the command exactly as if the call were not there: a push, merge or issue
     command beside it is read by the gates as usual, and an unread wrapper beside it is refused as
     before. Pipelines are cut where the shell cuts them, at ;, &&, ||, & and a line break, so a
@@ -1918,7 +1915,7 @@ def data_set_aside(s, declared, home):
         if how == "|":
             continue
         shown = data_blanked(s[start:end], declared, home)
-        if shown is None or DATA_GUARDED.search(shown):
+        if shown is None or guarded.search(shown):
             continue
         out.append(s[at:start])
         out.append(" : ")
@@ -1946,8 +1943,13 @@ def main(argv):
     elif mode == "data-set-aside":
         # stdin is the command; each argument after the mode is one declared "<path>" or "<path>
         # <subcommand>" entry. Exit 1, printing nothing, when no declared call stands in it in its
-        # declared shape (claude-config#1574, #1610, #1492).
-        rest = data_set_aside(data, argv[2:], os.environ.get("HOME", ""))
+        # declared shape (claude-config#1574, #1610, #1492). The test that text names git, gh or rtk
+        # is the guard's, in DATA_GUARDED_RE; without one that compiles nothing is set aside.
+        try:
+            guarded = re.compile(os.environ["DATA_GUARDED_RE"])
+        except (KeyError, re.error):
+            return 1
+        rest = data_set_aside(data, argv[2:], os.environ.get("HOME", ""), guarded)
         if rest is None:
             return 1
         sys.stdout.write(rest)

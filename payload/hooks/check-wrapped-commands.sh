@@ -135,6 +135,9 @@ case "${BASH_SOURCE[0]}" in */*) _SRW="${BASH_SOURCE[0]%/*}/lib/script-run-words
 # shellcheck source=lib/script-run-words.sh
 { . "$_SRW" 2>/dev/null && declare -F srw_may_run_script >/dev/null && SRW_LOADED=1; } || true
 GUARDED_WORD='(^|[^A-Za-z0-9_.-]|\\[nt])(git|gh|rtk)([^A-Za-z0-9_.-]|$)'
+# The same test on a command's own text, not its JSON. The one copy: lib/shell-words.py
+# data_set_aside is handed it (DATA_GUARDED_RE) rather than keeping one of its own (#1492).
+GUARDED_TEXT='(^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$)'
 
 # Does payload text $1 match regex $2? Under a UTF-8 locale bash's =~ stops at a byte that is not
 # UTF-8, so a word after one reads as absent and the call passes unread (claude-config#1885). The C
@@ -316,7 +319,7 @@ parsed="$(ps_parse_payload "$payload" raw)" \
   || not_judged "it could not read the hook payload (neither jq nor python3 could parse it as JSON)" payload-unreadable
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
-[[ $cmd =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] || exit 0
+[[ $cmd =~ $GUARDED_TEXT ]] || exit 0
 # The override is read here and honoured below, once the command has been judged, so an override of
 # a real refusal is recorded as one (claude-config#1492). Only a command carrying it pays the reading.
 overridden=0
@@ -344,9 +347,9 @@ why_category "$PS_UNREAD_WHY"
 # holds, which the gates could not see. A reader that fails or prints nothing sets nothing aside,
 # and a reading of what is left that fails refuses for the wrapper first found.
 if [ "$REASON" = script-file ]; then
-  rest="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-set-aside "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
+  rest="$(printf '%s' "$cmd" | DATA_GUARDED_RE="$GUARDED_TEXT" python3 "$PS_SHELL_WORDS" data-set-aside "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
     && [ -n "$rest" ] && {
-      [[ $rest =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] || exit 0
+      [[ $rest =~ $GUARDED_TEXT ]] || exit 0
       held_wrapper="$PS_UNREAD_WRAPPER"; held_why="$PS_UNREAD_WHY"
       ps__read "$rest"
       case $? in

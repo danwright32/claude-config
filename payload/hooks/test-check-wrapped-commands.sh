@@ -215,7 +215,7 @@ check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" 
 # the repository to gh as --repo and into the path of a GET, the title to python as a string, and its
 # other options to python's int(), gh's --limit, cat and a date pattern; it runs none of them and
 # writes nothing but its own temp files. So the whole script is declared, every argument data, under
-# the same rules as the spool's note: called alone, each of git, gh and rtk wholly inside a quoted
+# the same rules as the spool's note: a pipeline of its own, each of git, gh and rtk wholly inside a quoted
 # argument. In front of it, and of nothing else, exactly one shape may stand: the account rule's
 # GH_TOKEN=$(gh auth token -u <login>), with a plain login, to read another account's repository.
 # Behind a declared call, its output may be piped into grep, head, tail or cut, which only read
@@ -304,7 +304,7 @@ check_eq "#1610 two scripts are declared as taking data, the spool's note and th
 check "#1574 one is the spool's note" '  "~/.claude/hooks/lib/issue-spool.sh note"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
 check "#1610 the other is the whole duplicate check" '  "~/.claude/skills/milestone/milestone-candidates.sh"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
 
-# The reader's module docstring is the list of every mode its main accepts, data-blanked included,
+# The reader's module docstring is the list of every mode its main accepts, data-set-aside included,
 # so a mode added without its entry fails here rather than going unlisted.
 unlisted="$(python3 -c '
 import ast, re, sys
@@ -572,6 +572,20 @@ refused_file "a note inside a subshell, beside git" "(bash $SPOOL note . \"x\" \
 refused "the duplicate check piped into a shell, beside git" "bash $MC \"o/r\" --like \"x\" | bash; git status" "bash"
 judge "bash $SPOOL note . \"x\" \"y\" | sed -n 1p; git status"
 check "#1492 a declared call in another shape is told the shape it passes in" "passes in its declared shape" "$out"
+# One test of whether text names git, gh or rtk: the guard's GUARDED_TEXT, handed to the reader, which
+# keeps none of its own. Handed none, the reader sets nothing aside; and a guard whose test also
+# matched another word would have the reader refuse to set aside a note naming it.
+out="$(printf '%s' "bash $SPOOL note . \"git push\" \"b\"; git status" | python3 "$DIR/lib/shell-words.py" data-set-aside "~/.claude/hooks/lib/issue-spool.sh note")"; rc=$?
+check_eq "#1492 the reader handed no test of the three words sets nothing aside" "1|" "$rc|$out"
+GUARDCOPY="$WORKDIR/guardcopy"; mkdir -p "$GUARDCOPY/lib"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$GUARDCOPY/lib" push-scope.sh whole-number.sh || bad "#1492 the hook helpers could not be installed into $GUARDCOPY/lib"
+cp "$DIR/lib/shell-words.py" "$GUARDCOPY/lib/"
+sed "s/^GUARDED_TEXT='(^|\[^A-Za-z0-9_.-\])(git|gh|rtk)/GUARDED_TEXT='(^|[^A-Za-z0-9_.-])(git|gh|rtk|zqword)/" "$HOOK" > "$GUARDCOPY/check-wrapped-commands.sh"
+check "#1492 the guard copy under test widened its test" "(git|gh|rtk|zqword)" "$(grep '^GUARDED_TEXT=' "$GUARDCOPY/check-wrapped-commands.sh")"
+out="$(payload "bash $SPOOL note . zqword \"b\"; git status" | bash "$GUARDCOPY/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1492 the reader judges the note by the guard's own test" "2" "$rc"
+out="$(payload "bash $SPOOL note . plainword \"b\"; git status" | bash "$GUARDCOPY/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1492 control: that guard still sets aside a note naming none of its words" "0" "$rc"
 
 # 4f. A word inside a quoted title or body is no git command (claude-config#1699). A builder's
 # `gh pr create` titled with the word git was refused on 2026-10-24; replayed through every Bash
