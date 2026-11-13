@@ -302,8 +302,13 @@ QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
 # Kept at 20 for the short names it exists to refuse. Read again over the 1164 reviews started
 # 2026-10-25 to 2026-11-04: 9 of 814 placed by part of a line (the 8 recorded lengths 60 to 99 (4)
 # or 100 or more (4)), and the 8 misses kept whole 77 to 194 characters, so still nothing under 60.
-# The sample is this Mac's alone: the work MacBook keeps its own review records, not read here, so
-# re-read the report on both.
+# Read a third time over the 2107 reviews kept on 2026-11-12 (started 2026-10-28 on, as older ones
+# are swept): 6 of 1425 findings placed by part of a line, at 57 to 168 characters, each on the line
+# its finding is about. The first quote under 20 appeared: 15 characters, a setting's name whose
+# nearest occurrence to the cited number is a longer setting it starts, so any floor of 15 or less
+# would have moved that finding to the wrong row. 20 refused it, so the floor stays: nothing from
+# 20 to 56 was seen to decide either way. The sample is this Mac's alone: the work MacBook keeps
+# its own review records, not read here, so re-read the report on both (claude-config#1689).
 PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
 # Greedy, because the mark is the last thing place_findings writes on the line and a kept quote can

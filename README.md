@@ -2216,8 +2216,12 @@ the report gives both sets of lengths in bands around the 20 character floor (un
 matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
 2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
 characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
-the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
-MacBook's were not read, so run the report there too.
+the floor, so it decided no finding and stays at 20 (#1701). Read again over the 2107 reviews kept
+on 2026-11-12, 6 of 1425 findings were placed by part of a line, at 57 to 168 characters, each on
+the right line. The first quote under 20 appeared: a 15 character setting name whose nearest
+occurrence was a longer setting it starts, so a floor of 15 or less would have placed it on the
+wrong row. The floor refused it and stays at 20. That is one Mac's records: the work MacBook's were
+not read, so run the report there too (#1689).
 
 A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
 in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N
@@ -6486,6 +6490,10 @@ thread, under any Slack server and from any part of the session (the card's mess
 requester, #2435, included), settles it until the next merge. Which came first is kept as a count
 of steps in the session, never two clock readings.
 Held once per thread and merge in a chain of turn ends, as the card is, then let go with a toast.
+A thread Slack says no longer exists, a draft to it answering `invalid_thread_ts` or a read of it
+`thread_not_found` (#2787: on 2026-11-11 a deleted first post drew the hold at every turn end), is
+owed nothing more in that session: the next turn end tells Dan once, in a toast carrying the reply
+that could not be saved, and asks no more. No draft DM is offered in its place.
 The mod never calls a Slack tool.
 Only a thread recorded at the session's start owes a reply after every merge (#2578: on
 2026-11-09 one alert link pasted hours into a session drew three asks for unrelated merges). A
