@@ -1239,7 +1239,26 @@ The bedtime answer is written into the shared file so it is asked once, and kept
 A second paragraph says the shared file is written once a night by the scheduled sync.
 The bedtime answer is written into the shared file so it is asked once, and kept there.
 EOF
-P add src/ledger.ts src/old.ts docs/list.md docs/notes.md; P commit -q -m seed
+# A settings table shaped as the one quote under 20 characters seen in this Mac's reviews from
+# 2026-10-28 to 2026-11-12 (claude-config#1701): a setting's name on a line of its own (line 4),
+# and a longer setting it is the start of in a row nearer the cited number (line 11).
+cat > "$PLACE/docs/settings.md" <<'EOF'
+# Settings
+<tr><td>
+
+`SUITE_LOCK_WAIT`
+
+</td><td>
+
+How long a run waits for the lock.
+
+</td></tr>
+<tr><td><code>SUITE_LOCK_WAIT_POLL</code></td><td><code>2</code></td><td>
+
+Seconds between looks at the lock.
+</td></tr>
+EOF
+P add src/ledger.ts src/old.ts docs/list.md docs/notes.md docs/settings.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
 IFS= read -r -d '' place_out_prog <<'EOF' || true
@@ -1364,6 +1383,13 @@ one("a phrase of exactly 20 characters is placed by part of a line",
 one("a phrase of 19 characters is too short to be placed by part of a line",
     "docs/notes.md:1: the sync time is not stated." + S + "\nQuote: ritten once a night",
     "docs/notes.md:1: ", "too short to be placed by part of a line")
+# What the floor refuses, from a real review (claude-config#1701): the finding was about the setting
+# on line 4, but the nearest line holding its 15 characters is the longer setting on line 11, so
+# any floor of 15 or less would move the finding to the wrong row. It stays at its cited number.
+one("a setting's name under 20 characters is not moved to a longer name it starts",
+    "docs/settings.md:13: the setting's name and default sit on separate lines." + S +
+    "\nQuote: SUITE_LOCK_WAIT",
+    "docs/settings.md:13: ", "too short to be placed by part of a line")
 one("a phrase in no line at all keeps its number and says part of a line was tried",
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
@@ -1534,7 +1560,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 50 ] && ok || bad "the placement fixtures ran $place_ran of 50 cases"
+[ "$place_ran" -eq 51 ] && ok || bad "the placement fixtures ran $place_ran of 51 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
