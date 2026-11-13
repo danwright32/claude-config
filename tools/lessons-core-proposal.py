@@ -29,6 +29,8 @@ import html
 import os
 import sys
 
+# No cache left in tools/lib (#2854).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 # The reading and the ranking are shared with the monthly re-rank (claude-config#566, L370).
 from lessons_core import html_page, line_chars, rank_order, rate, read_counts, read_index, read_tsv, review_class  # noqa: E402

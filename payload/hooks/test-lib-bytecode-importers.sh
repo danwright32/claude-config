@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
 # send-gate: scans hooks/ skills/ mods/ commands/ agents/
-# Every program that imports a module from payload/hooks/lib turns bytecode off first (#2600).
+# Every program that imports a module from payload/hooks/lib or tools/lib (and, #2854, a heredoc written to a .py file) turns bytecode off first (#2600).
 #
 # THE FAULT. Python caches what it imports in a __pycache__ folder beside the module, unless told not
 # to. A program that imports from lib/ with bytecode on leaves lib/__pycache__/<module>.pyc behind,
@@ -558,8 +558,8 @@ bash "$DIR/lib/repo-files.sh" "$ROOT" > "$TMPROOT/files.list" 2>/dev/null
 tree="$(scan "$ROOT" "$TMPROOT/files.list" --list)"
 tree_hits="$(printf '%s\n' "$tree" | grep '^HIT ' || true)"
 [ -z "$tree_hits" ] \
-  && check "#2600 every program importing from payload/hooks/lib turns bytecode off before it" ok \
-  || check "#2600 every program importing from payload/hooks/lib turns bytecode off before it" "these do not:
+  && check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" ok \
+  || check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" "these do not:
 $tree_hits"
 # A scan that found a handful of importers is reading the wrong tree (L98): 63 on 2026-11-10,
 # counted by this scan.
