@@ -1943,11 +1943,11 @@ test('a session that started from a thread still asks after every merge, and the
   expect(String((await turnEnd($)).block)).toContain(`This session started from ${THREAD}`)
 })
 
-// ---- #2653: a session says once that its later merges are unrelated to the thread it started from ----
+// ---- #2653: a session says once that its merges are unrelated to the threads it was given ----
 // Dan, 2026-11-11: since #2630 there is no picker, so a session started from a Slack thread was held
 // for a fresh draft in it after every merge, its unrelated ones too (on 2026-11-10 an alert thread's
 // session went on to merge other work, and was asked twice in twenty minutes). The session may say
-// ONCE, by calling the unrelated_merges tool, that its later merges have nothing to do with the
+// ONCE, by calling the unrelated_merges tool, that its merges have nothing to do with the
 // thread; no draft is then held for them. It is the session's own act, never inferred, and kept in
 // that session's state only. Since #2849 it clears a merge that has already landed too, since that
 // is when a session learns the merge is unrelated.
@@ -1955,7 +1955,7 @@ const UNRELATED = 'mcp__is-it-live__unrelated_merges'
 const unrelated = async ($: unknown, more: Record<string, unknown> = {}) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: UNRELATED, tool_use_id: 'u1', ...more } as never)) as Out
 
-test('before the session says its later merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
+test('before the session says its merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
   world(on, { prView: merged(412, 413, 414) })
   await start($)
   await says($, `The alert fired in ${THREAD}, look into it`)
@@ -2011,7 +2011,7 @@ test('a card that asks a draft of its message in the thread after the session sa
   expect(String((await turnEnd($)).block)).toContain('"The venue filter is live now."')
 })
 
-test('saying the later merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
+test('saying the merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
   world(on, { prView: merged(412) })
   await start($)
   const none = await unrelated($)
