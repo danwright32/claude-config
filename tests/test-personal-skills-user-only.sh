@@ -53,6 +53,25 @@ for s in coffee-profile reel-plan dan-wright-brand-voice tracker brag-slim; do
     || check "$s keeps its name" "name is [$(frontmatter_value "$f" name)]"
 done
 
+# The other way: skills Dan chose a session may start on its own (claude-config#2542, 2026-11-13).
+# Both carried the key with no recorded reason; review-animations only reads code, and he chose to
+# let sessions start catch-up too. Named here so a later edit cannot put the key back unnoticed.
+for s in catch-up review-animations; do
+  f="$SKILLS/$s/SKILL.md"
+  if [ ! -f "$f" ]; then
+    check "$s exists" "no SKILL.md at $f"
+    continue
+  fi
+  v="$(frontmatter_value "$f" disable-model-invocation)"
+  [ -z "$v" ] && check "$s can be started by a session" ok \
+    || check "$s can be started by a session" "disable-model-invocation is [$v] in its frontmatter"
+  # Its description must not still tell the reader only Dan starts it.
+  case "$(frontmatter_value "$f" description)" in
+    *"User-invoked only"*|*"never auto-fire"*) check "$s description agrees" "it still says only Dan starts it" ;;
+    *) check "$s description agrees" ok ;;
+  esac
+done
+
 # Control: the reader must see a key that is there and miss one that is only in the body.
 CTL="$(mktemp -d "${TMPDIR:-/tmp}/personal-skills.XXXXXX")" || exit 2
 trap 'rm -rf "$CTL"' EXIT

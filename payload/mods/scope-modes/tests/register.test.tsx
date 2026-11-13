@@ -208,6 +208,24 @@ const stepsNoun: { name: string; register: Register } = {
   },
 }
 const withSteps = { plugins: [deps, isItLive, stepsNoun] }
+// The job watcher's noun (#2511), standing in as its own plugin: its job list and its quiet agents,
+// asked of the world as process.runs (__jobs, __quiet); left out, it stands for the watcher not loaded.
+const jobsNoun: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      const ask = async (what: string) => {
+        const r = await built.process.run([what])
+        if (r.exitCode !== 0) throw new Error(r.stderr)
+        return JSON.parse(r.stdout)
+      }
+      return { ...built, jobs: { list: () => ask('__jobs'), agents: () => ask('__quiet') } }
+    })
+  },
+}
+const withJobs = { plugins: [deps, isItLive, jobsNoun] }
+const keptJob = (o: Record<string, unknown> = {}) => ({ id: 'b1', label: 'wait for the push', runMs: 60_000, kept: true, stuck: false, state: 'running', owner: null, ownerId: null, stall: null, quietMs: null, ...o })
 
 const MIN = 60_000
 const T0 = 1_000_000
@@ -383,6 +401,12 @@ type Opts = {
   pullNumbers?: number[]
   /** gh issue edit failing, with its stderr (#1279: checking an answered question off). */
   editFails?: string
+  /** This session's background agents as Claude Code lists them (#2511): none unless said, or a list that cannot be read. */
+  agents?: { id: string; status: string }[] | { throws: string }
+  /** The job watcher's job list (#2511), none unless said, or a list it refuses. */
+  jobs?: Record<string, unknown>[] | { throws: string }
+  /** The running agents the job watcher judged quiet past twenty minutes (#2511), none unless said, or a refusal. */
+  quiet?: { name: string; quietMs: number }[] | { throws: string }
   /** gh issue view failing, with its stderr (#836). */
   issueViewFails?: string
   /** gh issue view failing for one issue, with its stderr, by number (#2585). */
@@ -873,6 +897,11 @@ const world = (on: On, o: Opts = {}) => {
       const v = o.verdict ?? null
       return v && 'throws' in v ? fail(1, v.throws) : ok(JSON.stringify(v))
     }
+    // The job watcher's answers (#2511): its job list, and the running agents it judged quiet.
+    if (cmd === '__jobs' || cmd === '__quiet') {
+      const v = cmd === '__jobs' ? (o.jobs ?? []) : (o.quiet ?? [])
+      return 'throws' in v ? fail(1, v.throws) : ok(JSON.stringify(v))
+    }
     // Sleep mode phase 7 (#843): each folder's origin, GitHub's answer to a repo view by account, and gh's accounts.
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view' && o.ghRepoViewFails) return fail(1, o.ghRepoViewFails)
     if (cmd === 'gh' && a[0] === 'repo' && a[1] === 'view' && o.ghRepoViewFailsWithToken && e.init?.env?.GH_TOKEN) return fail(1, o.ghRepoViewFailsWithToken)
@@ -958,6 +987,11 @@ const world = (on: On, o: Opts = {}) => {
   on('session.id', () => {
     if (w.idThrows) throw new Error('the session id could not be read')
     return { value: 's1' } as never
+  })
+  on('agent.list', () => {
+    const a = o.agents ?? []
+    if ('throws' in a) throw new Error(a.throws)
+    return { value: a.map(x => ({ description: 'a builder', type: 'general-purpose', ...x })) } as never
   })
   on('session.usage', () => {
     const u = o.usage ?? { cost: { usd: 1.5 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] }
@@ -5963,6 +5997,79 @@ test('the circuit breaker lets a session that does nothing new stop, ending its 
   // Stopped for the night: never blocked again.
   expect((await stop($ as never)).block).toBeUndefined()
 })
+
+// #2511 (2026-11-08, 11:41 to 11:45 PM ET): a worker held a claim its builder subagent was working
+// in a worktree of its own. Each turn the worker ended to wait for the builder's report was blocked
+// ("carry on with it"), three in a row read as no progress, and the breaker failed the claim; the
+// builder finished minutes later and its work shipped under Failed in the morning report.
+const CLAIM_7 = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+const BREAKER = 'circuit breaker: 3 blocks in a row with no new commit, claim or note'
+test('a worker whose builder subagent is still working rests at each Stop, never failed by the breaker, and is started again to check on it (#2511)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, agents: [{ id: 'a1', status: 'running' }] })
+  await start($ as never, clock)
+  for (let n = 0; n < 5; n++) expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released).toEqual([])
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ stopped: null, idleBlocks: 0, waitingOn: '1 subagent', resumeAt: T0 + 10 * MIN, waits: [] })
+  // A rest on work is no reload: this mod's own manifest is left alone.
+  expect(w.runs.filter(r => r[0] === 'touch')).toEqual([])
+  expect(kinds(w).filter(k => k === 'stopped' || k === 'failed')).toEqual([])
+  // Its report would start a turn sooner; with none, the minute's tick starts it to check on the work.
+  await clock.advance(10 * MIN)
+  expect(w.prompts).toEqual(['Sleep mode: this session rested while its own background work ran (1 subagent), and nothing has reported back yet. Check on that work before redoing anything, then carry on with the overnight work.'])
+  // Its own kept job (a wait for the builder's push) is work too; an agent's job, or one not kept, is not.
+  w.o.agents = []
+  w.o.jobs = [keptJob(), keptJob({ id: 'b2', kept: false }), keptJob({ id: 'b3', owner: 'a builder', ownerId: 'a1' })]
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: '1 kept job' })
+  // Once the work is over, the breaker counts afresh and fails the claim as before.
+  w.o.jobs = []
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeDefined()
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.released).toEqual([['/repo', '7', 's1', 'failed', BREAKER]])
+})
+
+// #2885 lessons review: the work's report starts a turn, so the rest is over then. A turn running past
+// the rest's ten minutes must not be handed a resume prompt saying nothing has reported back.
+test('a rest on background work ends when its report starts a turn, so a turn running past the rest is never handed a resume prompt (#2511)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, agents: [{ id: 'a1', status: 'running' }] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: '1 subagent', resumeAt: T0 + 10 * MIN })
+  w.o.agents = [{ id: 'a1', status: 'completed' }]
+  await turnStart($, 'report', 'the builder reports back')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ waitingOn: null, resumeAt: null })
+  await clock.advance(15 * MIN)
+  expect(w.prompts).toEqual([])
+})
+
+test('a turn starting during a rest for mods out of step leaves its resume set, since that rest is ended by no report (#2511)', withJobs, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, agents: [{ id: 'a1', status: 'running' }] })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  // The same record as a rest for mods out of step: a resume due, and no work waited on.
+  w.files[DRIVER] = JSON.stringify({ ...JSON.parse(w.files[DRIVER] as string), waitingOn: null, restDue: true })
+  await turnStart($, 't1')
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ restDue: true, resumeAt: T0 + 10 * MIN })
+})
+
+const noWork: [string, Opts, typeof withJobs][] = [
+  ['a builder that has ended', { agents: [{ id: 'a1', status: 'completed' }] }, withJobs],
+  ['a builder listed as running but quiet past the job watcher\'s twenty minutes (hung)', { agents: [{ id: 'a1', status: 'running' }], quiet: [{ name: 'a builder', quietMs: 25 * MIN }] }, withJobs],
+  ['a running builder the job watcher cannot judge', { agents: [{ id: 'a1', status: 'running' }], quiet: { throws: 'the agent record cannot be read' } }, withJobs],
+  ['a running builder with no job watcher loaded to judge it', { agents: [{ id: 'a1', status: 'running' }] }, withDeps],
+  ['an agent list that cannot be read', { agents: { throws: 'the agent list is not ready' } }, withJobs],
+  ['a kept job the job watcher measured as stalled', { jobs: [keptJob({ stuck: true, state: 'stalled', stall: 'silent', quietMs: 15 * MIN })] }, withJobs],
+]
+for (const [what, o, plugins] of noWork) {
+  test(`${what} is no work, so the breaker still fails the claim (#2511)`, plugins, async ($, on) => {
+    const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims: CLAIM_7, ...o })
+    await start($ as never, clock)
+    // The first Stop reads the first progress; the three after it are the breaker's run.
+    for (let n = 0; n < 4; n++) expect((await stop($ as never)).block).toBeDefined()
+    expect((await stop($ as never)).block).toBeUndefined()
+    expect(w.released).toEqual([['/repo', '7', 's1', 'failed', BREAKER]])
+  })
+}
 
 test('a counter that cannot be written still ends the claim in hand, on a Stop and on an API error (#844)', withDeps, async ($, on) => {
   const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })

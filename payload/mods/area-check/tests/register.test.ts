@@ -942,8 +942,8 @@ test('a script handed a folder that cannot be read, is not there, or runs under 
 
 // #2527, Dan's decision (2026-11-09): `bash tools/check-mods.sh <payload/mods>` copies into a folder it
 // makes with mktemp and runs an inline perl program, so its own text writes, and a folder it is handed
-// stays held for the held files under it, as #2321 holds any script's. Where a script's writes really
-// land is a follow up; until then the hold fails closed.
+// stays held for the held files under it, as #2321 holds any script's. Since #2565 a write is placed
+// where it can be, but a name built on a folder made with mktemp is not one, so the hold fails closed.
 const CHECK = 'scratch="$(mktemp -d)"\nfor d in "$1"/*/; do\n  checked="$scratch/$(basename "$d")"\n  cp -RH "$d" "$checked"\n  perl -MFile::Copy -e \'copy($ARGV[0], $ARGV[1])\' "$d/x" "$checked/x"\ndone\n'
 
 test('a check like check-mods.sh handed a folder holding a held file is held, naming the file (#2527)', KIT, async ($, on) => {
@@ -951,6 +951,67 @@ test('a check like check-mods.sh handed a folder holding a held file is held, na
   w.files[`${APP}/check.sh`] = `#!/bin/bash\n${CHECK}`
   expect(refusal(await bash($ as never, w, 'bash check.sh src/'))).toContain('The area check held this Bash command, which writes src/big.ts.')
   expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// #2565: a script handed a folder is judged for the files its own writes can reach there, not every
+// file under the folder. A name built on what it is handed ("$1/gen.ts") lands under the folder, and a
+// full path lands where it says; each is judged in the folder's place, as that write typed in the
+// command would be. src/ holds two held files, big.ts (growth) and lib/slack.ts (an open issue).
+test('a script handed a folder whose writes reach only some files there is held only for those (#2565)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/rewrite.sh`] = `#!/bin/bash\n${SCAN}echo x > "$1/gen.ts"\ncp "$1/big.ts" /tmp/big.ts.bak\n`
+  expect((await bash($ as never, w, 'bash rewrite.sh src/')).result).toBe('done')
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', script: `${APP}/rewrite.sh`, decision: 'passed', placed: 2 }])
+  w.files[`${APP}/rewrite.sh`] = `${SCAN}sed -i '' 's/a/b/' "\${1}/lib/slack.ts"\n`
+  const why = refusal(await bash($ as never, w, 'bash rewrite.sh src/', {}, 'b2'))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).not.toContain('big.ts')
+})
+
+// A write whose place cannot be told reaches the whole folder (fail closed), as #2321 judges it.
+const UNPLACED: [string, string][] = [
+  ['writes through a value it set from what it is handed', 'd="$1"\necho x > "$d/gen.ts"\n'],
+  ['writes a name relative to wherever it is run', 'echo x > gen.ts\n'],
+  ['moves into the folder it is handed and writes there', 'cd "$1"\necho x > gen.ts\n'],
+  ['writes what a function of its own is handed', 'w() {\n  echo x > "$1/gen.ts"\n}\nw "$1/lib"\n'],
+  ['gives what it is handed new values and writes there', 'set -- "$OTHER"\necho x > "$1/gen.ts"\n'],
+  ['writes under what it is handed or a default', 'echo x > "${1:-.}/gen.ts"\n'],
+  ['moves to another folder and writes under what it is handed', 'cd lib\necho x > "$1/gen.ts"\n'],
+  ['climbs out of a pattern under what it is handed', `sed -i '' 's/a/b/' "$1"/lib/*/../../big.ts\n`],
+  ['edits by patterns in two folders under what it is handed, more than are judged one by one', `sed -i '' 's/a/b/' "$1"/lib/*.ts "$1"/pay/*.ts\n`],
+  ['copies into a folder it made', 'scratch="$(mktemp -d)"\ncp -RH "$1" "$scratch/copy"\n'],
+]
+
+test('a script whose writes cannot be placed is still held for every file under the folder it is handed (#2565)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text]] of UNPLACED.entries()) {
+    w.files[`${APP}/rewrite.sh`] = text
+    const r = await bash($ as never, w, 'bash rewrite.sh src/', {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: a script that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: a script that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(UNPLACED.map(([what]) => `held: a script that ${what}`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+})
+
+// A script that really writes a held file, under what it is handed, by its full path, from a trap or
+// by a pattern under the folder, is held naming that file.
+const WRITES_HELD: [string, string, string][] = [
+  ['writes the held file under what it is handed', 'echo x > "$1/big.ts"\n', 'src/big.ts'],
+  ['edits the held file by its full path', `sed -i '' 's/a/b/' ${APP}/src/big.ts\n`, 'src/big.ts'],
+  ['writes the held file from a trap', `trap 'echo x > "$1/big.ts"' EXIT\n`, 'src/big.ts'],
+  ['edits files a pattern matches in a folder under what it is handed', `sed -i '' 's/a/b/' "$1"/lib/*.ts\n`, 'src/lib/slack.ts'],
+]
+
+test('a script that really writes a held file is still held, naming that file (#2565)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, text, file]] of WRITES_HELD.entries()) {
+    w.files[`${APP}/rewrite.sh`] = text
+    const r = await bash($ as never, w, 'bash rewrite.sh src/', {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: a script that ${what}` : refusal(r).includes(`The area check held this Bash command, which writes ${file}.`) ? `held: a script that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(WRITES_HELD.map(([what]) => `held: a script that ${what}`))
 })
 
 // #2527: `for t in "*push*" gate; do bash probe.sh --like "$t"; done`, a read only probe over search
@@ -1005,7 +1066,8 @@ test('a script whose write goes through eval, bash -c, a program named by a valu
     held.push(r.result === 'done' ? `ran: a script that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: a script that ${what}` : refusal(r))
   }
   expect(held).toEqual(UNREAD_WRITES.map(([what]) => `held: a script that ${what}`))
-  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
+  // A trap writing "$1/big.ts" is placed since #2565, held for that one file, and on record as held.
+  expect(w.records().filter(x => x.kind === 'script-reads' && x.decision !== 'held')).toEqual([])
 })
 
 // The controls (#2619): none of these writes a file, so each still runs with nothing judged. A value

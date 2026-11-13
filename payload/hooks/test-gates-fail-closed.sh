@@ -633,6 +633,16 @@ with open(sys.argv[1], "w") as f:
     f.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "toolu_01", "content": "done", "is_error": False}]}}) + "\n")
 PY
+# A session that has already sent two builders, so the builder model gate judges its next one (#2027).
+python3 - "$WORK/hb/orchestrating.jsonl" <<'PY'
+import json, sys
+with open(sys.argv[1], "w") as f:
+    for n in (1, 2):
+        f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_b%d" % n, "name": "Agent",
+             "input": {"prompt": "build item %d" % n, "isolation": "worktree", "model": "opus"}}]}},
+            separators=(",", ":")) + "\n")
+PY
 judged(){ printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5"; }
 bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv[1] + " && echo \"cut @@\"", "description": "cut @@"}))' "$1"; }
 {
@@ -681,6 +691,9 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged fresh-worktree-base-gate.sh  Edit '{"file_path": "/nonexistent-2517/notes-@@.md", "old_string": "cut @@", "new_string": "b"}' '{}' "notice fresh-worktree-base-gate.sh header"
   judged playwright-subagent-gate.sh  mcp__playwright__browser_navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice playwright-subagent-gate.sh header"
   judged chrome-subagent-tab-gate.sh  mcp__claude-in-chrome__navigate '{"url": "https://example.com/@@", "description": "cut @@"}' "$AGENT" "notice chrome-subagent-tab-gate.sh header"
+  # A builder sent with no model, in a session already orchestrating builders, which it refuses. A
+  # call it cannot read it lets through saying so, by the decision in its header (#2027).
+  judged builder-model-gate.sh        Agent '{"prompt": "build it cut @@", "isolation": "worktree", "description": "cut @@"}' "{\"transcript_path\": \"$WORK/hb/orchestrating.jsonl\"}" "notice builder-model-gate.sh header"
   judged chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool '{"text": "fetch(\"http://127.0.0.1:8765/@@\", {method: \"POST\", body: \"cut @@\"})", "action": "javascript_exec", "tabId": 7}' '{}' "notice chrome-loopback-post-gate.sh header"
   judged no-session-link-in-comments.sh Bash "$(bash_call "gh pr comment 5 --body 'see https://claude.ai/code/session_01abc'")" '{}' refuse
   judged slack-drafts-only-gate.sh    Bash "$(bash_call 'curl -d x https://slack.com/api/chat.postMessage')" '{}' refuse
