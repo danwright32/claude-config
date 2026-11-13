@@ -1441,6 +1441,264 @@ export const asProgram = (lang: 'python' | 'node', text: string): string => {
   return `${lang === 'python' ? 'python3' : 'node'} - <<'${end}'\n${text}${text.endsWith('\n') ? '' : '\n'}${end}`
 }
 
+/** The languages a script file a command runs is read in for what its own code writes (#2847, #2855). */
+export type ScriptLang = 'python' | 'node' | 'shell'
+
+/** A command as mod-kit's pipeline gives it, given the folder the call starts in: the parts a script file it runs is found by. */
+export type RunCommand = {
+  words: readonly string[]
+  language?: string
+  script?: { files: readonly string[]; stdin?: true }
+  program?: unknown
+  heredocs?: readonly { word: number; body: string; quoted: boolean; fd?: number; replaced?: true }[]
+  folder?: string | null
+}
+
+/**
+ * The folder a script's code is read in where the folder it runs in cannot be followed (#2847), so a
+ * relative name its code writes comes back under it and is told apart as one that cannot be placed.
+ * No real folder: mod-kit's write reader reads names only, and nothing is ever opened there.
+ */
+export const UNPLACED = '/design-round-guard-folder-not-known'
+/**
+ * The most of a script file, or a module it imports, read for what its own code writes (#2847). A
+ * script a session writes is far smaller; a larger file run by name (a package's bundled tool) is no
+ * script of the session's.
+ */
+export const SCRIPT_MAX = 512 * 1024
+/**
+ * The most local modules read for one call (#2855). Past this many it is a package or a tool, not a
+ * session's script, and the rest are not read.
+ */
+export const MODULES_MAX = 32
+/** How deep shell scripts running scripts are followed (#2855): the script a command runs, and those it runs in turn. */
+export const SHELL_DEPTH = 2
+
+/**
+ * The script file a command runs whose own text is read for what it writes (#2847, #2855), or
+ * undefined: an interpreter's script operand (python's, node's, and a shell's, `bash x.sh`, which
+ * mod-kit gives with no language, awk's and sed's program files carrying theirs), a file `source` or
+ * `.` reads into the shell, and a file run by its own name (`./x.py`, `scripts/gen.mjs`, `./edit.sh`).
+ * `shell` is set where the command says it is a shell's; otherwise the language is the program's or
+ * the file's extension (scriptLanguage). Inline code and a script on standard input are programs,
+ * read already as such.
+ */
+export const scriptOf = (c: RunCommand): { word: string; shell?: true } | undefined => {
+  if (c.program !== undefined) return undefined
+  if (c.script) {
+    const word = c.script.stdin ? undefined : c.script.files[0]
+    if (word === undefined) return undefined
+    if (c.language === undefined) return { word, shell: true }
+    return c.language === 'python' || c.language === 'node' ? { word } : undefined
+  }
+  const [first, second] = c.words
+  if ((first === 'source' || first === '.') && second !== undefined && !second.startsWith('-')) return { word: second, shell: true }
+  if (c.language !== undefined || first === undefined) return undefined
+  return /^\.\.?\//.test(first) || /\.(?:py|[cm]?js|[cm]?ts|sh|bash|zsh)$/i.test(first) ? { word: first } : undefined
+}
+
+/**
+ * Where the word a command names a script file by puts it (#2855): a word with no expansion as
+ * written, `~`, `$HOME` and `${HOME}` as the home folder, `$PWD` as the folder it runs in, and
+ * `$N/step.py` or `${N}/step.py` by `command`'s own assignment of N to a literal (shellVarPath), the
+ * one value it can hold. Undefined for anything else: a variable the command sets nowhere (one only
+ * the environment holds) or sets more than one way, a command's output, a pattern, and a relative
+ * name where the folder it runs in is not known.
+ */
+export const scriptPath = (word: string, command: string, folder: string | undefined, home: string): string | undefined => {
+  let w = word
+  const own = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(\/.*)?$/.exec(word)
+  if (own) {
+    const v = (own[1] ?? own[2]) as string
+    const rest = own[3] ?? ''
+    if (v === 'HOME') w = `${home}${rest}`
+    else if (v === 'PWD') {
+      if (folder === undefined) return undefined
+      w = `${folder}${rest}`
+    } else {
+      if (!rest) return undefined
+      const plain = command.replace(new RegExp(`\\$\\{${v}\\}`, 'g'), `$${v}`)
+      const set = shellVarPath(plain, plain, `${v}${rest}`)
+      if (set === undefined) return undefined
+      w = set
+    }
+  }
+  if (/[$`*?[]/.test(w)) return undefined
+  if (/^(\/|~(\/|$))/.test(w)) return resolvePath(w, '/', home)
+  return folder === undefined ? undefined : resolvePath(w, folder, home)
+}
+
+/**
+ * The file a command writes from a heredoc, with the text it then holds (#2855): `cat > f <<'EOF'`
+ * (or `cat <<'EOF' > f`), cat fed one heredoc on standard input with one `>` or `>|` into a file and
+ * no other word, the file placed by mod-kit's write reader (`files`, the line's writes, matched by the
+ * word naming it, as ask before saving's appendAlone matches its append). A quoted heredoc's body is
+ * the text as written, and so is an unquoted one's holding no `$`, backtick or backslash. Anything
+ * else (an append, another writer, a body the shell may change) is undefined, and a script the
+ * command then runs is read as it stands on disk, as before.
+ */
+export const heredocFile = (c: RunCommand, files: readonly { word: string; path?: string }[]): { path: string; text: string } | undefined => {
+  const docs = c.heredocs ?? []
+  const doc = docs[0]
+  if (c.words[0] !== 'cat' || c.words.length !== 4 || docs.length !== 1 || !doc || (doc.fd ?? 0) !== 0 || doc.replaced) return undefined
+  const at = c.words.findIndex(w => w === '>' || w === '>|')
+  const into = at > 0 ? c.words[at + 1] : undefined
+  // The four words are cat, the redirect, its file and the heredoc, each in its own place.
+  if (into === undefined || new Set([0, at, at + 1, doc.word]).size !== 4) return undefined
+  const path = files.find(f => f.word === into)?.path
+  if (!path || !(doc.quoted || !/[\\$`]/.test(doc.body))) return undefined
+  return { path, text: `${doc.body}\n` }
+}
+
+/**
+ * The local modules a python or node script's text imports (#2855), each as the files it may be
+ * read from, in the order the language tries them; the first that is a file is the module. Python:
+ * `import a.b` and `from a.b import c` from the script's own folder (`root`, sys.path's first entry,
+ * for every module the script loads), `from .m import x` from the importing file's (`dir`), and
+ * `from x import y` also as the submodule x/y. Node: a specifier starting `./` or `../` in an import,
+ * an export from, a dynamic import or a require, from the importing file's folder, with each extension
+ * node and a TypeScript runner try, and an index file. A package installed elsewhere is not read.
+ */
+export const importedFiles = (lang: 'python' | 'node', text: string, dir: string, root: string): string[][] => {
+  const out: string[][] = []
+  const add = (group: string[]) => {
+    if (!out.some(g => g[0] === group[0])) out.push(group)
+  }
+  if (lang === 'python') {
+    const mod = (base: string, name: string) => {
+      const p = name ? `${base}/${name.replace(/\./g, '/')}` : base
+      return [`${p}.py`, `${p}/__init__.py`]
+    }
+    for (const m of text.matchAll(/^[ \t]*(?:from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+\(?([\w., \t]+)|import[ \t]+([\w., \t]+))/gm)) {
+      if (m[4] !== undefined) {
+        for (const part of m[4].split(',')) {
+          const name = part.trim().split(/\s+/)[0] ?? ''
+          if (/^\w[\w.]*$/.test(name)) add(mod(root, name))
+        }
+        continue
+      }
+      const dots = (m[1] ?? '').length
+      let base = dots ? dir : root
+      for (let i = 1; i < dots; i++) base = base.slice(0, base.lastIndexOf('/')) || '/'
+      const from = m[2] ?? ''
+      if (from) add(mod(base, from))
+      for (const part of (m[3] ?? '').split(',')) {
+        const name = part.trim().split(/\s+/)[0] ?? ''
+        if (/^\w+$/.test(name)) add(mod(base, from ? `${from}.${name}` : name))
+      }
+    }
+    return out
+  }
+  const EXT = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']
+  for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(\.{1,2}\/[^'"\n]+)\1/g)) {
+    const p = resolvePath(m[2] as string, dir, '/')
+    const swapped = /\.[cm]?js$/.test(p) ? [p.replace(/\.([cm]?)js$/, '.$1ts')] : []
+    add([p, ...swapped, ...EXT.map(e => `${p}${e}`), ...EXT.map(e => `${p}/index${e}`)])
+  }
+  return out
+}
+
+/** How the guard reaches the disk and mod-kit's reading of a command, for scriptsRunIn. */
+export type ScriptIo = {
+  /** Each command a line runs, with the folder it runs in (mod-kit's pipeline, given `cwd`). */
+  pipeline: (command: string, cwd: string) => Promise<readonly RunCommand[]>
+  /** The file's kind and size, a link followed; undefined where nothing is there. */
+  stat: (path: string) => Promise<{ kind: string; size?: number } | undefined>
+  /** The file's text; throws where it cannot be read. */
+  read: (path: string) => Promise<string>
+  /** The files a line writes, by mod-kit's one write reader (`$.modkit.writes`), given the folder it starts in. */
+  writes: (command: string, cwd: string) => Promise<{ files: readonly { word: string; path?: string }[] }>
+}
+
+/** A script file read for what its own code writes, or why one that is there could not be read. */
+export type ScriptRun = { word: string; path: string; lang: ScriptLang; folder: string | undefined; text: string } | { word: string; unread: string }
+
+/**
+ * Each script file a command runs whose own text is read for what it writes (#2847, #2855), with its
+ * text, its language and the folder it runs in (absent where a cd before it cannot be followed), or
+ * why one that is there could not be read:
+ * - a python or node script, and each local module it imports, transitively, up to MODULES_MAX, read
+ *   in the script's language and the folder the script runs in, where its code's names land;
+ * - a shell script (`bash x.sh`, `./x.sh`, `source x.sh`), and the scripts it runs in turn, up to
+ *   SHELL_DEPTH, its variables read from its own text;
+ * - a script named through a variable the command sets to a literal (`N=/n; python3 "$N/a.py"`);
+ * - a script the same command writes first from a heredoc, read as the text it writes.
+ * A script named through a variable only the environment holds, a pattern or a command's output, a
+ * relative name where the folder is unknown, one not there, one larger than SCRIPT_MAX, and one run by
+ * its own name with no python, node or shell extension are not read. `word` says which file, and for
+ * a module or a script a shell script runs, which script brought it in.
+ */
+export const scriptsRunIn = async (io: ScriptIo, command: string, cwd: string, home: string): Promise<ScriptRun[]> => {
+  const out: ScriptRun[] = []
+  const seen = new Set<string>()
+  let modules = 0
+  const dirOf = (p: string) => p.slice(0, p.lastIndexOf('/')) || '/'
+  // The text of a file there to read, null for one not there or too large, or why it cannot be read.
+  const textOf = async (path: string): Promise<string | null | { unread: string }> => {
+    let kind: { kind: string; size?: number } | undefined
+    try {
+      kind = await io.stat(path)
+    } catch {
+      return null
+    }
+    if (!kind || kind.kind !== 'file' || (kind.size ?? 0) > SCRIPT_MAX) return null
+    try {
+      return await io.read(path)
+    } catch (err) {
+      return { unread: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  const imports = async (lang: 'python' | 'node', script: { path: string; text: string; word: string; folder: string | undefined }) => {
+    const queue = [{ path: script.path, text: script.text }]
+    for (let at = queue.shift(); at; at = queue.shift())
+      for (const group of importedFiles(lang, at.text, dirOf(at.path), dirOf(script.path))) {
+        for (const file of group) {
+          if (seen.has(file)) break
+          const text = await textOf(file)
+          if (text === null) continue
+          seen.add(file)
+          const word = `${relTo(file, dirOf(script.path))}, which ${script.word} imports,`
+          if (typeof text !== 'string') out.push({ word, unread: scriptUnreadable(word, text.unread) })
+          else if (modules++ < MODULES_MAX) {
+            out.push({ word, path: file, lang, folder: script.folder, text })
+            queue.push({ path: file, text })
+          }
+          break
+        }
+      }
+  }
+  const visit = async (line: string, at: string, depth: number, via: string | undefined) => {
+    // The text each file an earlier command in the line wrote from a heredoc now holds.
+    const written = new Map<string, string>()
+    let files: readonly { word: string; path?: string }[] | undefined
+    for (const c of await io.pipeline(line, at)) {
+      const run = scriptOf(c)
+      const folder = c.folder === null || c.folder === undefined || c.folder === UNPLACED || c.folder.startsWith(`${UNPLACED}/`) ? undefined : c.folder
+      const path = run ? scriptPath(run.word, line, folder, home) : undefined
+      if (run && path !== undefined && !seen.has(path)) {
+        seen.add(path)
+        const word = via ? `${run.word}, which ${via} runs,` : run.word
+        const made = written.get(path)
+        const text = made ?? (await textOf(path))
+        const lang: ScriptLang | undefined = run.shell ? 'shell' : (scriptLanguage(path, c.language) ?? (/\.(?:sh|bash|zsh)$/i.test(path) ? 'shell' : undefined))
+        if (text !== null && typeof text !== 'string') out.push({ word, unread: scriptUnreadable(word, text.unread) })
+        else if (text !== null && lang) {
+          out.push({ word, path, lang, folder, text })
+          if (lang === 'shell') {
+            if (depth < SHELL_DEPTH) await visit(text, folder ?? UNPLACED, depth + 1, word)
+          } else await imports(lang, { path, text, word, folder })
+        }
+      }
+      if (c.heredocs?.length) {
+        const made = heredocFile(c, (files ??= (await io.writes(line, at)).files))
+        if (made) written.set(made.path, made.text)
+      }
+    }
+  }
+  await visit(command, cwd, 1, undefined)
+  return out
+}
+
 /**
  * The mod hook TypeScript files a program's text names (#2847), as mentionedLookFiles names look
  * changing ones: a mod's plain .ts hook file may build what it draws (#1275), and a program that

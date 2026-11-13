@@ -1594,9 +1594,14 @@ beyond splitting words and removing quotes, whether bash runs it or it is run by
 pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
 tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
 check of an idea about them piped to grep, for another account too; the same words unquoted, a
-substitution, another script, another subcommand, any other assignment in front, a pipe into
-anything else or a second command are refused as before, and a declared script refused for its
-shape is told the shapes its declared call passes in.
+substitution, another script, another subcommand, any other assignment in front or a pipe into
+anything else are refused as before, and a declared script refused for its shape is told the shapes
+its declared call passes in. Since #1492 such a call may stand beside the command's other
+pipelines, after `;`, `&&`, `||` or a line break (`cd <dir> && <note>`, two notes, the duplicate
+check then `gh label list`): `lib/shell-words.py data_set_aside` replaces it with `:` and the rest is
+judged as if it were not there, so an unread wrapper beside it is refused as before and a push,
+merge or issue command beside it is read by the gates as usual. Never inside a subshell or a
+substitution, and never in a command naming `BASH_ENV`.
 
 One call is declared read only (#1669, Dan's approval of 2026-10-24, "Allow lesson only"):
 `~/claude-config-sync/claude-sync lesson <id>`, in `READ_ONLY_CALLS`. It reads LESSONS.md and
@@ -6673,7 +6678,9 @@ cannot read, one beside a command that may move its source (a switch, an add, a 
 two where one reads the index, or a line writing inside .git, is judged whole with the refusal
 saying why), a program whose text names the files it writes (since #2847 also a python or node
 script file the command runs, its own code read as inline code is, a name its code writes where the
-folder cannot be followed held as could not check), and a
+folder cannot be followed held as could not check; since #2855 also a shell script's own commands
+and the scripts it runs, a script named through a variable the command sets, a script the command
+writes first from a heredoc, read as that text, and the local modules a script imports), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6993,7 +7000,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847
+#1954, #2261, #2830, #2845, #2847, #2855
 
 </td></tr>
 <tr><td>
@@ -7215,7 +7222,11 @@ milestone's open issues) with `next`, or, for a goal naming no issue, to work th
 of its own and note each step as `progress`, counted by its own counter on disk, until a circuit
 breaker (3 blocks or 20 active minutes with no new commit, claim or note; a commit is one on the
 claim's `sleep/N` branch or in its reserved worktree, whoever made it, #1119), the night's cap, the
-weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a claim is parked
+weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a Stop while the
+session's own subagent is still working (running, and not judged quiet by the job watcher) or a job
+it kept has not stalled is no idle turn: the session rests, unblocked, until that work's report
+starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
+afresh from it (#2511, `hooks/busy.ts`); a claim is parked
 after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
 ten, twenty and forty minutes, then hourly, each wait noted, and the session started again; `/sleep`
 refuses on battery and holds `caffeinate -i` for the night, and each refusal is also a notification
@@ -7684,10 +7695,17 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
-A folder a script is handed is judged as a write of every file under it (#2321), unless the
-script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
-copies into a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527,
-and #2565 is to hold such a script only for the files its writes can reach. A script whose text
+A folder a script is handed is judged as a write of every file under it (#2321), unless every
+write in the script's own text can be placed (#2407, #2565): a full path, a path under the home
+folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
+and `"$1"/gen/*.ts` as everything under `<folder>/gen`). Each placed write is then judged where it
+lands, so a script handed `src/` that writes `"$1/gen.ts"` is held only if `src/gen.ts` would be.
+A name relative to wherever the script runs, one built from any other value (a folder made with
+`mktemp` among them), a pattern matched in the folder itself (`"$1"/*.ts`), and a name built on
+`$1` in a script that defines a function, gives `set` new values or changes folder keep the whole
+folder held. So
+`bash tools/check-mods.sh payload/mods`, which copies into a folder it makes with `mktemp`, is still
+held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
