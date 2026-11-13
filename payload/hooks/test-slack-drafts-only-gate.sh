@@ -4221,7 +4221,7 @@ if [ -n "$REPO2854" ]; then
   run_raw "$(payload Bash "$(bash_input "bash payload/hooks/test-lib-bytecode-importers.sh")" "$REPO2854")"
   allowed "#2854 test-lib-bytecode-importers.sh is allowed run on its own"
 else
-  echo "UNMEASURED: #2854 the bytecode suite run alone: this suite is not in a claude-config checkout"
+  printf 'SUITE-PART-UNMEASURED %s\n' "#2854 the bytecode suite run alone: this suite is not in a claude-config checkout"
 fi
 
 echo
