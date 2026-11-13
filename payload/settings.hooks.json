@@ -295,6 +295,17 @@
         ]
       },
       {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/builder-model-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__playwright__.*|mcp__plugin_playwright_playwright__.*",
         "hooks": [
           {
