@@ -262,6 +262,9 @@ const handedPlace = (word: string, folder: string): { path: string; tree?: true 
   const parts = (m[3] as string).split('/').filter(p => p !== '')
   const glob = parts.findIndex(p => /[*?[\]!]/.test(p))
   if (parts.some((p, i) => !(glob >= 0 && i >= glob ? PATTERN_PART : PLAIN_PART).test(p))) return undefined
+  // A climb after the pattern leaves the folder it is matched in (`$1/gen/*/../../big.ts` writes
+  // `<folder>/big.ts`), so the name is no place.
+  if (glob >= 0 && parts.slice(glob).includes('..')) return undefined
   if (glob === 0 || parts.length === 0) return undefined
   return glob < 0 ? { path: joined(folder, parts) } : { path: joined(folder, parts.slice(0, glob)), tree: true }
 }
@@ -306,10 +309,14 @@ const DEFINES_FUNCTION = /(?:^|[\s;&|({])function[ \t]+[A-Za-z_]|[A-Za-z_][A-Za-
  * Why a name a script builds on what it is handed (`$1`) may mean another value where it is built
  * (#2565), or null. Inside a function `$1` is what the function is handed, and `set` given anything
  * but options (`set -- x`, `set -e a`, `set -`) replaces what the script was handed; either way the
- * name lands where no reading of the command can tell. `shift` only moves along the values the
- * script was handed, which scriptReach already reads every one of, so it changes nothing.
+ * name lands where no reading of the command can tell. And what it is handed may be a name relative
+ * to the folder it started in (`src/`), so after cd, pushd or popd a name built on it lands under
+ * another folder. `shift` only moves along the values the script was handed, which scriptReach
+ * already reads every one of, so it changes nothing.
  */
 export const argsMove = (commands: readonly { words: readonly string[] }[], text: string): string | null => {
+  const moved = commands.find(c => ['cd', 'pushd', 'popd'].includes(c.words[0] ?? ''))
+  if (moved) return `it moves folder (${moved.words.join(' ')}), and what it is handed may be relative to where it started, so a name built on it cannot be placed`
   for (const c of commands) {
     if (c.words[0] !== 'set') continue
     for (let i = 1; i < c.words.length; i++) {

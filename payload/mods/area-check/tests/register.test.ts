@@ -953,6 +953,8 @@ const UNPLACED: [string, string][] = [
   ['writes what a function of its own is handed', 'w() {\n  echo x > "$1/gen.ts"\n}\nw "$1/lib"\n'],
   ['gives what it is handed new values and writes there', 'set -- "$OTHER"\necho x > "$1/gen.ts"\n'],
   ['writes under what it is handed or a default', 'echo x > "${1:-.}/gen.ts"\n'],
+  ['moves to another folder and writes under what it is handed', 'cd lib\necho x > "$1/gen.ts"\n'],
+  ['climbs out of a pattern under what it is handed', `sed -i '' 's/a/b/' "$1"/lib/*/../../big.ts\n`],
   ['copies into a folder it made', 'scratch="$(mktemp -d)"\ncp -RH "$1" "$scratch/copy"\n'],
 ]
 

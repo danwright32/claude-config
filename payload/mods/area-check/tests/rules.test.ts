@@ -779,7 +779,8 @@ test('a script handed a folder places each write it can, and reaches the whole f
   // Whatever cannot be placed reaches the whole folder, with why.
   const whole = (files: ModKitWrites['files'], more: Partial<ModKitWrites> = {}) => {
     const r = reach(files, more)
-    return 'reaches' in r ? r.reaches : `placed ${JSON.stringify(r.placed)}`
+    // A placed answer names only where it placed, never the word, so it cannot pass for a reach.
+    return 'reaches' in r ? r.reaches : `placed at ${r.placed.map(p => p.path).join(', ')}`
   }
   expect(whole([{ word: '$1/*.ts', edits: true }])).toContain('$1/*.ts')
   expect(whole([{ word: '$1' }])).toContain('$1')
@@ -789,6 +790,8 @@ test('a script handed a folder places each write it can, and reaches the whole f
   expect(whole([{ word: '$1/$name.ts' }])).toContain('$1/$name.ts')
   expect(whole([{ word: '$0/x.ts' }])).toContain('$0/x.ts')
   expect(whole([{ word: '$1/{a,b}.ts' }])).toContain('$1/{a,b}.ts')
+  // A climb after a pattern leaves the folder the pattern is matched in (lessons review): no place.
+  expect(whole([{ word: '$1/gen/*/../../big.ts' }])).toContain('$1/gen/*/../../big.ts')
   expect(whole([{ word: 'out.ts', path: `${SCRIPT_RUN_FROM}/out.ts` }])).toContain('wherever it is run from')
   expect(whole([{ word: '../../out.ts', path: `${SCRIPT_RUN_FROM.replace(/\/in\/in$/, '')}/out.ts` }])).toContain('wherever it is run from')
   expect(whole([], { runs: [{ what: 'a python3 script file', script: 'fix.py', args: [{ word: '$1' }] }] })).toContain('fix.py')
@@ -803,6 +806,11 @@ test('what a script is handed means something else in a function, or after set g
   expect(argsMove([], 'w() {\n  echo x\n}\n')).toContain('function')
   expect(argsMove([], 'function w {\n  echo x\n}\n')).toContain('function')
   expect(argsMove([], 'w ()\n{\n  echo x\n}\n')).toContain('function')
+  // What it is handed may be a name relative to where it started (`src/`), so a move of folder lands
+  // a name built on it somewhere else (lessons review).
+  expect(argsMove([{ words: ['cd', 'lib'] }], 'cd lib\n')).toContain('cd')
+  expect(argsMove([{ words: ['pushd', '/tmp'] }], 'pushd /tmp\n')).toContain('pushd')
+  expect(argsMove([{ words: ['popd'] }], 'popd\n')).toContain('popd')
 })
 
 test('a path a command writes itself is that write, though a script is handed it too, in either order (#2407)', () => {

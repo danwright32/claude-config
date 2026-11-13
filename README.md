@@ -7667,7 +7667,8 @@ and `"$1"/gen/*.ts` as everything under `<folder>/gen`). Each placed write is th
 lands, so a script handed `src/` that writes `"$1/gen.ts"` is held only if `src/gen.ts` would be.
 A name relative to wherever the script runs, one built from any other value (a folder made with
 `mktemp` among them), a pattern matched in the folder itself (`"$1"/*.ts`), and a name built on
-`$1` in a script that defines a function or gives `set` new values keep the whole folder held. So
+`$1` in a script that defines a function, gives `set` new values or changes folder keep the whole
+folder held. So
 `bash tools/check-mods.sh payload/mods`, which copies into a folder it makes with `mktemp`, is still
 held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
