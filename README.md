@@ -3705,6 +3705,20 @@ scratch repository that borrows the repository's objects, so the repository itse
 was). A clone of a remote makes files the gate cannot read, refused when the same command runs one,
 as a downloaded script is.
 
+Since claude-config#2869 a tool swiftc, clang, clang++, gcc, g++, cc, c++, rustc, go build or cargo
+build builds earlier in the same command is read as every file that build takes in (the files it is
+handed, the headers a C file includes from its own folder or an `-I` folder, every `.rs` file of the
+crate or cargo package, every `.go` file of the module and what it embeds), and then as it is on disk,
+which is what runs where the build is skipped (`[ -x "$T" ] || swiftc ... -o "$T"`). A build whose
+words cannot all be worked out is not followed, so its tool is still refused when run. Since #2852 a
+build a script on disk or a package script runs (`npm run build && node dist/x.js`) is followed the
+same way. Since #2854 a module a script on disk writes with literal text, by a path it cannot work
+out (`printf ... > "$TMPROOT/lib/m.py"`), is read where the same script then imports it from the
+folder named by the same words, provided the write certainly ran first and nothing between the two
+can change those words or that file; anything else about that folder is unknown, as before. A
+`python3 -c` program that does not parse is refused, as before, where it is handed a file it could
+act on; the refusal now says what Python reports, so the code gets fixed.
+
 Three more false refusals Dan chose to stop in #2844: Python code importing `sqlite3` counts as
 unable to post unless it names `load_extension`; a Python script naming an endpoint only in a
 regular expression's pattern (`re.compile`, `re.search` and the like) is not refused for it; and a

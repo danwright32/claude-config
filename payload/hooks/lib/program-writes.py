@@ -39,7 +39,10 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
 
 A file noted here is "maybe" written, so a refusal says it may be written, never that it was (L11).
 Only in text this call wrote itself: a script on disk is read by the gate before it runs, and its
-writes are outside what the gate answers, as for written-paths.py (note_unreadable).
+writes are outside what the gate answers, as for written-paths.py (note_unreadable). Two exceptions:
+a build in a script on disk is followed (#2852, note_program), and a module a script on disk writes
+with literal text, by a path it cannot work out, is read where the same script imports it from the
+folder named by the same words (#2854, note_raw_write and raw_module).
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, so
 the methods use the Judge's own state (made, made_maybe, made_code, shell) and readers (operands,
@@ -66,6 +69,11 @@ NON_WRITERS = frozenset({
     "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi", "do",
     "done", "function", "{", "}", "!", "]]", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "shopt", "setopt"})
+# NON_WRITERS that can still change a module a script wrote before it imports it (raw_unchanged):
+# one that removes files, so Python finds the module somewhere else, and the shell's own words that
+# change directory, read a file as commands, run text given to them or run another program.
+RAW_CHANGERS = frozenset({"rm", "rmdir", "unlink", "cd", "pushd", "popd", "source", ".", "eval", "trap",
+                          "alias", "builtin", "command", "exec"})
 # Claude Code's mcp subcommands that change only its own settings (~/.claude.json, a project's
 # .mcp.json): the words they are handed are a server's name, command, arguments and environment, kept
 # as settings and never written to a file or run (#2865). `claude mcp add lr -- npx -y @scope/name@1`
@@ -180,6 +188,33 @@ def file_shaped(path):
     return os.path.lexists(path) or re.search(r".\.\w+$", os.path.basename(path)) is not None
 
 
+def raw_path(raw):
+    """A redirection's target or an argument as written, where it names one path the same way wherever
+    it is written: double quoted variables ($X, ${X}) and plain path characters, every $ inside
+    double quotes so nothing is split or globbed, with the quotes taken away and ${X} written $X. None
+    for any other word (a substitution, a glob, a ~, a single quote, a default, an unquoted $)."""
+    out, i, dq = [], 0, False
+    while i < len(raw):
+        c = raw[i]
+        if c == '"':
+            dq = not dq
+            i += 1
+            continue
+        m = re.match(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))", raw[i:])
+        if m:
+            if not dq:
+                return None
+            out.append("$" + (m.group(1) or m.group(2)))
+            i += m.end()
+            continue
+        if not re.match(r"[\w./@+,:%-]", c):
+            return None
+        out.append(c)
+        i += 1
+    text = "".join(out)
+    return text if not dq and "$" in text else None
+
+
 def names_file(text, base):
     """Whether code text names a file called base: not inside a longer name (run.sh.bak, xrun.sh)."""
     return bool(base) and re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w-]|\.\w)", text) is not None
@@ -190,10 +225,132 @@ def make(interpreter, shells, awks, senders):
     awks its AWKS and senders its SENDERS, whose downloads it notes itself."""
 
     class ProgramWrites:
+        # ---- A module a script on disk writes by words it cannot work out (#2854) ---------------
+        #
+        # test-lib-bytecode-importers.sh writes `printf 'X = 1\n' > "$TMPROOT/fault/lib/fault_probe.py"`,
+        # TMPROOT from mktemp, and imports it with `python3 -c 'import sys; sys.path.insert(0,
+        # sys.argv[1]); import fault_probe' "$TMPROOT/fault/lib"`. Neither path can be worked out, so
+        # the import was placed nowhere and the suite was refused when run on its own. Where the same
+        # words name both (raw_path), the write certainly ran first and once, and nothing between the
+        # two can change those words or that file, the module is the text written, and it is read as
+        # any module is: refused where it names an endpoint, and its own imports followed.
+
+        def note_raw_write(self, raw, pieces, append):
+            """A redirection in a script on disk writing literal text (printf, echo, a heredoc) to a
+            path that cannot be worked out: kept by the words naming it, for raw_module, where the
+            write truncates and certainly runs once before every later command of the script."""
+            norm = raw_path(raw) if raw else None
+            if not norm or append or not pieces or any(kind != "text" for kind, _, _ in pieces):
+                return
+            span = self.raw_runs_once()
+            if span:
+                writes = self.shell.setdefault("raw_writes", {})
+                writes[norm] = ("".join(v for _, v, _ in pieces), span[0], span[1])
+
+        def raw_runs_once(self):
+            """(start, end) of the command being read where it certainly runs, once, before every later
+            command of its text: in no compound command, function body or subshell, not run after &&,
+            || or a pipe, and neither piped nor sent to the background. None otherwise."""
+            ctx, at = self.shell, self.shell.get("at")
+            if at is None:
+                return None
+            memo = ctx.setdefault("raw_struct", {})
+            if "parts" not in memo:
+                try:
+                    cmds, parts = self.parsed(ctx["text"], ctx["cwd"])
+                except self.sw.Unreadable:
+                    cmds, parts = [], []
+                memo["parts"] = parts
+                memo["struct"] = self.sh_struct(list(zip(cmds, parts)), ctx["text"]) if parts else None
+            parts, struct = memo["parts"], memo["struct"]
+            k = next((i for i, p in enumerate(parts) if p["start"] == at), None)
+            if k is None or not struct or len(parts[k]["scope"]) > 1 or parts[k]["how"] in ("|", "&"):
+                return None
+            if k and parts[k - 1]["how"] in ("&&", "||", "|"):
+                return None
+            row = struct[0][k]
+            if row is None or row[0]:
+                return None
+            return parts[k]["start"], parts[k]["end"]
+
+        def raw_module(self, word, module):
+            """For an import of module placed nowhere else, where a sys.path entry is the argument word
+            the command hands python as written: the module's key in raw_modules, its text the one a
+            write earlier in the same script on disk put at word/module.py by the same words; None
+            where there is none, or where it may not be what Python finds there (raw_unchanged). Only
+            a plain module, never a package or a dotted name: what else that folder holds is not known,
+            as for any folder a sys.path change names that the gate cannot work out."""
+            ctx = self.shell
+            norm = raw_path(word) if word and ctx.get("on_disk") else None
+            if not norm or "." in module:
+                return None
+            want = norm.rstrip("/") + "/" + module + ".py"
+            found = (ctx.get("raw_writes") or {}).get(want)
+            at = ctx.get("at")
+            if not found or at is None or at < found[2] or not self.raw_unchanged(want, found[2], at):
+                return None
+            key = f"{want} (written earlier in this script)"
+            self.raw_modules[key] = found[0]
+            return key
+
+        def raw_unchanged(self, want, start, end):
+            """Whether nothing in the script between start and end can change what the words of want
+            name, or write or remove that file: no variable they hold is bound again (sh_binds), no
+            command binds a name it does not spell out (sh_indirect), none names the module's file,
+            and every command runs a program known to write nothing (NON_WRITERS, by a name written
+            out) that is not one of the script's own functions and not in RAW_CHANGERS, with no
+            redirection writing a file that may be the module.
+
+            Any other program may write the module whatever it is handed, a folder or a parent of it,
+            a word the gate cannot work out, or a path whose variable's value is not known, so it is
+            never asked what its words name (lessons review of #2876: `gen_tool "$TMPROOT/fault/lib"`
+            between the write and the import had the import read as the earlier text). That holds
+            for a python run handed the folder, the first of two imports included: the gate does not
+            read inline code for whether it writes a file."""
+            s = self.shell["text"]
+            between = s[start:end]
+            if any(self.sh_binds(n, between) for n in re.findall(r"\$([A-Za-z_]\w*)", want)):
+                return False
+            module = os.path.basename(want)
+            if module in between:
+                return False
+            funcs = self.sh_funcs(s)
+            for p in self.shell["raw_struct"]["parts"]:
+                if not (start <= p["start"] < end):
+                    continue
+                text = s[p["start"]:p["end"]]
+                if self.sh_indirect(text):
+                    return False
+                args, redirs, odd = self.redirections(text)
+                if odd:
+                    return False  # a process substitution or the like, not worked out
+                for op, target in redirs:
+                    if ">" not in op or target is None or (op.endswith("&") and re.fullmatch(r"\d+|-", target)):
+                        continue  # a read, or one descriptor copied onto another
+                    path = raw_path(target) or literal_word(target)
+                    name = os.path.basename(path) if path else ""
+                    if not name or name == module or "$" in name:
+                        return False  # a file that may be the module
+                if not args:
+                    continue  # assignments alone: a substitution in them is a part of its own
+                prog = literal_word(args[0])
+                name = os.path.basename(prog) if prog else None
+                if name is None or name in funcs or name in RAW_CHANGERS or name not in NON_WRITERS:
+                    return False
+            return True
+
         def note_program(self, name, args, vals, d, stdin):
             """note_writes for a program that is not a copier, printf, echo, cat or tee: the files it
-            may write. Returns what it prints, as pieces, or None where that is not known."""
-            if self.shell.get("on_disk") or name in NON_WRITERS or name in senders:
+            may write. Returns what it prints, as pieces, or None where that is not known.
+
+            In a script on disk only a build is followed (#2852): what it builds is read as its
+            sources where a later command runs it (`npm run build && node dist/x.js`), and nothing it
+            names is marked, as nothing else a script on disk writes is (note_unreadable)."""
+            if self.shell.get("on_disk"):
+                if name not in NON_WRITERS and name not in senders:
+                    self.note_build(name, vals, d)
+                return None
+            if name in NON_WRITERS or name in senders:
                 return None
             if name == "claude" and vals[1:2] == ["mcp"] and vals[2:3] and vals[2] in CLAUDE_MCP_SETTINGS:
                 return None
