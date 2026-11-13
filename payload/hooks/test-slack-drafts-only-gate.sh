@@ -2402,7 +2402,13 @@ PERL_ASCII="perl -ne 'print \"\$ARGV:\$.: \$_\" if /[^\\x00-\\x7F]/; close ARGV 
 for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
   "perl -lne 'print if /slack/' notes.md post.sh" "perl -ne 'print if 1 .. 3' post.py" \
   "perl -nle 'print length' post.sh | sort -n" "perl -ne 'print \"\$ARGV: \$_\" if eof(ARGV)' notes.md post.sh" \
-  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -ne 'print \"\$\$: \$_\"' notes.md post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
+  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -ne 'print \"\$\$: \$_\"' notes.md post.sh" \
+  "perl -ne 'print unless /^\\s*\$/' post.sh" "perl -ne 'print if /x/ && \$y' post.sh" "perl -ne 'print if /foo.*\$/' post.sh" \
+  "perl -lane 'print \$F[1]' post.sh" "perl -pe 's/a/b/' post.sh" "perl -pe 'tr/a-z/A-Z/' post.sh" \
+  "perl -ne 'print if 3 * 2 > 5 and \$. % 2' post.sh" "perl -nle 'print scalar reverse \$_' post.sh" \
+  "perl -lane '\$c{\$F[0]}++; END { print \"\$_ \$c{\$_}\" for sort keys %c }' post.sh" \
+  "perl -ne 'print join(q(,), (split /,/)[0, 2]), \"\\n\"' post.sh" "perl -F, -lane 'print \$F[0]' post.sh" \
+  "perl -ne 'BEGIN { \$/ = undef } print length' post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
   "python3 -c 'import sys; print(len(open(sys.argv[1]).read()))' post.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read().count(\"slack\"))' post.py $GATE_PY" \
   "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' post.js" \
@@ -2469,6 +2475,14 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$ \$x[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->@* = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$ARGV[0] =~ s/^/sh post.sh | /; @ARGV[1,2] = (1, 2) } print' notes.md" \
+  "perl -ne 'BEGIN { @x = (q(ARGV)); \$x[0][0] = q(sh post.sh |) } print' notes.md" \
+  "perl -ne 'BEGIN { \$y = q(AR).q(GV); local *{\$y} = [q(sh post.sh |)] } print' notes.md" \
+  "perl -ne 'print \"@{[ system(q(sh post.sh)) ]}\"' notes.md" \
+  "perl -ne 'print if /(?{ system(q(sh post.sh)) })/' notes.md" \
+  "perl -ne 'print if m{(??{ system(q(sh post.sh)) })}' notes.md" \
+  "perl -ne 'sysopen(my \$f, q(x), 1)' notes.md" "perl -ne 'print STDOUT readpipe(q(sh post.sh))' notes.md" \
+  "perl -ne 'print <<\"E\"' notes.md" "perl -ne 'print -e q(post.sh)' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; *\$x = [\"sh post.sh |\"] } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
@@ -2479,6 +2493,10 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
 done
 run_rf "perl -ne 'system(\$_)' post.sh"
 says "a perl one-liner refused names what it can do" "the code given to perl"
+# perl -e code is read by a safe list (#2886 review, twelve rounds of spellings): what is not on it
+# refuses, and the refusal names it.
+run_rf "perl -ne 'frobnicate(\$_)' notes.md"
+says "a perl word off the safe list is named in the refusal" "frobnicate"
 # node runs the last code option, the glued long form included (`--eval=...` ran in place of the -e
 # before it, measured with node 2026-11-13), so a file after it keeps the reading it had before #2691
 # (lessons review of #2886: only the bare -e, --eval, -p, --print words counted as a second option).

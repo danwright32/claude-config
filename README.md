@@ -3676,16 +3676,19 @@ extension (`node -e '...' -r ./x.js` loads `x.js`, and `-r ./x.txt` runs `x.txt`
 on reading their options there; Python and a shell given `-c` do not, and a family whose parsing there
 is not measured is taken to). Which options load a file is not a list the gate can
 keep complete, so such a file is read as code unless the option is one known to load nothing
-(`LOADS_NOTHING`: `--`, `--no-warnings` and a few more for node, perl's reading switches). And `perl -e` code is read for what it can
-do: a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`, `-F`, `-w`) and whose code
-names none of perl's ways to run a command, load or evaluate code, open, write or rename a file
-(`system`, backticks, `qx`, `open`, `do`, `require`, `use`, `eval`, `s///e`, `unlink`, a `::` name, `$^I`,
-any dereference, through a block, another scalar or an arrow (`@{...}`, `${...}`, `@$x`, `$x->[0]`), and the rest
-of `PERL_ACTS`), and
-that uses `ARGV` only as the scalar `$ARGV` or the filehandle given to `close`, `eof` or `<ARGV>` (any
-other spelling may set `@ARGV`, the names `<>` opens, and perl has many), in every `-e` it is given, and that is
-handed no argument perl's `<>` would open as a command or for writing (`'sh x |'`), is seen unable to
-act. So `perl -ne 'print if /x/'`
+(`LOADS_NOTHING`: `--`, `--no-warnings` and a few more for node, perl's reading switches). And `perl -e` code is judged
+by a safe list (`perl_unsafe`, #2886): a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`,
+`-F`, `-w`), every token of whose code, in every `-e` it is given, is one the list knows, and that is
+handed no argument perl's `<>` would open as a command or for writing (`'sh x |'`), is seen unable to act.
+The list knows the words in `PERL_SAFE_WORDS` (`print`, `split`, `join`, `sort`, `chomp`, `if`, `BEGIN`, `END`
+and the like), a variable named directly (`$x`, `$F[1]`, `$h{$k}`, `$.`), numbers, strings, `m//`, `s///` without
+`e`, `tr///`, `<>`, `<STDIN>` and operators. `ARGV` is known only as the scalar `$ARGV` or the filehandle given to
+`close`, `eof` or `<ARGV>`, and a variable reached through a block, another scalar, an arrow or a second subscript
+is not known, since each computes a name at run time and can set `@ARGV`, the names `<>` opens. Anything else
+acts, and the refusal names it, so `perl -ne 'frobnicate($_)'` is refused saying `frobnicate`. The list is
+there because twelve rounds of review of #2886 each found another spelling missing from a list of what acts
+(`@{ARGV}`, `${ARGV[0]}`, `*ARGV = [...]`, `@ ARGV`, `$x->@*` and more): a missing safe word refuses a
+harmless one-liner, where a missing dangerous one let a command through. So `perl -ne 'print if /x/'`
 over files that name an endpoint passes, and the same one-liner with `system`, `-MLWP::Simple` or `-i`
 is refused. Code in another language the gate does not read (`ruby -e`) is still taken to act.
 
