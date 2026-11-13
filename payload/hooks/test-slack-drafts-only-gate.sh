@@ -2436,6 +2436,9 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'exec \"sh\", \$ARGV' post.sh" "perl -MLWP::Simple -ne 'print' post.sh" \
   "perl -mPOSIX -ne 'print' notes.md" "perl -i -pe 's/a/b/' post.sh" "perl -i.bak -ne 'print' notes.md" \
   "perl -ne 'CORE::system(\$_)' post.sh" "perl -ne '@ARGV = (\"post.sh\"); print' notes.md" \
+  "perl -ne 'BEGIN { \$ARGV[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'print' notes.md 'sh post.sh |'" "perl -ne 'print' notes.md '| sh post.sh'" \
+  "perl -ne 'BEGIN { (\$x, @ARGV) = (1, \"sh post.sh |\") } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
   "python3 -c 'import sys; print(open(sys.argv[1]).read())' post.sh > run.sh; sh run.sh" \

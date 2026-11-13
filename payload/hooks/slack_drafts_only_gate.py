@@ -140,9 +140,10 @@ OPTIONS = {
 # perl -e code the gate sees cannot act (perl_acts, claude-config#2691): switches that only read lines
 # (-n, -p, -l, -a, -0, -F, -w), and code naming none of perl's ways to run a command, load or evaluate
 # code, write or rename a file, or open one (the two argument open runs a command), no module by name
-# (`::`), no backtick, no in place edit ($^I), and no change to @ARGV, whose names perl's <> opens.
+# (`::`), no backtick, no in place edit ($^I), and no use of @ARGV or an element of it, whose names
+# perl's <> opens with the two argument open (a name ending in | runs a command).
 PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
-PERL_ACTS = re.compile(r"`|::|\$\^I|\$\{\^|@ARGV\s*=(?!=)|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
+PERL_ACTS = re.compile(r"`|::|\$\^I|\$\{\^|@ARGV|\$ARGV\s*\[|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
                        r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
                        r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
                        r"dbmopen|tie|dump|ioctl|fcntl|glob|push|unshift|splice)\b")
@@ -154,10 +155,14 @@ def perl_acts(code, switches):
     switch beyond those that only read lines (a module by -M or -m, an in place edit by -i, -x, -d)
     counts as acting. The code acts when it names one of PERL_ACTS, or a substitution whose
     replacement is evaluated (s///e) or whose form the reading cannot follow. What is left can only
-    read the files it is handed, match and print. Deliberate obfuscation is not what this answers."""
+    read the files it is handed, match and print. A write counts even where acts() is asked only
+    whether the code can run what it is handed (runs_only): the reading does not tell the two apart,
+    so it refuses more rather than less. Deliberate obfuscation is not what this answers."""
     for w in switches:
         if w.startswith("-") and not PERL_SWITCH.fullmatch(w):
             return f"is run with perl's {w} switch, which can load a module or write a file"
+        if re.search(r"^\s*[|<>+&]|\|\s*$", w):
+            return f"is handed {w!r}, which perl's <> opens as a command or for writing"
     hit = PERL_ACTS.search(code)
     if hit:
         return f"uses {hit.group(0)}, which can run a command, load code or write a file"
@@ -4373,11 +4378,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         file, by its own text: what the package does with a file is not something the gate can tell,
         and before #2865 none of them was read at all.
 
-        inline, (its label, its text, the directory it runs in), is code the program was given by an
-        option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
-        first file read as code is, so a data file it is handed is read when it can act on it.
-        held_code says that code is certainly the program (a module python3 -m runs,
-        claude-config#2827), so a code shaped file after it is handed to it, as after a held script
+        inline, (its label, its text, the directory it runs in[, how it is read for what it can do]),
+        is code the program was given by an option (python3 -c), whose arguments the words are
+        (claude-config#2439). It is judged as the first file read as code is, so a data file it is
+        handed is read when it can act on it. The fourth member, where given, replaces acts_inline
+        (perl_acts for perl -e, claude-config#2691). held_code says that code is certainly the program
+        (a module python3 -m runs, claude-config#2827; code given by -c or -e, or read from a heredoc,
+        claude-config#2691), so a code shaped file after it is handed to it, as after a held script
         word, and read as code only where the code can run what it is handed."""
         code, data = [], []
         if inline:
