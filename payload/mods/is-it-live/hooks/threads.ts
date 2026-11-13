@@ -50,14 +50,38 @@ export const isSlackTool = (tool: string, name: string): boolean => tool.startsW
 
 // The errors Slack's draft tool names (its own description lists them), and a JSON answer saying it
 // did not work. One that says so in a result not marked as an error is no saved draft either.
-const DRAFT_ERROR = /"ok"\s*:\s*false|\b(?:attached_draft_exists|channel_not_found|not_in_channel|failed_to_create_draft)\b/
+const DRAFT_ERROR = /"ok"\s*:\s*false|\b(?:attached_draft_exists|channel_not_found|not_in_channel|failed_to_create_draft|invalid_thread_ts|thread_not_found)\b/
+
+type Answer = { text?: unknown; result?: unknown; isError?: unknown; deny?: unknown }
+const answerText = (o: Answer): string => (typeof o.text === 'string' ? o.text : typeof o.result === 'string' ? o.result : JSON.stringify(o.result ?? ''))
 
 /** Whether a draft call's answer says Slack saved it: not refused, not an error, and naming none of Slack's errors. */
-export const draftSaved = (o: { text?: unknown; result?: unknown; isError?: unknown; deny?: unknown }): boolean => {
+export const draftSaved = (o: Answer): boolean => {
   if (o.deny !== undefined || o.isError === true) return false
-  const text = typeof o.text === 'string' ? o.text : typeof o.result === 'string' ? o.result : JSON.stringify(o.result ?? '')
-  return !DRAFT_ERROR.test(text)
+  return !DRAFT_ERROR.test(answerText(o))
 }
+
+/** #2787: the errors Slack answers a draft (invalid_thread_ts) or a read (thread_not_found) with when the thread no longer exists. */
+export type GoneError = NonNullable<IsItLiveThread['gone']>['error']
+
+// #2787: Slack's answer names the error as its JSON error field, or leads with it, or names it in an
+// answer marked as an error. A read that went through can quote the words in a message, so a bare
+// mention anywhere else in an answer not marked as an error is not the thread gone.
+const GONE_FIELD = /"error"\s*:\s*"(invalid_thread_ts|thread_not_found)"/
+const GONE_LEAD = /^\s*(?:[Ee]rror\s*:?\s*)?(invalid_thread_ts|thread_not_found)\b/
+const GONE_ANY = /\b(invalid_thread_ts|thread_not_found)\b/
+
+/** #2787: the error a Slack draft or read answered with when the thread it names no longer exists, or undefined. */
+export const threadGone = (o: Answer): GoneError | undefined => {
+  if (o.deny !== undefined) return undefined
+  const text = answerText(o)
+  const m = GONE_FIELD.exec(text) ?? GONE_LEAD.exec(text) ?? (o.isError === true ? GONE_ANY.exec(text) : null)
+  return (m?.[1] as GoneError | undefined) ?? undefined
+}
+
+/** #2787: what Dan is told, once, of a thread Slack says no longer exists, with the reply that could not be saved there when it is known. */
+export const threadGoneOf = (t: SlackThread & { gone: { error: GoneError; message?: string } }): string =>
+  `Slack says ${nameOfThread(t)} no longer exists (it answered ${t.gone.error}), so no draft reply can be saved there and none is asked for again.${t.gone.message ? ` The reply that was not saved: "${t.gone.message}"` : ''}`
 
 /** How a thread is named to Dan and the session: the link he pasted, else its channel and time. */
 export const nameOfThread = (t: SlackThread) => t.link ?? `the Slack thread in channel ${t.channel} at ${t.ts}`
@@ -177,9 +201,10 @@ const latest = (...xs: (number | undefined)[]): number | undefined => {
 export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined, unrelated?: Unrelated): number | undefined =>
   latest(t.related, t.card !== undefined && !t.mid ? landed : undefined, unrelated === undefined ? t.defaulted : undefined)
 
-/** The threads owed a draft: those whose last draft came before the latest merge they are owed for. */
+/** The threads owed a draft: those whose last draft came before the latest merge they are owed for, never one Slack says no longer exists (#2787). */
 export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined, unrelated?: Unrelated): IsItLiveThread[] =>
   threads.filter(t => {
+    if (t.gone !== undefined) return false
     const from = draftOwedFrom(t, landed, unrelated)
     return from !== undefined && (t.settled ?? -Infinity) < from
   })
