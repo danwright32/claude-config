@@ -71,7 +71,7 @@ trap cleanup EXIT
 export CLAUDE_ISSUE_SPOOL_DIR="$T/spool"; mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
 export HOOK_TESTS_FLAKY_OUTPUT="$T/flaky"
 unset HOOK_TESTS_DEADLINE HOOK_TESTS_DEADLINE_RESERVE HOOK_TESTS_JOB_STARTED HOOK_TESTS_NOW GITHUB_ACTIONS GITHUB_WORKFLOW_REF GITHUB_JOB
-unset HOOK_TESTS_SLOT HOOK_TESTS_SLOT_WAIT HOOK_TESTS_SLOT_HOLD HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_SAY_EVERY HOOK_TESTS_SLOT_NOW HOOK_TESTS_SLOT_SLEEP
+unset HOOK_TESTS_SLOT HOOK_TESTS_SLOT_WAIT HOOK_TESTS_SLOT_STILL HOOK_TESTS_SLOT_HOLD HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_SAY_EVERY HOOK_TESTS_SLOT_NOW HOOK_TESTS_SLOT_SLEEP
 
 # The fixture repository: the runner and its libraries copied in, and one suite, all tracked, so the
 # copy's own `git rev-parse` finds this repository and a bare run of it is a whole run.
@@ -548,13 +548,104 @@ o14="$(cat "$T/out14")"
 has "#2828 passing over the dead waiter is said, with its pid" "pid $D14) is no longer running" "$o14"
 [ -z "$(tickets)" ] && check "#2828 nothing is left in the queue" ok || check "#2828 nothing is left in the queue" "tickets: $(tickets | tr '\n' ' ')"
 
+# ---- 15 to 17. the bound is on the line standing still, not on the whole wait (#2835) ------------
+# A sleep that moves the line: every <every>th call it ends the lowest numbered ticket whose pid is
+# listed in <pids file>, which is a run in front of this one finishing (turn_leave removes its
+# ticket). The clock moves 30 seconds a look, so <every> calls are <every> x 30 seconds of the line.
+# Every duration in 15 to 17 is set here, not measured.
+line_mover(){ # line_mover <script> <pids file> <every>
+  cat > "$1" <<MOVER
+#!/usr/bin/env bash
+c=\$(( \$(cat "$1.count" 2>/dev/null || echo 0) + 1 )); echo "\$c" > "$1.count"
+[ \$(( c % $3 )) -eq 0 ] || exit 0
+for n in \$(ls "$SLOT/full-run" | grep -E '^[0-9]+\$' | sort -n); do
+  p="\$(sed -n 's/^pid //p' "$SLOT/full-run/\$n")"
+  if grep -qx "\$p" "$2"; then rm -f "$SLOT/full-run/\$n" "$SLOT/full-run/\$n.head"; exit 0; fi
+done
+MOVER
+  chmod +x "$1"; rm -f "$1.count"
+}
+
+# 15. Fourth in line behind three full runs of 25 minutes each (set here, not measured): the line
+# moves every 25 minutes, so the run is served after 75, though that is past the hour the whole wait
+# was once bounded by. Seen twice before #2835 (2026-11-11 and 12), both runs refused with nothing
+# run while served in arrival order.
+clear_slot
+H15a="$(new_holder hp15a)"; H15b="$(new_holder hp15b)"; H15c="$(new_holder hp15c)"
+hold_slot "$H15a" "/work/trees/first" 1000000 || check "fixture: the first run's ticket was written" "turn_join failed"
+hold_slot "$H15b" "/work/trees/second" 1000000 || check "fixture: the second run's ticket was written" "turn_join failed"
+hold_slot "$H15c" "/work/trees/third" 1000000 || check "fixture: the third run's ticket was written" "turn_join failed"
+printf '%s\n%s\n%s\n' "$H15a" "$H15b" "$H15c" > "$T/pids15"
+line_mover "$T/mover15" "$T/pids15" 50
+printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark15"
+fx_run "$T/out15" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP="$T/mover15" HOOK_TESTS_SLOT_SAY_EVERY=600 SLOT_MARK="$T/mark15"; rc15=$?
+o15="$(cat "$T/out15")"
+{ [ "$rc15" -eq 0 ] && [ -f "$T/mark15" ]; } && check "#2835 a run fourth in line behind a moving line is served, however long the whole wait" ok \
+  || check "#2835 a run fourth in line behind a moving line is served, however long the whole wait" "exit=$rc15 out=$o15"
+has "#2835 it says it took the slot after the whole 75 minute wait" "took this Mac's full suite slot after waiting 75m" "$o15"
+has "#2835 the wait says it lasts as long as the line keeps moving" "as long as the line keeps moving" "$o15"
+[ -z "$(tickets)" ] && check "#2835 the served run gave the slot back" ok || check "#2835 the served run gave the slot back" "tickets: $(tickets | tr '\n' ' ')"
+
+# 16. A line that moves once and then stands still: the run waiting second refuses once nothing has
+# started or finished for HOOK_TESTS_SLOT_STILL, measured from the last movement, not from its
+# arrival. The run ahead leaves at 5 minutes, then the holder keeps it (its hold bound lifted), so
+# the run refuses at 15 minutes in all, 10 of them standing still (all set here, not measured).
+clear_slot
+H16="$(new_holder hp16)"; W16="$(new_holder hw16)"
+hold_slot "$H16" "/work/trees/long-holder" 1000000 || check "fixture: the holder's ticket was written" "turn_join failed"
+hold_slot "$W16" "/work/trees/leaves-early" 1000000 || check "fixture: the waiter's ticket was written" "turn_join failed"
+printf '%s\n' "$W16" > "$T/pids16"
+line_mover "$T/mover16" "$T/pids16" 10
+printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark16"
+fx_run "$T/out16" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP="$T/mover16" HOOK_TESTS_SLOT_STILL=600 HOOK_TESTS_SLOT_HOLD=999999 HOOK_TESTS_SLOT_SAY_EVERY=6000 SLOT_MARK="$T/mark16"; rc16=$?
+o16="$(cat "$T/out16")"
+[ "$rc16" -eq 75 ] && check "#2835 a line that stands still past the bound refuses, exit 75" ok \
+  || check "#2835 a line that stands still past the bound refuses, exit 75" "exit=$rc16 out=$o16"
+[ ! -f "$T/mark16" ] && check "#2835 the refused run ran no suite" ok || check "#2835 the refused run ran no suite" "the suite ran: $o16"
+has "#2835 the refusal says how long the whole wait was and how long the line stood still" \
+  "REFUSED: waited 15m for this Mac's full suite slot, and the line stood still for the last 10m" "$o16"
+has "#2835 the refusal names the setting that bounds it" "the most HOOK_TESTS_SLOT_STILL allows" "$o16"
+has "#2835 the refusal names who holds the slot and for how long" "pid $H16, a full run in /work/trees/long-holder, has held it for 15m" "$o16"
+has "#2835 the wait names the bound on standing still" "stands still for 10m" "$o16"
+_left16="$(tickets)"
+{ [ "$(printf '%s\n' "$_left16" | grep -c .)" = 1 ] && grep -q "^pid $H16\$" "$SLOT/full-run/$_left16"; } \
+  && check "#2835 the refused run gave its place back, and only the holder remains" ok \
+  || check "#2835 the refused run gave its place back, and only the holder remains" "tickets: $(tickets | tr '\n' ' ')"
+
+# 17. claude-sync's pull hands the runner HOOK_TESTS_SLOT_WAIT, half its 1800 second deadline (#2758),
+# and that stays a bound on the WHOLE wait: a line that keeps moving does not carry the pull past its
+# deadline. Same three run line as 15, moving every 10 minutes (settings, not measured); the pull's
+# run gives up at 15, with
+# the line claude-sync reads (its pattern is "REFUSED: waited <d> for this Mac's full suite slot, the
+# most HOOK_TESTS_SLOT_WAIT allows, and <who>. Nothing was run.").
+clear_slot
+hold_slot "$H15a" "/work/trees/first" 1000000 || check "fixture: the first run's ticket was written" "turn_join failed"
+hold_slot "$H15b" "/work/trees/second" 1000000 || check "fixture: the second run's ticket was written" "turn_join failed"
+hold_slot "$H15c" "/work/trees/third" 1000000 || check "fixture: the third run's ticket was written" "turn_join failed"
+line_mover "$T/mover17" "$T/pids15" 20
+printf '1000000\n' > "$T/clock.now"; rm -f "$T/mark17"
+fx_run "$T/out17" HOOK_TESTS_SLOT_NOW="$CLOCK" HOOK_TESTS_SLOT_SLEEP="$T/mover17" HOOK_TESTS_SLOT_WAIT=900 HOOK_TESTS_SLOT_SAY_EVERY=6000 SLOT_MARK="$T/mark17"; rc17=$?
+o17="$(cat "$T/out17")"
+{ [ "$rc17" -eq 75 ] && [ ! -f "$T/mark17" ]; } && check "#2835 with HOOK_TESTS_SLOT_WAIT set, a moving line still refuses at that bound, running nothing" ok \
+  || check "#2835 with HOOK_TESTS_SLOT_WAIT set, a moving line still refuses at that bound, running nothing" "exit=$rc17 out=$o17"
+_who17="$(sed -n "s/^run-all-tests: REFUSED: waited .* the most HOOK_TESTS_SLOT_WAIT allows, and \(.*\)\. Nothing was run\..*/\1/p" "$T/out17" | tail -1)"
+_for17="$(sed -n "s/^run-all-tests: REFUSED: waited \(.*\) for this Mac's full suite slot, the most HOOK_TESTS_SLOT_WAIT allows.*/\1/p" "$T/out17" | tail -1)"
+{ [ "$_for17" = 15m ] && [ -n "$_who17" ]; } && check "#2835 the refusal reads as claude-sync's pull parses it: 15m, and who holds it" ok \
+  || check "#2835 the refusal reads as claude-sync's pull parses it: 15m, and who holds it" "for='$_for17' who='$_who17' out=$o17"
+has "#2835 the wait names both bounds when the whole wait has one" "or once it has waited 15m in all" "$o17"
+kill "$H15a" "$H15b" "$H15c" "$H16" "$W16" 2>/dev/null
+
 # The settings are read by indirection, never eval (#2465, which the Slack drafts gate cannot follow):
 # a set bad value is still refused by name, an unset one still skipped, a set good one still taken.
 r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_HOLD=soon bash -c \
   '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
 check "#2465 a slot setting that is not a whole number is still refused, by name" \
   "$([ "$r" = "1|HOOK_TESTS_SLOT_HOLD='soon' is not a whole number of seconds" ] && echo ok || echo "got: $r")"
-r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL bash -c \
+r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL HOOK_TESTS_SLOT_STILL=soon bash -c \
+  '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
+check "#2835 HOOK_TESTS_SLOT_STILL that is not a whole number is refused, by name" \
+  "$([ "$r" = "1|HOOK_TESTS_SLOT_STILL='soon' is not a whole number of seconds" ] && echo ok || echo "got: $r")"
+r="$(env -u HOOK_TESTS_SLOT_WAIT -u HOOK_TESTS_SLOT_STILL -u HOOK_TESTS_SLOT_HOLD -u HOOK_TESTS_SLOT_SAY_EVERY -u HOOK_TESTS_SLOT_POLL bash -c \
   '. "$1"; full_run_slot_settings; printf "%s|%s" "$?" "$FULL_RUN_SLOT_ERR"' _ "$DIR/lib/full-run-slot.sh" 2>&1)"
 check "#2465 and with none set, nothing is refused" "$([ "$r" = "0|" ] && echo ok || echo "got: $r")"
 check "#2465 lib/full-run-slot.sh holds no eval" \
