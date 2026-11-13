@@ -2216,8 +2216,12 @@ the report gives both sets of lengths in bands around the 20 character floor (un
 matched no line, one per line. Read on the personal MacBook over the 1164 reviews started from
 2026-10-25 to 2026-11-04, 9 of 814 findings were placed by part of a line, every recorded length 60
 characters or more, and the 8 misses kept whole were all 77 characters or longer. Nothing fell near
-the floor, so it decided no finding and stays at 20 (#1701). That is one Mac's records: the work
-MacBook's were not read, so run the report there too.
+the floor, so it decided no finding and stays at 20 (#1701). Read again over the 2107 reviews kept
+on 2026-11-12, 6 of 1425 findings were placed by part of a line, at 57 to 168 characters, each on
+the right line. The first quote under 20 appeared: a 15 character setting name whose nearest
+occurrence was a longer setting it starts, so a floor of 15 or less would have placed it on the
+wrong row. The floor refused it and stays at 20. That is one Mac's records: the work MacBook's were
+not read, so run the report there too (#1689).
 
 A miss's mark also says how the quote sits against the file, worked out while the reviewed head is
 in hand: `though it runs across lines A to B` (copied from more than one line), `though its first N

@@ -1239,23 +1239,36 @@ The bedtime answer is written into the shared file so it is asked once, and kept
 A second paragraph says the shared file is written once a night by the scheduled sync.
 The bedtime answer is written into the shared file so it is asked once, and kept there.
 EOF
-P add src/ledger.ts src/old.ts docs/list.md docs/notes.md; P commit -q -m seed
+# A settings table shaped as the one quote under 20 characters seen in this Mac's reviews from
+# 2026-10-28 to 2026-11-12 (claude-config#1701): a setting's name on a line of its own (line 4),
+# and a longer setting it is the start of in a row nearer the cited number (line 11).
+cat > "$PLACE/docs/settings.md" <<'EOF'
+# Settings
+<tr><td>
+
+`SUITE_LOCK_WAIT`
+
+</td><td>
+
+How long a run waits for the lock.
+
+</td></tr>
+<tr><td><code>SUITE_LOCK_WAIT_POLL</code></td><td><code>2</code></td><td>
+
+Seconds between looks at the lock.
+</td></tr>
+EOF
+P add src/ledger.ts src/old.ts docs/list.md docs/notes.md docs/settings.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
 # A comment whose sentence runs on over a second line that starts with the comment's own marker,
 # the shape of 6 of the 8 quotes in this Mac's reviews to 2026-11-13 that began as the end of a line
 # (#2237): a reviewer quoting the sentence leaves the marker out, so the lines read on as one never
-# hold it. And a setting's name on a line of its own (line 6) with a longer setting it is the start
-# of on a row nearer the cited number (line 8), the shape of the one quote under 20 characters seen
-# in those reviews (#1701).
+# hold it.
 cat > "$PLACE/docs/scan.sh" <<'EOF'
 #!/bin/bash
 # How old a scan may be, in seconds, before a plan made from it is refused: what it
 # measured may have changed since. A setting, not a measurement.
 max_scan_age=3600
-
-`LOCK_WAIT`
-How long a run waits for the lock.
-<tr><td><code>LOCK_WAIT_POLL</code></td><td><code>2</code></td></tr>
 EOF
 P add docs/scan.sh; P commit -q -m "add scan"
 PLACE_SHA="$(P rev-parse HEAD)"
@@ -1381,6 +1394,13 @@ one("a phrase of exactly 20 characters is placed by part of a line",
 one("a phrase of 19 characters is too short to be placed by part of a line",
     "docs/notes.md:1: the sync time is not stated." + S + "\nQuote: ritten once a night",
     "docs/notes.md:1: ", "too short to be placed by part of a line")
+# What the floor refuses, from a real review (claude-config#1701): the finding was about the setting
+# on line 4, but the nearest line holding its 15 characters is the longer setting on line 11, so
+# any floor of 15 or less would move the finding to the wrong row. It stays at its cited number.
+one("a setting's name under 20 characters is not moved to a longer name it starts",
+    "docs/settings.md:13: the setting's name and default sit on separate lines." + S +
+    "\nQuote: SUITE_LOCK_WAIT",
+    "docs/settings.md:13: ", "too short to be placed by part of a line")
 one("a phrase in no line at all keeps its number and says part of a line was tried",
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
@@ -1412,14 +1432,13 @@ one("a quote neither across nor past the end of a line keeps its number and says
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
     "docs/notes.md:4: ", "whole or in part, nor does it run across or past the end of any line,")
-# The floor still holds for the new steps (#1701): the finding is about the setting on line 6, and
-# the nearest line holding its name is the longer setting on line 8, so it stays where it was cited.
-one("a setting's name under 20 characters is not moved to a longer name it starts",
-    "docs/scan.sh:9: the setting has no default." + S + "\nQuote: LOCK_WAIT",
-    "docs/scan.sh:9: ", "too short to be placed by part of a line")
-one("a longer quote starting with that name is not placed when no line holds or ends with its start",
-    "docs/scan.sh:9: the setting has no default." + S + "\nQuote: `LOCK_WAIT` is read once when the run starts",
-    "docs/scan.sh:9: ", "whole or in part, nor does it run across or past the end of any line,")
+# The floor still holds for the new steps (#1701): a quote that starts with the setting's name on
+# line 4 of docs/settings.md and runs on in words no line holds is not placed on that row, nor on
+# the longer setting it is the start of nearer the cited number, so it stays where it was cited.
+one("a longer quote starting with a setting's name is not placed when no line holds or ends with its start",
+    "docs/settings.md:13: the setting has no default." + S +
+    "\nQuote: `SUITE_LOCK_WAIT` is read once when the run starts",
+    "docs/settings.md:13: ", "whole or in part, nor does it run across or past the end of any line,")
 
 # A cited path that is not a file at the head (claude-config#1368: the other 4 of the 13). One held
 # `..`, two a stray folder in front of the real path, one a bare file name. Each is tried as the
