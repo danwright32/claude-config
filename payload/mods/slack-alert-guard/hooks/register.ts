@@ -11,6 +11,7 @@ import {
   SOURCE,
   agentRefusal,
   blocked,
+  cannotCheck,
   ciMessages,
   ciWorkflow,
   type Decl,
@@ -21,6 +22,7 @@ import {
   foreignNames,
   foreignUse,
   heldText,
+  hookFailed,
   inScope,
   isJs,
   isOwnRecord,
@@ -31,6 +33,7 @@ import {
   modelLiteral,
   modelOnlyDecls,
   modelReading,
+  outOfTime,
   plainYamlValues,
   question,
   refusal,
@@ -73,8 +76,6 @@ const message = (err: unknown) => errorText(err, SOURCE)
 
 const ownRecord =
   "Blocked: this would change the Slack alert guard's own record of the wording Dan approved, which only his answer to its question writes. Leave that file alone."
-const cannotCheck = (why: string) =>
-  `Blocked: the Slack alert guard could not check this call (${why}), so it is held rather than let through unchecked. Try it again; if it keeps failing, tell Dan what failed.`
 // The catches' last word, built before anything can fail (#2039).
 const HELD = cannotCheck('unknown failure')
 
@@ -82,7 +83,8 @@ const HELD = cannotCheck('unknown failure')
 // placeholders the added text writes as text (#2361); send: where the held text goes (#2586).
 type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; literal?: string[]; send?: SlackAlertSend }
 // Could not check: git or a read failed for the file itself, so the call is held and told to try again.
-type Unchecked = { unchecked: string }
+// late: it failed by running out of time, so it is told as a timeout, not a refusal (#2792).
+type Unchecked = { unchecked: string; late?: true }
 type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold } | { merge: string }
 const PASS: Verdict = { pass: true }
 
@@ -310,7 +312,8 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
  * nothing posts it before he approves it. Only in the repositories the choice holds (#2833): one
  * made in another repository lets the merge through, and one whose repository cannot be read holds
  * it wherever it is. A merge that cannot be read, a diff gh cannot give, or a pull request whose
- * repository gh cannot say, is held as could not check. With no choice waiting, no command is read.
+ * repository gh cannot say, is held as could not check; a diff gh did not give within its time is
+ * held as a timeout (#2792). With no choice waiting, no command is read.
  */
 const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
   const waiting = await choices($)
@@ -323,7 +326,11 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     if (m === undefined) continue
     if ('unreadable' in m) return unreadable
     const argv = ['gh', 'pr', 'diff', ...m.selector, ...(m.repo ? ['-R', m.repo] : [])]
+    const asked = await $.clock.now()
     const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
+    // A gh that failed once its whole time was spent was killed at its timeout (#2792).
+    if (r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS)
+      return { unchecked: `gh did not give the pull request's diff within ${SCAN_MS / 1000} seconds, while Slack alert wording chosen overnight waits on Dan`, late: true }
     if (r.exitCode !== 0 || r.isStdoutTruncated)
       return { unchecked: `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'}), while Slack alert wording chosen overnight waits on Dan` }
     const carrying = carried(r.stdout, waiting)
@@ -391,9 +398,12 @@ const whereIs = async ($: EngineInterface, path: string, deadline: number): Prom
   let dir = path.slice(0, path.lastIndexOf('/')) || '/'
   while (dir !== '/' && !(await $.fs.exists(dir))) dir = dir.slice(0, dir.lastIndexOf('/')) || '/'
   const ms = Math.floor(deadline - (await $.clock.now()))
-  if (ms <= 0) return { unchecked: `git was not asked which repository ${path} is in within ${SCAN_MS / 1000} seconds` }
+  if (ms <= 0) return { unchecked: `git was not asked which repository ${path} is in within ${SCAN_MS / 1000} seconds`, late: true }
   const where = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel', '--show-prefix'], { timeoutMs: ms })
   if (where.exitCode === 128 && /not a git repository/.test(where.stderr)) return { none: true }
+  // A git that failed once its whole time was spent was killed at its timeout (#2792).
+  if (where.exitCode !== 0 && (await $.clock.now()) >= deadline)
+    return { unchecked: `git did not name the repository ${path} is in within ${SCAN_MS / 1000} seconds`, late: true }
   if (where.exitCode !== 0 || where.isStdoutTruncated)
     return { unchecked: `git could not name the repository ${path} is in (exit ${where.exitCode}: ${where.stderr.trim().split('\n')[0] || 'no message'})` }
   // git prints the top, then the folder asked from below it, ending in a slash, or an empty line at the top.
@@ -618,6 +628,10 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     await drawCard($, id, "This would change the Slack alert guard's own record.", 'Only your answer to its question writes it.')
     return ownRecord
   }
+  if ('unchecked' in v && v.late) {
+    await drawCard($, id, 'The Slack alert guard ran out of time checking this call, so it did not run.', `${v.unchecked}. Claude sends it again in about a minute.`)
+    return outOfTime(v.unchecked)
+  }
   if ('unchecked' in v) {
     await drawCard($, id, 'The Slack alert guard could not check this call, so it is held.', v.unchecked)
     return cannotCheck(v.unchecked)
@@ -659,7 +673,7 @@ export const register: Register = on => {
     } finally {
       fromAgent.delete(id)
     }
-  }).catch(($, e, next) => neverThrows(() => ({ deny: cannotCheck(message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
+  }).catch(($, e, next) => neverThrows(() => ({ deny: hookFailed(next.error, message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's call, judged beneath every mod's tool.call hook. One that is refused goes to
   // the settings hooks first, so a call one of them refuses is refused in its words and never turned
@@ -671,7 +685,7 @@ export const register: Register = on => {
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
     return { decision: 'deny', reason: await refuse($, v, e.tool_use_id ?? '', e.tool, false) }
-  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: cannotCheck(message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
+  }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: hookFailed(next.error, message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's question, asked in Claude Code's own dialog. The guard words the question and its answers,
   // and reads his choice from the dialog's own result, the one place it comes from him.
