@@ -541,8 +541,9 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             if c == "#" and f.get("array") and s[i - 1] in " \t\n(":
                 # A comment inside an array's ( ), as the shell reads one there too: an apostrophe in
                 # it opened a quote that ran on past the array (tools/check-mod-shared-parts.sh's
-                # PARTS, so no compound after it paired; claude-config#2683).
-                j = s.find("\n", i)
+                # PARTS, so no compound after it paired; claude-config#2683). It ends at the line
+                # break, "; " in the flattened form, as a comment between commands does.
+                j = s.find(line_break, i)
                 i = n if j < 0 else j
                 continue
             if c == "(":
