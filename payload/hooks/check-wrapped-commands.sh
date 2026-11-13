@@ -50,9 +50,10 @@
 # judged as if it were not there, data_set_aside): `bash` (or nothing,
 # the script run by its path, claude-config#1623), the declared path (~/ or the home directory
 # written out), the subcommand, then words, and nothing a shell would do
-# beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the command
-# passes only if what is left names none of the three. Every other shape is refused as before, and so
-# is a note the reader cannot judge. The milestone duplicate check is declared the same way, every
+# beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the call
+# counts only if what is left of it names none of the three; the command is then judged without it,
+# so it passes when the rest names none of them or holds no unread wrapper, and a call in any other
+# shape is refused as before, and so is a note the reader cannot judge. The milestone duplicate check is declared the same way, every
 # argument of it (claude-config#1610), and in front of either call one thing may stand, the account
 # rule's GH_TOKEN=$(gh auth token -u <login>) with a plain login, to read another account's repository;
 # behind it only 2>&1 and pipes into grep, head, tail or cut (lib/shell-words.py DATA_FILTERS). A

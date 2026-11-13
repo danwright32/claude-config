@@ -1742,9 +1742,9 @@ def read(s):
 # #1610, only reads from GitHub), and the guard declares them; for one of them the words inside its
 # arguments are data. data_blanked() reads that one shape and nothing else: the call, with only
 # DATA_TOKEN_PREFIX in front and only 2>&1 and pipes into DATA_FILTERS behind, printed with every
-# argument after the path (or subcommand) that is quoted whole replaced by '', so the guard can look
-# for git, gh and rtk in what is left; None for any other shape, which the guard refuses exactly as
-# before. Anything a shell would do more than split words and remove quotes ends the reading with
+# argument after the path (or subcommand) that is quoted whole replaced by '', so data_set_aside can
+# look for git, gh and rtk in what is left of each pipeline of a command; None for any other shape,
+# a pipeline that is then not set aside (claude-config#1492). Anything a shell would do more than split words and remove quotes ends the reading with
 # None: another operator or redirection, a substitution or variable (a $ or a backtick, quoted or
 # not), a backslash, a glob or brace outside quotes, a comment, any other assignment or an option
 # before the script, a newline outside quotes, a quote that never closes.

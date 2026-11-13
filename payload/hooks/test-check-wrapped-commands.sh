@@ -578,8 +578,8 @@ check "#1492 a declared call in another shape is told the shape it passes in" "p
 out="$(printf '%s' "bash $SPOOL note . \"git push\" \"b\"; git status" | python3 "$DIR/lib/shell-words.py" data-set-aside "~/.claude/hooks/lib/issue-spool.sh note")"; rc=$?
 check_eq "#1492 the reader handed no test of the three words sets nothing aside" "1|" "$rc|$out"
 GUARDCOPY="$WORKDIR/guardcopy"; mkdir -p "$GUARDCOPY/lib"
-python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$GUARDCOPY/lib" push-scope.sh whole-number.sh || bad "#1492 the hook helpers could not be installed into $GUARDCOPY/lib"
-cp "$DIR/lib/shell-words.py" "$GUARDCOPY/lib/"
+python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$GUARDCOPY/lib" push-scope.sh whole-number.sh shell-words.py || bad "#1492 the hook helpers could not be installed into $GUARDCOPY/lib"
+check "#1492 the guard copy has the reader beside it" "def data_set_aside" "$(cat "$GUARDCOPY/lib/shell-words.py" 2>&1)"
 sed "s/^GUARDED_TEXT='(^|\[^A-Za-z0-9_.-\])(git|gh|rtk)/GUARDED_TEXT='(^|[^A-Za-z0-9_.-])(git|gh|rtk|zqword)/" "$HOOK" > "$GUARDCOPY/check-wrapped-commands.sh"
 check "#1492 the guard copy under test widened its test" "(git|gh|rtk|zqword)" "$(grep '^GUARDED_TEXT=' "$GUARDCOPY/check-wrapped-commands.sh")"
 out="$(payload "bash $SPOOL note . zqword \"b\"; git status" | bash "$GUARDCOPY/check-wrapped-commands.sh" 2>&1)"; rc=$?
