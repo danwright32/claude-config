@@ -599,10 +599,11 @@ symbol_cache_note(){
 scan_note(){
   local record="${FREE_SPACE_SCAN_RECORD:-${HOME:-}/.claude/state/disk-clean/last-scan.json}"
   [ -f "$record" ] && [ -r "$record" ] || return 0
-  local here="." at age age_words items tally n unsized kib bad partial taken unjudged icloud total kind cloud_note=""
+  local at age age_words items tally n unsized kib bad partial taken unjudged icloud total kind cloud_note=""
   local stamp="" key="" kept_key="" kept="" _extra="" cache="$STATE_DIR/disk-clean-tally"
-  case "${BASH_SOURCE[0]}" in */*) here="${BASH_SOURCE[0]%/*}" ;; esac
-  . "$here/lib/disk-clean-units.sh" 2>/dev/null || return 0
+  # The libraries beside this hook, by the folder worked out once at the top (_fs_here), so the
+  # Slack drafts gate can follow the path past the commands between (claude-config#2538).
+  . "$_fs_here/lib/disk-clean-units.sh" 2>/dev/null || return 0
   scan_tally_ok(){ is_number "${at:-}" && is_number "${n:-}" && is_number "${unsized:-}" && is_number "${kib:-}" \
     && is_number "${bad:-}" && is_number "${partial:-}" && is_number "${taken:-}" && is_number "${unjudged:-}" \
     && is_number "${icloud:-}"; }
@@ -614,7 +615,7 @@ scan_note(){
   fi
   read -r at n unsized kib bad partial taken unjudged icloud _extra <<< "$kept"
   if [ -z "$key" ] || [ "$kept_key" != "$key" ] || [ -n "${_extra:-}" ] || ! scan_tally_ok; then
-    . "$here/lib/disk-clean-record.sh" 2>/dev/null || return 0
+    . "$_fs_here/lib/disk-clean-record.sh" 2>/dev/null || return 0
     dcr_complete "$record" 2>/dev/null || return 0
     at="$(dcr_header "$record" scanned_at 2>/dev/null)" || return 0
     # Fields of dcr_review_items: id, category, method, target, state, bytes, identity, size, flags,
