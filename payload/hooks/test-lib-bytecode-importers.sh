@@ -17,6 +17,10 @@
 #   a python3 -c program or a heredoc fed to python3 in a shell file, in its text, or on the
 #     invocation itself: `python3 -B`, or PYTHONDONTWRITEBYTECODE set on the same command. The
 #     flag is part of that one run and cannot come apart from it.
+#   a heredoc a shell file writes to a .py file and then runs by name (`cat > "$TMP/loop.py" <<'PY'`,
+#     then `python3 -I "$TMP/loop.py"`, #2854), in its text, or on every line of the file that runs
+#     it: each passes -B or sets PYTHONDONTWRITEBYTECODE on the same command. A program written but
+#     never run by name has nothing to cover it, so it counts as run with bytecode on.
 #
 # THE SHAPES an import from lib/ takes, each read here (the list measured on 2026-11-10 is in the PR):
 #   1. by name: `import ratchet`, `from shell_code_lines import ...`, for any module lib/ holds whose
@@ -192,7 +196,10 @@ def judge(src, own_dir, extra=""):
             if m:
                 mods = [p.split()[0].split(".")[0] for p in m.group(1).split(",")] if m.group(1) else [m.group(2)]
                 for mod in mods:
-                    own = own_dir and os.path.normcase(own_dir) != os.path.normcase(LIB) \
+                    # A module beside a program is its own, unless that folder is a lib folder: a
+                    # tools/lib file importing its neighbour loads from lib, as a hooks lib file
+                    # importing its sibling does (#2854, after #2866 added tools/lib).
+                    own = own_dir and os.path.normcase(own_dir) not in {os.path.normcase(x) for x in LIB_DIRS} \
                         and os.path.exists(os.path.join(own_dir, mod + ".py"))
                     if mod in LIB_NAMES and not own:
                         loads.append((n, col))
@@ -321,8 +328,14 @@ def report(rel, line, shape, res, how, at=None):
         earlier = [o for o in offs if o < bare]
         late = " (it is set on line %d, inside a function this load is not in)" % (line + earlier[0][0] - 1) if earlier \
             else " (it is set on line %d, after the import)" % (line + off_at[0] - 1) if off_at else ""
+        # The line itself, so a failure on the real tree names the writer it found and where (#2854).
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
+                said = f.read().split("\n")[where - 1].strip()[:160]
+        except (OSError, IndexError):
+            said = "(the line could not be read)"
         print("HIT %s:%d: %s loads %s with bytecode on, which can leave a lib/__pycache__ "
-              "behind%s; %s" % (rel, where, shape, ", ".join(what), late, fix))
+              "behind%s; %s; the line reads: %s" % (rel, where, shape, ", ".join(what), late, fix, said))
 
 
 for rel in paths:
@@ -474,6 +487,9 @@ mkdir -p "$PROBE/tools/lib"
 : > "$PROBE/tools/lib/tsprobe.py"
 printf '#!/usr/bin/env bash\n# a python program written to a file, then run\ncat > "$TMP/x.py" <<'"'"'PY'"'"'\nimport tsprobe\nPY\n' > "$PROBE/payload/hooks/writer.sh"
 printf '#!/usr/bin/env bash\n# a python program written to a file, then run\ncat > "$TMP/x.py" <<'"'"'PY'"'"'\nimport sys\nsys.dont_write_bytecode = True\nimport tsprobe\nPY\n' > "$PROBE/payload/hooks/writer-ok.sh"
+# A tools/lib module importing its neighbour in tools/lib loads from lib, as one in the hooks lib
+# importing its sibling does: its own folder is a lib folder, not a program's own (#2854, after #2866).
+printf 'def f():\n    import tsprobe\n' > "$PROBE/tools/lib/neighbour.py"
 # Shell programs.
 {
   printf '#!/usr/bin/env bash\n'
@@ -507,21 +523,29 @@ printf '#!/usr/bin/env bash\n# a python program written to a file, then run\ncat
   printf "IFS= read -r -d '' LATEV <<'EOF' || true\nimport ratchet\nimport sys; sys.dont_write_bytecode = True\nEOF\n"   # 35 to 38: set too late
   printf "$P -c \"\$LATEV\"\n"                                                                                      # 39: held, the setting after
 } > "$PROBE/payload/hooks/probe.sh"
-( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py ) > "$TMPROOT/probe.list"
+( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py; echo tools/lib/neighbour.py ) > "$TMPROOT/probe.list"
 probe="$(scan "$PROBE" "$TMPROOT/probe.list" --list)"
 hits="$(printf '%s\n' "$probe" | sed -n 's/^HIT \([^:]*:[0-9]*\):.*/\1/p' | sort | tr '\n' ' ')"
-want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 payload/hooks/writer.sh:4 "
-# Twenty six importers: seven Python files (by-name, late, early, by-path, sibling, scoped,
-# scoped-ok) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34, 39),
-# and two heredocs written to a Python file, in tools/lib's reach (writer.sh, writer-ok.sh, #2854).
+want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 payload/hooks/writer.sh:4 tools/lib/neighbour.py:2 "
+# Twenty seven importers: eight Python files (by-name, late, early, by-path, sibling, scoped,
+# scoped-ok, and tools/lib's neighbour) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to
+# 19, 21, 22, 29, 30, 34, 39), and two heredocs written to a Python file, in tools/lib's reach
+# (writer.sh, writer-ok.sh, #2854).
 # prose.py, local.py, not-lib.py and lines 6 and 24 load nothing from lib.
 [ "$hits" = "$want" ] \
   && check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" ok \
   || check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" "it found [$hits], wanted [$want]: $probe"
 nimp="$(printf '%s\n' "$probe" | grep -c '^IMPORTER ' || true)"
-[ "$nimp" = 26 ] \
+[ "$nimp" = 27 ] \
   && check "the scan lists every importer in the probe, the ones that turn bytecode off too" ok \
-  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 26: $probe"
+  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 27: $probe"
+# A finding names the line that loads from lib, as it reads, so a failure on the real tree says which
+# writer it found and where (#2854: the #2866 builder saw detection only on its probe files).
+case "$probe" in
+  *"HIT payload/hooks/writer.sh:4: the heredoc written to a Python file loads tsprobe"*"; the line reads: import tsprobe"*)
+    check "#2854 a finding quotes the line that loads from lib" ok ;;
+  *) check "#2854 a finding quotes the line that loads from lib" "it said: $probe" ;;
+esac
 case "$probe" in
   *"HIT payload/hooks/scoped.py:6: the file loads code by path"*"(it is set on line 3, inside a function this load is not in)"*)
     check "#2840 a setting inside another function does not count for a load outside it, and the finding says so" ok ;;
@@ -550,6 +574,10 @@ printf 'X = 1\n' > "$TMPROOT/fault/lib/fault_probe.py"
 env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$P" -c 'import sys; sys.path.insert(0, sys.argv[1]); import fault_probe' "$TMPROOT/fault/lib"
 on="$(find "$TMPROOT/fault/lib" -name '*.pyc' | wc -l | tr -d ' ')"
 rm -rf "$TMPROOT/fault/lib/__pycache__"
+# Written again right before the second import: the Slack gate reads the module as this text only
+# where every program run since the write is one it knows writes nothing, and the first import, a
+# python run handed the folder, is not. So the suite stays allowed run on its own (#2854, #2876).
+printf 'X = 1\n' > "$TMPROOT/fault/lib/fault_probe.py"
 env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$P" -c 'import sys; sys.dont_write_bytecode = True; sys.path.insert(0, sys.argv[1]); import fault_probe' "$TMPROOT/fault/lib"
 off="$(find "$TMPROOT/fault/lib" -name '*.pyc' | wc -l | tr -d ' ')"
 [ "$on" -ge 1 ] && [ "$off" = 0 ] \

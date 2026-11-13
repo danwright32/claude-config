@@ -1,5 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import {
   DEADLINE_MS,
   BUDGET_MS,
@@ -50,7 +51,11 @@ import {
   shellTargets,
   SPOOL_KEY_COMMANDS,
   scriptProgram,
-  scriptWrite,
+  scriptReach,
+  argsMove,
+  placedCost,
+  FOLDER_JUDGE_MAX,
+  SCRIPT_RUN_FROM,
   trapTexts,
   unreadPart,
   type ShellTarget,
@@ -756,14 +761,72 @@ test("a trap's text is what it runs: none for a trap that lists, resets or ignor
   expect(trapTexts([{ words: ['trap'] }, { words: ['trap', '-p'] }, { words: ['trap', '-l'] }, { words: ['trap', '-', 'EXIT'] }, { words: ['trap', '', 'HUP'] }, { words: ['trap', '--', '-', 'INT'] }])).toEqual([])
 })
 
-test('a script writes there when its text writes any file the area check could judge or runs another script; none is null', () => {
-  expect(scriptWrite(NONE)).toBeNull()
-  // A built name that can only be no source file is none; a file it names, whatever it is, is a write.
-  expect(scriptWrite({ ...NONE, files: [{ word: '$tmp/scan.log' }] })).toBeNull()
-  expect(scriptWrite({ ...NONE, files: [{ word: '/tmp/scan.log', path: '/tmp/scan.log' }] })).toContain('/tmp/scan.log')
-  expect(scriptWrite({ ...NONE, files: [{ word: '$1/*.ts', edits: true }] })).toContain('$1/*.ts')
-  expect(scriptWrite({ ...NONE, files: [{ word: '/tmp/out.ts', path: '/tmp/out.ts' }] })).toContain('/tmp/out.ts')
-  expect(scriptWrite({ ...NONE, runs: [{ what: 'a python3 script file', script: 'fix.py', args: [{ word: '$1' }] }] })).toContain('fix.py')
+// #2565: where a script's writes land, read with the folder it is handed. A write whose place is
+// known is judged there; one whose place cannot be told reaches the whole folder, as #2321 judged it.
+test('a script handed a folder places each write it can, and reaches the whole folder with any it cannot (#2565)', () => {
+  const F = '/w/app/src'
+  const reach = (files: ModKitWrites['files'], more: Partial<ModKitWrites> = {}) => scriptReach({ ...NONE, files, ...more }, F)
+  expect(reach([])).toEqual({ placed: [] })
+  // A built name that can only be no source file is no write the area check judges.
+  expect(reach([{ word: '$tmp/scan.log' }])).toEqual({ placed: [] })
+  // A file it names by a full path lands there, whatever it is.
+  expect(reach([{ word: '/tmp/scan.log', path: '/tmp/scan.log' }])).toEqual({ placed: [{ word: '/tmp/scan.log', path: '/tmp/scan.log' }] })
+  expect(reach([{ word: '/tmp/x/*.ts', folder: '/tmp/x', edits: true }])).toEqual({ placed: [{ word: '/tmp/x/*.ts', path: '/tmp/x', tree: true }] })
+  // A name under what it is handed lands under the folder, each such word judged as if it were the folder.
+  expect(reach([{ word: '$1/gen.ts' }])).toEqual({ placed: [{ word: '$1/gen.ts', path: '/w/app/src/gen.ts', handed: true }] })
+  expect(reach([{ word: '${2}/lib/slack.ts', sources: ['/w/app/a.ts'], mayBeFolder: true }])).toEqual({ placed: [{ word: '${2}/lib/slack.ts', path: '/w/app/src/lib/slack.ts', handed: true }] })
+  expect(reach([{ word: '$1/../lib/x.ts' }])).toEqual({ placed: [{ word: '$1/../lib/x.ts', path: '/w/app/lib/x.ts', handed: true }] })
+  // A pattern below it reaches the folder the pattern is matched in, and everything under it.
+  expect(reach([{ word: '$1/gen/*.ts', edits: true }])).toEqual({ placed: [{ word: '$1/gen/*.ts', path: '/w/app/src/gen', tree: true, handed: true }] })
+  // Whatever cannot be placed reaches the whole folder, with why.
+  const whole = (files: ModKitWrites['files'], more: Partial<ModKitWrites> = {}) => {
+    const r = reach(files, more)
+    // A placed answer names only where it placed, never the word, so it cannot pass for a reach.
+    return 'reaches' in r ? r.reaches : `placed at ${r.placed.map(p => p.path).join(', ')}`
+  }
+  expect(whole([{ word: '$1/*.ts', edits: true }])).toContain('$1/*.ts')
+  expect(whole([{ word: '$1' }])).toContain('$1')
+  expect(whole([{ word: '$1/' }])).toContain('$1/')
+  expect(whole([{ word: '$d/out.ts' }])).toContain('$d/out.ts')
+  expect(whole([{ word: '${1:-src}/a.ts' }])).toContain('${1:-src}/a.ts')
+  expect(whole([{ word: '$1/$name.ts' }])).toContain('$1/$name.ts')
+  expect(whole([{ word: '$0/x.ts' }])).toContain('$0/x.ts')
+  expect(whole([{ word: '$1/{a,b}.ts' }])).toContain('$1/{a,b}.ts')
+  // A climb after a pattern leaves the folder the pattern is matched in (lessons review): no place.
+  expect(whole([{ word: '$1/gen/*/../../big.ts' }])).toContain('$1/gen/*/../../big.ts')
+  expect(whole([{ word: 'out.ts', path: `${SCRIPT_RUN_FROM}/out.ts` }])).toContain('wherever it is run from')
+  expect(whole([{ word: '../../out.ts', path: `${SCRIPT_RUN_FROM.replace(/\/in\/in$/, '')}/out.ts` }])).toContain('wherever it is run from')
+  expect(whole([], { runs: [{ what: 'a python3 script file', script: 'fix.py', args: [{ word: '$1' }] }] })).toContain('fix.py')
+  expect(whole([{ word: '/tmp/a.ts', path: '/tmp/a.ts' }, { word: '$d/out.ts' }])).toContain('$d/out.ts')
+})
+
+test('what a script is handed means something else in a function, or after set gives new values, so a name built from it cannot be placed (#2565)', () => {
+  expect(argsMove([{ words: ['echo', 'x'] }, { words: ['set', '-euo', 'pipefail'] }, { words: ['set', '+o', 'xtrace'] }, { words: ['shift', '2'] }], 'set -euo pipefail\nshift 2\n')).toBeNull()
+  expect(argsMove([{ words: ['set', '--', '$OTHER'] }], 'set -- "$OTHER"\n')).toContain('set')
+  expect(argsMove([{ words: ['set', '-e', 'a', 'b'] }], 'set -e a b\n')).toContain('set')
+  expect(argsMove([{ words: ['set', '-'] }], 'set -\n')).toContain('set')
+  expect(argsMove([], 'w() {\n  echo x\n}\n')).toContain('function')
+  expect(argsMove([], 'function w {\n  echo x\n}\n')).toContain('function')
+  expect(argsMove([], 'w ()\n{\n  echo x\n}\n')).toContain('function')
+  // What it is handed may be a name relative to where it started (`src/`), so a move of folder lands
+  // a name built on it somewhere else (lessons review).
+  expect(argsMove([{ words: ['cd', 'lib'] }], 'cd lib\n')).toContain('cd')
+  expect(argsMove([{ words: ['pushd', '/tmp'] }], 'pushd /tmp\n')).toContain('pushd')
+  expect(argsMove([{ words: ['popd'] }], 'popd\n')).toContain('popd')
+  // Run through builtin or command, it is the same move (lessons review).
+  expect(argsMove([{ words: ['builtin', 'cd', 'lib'] }], 'builtin cd lib\n')).toContain('cd')
+  expect(argsMove([{ words: ['command', 'pushd', 'lib'] }], 'command pushd lib\n')).toContain('pushd')
+  expect(argsMove([{ words: ['builtin', 'set', '--', 'x'] }], 'builtin set -- x\n')).toContain('set')
+})
+
+// The hook judges at most FOLDER_JUDGE_MAX files for a folder (#2373). A placed file is one judging;
+// a placed path that may be a folder (a pattern's folder, or a name with no extension) may be that
+// many on its own, so the placed writes of a folder's scripts cost no more than the folder did.
+test('placed writes cost one judging per file and the whole bound per folder they may be (#2565)', () => {
+  expect(placedCost([{ word: '$1/a.ts', path: '/w/a.ts' }, { word: '$1/b.ts', path: '/w/b.ts' }])).toBe(2)
+  expect(placedCost([{ word: '$1/gen/*.ts', path: '/w/gen', tree: true }])).toBe(FOLDER_JUDGE_MAX)
+  expect(placedCost([{ word: '$1/gen', path: '/w/gen' }])).toBe(FOLDER_JUDGE_MAX)
+  expect(placedCost([{ word: '$1/gen/*.ts', path: '/w/gen', tree: true }, { word: '$1/a.ts', path: '/w/a.ts' }])).toBeGreaterThan(FOLDER_JUDGE_MAX)
 })
 
 test('a path a command writes itself is that write, though a script is handed it too, in either order (#2407)', () => {
