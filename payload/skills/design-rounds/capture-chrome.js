@@ -1,11 +1,32 @@
 /* capture-chrome.js: save the product's real page as a design round's chrome (claude-config#1364).
 
-   Run in the MAIN session's browser (Playwright's browser_evaluate, with this file's text as the
-   function), on the product's page, signed in as the person the screen is for, with the window at
-   the width the round is drawn at. It answers with the page as one self contained document: the
-   markup as it renders now, every stylesheet the page uses inlined, every font and image those
-   stylesheets name inlined as data, and every script taken out (the chrome is drawn, never run).
-   Save the answer as the round's chrome.html, and name it in the spec:
+   Run in the MAIN session's browser, on the product's page, signed in as the person the screen is
+   for, with the window at the width the round is drawn at. It makes the page one self contained
+   document: the markup as it renders now, every stylesheet the page uses inlined, every font and
+   image those stylesheets name inlined as data, and every script taken out (the chrome is drawn,
+   never run). Two routes, by which browser tools the session has:
+
+   Playwright: browser_evaluate, with this file's text as the function. It answers with the document.
+
+   Claude in Chrome (claude-config#2774): the javascript tool, in the tab the session opened, with this
+   file's text wrapped as
+
+     await (<this file's text>)({saveAs: "chrome-<round>-<yyyymmddhhmm>.html"})
+
+   The page then saves the document itself, as a download into the Downloads folder, and answers with
+   one line: the file name, its size in bytes, and the first comment below. Check the file is in
+   ~/Downloads at exactly that size before moving it beside the round; if it is not there, stop and
+   say so (Chrome may be set to ask where to save, or to ask before a site's second download, and
+   either is Dan's to answer). A file name that is not a plain name ending in .html is refused.
+
+   NEVER POST THE PAGE ANYWHERE. Never start a receiver (on this Mac's loopback address or any other)
+   and have the page send its copy to it. A production page's content security policy
+   refuses the request and reports the refusal, which paged Dan with nothing to act on twice
+   (2026-11-01 and 2026-11-11, claude-config#2774). The download above sends nothing over the network.
+   chrome-loopback-post-gate.sh refuses a Claude in Chrome script naming a loopback address beside a
+   network call, so this file must never name one itself; that gate's suite runs it as its control.
+
+   Save the document as the round's chrome.html, and name it in the spec:
 
      "chrome": {"captured": "chrome.html", "from": "<the URL, who was signed in, the date>",
                 "slot": "#<the id of the element the round draws into>", "width": <the window width>}
@@ -18,7 +39,12 @@
    own script set is taken out, so the chrome follows the same theme rule as the built page rather
    than whichever theme the capture ran in (claude-config#2045); one in the markup the server sent is
    kept. The first comment names either, and says so when the served markup could not be read. */
-async () => {
+async (options) => {
+  // Playwright calls this with nothing; the Chrome route passes {saveAs: "<a file name>.html"}.
+  const saveAs = options && typeof options === "object" && typeof options.saveAs === "string" ? options.saveAs : "";
+  if (options && typeof options === "object" && "saveAs" in options && !/^[A-Za-z0-9][A-Za-z0-9._ -]*\.html$/.test(saveAs)) {
+    throw new Error("saveAs must be a plain file name ending in .html, with no folder: " + JSON.stringify(options.saveAs));
+  }
   const missing = [];
   const toData = async (url) => {
     try {
@@ -109,5 +135,18 @@ async () => {
   root.querySelector("head").append(style);
   const note = "<!-- captured from " + location.href + " at " + window.innerWidth + " wide on " + new Date().toISOString() +
     (missing.length ? "; NOT inlined, so drawn without: " + missing.join("; ") : "; every stylesheet, font and image inlined") + themeNote + " -->";
-  return "<!doctype html>\n" + note + "\n" + root.outerHTML;
+  const doc = "<!doctype html>\n" + note + "\n" + root.outerHTML;
+  if (!saveAs) return doc;
+  // The Claude in Chrome route: the page saves the capture itself, as a download, so nothing is sent
+  // over the network and no receiver is needed (claude-config#2774).
+  const blob = new Blob([doc], { type: "text/html" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = saveAs;
+  link.style.display = "none";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+  return "saved " + saveAs + " to the Downloads folder, " + blob.size + " bytes. " + note;
 }
