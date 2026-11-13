@@ -64,6 +64,7 @@ import {
   scriptProgram,
   scriptReach,
   argsMove,
+  placedCost,
   SCRIPT_RUN_FROM,
   type ScriptPlaced,
   trapTexts,
@@ -713,9 +714,9 @@ const programReach = async ($: EngineInterface, run: ShellRun, text: string, at:
 
 // Where the writes of every script a folder was handed to land, one list per script, when each write
 // of every one is placed (#2426 lessons review, #2565), or null: the first whose write may reach the
-// whole folder, or whose reading throws, answers for all. More paths placed than are judged one by
-// one is null too, so the walk stays inside the hook's budget (FOLDER_JUDGE_MAX) and the folder is
-// judged as before.
+// whole folder, or whose reading throws, answers for all. Placed writes costing more judgings than
+// the folder itself would (placedCost, FOLDER_JUDGE_MAX) is null too, so the walk stays inside the
+// hook's budget and the folder is judged as before.
 const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: string): Promise<ScriptPlaced[][] | null> => {
   const out: ScriptPlaced[][] = []
   for (const r of runs) {
@@ -727,7 +728,7 @@ const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: 
       return null
     }
   }
-  return out.reduce((n, p) => n + p.length, 0) > FOLDER_JUDGE_MAX ? null : out
+  return placedCost(out.flat()) > FOLDER_JUDGE_MAX ? null : out
 }
 
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a

@@ -302,6 +302,14 @@ export const scriptReach = (w: ModKitWrites, folder: string, home?: string): { r
   return { placed }
 }
 
+/**
+ * How many judgings the placed writes of a folder's scripts may cost (#2565), held to the
+ * FOLDER_JUDGE_MAX the folder itself was judged within (#2373): a file is one; a path that may be a
+ * folder, a pattern's (`tree`) or a name with no extension, which the hook then judges file by file
+ * up to that bound, is the whole bound.
+ */
+export const placedCost = (placed: readonly ScriptPlaced[]): number => placed.reduce((n, p) => n + (p.tree || literalExt(p.path) === undefined ? FOLDER_JUDGE_MAX : 1), 0)
+
 // A function definition anywhere in a script's text: `name()`, `name ()` or `function name`.
 const DEFINES_FUNCTION = /(?:^|[\s;&|({])function[ \t]+[A-Za-z_]|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)/m
 
@@ -315,18 +323,20 @@ const DEFINES_FUNCTION = /(?:^|[\s;&|({])function[ \t]+[A-Za-z_]|[A-Za-z_][A-Za-
  * already reads every one of, so it changes nothing.
  */
 export const argsMove = (commands: readonly { words: readonly string[] }[], text: string): string | null => {
-  const moved = commands.find(c => ['cd', 'pushd', 'popd'].includes(c.words[0] ?? ''))
-  if (moved) return `it moves folder (${moved.words.join(' ')}), and what it is handed may be relative to where it started, so a name built on it cannot be placed`
-  for (const c of commands) {
-    if (c.words[0] !== 'set') continue
-    for (let i = 1; i < c.words.length; i++) {
-      const w = c.words[i] as string
+  // `builtin cd` and `command cd` run the same cd, as unreadPart looks past builtin for eval.
+  const own = commands.map(c => (c.words[0] === 'builtin' || c.words[0] === 'command' ? c.words.slice(1) : c.words))
+  const moved = own.find(words => ['cd', 'pushd', 'popd'].includes(words[0] ?? ''))
+  if (moved) return `it moves folder (${moved.join(' ')}), and what it is handed may be relative to where it started, so a name built on it cannot be placed`
+  for (const words of own) {
+    if (words[0] !== 'set') continue
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i] as string
       // -o names an option in the next word, alone or last among others (`set -euo pipefail`).
       if (/^[-+][A-Za-z]*o$/.test(w)) {
         i++
         continue
       }
-      if (w === '--' || w === '-' || !/^[-+][A-Za-z]+$/.test(w)) return `it gives what it is handed new values (${c.words.join(' ')}), so a name built on them cannot be placed`
+      if (w === '--' || w === '-' || !/^[-+][A-Za-z]+$/.test(w)) return `it gives what it is handed new values (${words.join(' ')}), so a name built on them cannot be placed`
     }
   }
   if (DEFINES_FUNCTION.test(text)) return 'it defines a function, where what it is handed means what the function is handed, so a name built on it cannot be placed'

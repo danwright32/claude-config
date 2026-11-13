@@ -955,6 +955,7 @@ const UNPLACED: [string, string][] = [
   ['writes under what it is handed or a default', 'echo x > "${1:-.}/gen.ts"\n'],
   ['moves to another folder and writes under what it is handed', 'cd lib\necho x > "$1/gen.ts"\n'],
   ['climbs out of a pattern under what it is handed', `sed -i '' 's/a/b/' "$1"/lib/*/../../big.ts\n`],
+  ['edits by patterns in two folders under what it is handed, more than are judged one by one', `sed -i '' 's/a/b/' "$1"/lib/*.ts "$1"/pay/*.ts\n`],
   ['copies into a folder it made', 'scratch="$(mktemp -d)"\ncp -RH "$1" "$scratch/copy"\n'],
 ]
 

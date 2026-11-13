@@ -53,6 +53,8 @@ import {
   scriptProgram,
   scriptReach,
   argsMove,
+  placedCost,
+  FOLDER_JUDGE_MAX,
   SCRIPT_RUN_FROM,
   trapTexts,
   unreadPart,
@@ -811,6 +813,20 @@ test('what a script is handed means something else in a function, or after set g
   expect(argsMove([{ words: ['cd', 'lib'] }], 'cd lib\n')).toContain('cd')
   expect(argsMove([{ words: ['pushd', '/tmp'] }], 'pushd /tmp\n')).toContain('pushd')
   expect(argsMove([{ words: ['popd'] }], 'popd\n')).toContain('popd')
+  // Run through builtin or command, it is the same move (lessons review).
+  expect(argsMove([{ words: ['builtin', 'cd', 'lib'] }], 'builtin cd lib\n')).toContain('cd')
+  expect(argsMove([{ words: ['command', 'pushd', 'lib'] }], 'command pushd lib\n')).toContain('pushd')
+  expect(argsMove([{ words: ['builtin', 'set', '--', 'x'] }], 'builtin set -- x\n')).toContain('set')
+})
+
+// The hook judges at most FOLDER_JUDGE_MAX files for a folder (#2373). A placed file is one judging;
+// a placed path that may be a folder (a pattern's folder, or a name with no extension) may be that
+// many on its own, so the placed writes of a folder's scripts cost no more than the folder did.
+test('placed writes cost one judging per file and the whole bound per folder they may be (#2565)', () => {
+  expect(placedCost([{ word: '$1/a.ts', path: '/w/a.ts' }, { word: '$1/b.ts', path: '/w/b.ts' }])).toBe(2)
+  expect(placedCost([{ word: '$1/gen/*.ts', path: '/w/gen', tree: true }])).toBe(FOLDER_JUDGE_MAX)
+  expect(placedCost([{ word: '$1/gen', path: '/w/gen' }])).toBe(FOLDER_JUDGE_MAX)
+  expect(placedCost([{ word: '$1/gen/*.ts', path: '/w/gen', tree: true }, { word: '$1/a.ts', path: '/w/a.ts' }])).toBeGreaterThan(FOLDER_JUDGE_MAX)
 })
 
 test('a path a command writes itself is that write, though a script is handed it too, in either order (#2407)', () => {
