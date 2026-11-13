@@ -1237,9 +1237,11 @@ printf '%s\n' "$J" 'const c = process.getBuiltinModule("cluster");' 'c.fork({ U:
 printf '%s\n' "$J" 'const i = process[`getBuiltinModule`](`inspector`);' 'i.open(9229);' > "$T/dj/gbm-inspector.js"
 printf '%s\n' "$J" 'const mod = process.getBuiltinModule(m.text);' 'mod.request(m.url);' > "$T/dj/gbm-dyn.js"
 printf '%s\n' "$J" 'const load = process.getBuiltinModule;' 'load(m.text).request(m.url);' > "$T/dj/gbm-alias.js"
-# A word the old hand list named still refuses as it did, so nothing refused before passes now (13 of
-# 268 real scripts measured on 2026-11-07 were refused only by one, `got` among them).
-printf '%s\n' "$J" 'const got = m.text.length;' 'console.log(got);' > "$T/dj/words.js"
+# A package the old hand list named (got, ky, axios) refuses where it is loaded. Until 2026-11-12 the
+# bare word refused a script however it was used (13 of 268 real scripts measured on 2026-11-07 were
+# refused only by one); Dan chose to stop that in #2844, after a variable named got in mod-kit's
+# writes.ts refused every script importing it. A variable of that name is a control in the #2844 block.
+printf '%s\n' 'const got = require("got");' "$J" 'got.post(m.url);' > "$T/dj/words.js"
 printf '%s\n' 'import { readFileSync } from "node:fs";' 'import { cp } from "node:fs/promises";' \
   'const m = JSON.parse(readFileSync(process.argv[2], "utf8"));' 'await cp(process.argv[2], m.text);' > "$T/dj/cp.mjs"
 for acts in "cp.mjs:(cp)" "req.js:(request)" "worker.mjs:(node:worker_threads)" "dns.js:(dns)" "writes.js:writeFileSync" \
@@ -3647,6 +3649,322 @@ for runs in "git status && bash run.sh" "git fetch . posting && bash run.sh" "gi
   run_g "$runs"
   allowed "a git command that writes nothing that posts, or a ref that names nothing, leaves run.sh as it is on disk: $runs"
 done
+
+echo "slack drafts only: a file a compiler builds, one a Python runner runs, and what a revert, stash, worktree, clone or pull writes are read (claude-config#2844)"
+
+# Routes by which a command ran a file the gate never read (measured through this wrapper on main at
+# d7d723f, 2026-11-12: every shape in each refused list below passed). A file tsc or esbuild builds
+# and the command then runs was read as it was on disk, or not at all where it was not there yet; a
+# script or module handed to a runner from the standard library or installed (runpy, pdb, cProfile,
+# profile, trace, unittest, pytest) was not read; nor was a file a revert, a stash pop or apply, a new
+# linked worktree or a clone writes; and a pull was read against its branch as last fetched. Each
+# refused shape has an allowed twin that differs only in whether the file posts. Nothing here is run.
+# A refusal here must be the file read, never the gate failing to judge the call: a word it could not
+# work out once reached git as a NUL, and the crash refused the call as unjudgeable, which reads the
+# same as a refusal to a check that looks only at the exit code.
+read_refused() {
+  refused "$1"
+  case "$ERR" in
+    *"could not judge"*|*Traceback*) check "$1 (judged, not a crash)" "the gate crashed: ${ERR:0:300}" ;;
+    *) check "$1 (judged, not a crash)" ok ;;
+  esac
+}
+# The runners and builders are read by lib/program-runs.py, a base of the gate's Judge as
+# lib/program-writes.py is; a copy of it anywhere else would leave the gate on the old reading.
+cat > "$T/program-runs-check.py" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import slack_drafts_only_gate as gate
+where = {os.path.basename(getattr(gate.Judge, n).__code__.co_filename) for n in ("py_runner", "note_build", "built_from")}
+print("ok" if where == {"program-runs.py"} else "the Judge's runners and builders are from %r, not lib/program-runs.py" % where)
+PY
+check "the gate reads runners and builds with lib/program-runs.py" "$(python3 "$T/program-runs-check.py" "$DIR" 2>&1)"
+C="$T/c2844"
+mkdir -p "$C/src" "$C/qsrc" "$C/esrc"
+printf '%s\n' 'import { send } from "./lib/send.js";' 'send();' > "$C/src/main.ts"
+mkdir -p "$C/src/lib"
+printf '%s\n' "export function send() { fetch('https://slack.com/api/chat.postMessage'); }" > "$C/src/lib/send.ts"
+printf '%s\n' 'import { say } from "./lib/say.js";' 'say();' > "$C/qsrc/main.ts"
+mkdir -p "$C/qsrc/lib"
+printf '%s\n' "export function say() { console.log('hi'); }" > "$C/qsrc/lib/say.ts"
+printf '%s\n' '{' '  // where the build goes' '  "compilerOptions": { "outDir": "dist", "rootDir": "src", },' '  "include": ["src"]' '}' > "$C/tsconfig.json"
+printf '%s\n' '{ "compilerOptions": { "outDir": "qdist" }, "include": ["qsrc/**/*"] }' > "$C/tsconfig.quiet.json"
+printf '%s\n' "fetch('https://slack.com/api/chat.postMessage');" > "$C/esrc/post.ts"
+printf '%s\n' "console.log('hi');" > "$C/esrc/quiet.ts"
+printf '%s\n' "console.log('hi');" > "$C/qsrc/x.js"
+run_c() { run_raw "$(payload Bash "$(bash_input "$1")" "$C")"; }
+
+for runs in "tsc && node dist/main.js" "npx tsc && node dist/lib/send.js" "tsc -p . && node dist/main.js" \
+  "tsc --outDir out src/main.ts && node out/main.js" "tsc src/main.ts && node src/main.js" \
+  "esbuild src/main.ts --bundle --outdir=build && node build/main.js" \
+  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/post.js" "tsc; node dist/main.js" \
+  "npx tsc --outDir out src/main.ts && node out/main.js"; do
+  run_c "$runs"
+  read_refused "a file a compiler builds from a source that posts is read as that source: $runs"
+done
+for runs in "tsc -p tsconfig.quiet.json && node qdist/main.js" "tsc --outDir out qsrc/main.ts && node out/main.js" \
+  "npx tsc --outDir out qsrc/main.ts && node out/main.js" \
+  "tsc --outDir qsrc qsrc/main.ts && node qsrc/x.js" \
+  "tsc qsrc/main.ts && node qsrc/main.js" "esbuild qsrc/main.ts --bundle --outdir=build && node build/main.js" \
+  "esbuild esrc/post.ts esrc/quiet.ts --outdir=build && node build/quiet.js" "tsc && node elsewhere.js" \
+  "tsc --noEmit && node dist/main.js"; do
+  run_c "$runs"
+  allowed "a file a compiler builds from a source that does not post passes: $runs"
+done
+run_c "tsc && node dist/main.js"
+says "the refusal names the source the compiler builds from" "src/main.ts"
+# Dan chose on 2026-11-12 (#2844) to stop two false refusals: esbuild's --outfile= was refused as a
+# file it may write whatever its source held, and bun build's entries were read as a script bun runs,
+# so building code that names an endpoint was refused though nothing ran it. Both are now read by
+# what they build, and only where the same command runs it.
+for runs in "esbuild esrc/post.ts --bundle --outfile=out.js && node out.js" \
+  "npx esbuild esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outfile out.js && node out.js" \
+  "bun build esrc/post.ts --outfile=out.js && node out.js" "bun build esrc/post.ts --outdir bout && node bout/post.js" \
+  "bun build --compile esrc/post.ts --outfile app2844 && ./app2844" "bun build src/main.ts --outdir bout && node bout/main.js" \
+  "bun build esrc/post.ts --outdir bout --entry-naming '[name]-x.[ext]' && node bout/post-x.js"; do
+  run_c "$runs"
+  read_refused "a file esbuild or bun builds from a source that posts, and the command runs, is read as that source: $runs"
+done
+for runs in "esbuild esrc/quiet.ts --bundle --outfile=out.js && node out.js" \
+  "npx esbuild esrc/quiet.ts --outfile=out.js && node out.js" "bun build esrc/quiet.ts --outfile out.js && node out.js" \
+  "bun build esrc/post.ts" "bun build esrc/post.ts --outfile out.js" "bun build esrc/post.ts --outdir bout" \
+  "bun build --compile esrc/quiet.ts --outfile app2844 && ./app2844" "bun build qsrc/main.ts --outdir bout && node bout/main.js"; do
+  run_c "$runs"
+  allowed "a build whose output is quiet, or that nothing in the command runs, passes: $runs"
+done
+# Two builds of each other's output end, rather than reading each other until the gate crashes.
+printf '%s\n' "console.log('x');" > "$C/esrc/x.js"
+printf '%s\n' "console.log('y');" > "$C/esrc/y.js"
+run_c "esbuild esrc/x.js --outfile=esrc/y.js && esbuild esrc/y.js --outfile=esrc/x.js && node esrc/x.js"
+allowed "two builds of each other's quiet output pass, judged rather than crashed"
+# tsc --outFile bundles into one file this does not follow, so what it names keeps the mark #2772 gave
+# any program's named file: running that bundle is refused as unreadable, however quiet its source.
+run_c "tsc --outFile bundle.js qsrc/main.ts && node bundle.js"
+read_refused "a bundle tsc --outFile writes is not followed, so it stays unreadable"
+says "the refusal says the bundle may be written by tsc" "may be written earlier in this command by tsc"
+
+P="$T/p2844"
+mkdir -p "$P/tp" "$P/tq" "$P/tc" "$P/deep/pkg"
+PY_POST_2844="urllib.request.urlopen('https://slack.com/api/chat.postMessage')"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/post.py"
+printf '%s\n' "print('hi')" > "$P/plain.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/postmod.py"
+printf '%s\n' "print('hi')" > "$P/quietmod.py"
+printf '%s\n' "import unittest, postmod" "class T(unittest.TestCase):" "    def test_a(self): pass" > "$P/test_post.py"
+printf '%s\n' "import unittest, quietmod" "class T(unittest.TestCase):" "    def test_a(self): pass" > "$P/test_quiet.py"
+: > "$P/tp/__init__.py"
+: > "$P/tq/__init__.py"
+printf '%s\n' "import unittest, postmod" "def test_a(): pass" > "$P/tp/test_send.py"
+printf '%s\n' "import unittest, quietmod" "def test_a(): pass" > "$P/tq/test_say.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/tc/conftest.py"
+printf '%s\n' "def test_a(): pass" > "$P/tc/test_c.py"
+: > "$P/deep/pkg/__init__.py"
+printf '%s\n' "import postmod" "def test_a(): pass" > "$P/deep/pkg/check_post.py"
+printf '%s\n' "https://slack.com/api/chat.postMessage" > "$P/hook.txt"
+run_p() { run_raw "$(payload Bash "$(bash_input "$1")" "$P")"; }
+
+for runs in "python3 -m runpy postmod" "python3 -m pdb post.py" "python3 -m pdb -c continue post.py" \
+  "python3 -m pdb -m postmod" "python3 -m cProfile post.py" "python3 -m cProfile -o prof.out -s cumtime post.py" \
+  "python3 -m cProfile -m postmod" "python3 -m profile post.py" "python3 -m trace --count post.py" \
+  "python3 -m trace --trace --module postmod" "python3 -m unittest test_post" "python3 -m unittest test_post.T.test_a" \
+  "python3 -m unittest test_post.py" "python3 -m unittest -v tp.test_send" "python3 -m unittest discover -s tp -t ." \
+  "python3 -m unittest discover" "python3 -m unittest" "python3 -m unittest discover -p 'check_*.py' -s deep -t deep" \
+  "python3 -m pytest tp" "python3 -m pytest tp/test_send.py::test_a" "pytest tp" "pytest -q -k test_a tp/test_send.py" \
+  "pytest tc" "cd tp && pytest" "uv run pytest tp" "python3 -m pytest"; do
+  run_p "$runs"
+  read_refused "a file a Python runner from the standard library or installed runs is read: $runs"
+done
+for runs in "python3 -m runpy quietmod" "python3 -m pdb plain.py" "python3 -m pdb -c continue plain.py" \
+  "python3 -m pdb -m quietmod" "python3 -m cProfile plain.py" "python3 -m cProfile -o prof.out -s cumtime plain.py" \
+  "python3 -m cProfile -m quietmod" "python3 -m profile plain.py" "python3 -m trace --count plain.py" \
+  "python3 -m trace --trace --module quietmod" "python3 -m unittest test_quiet" "python3 -m unittest test_quiet.T.test_a" \
+  "python3 -m unittest test_quiet.py" "python3 -m unittest discover -s tq -t ." "python3 -m pytest tq" \
+  "pytest tq/test_say.py::test_a" "pytest tq" "cd tq && pytest" "python3 -m unittest nosuch_2844" \
+  "python3 -m cProfile plain.py hook.txt" "python3 -m timeit 'x = 1'" "python3 -m json.tool hook.txt" \
+  "pytest --ignore tp tq" "python3 -m unittest discover -s tq"; do
+  run_p "$runs"
+  allowed "a file a Python runner runs that does not post passes: $runs"
+done
+run_p "python3 -m cProfile post.py"
+says "the refusal names the runner" "cProfile"
+# sqlite3 cannot send a request or run code unless the code turns on extension loading (Dan chose
+# this on 2026-11-12, #2844, after a read only Lightroom catalog query was refused): code importing it
+# may be handed a file written earlier in the command, whose text cannot be read, as code importing
+# json may. The shape below is the one refused that day, its paths shortened.
+SQ_READ="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect('file:' + sys.argv[2] + '?mode=ro&immutable=1', uri=True)
+print(len(ids), con.execute('select count(*) from t').fetchone())"
+SQ_EXT="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect(sys.argv[2])
+con.enable_load_extension(True)
+print(len(ids))"
+SQ_SQL_EXT="import sqlite3, sys
+ids = open(sys.argv[1]).read().split()
+con = sqlite3.connect(sys.argv[2])
+con.execute('select load_extension(?)', ('x',))
+print(len(ids))"
+SQ_POST="import urllib.request, sys
+urllib.request.urlopen(open(sys.argv[1]).read().strip())"
+SQ_FIRST="sqlite3 -readonly 'file:cat.lrcat?mode=ro' 'select id_local from Adobe_images' > ids.txt"
+run_p "$SQ_FIRST && python3 -I -c \"$SQ_READ\" ids.txt other.db"
+allowed "code importing sqlite3, handed a file sqlite3 wrote earlier in the command, passes"
+for code in "$SQ_EXT" "$SQ_SQL_EXT" "$SQ_POST"; do
+  run_p "$SQ_FIRST && python3 -I -c \"$code\" ids.txt other.db"
+  read_refused "code that can load an extension or send a request, handed a file written earlier, is refused: ${code:0:60}"
+done
+# Two false refusals the #2847 builder found on 2026-11-12, which Dan chose to stop (#2844). A script
+# importing mod-kit's writes.ts, handed a file naming an endpoint, was refused: the word from inside
+# the string '--files-from' read as an import of ', ', and eval, got and chmod written as strings, in
+# regular expressions and as an object's keys read as code that runs or writes. And a Python script
+# naming an endpoint in a regular expression's pattern, which looks for it and posts nothing.
+printf "import { readWrites } from '%s'\nconsole.log(readWrites)\n" "$(cd "$DIR/../mods/mod-kit/hooks" && pwd)/writes.ts" > "$P/usewrites.mjs"
+printf '%s\n' "const table = new Set(['--files-from', '--include-from'])" "export const f = () => fetch(process.argv[2])" > "$P/fromfetch.mjs"
+printf '%s\n' "const keys = { chmod: 1, run: ['eval'], re: /eval\\s*\\(|require\\(/ }" "console.log(keys)" > "$P/keys.mjs"
+printf '%s\n' "const k = { chmod: 1 }" "globalThis['eval'](process.argv[2])" > "$P/subscript.mjs"
+run_p "node usewrites.mjs hook.txt"
+allowed "a script importing mod-kit's writes.ts, handed a file naming an endpoint, passes"
+run_p "node keys.mjs hook.txt"
+allowed "words naming a write or eval as keys, strings or a regex literal run nothing"
+for runs in "node fromfetch.mjs hook.txt" "node subscript.mjs hook.txt"; do
+  run_p "$runs"
+  read_refused "a script that fetches, or runs eval by a bracketed name, handed a file naming an endpoint, is refused: $runs"
+done
+printf '%s\n' "import re, sys" "MARK = re.compile(r'chat[._]postMessage|slack_webhook|hooks\\.slack\\.com')" \
+  "print(bool(MARK.search(open(sys.argv[1]).read())))" > "$P/regex_ok.py"
+printf '%s\n' "import re, sys" "# page one$(printf '\f')" "# page two" "print(re.findall(pattern='slack_webhook', string=sys.argv[1]))" > "$P/regex_kw.py"
+printf '%s\n' "import re, urllib.request" "MARK = re.compile(r'slack_webhook')" "$PY_POST_2844" > "$P/regex_post.py"
+printf '%s\n' "import re, sys" "print(re.sub(r'x', 'https://hooks.slack.com/services/T/B/C', sys.argv[1]))" > "$P/regex_repl.py"
+for runs in "python3 regex_ok.py hook.txt" "python3 regex_kw.py x"; do
+  run_p "$runs"
+  allowed "a Python script naming an endpoint only in a regular expression's pattern passes: $runs"
+done
+for runs in "python3 regex_post.py" "python3 regex_repl.py x"; do
+  run_p "$runs"
+  read_refused "a Python script naming an endpoint outside a pattern is still refused: $runs"
+done
+# A project whose pytest config puts its root on the import path (pythonpath) and names its tests
+# (testpaths), as PostRoll's does: its tests import the project's own modules, which bare pytest
+# finds only through that setting, and an import the gate cannot find is refused as unfollowable.
+mkdir -p "$P/pp/lib2844" "$P/pp/tests" "$P/pp/tests2"
+printf '%s\n' '[tool.pytest.ini_options]' 'testpaths = ["tests"]' 'pythonpath = ["."]' > "$P/pp/pyproject.toml"
+printf '%s\n' "print('hi')" > "$P/pp/lib2844/say.py"
+printf '%s\n' "import urllib.request" "$PY_POST_2844" > "$P/pp/lib2844/send.py"
+printf '%s\n' "import lib2844.say" "def test_a(): pass" > "$P/pp/tests/test_say.py"
+printf '%s\n' "import lib2844.send" "def test_a(): pass" > "$P/pp/tests2/test_send.py"
+run_raw "$(payload Bash "$(bash_input "pytest")" "$P/pp")"
+allowed "pytest with no paths runs its testpaths, with its pythonpath on the import path, which import nothing that posts"
+run_raw "$(payload Bash "$(bash_input "pytest tests2")" "$P/pp")"
+read_refused "pytest handed a folder whose tests import, through its pythonpath, a module that posts"
+
+# A repository whose latest commit made run.sh post (so a revert of it leaves the quiet text) and
+# whose commit before that made it quiet over a posting one (so a revert of that leaves the posting
+# text); a stash holding a run.sh that posts and one holding a run.sh that does not; and a bare remote
+# whose main has moved past what the clone last fetched to a run.sh that posts.
+R="$T/r2844"
+git init -q -b main "$R"
+gc() { git -C "$R" -c user.name=t -c user.email=t@example.invalid "$@"; }
+printf '%s\n' "$POST" > "$R/run.sh"
+gc add run.sh; gc commit -q -m posting
+printf '%s\n' "echo quiet" > "$R/run.sh"
+gc add run.sh; gc commit -q -m quieted
+printf '%s\n' "echo hello" > "$R/other.sh"
+gc add other.sh; gc commit -q -m other
+QUIETED="$(git -C "$R" rev-parse HEAD~1)"
+OTHER="$(git -C "$R" rev-parse HEAD)"
+printf '%s\n' "$POST" > "$R/run.sh"
+gc stash push -q -m posting
+printf '%s\n' "echo stashed" > "$R/run.sh"
+gc stash push -q -m quiet
+gc branch posted "$QUIETED~1"
+run_r() { run_raw "$(payload Bash "$(bash_input "$1")" "$R")"; }
+
+for runs in "git revert --no-edit $QUIETED && bash run.sh" "git revert -n $QUIETED; bash run.sh" \
+  "git stash pop stash@{1} && bash run.sh" "git stash apply 1 && bash run.sh" \
+  "git worktree add ../w2844 $QUIETED~1 && bash ../w2844/run.sh" \
+  "git worktree add -b b2844 ../w2844b $QUIETED~1 && cd ../w2844b && bash run.sh" \
+  "git clone -q -b posted . ../k2844 && bash ../k2844/run.sh"; do
+  run_r "$runs"
+  read_refused "a file a revert, stash, worktree or clone writes from text that posts is read as git holds it: $runs"
+done
+for runs in "git revert --no-edit $OTHER && bash run.sh" "git stash pop && bash run.sh" "git stash apply stash@{0} && bash run.sh" \
+  "git worktree add ../w2844 && bash ../w2844/run.sh" "git worktree add --detach ../w2844 $OTHER && bash ../w2844/other.sh" \
+  "git clone -q . ../k2844 && bash ../k2844/run.sh" "git stash list && bash run.sh" "git worktree add ../w2844 && bash run.sh" \
+  'for n in a b; do git worktree add -q --detach "wt/$n" HEAD; done; bash run.sh' \
+  'git worktree add ../w2844 "$NOPE_2844" && bash ../w2844/run.sh' 'git stash branch b2844 "$NOPE_2844" && bash run.sh'; do
+  run_r "$runs"
+  allowed "a file a revert, stash, worktree or clone writes from text that does not post passes: $runs"
+done
+run_r "git clone -q https://example.invalid/r2844.git ../k2844 && bash ../k2844/run.sh"
+read_refused "a file a clone of a remote writes is downloaded, so what it holds cannot be read"
+says "the refusal names the clone" "git clone"
+run_r "git clone -q https://example.invalid/r2844.git ../k2844 && bash run.sh"
+allowed "a file outside what a clone writes is read as it is on disk"
+run_r "git stash pop stash@{1} && bash run.sh"
+says "the refusal says where the text came from" "git stash"
+
+# A pull is read against what it fetches: the remote's main moves on to a run.sh that posts after the
+# clone last fetched it, and a second remote's main moves on to one that does not.
+B="$T/b2844.git"; B2="$T/b2844q.git"; L="$T/l2844"
+git init -q --bare -b main "$B"
+git -C "$R" push -q "$B" "$OTHER:refs/heads/main"
+git clone -q "$B" "$L" 2>/dev/null
+git clone -q "$B" "$T/u2844" 2>/dev/null
+printf '%s\n' "$POST" > "$T/u2844/other.sh"
+git -C "$T/u2844" -c user.name=t -c user.email=t@example.invalid commit -q -am moved
+git -C "$T/u2844" push -q origin main
+git clone -q --bare "$B" "$B2" 2>/dev/null
+git -C "$B2" update-ref refs/heads/main "$OTHER"
+git -C "$L" remote add quiet "$B2"
+run_l() { run_raw "$(payload Bash "$(bash_input "$1")" "$L")"; }
+L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
+for runs in "git pull && bash other.sh" "git pull origin main && bash other.sh" "git pull -q --ff-only && bash other.sh" \
+  "git pull origin && bash other.sh"; do
+  run_l "$runs"
+  read_refused "a file a pull brings from the remote, which posts, is read as the remote holds it: $runs"
+done
+for runs in "git pull quiet main && bash other.sh" "git pull && bash run.sh" "git fetch && bash other.sh"; do
+  run_l "$runs"
+  allowed "a pull that brings nothing that posts passes: $runs"
+done
+# A fetch and then a checkout, reset or merge of the branch it fetched (Dan, 2026-11-12, on #2844):
+# the branch is read as the fetch leaves it, not as it was last fetched.
+for runs in "git fetch && git checkout origin/main && bash other.sh" \
+  "git fetch origin && git reset --hard origin/main && bash other.sh" \
+  "git fetch -q origin main && git merge origin/main && bash other.sh" \
+  "git fetch --all; git switch --detach origin/main && bash other.sh"; do
+  run_l "$runs"
+  read_refused "a branch a fetch brings, which posts, is read as the fetch leaves it: $runs"
+done
+for runs in "git fetch quiet && git checkout quiet/main && bash other.sh" "git checkout origin/main && bash other.sh" \
+  "git fetch origin && git checkout origin/main && bash run.sh" "git fetch quiet && git checkout origin/main && bash other.sh"; do
+  run_l "$runs"
+  allowed "a branch fetched quiet, or one no fetch in the command touches, is read as it is held: $runs"
+done
+# The scratch repository borrows the objects of a repository whose path is not ASCII: its alternates
+# file holds that path as the bytes git printed.
+git clone -q "$B" "$T/lé2844" 2>/dev/null
+git -C "$T/lé2844" reset -q --hard "$OTHER"
+git -C "$T/lé2844" update-ref refs/remotes/origin/main "$OTHER"
+run_raw "$(payload Bash "$(bash_input "git pull && bash other.sh")" "$T/lé2844")"
+read_refused "a pull in a repository whose path is not ASCII is read as its fetch brings it"
+L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
+if [ "$L_AFTER" = "$L_BEFORE" ]; then check "every pull and fetch read leaves the repository's refs and files as they were" ok
+else check "every pull and fetch read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
+# A local branch with a slash in its name is not a remote's: after a fetch it is read as it is held.
+git -C "$L" branch local2844/posting origin/main >/dev/null 2>&1
+git -C "$T/u2844" push -q "$L" "main:refs/heads/local2844/posting" 2>/dev/null
+L_BEFORE="$(git -C "$L" for-each-ref; ls "$L/.git")"
+run_l "git fetch && git checkout local2844/posting && bash other.sh"
+read_refused "a local branch with a slash in its name, which posts, is read as it is held after a fetch"
+run_l "git fetch && git revert --no-edit origin/main && bash other.sh"
+allowed "a revert of a fetched branch reads what its parent held (quiet), judged rather than crashed"
+run_l "git fetch && git checkout local2844/quiet && bash other.sh"
+allowed "a local branch name that holds nothing is left as it is on disk after a fetch"
+L_AFTER="$(git -C "$L" for-each-ref; ls "$L/.git")"
+if [ "$L_AFTER" = "$L_BEFORE" ]; then check "a pull read leaves the repository's refs and files as they were" ok
+else check "a pull read leaves the repository's refs and files as they were" "before: $L_BEFORE, after: $L_AFTER"; fi
 
 echo
 echo "passed: $pass, failed: $fail"

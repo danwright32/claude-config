@@ -3664,16 +3664,39 @@ median was 5.59 s and one reading of five was 10.22 s, against the 11 second bud
 
 What it does not see, so a pass is not read as more than it measured: an import of a package or
 through a path alias (`@/lib/x`), a Python import placed through a `.pth` file or a `sys.path` change
-it cannot evaluate (refused, not passed, unless the module is also installed), a module run with
-`python3 -m`, an import path built at run time, a program run by bare name from the PATH, a file run
-through a variable or a substitution whose value it cannot work out, and an
-endpoint assembled from pieces on purpose. The threat it answers is a session that means well choosing the quickest way to
-post. It fails closed: a python that is missing or crashes, or a payload it cannot read that names a
-send route, is refused with the reason.
+it cannot evaluate (refused, not passed, unless the module is also installed), a module from the
+standard library or installed run with `python3 -m` (other than the runners below), an import path
+built at run time, a program run by bare name from the PATH (pytest apart), a file run through a
+variable or a substitution whose value it cannot work out, a build or git command inside a script on
+disk or a package script, and an endpoint assembled from pieces on purpose. The threat it answers is
+a session that means well choosing the quickest way to post. It fails closed: a python that is
+missing or crashes, or a payload it cannot read that names a send route, is refused with the reason.
+
+Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
+it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,
+cProfile, profile or trace runs, and the test modules `python3 -m unittest` and pytest collect,
+each with every local module it imports; and a file tsc, esbuild or bun build builds earlier in the
+same command, read as the source it is built from. A build that nothing in the command runs is not
+refused, whatever it builds (Dan's choice, 2026-11-12: bun build's entries were read as a script it
+runs, and esbuild's `--outfile=` refused even a quiet build). A file a revert, a stash, a new linked
+worktree or a clone of a local repository writes is read as git holds it, and a pull's, or a remote
+branch's a `git fetch` earlier in the command fetched, as that fetch brings it (fetched into a
+scratch repository that borrows the repository's objects, so the repository itself is left as it
+was). A clone of a remote makes files the gate cannot read, refused when the same command runs one,
+as a downloaded script is.
+
+Three more false refusals Dan chose to stop in #2844: Python code importing `sqlite3` counts as
+unable to post unless it names `load_extension`; a Python script naming an endpoint only in a
+regular expression's pattern (`re.compile`, `re.search` and the like) is not refused for it; and a
+JavaScript file naming `eval`, `chmod` or a package such as got only in a string, a regex literal or
+an object's key is not read as running or writing anything. A package is still read where it is
+imported or required.
 
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
-names `chat.postMessage`; `python3 -m unittest` over the same file passes. This is a known false
-positive, left for Dan to decide rather than exempted.
+names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
+file, which before then passed only because the gate did not read what unittest runs. The suite
+runner (`run-all-tests.sh`, through `lib/skill-python-tests.py`) loads the file itself and is not
+affected. This is a known false positive, left for Dan to decide rather than exempted.
 
 Cost, the gate alone timed by its caller on 2026-11-05: a plain `git push` stays on the quick exit
 and costs 0.007 to 0.008 s in the push gate table's five readings, and 0.010 s as the mean of 10 at
