@@ -93,8 +93,9 @@ export const editedPath = (tool: string, input: Record<string, unknown>): string
  * is held unless nothing in the repository could hold it.
  * `folder` is where such a write lands when the reader knows it, so its checkout is the one judged.
  * `runs` is every script a path was handed to, present only when that is the command's one way of
- * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every one
- * of them is read as writing nothing there (scriptProgram, scriptWrite; #2426 lessons review).
+ * reaching it (#2407): a folder handed to scripts is judged for the files under it unless every write
+ * of every one of them is placed, each then judged where it lands in the folder's stead (scriptProgram,
+ * scriptReach; #2426 lessons review, #2565).
  */
 export type ShellTarget = { word: string; path: string; tree?: true; runs?: ShellRun[] } | { word: string; unread: string; folder?: string }
 
@@ -221,19 +222,108 @@ export const trapTexts = (commands: readonly { words: readonly string[] }[]): st
   return [...texts]
 }
 
+// The folder a script's text is read as run from (#2565): nowhere, and many folders deep, so a name it
+// writes relative to wherever it is run comes back under SCRIPT_ROOT, even after climbing out with
+// `..` further than any real folder is deep, and is never taken for a place.
+const SCRIPT_ROOT = '/.area-check-script'
+export const SCRIPT_RUN_FROM = `${SCRIPT_ROOT}/run-from${'/in'.repeat(48)}`
+
+/** A write a script makes whose place is known (#2565): judged there, as that write typed in the command would be. */
+export type ScriptPlaced = { word: string; path: string; tree?: true; handed?: true }
+
+// A name built on one of what the script is handed, `$1/x` or `${12}/x`, with what follows. $0, the
+// script's own name, and any other form (`${1:-x}`, `${1%/}`) are not.
+const HANDED = /^(?:\$([1-9])|\$\{([1-9][0-9]*)\})\/(.*)$/
+// What may follow it and still name one place: plain characters, and a pattern's characters, which
+// stop the name at the folder the pattern is matched in. A value, a command's output, a brace, a
+// quote, an escape or an extended pattern is no place.
+const PLAIN_PART = /^[A-Za-z0-9._+@%,=: -]+$/
+const PATTERN_PART = /^[A-Za-z0-9._+@%,=: *?[\]!-]+$/
+
+const joined = (base: string, parts: readonly string[]): string => {
+  const out = base.split('/').filter(Boolean)
+  for (const p of parts) {
+    if (p === '' || p === '.') continue
+    if (p === '..') out.pop()
+    else out.push(p)
+  }
+  return `/${out.join('/')}`
+}
+
 /**
- * Why a script, its writes read by mod-kit from its own text (#2407), may write into a folder it is
- * handed, or null when it writes nothing the area check could judge. Any file it writes, named or
- * not, wherever it lands, and any script it runs in turn, whose writes are not read, counts: only a
- * script whose text writes no such file at all lets the folder it is handed go unjudged, so a script
- * whose writes cannot be placed is held, never passed.
+ * Where a name built on what a script is handed lands when the folder is what it was handed (#2565):
+ * `$1/gen.ts` under the folder at gen.ts, `$1/gen/*.ts` everywhere under gen (`tree`). Undefined for
+ * a name that is the folder itself or a pattern matched in it, which reach every file there, and for
+ * one holding anything but plain characters and a pattern's.
  */
-export const scriptWrite = (w: ModKitWrites, home?: string): string | null => {
+const handedPlace = (word: string, folder: string): { path: string; tree?: true } | undefined => {
+  const m = HANDED.exec(word)
+  if (!m) return undefined
+  const parts = (m[3] as string).split('/').filter(p => p !== '')
+  const glob = parts.findIndex(p => /[*?[\]!]/.test(p))
+  if (parts.some((p, i) => !(glob >= 0 && i >= glob ? PATTERN_PART : PLAIN_PART).test(p))) return undefined
+  if (glob === 0 || parts.length === 0) return undefined
+  return glob < 0 ? { path: joined(folder, parts) } : { path: joined(folder, parts.slice(0, glob)), tree: true }
+}
+
+/**
+ * Where a script's writes land, read by mod-kit from its own text run from SCRIPT_RUN_FROM (#2407,
+ * #2565), when it is handed `folder`. Each write whose place is known is `placed`, to be judged there:
+ * a path the reader names (a full path, or one under the home folder), a pattern's folder, and a name
+ * built on what the script is handed (`"$1/gen.ts"`, `handed`), read as if the folder were each of
+ * them, so every folder a script is handed is judged for the same names and the one it really is gets
+ * judged. Anything else `reaches` the whole folder, with why, as #2321 judged it: a script it runs in
+ * turn, a name relative to wherever it is run, and any name built from a value the reader cannot
+ * follow, a folder made with mktemp among them. Whether what it is handed still holds those values
+ * where the name is built is argsMove's question.
+ */
+export const scriptReach = (w: ModKitWrites, folder: string, home?: string): { reaches: string } | { placed: ScriptPlaced[] } => {
   const run = w.runs?.[0]
-  if (run) return `it runs ${run.what} (${run.script}), whose writes are not read`
-  const t = shellTargets(w, home)[0]
-  if (!t) return null
-  return 'path' in t ? `it writes ${t.word}` : `it writes ${t.word}: ${t.unread}`
+  if (run) return { reaches: `it runs ${run.what} (${run.script}), whose writes are not read` }
+  const placed: ScriptPlaced[] = []
+  const nowhere = (p: string) => p === SCRIPT_ROOT || p.startsWith(`${SCRIPT_ROOT}/`)
+  for (const t of shellTargets(w, home)) {
+    if ('path' in t) {
+      if (nowhere(t.path)) return { reaches: `it writes ${t.word}, which lands wherever it is run from` }
+      placed.push({ word: t.word, path: t.path, ...(t.tree ? { tree: true as const } : {}) })
+      continue
+    }
+    if (t.folder && !nowhere(t.folder)) {
+      placed.push({ word: t.word, path: t.folder, tree: true })
+      continue
+    }
+    const at = handedPlace(t.word, folder)
+    if (!at) return { reaches: `it writes ${t.word}: ${t.unread}` }
+    placed.push({ word: t.word, ...at, handed: true })
+  }
+  return { placed }
+}
+
+// A function definition anywhere in a script's text: `name()`, `name ()` or `function name`.
+const DEFINES_FUNCTION = /(?:^|[\s;&|({])function[ \t]+[A-Za-z_]|[A-Za-z_][A-Za-z0-9_:.-]*[ \t]*\([ \t]*\)/m
+
+/**
+ * Why a name a script builds on what it is handed (`$1`) may mean another value where it is built
+ * (#2565), or null. Inside a function `$1` is what the function is handed, and `set` given anything
+ * but options (`set -- x`, `set -e a`, `set -`) replaces what the script was handed; either way the
+ * name lands where no reading of the command can tell. `shift` only moves along the values the
+ * script was handed, which scriptReach already reads every one of, so it changes nothing.
+ */
+export const argsMove = (commands: readonly { words: readonly string[] }[], text: string): string | null => {
+  for (const c of commands) {
+    if (c.words[0] !== 'set') continue
+    for (let i = 1; i < c.words.length; i++) {
+      const w = c.words[i] as string
+      // -o names an option in the next word, alone or last among others (`set -euo pipefail`).
+      if (/^[-+][A-Za-z]*o$/.test(w)) {
+        i++
+        continue
+      }
+      if (w === '--' || w === '-' || !/^[-+][A-Za-z]+$/.test(w)) return `it gives what it is handed new values (${c.words.join(' ')}), so a name built on them cannot be placed`
+    }
+  }
+  if (DEFINES_FUNCTION.test(text)) return 'it defines a function, where what it is handed means what the function is handed, so a name built on it cannot be placed'
+  return null
 }
 
 // Whether a run is the installed spool helper, run by bash or directly: only that path under the home

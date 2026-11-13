@@ -7660,10 +7660,16 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
-A folder a script is handed is judged as a write of every file under it (#2321), unless the
-script's own text writes nothing at all (#2407), so `bash tools/check-mods.sh payload/mods`, which
-copies into a folder it makes with `mktemp`, is held: Dan chose to keep that hold on #2527,
-and #2565 is to hold such a script only for the files its writes can reach. A script whose text
+A folder a script is handed is judged as a write of every file under it (#2321), unless every
+write in the script's own text can be placed (#2407, #2565): a full path, a path under the home
+folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
+and `"$1"/gen/*.ts` as everything under `<folder>/gen`). Each placed write is then judged where it
+lands, so a script handed `src/` that writes `"$1/gen.ts"` is held only if `src/gen.ts` would be.
+A name relative to wherever the script runs, one built from any other value (a folder made with
+`mktemp` among them), a pattern matched in the folder itself (`"$1"/*.ts`), and a name built on
+`$1` in a script that defines a function or gives `set` new values keep the whole folder held. So
+`bash tools/check-mods.sh payload/mods`, which copies into a folder it makes with `mktemp`, is still
+held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
