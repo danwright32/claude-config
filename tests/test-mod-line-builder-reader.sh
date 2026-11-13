@@ -62,6 +62,8 @@ import re
 import sys
 
 lib, reg_path, out_path = sys.argv[1:4]
+# No cache left in tools/lib (#2854): -I drops PYTHONDONTWRITEBYTECODE, so it is set here.
+sys.dont_write_bytecode = True
 sys.path.insert(0, lib)
 from ts_source import closing, code_only
 

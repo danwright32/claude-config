@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
 # send-gate: scans hooks/ skills/ mods/ commands/ agents/
-# Every program that imports a module from payload/hooks/lib turns bytecode off first (#2600).
+# Every program that imports a module from payload/hooks/lib or tools/lib (and, #2854, a heredoc written to a .py file) turns bytecode off first (#2600).
 #
 # THE FAULT. Python caches what it imports in a __pycache__ folder beside the module, unless told not
 # to. A program that imports from lib/ with bytecode on leaves lib/__pycache__/<module>.pyc behind,
@@ -94,7 +94,11 @@ from shell_code_lines import read_lines
 
 LIB_REL = os.path.join("payload", "hooks", "lib")
 LIB = os.path.join(root, LIB_REL)
-LIB_FILES = sorted(f for f in os.listdir(LIB) if f.endswith(".py"))
+# The folders whose modules a program must not leave a cache beside: the hooks lib, and tools/lib
+# where tools/lib/ts_source.py is imported by the mod scans and their suites (#2854). A folder a
+# checkout lacks is skipped, so a probe tree holding only the hooks lib still reads.
+LIB_DIRS = [LIB] + [d for d in (os.path.join(root, "tools", "lib"),) if os.path.isdir(d)]
+LIB_FILES = sorted({f for d in LIB_DIRS for f in os.listdir(d) if f.endswith(".py")})
 LIB_NAMES = {f[:-3] for f in LIB_FILES if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", f)}
 IMPORT = re.compile(r"^\s*(?:import\s+([A-Za-z_][\w.]*(?:\s+as\s+\w+)?(?:\s*,\s*[A-Za-z_][\w.]*(?:\s+as\s+\w+)?)*)|from\s+([A-Za-z_]\w*)\s+import\b)")
 LOAD = re.compile(r"\b(spec_from_file_location|SourceFileLoader|run_path|import_module)\s*\(")
@@ -217,6 +221,10 @@ def judge(src, own_dir, extra=""):
 
 C_HEAD = re.compile(r"python3?((?:[ \t]+-[A-Za-z]+)*?)[ \t]+(-[A-Za-z]*c)[ \t]+$")
 ENV_OFF = re.compile(r"(?<![\w-])PYTHONDONTWRITEBYTECODE=(?:[^\s;|&'\"]|'[^']+'|\"[^\"]+\")")
+# A heredoc written to a Python file that a suite then runs (cat > "$TMP/loop.py" <<'PY'): the program
+# is read where it is written, since the run line names only the file (#2854).
+W_CALL = re.compile(r"^[ \t]*cat[ \t]+>>?[ \t]*[^<]*?([\w.-]+\.py)[\"']?[ \t]*<<")
+RUN_FLAGS = re.compile(r"python3?((?:[ \t]+-[A-Za-z]+)*)")
 H_CALL = re.compile(r"(?<![A-Za-z0-9_./-])python3?((?:[ \t]+-[A-Za-z]+)*)(?=[ \t]|$)([^<]*)<<")
 # A shell variable on the command line is read through the file's own assignments to it (#2751):
 # tests/test-work-names-tree.sh loaded lib/work-names.py as "$SCAN", assigned at its top, so its
@@ -313,7 +321,7 @@ def report(rel, line, shape, res, how, at=None):
         earlier = [o for o in offs if o < bare]
         late = " (it is set on line %d, inside a function this load is not in)" % (line + earlier[0][0] - 1) if earlier \
             else " (it is set on line %d, after the import)" % (line + off_at[0] - 1) if off_at else ""
-        print("HIT %s:%d: %s loads %s with bytecode on, which can leave payload/hooks/lib/__pycache__ "
+        print("HIT %s:%d: %s loads %s with bytecode on, which can leave a lib/__pycache__ "
               "behind%s; %s" % (rel, where, shape, ", ".join(what), late, fix))
 
 
@@ -394,6 +402,25 @@ for rel in paths:
         how = "python3 -B" if re.search(r"-[A-Za-z]*B", m.group(1)) else \
             ("PYTHONDONTWRITEBYTECODE" if ENV_OFF.search(line[:m.start()]) else None)
         report(rel, n + 1, "the heredoc fed to python3", res, how)
+    for i, (n, line, kind, bare, ops) in enumerate(rows):
+        w = W_CALL.search(line) if kind == "code" and ops else None
+        if not w:
+            continue
+        # Run lines naming the file: bytecode is off for the program when every one of them passes
+        # -B or sets the variable, and a file never run by name has nothing to cover it.
+        runs = [l for _, l, k, _, _ in rows if k == "code" and w.group(1) in l and "<<" not in l
+                and RUN_FLAGS.search(l)]
+        how = "every run line" if runs and all(
+            re.search(r"-[A-Za-z]*B", RUN_FLAGS.search(l).group(1)) or ENV_OFF.search(l) for l in runs) else None
+        body = []
+        for _, bl, bk, _, _ in rows[i + 1:]:
+            if bk != "heredoc":
+                break
+            body.append(bl)
+        progs += 1
+        res = judge("\n".join(body), None)
+        if res:
+            report(rel, n + 1, "the heredoc written to a Python file", res, how)
 print("READ files=%d programs=%d importers=%d" % (files, progs, importers))
 PY
 
@@ -440,6 +467,13 @@ printf 'import importlib.util\ns = importlib.util.spec_from_file_location("g", "
   printf '    return importlib.util.spec_from_file_location("a", os.path.join(os.path.dirname(__file__), "lib", "shell-words.py"))\n'
   printf 'A = answered()\n'
 } > "$PROBE/payload/hooks/scoped-ok.py"
+# #2854: tools/lib is judged too. tests/test-mod-line-builder-reader.sh wrote a program with a heredoc
+# (cat > "$TMP/loop.py" <<'PY'), ran it with python3 -I, and it imported tools/lib/ts_source.py with
+# bytecode on. Only the run line names the file, so the program is read where it is written.
+mkdir -p "$PROBE/tools/lib"
+: > "$PROBE/tools/lib/tsprobe.py"
+printf '#!/usr/bin/env bash\n# a python program written to a file, then run\ncat > "$TMP/x.py" <<'"'"'PY'"'"'\nimport tsprobe\nPY\n' > "$PROBE/payload/hooks/writer.sh"
+printf '#!/usr/bin/env bash\n# a python program written to a file, then run\ncat > "$TMP/x.py" <<'"'"'PY'"'"'\nimport sys\nsys.dont_write_bytecode = True\nimport tsprobe\nPY\n' > "$PROBE/payload/hooks/writer-ok.sh"
 # Shell programs.
 {
   printf '#!/usr/bin/env bash\n'
@@ -476,17 +510,18 @@ printf 'import importlib.util\ns = importlib.util.spec_from_file_location("g", "
 ( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py ) > "$TMPROOT/probe.list"
 probe="$(scan "$PROBE" "$TMPROOT/probe.list" --list)"
 hits="$(printf '%s\n' "$probe" | sed -n 's/^HIT \([^:]*:[0-9]*\):.*/\1/p' | sort | tr '\n' ' ')"
-want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 "
-# Twenty four importers: seven Python files (by-name, late, early, by-path, sibling, scoped,
-# scoped-ok) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34, 39).
+want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 payload/hooks/writer.sh:4 "
+# Twenty six importers: seven Python files (by-name, late, early, by-path, sibling, scoped,
+# scoped-ok) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34, 39),
+# and two heredocs written to a Python file, in tools/lib's reach (writer.sh, writer-ok.sh, #2854).
 # prose.py, local.py, not-lib.py and lines 6 and 24 load nothing from lib.
 [ "$hits" = "$want" ] \
   && check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" ok \
   || check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" "it found [$hits], wanted [$want]: $probe"
 nimp="$(printf '%s\n' "$probe" | grep -c '^IMPORTER ' || true)"
-[ "$nimp" = 24 ] \
+[ "$nimp" = 26 ] \
   && check "the scan lists every importer in the probe, the ones that turn bytecode off too" ok \
-  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 24: $probe"
+  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 26: $probe"
 case "$probe" in
   *"HIT payload/hooks/scoped.py:6: the file loads code by path"*"(it is set on line 3, inside a function this load is not in)"*)
     check "#2840 a setting inside another function does not count for a load outside it, and the finding says so" ok ;;
@@ -503,7 +538,7 @@ case "$probe" in
   *) check "#2840 a late setting inside a held program is named by its own line in the file" "it said: $probe" ;;
 esac
 case "$probe" in
-  *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave payload/hooks/lib/__pycache__ behind (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
+  *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave a lib/__pycache__ behind (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
     check "a finding names the file, the line, the module and the fix" ok ;;
   *) check "a finding names the file, the line, the module and the fix" "it said: $probe" ;;
 esac
@@ -531,8 +566,8 @@ bash "$DIR/lib/repo-files.sh" "$ROOT" > "$TMPROOT/files.list" 2>/dev/null
 tree="$(scan "$ROOT" "$TMPROOT/files.list" --list)"
 tree_hits="$(printf '%s\n' "$tree" | grep '^HIT ' || true)"
 [ -z "$tree_hits" ] \
-  && check "#2600 every program importing from payload/hooks/lib turns bytecode off before it" ok \
-  || check "#2600 every program importing from payload/hooks/lib turns bytecode off before it" "these do not:
+  && check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" ok \
+  || check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" "these do not:
 $tree_hits"
 # A scan that found a handful of importers is reading the wrong tree (L98): 63 on 2026-11-10,
 # counted by this scan.
@@ -543,7 +578,7 @@ nimp="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=[0-9]* imp
 # The two #2600 named, the one whose shape they copy, the #2751 writer, whose file to load is
 # named by a variable, and the two #2840 writers (a load in a function the setting was not in, and a
 # program held in a variable) are among those read.
-for known in payload/hooks/lib/bundle-budget.py payload/hooks/scan-absence-needles.py payload/hooks/scan-subshell-globals.py tests/test-work-names-tree.sh tools/review-score.py tools/test-review-score.sh payload/hooks/test-pr-review.sh; do
+for known in payload/hooks/lib/bundle-budget.py payload/hooks/scan-absence-needles.py payload/hooks/scan-subshell-globals.py tests/test-work-names-tree.sh tools/review-score.py tools/test-review-score.sh payload/hooks/test-pr-review.sh tests/test-mod-line-builder-reader.sh; do
   case "$tree" in
     *"IMPORTER $known:"*) check "#2600 $known is an importer the scan reads" ok ;;
     *) check "#2600 $known is an importer the scan reads" "it is not listed: $(printf '%s\n' "$tree" | tail -1)" ;;
