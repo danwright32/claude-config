@@ -1110,3 +1110,55 @@ test('with its open issues unread, a command that names a fast growing file is s
   expect(why).toContain('which writes src/big.ts.')
   expect(why).toContain('so its growth alone decided')
 })
+
+// #2823: `npx vitest run <three test paths> | grep -v ... | tail` was held as a write to a source file
+// under one of the folders it named: a tool run through npx handed every word on as a file it may
+// write, and a folder it was handed was judged for every held file under it. A test runner changes
+// the files it is handed only when a flag says so (vitest -u), so without one its operands are no
+// writes. Each runner below ran on this Mac in the 14 days before the fix.
+const RUNNERS = [
+  'npx vitest run src/ src/lib src/big.test.ts | grep -v "^ok" | tail -20',
+  'npx jest src/ src/lib',
+  'python3 -m pytest src/ src/lib -q',
+  'python3 -m unittest src/big_test.py src/lib',
+  'bun test src/ src/lib',
+  'node --test src/ src/lib',
+]
+
+test('a test runner handed folders holding held files runs, judging no file (#2823)', KIT, async ($, on) => {
+  const w = world($, on)
+  const ran: string[] = []
+  for (const [i, command] of RUNNERS.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `${command}: ran` : `${command}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(RUNNERS.map(c => `${c}: ran`))
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a test runner that really writes a held file is still held: a flag that updates what it is handed, an output option, a redirect, tee, cp, sed -i, a python heredoc (#2823)', KIT, async ($, on) => {
+  const w = world($, on)
+  const writers = [
+    'npx vitest run -u src/',
+    'npx vitest run --update src/',
+    'npx jest --updateSnapshot src/',
+    'python3 -m pytest --snapshot-update src/',
+    'bun test --update-snapshots src/',
+    'npx vitest run src/ --outputFile=src/big.ts',
+    'npx vitest run src/ --outputFile.junit src/big.ts',
+    'node --test --test-reporter-destination=src/big.ts src/',
+    'npx vitest run src/ > src/big.ts',
+    'python3 -m pytest src/ 2>&1 | tee src/big.ts',
+    'node --test src/ src/lib >> src/big.ts',
+    'npx vitest run src/ && cp /tmp/big.ts src/big.ts',
+    "npx vitest run src/ && sed -i '' 's/a/b/' src/big.ts",
+    "npx vitest run src/ && python3 - <<'EOF'\nopen('src/big.ts', 'w').write('x')\nEOF",
+  ]
+  const held: string[] = []
+  for (const [i, command] of writers.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `${command}: ran` : `${command}: ${/which writes (src\/big\.ts|python3 - <<EOF)\./.test(refusal(r)) ? 'held' : refusal(r)}`)
+  }
+  expect(held).toEqual(writers.map(c => `${c}: held`))
+})

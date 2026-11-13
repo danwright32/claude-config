@@ -845,14 +845,16 @@ describe('writes: the value of a known option a tool reads is no file it writes 
     expect(words('python3 -m http.server --bind 127.0.0.1')).toEqual([])
     expect(words('python3 -m http.server 8000 --bind 127.0.0.1 --directory site')).toEqual([['8000']])
     expect(words('python3 -m http.server -b 127.0.0.1 -d site 8000')).toEqual([['8000']])
-    expect(words('python3 -m pytest -n 4 -p no:cacheprovider tests/test_app.py')).toEqual([['tests/test_app.py']])
+    // With an update flag, so the run hands its files on (#2823) and only -n and -p's values are read.
+    expect(words('python3 -m pytest --snapshot-update -n 4 -p no:cacheprovider tests/test_app.py')).toEqual([['tests/test_app.py']])
     expect(words('python3 -m unittest -s tests -k parse')).toEqual([])
     expect(words('python3 -m ruff check --config ruff.toml app')).toEqual([['check', 'app']])
   })
   test('a tool run through npx: tsc -p, vitest --config and --root, prettier --stdin-filepath, eslint -c', () => {
     expect(words('npx tsc -p tsconfig.json')).toEqual([])
     expect(words('npx tsc --project tools/tsconfig.json --noEmit')).toEqual([])
-    expect(words('npx vitest run --config vitest.config.ts --root app')).toEqual([['run']])
+    // With -u, so the run hands its words on (#2823) and only --config and --root's values are read.
+    expect(words('npx vitest run -u --config vitest.config.ts --root app')).toEqual([['run']])
     expect(words('npx prettier --stdin-filepath app/page.tsx')).toEqual([])
     expect(words('npx eslint -c eslint.config.js --fix app/page.tsx')).toEqual([['app/page.tsx']])
   })
@@ -929,6 +931,63 @@ describe("writes: a known tool's mode that changes no file it is handed hands no
     expect(words('npx biome check src')).toEqual([['check', 'src']])
     expect(words('python3 -m black --check src')).toEqual([['src']])
     expect(words('python3 prettier.py --check src')).toEqual([['src']])
+  })
+})
+
+// #2823: `npx vitest run <three test paths> | grep -v ... | tail` handed every test path on as a file
+// the run may write, so the area check held it for a source file under one of those folders. A test
+// runner changes the files it is handed only when a flag says so: vitest -u or --update, jest -u or
+// --updateSnapshot, a pytest snapshot plugin's update flag, bun test -u or --update-snapshots. Without
+// one it hands on only the file an output option of its own writes. `bun test` is bun's runner,
+// never a script file named test, and `node --test` runs each operand as a test file, none of them
+// another's arguments; each is read as a tool run, by the same write forms.
+describe('writes: a test runner hands on the files it is handed only when a flag updates them (#2823)', () => {
+  const words = (command: string) => (read(command).runs ?? []).map(r => r.args.map(a => a.word))
+  test('a test runner handed paths and no update flag hands none on', () => {
+    for (const command of [
+      'npx vitest run tests/a tests/b src/x.test.ts | grep -v ok | tail',
+      'npx vitest tests/a.test.ts',
+      'npx vitest run --config vitest.config.ts --root app tests/a',
+      'npx --yes vitest@2 run tests/a',
+      'npx jest tests/ src/lib',
+      'python3 -m pytest tests/a tests/b -q',
+      'python3 -m pytest -n 4 -p no:cacheprovider tests/test_app.py',
+      'python3 -m unittest tests/a.py tests/b',
+      'bun test tests/a tests/b',
+      'bun test tests/a.test.ts',
+      'node --test tests/a.test.mjs tests/b',
+      'node --import tsx --test tests/a.test.ts tests/b.test.ts',
+    ])
+      expect({ command, words: words(command) }).toEqual({ command, words: [] })
+  })
+  test('an update flag hands every path on, and an output option hands on the file it writes', () => {
+    expect(words('npx vitest run -u tests/a')).toEqual([['run', 'tests/a']])
+    expect(words('npx vitest run --update tests/a')).toEqual([['run', 'tests/a']])
+    expect(words('npx vitest run -u --config vitest.config.ts --root app')).toEqual([['run']])
+    expect(words('npx jest -u tests/')).toEqual([['tests/']])
+    expect(words('npx jest --updateSnapshot tests/')).toEqual([['tests/']])
+    expect(words('python3 -m pytest --snapshot-update tests/a')).toEqual([['tests/a']])
+    // An option written --name=value gives its value, as every run's does (#1586).
+    expect(words('python3 -m pytest --inline-snapshot=fix tests/a')).toEqual([['fix', 'tests/a']])
+    expect(words('bun test -u tests/a')).toEqual([['tests/a']])
+    expect(words('bun test --update-snapshots tests/a')).toEqual([['tests/a']])
+    expect(words('npx vitest run tests/a --outputFile=report.json')).toEqual([['report.json']])
+    expect(words('npx vitest run tests/a --outputFile.junit junit.xml')).toEqual([['junit.xml']])
+    expect(words('npx jest tests/ --outputFile out.json')).toEqual([['out.json']])
+    expect(words('python3 -m pytest tests/a --junitxml=r.xml')).toEqual([['r.xml']])
+    expect(words('python3 -m pytest tests/a --basetemp tmp/run')).toEqual([['tmp/run']])
+    expect(words('bun test tests/a --reporter-outfile out.xml')).toEqual([['out.xml']])
+    expect(words('node --test --test-reporter-destination=out.txt tests/a tests/b')).toEqual([['out.txt']])
+  })
+  test('a word that may hold a flag the reader cannot see keeps every path handed on', () => {
+    expect(words('npx vitest run $FLAGS tests/a')).toEqual([['run', '$FLAGS', 'tests/a']])
+    expect(words('bun test "$@"')).toEqual([['$@']])
+  })
+  test('a script file run by bun or node is still read as one, its words its own arguments', () => {
+    expect(words('bun ./test tests/a')).toEqual([['tests/a']])
+    expect(words('bun run.ts out.ts')).toEqual([['out.ts']])
+    expect(words('node tests/a.test.mjs out.ts')).toEqual([['out.ts']])
+    expect(words('node build.mjs --test out.ts')).toEqual([['out.ts']])
   })
 })
 
