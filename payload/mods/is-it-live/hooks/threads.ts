@@ -14,8 +14,11 @@ import type { IsItLiveThread } from '../types/index.d.ts'
 // slack_send_message_draft in that same step. #2630, Dan, 2026-11-10: "Anytime you give me a message
 // for someone, you should also just save it as a slack draft in the relevant thread." So there is no
 // picker before the draft (there was one, Save as a draft or Skip this time, until then): a draft is
-// already Dan's to send, change or delete. Pure: drafts.ts reads the prompt, the tool calls and the
-// turn end (register.ts's Stop hook calls its draftHold), and keeps what this decides.
+// already Dan's to send, change or delete. #2849, Dan, 2026-11-12: given more than one thread, a
+// merge owes its reply in the one pasted most recently before its work began ("follow the most
+// recent link"), so a draft in an earlier thread does not settle it (assignLandings). Pure: drafts.ts
+// reads the prompt, the tool calls and the turn end (register.ts's Stop hook calls its draftHold),
+// and keeps what this decides.
 
 export type SlackThread = { channel: string; ts: string; link?: string }
 
@@ -72,33 +75,34 @@ export const UNASKED = 'Never ask him with AskUserQuestion whether to save it: a
  * draft, or the one the session started from; and the message a card asked a draft of for it, still
  * unsaved (#2630).
  */
-type Pasted = SlackThread & { mid?: true; prs?: string[]; card?: { pr: string; name: string; message: string } }
+type Pasted = SlackThread & { mid?: true; prs?: string[]; related?: number; settled?: number; card?: { pr: string; name: string; message: string } }
 
-// The opening of a hold: a thread the session started from is owed a reply after every merge, one
-// pasted once it was under way only after a merge for it, which is named so the reply covers only it.
+// The opening of a hold: a thread the session started from is owed a reply after its merges, one
+// pasted once it was under way only after a merge for it, which is named so the reply covers only it:
+// one whose pull request links it (#2578), or one whose work began after it was the latest link (#2849).
 const owedOf = (t: Pasted) =>
-  t.mid
-    ? `A pull request for ${nameOfThread(t)}, pasted in this session, has merged since its last draft reply (${(t.prs ?? []).join(', ')}). Before ending the turn: write a short reply in Dan's voice saying what merged for it and is live, and nothing about other merges`
-    : `This session started from ${nameOfThread(t)}, and a pull request has merged since its last draft reply. Before ending the turn: write a short reply in Dan's voice saying what merged and is live`
+  !t.mid
+    ? `This session started from ${nameOfThread(t)}, and a pull request has merged since its last draft reply. Before ending the turn: write a short reply in Dan's voice saying what merged and is live`
+    : `${byLink(t) ? `${nameOfThread(t)} is the latest Slack thread pasted in this session before work began on a pull request that has merged since its last draft reply` : `A pull request for ${nameOfThread(t)}, pasted in this session, has merged since its last draft reply`} (${(t.prs ?? []).join(', ')}). Before ending the turn: write a short reply in Dan's voice saying what merged for it and is live, and nothing about other merges`
 
 // Said after the save, whichever reply it was.
 const TOLD = 'Then tell Dan it is a draft waiting in that thread and that nothing was sent.'
 
-// #2653: said to a session started from a thread, the one kind owed a reply after every merge: how
-// it says, once, that its later merges have nothing to do with the thread. Never for a merge that
-// has already landed, so it cannot stand in for the reply this hold asks for.
+// #2653: said with a reply owed by the most recent link (#2849), the one no pull request asked for:
+// how the session says, once, that its merges have nothing to do with the thread. Since #2849 that
+// clears the merges already landed too, since that is when a session learns a merge is unrelated.
 const unrelatedOf = (t: SlackThread, tool: string) =>
-  `If this session's later merges have nothing to do with ${nameOfThread(t)}, say so once by calling ${tool} (load it with ToolSearch, query "select:${tool}"), and no reply is then asked for them. This reply is still owed.`
+  `If the merges this reply is owed for, and this session's later ones, have nothing to do with ${nameOfThread(t)}, say so once by calling ${tool} (load it with ToolSearch, query "select:${tool}"), and no reply is then asked for them.`
 
 /** Why a turn end is held, naming every thread owed a draft reply. A thread a card asked a draft of
  * its message for is owed that message, the one Dan was shown, never a second reply (#2630).
- * `unrelatedTool` is the tool a session calls to say its later merges are unrelated (#2653). */
+ * `unrelatedTool` is the tool a session calls to say its merges are unrelated (#2653, #2849). */
 export const draftHoldOf = (owed: Pasted[], unrelatedTool: string): string =>
   owed
     .map(t =>
       t.card
         ? `The message for ${t.card.name} on the is it live card for ${t.card.pr} is owed as a Slack draft reply in ${nameOfThread(t)}, and no draft of it is saved since. Before ending the turn, save it now, without asking Dan first: call ${saveWith(t)}, with message set to exactly "${t.card.message}", word for word. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}`
-        : `${owedOf(t)}, run /no-ai-tells on it, show it to Dan in your reply, and in that same step, without asking Dan first, save that exact text with ${saveWith(t)}. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}${t.mid ? '' : ` ${unrelatedOf(t, unrelatedTool)}`}`,
+        : `${owedOf(t)}, run /no-ai-tells on it, show it to Dan in your reply, and in that same step, without asking Dan first, save that exact text with ${saveWith(t)}. ${UNASKED} ${TOLD} ${NEVER} ${EXISTS}${byLink(t) ? ` ${unrelatedOf(t, unrelatedTool)}` : ''}`,
     )
     .join('\n\n')
 
@@ -106,20 +110,72 @@ export const draftHoldOf = (owed: Pasted[], unrelatedTool: string): string =>
 export const draftLetGoOf = (owed: SlackThread[]): string => `No Slack draft reply saved to ${owed.map(nameOfThread).join(', ')}: the turn ended without one.`
 
 /**
- * #2653: the session said its later merges are unrelated to the thread it started from, and the
- * step its last merge had landed at when it did (absent when none had). Kept in session state, so a
- * new session from the same thread is asked again.
+ * #2653: the session said its merges are unrelated to the threads it was given. Kept in session
+ * state, so a new session from the same thread is asked again. Only its presence is read: since
+ * #2849 what was said covers the merges already landed as well as later ones, so the landed step
+ * it once carried is no longer kept.
  */
-export type Unrelated = { landed?: number }
+export type Unrelated = Record<string, never>
 
 /**
- * The step a thread's draft is owed from: the latest merge for it when pasted mid session (#2578),
- * else the latest merge. Once the session has said its later merges are unrelated (#2653), a thread
- * it started from is owed only for the merges that had landed by then, unless a card asked a draft
- * of its message there (#2630), which is a merge for it whatever was said.
+ * #2849: a merge as it lands: its name as the hold names it, the keys of the recorded threads its
+ * pull request or an issue it closes links, and when GitHub says the pull request opened (ms since
+ * the epoch), where that was read.
+ */
+export type Landing = { pr: string; links?: string[]; opened?: number }
+
+// #2849: the threads a merge owes the session's reply by the most recent link, Dan's choice on
+// 2026-11-12: the thread pasted most recently before the work on it began. The mod cannot see work
+// begin, so it reads the time the pull request opened, after which no link pasted is the one the
+// work came from (a merge in flight while Dan pastes the next alert stays with its own thread). Where
+// GitHub gave no such time, every thread recorded by the time the merge landed counts, so the latest
+// is chosen. A pull request opened before any link was pasted (one made earlier and merged in this
+// session) owes the threads the session started from, as it did before. Threads recorded in one
+// prompt share a step, so links pasted together are owed together.
+const mostRecent = (ts: IsItLiveThread[], opened: number | undefined): IsItLiveThread[] => {
+  const before = opened === undefined ? ts : ts.filter(t => t.at <= opened)
+  const pool = before.length ? before : ts.filter(t => !t.mid)
+  const top = Math.max(...pool.map(t => t.step ?? 0))
+  return pool.filter(t => (t.step ?? 0) === top)
+}
+
+const owing = (t: IsItLiveThread, field: 'related' | 'defaulted', n: number, pr: string): IsItLiveThread => ({ ...t, [field]: Math.max(t[field] ?? 0, n), prs: [...new Set([...(t.prs ?? []), pr])] })
+
+/**
+ * #2849: the threads after merges landed at step `n`. A merge whose pull request links threads
+ * recorded mid session owes each of them (#2578), and one linking threads the session started from
+ * owes those; one linking none, in a session started from a thread, owes the most recent thread.
+ * With no thread to start from and none linked, a merge owes no reply, as before.
+ */
+export const assignLandings = (ts: IsItLiveThread[], landings: Landing[], n: number): IsItLiveThread[] => {
+  let out = ts
+  for (const l of landings) {
+    const linked = out.filter(t => (l.links ?? []).includes(threadKey(t)))
+    const defaults = linked.length ? linked.filter(t => !t.mid) : out.some(t => !t.mid) ? mostRecent(out, l.opened) : []
+    const keys = (xs: IsItLiveThread[]) => new Set(xs.map(threadKey))
+    const mids = keys(linked.filter(t => t.mid))
+    const owed = keys(defaults)
+    out = out.map(t => (mids.has(threadKey(t)) ? owing(t, 'related', n, l.pr) : owed.has(threadKey(t)) ? owing(t, 'defaulted', n, l.pr) : t))
+  }
+  return out
+}
+
+const latest = (...xs: (number | undefined)[]): number | undefined => {
+  const known = xs.filter((x): x is number => x !== undefined)
+  return known.length ? Math.max(...known) : undefined
+}
+
+/**
+ * The step a thread's draft is owed from: the latest merge whose pull request links it when pasted
+ * mid session (#2578), and the latest merge owing it the session's reply (#2849) until the session
+ * says its merges are unrelated (#2653). That reply includes one a pull request's link to a thread
+ * the session started from asks for, which saying so cleared before #2849 too, so it still does.
+ * A card asking a draft of its message in a thread the session
+ * started from (#2630) owes it from the latest merge whatever was said, as a card for a thread
+ * pasted mid session does through `related`.
  */
 export const draftOwedFrom = (t: IsItLiveThread, landed: number | undefined, unrelated?: Unrelated): number | undefined =>
-  t.mid ? t.related : unrelated === undefined || t.card !== undefined ? landed : unrelated.landed
+  latest(t.related, t.card !== undefined && !t.mid ? landed : undefined, unrelated === undefined ? t.defaulted : undefined)
 
 /** The threads owed a draft: those whose last draft came before the latest merge they are owed for. */
 export const owedThreads = (threads: IsItLiveThread[], landed: number | undefined, unrelated?: Unrelated): IsItLiveThread[] =>
@@ -127,3 +183,6 @@ export const owedThreads = (threads: IsItLiveThread[], landed: number | undefine
     const from = draftOwedFrom(t, landed, unrelated)
     return from !== undefined && (t.settled ?? -Infinity) < from
   })
+
+/** #2849: whether a thread owed a draft is owed only the session's reply by the most recent link, which the unrelated_merges tool clears. */
+const byLink = (t: Pasted) => t.card === undefined && (t.related ?? -Infinity) <= (t.settled ?? -Infinity)

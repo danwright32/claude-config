@@ -1,12 +1,12 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, draftKeyOf, draftLineOf, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type Relation, draftHold, markLanded, noteCard, pastedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
+import { draftHold, markLanded, noteCard, recordedThreads, registerDrafts, registerUnrelated, relateCard } from './drafts.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, isNotAPr, letGoOf, mergeCallOf, nudgeOf, owedFrom, proofOf, refusalOf } from './merges.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { askPr, failureOf, type PrReaders } from './mod-kit/prmerged.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
-import { linksThread, threadKey } from './threads.ts'
+import { type Landing, linksThread, threadKey } from './threads.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -200,45 +200,56 @@ const mergesIn = async ($: EngineInterface, command: string, cwd: string): Promi
   return { calls: out, ...(skew === undefined ? {} : { skew }) }
 }
 
-// #2578: the text of a merged PR and of the issues it closes, each as gh gives it. A read GitHub
-// refuses throws gh's own words.
-const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<string[]> => {
+// #2578: the text of a merged PR and of the issues it closes, each as gh gives it, and (#2849) when
+// GitHub says the PR opened, ms since the epoch, absent where it gave no readable time. A read
+// GitHub refuses throws gh's own words.
+const textsOf = async ($: EngineInterface, repo: string, pr: number): Promise<{ texts: string[]; opened?: number }> => {
   type Text = { title?: string; body?: string; comments?: { body?: string }[] }
   const read = async (args: string[]) => {
     const r = await readGitHub($, args)
     if ('error' in r) throw new Error(r.error)
-    return JSON.parse(r.out) as Text & { closingIssuesReferences?: { number: number; repository?: { name?: string; owner?: { login?: string } } }[] }
+    return JSON.parse(r.out) as Text & { createdAt?: unknown; closingIssuesReferences?: { number: number; repository?: { name?: string; owner?: { login?: string } } }[] }
   }
   const all = (t: Text) => [t.title ?? '', t.body ?? '', ...(t.comments ?? []).map(c => c.body ?? '')]
-  const p = await read(['pr', 'view', String(pr), '--repo', repo, '--json', 'title,body,comments,closingIssuesReferences'])
-  const out = all(p)
+  const p = await read(['pr', 'view', String(pr), '--repo', repo, '--json', 'title,body,comments,closingIssuesReferences,createdAt'])
+  const texts = all(p)
   for (const i of p.closingIssuesReferences ?? []) {
     const at = i.repository?.owner?.login && i.repository.name ? `${i.repository.owner.login}/${i.repository.name}` : repo
-    out.push(...all(await read(['issue', 'view', String(i.number), '--repo', at, '--json', 'title,body,comments'])))
+    texts.push(...all(await read(['issue', 'view', String(i.number), '--repo', at, '--json', 'title,body,comments'])))
   }
-  return out
+  const opened = typeof p.createdAt === 'string' ? Date.parse(p.createdAt) : NaN
+  return Number.isNaN(opened) ? { texts } : { texts, opened }
 }
 
 // #2436: a merge landed. Said to Dan when it cannot be kept, since the draft reply it owes would
 // otherwise never be asked for. #2578: it is for a thread pasted mid session only when its PR, or an
-// issue it closes, links that thread. GitHub is asked only while such a thread is recorded; a read
-// it refuses is said once the landing is kept, and is for no thread, so no reply rests on a guess.
+// issue it closes, links that thread. #2849: in a session started from a thread, one linking no
+// thread owes the thread pasted most recently before its PR opened (threads.ts). GitHub is asked only
+// while a thread pasted mid session is recorded, the only time there is more than one link to choose
+// between; a read it refuses is said once the landing is kept, and links no thread, so the merge owes
+// the latest thread recorded by the time it landed.
 const landed = async ($: EngineInterface, merged: { repo?: string; pr: number }[]) => {
   try {
-    const pasted = await pastedThreads($)
-    const related: Relation[] = []
+    const threads = await recordedThreads($)
+    const ask = threads.some(t => t.mid)
+    const landings: Landing[] = []
     let refused: unknown
-    for (const m of pasted.length ? merged : []) {
-      if (!m.repo) continue
-      let texts: string[] = []
+    for (const m of merged) {
+      const pr = m.repo ? `${m.repo}#${m.pr}` : `#${m.pr}`
+      if (!ask || !m.repo) {
+        landings.push({ pr })
+        continue
+      }
       try {
-        texts = await textsOf($, m.repo, m.pr)
+        const read = await textsOf($, m.repo, m.pr)
+        const links = threads.filter(t => linksThread(read.texts, t)).map(threadKey)
+        landings.push({ pr, links, ...(read.opened === undefined ? {} : { opened: read.opened }) })
       } catch (err) {
         refused = err
+        landings.push({ pr })
       }
-      for (const t of pasted) if (linksThread(texts, t)) related.push({ key: threadKey(t), pr: `${m.repo}#${m.pr}` })
     }
-    await markLanded($, related)
+    await markLanded($, landings)
     if (refused !== undefined) throw refused
   } catch (err) {
     $.ui.toast(`Is it live could not note a merge for the Slack thread's draft reply: ${msg(err)}`)
