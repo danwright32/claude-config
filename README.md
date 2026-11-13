@@ -2232,6 +2232,17 @@ folder is gone by the time anyone reads the report. Of those 8 misses, worked ou
 finding each reviewed commit in this Mac's checkouts, 1 ran across a line break, 3 ran past the end
 of a line, and 4 did neither (altered or paraphrased quotes).
 
+Since #2237 those two shapes are placed rather than marked, on the line the quote starts on, after
+the whole line, its marker and part of a line have all found nothing: across a line break when the
+quote is inside the file's lines read on as one (blank lines skipped), and past the end of a line
+when at least its first 20 characters end a line, the same floor part of a line is held to. On the
+personal MacBook, over every review held on 2026-11-13, 13 of the 23 quotes that matched no line
+whole or in part were one of these (5 across, 8 past the end, 6 of those a comment's sentence quoted
+without the marker starting its next line), and in all 13 the line the quote starts on was the line
+the finding was about. The other 10 did neither and stay unplaced. Each review records the two as
+`across` and `past_end` in `placement=`, and the report counts them under how placed; a mark now only
+ever says neither, and the report's shape count reads the older marks.
+
 #### Scoring the review itself
 
 `tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:
