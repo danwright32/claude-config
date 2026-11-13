@@ -167,6 +167,8 @@ def perl_acts(words):
     for w in words:
         if is_code:
             codes.append(w)
+        elif w.startswith("-F"):
+            codes.append(w[2:])  # compiled into the program as split's pattern, so read as code
         elif w.startswith("-") and not PERL_SWITCH.fullmatch(w):
             return f"is run with perl's {w} switch, which can load a module or write a file"
         elif re.search(r"^\s*[|<>+&]|\|\s*$", w):

@@ -2440,6 +2440,7 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'BEGIN { \$ARGV[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'print' notes.md 'sh post.sh |'" "perl -ne 'print' notes.md '| sh post.sh'" \
   "perl -ne 'print' -e 'system(\"sh post.sh\")' notes.md" "perl -e 'print 1' -e 'system(\$_)' post.sh" \
+  "perl -F'/(?{system(qw(sh))})/' -ane 'print' notes.md" \
   "perl -ne 'BEGIN { (\$x, @ARGV) = (1, \"sh post.sh |\") } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
