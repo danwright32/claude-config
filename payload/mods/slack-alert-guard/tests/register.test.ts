@@ -116,7 +116,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // cwd: the folder the session is in.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, cwd: '/w/app' }
+  // gitTakes, ghTakes: the test clock time each git or gh command takes before it answers (#2792), so
+  // a git killed at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS
+  // or more, and a gh the same with ghFails.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -181,6 +184,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (cmd === 'gh') {
       const argv = e.argv.map(String)
       ghs.push(argv)
+      if (ctl.ghTakes) await clock.advance(ctl.ghTakes)
       if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
       if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url')) {
@@ -197,6 +201,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const argv = e.argv.map(String)
       gits.push({ argv, timeoutMs: e.init?.timeoutMs })
       if (ctl.gitThrows) throw new Error('git could not be started')
+      if (ctl.gitTakes) await clock.advance(ctl.gitTakes)
       if (ctl.gitFails) return { value: { exitCode: 143, stdout: '', stderr: `${ctl.gitFails}\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
       const dir = argv[2] ?? ''
       const top = Object.keys(ORIGINS).find(r => dir === r || dir.startsWith(`${r}/`))
@@ -806,6 +811,56 @@ test('a guard that cannot read its record or the file refuses, saying why; one t
   w.ctl.storeSetFails = true
   expect(contextOf(await ask($, w, why, APPROVE))).toContain('could not be recorded')
   expect(w.ran).toEqual([])
+})
+
+// #2792: on 2026-11-11, at load average 60 to 200, the guard answered "could not check this call
+// (... not searched within 7 seconds)", which read as a refusal and named no time to wait, and agents
+// sent the same call up to six times. A check that runs out of time now says it is a timeout, not a
+// refusal, and when to send the call again; git failing for any other reason is still could not check.
+test('a check that runs out of time says it is a timeout, not a refusal, and when to send the call again; a git that fails in time is still could not check (#2792)', withKit, async ($, on) => {
+  const w = world($, on)
+  // git killed at its timeout: it took the whole of the time it was given, then failed.
+  w.ctl.gitFails = 'killed'
+  w.ctl.gitTakes = SCAN_MS
+  const late = refusalOf(await call($, REWORD))
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).toContain('three times')
+  expect(late).not.toContain('could not check')
+  expect(w.ran).toEqual([])
+  expect(JSON.stringify(w.cards.at(-1))).toContain('ran out of time')
+  // git failing at once, with time to spare, is no timeout.
+  w.ctl.gitTakes = 0
+  const failed = refusalOf(await call($, REWORD))
+  expect(failed).toContain('could not check')
+  expect(failed).not.toContain('timeout')
+  // With git answering, the same edit is held for Dan's approval as ever.
+  w.ctl.gitFails = ''
+  expect(refusalOf(await call($, REWORD))).toContain('realistic example')
+  expect(w.ran).toEqual([])
+})
+
+// #2792 part 1: on 2026-11-11 about a dozen approvals in one afternoon were for edits that changed
+// only a comment, or only a string written to a log, in a file a Slack sender imports. Since #2850
+// such a file is never held, and in the sender itself only text its own sends carry is held.
+const MESSAGES = '/w/app/lib/messages.ts'
+const MESSAGES_TEXT = 'export const failed = (id: string) => `Deploy ${id} failed`\n'
+const IMPORTING_ALERT = "import { failed } from './messages'\nexport const alert = (id: string) => fetch(process.env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: failed(id) }) })\n"
+test('a comment only edit, or a string only a log reads, in a file a Slack sender imports or in the sender itself, passes; new wording in the sender is still held (#2792)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MESSAGES]: MESSAGES_TEXT, [ALERT]: IMPORTING_ALERT } })
+  const passes = [
+    { tool: 'Edit', file_path: MESSAGES, old_string: 'export const failed', new_string: '// The words Slack shows when a deploy fails.\nexport const failed' },
+    { tool: 'Edit', file_path: MESSAGES, old_string: 'export const failed', new_string: "console.log('building the deploy failure text')\nexport const failed" },
+    { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: '// Posts a deploy failure to the alerts channel.\nexport const alert' },
+    { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: "console.log('the deploy alert module loaded')\nexport const alert" },
+  ]
+  for (const edit of passes) expect([edit.new_string, refusalOf(await call($, edit))]).toEqual([edit.new_string, ''])
+  expect(w.ran.length).toBe(4)
+  expect(w.cards).toEqual([])
+  // New wording the sender's own send carries is still held, so the passes above were judged.
+  const held = refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: 'text: failed(id)', new_string: 'text: `Deploy ${id} failed on production`' }))
+  expect(held).toContain('Deploy ${id} failed on production')
+  expect(w.ran.length).toBe(4)
 })
 
 test("python alerts are read through mod-kit's reader, and the guard's own record is never written by a call", withKit, async ($, on) => {
@@ -1464,6 +1519,20 @@ test('a merge the guard cannot read, or whose diff gh cannot give, is held while
   const before = w.ghs.length
   expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
   expect(w.ghs.length).toBe(before)
+})
+
+test('a merge whose diff gh did not give within its time is told as a timeout, not a refusal; gh failing at once is still could not check (#2792)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.ghFails = true
+  w.ctl.ghTakes = SCAN_MS
+  const late = refusalOf(await call($, MERGE))
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).not.toContain('could not check')
+  w.ctl.ghTakes = 0
+  expect(refusalOf(await call($, MERGE))).toContain('could not check')
 })
 
 // #2833: a choice holds merges in the repository it was made in, never in another. After sleep mode
