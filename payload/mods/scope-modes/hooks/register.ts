@@ -3368,7 +3368,8 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
 // time even mid turn (the watchdog), said at the next Stop. The session is started again outside
 // the one at a time queue, so the turn it starts can reach its own Stop.
 const driverTick = async ($: EngineInterface, seen: SleepReading) => {
-  // The words it is started again with: after an API error's wait, or after a rest (#1281).
+  // The words it is started again with, as resumeWords picks them: after an API error's wait, a rest
+  // for mods out of step (#1281), or a rest on its own background work (#2511).
   const resume = await oneAtATime(async (): Promise<string | null> => {
     const en = await enrolledNow($, seen)
     if (!en || stoppedHere.has(stopKey(en))) return null

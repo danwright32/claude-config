@@ -266,8 +266,10 @@ export const NO_GOAL_WHY = 'no goal was set for this session before bed, so it d
 
 /**
  * One Stop of an enrolled session while the Mac sleeps. Blocks to keep it working, or lets it stop
- * with a note saying why. The order is the order of what matters most: an unreadable counter, no
- * goal, the weekly limit, the night's cap, the breaker, the stuck claim, the unmeasured usage.
+ * with a note saying why, or lets it rest. The order is the order of what matters most: an
+ * unreadable counter, no goal, the weekly limit, the night's cap, mods out of step, the breaker
+ * (passed over while the session's own work still runs, #2511), the stuck claim, a rest on that
+ * work, the unmeasured usage.
  */
 export const decideStop = (i: StopInput): StopDecision => {
   const { now, self } = i
