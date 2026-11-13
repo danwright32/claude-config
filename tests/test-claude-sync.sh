@@ -2212,10 +2212,19 @@ if ! . "${SCRIPT%/*}/payload/hooks/lib/hang-wait.sh"; then
   exit 1
 fi
 # fn_drive <code> <file> [args...]: what `bash -c '<code>' _ <file> [args...]` did for a function file
-# this suite extracts from claude-sync at run time, with the code written into a driver beside that
-# file and run as its own process, $1 the file and the rest after it. Sourcing a file made at run time
-# names a path the Slack drafts gate cannot work out, and it refuses that (claude-config#2538).
-fn_drive(){ local code="$1"; shift; printf '%s\n' "$code" > "$1.drive"; bash "$1.drive" "$@"; }
+# this suite extracts from claude-sync at run time, with the code written into a driver in this suite's
+# scratch and run as its own process, $1 the file and the rest after it. Sourcing a file made at run
+# time names a path the Slack drafts gate cannot work out, and it refuses that (claude-config#2538).
+# Never beside the file: $1 can be a library in the checkout's own payload, which the sync carries.
+fn_drive(){
+  local code="$1" drv rc
+  shift
+  drv="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")" || return 1
+  printf '%s\n' "$code" > "$drv"
+  bash "$drv" "$@"; rc=$?
+  rm -f "$drv"
+  return "$rc"
+}
 # The workflow timeout reader the #1901 section uses, loaded here rather than in that section: past
 # its first check this file's variables are more than the drafts gate follows, so a path made from
 # SCRIPT there is one it refuses (#2538). The section checks it loaded.
@@ -24434,6 +24443,10 @@ ts17_rc_held=0
 fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3" --exclude=/real-skill' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_held=$?
 check "#2017 and a skill the caller holds back is still left out" "[ \"\$ts17_rc_held\" -eq 1 ]"
+# Those calls hand fn_drive the checkout's own library first, so its driver must land in scratch,
+# never beside that library in the payload the sync carries (#2538).
+check "#2538 fn_drive writes no driver into the payload it is handed" \
+  "! ls -A '${SCRIPT%/*}/payload/hooks/lib' | grep -q '\\.drive\$'"
 
 section "== a watcher stops when it has been replaced or orphaned, and a tick is one watcher (#604) =="
 # 2026-10-03: status reported 5 claude-sync watch processes, nested up to 4 deep, one of them a root
