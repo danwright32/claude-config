@@ -45,7 +45,9 @@
 # finding about the three tools (4 of the first 14 refusals recorded, 2026-10-22 to 23). A script
 # could run an argument, so a quoted argument is never data in general. It is data only for a script
 # subcommand declared below, whose argument handling has been read and runs none of them, and only
-# when the command is that call alone, read by lib/shell-words.py data_blanked: `bash` (or nothing,
+# when that call is a pipeline of the command on its own, read by lib/shell-words.py data_blanked
+# (since #1492 it may stand beside the command's other pipelines, after ;, && or ||, which are then
+# judged as if it were not there, data_set_aside): `bash` (or nothing,
 # the script run by its path, claude-config#1623), the declared path (~/ or the home directory
 # written out), the subcommand, then words, and nothing a shell would do
 # beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the command
@@ -335,22 +337,37 @@ first_unexcused "$cmd" || exit 0
 why_category "$PS_UNREAD_WHY"
 # A declared script call (or subcommand call), with nothing in front but the GH_TOKEN prefix and
 # nothing behind but 2>&1 and pipes into plain filters, whose git, gh and rtk all sit inside
-# arguments quoted whole, is no refusal (claude-config#1574, #1610). A reader that fails or prints
-# nothing is no pass.
+# arguments quoted whole, is set aside (claude-config#1574, #1610), and since #1492 it may stand
+# beside the command's other pipelines: lib/shell-words.py data_set_aside replaces each such call by
+# `:`, and what is left is judged as if the call were not there. Passed when what is left names none
+# of git, gh and rtk or holds no unread wrapper; otherwise refused for the first unread wrapper it
+# holds, which the gates could not see. A reader that fails or prints nothing sets nothing aside,
+# and a reading of what is left that fails refuses for the wrapper first found.
+if [ "$REASON" = script-file ]; then
+  rest="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-set-aside "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
+    && [ -n "$rest" ] && {
+      [[ $rest =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] || exit 0
+      held_wrapper="$PS_UNREAD_WRAPPER"; held_why="$PS_UNREAD_WHY"
+      ps__read "$rest"
+      case $? in
+        0|3)
+          ps_unreadable "$rest" || exit 0
+          first_unexcused "$rest" || exit 0
+          why_category "$PS_UNREAD_WHY" ;;
+        *) PS_UNREAD_WRAPPER="$held_wrapper"; PS_UNREAD_WHY="$held_why" ;;
+      esac
+    }
+fi
 if [ "$REASON" = script-file ]; then
   # A script is unread only beside git, gh or rtk, so its remedy is to stand apart from them.
   ASK="Run the script in a command of its own, and git, gh and rtk in commands of their own, so every gate can read those; or write out what it runs in full. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
-  shown="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-blanked "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
-    && [ -n "$shown" ] \
-    && ! [[ $shown =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] \
-    && exit 0
   # A declared script refused for its shape is told the shapes it passes in, rather than only to
   # write the command out (claude-config#1610): the remedy is to change the call, not to unwrap it.
   for entry in "${DATA_ARGUMENT_SCRIPTS[@]}"; do
     script="${entry%% *}"
     case "$PS_UNREAD_WHY" in
       *"script file $script,"*|*"script file $HOME/${script#\~/},"*)
-        ASK="Its declared call, \`bash $entry\`, passes only called alone, or piped into grep, head, tail or cut, with git, gh and rtk only inside quoted arguments and nothing in front but GH_TOKEN=\$(gh auth token -u <login>), run by bash or by its path; run it that way, and anything else as a command of its own. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
+        ASK="Its declared call, \`bash $entry\`, passes in its declared shape: run by bash or by its path, piped, if at all, only into grep, head, tail or cut, with git, gh and rtk only inside quoted arguments and nothing in front but GH_TOKEN=\$(gh auth token -u <login>); other commands may stand beside it after ;, && or ||. Run it that way, and anything else as a command of its own. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
         break ;;
     esac
   done

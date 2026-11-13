@@ -44,13 +44,15 @@ hook that slow is killed and the command goes unscreened.
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
-  shell-words.py data-blanked '<path>[ <subcommand>]'...   stdin: a whole command
-      when the command is exactly `bash <path> [<subcommand>] <words>`, or `<path> [<subcommand>]
-      <words>` with the script run by its path (claude-config#1623), for one of the declared
-      entries (path under ~/), with nothing in front but GH_TOKEN=$(gh auth token -u <login>), it
-      printed from `bash` (or the path) on with every argument after the path (or the subcommand) that is quoted
-      whole replaced by '', exit 0; for any other shape nothing, exit 1 (claude-config#1574, #1610).
-      The reader check-wrapped-commands.sh asks before refusing a script file; see data_blanked().
+  shell-words.py data-set-aside '<path>[ <subcommand>]'...   stdin: a whole command
+      the command with each declared call in it replaced by `:`, exit 0, or nothing, exit 1, when
+      none stands in it. A declared call is a pipeline of the command itself that is exactly `bash
+      <path> [<subcommand>] <words>`, or `<path> [<subcommand>] <words>` with the script run by its
+      path (claude-config#1623), for one of the declared entries (path under ~/), with nothing in
+      front but GH_TOKEN=$(gh auth token -u <login>) and nothing behind but 2>&1 and pipes into
+      grep, head, tail or cut, git, gh and rtk only inside arguments quoted whole (claude-config
+      #1574, #1610), standing beside the command's other pipelines (#1492). The reader
+      check-wrapped-commands.sh asks before refusing a script file; see data_set_aside().
 
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
@@ -1880,6 +1882,53 @@ def data_blanked(s, declared, home):
     return None
 
 
+# The guard's own test that text names git, gh or rtk (check-wrapped-commands.sh).
+DATA_GUARDED = re.compile(r"(^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$)")
+
+
+def data_set_aside(s, declared, home):
+    """s with every declared data call in it set aside (claude-config#1492), or None when it holds
+    none. A declared call is a pipeline of the command itself, never inside a subshell, a
+    substitution or a wrapper's string, that data_blanked reads in full (the call, only
+    DATA_TOKEN_PREFIX in front, only 2>&1 and pipes into DATA_FILTERS behind) and whose blanked
+    text names none of git, gh and rtk. Each is replaced by `:`, which runs nothing, so the guard can
+    judge the rest of the command exactly as if the call were not there: a push, merge or issue
+    command beside it is read by the gates as usual, and an unread wrapper beside it is refused as
+    before. Pipelines are cut where the shell cuts them, at ;, &&, ||, & and a line break, so a
+    declared call piped into anything but a filter is never one. None too when s cannot be read, or
+    names BASH_ENV anywhere, since bash runs the file that names before any script it is given."""
+    if "BASH_ENV" in s:
+        return None
+    parts = []
+    try:
+        commands(s, "", parts=parts)
+    except Unreadable:
+        return None
+    top = [p for p in parts if p["scope"] == (0,)]
+    spans, k = [], 0
+    while k < len(top):
+        j = k
+        while top[j]["how"] == "|" and j + 1 < len(top):
+            j += 1
+        spans.append((top[k]["start"], top[j]["end"], top[j]["how"]))
+        k = j + 1
+    out, at, found = [], 0, False
+    for start, end, how in spans:
+        # A pipeline that ends in a pipe has nothing after it to read, so it is no declared call.
+        if how == "|":
+            continue
+        shown = data_blanked(s[start:end], declared, home)
+        if shown is None or DATA_GUARDED.search(shown):
+            continue
+        out.append(s[at:start])
+        out.append(" : ")
+        at, found = end, True
+    if not found:
+        return None
+    out.append(s[at:])
+    return "".join(out)
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     data = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace").read()
@@ -1894,14 +1943,14 @@ def main(argv):
         sys.stdout.write(program_field(data)[2])
     elif mode == "bare":
         sys.stdout.write(bare(data))
-    elif mode == "data-blanked":
+    elif mode == "data-set-aside":
         # stdin is the command; each argument after the mode is one declared "<path>" or "<path>
-        # <subcommand>" entry. Exit 1, printing nothing, for any other shape (claude-config#1574,
-        # #1610).
-        shown = data_blanked(data, argv[2:], os.environ.get("HOME", ""))
-        if shown is None:
+        # <subcommand>" entry. Exit 1, printing nothing, when no declared call stands in it in its
+        # declared shape (claude-config#1574, #1610, #1492).
+        rest = data_set_aside(data, argv[2:], os.environ.get("HOME", ""))
+        if rest is None:
             return 1
-        sys.stdout.write(shown)
+        sys.stdout.write(rest)
     elif mode == "read":
         text, rc = read(data)
         sys.stdout.write(text)
@@ -1927,7 +1976,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, or data-blanked '<path>[ <subcommand>]'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool|heredoc-markers < text, or data-set-aside '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

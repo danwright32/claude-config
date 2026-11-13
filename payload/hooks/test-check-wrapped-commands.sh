@@ -181,8 +181,9 @@ check_eq "#1478 control: a command naming neither passes in silence even with th
 # 4b. A note to the issue spool is data, not a command (claude-config#1574). `issue-spool.sh note`
 # hands every argument after `note` to python as a string and runs none of them, so a finding whose
 # quoted text names git, gh or rtk passes. Only that script, only that subcommand, only a call of it
-# alone, and only where each of those words sits inside an argument quoted whole: everything else is
-# refused exactly as before. Every command below is one an agent would run; none is run here.
+# as a pipeline of its own (beside other pipelines since #1492, section 4e2), and only where each of
+# those words sits inside an argument quoted whole: everything else is refused exactly as before.
+# Every command below is one an agent would run; none is run here.
 SPOOL='~/.claude/hooks/lib/issue-spool.sh'
 allowed "a spool note whose text says git push" "bash $SPOOL note . \"git push was refused, gh pr view and rtk too\" \"builder #1574\""
 allowed "a spool note in single quotes" "bash $SPOOL note . 'the gh poll loop' 'builder #1574'"
@@ -198,7 +199,8 @@ refused "the spool's path through a variable" "bash \$HOME/.claude/hooks/lib/iss
 refused "a substitution inside the note" "bash $SPOOL note . \"\$(git push)\" \"builder\"" "bash"
 refused "backticks inside the note" "bash $SPOOL note . \"\`git push\`\" \"builder\"" "bash"
 refused "a quote that never closes" "bash $SPOOL note . \"git push \"x\" \"builder\"" "bash"
-refused "a chained second command" "bash $SPOOL note . \"a finding\" \"builder\" && git push" "bash"
+# A chained second command the gates can read is judged by them, the note set aside (#1492, 4e2).
+allowed "a chained second command" "bash $SPOOL note . \"a finding\" \"builder\" && git push"
 refused "a chained second command whose words are quoted" "bash $SPOOL note . \"x\" \"y\"; bash ./build.sh \"git\"" "bash"
 refused "a note piped on" "bash $SPOOL note . \"git push\" \"builder\" | sh" "bash"
 refused "an assignment before the spool" "CLAUDE_ISSUE_SPOOL_MIDCLEAR='git push' bash $SPOOL note . \"x\" \"y\"" "bash"
@@ -217,7 +219,8 @@ check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" 
 # argument. In front of it, and of nothing else, exactly one shape may stand: the account rule's
 # GH_TOKEN=$(gh auth token -u <login>), with a plain login, to read another account's repository.
 # Behind a declared call, its output may be piped into grep, head, tail or cut, which only read
-# what they are given and print it; `2>&1` may stand before the first pipe. Nothing else follows.
+# what they are given and print it; `2>&1` may stand before the first pipe. Nothing else follows in
+# its pipeline; other pipelines may stand beside it since #1492 (section 4e2), judged without it.
 MC='~/.claude/skills/milestone/milestone-candidates.sh'
 allowed "the duplicate check, as the docs give it" "bash $MC \"danwright32/claude-config\" --like \"Stop the gh poll loop before git push\""
 allowed "the duplicate check through the absolute path" "bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"an rtk rewrite\""
@@ -245,9 +248,10 @@ refused "the check piped to python" "bash $MC \"o/r\" --like \"gh\" | python3 -c
 refused "a filter given by its path" "bash $MC \"o/r\" --like \"gh\" | /usr/bin/grep x" "bash"
 refused "a filter redirected" "bash $MC \"o/r\" --like \"gh\" | grep x > out.txt" "bash"
 refused "a filter with a substitution" "bash $MC \"o/r\" --like \"gh\" | grep \"\$(git push)\"" "bash"
-refused "a filter chained to a push" "bash $MC \"o/r\" --like \"gh\" | grep x && git push" "bash"
-refused "a filter followed by a second command" "bash $MC \"o/r\" --like \"gh\" | grep x; git push" "bash"
-refused "an or in place of a pipe" "bash $MC \"o/r\" --like \"gh\" || git push" "bash"
+# A readable command after the declared pipeline is the gates' to judge, the check set aside (#1492).
+allowed "a filter chained to a push" "bash $MC \"o/r\" --like \"gh\" | grep x && git push"
+allowed "a filter followed by a second command" "bash $MC \"o/r\" --like \"gh\" | grep x; git push"
+allowed "an or in place of a pipe" "bash $MC \"o/r\" --like \"gh\" || git push"
 refused "a pipe of stderr too" "bash $MC \"o/r\" --like \"gh\" |& grep x" "bash"
 refused "an empty pipe" "bash $MC \"o/r\" --like \"gh\" |" "bash"
 refused "an assignment before a filter" "bash $MC \"o/r\" --like \"gh\" | GH_TOKEN=x grep y" "bash"
@@ -255,17 +259,17 @@ refused "stderr sent elsewhere before the pipe" "bash $MC \"o/r\" --like \"gh\" 
 refused "2>&1 after a filter" "bash $MC \"o/r\" --like \"gh\" | grep x 2>&1" "bash"
 refused "a script piped into the check" "bash ./build.sh | bash $MC \"o/r\" --like \"gh\"" "bash"
 judge "bash $MC \"o/r\" --like \"gh\" | sh"
-check "#1610 a declared call in another shape is told the shapes it passes in" "passes only called alone, or piped into grep, head, tail or cut" "$out"
+check "#1610 a declared call in another shape is told the shapes it passes in" "passes in its declared shape: run by bash or by its path, piped, if at all, only into grep, head, tail or cut" "$out"
 judge "bash $SPOOL clear . \"git push\""
-check "#1610 a spool subcommand that is not declared is told which one is" "\`bash ~/.claude/hooks/lib/issue-spool.sh note\`, passes only called alone" "$out"
+check "#1610 a spool subcommand that is not declared is told which one is" "\`bash ~/.claude/hooks/lib/issue-spool.sh note\`, passes in its declared shape" "$out"
 judge "bash ./build.sh && git push"
-told=no; [[ $out == *"passes only called alone"* ]] && told=yes
+told=no; [[ $out == *"passes in its declared shape"* ]] && told=yes
 check_eq "#1610 control: an undeclared script is refused but not told that" "2 no" "$rc $told"
 refused "the check's words outside the quotes" "bash $MC \"owner/repo\" --like git push" "bash"
 refused "a substitution in the check's title" "bash $MC \"owner/repo\" --like \"\$(git push)\"" "bash"
 refused "a script of the check's name elsewhere" "bash ./milestone-candidates.sh \"owner/repo\" --like \"git push\"" "bash"
 refused "the script beside it that writes" "bash ~/.claude/skills/milestone/ensure-milestone.sh \"owner/repo\" \"gh title\" --create-approved" "bash"
-refused "the check chained to a push" "bash $MC \"owner/repo\" --like \"a title\" && git push" "bash"
+allowed "the check chained to a push, which the push gates judge (#1492)" "bash $MC \"owner/repo\" --like \"a title\" && git push"
 refused "the check redirected" "bash $MC \"owner/repo\" --like \"gh\" > out.txt" "bash"
 refused "the token with no account named" "GH_TOKEN=\$(gh auth token) bash $MC \"o/r\" --like \"gh\"" "bash"
 refused "the token's account quoted" "GH_TOKEN=\$(gh auth token -u \"danwright32\") bash $MC \"o/r\" --like \"gh\"" "bash"
@@ -283,7 +287,8 @@ refused "another variable's token" "GITHUB_TOKEN=\$(gh auth token -u danwright32
 refused "a second assignment after the token" "GH_TOKEN=\$(gh auth token -u danwright32) FOO=1 bash $MC \"o/r\" --like \"gh\"" "bash"
 refused "an assignment before the token" "FOO=1 GH_TOKEN=\$(gh auth token -u danwright32) bash $MC \"o/r\" --like \"gh\"" "bash"
 refused "the token twice" "GH_TOKEN=\$(gh auth token -u a) GH_TOKEN=\$(gh auth token -u b) bash $MC \"o/r\" --like \"gh\"" "bash"
-refused "the token exported first" "export GH_TOKEN=\$(gh auth token -u danwright32); bash $MC \"o/r\" --like \"gh\"" "bash"
+# Exported first, the token is a command of its own the gates read, and the check stands alone (#1492).
+allowed "the token exported first" "export GH_TOKEN=\$(gh auth token -u danwright32); bash $MC \"o/r\" --like \"gh\""
 refused "the token before a different script" "GH_TOKEN=\$(gh auth token -u danwright32) bash ./build.sh \"gh\"" "bash"
 refused "the token before another shell" "GH_TOKEN=\$(gh auth token -u danwright32) sh $MC \"o/r\" --like \"gh\"" "sh"
 refused "the token before a shell option" "GH_TOKEN=\$(gh auth token -u danwright32) bash -x $MC \"o/r\" --like \"gh\"" "bash"
@@ -315,7 +320,8 @@ cp "$HOOK" "$OLDREADER/"
 # Every library but the reader under test is the real one, whole-number.sh included (#1948), or the
 # refusals below would be the gate refusing over a missing library rather than over this reader.
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$OLDREADER/lib" push-scope.sh whole-number.sh || bad "#2204 the hook helpers could not be installed into $OLDREADER/lib"
-sed 's/mode == "data-blanked"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
+sed 's/mode == "data-set-aside"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
+check "#1492 the reader under test really lacks the mode" "not-a-mode-1574" "$(cat "$OLDREADER/lib/shell-words.py")"
 out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
 out="$(payload "bash $SPOOL note . \"a finding\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
@@ -348,8 +354,9 @@ old = """def data_blanked(s, declared, home):
     return None
 
 
-def main("""
-src = re.sub(r"def data_blanked\(.*?\n\n\ndef main\(", lambda m: old, src, count=1, flags=re.S)
+"""
+# Only data_blanked is swapped: the code after it (data_set_aside, #1492) is the same in both.
+src = re.sub(r"def data_blanked\(.*?\n\n\n(?=\S)", lambda m: old, src, count=1, flags=re.S)
 open(sys.argv[2], "w").write(src)' "$DIR/lib/shell-words.py" "$PRE1610/lib/shell-words.py"
 out="$(payload "bash $MC \"o/r\" --like \"git push\"" | bash "$PRE1610/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1610 a reader from before the duplicate check was declared refuses it" "2" "$rc"
@@ -413,13 +420,13 @@ refused_file "sourced with no slash" "source env.sh && gh pr merge 7" "env.sh"
 # The near miss #1610 dropped: no space before bash makes the token's value end in `bash`, and the
 # declared script itself the command, behind an assignment the declaration does not accept.
 refused_file "the token run together with bash" "GH_TOKEN=\$(gh auth token -u danwright32)bash $MC \"o/r\" --like \"gh\"" "$MC"
-refused_file "a declared script run by path, chained to a push" "$SPOOL note . \"a finding\" \"builder\" && git push" "$SPOOL"
+allowed "a declared script run by path, chained to a push the push gates judge (#1492)" "$SPOOL note . \"a finding\" \"builder\" && git push"
 refused_file "a declared script run by path, its words unquoted" "$SPOOL note . git push \"builder\"" "$SPOOL"
 refused_file "a declared script's other subcommand, run by path" "$SPOOL clear . \"git push\"" "$SPOOL"
 refused_file "a declared script's name elsewhere, run by path" "./issue-spool.sh note . \"git push\" \"builder\"" "./issue-spool.sh"
 refused_file "a declared script through a variable" "\$HOME/.claude/hooks/lib/issue-spool.sh note . \"git push\" \"builder\"" "\$HOME/.claude/hooks/lib/issue-spool.sh"
 judge "$SPOOL clear . \"git push\""
-check "#1623 a declared script run by path in another shape is told the shapes it passes in" "passes only called alone" "$out"
+check "#1623 a declared script run by path in another shape is told the shapes it passes in" "passes in its declared shape" "$out"
 judge "./build.sh && git push"
 check "#1623 a script refused is told it can run in a command of its own" "Run the script in a command of its own" "$out"
 allowed "a declared note run by its path" "$SPOOL note . \"git push was refused\" \"builder #1623\""
@@ -524,6 +531,47 @@ read_only_block="$(sed -n '/^READ_ONLY_CALLS=(/,/^)/p' "$HOOK")"
 read_only="$(grep -c '^  "' <<< "$read_only_block")"
 check_eq "#1669 one call is declared read only, claude-sync lesson" "1" "$read_only"
 check "#1669 it is the live clone's lesson" '  "~/claude-config-sync/claude-sync lesson"' "$read_only_block"
+
+# 4e2. A declared data call BESIDE other commands (claude-config#1492). Measured on the personal
+# MacBook, 2026-10-22 to 2026-11-12 ET: 395 refusals in the transcripts, 73 of them of the two
+# declared scripts, in shapes like `cd <dir> && <note>`, two notes in one command, or the duplicate
+# check piped to head and then `gh label list`; every one of the 35 duplicate check refusals was
+# followed by the session running the gh part on its own. A declared call runs none of its arguments
+# and no git push, gh pr merge or gh issue command of its own (issue-spool.sh note runs only `git -C
+# <dir> rev-parse`; milestone-candidates.sh only `gh api` GETs and `gh issue list`). So a declared
+# call in exactly its declared shape, its pipe only into grep, head, tail or cut, standing beside other
+# commands after ;, &&, || or a line break, is set aside, and the rest of the command is judged as if
+# it were not there: a push, merge or issue command beside it is read by the gates as usual, and an
+# unread wrapper beside it is refused as before. This loosens #1574's "only a call of it alone".
+allowed "a spool note after cd" "cd /srv/x && bash $SPOOL note . \"git push was refused\" \"builder #1492\""
+allowed "two spool notes in one command" "bash $SPOOL note . \"gh one\" \"b\"; bash $SPOOL note . \"git two\" \"b\""
+allowed "the duplicate check, then the labels" "bash $MC \"o/r\" --like \"a gh title\" | head -20; gh label list --repo o/r | grep -i bug"
+allowed "the duplicate check for another account, then the issues" "GH_TOKEN=\$(gh auth token -u other-acct) bash $MC \"o/r\" --like \"gh\" 2>&1 | grep DUP; gh issue list --repo o/r"
+allowed "a note beside git status" "bash $SPOOL note . \"x\" \"y\" && git status"
+allowed "a note by its path beside gh pr view" "$SPOOL note . \"a finding\" \"b\"; gh pr view 7"
+allowed "a note beside a script, git named only in the note" "bash $SPOOL note . \"git push\" \"b\"; ./build.sh --fast"
+allowed "a note on its own line, then git" "$(printf 'bash %s note . "x" "y"\ngit status' "$SPOOL")"
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "cd /srv/x && bash $SPOOL note . \"git push\" \"b\" && git status"
+check_eq "#1492 a declared call set aside is not recorded as a refusal" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
+# The same shapes hiding a push, a merge or an issue command are refused as before.
+refused_file "a note beside an undeclared script and a push" "bash $SPOOL note . \"x\" \"y\" && bash ./build.sh && git push" "./build.sh"
+refused_file "the duplicate check beside a script running gh pr merge" "bash $MC \"o/r\" --like \"x\" | head; ./merge.sh && gh pr merge 7" "./merge.sh"
+refused "a note beside bash -c of a variable" "bash $SPOOL note . \"x\" \"y\"; bash -c \"\$CMD\" && git push" "bash -c"
+refused "a note beside a shell fed a file" "bash $SPOOL note . \"x\" \"y\"; bash < steps.txt; gh issue create --title t" "bash"
+refused_file "a note holding a substitution, beside git" "bash $SPOOL note . \"\$(git push)\" \"y\"; git status" "$SPOOL"
+refused_file "a note after BASH_ENV is exported, which bash runs first" "export BASH_ENV=./x.sh; bash $SPOOL note . \"x\" \"y\" && git status" "$SPOOL"
+refused_file "a note behind BASH_ENV" "BASH_ENV=./x.sh bash $SPOOL note . \"x\" \"y\" && git status" "$SPOOL"
+refused_file "the spool's other subcommand beside git" "bash $SPOOL clear . && git status" "$SPOOL"
+refused_file "a note piped into sed, beside git" "bash $SPOOL note . \"x\" \"y\" | sed -n 1p; git status" "$SPOOL"
+refused_file "a note redirected, beside git" "bash $SPOOL note . \"x\" \"y\" > out.txt; git status" "$SPOOL"
+refused_file "a note's words outside its quotes, beside git" "bash $SPOOL note . git push \"y\"; git status" "$SPOOL"
+refused_file "a script of the spool's name elsewhere, beside a push" "bash ./issue-spool.sh note . \"x\" \"y\" && git push" "./issue-spool.sh"
+refused_file "a sourced spool beside git" "source $SPOOL note . \"x\" && git status" "$SPOOL"
+refused_file "a note inside a subshell, beside git" "(bash $SPOOL note . \"x\" \"y\") && git status" "$SPOOL"
+refused "the duplicate check piped into a shell, beside git" "bash $MC \"o/r\" --like \"x\" | bash; git status" "bash"
+judge "bash $SPOOL note . \"x\" \"y\" | sed -n 1p; git status"
+check "#1492 a declared call in another shape is told the shape it passes in" "passes in its declared shape" "$out"
 
 # 4f. A word inside a quoted title or body is no git command (claude-config#1699). A builder's
 # `gh pr create` titled with the word git was refused on 2026-10-24; replayed through every Bash
