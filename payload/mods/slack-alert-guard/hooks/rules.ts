@@ -54,6 +54,26 @@ export const CHANGE = 'Change wording'
  * return the refusal.
  */
 export const SCAN_MS = 7000
+
+/** Why a call is held when the guard could not check it, the failure in its own words. */
+export const cannotCheck = (why: string) =>
+  `Blocked: the Slack alert guard could not check this call (${why}), so it is held rather than let through unchecked. Try it again; if it keeps failing, tell Dan what failed.`
+/**
+ * Why a call is held when the guard ran out of time checking it (#2792): said as a timeout, never as
+ * a refusal, with when to send it again and when to stop. On 2026-11-11, at load average 60 to 200,
+ * the could not check answer read as a refusal and agents sent the same call up to six times.
+ */
+export const outOfTime = (why: string) =>
+  `This is a timeout, not a refusal: the Slack alert guard ran out of time before it could check this call (${why}), so the call did not run, nothing in it was judged, and nothing waits on Dan. It happens when the Mac is heavily loaded. Send the same call again in about a minute; if it runs out of time three times in a row, stop and tell Dan the Slack alert guard could not finish checking it.`
+/**
+ * What a call is told when the guard's hook failed (`next.error`, the engine's HookFailure): a hook
+ * Claude Code cut off for running past its time is a timeout; any other failure is could not check,
+ * in `said`, the failure's own words.
+ */
+export const hookFailed = (failure: unknown, said: string): string =>
+  !!failure && typeof failure === 'object' && (failure as { kind?: unknown }).kind === 'timeout'
+    ? outOfTime('the check took longer than Claude Code gives a hook')
+    : cannotCheck(said)
 /**
  * The most files read for the other uses of a model prompt (#2475) before the prompt counts as
  * wording, held as any other. 500 is more than twice the most a real search read (#2510: 213 in
