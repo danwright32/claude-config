@@ -2818,7 +2818,7 @@ fi
 priv="$(grep -n -E 'from ts_source import .*\b_[A-Za-z]|ts_source\._[A-Za-z]' "$ROOT"/tools/*.sh "$ROOT"/tools/*.py "$ROOT"/tests/*.sh 2>/dev/null | grep -v "^$ROOT/tests/test-mods.sh:.*priv=")"
 [ -z "$priv" ] && check "no scan imports a private helper of tools/lib/ts_source.py" ok \
   || check "no scan imports a private helper of tools/lib/ts_source.py" "$priv"
-fc="$(python3 - "$ROOT/tools/lib" <<'PY'
+fc="$(python3 -B - "$ROOT/tools/lib" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from ts_source import code_only, function_code, function_span, kinds

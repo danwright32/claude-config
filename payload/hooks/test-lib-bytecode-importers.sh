@@ -223,7 +223,8 @@ C_HEAD = re.compile(r"python3?((?:[ \t]+-[A-Za-z]+)*?)[ \t]+(-[A-Za-z]*c)[ \t]+$
 ENV_OFF = re.compile(r"(?<![\w-])PYTHONDONTWRITEBYTECODE=(?:[^\s;|&'\"]|'[^']+'|\"[^\"]+\")")
 # A heredoc written to a Python file that a suite then runs (cat > "$TMP/loop.py" <<'PY'): the program
 # is read where it is written, since the run line names only the file (#2854).
-W_CALL = re.compile(r"^[ \t]*cat[ \t]+>>?[ \t]*[^<]*\.py[\"']?[ \t]*<<")
+W_CALL = re.compile(r"^[ \t]*cat[ \t]+>>?[ \t]*[^<]*?([\w.-]+\.py)[\"']?[ \t]*<<")
+RUN_FLAGS = re.compile(r"python3?((?:[ \t]+-[A-Za-z]+)*)")
 H_CALL = re.compile(r"(?<![A-Za-z0-9_./-])python3?((?:[ \t]+-[A-Za-z]+)*)(?=[ \t]|$)([^<]*)<<")
 # A shell variable on the command line is read through the file's own assignments to it (#2751):
 # tests/test-work-names-tree.sh loaded lib/work-names.py as "$SCAN", assigned at its top, so its
@@ -402,8 +403,15 @@ for rel in paths:
             ("PYTHONDONTWRITEBYTECODE" if ENV_OFF.search(line[:m.start()]) else None)
         report(rel, n + 1, "the heredoc fed to python3", res, how)
     for i, (n, line, kind, bare, ops) in enumerate(rows):
-        if kind != "code" or not ops or not W_CALL.search(line):
+        w = W_CALL.search(line) if kind == "code" and ops else None
+        if not w:
             continue
+        # Run lines naming the file: bytecode is off for the program when every one of them passes
+        # -B or sets the variable, and a file never run by name has nothing to cover it.
+        runs = [l for _, l, k, _, _ in rows if k == "code" and w.group(1) in l and "<<" not in l
+                and RUN_FLAGS.search(l)]
+        how = "every run line" if runs and all(
+            re.search(r"-[A-Za-z]*B", RUN_FLAGS.search(l).group(1)) or ENV_OFF.search(l) for l in runs) else None
         body = []
         for _, bl, bk, _, _ in rows[i + 1:]:
             if bk != "heredoc":
@@ -412,7 +420,7 @@ for rel in paths:
         progs += 1
         res = judge("\n".join(body), None)
         if res:
-            report(rel, n + 1, "the heredoc written to a Python file", res, None)
+            report(rel, n + 1, "the heredoc written to a Python file", res, how)
 print("READ files=%d programs=%d importers=%d" % (files, progs, importers))
 PY
 
