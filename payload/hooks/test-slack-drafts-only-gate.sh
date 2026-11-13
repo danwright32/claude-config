@@ -3377,7 +3377,7 @@ if more:
     wrong.append("asking lib.sh about the same names again scanned it %d more times" % more)
 print("; ".join(wrong) or "ok")
 PY
-once="$(python3 "$T/once.py" "$DIR/slack_drafts_only_gate.py" "$T/once" 2>&1)"
+once="$(python3 -B "$T/once.py" "$DIR/slack_drafts_only_gate.py" "$T/once" 2>&1)"
 check "a text is read into commands once, and a sourced file asked about a name once (#2576)" "$once"
 
 echo "slack drafts only: a claude-sync line is judged in about the time it took at #2640 (claude-config#2784)"
@@ -3490,7 +3490,7 @@ if len(names) < 500:
     wrong.append("only %d names were compared" % len(names))
 print("; ".join(wrong) or "ok")
 PY
-  work="$(python3 "$T/work.py" "$DIR/slack_drafts_only_gate.py" "$CS" 2>&1)"
+  work="$(python3 -B "$T/work.py" "$DIR/slack_drafts_only_gate.py" "$CS" 2>&1)"
   check "claude-sync is read once in a run, and sh_binds answers as it did (#2784)" "$work"
 
   cat > "$T/cost.py" <<'PY'
@@ -3521,9 +3521,9 @@ ratio = spent / unit
 print("ok" if ratio <= ceiling else "judging it took %.1f s of processor time, %.1f readings of claude-sync (%.2f s each), past %s"
       % (spent, ratio, unit, ceiling))
 PY
-  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
+  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 12 L174 2>&1)"
   check "one claude-sync lesson is judged within 12 readings of claude-sync (#2784)" "$cost"
-  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
+  cost="$(env -u SLACK_GATE_TICK_BUDGET -u HOOK_TESTS_RUNNING python3 -B "$T/cost.py" "$HOOK" "$DIR/lib/shell-words.py" "$CS" 22 L174 L290 L656 2>&1)"
   check "three claude-sync lessons in one line are judged within 22 readings of claude-sync (#2784)" "$cost"
 fi
 
