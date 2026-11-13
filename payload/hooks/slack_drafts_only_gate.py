@@ -1407,8 +1407,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         """What one command reads on its input, as stdin_of gives it, with an unreadable piece where
         that is not known; False where nothing feeds it (no pipe before it, no file or here string
         given), or a heredoc does, which the caller reads where the command is (fed)."""
-        redirs = self.redirections(text)[1]
-        ins = [op.lstrip("0") for op, _ in redirs if re.fullmatch(r"0?(<<<|<<-|<<|<>|<&|<)", op)]
+        # Only a redirection of the input itself: `3< clean.sh` opens another descriptor, and leaves the
+        # pipe as what the program reads (lessons review at c6111a2).
+        redirs = [(op, t) for op, t in self.redirections(text)[1] if re.fullmatch(r"0?(<<<|<<-|<<|<>|<&|<)", op)]
+        ins = [op.lstrip("0") for op, _ in redirs]
         if any(op in ("<<", "<<-") for op in ins) or not (ins or self.shell.get("after_pipe")):
             return False
         pieces = self.stdin_of(d, text, whole, redirs)
@@ -5420,7 +5422,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 k += 1
                 continue
             target = m.group(1) or (words[k + 1] if k + 1 < len(words) else "")
-            if re.match(r"\d*<(?![<>&])", words[k]) and target:
+            if re.match(r"0?<(?![<>&])", words[k]) and target:  # the input only, never `3< f` (#2887)
                 from_file = target
             k += 1 if m.group(1) else 2
         words = kept
