@@ -3653,6 +3653,17 @@ refused. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
+Code given inline (`python3 -c`, `node -e`, `perl -ne`, the code `python3 -` reads from a heredoc) is
+certainly the program, so every file after it is that code's argument in the same way (#2691), except
+a file named by a valued option after the code (`node -e '...' -r ./x.js` loads `x.js`; node, ruby and
+perl go on reading their options there, Python does not). And `perl -e` code is read for what it can
+do: a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`, `-F`, `-w`) and whose code
+names none of perl's ways to run a command, load or evaluate code, open, write or rename a file
+(`system`, backticks, `qx`, `open`, `do`, `require`, `use`, `eval`, `s///e`, `unlink`, a `::` name, `$^I`,
+a change to `@ARGV`, and the rest of `PERL_ACTS`) is seen unable to act. So `perl -ne 'print if /x/'`
+over files that name an endpoint passes, and the same one-liner with `system`, `-MLWP::Simple` or `-i`
+is refused. Code in another language the gate does not read (`ruby -e`) is still taken to act.
+
 A file a command runs through a variable or a substitution is read where its value is certain
 (#2678). `python3 "$ROOT/tools/post.py"`, in a script whose first lines set `ROOT` from `BASH_SOURCE`,
 named no file as written, so a script that posts was never read there, where the same file run by a

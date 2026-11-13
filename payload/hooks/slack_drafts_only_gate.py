@@ -137,6 +137,38 @@ OPTIONS = {
     "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
     "osascript": ({"-e"}, "", VALUED),
 }
+# perl -e code the gate sees cannot act (perl_acts, claude-config#2691): switches that only read lines
+# (-n, -p, -l, -a, -0, -F, -w), and code naming none of perl's ways to run a command, load or evaluate
+# code, write or rename a file, or open one (the two argument open runs a command), no module by name
+# (`::`), no backtick, no in place edit ($^I), and no change to @ARGV, whose names perl's <> opens.
+PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
+PERL_ACTS = re.compile(r"`|::|\$\^I|\$\{\^|@ARGV\s*=(?!=)|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
+                       r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
+                       r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
+                       r"dbmopen|tie|dump|ioctl|fcntl|glob|push|unshift|splice)\b")
+
+
+def perl_acts(code, switches):
+    """How perl -e code can act on the files it is handed, as acts() phrases it, or None where it is
+    seen unable to (claude-config#2691). switches are the command's words around the code; any
+    switch beyond those that only read lines (a module by -M or -m, an in place edit by -i, -x, -d)
+    counts as acting. The code acts when it names one of PERL_ACTS, or a substitution whose
+    replacement is evaluated (s///e) or whose form the reading cannot follow. What is left can only
+    read the files it is handed, match and print. Deliberate obfuscation is not what this answers."""
+    for w in switches:
+        if w.startswith("-") and not PERL_SWITCH.fullmatch(w):
+            return f"is run with perl's {w} switch, which can load a module or write a file"
+    hit = PERL_ACTS.search(code)
+    if hit:
+        return f"uses {hit.group(0)}, which can run a command, load code or write a file"
+    for m in re.finditer(r"(?<![\w$@%&\\])s\s*([^\w\s])", code):
+        d, i, seen = m.group(1), m.end(), 0
+        while d not in "{[(<" and i < len(code) and seen < 2:
+            seen += code[i] == d
+            i += 2 if code[i] == "\\" else 1
+        if seen < 2 or "e" in re.match(r"[a-z]*", code[i:]).group(0):
+            return "uses a substitution whose replacement may be run as code (s///e)"
+    return None
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
@@ -4089,9 +4121,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 reason = self.imports(label, None, here, code, lang) if lang else None
                 if reason:
                     return reason
-                # The files after it are the code's arguments, judged as a script's are: a data file
-                # is read when the code can act on it, and any other file is read as code (#2439).
-                return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
+                # The files after it are the code's arguments, never a script the program runs: each is
+                # read as a script only where the code can run what it is handed, and its own text
+                # judged as a data file's (#2439, claude-config#2691). perl -e code is read for what it
+                # can do (perl_acts) rather than taken to act.
+                given = (label, code, here)
+                if self.family(name) == "perl":
+                    switches = before + words[1 + len(before):2 + len(before)] + after
+                    given += (lambda runs_only=False: perl_acts(code, switches),)
+                return self.every_file([words[0]] + after, d, depth, False, lang, inline=given, held_code=True)
             module = self.py_module(words) if lang == "py" else None
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)
@@ -4103,7 +4141,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 at = words.index("-")
                 reason = (self.every_file(words[:at], d, depth, False, lang)
                           or self.every_file([words[0]] + words[at + 1:], d, depth, False, lang,
-                                             inline=(f"the code {name} reads from its input", fed, here)))
+                                             inline=(f"the code {name} reads from its input", fed, here),
+                                             held_code=True))
                 if reason:
                     return reason
             elif "-m" not in words[1:]:
@@ -4342,8 +4381,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         word, and read as code only where the code can run what it is handed."""
         code, data = [], []
         if inline:
-            label, text, here = inline
-            code.append((label, lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
+            # A fourth member, where given, is how that code is read for what it can do (perl_acts).
+            label, text, here = inline[:3]
+            code.append((label, inline[3] if len(inline) > 3 else
+                         lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
         if actor:
             code.append((actor[0], lambda runs_only=False: actor[1]))
         # The word the program runs as its script (operands), and whether it is certain to name no
@@ -4361,6 +4402,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # it, as after a held script word (a module python3 -m runs, claude-config#2827).
         after_held = bool(inline and held_code)
         prog = os.path.basename(words[0])
+        # Except the value of a valued option after the code: node, ruby and perl go on reading their
+        # own options past -e, so `node -e '...' -r ./x.js` loads x.js (measured with node, 2026-11-13,
+        # claude-config#2691). Python stops at -c and -m, and every word after the code is its argument.
+        fam = self.family(prog)
+        loads = OPTIONS.get(fam, (set(), "", VALUED))[2] if inline and fam != "py" else ()
+        last = None
         # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
         # is opened for writing by the shell before the program starts and is never handed to it, so
         # it is not read (claude-config#2771): reading it refused rerunning a suite whose earlier output
@@ -4368,6 +4415,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # every argument, and a file written here and run by a later command is judged there.
         written = False
         for w in words[1:]:
+            option, last = last, w
             if written:
                 written = False
                 continue
@@ -4385,7 +4433,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if (code or past) and (actor or self.data_shaped(path)):
                 data.append((w, path, False))
                 continue
-            if after_held and code:
+            if after_held and code and option not in loads:
                 data.append((w, path, True))
                 continue
             # A file read as code in the place of a script word that names no file is named by that
