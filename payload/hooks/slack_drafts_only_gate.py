@@ -169,11 +169,13 @@ LOADS_NOTHING = {
 # eof, or read by <ARGV>. Any other ARGV left in the code is taken to act.
 PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
 PERL_ARGV_READS = re.compile(r"\$ARGV\b(?!\s*[\[{])|\b(?:close|eof)\s*\(?\s*ARGV\b|<ARGV>")
-# A sigil followed by a block or by another scalar reaches a variable whose name may be computed
+# Any dereference, which is how a variable is reached by a name computed at run time (`$x = "AR"."GV"`
+# then `@$x`, `$x->[0]` or `$x->@*` is @ARGV): a sigil followed by a block or by another scalar
 # (`@{...}`, `${...}`, `@$x`, `$$x[0]`, `*$x`, `$#$x`), with or without space after either sigil, as
-# perl allows (`$ $x[0]`); `$$` alone is the process id. `%` and `*` here also match `$a % $b` and
-# `$a * $b`: the reading refuses that arithmetic rather than tell them apart.
-PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|[@%*&]\s*\$|\$\s*\$(?=[\w{])|\$#\s*[{$]")
+# perl allows (`$ $x[0]`), and any arrow (`->`), which also covers a method or code call through a
+# reference. `$$` alone is the process id. `%` and `*` here also match `$a % $b` and `$a * $b`: the
+# reading refuses that arithmetic rather than tell them apart.
+PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|[@%*&]\s*\$|\$\s*\$(?=[\w{])|\$#\s*[{$]|->")
 PERL_ACTS = re.compile(r"`|::|\$\^I|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
                        r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
                        r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
@@ -4365,12 +4367,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 given = (label, code, here)
                 # node runs the LAST -e or -p it is given (measured 2026-11-13), and only the first is
                 # read here, so where another code option follows, the files keep the reading they had
-                # (any code shaped file read as code). perl_acts reads every -e; Python takes a second
-                # -c as an argument. A code option glued to its code (`--eval=...`) counts too: node
-                # runs it in place of the -e before it (measured 2026-11-13, #2886 review).
+                # (any code shaped file read as code). perl_acts reads every -e; Python, and a shell
+                # given -c, take a second -c as an argument (bash and zsh measured 2026-11-13). A code
+                # option glued to its code (`--eval=...`) counts too: node runs it in place of the -e
+                # before it (measured 2026-11-13, #2886 review).
                 fam = self.family(name)
                 code_words, letters, _ = OPTIONS.get(fam, (set(), "", VALUED))
-                held = fam in ("py", "perl") or not any(
+                held = fam in ("py", "perl", "shell") or not any(
                     w.split("=", 1)[0] in code_words or (letters and re.fullmatch(rf"-[A-Za-z]{{1,4}}[{letters}]", w))
                     for w in after)
                 if fam == "perl":

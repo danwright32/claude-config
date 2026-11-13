@@ -3680,7 +3680,7 @@ keep complete, so such a file is read as code unless the option is one known to 
 do: a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`, `-F`, `-w`) and whose code
 names none of perl's ways to run a command, load or evaluate code, open, write or rename a file
 (`system`, backticks, `qx`, `open`, `do`, `require`, `use`, `eval`, `s///e`, `unlink`, a `::` name, `$^I`,
-a variable reached through a block or another scalar such as `@{...}`, `${...}` or `@$x`, and the rest
+any dereference, through a block, another scalar or an arrow (`@{...}`, `${...}`, `@$x`, `$x->[0]`), and the rest
 of `PERL_ACTS`), and
 that uses `ARGV` only as the scalar `$ARGV` or the filehandle given to `close`, `eof` or `<ARGV>` (any
 other spelling may set `@ARGV`, the names `<>` opens, and perl has many), in every `-e` it is given, and that is

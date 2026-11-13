@@ -2419,7 +2419,8 @@ for reads in "node -e 'console.log(1)' --no-warnings ./post.js" "node -e 'read' 
   "node -e 'console.log(1)' -- ./post.js" "node -e 'console.log(1)' --max-old-space-size=4096 ./post.js" \
   "node -e 'console.log(1)' --input-type=commonjs --no-deprecation ./post.js" \
   "perl -ne 'print' -l post.sh" "python3 -c 'print(1)' -X ./post.py" \
-  "bash -c 'wc -l \"\$@\"' -- ./post.sh" "bash -c 'wc -l \"\$@\"' _ -n ./post.sh" "sh -c 'wc -l \"\$1\"' -x ./post.sh"; do
+  "bash -c 'wc -l \"\$@\"' -- ./post.sh" "bash -c 'wc -l \"\$@\"' _ -n ./post.sh" "sh -c 'wc -l \"\$1\"' -x ./post.sh" \
+  "bash -c 'wc -l \"\$@\"' _ -c ./post.sh"; do
   run_rf "$reads"
   allowed "a file after an option that loads nothing is the code's argument: $reads"
 done
@@ -2466,6 +2467,8 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; @\$x = (\"sh post.sh |\") } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$\$x[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$ \$x[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->@* = (\"sh post.sh |\") } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; *\$x = [\"sh post.sh |\"] } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
