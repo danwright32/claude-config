@@ -170,9 +170,10 @@ LOADS_NOTHING = {
 PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
 PERL_ARGV_READS = re.compile(r"\$ARGV\b(?!\s*[\[{])|\b(?:close|eof)\s*\(?\s*ARGV\b|<ARGV>")
 # A sigil followed by a block or by another scalar reaches a variable whose name may be computed
-# (`@{...}`, `${...}`, `@$x`, `$$x[0]`, `*$x`, `$#$x`); `$$` alone is the process id. `%` and `*` here
-# also match `$a % $b` and `$a * $b`: the reading refuses that arithmetic rather than tell them apart.
-PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|[@%*&]\s*\$|\$\$(?=[\w{])|\$#\s*[{$]")
+# (`@{...}`, `${...}`, `@$x`, `$$x[0]`, `*$x`, `$#$x`), with or without space after either sigil, as
+# perl allows (`$ $x[0]`); `$$` alone is the process id. `%` and `*` here also match `$a % $b` and
+# `$a * $b`: the reading refuses that arithmetic rather than tell them apart.
+PERL_BLOCK = re.compile(r"[@$%*&]\s*\{|[@%*&]\s*\$|\$\s*\$(?=[\w{])|\$#\s*[{$]")
 PERL_ACTS = re.compile(r"`|::|\$\^I|\b(?:system|exec|qx|readpipe|fork|open|sysopen|pipe|"
                        r"socket|socketpair|connect|bind|listen|accept|send|do|require|use|no|eval|evalbytes|syscall|"
                        r"kill|unlink|rename|link|symlink|mkdir|rmdir|chmod|chown|chdir|chroot|truncate|utime|"
@@ -4691,8 +4692,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if w.startswith("-") or w.startswith("+"):
                 # `--require=./x.js` is read as `--require ./x.js` (#2887), its option name included, so
                 # a module node loads by it after the code is code, not the code's data (#2886 review).
-                # After the code any option glued to a value is split, known or not.
-                glued = self.glued_option(w, any_option=options_read and after_held and bool(code))
+                # After the code any option glued to a value is split, known or not, whether or not the
+                # code is held (a second -e after it).
+                glued = self.glued_option(w, any_option=options_read and bool(code))
                 if glued is None:
                     continue
                 option, w = glued

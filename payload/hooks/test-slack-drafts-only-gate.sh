@@ -2465,6 +2465,7 @@ for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh"
   "perl -ne 'BEGIN { @{\"AR\".\"GV\"} = (\"sh post.sh |\") } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; @\$x = (\"sh post.sh |\") } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$\$x[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$ \$x[0] = \"sh post.sh |\" } print' notes.md" \
   "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; *\$x = [\"sh post.sh |\"] } print' notes.md" \
   "ruby -ne 'print' post.sh" \
   "perl -ne 'print' post.sh > run.sh && bash run.sh" \
@@ -2588,7 +2589,8 @@ done
 # after the code, the value of ANY option, separate or glued with =, is read as code, unless the option
 # is one known to load nothing; an option nobody has named yet is read as code too (#2886 review).
 for shape in "node -e 1 --experimental-loader ./FILE" "node -e 1 --experimental-loader=./FILE" \
-  "node -e 1 --some-future-flag=./FILE" "node -e 1 --some-future-flag ./FILE" "node -e 1 -x ./FILE"; do
+  "node -e 1 --some-future-flag=./FILE" "node -e 1 --some-future-flag ./FILE" "node -e 1 -x ./FILE" \
+  "node -e 1 -e 2 --some-future-flag=./FILE" "node -e 1 -e 2 --some-future-flag ./FILE"; do
   si_pair "$shape" x.mjs clean.mjs "x.mjs"
 done
 # A loaded file is read as code whatever it is named: node runs `-r ./x.txt` as CommonJS, so the
