@@ -3132,30 +3132,43 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return None if stack or brace else (rows, blocks)
 
     def sh_locals(self, s, items, struct, known, script):
-        """The values `local NAME=value` gives in the function it is in, as sh_walk regions
-        (claude-config#2465: lib/suite-deadline.sh sources "$_sd_reader", a local). The local must be a
-        command of the function body itself (in no if, loop, case, group or chain, so it runs whenever
-        the function does), NAME=value must appear once in it, and nothing else in s may bind NAME.
-        Its value is worked out from what is known there, the directory unknown, since a function
-        runs wherever it is called. It lasts until the function ends, a loop or a function opens
-        inside it, or a command that is not one of SH_KEEPS, a plain NAME=value, or a local of other
-        names runs, since that can be a function setting it; that command's own words are still read
-        with it, being worked out before it runs."""
+        """The values `local NAME=value` gives in the function it is in, and a plain NAME=value in the
+        function body, if branch or { } group it is in, as sh_walk regions (claude-config#2465:
+        lib/suite-deadline.sh sources "$_sd_reader", a local; #2683: bug-bash/target-guard.sh runs
+        "$egress", set two lines up in the same if branch). The command must be one of that block
+        itself (in no deeper if, loop, case, group or chain, so it runs whenever the block does),
+        NAME=value must appear once in it, and nothing else in s may bind NAME. Its value is worked
+        out from what is known there, the directory unknown, since a function runs wherever it is
+        called. It lasts until the block ends (for an if, its branch: the next elif or else), a loop
+        or a function opens inside it, or a command that is not one of SH_KEEPS, a plain NAME=value,
+        or a local of other names runs, since that can be a function setting it; that command's own
+        words are still read with it, being worked out before it runs. Where s sources no file and
+        binds no name through a variable (sh_sealed), nothing but s itself can bind NAME, and s
+        binds it nowhere else, so any command may run between."""
         out = {}
         if struct is None:
             return out
         rows, blocks = struct
+        sealed = None
         for idx, ((d, t), p) in enumerate(items):
             if rows[idx] is None:
                 continue
             stack, head = rows[idx]
-            if not stack or blocks[stack[-1]]["kind"] != "func" or p["how"] in ("|", "&"):
+            if not stack or blocks[stack[-1]]["kind"] not in ("func", "if", "group") or p["how"] in ("|", "&"):
                 continue
             before = next((items[j][1]["how"] for j in range(idx - 1, -1, -1) if rows[j] is not None), ";")
             toks = self.sh_tokens(head)
-            if before in ("&&", "||", "|", "&") or toks[:1] != [("word", "local")] or any(k == "op" for k, _ in toks):
+            if before in ("&&", "||", "|", "&") or any(k == "op" for k, _ in toks):
                 continue
-            words = [r for _, r in toks[1:]]
+            if toks[:1] == [("word", "local")]:
+                if blocks[stack[-1]]["kind"] != "func":
+                    continue
+                words = [r for _, r in toks[1:]]
+            else:
+                a = self.sh_assignment(head)
+                if not a:
+                    continue
+                words = [a[0] + "=" + a[1]]
             while words[:1] == ["-r"]:
                 words = words[1:]
             if any(w[:1] in ("-", "+") for w in words):
@@ -3174,20 +3187,33 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
                     continue
                 b = items[end][1]["start"]
+                if sealed is None:
+                    sealed = self.sh_sealed(items)
                 for j in range(idx + 1, end):
                     if rows[j] is None:
                         continue  # a subshell's or a substitution's, which cannot set it
                     stack_j, head_j = rows[j]
                     if stack_j[:len(stack)] != stack or \
-                            any(blocks[x]["kind"] in ("loop", "func") for x in stack_j[len(stack):]):
+                            any(blocks[x]["kind"] in ("loop", "func") for x in stack_j[len(stack):]) or \
+                            (stack_j == stack and re.match(r"(?:elif|else)(?![\w-])", items[j][0][1].lstrip())):
                         b = items[j][1]["start"]
                         break
-                    if not self.sh_keeps(head_j) and not self.sh_sources_without(head_j, n, s, known, script,
-                                                                                 items[j][1]["start"]):
+                    if not sealed and not self.sh_keeps(head_j) and \
+                            not self.sh_sources_without(head_j, n, s, known, script, items[j][1]["start"]):
                         b = items[j][1]["start"] + 1
                         break
                 out.setdefault(n, []).append((p["end"], b, v))
         return out
+
+    def sh_sealed(self, items):
+        """Whether no command of the text sources a file or binds a name it does not spell out
+        (sh_indirect: eval, read "$n", printf -v "$n"...), a subshell's or a substitution's included,
+        so only the text's own spelt out bindings can set a name (sh_locals, claude-config#2683)."""
+        for (d, t), p in items:
+            h = self.sh_strip_openers(t)
+            if self.sh_source_target(h) is not None or self.sh_indirect(h):
+                return False
+        return True
 
     def sh_sources_without(self, head, n, s, known, script, at):
         """Whether head sources a file whose path is worked out (from what is known at offset at in s)
