@@ -275,6 +275,8 @@ type Opts = {
   repoAnswer?: string | null
   /** A sleep record another /sleep places the moment this one takes the preparing marker (#843). */
   recordOnMarker?: string
+  /** Run once, the moment a /sleep links its preparing marker, before that link returns (#2582). */
+  onPreparingLinked?: () => Promise<unknown>
   /** Dan's bedtime answer, given only when this settles (#843). */
   repoAnswerLate?: Promise<string>
   /** origin/HEAD's branch, main unless said (#843). */
@@ -667,6 +669,11 @@ const world = (on: On, o: Opts = {}) => {
       w.files[to] = w.files[from] as string
       // Another /sleep finishing just as this one takes the marker (#843).
       if (o.recordOnMarker && to.endsWith('/state/sleep/preparing')) w.files[`${'/Users'}/x/.claude/state/sleep/current.json`] = o.recordOnMarker
+      const linked = o.onPreparingLinked
+      if (linked && to.endsWith('/state/sleep/preparing')) {
+        o.onPreparingLinked = undefined
+        return linked().then(() => ok()) as never
+      }
       return ok()
     }
     if (cmd === 'rm') {
@@ -5468,6 +5475,17 @@ test("a second /sleep while this session's own is still asking says so, and neve
   expect(second).not.toMatch(/wake|another|session s1/)
   await clock.advance(10 * MIN)
   expect((await first).text).toMatch(/^Sleep mode is on until/)
+})
+
+// The moment between linking the marker and the claim returning: a /sleep here that reads it then
+// must still find it as this session's own, asking (#2582).
+test("a second /sleep reading this session's marker the moment it is linked says this session's own is asking (#2582)", withDeps, async ($, on) => {
+  let second: string | undefined
+  const { clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, onPreparingLinked: async () => (second = (await command($ as never, 'sleep')).text) })
+  await start($ as never, clock)
+  const first = await command($ as never, 'sleep')
+  expect(second).toBe("This session's own /sleep is still asking its before bed questions, begun at 7:16 PM ET on Wed Dec 31. Nothing changed.")
+  expect(first.text).toMatch(/^Sleep mode is on until/)
 })
 
 test('a preparing marker this session placed with no /sleep of its own still asking is said as that, not as another session (#2582)', withDeps, async ($, on) => {
