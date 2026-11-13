@@ -1083,7 +1083,8 @@ run({saveAs: "chrome-probe.html"}).then(function (said) {
         saved = json.loads(html_unescape(m.group(1))) if m and proc.returncode == 0 else {}
     except ValueError:
         saved = {}
-    shown = repr(saved)[:600] or proc.stdout[-600:] + proc.stderr[-300:]
+    # An empty result shows Chrome's own output instead, since "{}" alone says nothing about why.
+    shown = repr(saved)[:600] if saved else proc.stdout[-600:] + proc.stderr[-300:]
     check("#2774 given saveAs, the capture saves itself as one download of a Blob under that name",
           saved.get("clicks") == 1 and saved.get("download") == "chrome-probe.html" and saved.get("href") == "blob:"
           and saved.get("attached") is True, shown)
