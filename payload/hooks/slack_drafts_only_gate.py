@@ -1419,7 +1419,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         read as the same text handed by name is, a file by read_file(path, its word) and text by
         read_text(text). Code a program was given to write it names what it names, as script() reads
         it. A piece whose text cannot be worked out, what any program the gate does not read prints
-        (curl, gh) or a file it may have written, is refused: the gate cannot see what it holds."""
+        (a download, say) or a file it may have written, is refused: the gate cannot see what it holds."""
         for kind, value, label in pieces:
             if kind == "file":
                 reason = read_file(value, label or value)
