@@ -3487,10 +3487,14 @@ ur_plain suite-printfv 'SUITE="$DIR/../tools/lib/act.sh"' 'printf -v SUITE %s "$
 ur_plain sealed-read 'sealed() {' '  local py="$ROOT/tools/lib/act.py"' '  read -r py < /dev/null' '  python3 "$py"' '}' 'sealed'
 ur_plain localsrc-rebinds 'fields() {' '  local ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/rebinds.sh"' '  bash "$ensure"' '}' 'fields'
 ur_plain declf-assign 'HOOK="$ROOT/tools/lib/act.sh"' 'declare HOOK="$1"' 'bash "$HOOK"'
+# export -n takes the export off and keeps the value, where declare -n makes a nameref (#2538:
+# test-claude-sync.sh's `export -n SUITE_FILTERED ...` ended its walk at line 1198).
+ur_plain exportn 'HOOK="$ROOT/tools/lib/act.sh"' 'export -n HOOK SUITE_FILTERED 2>/dev/null || true' 'bash "$HOOK"'
+ur_plain declaren 'HOOK="$ROOT/tools/lib/act.sh"' 'declare -n HOOK=OTHER' 'bash "$HOOK"'
 ur_plain read-ifs 'SUITE="$DIR/../tools/lib/act.sh"' 'IFS= read -r SUITE < /dev/null' 'run() {' '  bash "$SUITE"' '}' 'run'
 ur_plain read-chained 'SUITE="$DIR/../tools/lib/act.sh"' 'run() {' '  bash "$SUITE"' '}' '[ -n "$1" ] && read -r SUITE < /dev/null' 'run'
 ur_plain read-case 'SUITE="$DIR/../tools/lib/act.sh"' 'case "$1" in' '  x) read -r SUITE < /dev/null ;;' 'esac' 'run() {' '  bash "$SUITE"' '}' 'run'
-for shape in suite sealed comment declf localsrc prose casepat; do
+for shape in suite sealed comment declf localsrc prose casepat exportn; do
   run_ur refuse "bash $UR/posts/tests/$shape.sh"
   says "switched on: a path the script sets plainly is read, and a file that posts refused as the post ($shape)" \
     "REFUSED: this command posts to Slack"
@@ -3548,7 +3552,7 @@ says "a heredoc's argument written through a variable is judged as the literal p
 ur_plain heredoc-read 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'print(len(open(sys.argv[1]).read()))' 'EOF'
 run_bash "bash $UR/posts/tests/heredoc-read.sh"
 allowed "and code that only reads that argument passes, as with a literal path (#2691)"
-for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
+for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case declaren; do
   run_ur refuse "bash $UR/quiet/tests/$shape.sh"
   says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \
     "a path the gate cannot work out"

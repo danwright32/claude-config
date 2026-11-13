@@ -3509,7 +3509,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return False
             for a in args:
                 if a[:1] in ("-", "+"):
-                    if a[0] == "-" and "n" in a[1:]:
+                    # -n makes a nameref, except to export, where it takes the export off and keeps
+                    # the value (test-claude-sync.sh's `export -n SUITE_FILTERED ...`, #2538).
+                    if a[0] == "-" and "n" in a[1:] and w0 != "export":
                         return True
                     continue
                 if not re.fullmatch(name, a.split("=", 1)[0]):
