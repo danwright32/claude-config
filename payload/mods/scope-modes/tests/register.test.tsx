@@ -3523,8 +3523,9 @@ test('/sleep started by another session, or being prepared, changes nothing', wi
   await start($ as never, clock)
   expect((await command($ as never, 'sleep')).text).toMatch(/^Sleep mode is already on: it started at 7:11 PM ET on Wed Dec 31 in \/other/)
   delete w.files[CURRENT]
-  w.files[`${SLEEP}/preparing`] = JSON.stringify({ owner: 's1', at: T0, nonce: 'n7' })
-  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in session s1 since 7:16 PM ET on Wed Dec 31. Nothing changed; if that session has gone, /wake clears it.')
+  w.files[`${SLEEP}/preparing`] = JSON.stringify({ owner: 's2', at: T0, nonce: 'n7' })
+  w.o.open = [{ sessionId: 's2' }]
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode is already being prepared in session s2 since 7:16 PM ET on Wed Dec 31. Nothing changed; if that session has gone, /wake clears it.')
   // Only a marker of its own was tried, and it is gone again.
   expect(w.fsWrites.filter(f => !f.includes('/preparing'))).toEqual([])
   expect(Object.keys(w.files).filter(f => f.includes('/preparing.'))).toEqual([])
@@ -3536,8 +3537,10 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   const [a, b] = await Promise.all([command($ as never, 'sleep'), command($ as never, 'sleep')])
   const texts = [a.text, b.text]
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
-  // The other finds the first one's record, or its preparing marker while it is still settling the night.
-  expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
+  // The other finds the first one's record, or its preparing marker while it is still settling the
+  // night, said as this session's own /sleep, since both run here (#2582), never as one no longer asking.
+  expect(texts.filter(t => /^(Sleep mode is already on|This session's own \/sleep is still asking)/.test(t ?? '')).length).toBe(1)
+  expect(texts.filter(t => /another session|session s1|no longer asking/.test(t ?? ''))).toEqual([])
   // The record, the one night's unanswered list beside it (#836), the one night waiting on its morning
   // review (#1107), and the one session's report name (#1287).
   expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/notes/${T0}-s1.needs.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`])
@@ -5450,6 +5453,48 @@ test('a preparing marker held by a live session refuses /sleep naming it; one wh
   expect(linked).toBeGreaterThan(moved)
   // The marker is only ever removed as this /sleep's own release, after it was linked: never rm then make.
   expect(removed).toBeGreaterThan(linked)
+})
+
+// #2582: a second /sleep in the session whose own /sleep was still asking was told another session
+// held the night, and offered /wake, which would have cleared the night being prepared.
+test("a second /sleep while this session's own is still asking says so, and never offers /wake (#2582)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]) }, githubRepos: { default: ['o/r'] }, repoAnswer: null })
+  await start($ as never, clock)
+  const first = command($ as never, 'sleep')
+  await clock.advance(MIN)
+  expect(JSON.parse(w.files[PREP] as string).owner).toBe('s1')
+  const second = (await command($ as never, 'sleep')).text
+  expect(second).toBe("This session's own /sleep is still asking its before bed questions, begun at 7:16 PM ET on Wed Dec 31. Nothing changed.")
+  expect(second).not.toMatch(/wake|another|session s1/)
+  await clock.advance(10 * MIN)
+  expect((await first).text).toMatch(/^Sleep mode is on until/)
+})
+
+test('a preparing marker this session placed with no /sleep of its own still asking is said as that, not as another session (#2582)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [PREP]: marker('s1', T0) } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('A sleep this session began preparing at 7:16 PM ET on Wed Dec 31 is no longer asking its questions, but its preparing marker is still there. Nothing changed; /wake clears it.')
+  expect(w.files[PREP]).toBe(marker('s1', T0))
+})
+
+test('a stale preparing marker this session left is taken over and said as its own (#2582)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [PREP]: marker('s1', T0 - 3 * 60 * MIN) } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(r.text).toMatch(/A sleep this session left half prepared since 4:16 PM ET on Wed Dec 31 was taken over\./)
+  expect(r.text).not.toMatch(/session s1/)
+})
+
+test("the answers lock held by this session itself is said as this session's, not another's (#2582)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([]), [LOCK]: marker('s1', T0) }, githubRepos: { default: ['o/r'] }, repoAnswer: 'Merge, never deploy' })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(MIN)
+  const r = await pending
+  expect(r.text).toMatch(/the answer about o\/r was not saved: the lists are being written by this session \(since 7:16 PM ET on Wed Dec 31\)/)
+  expect(r.text).not.toMatch(/session s1/)
+  expect(w.files[LOCK]).toBe(marker('s1', T0))
 })
 
 test('a preparing marker that cannot be written, or cannot be read, is said as itself', withDeps, async ($, on) => {
@@ -7636,6 +7681,18 @@ test('/sleep waits on another session changing the record of the nights, then sa
   expect(w.files[REVIEWS]).toBe(pendingG0)
   expect(w.files[RLOCK]).toBe(marker('s2', T0))
   expect(stepsCalls(w)).toEqual([])
+})
+
+test("the morning reviews' lock held by this session itself is said as this session's, not another's (#2582)", withSteps, async ($, on) => {
+  const RLOCK = `${SLEEP}/morning-review.lock`
+  const { w, clock } = world(on, { files: { [REVIEWS]: pendingG0, [RLOCK]: marker('s1', T0) } })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(MIN)
+  const r = await pending
+  expect(r.text).toContain(' The reminder to end sleep mode was not pinned: the night could not be noted as waiting on it (this session has been changing the record of the morning reviews since ')
+  expect(r.text).not.toMatch(/session s1/)
+  expect(w.files[RLOCK]).toBe(marker('s1', T0))
 })
 
 test('/sleep over a record of the nights that cannot be read keeps it aside rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {
