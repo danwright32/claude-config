@@ -69,6 +69,11 @@ RUNS='(^|[^A-Za-z0-9_])(python[0-9.]*|pypy[0-9.]*|node|nodejs|ruby|perl|php|deno
 RUNS+="|${START}([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*[^[:space:];&|()]*/"
 RUNS+="|${START}(sudo|doas|env|rtk|command|exec|nohup|nice|time|timeout|gtimeout|caffeinate|stdbuf|xargs|if|then|else|elif|do|while|until|!|\\.)([[:space:]]|\$)"
 RUNS+='|[[:space:]]-(exec|execdir|ok|okdir)[[:space:]]'
+# A shell a pipe feeds its code (`cat post.sh | sh`, ending the command, so no space follows it), and
+# curl handed a config file, which is the request it describes (claude-config#2887). Under nocasematch
+# -K also matches curl's -k, which only sends that call to python3.
+RUNS+='|\|&?[[:space:]]*(bash|sh|zsh|dash|ksh)([^A-Za-z0-9_.-]|$)'
+RUNS+='|(^|[^A-Za-z0-9_])curl(ie)?[[:space:]](.*[[:space:]])?(-[A-Za-z]*K|--config)'
 # Under a UTF-8 locale bash's =~ stops at a byte that is not UTF-8, so a word after one would read as
 # absent and the call would pass unjudged (claude-config#1885); the C locale is tried as well.
 payload_match() { [[ $1 =~ $2 ]] && return 0; local LC_ALL=C; [[ $1 =~ $2 ]]; }

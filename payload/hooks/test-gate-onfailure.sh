@@ -80,6 +80,7 @@ REFUSING=(
   handback-claims-gate.sh
   playwright-subagent-gate.sh
   chrome-subagent-tab-gate.sh
+  chrome-loopback-post-gate.sh
   no-session-link-in-comments.sh
   slack-drafts-only-gate.sh
   # It asks rather than refuses, but it fails closed (#2521): a crash or a timeout must stop a
@@ -188,6 +189,9 @@ samples = {
     "mcp__playwright__browser_snapshot": {},
     "mcp__plugin_playwright_playwright__browser_snapshot": {},
     "mcp__claude-in-chrome__navigate": {"url": "https://example.com"},
+    # After navigate, so the tab gate is still probed with navigate; the loopback post gate's matcher
+    # names only the javascript tool and browser_batch, so it takes this one (#2774).
+    "mcp__claude-in-chrome__javascript_tool": {"action": "javascript_exec", "text": "document.title", "tabId": 7},
     # For the Slack drafts only gate an ordinary Slack call is a read, since it refuses every send
     # (#2302). It sits ahead of the send so a matcher naming any Slack tool is probed with the read;
     # the session link gate's matcher names only send tools, so its probe still takes the send.
@@ -294,6 +298,7 @@ monitor-action-gate.sh Monitor
 handback-claims-gate.sh SubagentHandback
 playwright-subagent-gate.sh mcp__playwright__browser_snapshot,mcp__plugin_playwright_playwright__browser_snapshot
 chrome-subagent-tab-gate.sh mcp__claude-in-chrome__navigate
+chrome-loopback-post-gate.sh mcp__claude-in-chrome__javascript_tool
 no-session-link-in-comments.sh Bash,mcp__plugin_slack_slack__slack_send_message
 slack-drafts-only-gate.sh Bash,mcp__claude_ai_Slack__slack_read_channel
 db-write-ask.sh Bash,mcp__claude_ai_Supabase__execute_sql,mcp__claude_ai_SFDC_USE__createSobjectRecord,mcp__playwright__browser_snapshot"
