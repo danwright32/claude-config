@@ -20,6 +20,12 @@ Before #2844 two routes ran a file the gate never read:
     it may write, so building code that names an endpoint was refused though nothing ran it, and a
     quiet --outfile= build was refused when run. Dan chose on 2026-11-12 (#2844) to read both only by
     what they build, where the same command runs it.
+  * A tool a native compiler builds and the same command then runs (`[ -x "$T" ] || swiftc -O x.swift
+    -o "$T"; ... | "$T"`, #2869): refused as a file swiftc may write, however quiet its source, and
+    one built with no -o (clang x.c && ./a.out) read as it was on disk. swiftc, the C compilers,
+    rustc, go build and cargo build are now read by every file the build takes in (note_native,
+    native_sources), and the tool then as it is on disk, which is what runs where the build is
+    skipped. A build in a script on disk or a package script is followed the same way (#2852).
 
 slack_drafts_only_gate.py loads this file and gives its Judge the class make() returns as a base, as
 it does lib/program-writes.py's, so the methods use the Judge's own readers (resolve, resolve_py,
@@ -86,6 +92,42 @@ TSC_VALUED = frozenset({
     "--locale", "--types", "--typeRoots", "--rootDirs", "--sourceRoot", "--mapRoot", "--newLine",
     "--jsxFactory", "--jsxFragmentFactory", "--jsxImportSource", "--moduleDetection", "--generateTrace"})
 TSC_WALK = 5000
+
+# Native compilers (#2869), each by the language its sources are read as: a tool one builds is read as
+# every file the build takes in (native_sources). go and cargo are read only with their build
+# subcommand (cargo b is its short form). A compiler's own name with a version (gcc-14) is not one.
+NATIVE = {"swiftc": "swift", "clang": "c", "clang++": "c", "gcc": "c", "g++": "c", "cc": "c", "c++": "c",
+          "rustc": "rust"}
+# The options whose value is the next word, so the value is never taken for an input: the output, and
+# the folders a C include is looked for in. A value taken for an input anyway is only read as one more
+# source, and a word naming no file is not read, so a value missing here can only make more be read.
+NATIVE_VALUED = {
+    "c": frozenset({"-o", "--output", "-I", "-iquote", "-isystem", "-idirafter", "-x", "-arch", "-target",
+                    "-MF", "-MT", "-MQ", "-Xlinker", "-Xclang", "-Xpreprocessor", "-Xassembler", "-framework",
+                    "-isysroot", "-L", "-F", "-D", "-U"}),
+    "swift": frozenset({"-o", "-module-name", "-I", "-L", "-F", "-sdk", "-target", "-Xcc", "-Xlinker", "-j",
+                        "-swift-version", "-D", "-module-cache-path", "-emit-module-path"}),
+    "rust": frozenset({"-o", "--out-dir", "--crate-name", "--crate-type", "--edition", "--emit", "--target",
+                       "-C", "--codegen", "-L", "--extern", "--cfg", "-A", "-W", "-D", "-F", "--cap-lints"}),
+    "go": frozenset({"-o", "-C", "-tags", "-ldflags", "-gcflags", "-asmflags", "-mod", "-modfile", "-pkgdir",
+                     "-p", "-buildmode", "-compiler", "-installsuffix", "-overlay", "-pgo", "-toolexec",
+                     "-coverpkg", "-covermode", "-buildvcs", "-gccgoflags"}),
+    "cargo": frozenset({"--manifest-path", "--target-dir", "--artifact-dir", "--out-dir", "-p", "--package",
+                        "--bin", "--example", "--test", "--bench", "--features", "-F", "--target", "-j", "--jobs",
+                        "--profile", "--color", "--message-format", "--exclude", "--config", "-Z", "--lockfile-path"}),
+}
+# What a C source takes in that the command does not name: a header by #include or #import, looked
+# for beside the file that names it (a quoted name only) and in the folders -I, -iquote and -isystem
+# name, never the system's own.
+C_INCLUDE = re.compile(r'^[ \t]*#[ \t]*(?:include|import|include_next)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
+# A Rust file's text taken in at build time: include!, include_str!, include_bytes! and #[path].
+RUST_INCLUDE = re.compile(r'\binclude(?:_str|_bytes)?!\s*\(\s*"([^"\n]+)"\s*\)|#\[path\s*=\s*"([^"\n]+)"\]')
+# A file go embeds into what it builds, by a //go:embed line's patterns.
+GO_EMBED = re.compile(r"^//go:embed\s+(.+)$", re.M)
+# How many files and folders a build's sources are looked for among, and how many headers or included
+# files are followed; past either, the tool is refused as one whose sources cannot all be read.
+NATIVE_WALK = 5000
+NATIVE_FILES = 2000
 
 
 def jsonc(text):
@@ -487,8 +529,13 @@ def make(marker, judged_by_name):
             True for an esbuild or bun build whose every word is worked out: what it writes is then
             known (its outputs, or nothing but what it prints), so note_program does not also mark the
             files it names as ones it may write (Dan, 2026-11-12, #2844). tsc keeps that mark on the
-            files it is handed, as before; script() skips it only where it reads one as a source."""
+            files it is handed, as before; script() skips it only where it reads one as a source.
+
+            A native compiler (NATIVE, go build, cargo build) is note_native's (#2869)."""
             words, writer = list(vals), name  # the program the command runs, a launcher included
+            kind = self.native_kind(name, words)
+            if kind:
+                return self.note_native(kind, name, words, d)
             if name in LAUNCHERS:
                 k = 1
                 while k < len(words) and words[k] is not None and words[k].startswith("-"):
@@ -509,6 +556,307 @@ def make(marker, judged_by_name):
                 entry["label"], entry["writer"] = name, writer
                 self.made_built.append(entry)
             return name != "tsc"
+
+        # ---- Native compilers (#2869) -----------------------------------------------------------
+
+        @staticmethod
+        def native_kind(name, words):
+            """The NATIVE_VALUED key a native compiler run is read by, or None: swiftc, a C compiler,
+            rustc, go build, or cargo build (after an optional +toolchain word)."""
+            if name in NATIVE:
+                return NATIVE[name]
+            sub = [w for w in words[1:3] if w is None or not w.startswith("+")][:1] if name == "cargo" else words[1:2]
+            if name == "go" and sub == ["build"]:
+                return "go"
+            if name == "cargo" and sub in (["build"], ["b"]):
+                return "cargo"
+            return None
+
+        def note_native(self, kind, name, words, d):
+            """A native compiler's run: the tool it builds is read, when a later command of this call
+            runs it, as every file the build takes in (native_sources), and then as it is on disk, which
+            is what runs where the build is skipped or fails (`[ -x "$T" ] || swiftc ... -o "$T"`).
+            Every other file it names keeps the mark #2772 gives any program's named file, its sources
+            included, which script() skips only where it reads one as this build's source.
+
+            False, so nothing is followed and note_program marks what it names as before, where a word
+            cannot be worked out or is a response file (@file), whose words are not known, or where the
+            build's folder (a go module, a cargo package) cannot be found."""
+            if any(w is None for w in words) or any(w.startswith("@") for w in words[1:]):
+                return False
+            label = f"{name} build" if kind in ("go", "cargo") else name
+            args = words[1:]
+            if kind in ("go", "cargo"):
+                args = args[args.index("build" if "build" in args else "b") + 1:]
+            opts, inputs, k, valued = {}, [], 0, NATIVE_VALUED[kind]
+            while k < len(args):
+                w = args[k]
+                if w == "--":
+                    inputs += args[k + 1:] if kind != "cargo" else []
+                    break
+                if not w.startswith("-") or w == "-":
+                    inputs.append(w)
+                    k += 1
+                    continue
+                key, val = w, None
+                if "=" in w and (w.startswith("--") or kind == "go"):
+                    key, val = w.split("=", 1)
+                elif kind == "c" and not w.startswith("--"):
+                    glued = next((p for p in ("-o", "-I", "-L", "-F") if w.startswith(p) and len(w) > len(p)), None)
+                    if glued:
+                        key, val = glued, w[len(glued):]
+                if val is None and key in valued and k + 1 < len(args):
+                    val, k = args[k + 1], k + 1
+                opts.setdefault(key, []).append(val)
+                k += 1
+
+            def last(*keys):
+                vals = [v for key in keys for v in opts.get(key, ()) if isinstance(v, str)]
+                return vals[-1] if vals else None
+
+            def stem(p):
+                return os.path.splitext(os.path.basename(p))[0]
+
+            here = self.resolve(last("-C"), d) if kind == "go" and last("-C") else d
+            entry = {"native": kind, "label": label, "writer": name, "inputs": [self.resolve(i, here) for i in inputs],
+                     "outs": [], "under": [], "roots": [], "quote": [], "angle": []}
+            out = last("-o", "--output")
+            if kind == "c":
+                entry["outs"] = [out] if out else ["a.out"] + [stem(i) + ".o" for i in inputs]
+                entry["quote"] = [self.resolve(v, here) for key in ("-iquote", "-I") for v in opts.get(key, ()) if v]
+                entry["angle"] = [self.resolve(v, here) for key in ("-I", "-isystem", "-idirafter")
+                                  for v in opts.get(key, ()) if v]
+            elif kind == "swift":
+                entry["outs"] = [out] if out else [stem(i) for i in inputs if i.endswith(".swift")] + \
+                    ["main"] + [v for v in opts.get("-module-name", ()) if v]
+            elif kind == "rust":
+                rs = [i for i in inputs if i.endswith(".rs")]
+                names = [v for v in opts.get("--crate-name", ()) if v] + [stem(i) for i in rs[:1]] + \
+                    [stem(i).replace("-", "_") for i in rs[:1]]
+                entry["outs"] = [out] if out else [os.path.join(last("--out-dir") or "", n) for n in names]
+                entry["roots"] = [os.path.dirname(self.resolve(i, here)) for i in rs[:1]]
+            elif kind == "go":
+                if not self.go_entry(entry, inputs, out, here):
+                    return False
+            elif not self.cargo_entry(entry, last("--manifest-path"), last("--target-dir"),
+                                      [v for key in ("--artifact-dir", "--out-dir") for v in opts.get(key, ()) if v], here):
+                return False
+            entry["outs"] = [os.path.realpath(self.resolve(o, here)) for o in entry["outs"]]
+            entry["under"] = [os.path.realpath(u) for u in entry["under"]]
+            self.made_built.append(entry)
+            if not self.shell.get("on_disk"):
+                # Every word naming a file but the tool it builds keeps the mark any program's named
+                # file has (an option's file, -MF deps.d, is one the build may write).
+                outs = set(entry["outs"])
+                for w in words[1:]:
+                    if not any(os.path.realpath(self.resolve(p, here)) in outs for p in [w] + w.split("=", 1)[1:]):
+                        self.note_named(w, w, here, name)
+            return True
+
+        def go_entry(self, entry, inputs, out, here):
+            """note_native for go build: the tool it writes (-o, or the default name in the folder it
+            runs in) and the module folders whose files it builds from. False where a package's module
+            cannot be found."""
+            files = [i for i in inputs if i.endswith(".go")]
+            pkgs = [] if files else (inputs or ["."])
+            dirs, names = [], []
+            if files:
+                dirs.append(os.path.dirname(self.resolve(files[0], here)))
+                names.append(os.path.splitext(os.path.basename(files[0]))[0])
+            for p in pkgs:
+                local = p.startswith((".", "/"))
+                where = self.resolve(p.split("/...")[0] if p.endswith("/...") else p, here) if local else here
+                dirs.append(where)
+                if p.endswith("..."):
+                    continue  # several packages: go build writes no tool
+                names.append(os.path.basename(os.path.normpath(where)) if local else p.rstrip("/").rsplit("/", 1)[-1])
+            for dr in dirs:
+                root = dr
+                while not os.path.isfile(os.path.join(root, "go.mod")):
+                    up = os.path.dirname(root)
+                    if up == root:
+                        return False
+                    root = up
+                if root not in entry["roots"]:
+                    entry["roots"].append(root)
+                if os.path.normpath(dr) == os.path.normpath(root):
+                    try:
+                        with open(os.path.join(root, "go.mod"), encoding="utf-8", errors="replace") as f:
+                            mod = re.search(r"(?m)^\s*module\s+\"?([^\s\"]+)", f.read())
+                    except OSError:
+                        mod = None
+                    if mod:
+                        parts = mod.group(1).split("/")
+                        names.append(parts[-2] if len(parts) > 1 and re.fullmatch(r"v\d+", parts[-1]) else parts[-1])
+            if out:
+                full = self.resolve(out, here)
+                entry["outs"] = [os.path.join(full, n) for n in names] if out.endswith("/") or os.path.isdir(full) else [out]
+            else:
+                entry["outs"] = names
+            return True
+
+        def cargo_entry(self, entry, manifest, target, more, here):
+            """note_native for cargo build: every file under the target folder it writes into, read as
+            the package's (or its workspace's) files. False where no Cargo.toml is found."""
+            if manifest:
+                top = os.path.dirname(self.resolve(manifest, here))
+                if not os.path.isfile(self.resolve(manifest, here)):
+                    return False
+            else:
+                top = here
+                while not os.path.isfile(os.path.join(top, "Cargo.toml")):
+                    up = os.path.dirname(top)
+                    if up == top:
+                        return False
+                    top = up
+            root, cur = top, top
+            while True:  # a workspace above the package holds the target folder and the members
+                try:
+                    with open(os.path.join(cur, "Cargo.toml"), encoding="utf-8", errors="replace") as f:
+                        if re.search(r"(?m)^\s*\[workspace\]", f.read()):
+                            root = cur
+                except OSError:
+                    pass
+                up = os.path.dirname(cur)
+                if up == cur:
+                    break
+                cur = up
+            entry["roots"] = [root]
+            entry["under"] = [self.resolve(target, here) if target else os.path.join(root, "target")] + \
+                [self.resolve(m, here) for m in more] + \
+                ([os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else [])
+            return True
+
+        def native_builds(self, e, real):
+            """Whether the native build e writes the file at real path real."""
+            return real in e["outs"] or any(real.startswith(u + os.sep) for u in e["under"])
+
+        def native_sources(self, e):
+            """Every file native build e takes in, worked out the first time it is asked for: the files
+            it is handed, the headers a C source includes, every .rs file under a Rust crate's folder
+            and the files one includes, every .go file of a go module with what it embeds, and every
+            .rs file of a cargo package or workspace, with the folders a path dependency names. None
+            where they cannot all be listed (NATIVE_WALK, NATIVE_FILES), and the tool is refused."""
+            if "sources" in e:
+                return e["sources"]
+            out, seen = [], set()
+
+            def add(p):
+                p = os.path.normpath(p)
+                if p not in seen:
+                    seen.add(p)
+                    out.append(p)
+
+            def text_of(p):
+                self.tick(p)
+                try:
+                    return self.content(p).decode("utf-8", "replace")
+                except OSError:
+                    return ""
+
+            ok = True
+            for i in e["inputs"]:
+                add(i)
+            kind = e["native"]
+            if kind == "c":
+                k = 0
+                while k < len(out) and ok:
+                    cur = out[k]
+                    k += 1
+                    for m in C_INCLUDE.finditer(text_of(cur)):
+                        dirs = ([os.path.dirname(cur)] + e["quote"] if m.group(1) == '"' else []) + e["angle"]
+                        found = next((os.path.join(dr, m.group(2)) for dr in dirs
+                                      if self.native_there(os.path.join(dr, m.group(2)))), None)
+                        if found:
+                            add(found)
+                    ok = len(out) <= NATIVE_FILES
+            elif kind in ("rust", "go", "cargo"):
+                ext = ".go" if kind == "go" else ".rs"
+                roots, r = list(e["roots"]), 0
+                while r < len(roots) and ok:
+                    walked = self.native_walk(roots[r], ext, e["under"])
+                    r += 1
+                    if walked is None:
+                        ok = False
+                        break
+                    for p in walked:
+                        add(p)
+                    for extra in self.native_more(kind, roots[r - 1]):
+                        if extra not in roots:
+                            roots.append(extra)
+                k = 0
+                while k < len(out) and ok:
+                    cur = out[k]
+                    k += 1
+                    if not cur.endswith(ext):
+                        continue
+                    body = text_of(cur)
+                    if kind == "go":
+                        pats = [w.strip('"`') for m in GO_EMBED.finditer(body) for w in m.group(1).split()]
+                        for pat in pats:
+                            pat = pat[4:] if pat.startswith("all:") else pat
+                            full = os.path.join(os.path.dirname(cur), pat)
+                            hits = [full] if os.path.isfile(full) else []
+                            if os.path.isdir(full):
+                                hits = [os.path.join(a, n) for a, _, ns in os.walk(full) for n in ns]
+                            elif any(c in pat for c in "*?["):
+                                hits = [os.path.join(os.path.dirname(cur), n) for n in os.listdir(os.path.dirname(cur))
+                                        if fnmatch.fnmatchcase(n, os.path.basename(pat))] if "/" not in pat else []
+                            for h in hits:
+                                add(h)
+                    else:
+                        for m in RUST_INCLUDE.finditer(body):
+                            add(os.path.join(os.path.dirname(cur), m.group(1) or m.group(2)))
+                    ok = len(out) <= NATIVE_FILES
+            e["sources"] = out if ok else None
+            return e["sources"]
+
+        def native_there(self, path):
+            """Whether a file a build takes in is there: on disk, or made earlier in this call."""
+            return os.path.isfile(path) or bool(self.made_from(path))
+
+        @staticmethod
+        def native_walk(top, ext, skip):
+            """Every file ending ext under top, past hidden folders and the target folders skip names,
+            or None past NATIVE_WALK files and folders."""
+            out, seen = [], 0
+            skip = {os.path.realpath(s) for s in skip}
+            for cur, dirs, names in os.walk(top):
+                seen += len(names) + len(dirs)
+                if seen > NATIVE_WALK:
+                    return None
+                dirs[:] = [x for x in dirs if not x.startswith(".") and os.path.realpath(os.path.join(cur, x)) not in skip
+                           and not (ext == ".rs" and x == "target")]
+                out += [os.path.join(cur, n) for n in names if n.endswith(ext)]
+            return out
+
+        @staticmethod
+        def native_more(kind, root):
+            """The folders outside root a build at root also takes in: a go.mod replace or go.work use
+            naming a local folder, or a Cargo.toml path dependency."""
+            out = []
+            files = [("go.mod", r"=>\s*((?:\.{1,2}/|/)[^\s]*)"), ("go.work", r"(?:^|\s)((?:\.{1,2}/|/)[^\s)]*)")] \
+                if kind == "go" else [("Cargo.toml", r'\bpath\s*=\s*"([^"\n]+)"')]
+            for name, rx in files:
+                try:
+                    with open(os.path.join(root, name), encoding="utf-8", errors="replace") as f:
+                        text = f.read()
+                except OSError:
+                    continue
+                for m in re.finditer(rx, text, re.M):
+                    p = os.path.normpath(os.path.join(root, m.group(1)))
+                    if os.path.isdir(p):
+                        out.append(p)
+            return out
+
+        def native_unlisted(self, path):
+            """The label of a native build of this call that writes path but whose sources could not all
+            be listed, or None."""
+            real = os.path.realpath(path)
+            for e in self.made_built:
+                if "native" in e and self.native_builds(e, real) and self.native_sources(e) is None:
+                    return e["label"]
+            return None
 
         def tsc_entry(self, words, d):
             """What tsc builds: the files it is handed, or the project its config names."""
@@ -688,7 +1036,17 @@ def make(marker, judged_by_name):
             real = os.path.realpath(path)
             stem, ext = os.path.splitext(real)
             out = []
+            natives = [e for e in self.made_built if "native" in e]
             for e in self.made_built:
+                if "native" in e:
+                    # Every file the build takes in, each there or made earlier in this call, or built by
+                    # another native build of it (cc -c x.c && cc x.o -o app); none where they cannot all
+                    # be listed, which script() refuses (native_unlisted).
+                    if self.native_builds(e, real):
+                        out += [(src, e["label"], e["writer"]) for src in self.native_sources(e) or ()
+                                if self.native_there(src) or any(self.native_builds(o, os.path.realpath(src))
+                                                                 for o in natives if o is not e)]
+                    continue
                 if ext not in BUILT_FROM and ("configs" in e or not e["outfile"]):
                     continue  # only a named output file may be anything (bun build --compile's program)
                 if "configs" in e:
@@ -706,8 +1064,13 @@ def make(marker, judged_by_name):
                         if e["names"] or os.path.normpath(want) == stem:
                             out.append((src, e["label"], e["writer"]))
             seen, found = set(), []
+            # A source is one on disk, or one made earlier in this call, which script() then reads as
+            # made (a source downloaded first is unreadable, #2869: it was left out, so the tool built
+            # from it was read as it was on disk). A native build's sources are checked above.
             for src, how, writer in out:
-                if src not in seen and os.path.realpath(src) != real and os.path.isfile(src):  # never the output itself
+                there = os.path.isfile(src) or bool(self.made_from(src)) or any(
+                    self.native_builds(o, os.path.realpath(src)) for o in natives)
+                if src not in seen and os.path.realpath(src) != real and there:  # never the output itself
                     seen.add(src)
                     found.append((src, how, writer))
             return found

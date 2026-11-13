@@ -863,7 +863,7 @@ def load_reader():
 WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
 # The files any other program writes by name (claude-config#2772): note_program and its readers.
 _program_writes = load_lib("program_writes", "program-writes.py")
-ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
+ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS, COPIERS)
 # The files a runner or a compiler runs without the command naming them (claude-config#2844).
 _program_runs = load_lib("program_runs", "program-runs.py")
 
@@ -998,6 +998,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # (note_build in lib/program-runs.py, claude-config#2844).
         self.made_built = []
         self.building = set()  # the sources script() is reading as a build's output, so a cycle ends
+        # The modules a script on disk wrote by words it could not work out and then imported, by
+        # the key raw_module gives each, and their text (lib/program-writes.py, claude-config#2854).
+        self.raw_modules = {}
         # The remotes a git fetch earlier in this call fetched, "*" for all (note_fetch, #2844).
         self.git_fetched = set()
 
@@ -1341,6 +1344,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         last = max((k for k, f in enumerate(files) if f[2]), default=None)
         for k, (target, v, takes, append) in enumerate(files):
             if k == last:
+                if v is None and self.shell.get("on_disk"):
+                    self.note_raw_write(target, out, append)  # a module it then imports (#2854)
                 self.note_output(target, v, d, out, label, append, redirect=True)
             elif takes:
                 self.note_output(target, v, d, [], label, append, redirect=True)
@@ -1656,6 +1661,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 self.building.discard(key)
             if reason:
                 return reason
+        unlisted = self.native_unlisted(path) if self.made_built else None
+        if unlisted:
+            return self.unfollow(f"{label} is built earlier in this command by {unlisted}, from more files than "
+                                 "this gate reads, so it cannot see what that runs")
         if not self.is_file(path):
             return None  # nothing there to run
         unread = self.unread(path, skip=built)
@@ -1826,7 +1835,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                                         "runs"), None, None, None
                     return
                 for target in targets:
-                    target = os.path.realpath(target)
+                    written = self.raw_modules.get(target)  # a module the script wrote (#2854)
+                    target = target if written is not None else os.path.realpath(target)
                     if target in seen:
                         continue
                     seen[target] = via
@@ -1846,8 +1856,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         self.past = (start, len(seen) - (2 if origin else 1))
                     self.tick(target)
                     try:
-                        with open(target, "rb") as f:
-                            found = f.read(MAX_FILE).decode("utf-8", "replace")
+                        if written is not None:
+                            found = written
+                        else:
+                            with open(target, "rb") as f:
+                                found = f.read(MAX_FILE).decode("utf-8", "replace")
                     except OSError:
                         yield self.unfollow(f"{via} ({target}), a module the gate cannot read, so it cannot "
                                             "see what that runs"), None, None, None
@@ -2047,16 +2060,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if not module:
             return []
         for base in list(inserts[0]) + [root] + self.py_cmd["path"]:
-            found = self.resolve_in(base, 0, module, names)
+            found = self.raw_resolve(base, module) if isinstance(base, tuple) else self.resolve_in(base, 0, module, names)
             if found is not None:
                 return found
         if self.placed(module.split(".")[0], root):
             return []
         for base in inserts[1]:
-            found = self.resolve_in(base, 0, module, names)
+            found = self.raw_resolve(base, module) if isinstance(base, tuple) else self.resolve_in(base, 0, module, names)
             if found is not None:
                 return found
         return False
+
+    def raw_resolve(self, base, module):
+        """resolve_in for a sys.path entry kept as the words written (("raw", word), py_inserts): the
+        module a script on disk wrote there (raw_module, #2854), else None, as for a folder without it."""
+        key = self.raw_module(base[1], module)
+        return [key] if key else None
 
     def placed(self, top, root):
         """Whether a top level Python module is the standard library or an installed package: built
@@ -2137,6 +2156,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     p = os.path.normpath(p if os.path.isabs(p) else os.path.join(cwd, p))
                     if p not in where:
                         where.append(p)
+                elif self.shell.get("on_disk") and isinstance(e, ast.Subscript) and self.dotted(e.value) == "sys.argv" \
+                        and isinstance(e.slice, ast.Constant) and type(e.slice.value) is int and e.slice.value > 0:
+                    # sys.argv[n] the command hands as words py_args cannot work out: kept as written,
+                    # in its place, for a module a script on disk wrote there by the same words
+                    # (raw_module, #2854). Every other import is placed as before.
+                    raws = self.py_cmd.get("argv_raw") or ()
+                    raw = raws[e.slice.value] if e.slice.value < len(raws) else None
+                    if raw and ("raw", raw) not in where:
+                        where.append(("raw", raw))
 
     @staticmethod
     def dotted(node):
@@ -3469,10 +3497,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 break
         if argv is None:
             return ([""] if j >= len(vals) else None), env
-        for v, sp in vals[j:]:
+        # Each argument as written too, for a sys.path entry whose value is not known (#2854).
+        raws = [None]
+        for (v, sp), w in zip(vals[j:], words[j:]):
             if sp:
                 break
             argv.append(v)
+            raws.append(w)
+        self.py_cmd["argv_raw"] = raws
         return argv, env
 
     def sh_tokens(self, s):
@@ -4670,7 +4702,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 tree = ast.parse(text)
-        except (SyntaxError, ValueError):
+        except SyntaxError as e:
+            # What Python found, so the code is fixed rather than moved to a file (#2869: a backslash
+            # inside an f-string's braces, which this Python reads as a line continuation). Only what
+            # this Python reports: another version may read the code otherwise.
+            where = (e.text or "").strip()[:120]
+            return (f"could not be parsed to see what it imports (Python {sys.version_info[0]}.{sys.version_info[1]} "
+                    f"reads it as a syntax error, {e.msg}" + (f", at: {where}" if where else "") + ")")
+        except ValueError:
             return "could not be parsed to see what it imports"
         cur_dir = os.path.dirname(cur) if cur else root  # inline code has no file, and runs from root
         # Only this file's own sys.path changes: fewer folders in front can only leave an import to be
