@@ -88,7 +88,7 @@ try:
     if short == "browser_batch":
         actions = ti.get("actions")
         if not isinstance(actions, list):
-            print("allow\t"); sys.exit()
+            raise Unreadable("the batch calls are not a list")
         for i, a in enumerate(actions):
             name = a.get("name") if isinstance(a, dict) else None
             name = name if isinstance(name, str) else ""
@@ -109,7 +109,7 @@ case "$verdict" in
     rest="${verdict#*$'\t'}"
     tool="${rest%%$'\t'*}"
     host="${rest#*$'\t'}"
-    echo "REFUSED: $tool runs a script in the page that sends to $host, a loopback address. A production page's content security policy refuses that request and reports it, and twice (2026-11-01 and 2026-11-11) a page posting a copy of itself to a receiver on this Mac paged Dan with nothing to act on (claude-config#2774). Never post a page to any receiver. To capture a page, run ~/.claude/skills/design-rounds/capture-chrome.js with {saveAs: \"chrome-<round>-<yyyymmddhhmm>.html\"}: the page saves the capture into ~/Downloads as a download, sending nothing over the network (the design rounds skill gives the steps). If the page is itself on that address (a local dev server), fetch its own server by a relative path instead." >&2
+    echo "REFUSED: $tool runs a script in the page that names $host beside a network call (fetch, XMLHttpRequest, sendBeacon, WebSocket or EventSource), and $host is a loopback address. A production page's content security policy refuses a request to it and reports the refusal, and twice (2026-11-01 and 2026-11-11) a page posting a copy of itself to a receiver on this Mac paged Dan with nothing to act on (claude-config#2774). Never post a page to any receiver. To capture a page, run ~/.claude/skills/design-rounds/capture-chrome.js with {saveAs: \"chrome-<round>-<yyyymmddhhmm>.html\"}: the page saves the capture into ~/Downloads as a download, sending nothing over the network (the design rounds skill gives the steps). If the page is itself on that address (a local dev server), fetch its own server by a relative path instead." >&2
     exit 2
     ;;
   allow$'\t'*)

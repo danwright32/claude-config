@@ -102,6 +102,8 @@ refused "a page posting itself to a receiver on 127.0.0.1 is refused"
 says "and it says why" "content security policy"
 says "and names the route that sends nothing" "saveAs"
 says "and where that route is written down" "capture-chrome.js"
+# It sees two words in the text, never where a request goes, so it says only that (L11).
+says "and claims only what it checked: the address named beside a network call" "names 127.0.0.1 beside a network call"
 run "$JS" "$(js 'await fetch("http://127.0.0.1:8765/", {method: "POST", body: "x"})')" a3211051898ed98b1
 refused "a subagent's is refused the same"
 run "$JS" "$(js 'navigator.sendBeacon("http://localhost:8765/save", document.documentElement.outerHTML)')"
@@ -143,6 +145,9 @@ notices "#1906 and says the gate did not run where the person sees it" "CHROME L
 run_raw '{"hook_event_name":"PreToolUse","tool_name":"mcp__claude-in-chrome__javascript_tool","tool_input":{"action":"javascript_exec","text":7}}'
 if [ "$RC" -eq 0 ]; then check "a script that is not text is let through" ok; else check "a script that is not text is let through" "exit $RC"; fi
 notices "and says the gate did not run" "CHROME LOOPBACK POST GATE DID NOT RUN"
+run "${C}browser_batch" '{"actions": "javascript_tool"}'
+if [ "$RC" -eq 0 ]; then check "a batch whose calls are not a list is let through" ok; else check "a batch whose calls are not a list is let through" "exit $RC"; fi
+notices "and says the gate did not run, rather than passing it in silence" "CHROME LOOPBACK POST GATE DID NOT RUN"
 NOPY="$(mktemp -d "${TMPDIR:-/tmp}/loopback-gate-nopy.XXXXXXXX")"
 ln -s "$(command -v cat)" "$NOPY/cat"
 errf="$(mktemp "${TMPDIR:-/tmp}/loopback-gate-err.XXXXXXXX")"
