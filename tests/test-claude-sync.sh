@@ -12575,7 +12575,8 @@ printf -- '- **L1000. the last number in this band.** body\n' > "$SPH/LESSONS.md
 echo '{"hooks":{}}' > "$SPH/settings.json"
 _spill(){   # $* = the call to make with the tool sourced -> its output, its exit code in _spill_rc
   _spill_rc=0
-  _spill_out="$(bash -c "export CLAUDE_HOME='$SPH' SYNC_REPO='$SPR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; $*" 2>&1)" || _spill_rc=$?
+  _spill_out="$(CLAUDE_HOME="$SPH" SYNC_REPO="$SPR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    fn_drive ". \"\$1\" help >/dev/null 2>&1; $*" "$SCRIPT" 2>&1)" || _spill_rc=$?
   return 0
 }
 # The control FIRST: a band with room mints from it. Without this the refusals below are satisfied by
@@ -12774,7 +12775,8 @@ rm -f "$RVF"
 # The call prints RAN only once the function has returned, so a sourcing that stopped early or a
 # renamed function cannot pass as "left the lock alone".
 _rv_takeover(){   # $1 = the pid the takeover believes is dead -> RAN, or nothing
-  bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_pid_lock '$RVF.lock' '$1' && echo RAN" 2>/dev/null || true
+  CLAUDE_HOME="$RVH" SYNC_REPO="$RVR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    fn_drive '. "$1" help >/dev/null 2>&1; break_stale_pid_lock "$2" "$3" && echo RAN' "$SCRIPT" "$RVF.lock" "$1" 2>/dev/null || true
 }
 # The control first: a lock that still names the dead holder IS removed.
 printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
