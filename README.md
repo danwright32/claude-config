@@ -3984,8 +3984,13 @@ same time queue rather than compete (#2012). On 2026-11-01 five full runs at onc
 average to 270 to 410 on 12 cores, and suites stopped at their own wall clocks on load alone,
 because each run's budget below is per run, not per Mac. A run that has to wait says so at once,
 naming the holder's pid, its checkout and how long it has held the slot, then says `still waiting`
-with the time so far every minute. It refuses with exit 75 after `HOOK_TESTS_SLOT_WAIT` (an hour),
-running nothing. A holder whose process has gone is passed over at once. So is a live one past
+with the time so far every minute. It waits as long as the line keeps moving, and refuses with exit
+75, running nothing, once the line has stood still for `HOOK_TESTS_SLOT_STILL` (an hour): no run
+ahead of it finishing, leaving or being passed over (#2835). A run fourth in line behind full runs
+of 20 to 30 minutes is served, however long that takes in all; when the bound was on the whole wait
+such a run was refused twice with nothing run though the line was moving. `HOOK_TESTS_SLOT_WAIT`,
+unset by default, bounds the whole wait, and claude-sync's pull sets it to keep its run inside its
+own deadline (#2758). A holder whose process has gone is passed over at once. So is a live one past
 `HOOK_TESTS_SLOT_HOLD` (45 minutes), and either is said. The queue is `hooks/lib/merge-turn.sh`, the
 merge helper's own turn, in `~/.claude/state/full-run-slot` (`hooks/lib/full-run-slot.sh`). Only a
 whole run queues, and a run naming directories counts as whole when they hold half the tree's suites
@@ -4385,13 +4390,16 @@ unset: only a whole run queues
 `1` queues any run for this Mac's one full suite slot and `0` none, for one run. Unset, a run queues
 only when it names no directories (or names directories holding half the tree's suites or more, at
 least 3, #2034), sets no `HOOK_TESTS_ROOT`, was not started inside another run and is not under CI,
-and not when a run above it holds the slot. `HOOK_TESTS_SLOT_WAIT` (`3600`) is how long it waits
-before refusing with exit 75, `HOOK_TESTS_SLOT_HOLD` (`2700`) how long a live holder keeps the slot
-before a waiter passes it over, `HOOK_TESTS_SLOT_SAY_EVERY` (`60`) how often a wait says it is still
-waiting, `HOOK_TESTS_SLOT_POLL` (`2`) how often it looks, and `HOOK_TESTS_SLOT_DIR` where the queue
-lives. They are settings, not measurements: the wait is longer than one hold so the run first in
-line is never refused while the holder is inside its own, and claude-sync's check after a pull stops
-its own run at 1800 seconds, recording one stopped while it waited as not completed (#2012). Any of
+and not when a run above it holds the slot. `HOOK_TESTS_SLOT_STILL` (`3600`) is how long the line
+may stand still (no run ahead finishing, leaving or passed over) before a waiting run refuses with
+exit 75 (#2835), `HOOK_TESTS_SLOT_WAIT` (unset, no bound) how long the whole wait may last before
+the same refusal, `HOOK_TESTS_SLOT_HOLD` (`2700`) how long a live holder keeps the slot before a
+waiter passes it over, `HOOK_TESTS_SLOT_SAY_EVERY` (`60`) how often a wait says it is still waiting,
+`HOOK_TESTS_SLOT_POLL` (`2`) how often it looks, and `HOOK_TESTS_SLOT_DIR` where the queue lives.
+They are settings, not measurements: the line may stand still longer than one hold so the run first
+in line is never refused while the holder is inside its own, and claude-sync's check after a pull
+hands its run `HOOK_TESTS_SLOT_WAIT` at half its 1800 second deadline, so a run still queued there
+refuses inside the deadline and is recorded as one that waited for the slot (#2758). Any of
 them unreadable is refused.
 
 </td></tr>
