@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineCreateResult, EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
@@ -124,11 +124,19 @@ export const checkOffAnswered = async ($: EngineInterface, e: { question: string
 
 export const register: Register = on => {
   // #2261: a hook on a noun no loaded mod provides stops this whole mod loading, so with the design
-  // round guard absent the same no-op bottom it provides is put here too, and nothing raises it; with
-  // the guard loaded the bottom is a no-op whichever of the two is kept.
+  // round guard's member absent the same no-op bottom it provides is put here too, and nothing
+  // raises it. #2862: only when absent. Claude Code 2.1.323 refuses an engine.create that replaces a
+  // member another plugin added, and unloads this whole mod, so the guard's own member is kept as
+  // it is. Its module failing to load is how it comes to be absent, since Claude Code loads no
+  // picker manners at all without the guard's plugin (dependency-unsatisfied, measured on 2.1.323).
+  // The bottom is written FIRST and the built $ spread over it, so the guard's member, when there,
+  // is the one returned, untouched; reading built.designRound to decide is itself refused ("used as
+  // a value"). tests/test-mods-load-engine.sh loads both cases on the real engine.
   on('engine.create', async ($, e, next) => {
-    const built = await next(e)
-    return { ...built, designRound: { answered: async () => undefined } }
+    // Typed as what a step may return, every noun optional, so the type check reads the member as
+    // possibly absent, which it is, rather than as overwritten for certain (TS2783).
+    const built: EngineCreateResult = await next(e)
+    return { designRound: { answered: async () => undefined }, ...built }
   })
 
   on('session.start', async ($, e, next) => {
