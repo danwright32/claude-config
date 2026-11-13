@@ -4101,6 +4101,14 @@ for runs in "swiftc -O tools/quiet.swift -o tool && ./tool" \
   run_n "$runs"
   allowed "a tool a native compiler builds from quiet sources passes: $runs"
 done
+# cargo b is build's short form, and the word after -p is a package name, even one called build:
+# the options are read from after the subcommand word, not from after the first word spelled build.
+# Measured at 9c25864c6f: reading from after "-p build" lost --manifest-path, the package was not
+# found, and the tool built from a source naming an endpoint passed.
+run_n "cargo b --manifest-path cq/Cargo.toml -p build && ./cq/target/debug/cq"
+allowed "cargo b with a package named build reads its options from after the subcommand"
+run_n "cargo b --manifest-path cp/Cargo.toml -p build && ./cp/target/debug/cp"
+read_refused "cargo b with a package named build still reads the sources it builds from"
 # The reported command's shape, its tool named through variables the command sets.
 run_n "W=$N; T=\"\$W/tool\"; [ -x \"\$T\" ] || swiftc -O \"\$W/tools/quiet.swift\" -o \"\$T\"; printf '%s\\n' a | \"\$T\" 2>/dev/null | python3 -I -c 'import json,sys
 for l in sys.stdin: print(json.loads(l))'"

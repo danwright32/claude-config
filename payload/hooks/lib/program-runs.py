@@ -587,7 +587,9 @@ def make(marker, judged_by_name):
             label = f"{name} build" if kind in ("go", "cargo") else name
             args = words[1:]
             if kind in ("go", "cargo"):
-                args = args[args.index("build" if "build" in args else "b") + 1:]
+                # After the subcommand word native_kind found (after cargo's +toolchain word), never
+                # after the first word spelled build: `cargo b -p build` names a package called build.
+                args = words[3 if kind == "cargo" and words[1].startswith("+") else 2:]
             opts, inputs, k, valued = {}, [], 0, NATIVE_VALUED[kind]
             while k < len(args):
                 w = args[k]
