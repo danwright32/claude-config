@@ -208,11 +208,18 @@ def perl_delimited(code, i):
     return None
 
 
+def perl_code_block(pattern):
+    """The code block in a perl pattern (`(?{`, `(??{`, `(*{`), as text, or None."""
+    m = PERL_CODE_BLOCK.search(pattern)
+    return m.group(0) if m else None
+
+
 def perl_interpolated(text, regex=False):
     """What in text, a string perl interpolates (or a pattern, where regex), is off the safe list, or
     None. A variable in it is read as in code, with a subscript only of plain indexes."""
-    if regex and PERL_CODE_BLOCK.search(text):
-        return PERL_CODE_BLOCK.search(text).group(0)
+    block = perl_code_block(text) if regex else None
+    if block:
+        return block
     i, n = 0, len(text)
     while i < n:
         c = text[i]
@@ -330,7 +337,7 @@ def _perl_unsafe(code):
             return "->"
         if c == "`":
             return "`"
-        if c in "/?" and term and c == "/":
+        if c == "/" and term:
             body = perl_delimited(code, i)
             if body is None:
                 return "/"
@@ -404,8 +411,7 @@ def _perl_unsafe(code):
                     return "s///" + flags
                 hit = None
                 if word in ("m", "qr", "s"):
-                    hit = perl_interpolated(parts[0], regex=True) if code[d] != "'" else (
-                        PERL_CODE_BLOCK.search(parts[0]) and PERL_CODE_BLOCK.search(parts[0]).group(0))
+                    hit = perl_interpolated(parts[0], regex=True) if code[d] != "'" else perl_code_block(parts[0])
                 if not hit and word == "s" and code[d] != "'":
                     hit = perl_interpolated(parts[1])
                 if not hit and word == "qq":
@@ -479,8 +485,7 @@ def perl_acts(words):
         elif w.startswith("-F"):
             # A pattern in //, '' or "" is used as written; any other is put in single quotes.
             pattern = w[2:]
-            hit = perl_unsafe(pattern) if pattern[:1] in ("/", "'", '"') else (
-                PERL_CODE_BLOCK.search(pattern) and PERL_CODE_BLOCK.search(pattern).group(0))
+            hit = perl_unsafe(pattern) if pattern[:1] in ("/", "'", '"') else perl_code_block(pattern)
             if hit:
                 return f"is run with the -F pattern {pattern!r}, which uses {hit!r}, off the list of perl read as only reading"
         elif w.startswith("-") and not PERL_SWITCH.fullmatch(w):
