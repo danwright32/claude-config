@@ -116,9 +116,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitFails: git is killed and exits nonzero with this on stderr (as at its timeoutMs); gitThrows:
   // git cannot be run at all, so the call rejects (a hook that throws is skipped, and nothing answers);
   // cwd: the folder the session is in.
-  // gitTakes: the test clock time each git command takes before it answers (#2792), so a git killed
-  // at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS or more.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, cwd: '/w/app' }
+  // gitTakes, ghTakes: the test clock time each git or gh command takes before it answers (#2792), so
+  // a git killed at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS
+  // or more, and a gh the same with ghFails.
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -183,6 +184,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
     if (cmd === 'gh') {
       const argv = e.argv.map(String)
       ghs.push(argv)
+      if (ctl.ghTakes) await clock.advance(ctl.ghTakes)
       if (night2.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const sel = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : ''
       if (argv[1] === 'pr' && argv[2] === 'view' && argv.includes('url')) {
@@ -1517,6 +1519,20 @@ test('a merge the guard cannot read, or whose diff gh cannot give, is held while
   const before = w.ghs.length
   expect(refusalOf(await call($, { tool: 'Bash', command: 'gh pr view 12' }))).toBe('')
   expect(w.ghs.length).toBe(before)
+})
+
+test('a merge whose diff gh did not give within its time is told as a timeout, not a refusal; gh failing at once is still could not check (#2792)', withNight, async ($, on) => {
+  nightFresh(true)
+  const w = world($, on)
+  await chooseReword($, w)
+  w.night.ghFails = true
+  w.ctl.ghTakes = SCAN_MS
+  const late = refusalOf(await call($, MERGE))
+  expect(late).toContain('timeout, not a refusal')
+  expect(late).toContain('again in about a minute')
+  expect(late).not.toContain('could not check')
+  w.ctl.ghTakes = 0
+  expect(refusalOf(await call($, MERGE))).toContain('could not check')
 })
 
 // #2833: a choice holds merges in the repository it was made in, never in another. After sleep mode

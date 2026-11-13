@@ -322,7 +322,11 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
     if (m === undefined) continue
     if ('unreadable' in m) return unreadable
     const argv = ['gh', 'pr', 'diff', ...m.selector, ...(m.repo ? ['-R', m.repo] : [])]
+    const asked = await $.clock.now()
     const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
+    // A gh that failed once its whole time was spent was killed at its timeout (#2792).
+    if (r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS)
+      return { unchecked: `gh did not give the pull request's diff within ${SCAN_MS / 1000} seconds, while Slack alert wording chosen overnight waits on Dan`, late: true }
     if (r.exitCode !== 0 || r.isStdoutTruncated)
       return { unchecked: `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'}), while Slack alert wording chosen overnight waits on Dan` }
     const carrying = carried(r.stdout, waiting)
