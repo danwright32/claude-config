@@ -309,7 +309,8 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
  * nothing posts it before he approves it. Only in the repositories the choice holds (#2833): one
  * made in another repository lets the merge through, and one whose repository cannot be read holds
  * it wherever it is. A merge that cannot be read, a diff gh cannot give, or a pull request whose
- * repository gh cannot say, is held as could not check. With no choice waiting, no command is read.
+ * repository gh cannot say, is held as could not check; a diff gh did not give within its time is
+ * held as a timeout (#2792). With no choice waiting, no command is read.
  */
 const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
   const waiting = await choices($)
