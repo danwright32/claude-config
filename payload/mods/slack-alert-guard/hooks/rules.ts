@@ -42,6 +42,8 @@
 // marker anywhere is a sender, as before. No file is named or exempted. Not recognised, so still
 // held: a sentence that spells an endpoint out, a list of bare names, a pattern in a regex literal.
 
+import type { SlackAlertSend } from '../types/index.d.ts'
+
 export const GUARD = 'Slack alert guard'
 export const SOURCE = 'slack-alert-guard'
 export const HEADER = 'Slack alert'
@@ -54,6 +56,26 @@ export const CHANGE = 'Change wording'
  * return the refusal.
  */
 export const SCAN_MS = 7000
+
+/** Why a call is held when the guard could not check it, the failure in its own words. */
+export const cannotCheck = (why: string) =>
+  `Blocked: the Slack alert guard could not check this call (${why}), so it is held rather than let through unchecked. Try it again; if it keeps failing, tell Dan what failed.`
+/**
+ * Why a call is held when the guard ran out of time checking it (#2792): said as a timeout, never as
+ * a refusal, with when to send it again and when to stop. On 2026-11-11, at load average 60 to 200,
+ * the could not check answer read as a refusal and agents sent the same call up to six times.
+ */
+export const outOfTime = (why: string) =>
+  `This is a timeout, not a refusal: the Slack alert guard ran out of time before it could check this call (${why}), so the call did not run, nothing in it was judged, and nothing waits on Dan. It happens when the Mac is heavily loaded. Send the same call again in about a minute; if it runs out of time three times in a row, stop and tell Dan the Slack alert guard could not finish checking it.`
+/**
+ * What a call is told when the guard's hook failed (`next.error`, the engine's HookFailure): a hook
+ * Claude Code cut off for running past its time is a timeout; any other failure is could not check,
+ * in `said`, the failure's own words.
+ */
+export const hookFailed = (failure: unknown, said: string): string =>
+  !!failure && typeof failure === 'object' && (failure as { kind?: unknown }).kind === 'timeout'
+    ? outOfTime('the check took longer than Claude Code gives a hook')
+    : cannotCheck(said)
 /**
  * The most files read for the other uses of a model prompt (#2475) before the prompt counts as
  * wording, held as any other. 500 is more than twice the most a real search read (#2510: 213 in
@@ -873,25 +895,43 @@ const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 export const changeText = (added: string[], removed: string[]): string =>
   added.length ? `adds Slack message text Dan has not approved: ${listed(added)}` : `takes Slack message text away: ${listed(removed)}`
 
+/** Why held text's send could not be traced, so all the file's new wording was held (#2586). */
+export const UNTRACED_LANGUAGE = 'it follows sends only in JavaScript, TypeScript and python'
+export const UNTRACED_EDIT = 'the edit does not match the file as it is now'
+export const UNTRACED_NONE = 'it found no send call in the file that it could follow'
+
+/**
+ * Where the held text goes (#2586): the sends of the file it reaches, by what each calls and its
+ * line, or, held without one being found, that none could be traced and why, never a send it did not
+ * find (L11). Text taken away reached its send in the file as it was.
+ */
+const sendText = (file: string, removing: boolean, send: SlackAlertSend): string => {
+  if ('untraced' in send) return `; the guard could not trace which Slack send in it carries this text, because ${send.untraced}`
+  if (!send.sends.length) return ''
+  const each = send.sends.map(s => `${s.callee} on line ${s.line}`)
+  const named = each.length === 1 ? `send ${each[0]}` : `sends ${each.slice(0, -1).join(', ')} and ${each.at(-1)}`
+  return `, which ${removing ? 'reached' : 'reaches'} the Slack ${named} of ${file}`
+}
+
 /**
  * What is held, as the card and both refusals open: always a file that posts to Slack by itself
- * (#2837). A shell command carries no wording the guard can read before it runs, so it is named as
- * that rather than as an empty list taken away.
+ * (#2837), with the send its text reaches (#2586). A shell command carries no wording the guard can
+ * read before it runs, so it is named as that rather than as an empty list taken away.
  */
-export const heldText = (file: string, added: string[], removed: string[]): string =>
+export const heldText = (file: string, added: string[], removed: string[], send?: SlackAlertSend): string =>
   added.length || removed.length
-    ? `This edit to ${file} ${changeText(added, removed)}`
+    ? `This edit to ${file} ${changeText(added, removed)}${send ? sendText(file, !added.length, send) : ''}`
     : `This shell command writes to ${file}, which posts to Slack, and the wording it leaves cannot be read until it runs`
 
-export const blocked = (file: string, added: string[], removed: string[]): string => `Blocked: t${heldText(file, added, removed).slice(1)}`
+export const blocked = (file: string, added: string[], removed: string[], send?: SlackAlertSend): string => `Blocked: t${heldText(file, added, removed, send).slice(1)}`
 
 /** The main session's refusal: show Dan the message as Slack will post it, then ask. */
-export const refusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `${blocked(file, added, removed)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
+export const refusal = (id: string, file: string, added: string[], removed: string[], send?: SlackAlertSend): string =>
+  `${blocked(file, added, removed, send)}. Every new Slack alert's wording waits until Dan approves it. Show him the whole message as Slack will post it, with every variable filled in from a realistic example (real looking names, numbers and links, never a placeholder), then ask him with AskUserQuestion, carrying metadata {"source": "${SOURCE}:${id}", "rendered": "<that message>"} and no answers filled in. The guard words the question. Send this call again, unchanged, once he answers ${APPROVE}.`
 
 /** A subagent's refusal: it may not ask Dan, so it stops and reports. */
-export const agentRefusal = (id: string, file: string, added: string[], removed: string[]): string =>
-  `${blocked(file, added, removed)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
+export const agentRefusal = (id: string, file: string, added: string[], removed: string[], send?: SlackAlertSend): string =>
+  `${blocked(file, added, removed, send)}. Slack alert wording waits on Dan's approval, which only the main session can ask for. Stop and report to the main session that call ${id} waits on Dan approving this wording, with the message as Slack will post it, every variable filled in from a realistic example.`
 
 /**
  * The question Dan is asked, with the message itself in it. Approving posts nothing: it only lets

@@ -121,6 +121,12 @@ export type IsItLiveThread = {
    * than asking for a second reply, since it is the text Dan was shown.
    */
   card?: { pr: string; name: string; message: string }
+  /**
+   * #2787: Slack said the thread no longer exists (its first post was deleted): the error it
+   * answered, the reply that could not be saved there when one is known, and whether Dan has been
+   * told. No draft is asked for it again in this session.
+   */
+  gone?: { error: 'invalid_thread_ts' | 'thread_not_found'; message?: string; told?: true }
 }
 
 /**

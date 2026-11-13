@@ -104,7 +104,8 @@ def main(argv):
 
     reviews, kinds, findings, recorded, unreadable, unopened = 0, {}, 0, 0, [], []
     first = last = None
-    how = {"whole": 0, "marker": 0, "part": 0, "path": 0}
+    # across and past_end are recorded by reviews since #2237; an older review placed none that way.
+    how = {"whole": 0, "marker": 0, "part": 0, "across": 0, "past_end": 0, "path": 0}
     why = {k: 0 for k, _ in m.UNPLACED_KINDS}
     why["other"] = 0
     tried = {"marker": 0, "part": 0, "short": 0}
@@ -203,6 +204,7 @@ def main(argv):
     print(f"  other: {why['other']}")
     print(f"how placed, from the {recorded} of {reviews} reviews that record it: whole line {how['whole']}, "
           f"without the diff's marker {how['marker']}, part of a line {how['part']}, "
+          f"across a line break {how['across']}, past the end of a line {how['past_end']}, "
           f"path corrected {how['path']}")
     print(f"quote lengths placed by part of a line, from the {part_recorded} of {reviews} reviews that "
           f"record them: {bands(part_lengths)}")

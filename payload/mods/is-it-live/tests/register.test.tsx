@@ -190,6 +190,8 @@ type World = {
   inLine?: Gh
   /** #2436: what Slack answers a draft, and the job watcher's running task ids ('unreadable' refuses). */
   slackDraft: { text: string; isError?: true }
+  /** #2787: what Slack answers a read of a thread, its messages unless set. */
+  slackRead?: { text: string; isError?: true }
   jobs: string[] | 'unreadable'
 }
 /** How a command was run: the folder it ran in and the account token handed to it, if any. */
@@ -289,8 +291,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   on('prompt.submit', ($, e) => ({ text: e.text, context: [] }) as never)
   on('tool.call', { tool: ['mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__plugin_slack_slack__slack_send_message_draft', 'mcp__claude_ai_Slack__slack_read_thread'] }, ($, e) => {
     slackCalls.push(String(e.tool))
-    if (String(e.tool).endsWith('slack_read_thread')) return { result: 'messages', text: 'messages' } as never
-    const d = w.slackDraft
+    const d = String(e.tool).endsWith('slack_read_thread') ? (w.slackRead ?? { text: 'messages' }) : w.slackDraft
     return (d.isError ? { isError: true, result: d.text, text: d.text } : { result: d.text, text: d.text }) as never
   })
   on('ui.log', () => ({ value: undefined }) as never)
@@ -1821,6 +1822,61 @@ test('a session with nobody at the prompt is never held for a draft (#2436)', wi
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
+// ---- #2787: a thread that no longer exists is owed no draft ----
+// On 2026-11-11 the post that started the thread had been deleted, so every draft to it answered
+// invalid_thread_ts and every read thread_not_found, and the hold asked again at the end of turn after
+// turn. Once Slack says the thread is gone, Dan is told once, with the reply that could not be saved,
+// and no turn end asks again (taken for Dan, 2026-11-12: no draft DM is offered in its place).
+
+test('a draft Slack refuses because the thread no longer exists settles the hold, said once with the reply, and no later turn end or merge asks again (#2787)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412, 413) })
+  await start($)
+  await says($, `Geoff answered in ${THREAD}, build what he asked for`)
+  await mergeAndCard($, 412)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  w.w.slackDraft = { text: 'invalid_thread_ts', isError: true }
+  await draft($, { message: 'The venue filter is live now.' })
+  expect((await turnEnd($)).block).toBeUndefined()
+  const said = w.toasts.filter(t => t.includes(THREAD))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('no longer exists')
+  expect(said[0]).toContain('"The venue filter is live now."')
+  expect((await turnEnd($)).block).toBeUndefined()
+  await mergeAndCard($, 413)
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(w.toasts.filter(t => t.includes(THREAD))).toHaveLength(1)
+})
+
+test("a read Slack answers thread_not_found settles the hold for a card's message, which is said once (#2787)", withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, `Kris asked in ${THREAD}, build what she asked for`)
+  await bash($, 'gh pr merge 412 --squash')
+  await card($, { ...CARD, deploy: 'none', requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.', slack: { channel_id: CH, thread_ts: TS } })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  w.w.slackRead = { text: '{"ok":false,"error":"thread_not_found"}', isError: true }
+  await slack($, READ, { channel_id: CH, message_ts: TS })
+  expect((await turnEnd($)).block).toBeUndefined()
+  const said = w.toasts.filter(t => t.includes(THREAD))
+  expect(said).toHaveLength(1)
+  expect(said[0]).toContain('"The venue filter is live now."')
+  expect((await turnEnd($)).block).toBeUndefined()
+  expect(w.toasts.filter(t => t.includes(THREAD))).toHaveLength(1)
+})
+
+test('a draft Slack refuses for any other reason still holds every turn end, as before (#2787)', withKit, async ($, on) => {
+  const w = world(on, { prView: merged(412) })
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($)
+  w.w.slackDraft = { text: '{"ok":false,"error":"not_in_channel"}' }
+  await draft($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  await draft($)
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  expect(w.toasts.join(' ')).not.toContain('no longer exists')
+})
+
 // ---- #2578: a thread pasted once the session is under way is owed a reply only after a merge for it ----
 // On 2026-11-09 Dan pasted one alert link hours into an orchestrated session; the hold then asked for
 // a reply in the alert's thread after three unrelated merges, and he skipped each. A merge is for a
@@ -1943,11 +1999,11 @@ test('a session that started from a thread still asks after every merge, and the
   expect(String((await turnEnd($)).block)).toContain(`This session started from ${THREAD}`)
 })
 
-// ---- #2653: a session says once that its later merges are unrelated to the thread it started from ----
+// ---- #2653: a session says once that its merges are unrelated to the threads it was given ----
 // Dan, 2026-11-11: since #2630 there is no picker, so a session started from a Slack thread was held
 // for a fresh draft in it after every merge, its unrelated ones too (on 2026-11-10 an alert thread's
 // session went on to merge other work, and was asked twice in twenty minutes). The session may say
-// ONCE, by calling the unrelated_merges tool, that its later merges have nothing to do with the
+// ONCE, by calling the unrelated_merges tool, that its merges have nothing to do with the
 // thread; no draft is then held for them. It is the session's own act, never inferred, and kept in
 // that session's state only. Since #2849 it clears a merge that has already landed too, since that
 // is when a session learns the merge is unrelated.
@@ -1955,7 +2011,7 @@ const UNRELATED = 'mcp__is-it-live__unrelated_merges'
 const unrelated = async ($: unknown, more: Record<string, unknown> = {}) =>
   (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: UNRELATED, tool_use_id: 'u1', ...more } as never)) as Out
 
-test('before the session says its later merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
+test('before the session says its merges are unrelated, a merge holds the turn end; after it, a later merge holds nothing (#2653)', withKit, async ($, on) => {
   world(on, { prView: merged(412, 413, 414) })
   await start($)
   await says($, `The alert fired in ${THREAD}, look into it`)
@@ -2011,7 +2067,7 @@ test('a card that asks a draft of its message in the thread after the session sa
   expect(String((await turnEnd($)).block)).toContain('"The venue filter is live now."')
 })
 
-test('saying the later merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
+test('saying the merges are unrelated is refused with no thread to be unrelated to, or from a subagent (#2653)', withKit, async ($, on) => {
   world(on, { prView: merged(412) })
   await start($)
   const none = await unrelated($)

@@ -1,5 +1,6 @@
 ---
 name: plan-security
+model: fable
 description: Security lens for feature planning, authn/authz, data exposure, input validation, attack surface, secrets. Use as a plan-council / plan-lite panelist or an agent-team teammate.
 ---
 
