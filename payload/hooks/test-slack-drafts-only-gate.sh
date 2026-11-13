@@ -2409,6 +2409,16 @@ for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
   run_rf "$reads"
   allowed "inline code that only reads the files it is handed passes: ${reads%%$'\n'*}"
 done
+# A plain word after an option known to load nothing is still the code's argument, not its value
+# (measured with node 22, 2026-11-13: each file below lands in process.argv and is never loaded), and
+# so is a word after --, which ends node's options, or after an option whose value is glued on.
+for reads in "node -e 'console.log(1)' --no-warnings ./post.js" "node -e 'read' --no-warnings notes.md" \
+  "node -e 'console.log(1)' -- ./post.js" "node -e 'console.log(1)' --max-old-space-size=4096 ./post.js" \
+  "node -e 'console.log(1)' --input-type=commonjs --no-deprecation ./post.js" \
+  "perl -ne 'print' -l post.sh" "python3 -c 'print(1)' -X ./post.py"; do
+  run_rf "$reads"
+  allowed "a file after an option that loads nothing is the code's argument: $reads"
+done
 
 # Reads that passed before, kept passing: a program that only reads, and a script on disk that does.
 for reads in "cat post.sh" "grep -n slack post.sh" "head -5 post.sh" "sed -n 1,2p post.sh" "rg -n slack post.sh" \
@@ -2554,6 +2564,14 @@ for shape in "node -e 1 --require=./FILE" "node -e 'console.log(1)' --require=./
   si_pair "$shape" x.js clean.js "x.js"
 done
 for shape in "node -e 1 --import=./FILE" "node -e 1 --loader=./FILE" "node -e 1 --import ./FILE"; do
+  si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
+# Which options load a file is not a list the gate can keep complete: three rounds of review each found
+# one it missed (--require=, --loader=, then --experimental-loader), and each missed one was a pass. So
+# after the code, the value of ANY option, separate or glued with =, is read as code, unless the option
+# is one known to load nothing; an option nobody has named yet is read as code too (#2886 review).
+for shape in "node -e 1 --experimental-loader ./FILE" "node -e 1 --experimental-loader=./FILE" \
+  "node -e 1 --some-future-flag=./FILE" "node -e 1 --some-future-flag ./FILE" "node -e 1 -x ./FILE"; do
   si_pair "$shape" x.mjs clean.mjs "x.mjs"
 done
 # What a command prints that cannot be read, piped into a shell or an interpreter as its code, is

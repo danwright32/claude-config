@@ -137,6 +137,21 @@ OPTIONS = {
     "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
     "osascript": ({"-e"}, "", VALUED),
 }
+# The options known to load nothing, by family, for the words after code given inline (every_file,
+# claude-config#2691). node, perl and the rest go on reading their own options after the code, and
+# which of those options load a file is not a list the gate can keep complete: three rounds of review
+# of #2886 each found a loader it missed (--require=, --loader=, --experimental-loader), and each one
+# missed was a pass. So there the value of ANY option, separate or glued with =, is read as code, and
+# only an option matched here leaves the word after it as the code's argument. Each is measured to load
+# nothing (node 22, 2026-11-13: a file after each landed in process.argv unrun; -- ends node's options;
+# --input-type takes only module or commonjs) or is perl's own reading switches, which take no separate
+# value (perl_acts reads the rest). A family not listed has none. Python is not read this way at all:
+# it stops at -c, so every word after the code is its argument.
+LOADS_NOTHING = {
+    "js": re.compile(r"--|--no-warnings|--no-deprecation|--trace-warnings|--enable-source-maps|--input-type|"
+                     r"--max-old-space-size|--stack-size"),
+    "perl": re.compile(r"--|-[nlpaw0-9]+"),
+}
 # perl -e code the gate sees cannot act (perl_acts, claude-config#2691): switches that only read lines
 # (-n, -p, -l, -a, -0, -F, -w), and code naming none of perl's ways to run a command, load or evaluate
 # code, write or rename a file, or open one (the two argument open runs a command), no module by name
@@ -4621,11 +4636,15 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # it, as after a held script word (a module python3 -m runs, claude-config#2827).
         after_held = bool(inline and held_code)
         prog = os.path.basename(words[0])
-        # Except the value of a valued option after the code: node, ruby and perl go on reading their
-        # own options past -e, so `node -e '...' -r ./x.js` loads x.js (measured with node, 2026-11-13,
-        # claude-config#2691). Python stops at -c and -m, and every word after the code is its argument.
+        # Except the value of an option after the code: node, ruby and perl go on reading their own
+        # options past -e, so `node -e '...' -r ./x.js` loads x.js (measured with node, 2026-11-13,
+        # claude-config#2691). Which options load a file is not known in full, so the value of any
+        # option there, separate or glued with =, is read as code unless the option is one known to
+        # load nothing (LOADS_NOTHING, #2886 review). Python stops at -c and -m, and every word after
+        # the code is its argument.
         fam = self.family(prog)
-        loads = OPTIONS.get(fam, (set(), "", VALUED))[2] if inline and fam != "py" else ()
+        options_read = bool(inline) and fam != "py"
+        safe = LOADS_NOTHING.get(fam)
         last = None
         # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
         # is opened for writing by the shell before the program starts and is never handed to it, so
@@ -4634,7 +4653,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # every argument, and a file written here and run by a later command is judged there.
         written = False
         for w in words[1:]:
-            option, last = last, w
+            # The option this word may be the value of: the word before it, where that is an option
+            # whose value is not glued on (`--input-type=module ./x.js` hands x.js to the code).
+            option = last if last and last[:1] in "-+" and not self.glued_option(last, any_option=True) else None
+            last = w
             if written:
                 written = False
                 continue
@@ -4647,7 +4669,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if w.startswith("-") or w.startswith("+"):
                 # `--require=./x.js` is read as `--require ./x.js` (#2887), its option name included, so
                 # a module node loads by it after the code is code, not the code's data (#2886 review).
-                glued = self.glued_option(w)
+                # After the code any option glued to a value is split, known or not.
+                glued = self.glued_option(w, any_option=options_read and after_held and bool(code))
                 if glued is None:
                     continue
                 option, w = glued
@@ -4657,7 +4680,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if (code or past) and (actor or self.data_shaped(path)):
                 data.append((w, path, False))
                 continue
-            if after_held and code and option not in loads:
+            loaded = options_read and option is not None and not (safe and safe.fullmatch(option))
+            if after_held and code and not loaded:
                 data.append((w, path, True))
                 continue
             # A file read as code in the place of a script word that names no file is named by that
@@ -5504,12 +5528,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return "\n".join(bodies), True
 
     @staticmethod
-    def glued_option(w):
+    def glued_option(w, any_option=False):
         """(the option, its value) for a long option that takes one, glued on with = (`--require=./x.js`),
         which the program reads as the same option with its value as the next word; None for any other
-        word (claude-config#2887: node --require= and --import= loaded a module unread where -r did not)."""
+        word (claude-config#2887: node --require= and --import= loaded a module unread where -r did not).
+        any_option takes any option word glued to a value, known or not (after inline code, #2886)."""
         name, eq, value = w.partition("=")
-        return (name, value) if eq and value and name.startswith("--") and name in VALUED else None
+        if not (eq and value):
+            return None
+        known = name.startswith("--") and name in VALUED
+        return (name, value) if known or (any_option and name[:1] in "-+" and len(name) > 1) else None
 
     @classmethod
     def glued_value(cls, w):
