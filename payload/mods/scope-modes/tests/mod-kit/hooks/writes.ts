@@ -569,8 +569,10 @@ const toolArgs = (name: string, args: readonly string[]): string[] => {
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string
     const eq = a.indexOf('=')
-    if (isOutput(modes.outputs, a) && args[i + 1] !== undefined) out.push(args[++i] as string)
-    else if (eq > 0 && isOutput(modes.outputs, a.slice(0, eq))) out.push(a.slice(eq + 1))
+    // Written with =, the value is the file; only an option written alone takes the next word.
+    if (eq > 0) {
+      if (isOutput(modes.outputs, a.slice(0, eq))) out.push(a.slice(eq + 1))
+    } else if (isOutput(modes.outputs, a) && args[i + 1] !== undefined) out.push(args[++i] as string)
   }
   return scriptArgs(out)
 }

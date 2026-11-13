@@ -1147,6 +1147,7 @@ test('a test runner that really writes a held file is still held: a flag that up
     'bun test --update-snapshots src/',
     'npx vitest run src/ --outputFile=src/big.ts',
     'npx vitest run src/ --outputFile.junit src/big.ts',
+    'npx vitest run --outputFile.junit=src/big.ts src/lib',
     'node --test --test-reporter-destination=src/big.ts src/',
     'npx vitest run src/ > src/big.ts',
     'python3 -m pytest src/ 2>&1 | tee src/big.ts',

@@ -973,6 +973,9 @@ describe('writes: a test runner hands on the files it is handed only when a flag
     expect(words('bun test --update-snapshots tests/a')).toEqual([['tests/a']])
     expect(words('npx vitest run tests/a --outputFile=report.json')).toEqual([['report.json']])
     expect(words('npx vitest run tests/a --outputFile.junit junit.xml')).toEqual([['junit.xml']])
+    // Written with =, the value is the file, never the word after it (lessons review of 2eb58e8).
+    expect(words('npx vitest run --outputFile.junit=junit.xml tests/a')).toEqual([['junit.xml']])
+    expect(words('npx vitest run --outputFile=report.json tests/a')).toEqual([['report.json']])
     expect(words('npx jest tests/ --outputFile out.json')).toEqual([['out.json']])
     expect(words('python3 -m pytest tests/a --junitxml=r.xml')).toEqual([['r.xml']])
     expect(words('python3 -m pytest tests/a --basetemp tmp/run')).toEqual([['tmp/run']])
