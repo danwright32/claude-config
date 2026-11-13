@@ -71,9 +71,10 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, REST_RESUME, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
+  LIMITS, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, resumeWords, sendItselfAsk, startFailBecause, startPrompt, thenNext, unstartedSaid,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release, type Unstarted,
 } from './driver.ts'
+import { busyNow } from './busy.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
@@ -3293,6 +3294,7 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
       weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal), skew: skewMet,
+      busy: await busyNow($),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     // A rest is for the skew met so far: one met after it, in the turn it starts, is met anew (#1281).
@@ -3314,6 +3316,11 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
     // Said from what the queue answered, never before it (#925); its answer reaches the block only as data (#922).
     if (d.kind === 'block') return { block: blockTold(d, ended, { root: where.root, self: en.self }) }
+    // #2511: a rest on the session's own background work loads nothing again; its report, or the tick, starts it.
+    if (d.kind === 'rest' && !d.reload) {
+      $.ui.log(`scope-modes: the overnight driver let this session rest: ${d.why}`, { to: 'debug' })
+      return null
+    }
     if (d.kind === 'rest') {
       // #1281: this mod's own manifest touched, so it loads again once the session is idle, against
       // the mod-kit loaded by then (measured on 2.1.302: a touch alone reloads a mod, at idle). The
@@ -3371,7 +3378,7 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
     if (resumeDue(d, en.now)) {
       // Cleared and saved first, so a second tick never starts it twice.
       d.resumeAt = null
-      return (await saveDriver($, en, d)) === null ? (d.restDue ? REST_RESUME : RESUME) : null
+      return (await saveDriver($, en, d)) === null ? resumeWords(d) : null
     }
     if (d.stopped || d.resumeAt !== null) return null
     const c = await claimNow($, en)

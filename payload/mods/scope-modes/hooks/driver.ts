@@ -39,6 +39,11 @@ export const LIMITS = {
   claimReadFails: 3,
   /** How long a worker whose mods are out of step rests, idle, so a reload it is owed can land (#1281). */
   skewRestMs: MIN,
+  /**
+   * How long a worker rests while its own subagent or kept job is still working before it is started
+   * again to check on it (#2511). The work's own report starts it sooner; this is for when none comes.
+   */
+  busyRestMs: 10 * MIN,
 }
 
 /** The errors worth waiting out: a usage limit, and the server being busy or failing (overloaded arrives as server_error, #839). */
@@ -84,6 +89,8 @@ export type DriverRecord = {
   rested?: boolean
   /** The wait now running is that rest, so the session is started again with the words for it (#1281). */
   restDue?: boolean
+  /** The background work the rest now running waits on, as counted (#2511); null or absent for none. */
+  waitingOn?: string | null
 }
 
 export type DriverReading = { state: 'none' } | { state: 'ok'; record: DriverRecord } | { state: 'unreadable'; why: string }
@@ -92,7 +99,7 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 
 export const freshDriver = (generation: string, session: string, now: number): DriverRecord => ({
   v: 1, generation, session, since: now, blocks: 0, idleBlocks: 0, progressAt: now, fingerprint: null,
-  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, claimFails: 0, parked: null, stopped: null, rested: false, restDue: false,
+  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, claimFails: 0, parked: null, stopped: null, rested: false, restDue: false, waitingOn: null,
 })
 
 /** The counter as stored. Anything but a whole record for this night and session is unreadable, never a fresh start (L105). */
@@ -118,7 +125,8 @@ export const readDriver = (text: string | null, generation: string, session: str
     return { state: 'unreadable', why: "the driver's counter has a wait it cannot read" }
   }
   const boolOrAbsent = (x: unknown) => x === undefined || typeof x === 'boolean'
-  if (typeof r.finishing !== 'boolean' || !strOrNull(r.stopped) || !strOrNull(r.parked) || !strOrNull(r.fingerprint) || !boolOrAbsent(r.rested) || !boolOrAbsent(r.restDue)) {
+  const strOrNullOrAbsent = (x: unknown) => x === undefined || strOrNull(x)
+  if (typeof r.finishing !== 'boolean' || !strOrNull(r.stopped) || !strOrNull(r.parked) || !strOrNull(r.fingerprint) || !boolOrAbsent(r.rested) || !boolOrAbsent(r.restDue) || !strOrNullOrAbsent(r.waitingOn)) {
     return { state: 'unreadable', why: "the driver's counter has a field it cannot read" }
   }
   return { state: 'ok', record: r as DriverRecord }
@@ -204,8 +212,12 @@ export type Release = { issue: number; state: 'parked' | 'failed'; why: string }
 export type StopDecision =
   | { kind: 'block'; reason: string; record: DriverRecord; notes: Note[]; release?: Release }
   | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; release?: Release; why: string }
-  /** Let the session stop, idle, until `record.resumeAt`, keeping its claim, then start it again (#1281). */
-  | { kind: 'rest'; record: DriverRecord; notes: Note[]; why: string; release?: undefined }
+  /**
+   * Let the session stop, idle, until `record.resumeAt`, keeping its claim, then start it again: for
+   * mods out of step, with `reload` true, so they load again (#1281); or while its own background
+   * work is still working, with `reload` false (#2511).
+   */
+  | { kind: 'rest'; record: DriverRecord; notes: Note[]; why: string; reload: boolean; release?: undefined }
 
 export type StopInput = {
   now: number
@@ -227,6 +239,12 @@ export type StopInput = {
    * lacks, so every call is refused. Null or absent for none.
    */
   skew?: string | null
+  /**
+   * The background work this session started that is still working, counted by busyWords ("1
+   * subagent and 1 kept job"), never in the session's own words (#2511). Null or absent for none,
+   * and for work that stopped, hung or could not be read, so the breaker still trips on those.
+   */
+  busy?: string | null
 }
 
 /**
@@ -265,6 +283,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   d.waitStep = 0
   d.resumeAt = null
   d.restDue = false
+  d.waitingOn = null
   if (i.weekly !== null) d.weeklyAt = now
   const progressed = i.fingerprint !== null && i.fingerprint !== d.fingerprint
   if (progressed) {
@@ -307,7 +326,7 @@ export const decideStop = (i: StopInput): StopDecision => {
       d.resumeAt = now + LIMITS.skewRestMs
       d.waits.push({ from: now, until: d.resumeAt })
       const why = `${skew} Every call was refused, since none could be checked for a merge or deploy, so this session rests a minute to load its mods again.`
-      return { kind: 'rest', record: d, why, notes: [{ kind: 'finding', ...where, text: why }] }
+      return { kind: 'rest', record: d, why, reload: true, notes: [{ kind: 'finding', ...where, text: why }] }
     }
     const why = `${skew} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
     return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
@@ -327,9 +346,13 @@ export const decideStop = (i: StopInput): StopDecision => {
   } else {
     d.claimFails = 0
   }
+  // #2511: a turn ended while the session's own subagent or kept job is still working is a wait on
+  // that work, never idleness, so the breaker does not judge it (a rest below). Work that stopped,
+  // hung or could not be read arrives here as none, so the breaker still fails such a claim.
+  const busy = i.busy ?? null
   const idleMs = activeMs(d.waits, d.progressAt, now)
   const idle = progressed ? 0 : d.idleBlocks
-  if (idle >= LIMITS.breakerBlocks || idleMs >= LIMITS.breakerMs) {
+  if (busy === null && (idle >= LIMITS.breakerBlocks || idleMs >= LIMITS.breakerMs)) {
     const why = `circuit breaker: ${idle >= LIMITS.breakerBlocks ? `${idle} blocks in a row` : `${mins(idleMs)} of active time`} with no new commit, claim or note`
     return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
@@ -340,6 +363,21 @@ export const decideStop = (i: StopInput): StopDecision => {
     release = { issue: claim.issue, state: 'parked', why: `attempt ${claim.attempts}: an issue is parked after ${LIMITS.attempts} attempts in a night` }
   } else if (claim && claim.since !== null && activeMs(d.waits, claim.since, now) >= LIMITS.stuckMs) {
     release = { issue: claim.issue, state: 'parked', why: `${mins(activeMs(d.waits, claim.since, now))} of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets` }
+  }
+  // #2511: with nothing to end, a session whose own work is still working rests until that work
+  // reports (its report starts a turn) or busyRestMs passes, rather than being blocked into turns
+  // that can only wait. The rest is counted against the night's cap, so work that never reports
+  // cannot rest the night away, and it is no wait on a limit, so the claim's active time still runs
+  // toward its stuck limit. The breaker counts afresh from here. A park the watchdog made is kept
+  // for the next block to say.
+  if (busy !== null && !release) {
+    d.blocks++
+    d.idleBlocks = 0
+    d.progressAt = now
+    d.resumeAt = now + LIMITS.busyRestMs
+    d.waitingOn = busy
+    const why = `its own background work is still working (${busy}), so it rests until that reports back, ${mins(LIMITS.busyRestMs)} at most`
+    return { kind: 'rest', record: d, why, reload: false, notes: [{ kind: 'heartbeat', ...where }] }
   }
   // What the release says is not written here: whether it ended is known only once the queue has
   // answered, so blockTold puts it in front of this reason then (#925).
@@ -515,6 +553,24 @@ export const RESUME = 'Sleep mode: the wait after the API error is over. Carry o
 
 /** What a worker is told when its rest for mods out of step is over (#1281). */
 export const REST_RESUME = 'Sleep mode: this session rested so its mods could load again. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'
+
+/**
+ * The background work still working, counted (#2511): a subagent the job watcher has seen move in
+ * the last twenty minutes, and a job this session kept that has not stalled. Null for none.
+ */
+export const busyWords = (subagents: number, keptJobs: number): string | null => {
+  const part = (n: number, one: string) => (n > 0 ? [`${n} ${one}${n === 1 ? '' : 's'}`] : [])
+  const parts = [...part(subagents, 'subagent'), ...part(keptJobs, 'kept job')]
+  return parts.length ? parts.join(' and ') : null
+}
+
+/** The words a session is started again with once its wait is over: after a rest for mods out of step, a rest on its own work (#2511), or an API error. */
+export const resumeWords = (d: DriverRecord): string =>
+  d.restDue
+    ? REST_RESUME
+    : d.waitingOn
+      ? `Sleep mode: this session rested while its own background work ran (${d.waitingOn}), and nothing has reported back yet. Check on that work before redoing anything, then carry on with the overnight work.`
+      : RESUME
 
 /**
  * The overnight rules, carried in every block so they survive compaction (#844). `self` and `root`
