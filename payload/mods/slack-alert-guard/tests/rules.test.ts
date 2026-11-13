@@ -311,6 +311,31 @@ test('a held edit names the wording it adds or takes away; a held shell command 
   expect(refusal('t1', '/w/a/alert.ts', ['Deploy failed on production'], []).startsWith('Blocked: this edit to /w/a/alert.ts adds')).toBe(true)
 })
 
+// claude-config#2586: the guard knows which send a held line reaches, so its message says so, and
+// says plainly when it could not tell rather than claiming a send it did not find (L11).
+test('a held edit names the Slack send its text reaches, or says the send could not be traced and why (#2586)', () => {
+  const F = '/w/a/alert.ts'
+  expect(heldText(F, ['Deploy failed on production'], [], { sends: [{ callee: 'chat.postMessage', line: 12 }] })).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed on production", which reaches the Slack send chat.postMessage on line 12 of ${F}`,
+  )
+  expect(heldText(F, ['Deploy failed', 'Backup is late'], [], { sends: [{ callee: 'fetch', line: 3 }, { callee: 'client.chat_postMessage', line: 9 }] })).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed", "Backup is late", which reaches the Slack sends fetch on line 3 and client.chat_postMessage on line 9 of ${F}`,
+  )
+  expect(heldText(F, [], ['Deploy failed'], { sends: [{ callee: 'fetch', line: 4 }] })).toBe(
+    `This edit to ${F} takes Slack message text away: "Deploy failed", which reached the Slack send fetch on line 4 of ${F}`,
+  )
+  const untraced = heldText(F, ['Deploy failed'], [], { untraced: 'the edit does not match the file as it is now' })
+  expect(untraced).toBe(
+    `This edit to ${F} adds Slack message text Dan has not approved: "Deploy failed"; the guard could not trace which Slack send in it carries this text, because the edit does not match the file as it is now`,
+  )
+  expect(untraced).not.toContain('reaches')
+  // Both refusals and the card open with the same words, so each names the send too.
+  for (const r of [refusal('t1', F, ['Deploy failed'], [], { sends: [{ callee: 'fetch', line: 3 }] }), agentRefusal('t1', F, ['Deploy failed'], [], { sends: [{ callee: 'fetch', line: 3 }] })])
+    expect(r).toContain(`"Deploy failed", which reaches the Slack send fetch on line 3 of ${F}. `)
+  // A shell command's wording cannot be read, so no send is named for it.
+  expect(heldText(F, [], [], { sends: [{ callee: 'fetch', line: 3 }] })).not.toContain('line 3')
+})
+
 // claude-config#2361, #2364, #2290: hold only text a Slack send builds.
 
 test('a test file is told by its name or a test folder, read from the repository root', () => {

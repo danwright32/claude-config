@@ -1239,8 +1239,38 @@ The bedtime answer is written into the shared file so it is asked once, and kept
 A second paragraph says the shared file is written once a night by the scheduled sync.
 The bedtime answer is written into the shared file so it is asked once, and kept there.
 EOF
-P add src/ledger.ts src/old.ts docs/list.md docs/notes.md; P commit -q -m seed
+# A settings table shaped as the one quote under 20 characters seen in this Mac's reviews from
+# 2026-10-28 to 2026-11-12 (claude-config#1701): a setting's name on a line of its own (line 4),
+# and a longer setting it is the start of in a row nearer the cited number (line 11).
+cat > "$PLACE/docs/settings.md" <<'EOF'
+# Settings
+<tr><td>
+
+`SUITE_LOCK_WAIT`
+
+</td><td>
+
+How long a run waits for the lock.
+
+</td></tr>
+<tr><td><code>SUITE_LOCK_WAIT_POLL</code></td><td><code>2</code></td><td>
+
+Seconds between looks at the lock.
+</td></tr>
+EOF
+P add src/ledger.ts src/old.ts docs/list.md docs/notes.md docs/settings.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
+# A comment whose sentence runs on over a second line that starts with the comment's own marker,
+# the shape of 6 of the 8 quotes in this Mac's reviews to 2026-11-13 that began as the end of a line
+# (#2237): a reviewer quoting the sentence leaves the marker out, so the lines read on as one never
+# hold it.
+cat > "$PLACE/docs/scan.sh" <<'EOF'
+#!/bin/bash
+# How old a scan may be, in seconds, before a plan made from it is refused: what it
+# measured may have changed since. A setting, not a measurement.
+max_scan_age=3600
+EOF
+P add docs/scan.sh; P commit -q -m "add scan"
 PLACE_SHA="$(P rev-parse HEAD)"
 IFS= read -r -d '' place_out_prog <<'EOF' || true
 import importlib.util, sys
@@ -1364,25 +1394,51 @@ one("a phrase of exactly 20 characters is placed by part of a line",
 one("a phrase of 19 characters is too short to be placed by part of a line",
     "docs/notes.md:1: the sync time is not stated." + S + "\nQuote: ritten once a night",
     "docs/notes.md:1: ", "too short to be placed by part of a line")
+# What the floor refuses, from a real review (claude-config#1701): the finding was about the setting
+# on line 4, but the nearest line holding its 15 characters is the longer setting on line 11, so
+# any floor of 15 or less would move the finding to the wrong row. It stays at its cited number.
+one("a setting's name under 20 characters is not moved to a longer name it starts",
+    "docs/settings.md:13: the setting's name and default sit on separate lines." + S +
+    "\nQuote: SUITE_LOCK_WAIT",
+    "docs/settings.md:13: ", "too short to be placed by part of a line")
 one("a phrase in no line at all keeps its number and says part of a line was tried",
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
     "docs/notes.md:4: ", "matches no line of docs/notes.md at the reviewed head, whole or in part")
-# How a miss sits against the file is said in its mark, worked out while the reviewed head is in
-# hand (claude-config#1701): a review of a worktree records the worktree folder as its repo, and the
-# folder is gone by the time anyone reads the report, so the shape cannot be judged afterwards.
-one("a quote running across two lines says which lines it runs across",
-    "docs/notes.md:4: the sync time is not stated." + S +
+# A quote copied from more than one line, or starting as the end of a line and running on past it
+# (#2237). Over this Mac's reviews to 2026-11-13, 13 of the 23 quotes that matched no line whole or
+# in part were one of these two shapes, and in all 13 the line each starts on is the line the finding
+# is about. So each is placed on the line it starts on, the occurrence nearest the cited number
+# winning, after the whole line, its marker and part of a line have all found nothing. The part
+# ending a line must be 20 characters or more, the floor a part of a line is held to.
+one("a quote running across two lines places on the line it starts on",
+    "docs/notes.md:1: the sync time is not stated." + S +
     "\nQuote: written once a night by the scheduled sync. The bedtime answer is written",
-    "docs/notes.md:4: ", "whole or in part, though it runs across lines 4 to 5,")
-one("a quote that starts as the end of a line and runs on past it says how much ended the line",
-    "docs/notes.md:5: the answer is said to be shared." + S +
+    "docs/notes.md:4: ", None)
+one("a quote that starts as the end of a line and runs on past it places on the nearest such line",
+    "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: is asked once, and kept there. Then the sync reads it back",
-    "docs/notes.md:5: ", "whole or in part, though its first 30 characters end line 5 and the rest does not follow it,")
-one("a quote neither across nor past the end of a line says so",
+    "docs/notes.md:5: ", None)
+one("a comment's sentence quoted without the marker starting its second line places on its first",
+    "docs/scan.sh:4: the age is not the one used." + S +
+    "\nQuote: # How old a scan may be, in seconds, before a plan made from it is refused: what it "
+    "measured may have changed since.",
+    "docs/scan.sh:2: ", None)
+one("a quote whose part ending a line is under 20 characters is not placed past that line's end",
+    "docs/notes.md:4: the answer is said to be shared." + S +
+    "\nQuote: kept there. Then the sync reads it back",
+    "docs/notes.md:4: ", "whole or in part, nor does it run across or past the end of any line,")
+one("a quote neither across nor past the end of a line keeps its number and says so",
     "docs/notes.md:4: the answer is said to be shared." + S +
     "\nQuote: written into the local file so it is asked twice",
     "docs/notes.md:4: ", "whole or in part, nor does it run across or past the end of any line,")
+# The floor still holds for the new steps (#1701): a quote that starts with the setting's name on
+# line 4 of docs/settings.md and runs on in words no line holds is not placed on that row, nor on
+# the longer setting it is the start of nearer the cited number, so it stays where it was cited.
+one("a longer quote starting with a setting's name is not placed when no line holds or ends with its start",
+    "docs/settings.md:13: the setting has no default." + S +
+    "\nQuote: `SUITE_LOCK_WAIT` is read once when the run starts",
+    "docs/settings.md:13: ", "whole or in part, nor does it run across or past the end of any line,")
 
 # A cited path that is not a file at the head (claude-config#1368: the other 4 of the 13). One held
 # `..`, two a stray folder in front of the real path, one a bare file name. Each is tried as the
@@ -1421,7 +1477,8 @@ got = [l.split(" ")[0] for l in two.splitlines() if m.FINDING.match(l)]
 print("PASS\tthree findings each placed by their own quote" if got == ["src/ledger.ts:5:", "src/ledger.ts:1:", "src/ledger.ts:16:"]
       else f"FAIL\tthree findings each placed by their own quote: {got} | {two!r}")
 print("PASS\tthe counts say how many were placed and how many not" if
-      counts == {"placed": 2, "unplaced": 1, "whole": 2, "marker": 0, "part": 0, "path": 0, "part_lengths": []}
+      counts == {"placed": 2, "unplaced": 1, "whole": 2, "marker": 0, "part": 0, "across": 0, "past_end": 0,
+                 "path": 0, "part_lengths": []}
       else f"FAIL\tthe counts say how many were placed and how many not: {counts}")
 # HOW each was placed is counted too, since a placed finding carries no trace of it and a fallback
 # that never fires reads exactly like one that is not there (L551).
@@ -1430,13 +1487,16 @@ _, counts = m.place_findings(
     "src/ledger.ts:3: b." + S + "\nQuote: +    total += e.amount;\n"
     "docs/notes.md:4: c." + S + "\nQuote: written into the shared file so it is asked once\n"
     "ledger.ts:3: d." + S + "\nQuote: total += e.amount;\n"
+    "docs/notes.md:1: f." + S + "\nQuote: written once a night by the scheduled sync. The bedtime answer\n"
+    "docs/notes.md:3: g." + S + "\nQuote: is asked once, and kept there. Then the sync reads it back\n"
     "src/ledger.ts:3: e." + S, repo, sha, ["src/ledger.ts"])
 print("PASS\tthe counts say how each finding was placed" if
-      counts == {"placed": 4, "unplaced": 1, "whole": 2, "marker": 1, "part": 1, "path": 1, "part_lengths": [48]}
+      counts == {"placed": 6, "unplaced": 1, "whole": 2, "marker": 1, "part": 1, "across": 1, "past_end": 1,
+                 "path": 1, "part_lengths": [48]}
       else f"FAIL\tthe counts say how each finding was placed: {counts}")
 meta = m.placement_meta(counts)
 print("PASS\tthe counts are written as one metadata value" if
-      meta == "whole:2,marker:1,part:1,path:1,unplaced:1"
+      meta == "whole:2,marker:1,part:1,across:1,past_end:1,path:1,unplaced:1"
       else f"FAIL\tthe counts are written as one metadata value: {meta!r}")
 # Every reason a finding can be left unplaced is one the report can name (lib/ai-review-placement.py
 # reads the marks back), so none of them falls into its catch all.
@@ -1534,7 +1594,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 50 ] && ok || bad "the placement fixtures ran $place_ran of 50 cases"
+[ "$place_ran" -eq 54 ] && ok || bad "the placement fixtures ran $place_ran of 54 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
@@ -1559,7 +1619,7 @@ check "the finding citing a blank line is stored at the line it quoted" "src/pla
 check_not "and its Quote line is not stored" "Quote:" "$placed_body"
 check "the approximate finding with no quote is stored at its number" "src/placed.ts:1: total has no type" "$placed_body"
 check "marked as not placed" "quoted no line" "$placed_body"
-check "the review records how its findings were placed" "placement=whole:1,marker:0,part:0,path:0,unplaced:1" "$placed_body"
+check "the review records how its findings were placed" "placement=whole:1,marker:0,part:0,across:0,past_end:0,path:0,unplaced:1" "$placed_body"
 check "and the lengths of the quotes it placed by part of a line, none here" "$(printf '\npart_quote_lengths=\n')" "$placed_body"
 check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$placed_body"
 

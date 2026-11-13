@@ -46,10 +46,11 @@ mkdir -p "$STATE"
 S=" Should be: fix it. [severity: major]"
 mark(){ printf ' [review harness: not placed, %s, so line %s is the reviewer'"'"'s own number, unchecked]' "$1" "$2"; }
 
-# A whole branch review that records how its placed findings were placed: two placed, one whose
+# A whole branch review that records how its placed findings were placed (#2237: one across a
+# line break, one past the end of a line): two placed, one whose
 # path is not a file, one whose quote matched nothing after the marker and part of a line were tried.
 {
-  printf 'repo=r\nsha=a\nstarted=2000\nfinished=2010\nstatus=ok\nkind=pr\nfindings=4\nplacement=whole:1,marker:0,part:1,path:1,unplaced:2\n\n'
+  printf 'repo=r\nsha=a\nstarted=2000\nfinished=2010\nstatus=ok\nkind=pr\nfindings=4\nplacement=whole:0,marker:0,part:0,across:1,past_end:1,path:1,unplaced:2\n\n'
   printf 'src/a.ts:3: one.%s\n' "$S"
   printf 'docs/b.md:9: two.%s\n' "$S"
   printf 'suites/src/a.ts:4: three.%s%s\n' "$S" "$(mark 'suites/src/a.ts is not a file at the reviewed head' 4)"
@@ -87,7 +88,7 @@ check "a quote matching nothing is its own reason, with what was tried" "its quo
 check "no quote at all is its own reason" "it quoted no line: 1" "$out"
 check "an empty Quote line outside the window is not counted" "its Quote line was empty: 0" "$out"
 check "a reason the runner does not give is counted as other, never dropped" "other: 1" "$out"
-check "how the placed ones were placed comes from the reviews that record it, saying how many do" "how placed, from the 2 of 3 reviews that record it: whole line 1, without the diff's marker 0, part of a line 1, path corrected 1" "$out"
+check "how the placed ones were placed comes from the reviews that record it, saying how many do" "how placed, from the 2 of 3 reviews that record it: whole line 0, without the diff's marker 0, part of a line 0, across a line break 1, past the end of a line 1, path corrected 1" "$out"
 check "it says when the window starts and what it covers" "started at or after 1969-12-31 19:16 EST" "$out"
 check "and when the reviews in it finished" "finished 1969-12-31 19:33 EST to 1969-12-31 20:06 EST" "$out"
 check "a finished review whose times cannot be read is named as not counted" "not counted, its start or finish time unreadable: 1-pr-g.txt" "$out"

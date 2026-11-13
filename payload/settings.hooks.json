@@ -328,6 +328,17 @@
         ]
       },
       {
+        "matcher": "mcp__claude-in-chrome__(javascript_tool|browser_batch)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/chrome-loopback-post-gate.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__claude_ai_Supabase__execute_sql|mcp__claude_ai_SFDC_-_Read_Only__(find|getObjectSchema|getRelatedRecords|getUserInfo|listRecentSobjectRecords|soqlQuery)|Bash",
         "hooks": [
           {
