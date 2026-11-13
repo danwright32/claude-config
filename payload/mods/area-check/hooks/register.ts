@@ -62,7 +62,11 @@ import {
   shellKey,
   shellTargets,
   scriptProgram,
-  scriptWrite,
+  scriptReach,
+  argsMove,
+  placedCost,
+  SCRIPT_RUN_FROM,
+  type ScriptPlaced,
   trapTexts,
   unreadPart,
   questionKey,
@@ -659,56 +663,72 @@ const folderAt = async ($: EngineInterface, path: string): Promise<false | { dir
 
 type Unread = Extract<ShellTarget, { unread: string }>
 
-// Whether a script handed a folder can write there (#2407): its file read as mod-kit reads every file
-// a command names (currentText, which never opens a device or a fifo), fed to its interpreter as the
-// program it runs (scriptProgram), and read by mod-kit's one reader of what a command writes, run from
-// the folder the session is in (programWrites). `writes: null` only when every step answered and the script writes
-// nothing the area check could judge; anything that cannot be read, or any write, is why it may write
-// there, so the folder is judged as before (fail closed).
-const scriptWritesIn = async ($: EngineInterface, run: ShellRun): Promise<{ writes: string | null }> => {
-  if (!run.path) return { writes: `${run.what} is named by no path that can be read` }
+type Reach = { reaches: string } | { placed: ScriptPlaced[] }
+
+// Where the writes of a script handed a folder land (#2407, #2565): its file read as mod-kit reads
+// every file a command names (currentText, which never opens a device or a fifo), fed to its
+// interpreter as the program it runs (scriptProgram), and read by mod-kit's one reader of what a
+// command writes (programReach). It is read as run from a folder that is nowhere (SCRIPT_RUN_FROM),
+// never the session's: where the script is run from is not known here, so a name it writes relative
+// to that is seen as one and never placed. `placed` only when every step answered and every write
+// was placed; anything that cannot be read, or any write that cannot be placed, is why it may reach
+// every file in the folder, which is then judged as before (fail closed).
+const scriptWritesIn = async ($: EngineInterface, run: ShellRun, folder: string): Promise<Reach> => {
+  if (!run.path) return { reaches: `${run.what} is named by no path that can be read` }
   const cur = await currentText({ exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: p => $.fs.read(p) }, run.path)
-  if (!('text' in cur)) return { writes: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
-  const [cwd, home] = await Promise.all([$.session.cwd(), homeOf($)])
-  return { writes: await programWrites($, run, cur.text, { cwd, home }, 0) }
+  if (!('text' in cur)) return { reaches: 'unreadable' in cur ? `the script cannot be read: ${cur.unreadable}` : 'the script is not there' }
+  return programReach($, run, cur.text, { home: await homeOf($), folder, moves: null }, 0)
 }
 
 // How many traps deep a script's text is read (a trap whose text sets a trap, and so on); one set
 // deeper than that is not read, so the script is held.
 const TRAPS_DEEP = 3
 
-// Why a script's text may write, or null: the text fed to its interpreter and read by mod-kit's one
-// reader, then the text of each trap it sets read the same way (#2619), since the reader gives a
-// trap's text as a word, never as the commands it runs, and a write in one was read as no write.
-const programWrites = async ($: EngineInterface, run: ShellRun, text: string, at: { cwd: string; home: string }, depth: number): Promise<string | null> => {
+// Where a script's text writes: the text fed to its interpreter and read by mod-kit's one reader,
+// then the text of each trap it sets read the same way (#2619), since the reader gives a trap's text
+// as a word, never as the commands it runs, and a write in one was read as no write. A name built on
+// what the script is handed is placed only where nothing in the script, or the script whose trap this
+// is (`moves`), gives what it is handed another meaning (argsMove).
+const programReach = async ($: EngineInterface, run: ShellRun, text: string, at: { home: string; folder: string; moves: string | null }, depth: number): Promise<Reach> => {
   const prog = scriptProgram(run, text)
-  if ('unread' in prog) return prog.unread
-  const read = { command: prog.command, cwd: at.cwd, home: at.home }
+  if ('unread' in prog) return { reaches: prog.unread }
+  const read = { command: prog.command, cwd: SCRIPT_RUN_FROM, home: at.home }
   const commands = await $.modkit.pipeline(read)
   const unread = unreadPart(commands, prog.delimiter, text)
-  if (unread) return unread
-  const wrote = scriptWrite(await $.modkit.writes(read), at.home)
-  if (wrote) return wrote
+  if (unread) return { reaches: unread }
+  const own = scriptReach(await $.modkit.writes(read), at.folder, at.home)
+  if ('reaches' in own) return own
+  const moves = at.moves ?? argsMove(commands, text)
+  const handed = own.placed.find(p => p.handed)
+  if (handed && moves) return { reaches: `it writes ${handed.word}, and ${moves}` }
+  const placed = [...own.placed]
   // A trap's text has no #! line, so it is fed to the interpreter the script's own text was.
   const sameInterpreter: ShellRun = { what: `a ${prog.name} script file`, path: run.path }
   for (const trap of trapTexts(commands)) {
-    const inTrap = depth < TRAPS_DEEP ? await programWrites($, sameInterpreter, trap, at, depth + 1) : 'it is set by more traps than are read'
-    if (inTrap) return `its trap runs ${trap}: ${inTrap}`
+    const inTrap = depth < TRAPS_DEEP ? await programReach($, sameInterpreter, trap, { ...at, moves }, depth + 1) : { reaches: 'it is set by more traps than are read' }
+    if ('reaches' in inTrap) return { reaches: `its trap runs ${trap}: ${inTrap.reaches}` }
+    placed.push(...inTrap.placed)
   }
-  return null
+  return { placed }
 }
 
-// Whether every script a folder was handed to is read as writing nothing there (#2426 lessons review):
-// the first that may write, or whose reading throws, answers no.
-const allOnlyRead = async ($: EngineInterface, runs: readonly ShellRun[]): Promise<boolean> => {
+// Where the writes of every script a folder was handed to land, one list per script, when each write
+// of every one is placed (#2426 lessons review, #2565), or null: the first whose write may reach the
+// whole folder, or whose reading throws, answers for all. Placed writes costing more judgings than
+// the folder itself would (placedCost, FOLDER_JUDGE_MAX) is null too, so the walk stays inside the
+// hook's budget and the folder is judged as before.
+const allPlaced = async ($: EngineInterface, runs: readonly ShellRun[], folder: string): Promise<ScriptPlaced[][] | null> => {
+  const out: ScriptPlaced[][] = []
   for (const r of runs) {
     try {
-      if ((await scriptWritesIn($, r)).writes !== null) return false
+      const v = await scriptWritesIn($, r, folder)
+      if ('reaches' in v) return null
+      out.push(v.placed)
     } catch {
-      return false
+      return null
     }
   }
-  return true
+  return placedCost(out.flat()) > FOLDER_JUDGE_MAX ? null : out
 }
 
 // A path a command writes, judged as its first edit would be; then, for a write marked `tree` or a
@@ -732,13 +752,26 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     if (kind === false) return PASS
     if ('unread' in kind) return { word: t.word, unread: `${t.word} may be a folder whose files it writes, and what it is cannot be read (${kind.unread})`, folder: at }
     at = kind.dir
-    // A folder handed only to scripts whose text writes nothing is only read (#2407): every one of them
-    // is read, and any one that may write there, or cannot be read, judges the folder as before (#2426
-    // lessons review). Each pass is logged, so a reading that lets everything through shows in the log
-    // rather than as quiet.
-    if (t.runs?.length && (await allOnlyRead($, t.runs))) {
-      for (const r of t.runs) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: r.path, decision: 'passed' })
-      return PASS
+    // A folder handed only to scripts each of whose writes is placed is judged only where those writes
+    // land (#2407, #2565): every one of them is read, and any one with a write that cannot be placed, or
+    // that cannot be read, judges the folder as before (#2426 lessons review). Each placed write is
+    // judged where it lands, as that write typed in the command would be, so a held file among them
+    // refuses the command, naming it. Each reading is logged with how many writes were placed and
+    // whether they passed, so a reading that lets everything through, or one that never places
+    // anything, shows in the log rather than as quiet (L551).
+    const placed = t.runs?.length ? await allPlaced($, t.runs, at) : null
+    if (t.runs && placed) {
+      let verdict: Awaited<ReturnType<typeof gatePath>> = PASS
+      const judged = new Set<string>()
+      for (const p of placed.flat()) {
+        if (judged.has(p.path)) continue
+        judged.add(p.path)
+        verdict = await gatePath($, id, { word: p.word, path: p.path, ...(p.tree ? { tree: true as const } : {}) }, agent)
+        if (!('pass' in verdict)) break
+      }
+      const decision = 'pass' in verdict ? 'passed' : 'held'
+      for (const [i, r] of t.runs.entries()) await logged($, at, { v: 1, kind: 'script-reads', at: new Date(await $.clock.now()).toISOString(), session: await $.session.id(), agent, word: t.word, script: r.path, decision, placed: placed[i]?.length ?? 0 })
+      return verdict
     }
   }
   let under: Awaited<ReturnType<typeof underTree>>
