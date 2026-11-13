@@ -1604,8 +1604,18 @@ for tree in posts quiet; do
     > "$T/sv/$tree/dirkept.sh"
   printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/none/x.sh"' 'test ! -f "$P" && P="$ROOT/lib/x.sh"' '. "$P"' \
     > "$T/sv/$tree/filenegated.sh"
+  # claude-sync's selfdir: a default holding a substitution whose quotes nest inside ${ }, in a
+  # function the walk does not follow. Read as a name bound through a variable, it dropped every
+  # value that lasts, so ROOT was not known in go's body.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' \
+    'other() { local s="${A_2538:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"; echo "$s"; }' 'go' \
+    > "$T/sv/$tree/nestdefault.sh"
+  # claude-sync's apply_source_dir: a read continued onto the next line by a backslash.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'go() { . "$ROOT/lib/x.sh"; }' \
+    'other() {' '  if [ -f /none ] && IFS=: read -r a b < /none \' '     && [ "$a" = 1 ]; then echo "$b"; fi' '}' 'go' \
+    > "$T/sv/$tree/readcont.sh"
 done
-for shape in filekept filefallback dirkept filenegated; do
+for shape in filekept filefallback dirkept filenegated nestdefault readcont; do
   run_bash "bash $T/sv/posts/$shape.sh"
   refused "#2538 a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
   says "#2538 and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"

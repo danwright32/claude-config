@@ -4059,6 +4059,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             c = s[i]
             if c == "\n":
                 break
+            if c == "\\" and s[i + 1:i + 2] in ("", "\n"):
+                # A backslash newline joins the next line on, and one at the end is the command's own
+                # continuation, cut off by the reader (claude-sync's `read ... < "$ans" \`, then
+                # `&& ...`): no word, or it read as a name nobody could spell (claude-config#2538).
+                i += 2
+                continue
             if c.isspace():
                 i += 1
                 continue
@@ -4128,7 +4134,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     return n
                 i = j
             elif s.startswith("${", i):
-                j = s.find("}", i)
+                j = self.sh_brace_close(s, i + 2)
+                if j is None:
+                    # One it cannot pair (an apostrophe inside "${x:-it's}" is no quote) ends at the
+                    # first }, as every ${ } did before.
+                    j = s.find("}", i)
                 if j < 0:
                     return n
                 i = j
@@ -4136,6 +4146,42 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return i
             i += 1
         return n
+
+    @staticmethod
+    def sh_brace_close(s, i):
+        """The index of the } closing the ${ that ends just before i, or None. The text inside can
+        hold quotes, a substitution and another ${ } of its own (claude-sync's
+        `"${SYNC_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"`), so the first } is not
+        always the one: taken as it was, the word ended inside the substitution and the rest read as
+        words of their own, one of them a name nobody could spell (claude-config#2538)."""
+        dq, n = False, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'" and not dq:
+                j = s.find("'", i + 1)
+                if j < 0:
+                    return None
+                i = j + 1
+                continue
+            if c == '"':
+                dq = not dq
+            elif s.startswith("$(", i):
+                j = Judge.sh_close(s, i + 2)
+                if j is None:
+                    return None
+                i = j
+            elif s.startswith("${", i):
+                j = Judge.sh_brace_close(s, i + 2)
+                if j is None:
+                    return None
+                i = j
+            elif c == "}" and not dq:
+                return i
+            i += 1
+        return None
 
     def sh_word(self, raw, d, var, script, assign):
         """(the value of one raw shell word, or None where it is not certain; whether it can become
