@@ -4733,6 +4733,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   changed.** (bidspoke#3599, 2026-11-12)
   SHORT: A record that an alert was sent must be renewed while its condition stands, or the alert repeats when the record's fixed expiry lapses.
 
+- **L853. A job killed by its own time limit is reported as cancelled, exactly like a run a newer
+  one replaced, so an alert gated on not cancelled to keep replaced runs quiet also silences every
+  timeout. Tell the two apart by something other than the cancelled status, or a job that has
+  outgrown its limit goes dark and reads as healthy.**
+  (slate#4880, 2026-11-13)
+  SHORT: A job killed by its own time limit reports as cancelled, so an alert gated on not cancelled silences timeouts; tell the two apart another way.
 ## State and identity
 
 - **L1032. A check that a file is still the one it was before must not rest on its device and inode

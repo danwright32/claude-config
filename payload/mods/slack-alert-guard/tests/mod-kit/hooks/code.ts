@@ -508,15 +508,46 @@ const pyLiteral = (expr: string, code: string, seen: Set<string> = new Set()): s
   if (other.some(r => r.test(code))) return undefined
   return pyLiteral((plain[0] as RegExpExecArray)[1] as string, code, seen)
 }
+/**
+ * The characters the readers that look back from a place in a program have read (#2855), summed
+ * from when it was last set to 0: a call's receiver, the call a literal sits in, and the name a
+ * literal is bound to. A test counts the reading's work by it rather than by the clock.
+ */
+export const lookedBack = { chars: 0 }
+// Where a run of characters `kind` matches ends, reading back from `at`: the first place at or before
+// it whose character before is not one. Each character read is counted.
+const backOver = (code: string, at: number, kind: RegExp): number => {
+  let i = at
+  while (i > 0 && kind.test(code[i - 1] as string)) i--
+  lookedBack.chars += at - i
+  return i
+}
 // The receiver a method is called on, written just before the `.` at `at`: a call's whole text, or
-// a bare name.
+// a bare name. Read back from `at` only as far as the receiver reaches (#2855): handing a regular
+// expression everything before it, as before, read the whole program again on every call, and its
+// `\s+$` backtracked across each blanked literal's run of spaces. Gives what that reading gave.
 const receiverBefore = (code: string, at: number): string | undefined => {
-  const before = code.slice(0, at).replace(/\s+$/, '')
-  if (!before.endsWith(')')) return /(?<![\w.])([A-Za-z_]\w*)$/.exec(before)?.[1]
+  const end = backOver(code, at, /\s/)
+  if (code[end - 1] !== ')') {
+    // A bare name: the whole run of word characters before it, starting with a letter or _, not after a dot.
+    const start = backOver(code, end, /\w/)
+    return start < end && /[A-Za-z_]/.test(code[start] as string) && code[start - 1] !== '.' ? code.slice(start, end) : undefined
+  }
   let depth = 0
-  for (let i = before.length - 1; i >= 0; i--) {
-    if (before[i] === ')') depth++
-    else if (before[i] === '(' && --depth === 0) return /(?<![\w.])(?:pathlib\s*\.\s*)?Path\s*$/.exec(before.slice(0, i))?.[0].concat(before.slice(i))
+  for (let i = end - 1; i >= 0; i--) {
+    lookedBack.chars++
+    if (code[i] === ')') depth++
+    else if (code[i] === '(' && --depth === 0) {
+      // A call of Path, or of pathlib.Path, spaces allowed around the dot and before the bracket.
+      const word = backOver(code, i, /\s/)
+      if (code.slice(word - 4, word) !== 'Path') return undefined
+      const dot = backOver(code, word - 4, /\s/)
+      if (code[dot - 1] === '.') {
+        const lib = backOver(code, dot - 1, /\s/)
+        if (code.slice(lib - 7, lib) === 'pathlib' && !/[\w.]/.test(code[lib - 8] ?? '')) return code.slice(lib - 7, end)
+      }
+      return /[\w.]/.test(code[word - 5] ?? '') ? undefined : code.slice(word - 4, end)
+    }
   }
   return undefined
 }
@@ -750,12 +781,16 @@ const pathUses = (code: string, spans: ModKitPythonText[]): ((t: ModKitPythonTex
     const full = bound.get(head as string)
     return full === undefined ? name : [full, ...rest].join('.')
   }
+  const pathNames = new Map<string, boolean>()
   // Whether the call whose bracket opens at `k` takes a path.
   const pathCall = (k: number): boolean => {
     if (skeleton[k] !== '(') return false
-    const before = skeleton.slice(0, k)
-    const m = /(\.\s*)?([A-Za-z_][\w.]*)\s*$/.exec(before)
-    if (!m) return false
+    // The call's name is made only of word characters, dots and spaces, so only the run of those
+    // before the bracket is read (#2855), never everything before it; the match is the same.
+    const from = backOver(skeleton, k, /[\w.\s]/)
+    const found = /(\.\s*)?([A-Za-z_][\w.]*)\s*$/.exec(skeleton.slice(from, k))
+    if (!found) return false
+    const m = Object.assign(found, { index: found.index + from })
     // A method on an expression (`', '.join(`, `Path(p).rename(`) is read by its own name alone.
     const method = m[1] !== undefined
     const name = method ? (m[2] as string) : resolve(m[2] as string)
@@ -767,7 +802,15 @@ const pathUses = (code: string, spans: ModKitPythonText[]): ((t: ModKitPythonTex
       const dot = (m.index ?? 0) + (method ? 0 : (m[2] as string).lastIndexOf('.'))
       const receiver = receiverBefore(skeleton, dot)
       if (receiver === undefined) return false
-      return PY_PATH.test(receiver) || (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(skeleton))
+      if (PY_PATH.test(receiver)) return true
+      if (!/^\w+$/.test(receiver)) return false
+      // Whether the name is ever bound to a Path, asked of the whole program once per name (#2855).
+      let isPath = pathNames.get(receiver)
+      if (isPath === undefined) {
+        isPath = new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(skeleton)
+        pathNames.set(receiver, isPath)
+      }
+      return isPath
     }
     return false
   }
@@ -786,7 +829,10 @@ const pathUses = (code: string, spans: ModKitPythonText[]): ((t: ModKitPythonTex
     const end = Math.min(code.length, t.to + q)
     if (usedAt(start, end)) return true
     // The whole value of a name bound at the start of a statement, used as a path anywhere.
-    const name = /(?:^|[;\n])[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*$/.exec(skeleton.slice(0, start))?.[1]
+    // Only the statement it is in is read (#2855): from just after the last `;` or new line before it,
+    // which none of what the binding is made of can be.
+    const statement = backOver(skeleton, start, /[^;\n]/)
+    const name = /(?:^|[;\n])[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*$/.exec(skeleton.slice(statement, start))?.[1]
     if (name === undefined || !/^[ \t]*(?:[;\n#]|$)/.test(skeleton.slice(end))) return false
     for (const m of skeleton.matchAll(new RegExp(`(?<![\\w.])${escaped(name)}(?!\\w)`, 'g'))) {
       const i = m.index ?? 0
