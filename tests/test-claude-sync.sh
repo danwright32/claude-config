@@ -10,7 +10,18 @@ set -uo pipefail
 # temp directory, where deriving these from $0 points at a claude-sync that does not exist:
 # every run then silently did nothing while the suite reported the resulting failures as if
 # the code were broken.
-SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/claude-sync}"
+# The claude-sync beside this file, where there is one, is always the one tested and never one the
+# environment names: the Slack drafts gate then works out every helper sourced from beside it, which
+# it refuses when the environment chooses the file (claude-config#2538). Every run of this file
+# passes SCRIPT on unchanged, so only an extracted copy, with no claude-sync beside it, takes it.
+_suite_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_suite_passed="${SCRIPT:-}"
+SCRIPT="$_suite_root/claude-sync"
+[ -f "$SCRIPT" ] || SCRIPT="${_suite_passed:-$SCRIPT}"
+# Handed to every run of this file and its copies by the environment, once, rather than as a
+# SCRIPT="$SCRIPT" before each run: the drafts gate reads one of those inside a function as the
+# function binding SCRIPT, and then cannot work out SCRIPT past any call (#2538).
+export SCRIPT
 SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 
 # A change watcher started a fourth time on one copy of claude-sync inside five minutes stops there
@@ -235,7 +246,7 @@ SUITE_SECTION_SAMPLES="${SUITE_SECTION_SAMPLES:-10}"
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948), for this
 # setting and the counts below. Missing, the shell says so and every count is refused.
 # shellcheck source=../payload/hooks/lib/whole-number.sh
-. "$(dirname "$SCRIPT")/payload/hooks/lib/whole-number.sh"
+. "${SCRIPT%/*}/payload/hooks/lib/whole-number.sh"
 if _wn_got="$(whole_above_zero "$SUITE_SECTION_SAMPLES")"; then SUITE_SECTION_SAMPLES="$_wn_got"; else
   echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
   exit 4
@@ -718,7 +729,7 @@ if [ -n "${SECTION_UNTIL:-}" ] && [ -z "${SUITE_FILTERED:-}" ]; then
   # re-executed from a temp copy, not a run nested inside another, and counting it would put an
   # ordinary `SECTION_UNTIL=... bash tests/...` at depth 1, whose own #27 subruns would then be
   # refused at depth 2 for no reason. Depth counts suites started BY a suite.
-  SUITE_FILTERED=1 SUITE_TARGET_SECTION="$_su_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
+  SUITE_FILTERED=1 SUITE_TARGET_SECTION="$_su_name" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered"; _rc=$?
   rm -f "$_filtered"
   exit "$_rc"
 fi
@@ -1121,7 +1132,7 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${_so_shard_mode:-}" ]; } && [ -z "${SU
   # a fifth read that happened to be at top level. pipefail is already set, and tee exits 0, so the
   # status here is still the run's own.
   _so_log="$(mktemp "$SUITE_SCRATCH_HOME/claude-sync-suite-work.XXXXXXXX")"
-  SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_TARGET_TITLES="$_so_titles_list" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
+  SUITE_FILTERED=1 SECTION_ONLY= SUITE_TARGET_SECTION="$_so_name" SUITE_TARGET_TITLES="$_so_titles_list" SUITE_DEPTH="$SUITE_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$_filtered" 2>&1 | tee "$_so_log"; _so_rc=$?
   rm -f "$_filtered"
   if grep -qE 'line [0-9]+: [A-Za-z_][A-Za-z0-9_]*: unbound variable' "$_so_log" 2>/dev/null; then
     rm -f "$_so_log"
@@ -1165,7 +1176,7 @@ if [ -z "${SUITE_FROM_COPY:-}" ]; then
     echo "test suite: the copy taken of this file does not parse, which means the file was being written while it was read. Nothing was run. Save your edits and start again." >&2
     exit 3
   fi
-  SUITE_FROM_COPY=1 SUITE_DEPTH="$SUITE_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$_full_copy"
+  SUITE_FROM_COPY=1 SUITE_DEPTH="$SUITE_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$_full_copy"
   _fc_rc=$?
   rm -f "$_full_copy"
   exit "$_fc_rc"
@@ -1205,7 +1216,7 @@ if [ -n "${SUITE_SPAWN_UNTIL:-}" ]; then
   _sp_until="$SUITE_SPAWN_UNTIL"
   echo "test suite: spawn probe; a child of this run inherits SUITE_FILTERED as: $(bash -c 'printf "%s" "${SUITE_FILTERED:-<unset>}"')"
   echo "test suite: spawn probe; a child of this run inherits SECTION_ONLY as: $(bash -c 'printf "%s" "${SECTION_ONLY:-<unset>}"')"
-  SUITE_SPAWN_UNTIL= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SECTION_UNTIL="$_sp_until" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF"; _sp_rc=$?
+  SUITE_SPAWN_UNTIL= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SECTION_UNTIL="$_sp_until" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF"; _sp_rc=$?
   echo "test suite: spawn probe; the child exited $_sp_rc"
   exit "$_sp_rc"
 fi
@@ -1299,7 +1310,7 @@ fi
 # the one that speaks at the ceiling; DESIGN.md derives it. SUITE_TIMEOUT=0 turns both off.
 # Found beside $SCRIPT rather than beside this file: a filtered run executes an extracted copy of
 # this file from a temp directory, where a path relative to it points at nothing (#27).
-. "$(dirname "$SCRIPT")/payload/hooks/lib/suite-deadline.sh" || {
+. "${SCRIPT%/*}/payload/hooks/lib/suite-deadline.sh" || {
   echo "FAIL: $(basename "$0"): lib/suite-deadline.sh is missing, so this suite cannot bound its own wall clock. Refusing to run unbounded."
   printf 'SUITE-RESULT passed=0 failed=1\n'
   exit 1
@@ -2182,8 +2193,8 @@ SUITE_CPU_SECONDS=""
 # (L551). Only consulted where a guard is about to fail, so a quiet day reads nothing. Found beside
 # $SCRIPT, as suite-deadline.sh is, and a copy without it judges as before and says the figure is
 # missing (L90).
-if [ -f "$(dirname "$SCRIPT")/payload/hooks/lib/load-average.sh" ]; then
-  . "$(dirname "$SCRIPT")/payload/hooks/lib/load-average.sh"
+if [ -f "${SCRIPT%/*}/payload/hooks/lib/load-average.sh" ]; then
+  . "${SCRIPT%/*}/payload/hooks/lib/load-average.sh"
 else
   load_average_one_minute(){ return 0; }
   load_average_cores(){ return 0; }
@@ -2195,11 +2206,22 @@ SUITE_LOAD_FIGURE=""
 # tenth or a `date +%s` plus a minute, the shape that failed 16 of 16 loaded copies of
 # test-derived-data-sweep.sh (#1577, on 2026-10-23). A copy without the file cannot wait on anything safely, so it
 # refuses rather than guessing a ceiling.
-if ! . "$(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh"; then
-  echo "FAIL: $(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+if ! . "${SCRIPT%/*}/payload/hooks/lib/hang-wait.sh"; then
+  echo "FAIL: ${SCRIPT%/*}/payload/hooks/lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
   printf 'SUITE-RESULT passed=0 failed=1\n'
   exit 1
 fi
+# fn_drive <code> <file> [args...]: what `bash -c '<code>' _ <file> [args...]` did for a function file
+# this suite extracts from claude-sync at run time, with the code written into a driver beside that
+# file and run as its own process, $1 the file and the rest after it. Sourcing a file made at run time
+# names a path the Slack drafts gate cannot work out, and it refuses that (claude-config#2538).
+fn_drive(){ local code="$1"; shift; printf '%s\n' "$code" > "$1.drive"; bash "$1.drive" "$@"; }
+# The workflow timeout reader the #1901 section uses, loaded here rather than in that section: past
+# its first check this file's variables are more than the drafts gate follows, so a path made from
+# SCRIPT there is one it refuses (#2538). The section checks it loaded.
+_wf_lib="${SCRIPT%/*}/payload/hooks/lib/workflow-job-timeout.sh"
+_wf_lib_ok=0
+if [ -f "$_wf_lib" ] && . "$_wf_lib"; then _wf_lib_ok=1; fi
 SUITE_LOAD_CORES=""
 # Exits 0 when the machine was busier than its cores beyond this suite's own shards, and leaves the
 # figures it read in SUITE_LOAD_FIGURE and SUITE_LOAD_CORES (empty where they could not be read).
@@ -2507,7 +2529,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_FILTERED:-}" ] && [ -z "${SUITE_SHA
   _fan_pids=""
   _fan_i=1
   while [ "$_fan_i" -le "$SUITE_JOBS" ]; do
-    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" SUITE_SECTION_MARK_SHARED="$SUITE_SECTION_MARK"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
+    SUITE_SHARD="$_fan_i/$SUITE_JOBS" SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_DEPTH"       SCRIPT_SELF="$SCRIPT_SELF" SUITE_SECTION_MARK_SHARED="$SUITE_SECTION_MARK"       bash "$SCRIPT_SELF" > "$_fan_dir/$_fan_i.out" 2>&1 &
     _fan_pids="$_fan_pids $!"
     _fan_i=$((_fan_i + 1))
   done
@@ -3727,9 +3749,9 @@ cv_c1="$(git -C "$CVR" rev-parse HEAD~2)"; cv_c2="$(git -C "$CVR" rev-parse HEAD
 cv_v1="$(git -C "$CVR" rev-parse "$cv_c1:payload/x.ts")"; cv_v2="$(git -C "$CVR" rev-parse "$cv_c2:payload/x.ts")"
 CV_FN="$WORK/holding-fn.sh"
 sed -n '/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CV_FN"
-cv_named_real="$(SYNC_REPO="$CVR" bash -c '. "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+cv_named_real="$(SYNC_REPO="$CVR" fn_drive '. "$1"; commit_holding_version payload/x.ts "$2"' "$CV_FN" "$cv_v1" 2>/dev/null)"
 cv_named_old="$(SYNC_REPO="$CVR" CV_HIST="$(printf 'commit %s\n:100644 000000 %s 0000000000000000000000000000000000000000 D\tpayload/x.ts\ncommit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c3" "$cv_v2" "$cv_c2" "$cv_v1" "$cv_v2")" \
-  bash -c 'git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CV_FN" "$cv_v1" 2>/dev/null)"
+  fn_drive 'git(){ case " $* " in *" log --root "*) printf "%s\n" "$CV_HIST" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' "$CV_FN" "$cv_v1" 2>/dev/null)"
 dbg "#1022 named from the real walk: $cv_named_real, from the old side only: $cv_named_old"
 check "#1022 the helper is in the tool to be judged" "[ -s '$CV_FN' ]"
 check "#1022 a version the walk saw written is named by the commit that wrote it" \
@@ -3754,7 +3776,7 @@ awk -v a="$cvl_c1" -v b="$cvl_c2" 'BEGIN { z = "00000000000000000000000000000000
 CVL_FN="$WORK/reflog-fn.sh"
 sed -n '/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p' "$SCRIPT" > "$CVL_FN"
 cvl_rc=0
-cvl_out="$(SYNC_REPO="$CVL" bash -c 'set -euo pipefail; . "$1"; deletion_reached_clone_at "$2"' _ "$CVL_FN" "$cvl_c2" 2>/dev/null)" || cvl_rc=$?
+cvl_out="$(SYNC_REPO="$CVL" fn_drive 'set -euo pipefail; . "$1"; deletion_reached_clone_at "$2"' "$CVL_FN" "$cvl_c2" 2>/dev/null)" || cvl_rc=$?
 dbg "#1022 arrival over 5000 reflog entries: rc=$cvl_rc out=$cvl_out"
 check "#1022 the reflog fixture really is past the pipe buffer" \
   "[ \"\$(git -C '$CVL' log -g --format=%H HEAD | wc -l | tr -d ' ')\" -eq 5000 ] && [ \"\$(wc -c < '$CVL/.git/logs/HEAD' | tr -d ' ')\" -gt 200000 ]"
@@ -3768,7 +3790,7 @@ cvh_hist="$(printf 'commit %s\n:100644 100644 %s %s M\tpayload/x.ts\n' "$cv_c2" 
 # while it passed on the Mac.
 CVH_FILE="$WORK/holding-long-hist.txt"; printf '%s\n' "$cvh_hist" > "$CVH_FILE"
 cvh_rc=0
-cvh_out="$(SYNC_REPO="$CVR" CV_HIST_FILE="$CVH_FILE" bash -c 'set -euo pipefail; git(){ case " $* " in *" log --root "*) cat "$CV_HIST_FILE" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' _ "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
+cvh_out="$(SYNC_REPO="$CVR" CV_HIST_FILE="$CVH_FILE" fn_drive 'set -euo pipefail; git(){ case " $* " in *" log --root "*) cat "$CV_HIST_FILE" ;; *) command git "$@" ;; esac; }; . "$1"; commit_holding_version payload/x.ts "$2"' "$CVL_FN" "$cv_v2" 2>/dev/null)" || cvh_rc=$?
 dbg "#1022 version lookup over a long history: rc=$cvh_rc out=$cvh_out"
 check "#1022 the version lookup survives a history past the pipe buffer under pipefail, with the right commit" \
   "[ \"\${#cvh_hist}\" -gt 200000 ] && [ \"\$cvh_rc\" -eq 0 ] && [ \"\$cvh_out\" = '$cv_c2' ]"
@@ -3786,7 +3808,7 @@ printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks";
 RG_FN="$WORK/once-fn.sh"
 { printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
   sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p;/^semicolon_list(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
-rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
+rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" fn_drive 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' "$RG_FN" 2>&1; }
 rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
 dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
 check "#1022 the first send says it is putting back the deleted file" \
@@ -3880,10 +3902,10 @@ SE_FN_OK="$WORK/sx2004-fn-ok.sh"; SE_FN_BAD="$WORK/sx2004-fn-bad.sh"
 sed -n '/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_OK"
 sed -n '/^unmanaged_skill_list_unreadable(){/,/^}/p;/^  carried_skill_paths(){ /p;/^payload_path_applied(){/,/^}/p' "$SCRIPT" > "$SE_FN_BAD"
 se_rc_ok=0
-PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" bash -c 'set -eo pipefail; . "$1"; . "$2"; payload_path_applied skills/real-skill/.trash/old.md' _ \
+PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" fn_drive 'set -eo pipefail; . "$1"; . "$2"; payload_path_applied skills/real-skill/.trash/old.md' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$SE_FN_OK" >/dev/null 2>&1 || se_rc_ok=$?
 se_rc_bad=0
-se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/nowhere bash -c 'set -eo pipefail; . "$1"; payload_path_applied skills/real-skill/.trash/old.md' _ "$SE_FN_BAD" 2>&1)" || se_rc_bad=$?
+se_err_bad="$(PAYLOAD="$SEC/payload" CLAUDE_HOME="$SEH" UNMANAGED_SKILLS_LIB=/nowhere fn_drive 'set -eo pipefail; . "$1"; payload_path_applied skills/real-skill/.trash/old.md' "$SE_FN_BAD" 2>&1)" || se_rc_bad=$?
 dbg "#2004 failure path: ok rc=$se_rc_ok, bad rc=$se_rc_bad, said: $se_err_bad"
 check "#2004 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$SE_FN_BAD'"
 check "#2004 with the shared list read, the nested .trash path is judged left out" "[ \"\$se_rc_ok\" -eq 0 ]"
@@ -9542,7 +9564,7 @@ awk -v pend="$SUITE_PRELUDE_END" '
   !skip { print }' "$SCRIPT_SELF" > "$_rg_copy"
 _rg_out="$WORK/registry-probe-shard.txt"
 SUITE_RUN_REGISTRY="$_rg_file" SUITE_SECTION_MARK_SHARED="$_rg_mark" SUITE_SHARD="1/2" SUITE_SECTION_TIMINGS= \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 SCRIPT="$SCRIPT" SCRIPT_SELF="$_rg_copy" bash "$_rg_copy" > "$_rg_out" 2>&1
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 SCRIPT_SELF="$_rg_copy" bash "$_rg_copy" > "$_rg_out" 2>&1
 # What the probe shard ran, asserted, so a copy that lost the probe or kept a real section reads as
 # a broken fixture rather than as a shard that registered (L159).
 check "#1494 the registry probe shard ran its one probe section" \
@@ -9888,21 +9910,22 @@ section "== nothing depends on a tool only BSD has (#38) =="
 # every age comparison downstream then reads it as garbage.
 _PORTABLE_HELPERS="$WORK/helpers.sh"
 { echo 'file_mtime(){ :; }'; sed -n '/^file_mtime(){/,/^}/p;/^date_from_epoch(){/,/^}/p' "$SCRIPT"; } > "$_PORTABLE_HELPERS"
-# shellcheck disable=SC1090
-. "$_PORTABLE_HELPERS"
+# Each helper runs from the extracted file through fn_drive, never sourced here (#2538).
+_ph_mtime='. "$1"; file_mtime "$2"'
+_ph_date='. "$1"; date_from_epoch "$2" "$3"'
 echo 'x' > "$WORK/mtime-probe"
-_pm="$(file_mtime "$WORK/mtime-probe")"
+_pm="$(fn_drive "$_ph_mtime" "$_PORTABLE_HELPERS" "$WORK/mtime-probe")"
 check "#38 the mtime helper returns a bare timestamp" "grep -qE '^[0-9]+$' <<< \"\$_pm\""
 # The claim that matters is not "it returns a number" but "it returns the RIGHT number", measured
 # against the suite's own independent reader rather than against itself (L70).
 check "#38 and it agrees with the suite's own reader" "[ \"\$_pm\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
 # Unreadable must be EMPTY, not a zero and not an error blob: every caller treats empty as "no
 # evidence", and a 0 would read as 1970, which is old enough to trip every age threshold there is.
-_pmiss="$(file_mtime "$WORK/no-such-file-at-all")"
+_pmiss="$(fn_drive "$_ph_mtime" "$_PORTABLE_HELPERS" "$WORK/no-such-file-at-all")"
 check "#38 an unreadable path yields nothing at all" "[ -z \"\$_pmiss\" ]"
-_pdate="$(date_from_epoch 1000000000 '+%Y-%m-%d')"
+_pdate="$(fn_drive "$_ph_date" "$_PORTABLE_HELPERS" 1000000000 '+%Y-%m-%d')"
 check "#38 the date helper formats a timestamp" "[ '$_pdate' = '2001-09-08' ] || [ '$_pdate' = '2001-09-09' ]"
-_pdbad="$(date_from_epoch '' '+%Y-%m-%d')"
+_pdbad="$(fn_drive "$_ph_date" "$_PORTABLE_HELPERS" '' '+%Y-%m-%d')"
 check "#38 and yields nothing for a timestamp it cannot read" "[ -z \"\$_pdbad\" ]"
 
 # The GNU half of both helpers is the half this Mac never runs, so on a Mac it is unproven code
@@ -9930,7 +9953,7 @@ fi
 exit 1
 GNUDATE
 chmod +x "$_GNUBIN/stat" "$_GNUBIN/date"
-_gnu_mtime="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; file_mtime '$WORK/mtime-probe'")"
+_gnu_mtime="$(PATH="$_GNUBIN:$PATH" fn_drive "$_ph_mtime" "$_PORTABLE_HELPERS" "$WORK/mtime-probe")"
 check "#38 the mtime helper still answers with GNU-shaped tools" \
   "grep -qE '^[0-9]+$' <<< \"\$_gnu_mtime\""
 # The specific trap: the filesystem block must not be carried along with the number.
@@ -9938,7 +9961,7 @@ check "#38 and does not carry the filesystem block with it" \
   "[ \"\$_gnu_mtime\" = \"\$(_suite_mtime '$WORK/mtime-probe')\" ]"
 check "#38 and the stand-in really was used" \
   "grep -q gnu-bin <<< \"\$(PATH='$_GNUBIN:'\$PATH command -v stat)\""
-_gnu_date="$(PATH="$_GNUBIN:$PATH" bash -c ". '$_PORTABLE_HELPERS'; date_from_epoch 1000000000 '+%Y-%m-%d'")"
+_gnu_date="$(PATH="$_GNUBIN:$PATH" fn_drive "$_ph_date" "$_PORTABLE_HELPERS" 1000000000 '+%Y-%m-%d')"
 check "#38 the date helper still answers with GNU-shaped tools" \
   "[ '$_gnu_date' = '2001-09-08' ] || [ '$_gnu_date' = '2001-09-09' ]"
 
@@ -10864,7 +10887,7 @@ _cov_k=1
 while [ "$_cov_k" -le 4 ]; do
   _cov_real="$_cov_real$(SUITE_SHARD="$_cov_k/4" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
     SUITE_SECTION_TIMINGS="$ST_COV_PIN" \
-    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
 "
   _cov_k=$((_cov_k + 1))
 done
@@ -11197,7 +11220,7 @@ _bw_disturb(){   # _bw_disturb <store dir> -> how many records it changed
 _bw_lines(){   # _bw_lines <shards> [store] -> the real coverage lines for that many shards
   SUITE_SHARD="1/$1" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
     SUITE_SECTION_TIMINGS="${2:-$ST_BW_PIN}" \
-    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1
 }
 # The one launch per shard form, kept for exactly one purpose: proving the form above answers the
 # same. A fast path that is a COPY of the selector's logic would agree with itself and with
@@ -11207,7 +11230,7 @@ _bw_lines_one_at_a_time(){   # _bw_lines_one_at_a_time <shards> [store] -> the s
   while [ "$_bw_k" -le "$_bw_n" ]; do
     _bw_all="$_bw_all$(SUITE_SHARD="$_bw_k/$_bw_n" SUITE_SHARD_COVERAGE_ONLY=1 SUITE_NO_LOCK=1 \
       SUITE_SECTION_TIMINGS="$_bw_store" \
-      SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
+      SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)
 "
     _bw_k=$((_bw_k + 1))
   done
@@ -11316,7 +11339,7 @@ if [ -n "$_bw_dep" ]; then
   _bw_pre_title="$(sed -n "${_bw_dep}p" "$SCRIPT_SELF" | sed 's/^# needs: //')"
   check "#151 the file really does carry a needs declaration to test this over" \
     "[ -n \"\$_bw_dep_title\" ] && [ -n \"\$_bw_pre_title\" ]"
-  _bw_only="$(SECTION_ONLY="$_bw_dep_title" SUITE_NO_LOCK=1 SCRIPT="$SCRIPT" \
+  _bw_only="$(SECTION_ONLY="$_bw_dep_title" SUITE_NO_LOCK=1 \
     SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
   check "#151 running only the dependent section still pulls its prerequisite in" \
     "grep -qF -- \"\$_bw_pre_title\" <<< \"\$_bw_only\""
@@ -11350,7 +11373,7 @@ _bw_old=""; _bw_old_n=""
 for _bw_try in 2 3 4 5 6 7 8; do
   _bw_old="$(SUITE_SHARD_NO_GROUPING=1 SUITE_SHARD="1/$_bw_try" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 \
     SUITE_SECTION_TIMINGS="$ST_BW_EMPTY" \
-    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+    SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
   if [ -n "$(_bw_borrowed "$_bw_old")" ]; then _bw_old_n="$_bw_try"; break; fi
 done
 check "#151 dealt out the old way, a section really is borrowed by a shard that does not own it (at ${_bw_old_n:-no} shards)" \
@@ -11670,9 +11693,7 @@ check "#210 there are workflow files to check" "[ \"\${_wf_n:-0}\" -ge 1 ]"
 # run-all-tests.sh also uses to hold a flake recheck to the job's own limit (#1901), so the two can
 # never disagree about what a job's timeout is (L370). A job is a two-space key under `jobs:`, and
 # its block runs to the next such key or the end of the file.
-_wf_lib="$(cd "$(dirname "$SCRIPT")" && pwd)/payload/hooks/lib/workflow-job-timeout.sh"
-_wf_lib_ok=0
-if [ -f "$_wf_lib" ] && . "$_wf_lib"; then _wf_lib_ok=1; fi
+# It is loaded near the top, beside fn_drive, where the drafts gate can still work out SCRIPT (#2538).
 check "#1901 the shared workflow timeout reader loads from $_wf_lib" "[ $_wf_lib_ok -eq 1 ]"
 _wf_jobs(){   # _wf_jobs <file>... -> "<file>\t<job>\t<minutes or NONE>" per job
   [ "$_wf_lib_ok" -eq 1 ] || return 0
@@ -11827,7 +11848,7 @@ st_spread(){   # st_spread <seconds, space separated> -> highest minus lowest, o
 # and that sentence is the control for every check below: without it a run that balanced by time
 # and a run that could not are told apart by nothing (L98).
 ST_EMPTY="$WORK/section-timings-empty"; mkdir -p "$ST_EMPTY"
-st_empty="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_EMPTY" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+st_empty="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_EMPTY" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 check "#203 with nothing measured the deal falls back to counting, and says so" \
   "case \"\$st_empty\" in *'dealt by section count'*) true ;; *) false ;; esac"
 check "#203 and it still divides every section between the shards" \
@@ -11837,7 +11858,7 @@ check "#203 and it still divides every section between the shards" \
 # its sections cost, and that is the record the selector reads: a fixture written here would prove
 # only that the reader agrees with this file's idea of the format (L48, L52). It stops at the fifth
 # section, the fewest records the check below accepts, rather than the ninth (claude-config#2460).
-SECTION_UNTIL='install-autosync writes a receive-timer' SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+SECTION_UNTIL='install-autosync writes a receive-timer' SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
 st_recs="$(ls "$ST_STORE" 2>/dev/null | grep -c . | tr -d ' ')"
 check "#203 a run records what each of its sections cost (${st_recs:-0} record(s))" \
   "[ \"\${st_recs:-0}\" -ge 5 ]"
@@ -11860,14 +11881,14 @@ check "#203 and the record is keyed on the section's title, not its position" \
 # suite exiting at once because it refused its own lock was recorded as costing nothing and then
 # led nothing, with the run reporting a measured order the whole time (L330).
 ST_SEAM="$WORK/section-timings-seam"; mkdir -p "$ST_SEAM"
-SECTION_UNTIL=push SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=0.1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_SEAM" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+SECTION_UNTIL=push SUITE_SLOW_IN='==' SUITE_POLL_INTERVAL=0.1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_SEAM" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
 st_seam_n="$(ls "$ST_SEAM" 2>/dev/null | grep -c . | tr -d ' ')"
 check "#203 a run whose sections were slowed on purpose records nothing (${st_seam_n:-0} record(s))" \
   "[ \"\${st_seam_n:-0}\" -eq 0 ]"
 # The control: the very same run WITHOUT the seam does record, or the check above is satisfied by a
 # run that records nothing under any circumstances (L159, L1).
 ST_CTRL="$WORK/section-timings-ctrl"; mkdir -p "$ST_CTRL"
-SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_CTRL" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_CTRL" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
 st_ctrl_n="$(ls "$ST_CTRL" 2>/dev/null | grep -c . | tr -d ' ')"
 check "#203 and the same run without the seam does record (${st_ctrl_n:-0} record(s))" \
   "[ \"\${st_ctrl_n:-0}\" -gt 0 ]"
@@ -11875,7 +11896,7 @@ check "#203 and the same run without the seam does record (${st_ctrl_n:-0} recor
 # With records present the deal says it used them, and every shard's line carries the seconds it
 # was dealt, so the balance can be READ rather than inferred (L63: a guard asserts the quantity it
 # exists to protect, which here is seconds and not sections).
-st_timed="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+st_timed="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_STORE" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 check "#203 with records present the deal says it used them" \
   "case \"\$st_timed\" in *'dealt by measured section time'*) true ;; *) false ;; esac"
 st_secs="$(st_seconds "$st_timed")"
@@ -11944,7 +11965,7 @@ check "#203 the fixture store was written for every section in the file ($(ls "$
 # against the number of shards, so a count that happens to divide them evenly proves nothing about
 # the ones that do not (L147). These are the counts #151 already exercises.
 for st_n in 2 4 8; do
-  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_FIX" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  st_out="$(SUITE_SHARD="1/$st_n" SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_FIX" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
   st_s="$(st_seconds "$st_out")"
   st_total=0
   for st_x in $st_s; do st_total=$(( st_total + st_x )); done
@@ -11978,7 +11999,7 @@ while IFS= read -r st_t; do
 done <<STZEROT
 $(grep '^section "' "$SCRIPT_SELF" | sed 's/^section "//; s/"$//')
 STZEROT
-st_zero="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_ZERO" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+st_zero="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS="$ST_ZERO" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 check "#203 a store in which every section measured zero still divides the sections between shards" \
   "printf '%s\n' \"\$st_zero\" | shard_coverage_verdict 4 >/dev/null"
 check "#203 and it does not pile them all onto one shard" \
@@ -11987,7 +12008,7 @@ check "#203 and it does not pile them all onto one shard" \
 # The store switched off entirely, which is what a run that must leave no trace needs, and what CI
 # has until its cache is warm.
 ST_OFF="$WORK/section-timings-off"; mkdir -p "$ST_OFF"
-st_off="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+st_off="$(SUITE_SHARD=1/4 SUITE_SHARD_COVERAGE_ALL=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 check "#203 an empty SUITE_SECTION_TIMINGS turns the record off and says so" \
   "case \"\$st_off\" in *'dealt by section count'*) true ;; *) false ;; esac"
 st_off_n="$(ls "$ST_OFF" 2>/dev/null | grep -c . | tr -d ' ')"
@@ -12009,7 +12030,7 @@ section "== the runner says how much of the machine this suite may take (#136) =
 # On ONE line, because #34's scan reads the depth off the line that spawns and a continuation
 # would leave the spawn looking undepthed. And no `head`: a reader that leaves early kills the
 # producer under pipefail and reports a failure that never happened (L183, #132).
-_pl(){ SUITE_PLAN_ONLY=1 SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" env "$@" bash "$SCRIPT_SELF" 2>&1; }
+_pl(){ SUITE_PLAN_ONLY=1 SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" env "$@" bash "$SCRIPT_SELF" 2>&1; }
 
 # The grant is UNSET here rather than merely absent from the arguments: this suite is itself run by
 # the runner, so it inherits a real grant, and a check that assumed nothing was set would be asking
@@ -16760,7 +16781,7 @@ sed 's/^# needs: .*/# needs: zzz-no-such-prerequisite/' "$SCRIPT_SELF" > "$_SOBA
 _sobad_n="$(grep -c '^# needs: zzz-no-such-prerequisite' "$_SOBAD")"
 check "#105 the corrupted copy really carries a bad declaration" "[ '$_sobad_n' -ge 1 ]"
 _SO6="$WORK/so-badneeds.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOBAD" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOBAD" > "$_SO6" 2>&1; _so6_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT_SELF="$_SOBAD" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOBAD" > "$_SO6" 2>&1; _so6_rc=$?
 check "#105 a declaration naming no section is refused" "[ '$_so6_rc' -ne 0 ]"
 check "#105 and the refusal names the text it could not resolve" "grep -q 'zzz-no-such-prerequisite' '$_SO6'"
 
@@ -16779,7 +16800,7 @@ grep -v '^# needs: ' "$SCRIPT_SELF" > "$_SOUB"
 _soub_n="$(grep -c '^# needs: ' "$_SOUB" || true)"
 check "#105 the stripped copy really has no declarations left" "[ '$_soub_n' -eq 0 ]"
 _SO7="$WORK/so-unbound.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOUB" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOUB" > "$_SO7" 2>&1; _so7_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT_SELF="$_SOUB" SECTION_ONLY="#17: a collision the merge creates" bash "$_SOUB" > "$_SO7" 2>&1; _so7_rc=$?
 check "#105 a section run without its prerequisite does not report success" "[ '$_so7_rc' -ne 0 ]"
 check "#105 and says the run's result cannot be trusted" "line_has \"\$(cat '$_SO7')\" 'unbound variable' 'NOT trustworthy'"
 check "#105 and names the section it was running" "grep -q 'a collision the merge creates' '$_SO7'"
@@ -16792,7 +16813,7 @@ _SOSUB="$WORK/so-subshell.sh"
 awk '/^suite_profile$/ && !ins { print "section \"== zzz a constructed subshell only dependency ==\""; print "_zz_out=\"$(printf %s \"$ZZ_NO_SUCH_FIXTURE\")\""; print "check \"zzz this check passes regardless\" \"true\""; ins=1 } { print }' "$SCRIPT_SELF" > "$_SOSUB"
 check "#105 the constructed copy carries a subshell only read" "grep -q 'ZZ_NO_SUCH_FIXTURE' '$_SOSUB'"
 _SO8="$WORK/so-subshell.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SOSUB" SECTION_ONLY="zzz a constructed subshell only dependency" bash "$_SOSUB" > "$_SO8" 2>&1; _so8_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT_SELF="$_SOSUB" SECTION_ONLY="zzz a constructed subshell only dependency" bash "$_SOSUB" > "$_SO8" 2>&1; _so8_rc=$?
 check "#105 a run that loses only a subshell is refused too" "[ '$_so8_rc' -ne 0 ]"
 check "#105 even though every check inside it passed" "grep -q 'FAIL=0' '$_SO8'"
 
@@ -16833,7 +16854,7 @@ _SONC="$WORK/so-nochecks.sh"
 awk '/^suite_profile$/ && !ins { print "section \"== zzz a section with no checks of its own ==\""; print "echo \"nothing is asserted here\""; ins=1 } { print }' "$SCRIPT_SELF" > "$_SONC"
 check "#110 the constructed copy carries a section that checks nothing" "grep -q 'zzz a section with no checks' '$_SONC'"
 _SO9="$WORK/so-nochecks.txt"
-SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$_SONC" SECTION_ONLY="zzz a section with no checks" bash "$_SONC" > "$_SO9" 2>&1; _so9_rc=$?
+SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT_SELF="$_SONC" SECTION_ONLY="zzz a section with no checks" bash "$_SONC" > "$_SO9" 2>&1; _so9_rc=$?
 check "#110 a run whose target checked nothing is refused" "[ '$_so9_rc' -ne 0 ]"
 check "#110 and says the section itself ran none" "grep -q 'ran NO checks of its own' '$_SO9'"
 check "#110 even though the run as a whole reported no failures" "grep -q 'FAIL=0' '$_SO9'"
@@ -17226,7 +17247,7 @@ _hd_reader(){ # _hd_reader <file> -> the headings that file's own reader can see
   # and that notice counted as a heading: the reader appeared to see one MORE heading than the file
   # writes, which is the failure this section exists to report, arriving from the harness rather
   # than from the file (L156).
-  SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT="$SCRIPT" SCRIPT_SELF="$1" SECTION_LIST=1 bash "$1" 2>/dev/null \
+  SUITE_DEPTH=$SUITE_CHILD_DEPTH SCRIPT_SELF="$1" SECTION_LIST=1 bash "$1" 2>/dev/null \
     | grep -E '^[0-9]+'"$(printf '\t')" || true
 }
 _hd_calls="$(_hd_any "$SCRIPT_SELF" | grep -c . || true)"
@@ -17951,7 +17972,7 @@ check "#505 and the marked line says the same thing as the headline" \
 
 # BUILT IS NOT WIRED (L3). The function above is only worth having if a real run actually emits a
 # total for it to judge, so a filtered run is driven and its machine readable line read back.
-_wb_run="$(SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+_wb_run="$(SECTION_UNTIL=push SUITE_NO_LOCK=1 SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 _wb_line="$(printf '%s\n' "$_wb_run" | awk '/^SUITE-WORK / && !got {print; got = 1}')"
 check "#492 a real run emits a machine readable work total" "[ -n \"\$_wb_line\" ]"
 check "#492 and it carries both the seconds and the section count" \
@@ -18514,13 +18535,13 @@ WTSCOPES
 _wt_sec='== nothing depends on a tool only BSD has (#38) =='
 _wt_cache="$WORK/wholetree-cache"; rm -rf "$_wt_cache"
 env -u SUITE_SECTION_TIMINGS XDG_CACHE_HOME="$_wt_cache/control" SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
-  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" >/dev/null 2>&1
 _wt_ctl_n="$(find "$_wt_cache/control" -type f 2>/dev/null | grep -c . || true)"
 check "#809 the control: a section run with the timing variable unset records its timing ($_wt_ctl_n)" \
   "[ '${_wt_ctl_n:-0}' -ge 1 ]"
 # Now as the send runs it: top level, the lock skipped, the timing record off.
 _wt_send_out="$(XDG_CACHE_HOME="$_wt_cache/send" SUITE_SECTION_TIMINGS= SUITE_NO_LOCK=1 SECTION_ONLY="$_wt_sec" \
-  SUITE_DEPTH=0 SCRIPT="$SCRIPT" SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
+  SUITE_DEPTH=0 SCRIPT_SELF="$SCRIPT_SELF" bash "$SCRIPT_SELF" 2>&1)"
 _wt_send_n="$(find "$_wt_cache/send" -type f 2>/dev/null | grep -c . || true)"
 check "#809 a section run as the send runs it writes no timing record ($_wt_send_n)" \
   "[ '${_wt_send_n:-0}' -eq 0 ]"
@@ -19035,7 +19056,7 @@ h54_env(){ CLAUDE_HOME="$H54/home" SYNC_REPO="$H54/repo" SYNC_HOLD_FILE="$H54_HO
 # The length, said exactly. Rounded to the nearest hour, `hold 90` was the "2 hours" printed on 2026-10-28.
 DW54_FN="$WORK/h1854-duration.sh"
 sed -n '/^duration_in_words(){/,/^}/p' "$SCRIPT" > "$DW54_FN"
-dw54(){ bash -c '. "$1"; duration_in_words "$2" "$3"' _ "$DW54_FN" "$1" "${2:-}"; }
+dw54(){ fn_drive '. "$1"; duration_in_words "$2" "$3"' "$DW54_FN" "$1" "${2:-}"; }
 check "#1854 an exact length of 90 minutes is 1 hour 30 minutes" "[ \"\$(dw54 5400 exact)\" = '1 hour 30 minutes' ]"
 check "#1854 and a part minute left counts as a whole one, never as none" "[ \"\$(dw54 5399 exact)\" = '1 hour 30 minutes' ]"
 check "#1854 and a whole number of hours says no minutes" "[ \"\$(dw54 7200 exact)\" = '2 hours' ]"
@@ -24385,10 +24406,10 @@ TS17_FN_OK="$WORK/t2017-fn-ok.sh"; TS17_FN_BAD="$WORK/t2017-fn-bad.sh"
 sed -n '/^LOCAL_FILE_GLOBS=/p;/^tree_holds_files(){/,/^}/p' "$SCRIPT" > "$TS17_FN_OK"
 sed -n '/^LOCAL_FILE_GLOBS=/p;/^unmanaged_skill_list_unreadable(){/,/^}/p;/^  carried_skill_paths(){ /p;/^tree_holds_files(){/,/^}/p' "$SCRIPT" > "$TS17_FN_BAD"
 ts17_rc_ok=0
-bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_TREE" >/dev/null 2>&1 || ts17_rc_ok=$?
 ts17_rc_bad=0
-ts17_err_bad="$(UNMANAGED_SKILLS_LIB=/nowhere bash -c 'set -eo pipefail; . "$1"; tree_holds_files "$2"' _ "$TS17_FN_BAD" "$TS17_TREE" 2>&1)" || ts17_rc_bad=$?
+ts17_err_bad="$(UNMANAGED_SKILLS_LIB=/nowhere fn_drive 'set -eo pipefail; . "$1"; tree_holds_files "$2"' "$TS17_FN_BAD" "$TS17_TREE" 2>&1)" || ts17_rc_bad=$?
 dbg "#2017 failure path: ok rc=$ts17_rc_ok, bad rc=$ts17_rc_bad, said: $ts17_err_bad"
 check "#2017 fixture: the tool's stand in for an unreadable list was extracted" "grep -q '^  carried_skill_paths(){ ' '$TS17_FN_BAD'"
 check "#2017 with the shared list read, a skills folder holding only a nested .trash is empty" "[ \"\$ts17_rc_ok\" -eq 1 ]"
@@ -24401,16 +24422,16 @@ echo 'ordinary config in a folder that happens to be called synced' > "$TS17_SYN
 TS17_TOP="$WORK/t2017-top/skills"; mkdir -p "$TS17_TOP/synced/acct"
 echo 'a downloaded skill' > "$TS17_TOP/synced/acct/dl.md"
 ts17_rc_syn=0
-bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_syn=$?
 ts17_rc_top=0
-bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' _ \
+fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3"' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_TOP" >/dev/null 2>&1 || ts17_rc_top=$?
 check "#2017 a synced folder inside a real skill is content" "[ \"\$ts17_rc_syn\" -eq 0 ]"
 check "#2017 while the top level synced folder alone is not" "[ \"\$ts17_rc_top\" -eq 1 ]"
 # A held back path is still the caller's own anchored exclude, judged as before.
 ts17_rc_held=0
-bash -c 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3" --exclude=/real-skill' _ \
+fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3" --exclude=/real-skill' \
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_held=$?
 check "#2017 and a skill the caller holds back is still left out" "[ \"\$ts17_rc_held\" -eq 1 ]"
 
@@ -25376,9 +25397,15 @@ chmod +x "$SWT/clock-move" "$SWT/slot-clock" "$SWT/pull-clock"
 # zombie, and its ticket written through the queue's own writer, holding the turn from the clock's
 # present.
 sw_holder(){ ( sleep 900 > /dev/null 2>&1 < /dev/null & printf '%s\n' "$!" > "$SWT/holder" ) </dev/null >/dev/null 2>&1; cat "$SWT/holder"; }
-sw_hold(){ ( . "$SWPAY/lib/merge-turn.sh"; TURN_PID="$1"; TURN_PID_START=""
-  MWR_TURN_DIR="$SWSLOT" turn_open "full-run"; turn_join "/work/trees/a-builder" "$(cat "$SWT/now")" || exit 1
-  turn_look "$(cat "$SWT/now")" 999999 ) >/dev/null 2>&1; }
+# The turn is held by a driver written in this section's scratch and run as its own process, handed
+# the library, the holder, the slot and the clock: sourced here by its path, made from SCRIPT past
+# where the drafts gate can follow this file's variables, it is a path the gate refuses (#2538).
+sw_hold(){
+  printf '%s\n' '. "$1" || exit 1; TURN_PID="$2"; TURN_PID_START=""' \
+    'MWR_TURN_DIR="$3" turn_open "full-run"; turn_join "/work/trees/a-builder" "$(cat "$4")" || exit 1' \
+    'turn_look "$(cat "$4")" 999999' > "$SWT/hold.drive"
+  bash "$SWT/hold.drive" "$SWPAY/lib/merge-turn.sh" "$1" "$SWSLOT" "$SWT/now" >/dev/null 2>&1
+}
 # Run as a pull from a terminal or launchd is: without the marks this suite inherits from a full run
 # around it (HOOK_TESTS_RUNNING and that run's deadline), under which the fixture runner refused a
 # whole run outright as recursion, and with no HOOK_TESTS_SLOT, so the runner decides for itself that
