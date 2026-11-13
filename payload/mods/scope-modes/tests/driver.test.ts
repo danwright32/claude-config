@@ -550,6 +550,12 @@ describe('resting on background work (#2511)', () => {
     expect(resumeWords({ ...d, waitingOn: null })).toBe(RESUME)
     expect(resumeWords({ ...d, restDue: true })).toBe(REST_RESUME)
   })
+  test('an API error after a rest on background work is resumed as the API error\'s wait, never as the rest (lessons review)', () => {
+    const rested = decideStop(input({ claim: held(), busy: '1 subagent' })).record as DriverRecord
+    const f = decideFailure({ now: T0 + MIN, self: 's1', generation: 'g1', repo: 'o/r', driver: ok(rested), error: 'rate_limit', message: 'API Error: 429', weekly: 50, claim: held() })
+    expect(f.kind).toBe('wait')
+    expect(resumeWords(f.record as DriverRecord)).toBe(RESUME)
+  })
 })
 
 // #2062: a worker /sleep could not tell to start does no work until somebody starts it, so Dan

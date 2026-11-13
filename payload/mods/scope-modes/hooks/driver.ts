@@ -468,6 +468,8 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   d.waitStep++
   d.resumeAt = i.now + minutes * MIN
   d.restDue = false
+  // The wait now running is the API error's, never a rest on background work (#2511 lessons review).
+  d.waitingOn = null
   d.waits.push({ from: i.now, until: d.resumeAt })
   return { kind: 'wait', record: d, minutes, notes: [{ kind: 'wait', ...where, minutes, error: i.error, ...(said ? { text: said } : {}) }] }
 }
