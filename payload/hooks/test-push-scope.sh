@@ -797,7 +797,11 @@ got="$(ps_repo_dirs "cd $T && git push; cd $RD/no-such-dir && git push" "$S" 2>/
 LONE="$RD/lone-lib"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$LONE" push-scope.sh >/dev/null \
   || check "#2204 push-scope.sh could be installed with what it sources" "the install refused"
-lone() { bash -c '. "$1"; shift; "$@"' _ "$LONE/push-scope.sh" "$@"; }
+# A copy made at run time is driven by a script written beside it and run as its own process, never
+# sourced by its path: a path made at run time and sourced is one the Slack drafts gate cannot work
+# out, and refuses (claude-config#2538).
+printf '%s\n' '. "${BASH_SOURCE[0]%/*}/push-scope.sh" || exit 1' '"$@"' > "$LONE/drive.sh"
+lone() { bash "$LONE/drive.sh" "$@"; }
 got="$(lone ps_repo_dir "cd $T && git push" "$S" 2>"$RD/lone.err")"; rc=$?
 if [ "$rc" -eq 2 ] && [ -z "$got" ] && grep -q "shell-words.py" "$RD/lone.err"; then
   check "#1017 with no reader beside it, a cd is refused by name rather than judged in the session" ok
@@ -830,8 +834,9 @@ got="$(ps_repo_dir "git status" "$S" 2>/dev/null)"; rc=$?
 PYC_LIB="$RD/pyc-lib"; mkdir -p "$PYC_LIB"
 python3 "$DIR/lib/install-hook-libs.py" "$DIR/lib" "$PYC_LIB" push-scope.sh shell-words.py \
   || check "#2147 the hook helpers install into $PYC_LIB" "the install refused"
-pyc_got="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX bash -c '. "$1"; shift; "$@"' _ \
-  "$PYC_LIB/push-scope.sh" ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
+# Driven by a script beside the copy, as the lone copy above is (claude-config#2538).
+printf '%s\n' '. "${BASH_SOURCE[0]%/*}/push-scope.sh" || exit 1' '"$@"' > "$PYC_LIB/drive.sh"
+pyc_got="$(env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX bash "$PYC_LIB/drive.sh" ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
 pyc_left="$(ls -A "$PYC_LIB/__pycache__" 2>/dev/null | tr '\n' ' ')"
 if [ "$pyc_got" != "PATHS a.txt b.txt " ]; then
   check "#1017 reading an add leaves no shell-words bytecode beside it" "the copy's reader answered [$pyc_got], not the paths shell-words.py reads, so whether it writes bytecode was not measured"
