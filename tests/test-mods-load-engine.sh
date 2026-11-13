@@ -69,7 +69,8 @@ hang_wait '[ -s "$WORK/model.port" ]'
 [ -s "$WORK/model.port" ] || unmeasured "the stand in model did not start within ${HANG_S}s"
 PORT="$(cat "$WORK/model.port")"
 
-# The mods with a hooks module, by the name their manifest gives, one per line.
+# The mods with a hooks module, by folder name, one per line. The engine's log names a mod by its
+# manifest's name, so a folder named otherwise reads as never seen loading: a failure, never a pass.
 hooked_mods() {
   local d
   for d in "$WORK/mods"/*/; do
