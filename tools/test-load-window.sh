@@ -519,6 +519,19 @@ run --seconds 60 --workers 1 -- bash "$W/review-self.sh" "$case_dir/s" other
 eq "#1730 control: a review it cannot trace to itself makes it yield" 75 "$RC"
 says "#1730 control: naming the review" "Stopping early: a lessons review" "$OUT"
 
+# Each helper is sourced on a line of its own (#2538), so a missing one still stops the tool before any
+# window starts, and is named. A copy of the tool beside a copy of the hooks lib with one helper gone.
+MISS="$W/miss"
+mkdir -p "$MISS/tools" "$MISS/payload/hooks"
+cp "$TOOL" "$MISS/tools/load-window.sh"
+cp -R "$DIR/../payload/hooks/lib" "$MISS/payload/hooks/lib"
+rm -f "$MISS/payload/hooks/lib/merge-phase.sh"
+fresh misshelper
+OUT="$(bash "$MISS/tools/load-window.sh" --status 2>&1)"; RC=$?
+eq "#2538 a helper gone stops the tool" 1 "$RC"
+says "#2538 naming the helper that is gone" "merge-phase.sh is missing, so no window was started." "$OUT"
+eq "#2538 so no window was recorded" "" "$(record)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
