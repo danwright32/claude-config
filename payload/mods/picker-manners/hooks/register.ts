@@ -1,4 +1,4 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineCreateResult, EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
@@ -133,7 +133,9 @@ export const register: Register = on => {
   // is the one returned, untouched; reading built.designRound to decide is itself refused ("used as
   // a value"). tests/test-mods-load-engine.sh loads both cases on the real engine.
   on('engine.create', async ($, e, next) => {
-    const built = await next(e)
+    // Typed as what a step may return, every noun optional, so the type check reads the member as
+    // possibly absent, which it is, rather than as overwritten for certain (TS2783).
+    const built: EngineCreateResult = await next(e)
     return { designRound: { answered: async () => undefined }, ...built }
   })
 
