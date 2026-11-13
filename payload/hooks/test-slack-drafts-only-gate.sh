@@ -4123,26 +4123,24 @@ done
 # continuation). Code that cannot be parsed counts as able to act on what it is handed, and it was
 # handed what a tool printed, so it is still refused, and the refusal now says what Python found, so
 # the code is fixed rather than moved into a file. The same code written correctly passes.
-PYBAD="$(cat <<'CMD'
+cat > "$N/pybad.cmd" <<'CMD'
 ./tool 2>/dev/null > measure.jsonl; python3 -I -c '
 import json,sys
 for l in open(sys.argv[1]):
     m=json.loads(l)
     print(f"{m[\"w\"]}x{m[\"h\"]}")' measure.jsonl
 CMD
-)"
-run_n "$PYBAD"
+run_n "$(cat "$N/pybad.cmd")"
 read_refused "#2869 python3 -c code that does not parse is still refused"
 says "the refusal names the syntax error Python reports" "unexpected character after line continuation character"
-PYGOOD="$(cat <<'CMD'
+cat > "$N/pygood.cmd" <<'CMD'
 ./tool 2>/dev/null > measure.jsonl; python3 -I -c '
 import json,sys
 for l in open(sys.argv[1]):
     m=json.loads(l)
     print(f"{m["w"]}x{m["h"]}")' measure.jsonl
 CMD
-)"
-run_n "$PYGOOD"
+run_n "$(cat "$N/pygood.cmd")"
 allowed "#2869 the same code written so it parses, handed what a tool on disk printed, passes"
 
 # #2852: a build run inside a script on disk or a package script was not followed, so `npm run build
@@ -4217,9 +4215,14 @@ for s in curl unreadable rebound cond chained append copied unpacked sourced; do
   run_f "bash $s.sh"
   read_refused "#2854 a module whose text the script does not certainly write, by those words, is still refused: $s"
 done
-# The suite itself now runs alone.
-run_raw "$(payload Bash "$(bash_input "bash payload/hooks/test-lib-bytecode-importers.sh")" "$(cd "$DIR/../.." && pwd)")"
-allowed "#2854 test-lib-bytecode-importers.sh is allowed run on its own"
+# The suite itself now runs alone, from the checkout this suite is in (lib/checkout-root.sh, #1663).
+REPO2854="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -n "$REPO2854" ]; then
+  run_raw "$(payload Bash "$(bash_input "bash payload/hooks/test-lib-bytecode-importers.sh")" "$REPO2854")"
+  allowed "#2854 test-lib-bytecode-importers.sh is allowed run on its own"
+else
+  echo "UNMEASURED: #2854 the bytecode suite run alone: this suite is not in a claude-config checkout"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

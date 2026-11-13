@@ -1,7 +1,7 @@
 """The files a runner or a compiler runs without the command naming them as a script, for the Slack
 drafts gate (claude-config#2844).
 
-Before #2844 two routes ran a file the gate never read:
+Before #2844 and #2869 three routes ran a file the gate never read:
 
   * A runner from the standard library or installed, handed a script or a module (python3 -m
     cProfile post.py, python3 -m unittest discover, pytest tests): the gate does not read a module
@@ -1030,8 +1030,9 @@ def make(marker, judged_by_name):
 
         def built_from(self, path):
             """[(the source, the compiler as a refusal names it, the program the command ran)] that a
-            compiler run earlier in this call builds path from (note_build), each a file on disk other
-            than path itself; empty where none does. The program (a launcher, npx, or the compiler) is
+            compiler run earlier in this call builds path from (note_build), each other than path
+            itself and a file on disk, one made earlier in this call, or one a native build of this
+            call writes (#2869); empty where none does. The program (a launcher, npx, or the compiler) is
             the one whose naming of the source script() skips as a write."""
             real = os.path.realpath(path)
             stem, ext = os.path.splitext(real)
