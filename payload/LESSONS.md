@@ -6257,6 +6257,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   with a secret under a name the list does not hold.**
   (bidspoke#3063, 2026-10-29)
   SHORT: Redaction keyed on a field's NAME misses a secret under any other name; redact by the value's source, and test with an unlisted name.
+- **L1037. A hosting platform's log store keeps the request's address beside every line your code
+  writes, so limiting what your own lines carry does not limit what is kept; read the fields of one
+  stored record on the real account before deciding how logs are kept.**
+  (bidspoke#3603, 2026-11-12)
+  SHORT: A platform's log store keeps the request's address beside your lines, so read one stored record on the real account before deciding what logs keep.
 
 ## UX completeness
 - **L839. Anything a customer or outside party can see is copy, including a link's path and query
