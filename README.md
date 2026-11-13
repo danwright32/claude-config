@@ -7806,7 +7806,9 @@ docstring is never message text (#2574).
 No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
 a template, copy module or script whose own code names nothing of Slack, however a sender reaches
 it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
-write into a folder. The card, refusal and question name only the file that holds the text.
+write into a folder. The question names only the file that holds the text. The card and both
+refusals also name the send in it that the held text reaches, by what it calls and its line
+(#2586), or, when the file is held whole, say that no send could be traced and why.
 A file that names a Slack endpoint only to match or refuse it is not a file that posts (#2662; Dan,
 2026-11-10: "Recognise refusal code"; on 2026-11-09 the guard held what the Slack drafts gate
 prints on stderr, and edits to a script the gate's docstrings name, as Slack wording). A marker
