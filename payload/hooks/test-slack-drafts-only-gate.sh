@@ -4013,6 +4013,15 @@ run_p "npx prettier --write quiet.test.ts >/dev/null && npx vitest run quiet.tes
 allowed "a test file a formatter may rewrite, then handed to a test runner, is read as it is on disk"
 run_p "npx prettier --write post.test.ts >/dev/null && npx vitest run post.test.ts"
 read_refused "a test file naming an endpoint, handed to a package that runs it, is refused"
+# A program the gate reads by its own name, named with a version, is read as that program: tsx@4 runs
+# a script whose imports are followed, so a quiet script importing a module that posts is refused.
+mkdir -p "$P/vsrc"
+printf '%s\n' 'import { post } from "./slack";' 'post("hi");' > "$P/vsrc/main.ts"
+printf '%s\n' 'export const post = (t: string) => fetch("https://slack.com/api/chat.postMessage", { body: t });' > "$P/vsrc/slack.ts"
+for runs in "npx tsx@4 vsrc/main.ts" "npm exec -- tsx@4.7.0 vsrc/main.ts" "bunx bash@5 -c 'curl https://hooks.slack.com/services/T0/B0/x'"; do
+  run_p "$runs"
+  read_refused "a program read by its name, given a version, is still read as that program: $runs"
+done
 # A compiler run as a package still builds and runs nothing it is handed (#2844).
 run_p "npx tsc@5 --noEmit post.test.ts"
 allowed "a versioned compiler is still read by what it builds, not as a package handed a file"

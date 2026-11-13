@@ -3995,6 +3995,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             words = words[k:]
             if not words:
                 return None
+            if launcher:
+                words = [self.unversioned(words[0])] + words[1:]
             name = os.path.basename(words[0])
         if name in PACKAGERS:
             return self.package(name, words, d, depth)
@@ -5101,6 +5103,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 rest = rest[1:]
             if not rest or depth >= MAX_DEPTH:
                 return None
+            rest = [self.unversioned(rest[0])] + rest[1:]
             reason = self.package_run(rest, where, depth, f"{name} {sub}")
             if reason is not False:
                 return reason

@@ -139,6 +139,17 @@ def make(marker, judged_by_name):
     class ProgramRuns:
         # ---- Packages a launcher runs -----------------------------------------------------------
 
+        @staticmethod
+        def unversioned(word):
+            """A launcher's first word with its @version dropped where the rest is a program the gate
+            reads by its own name (npx tsx@4, bunx bash@5), so it is read as that program, its
+            imports followed; the word as it is otherwise (#2865, lessons review at e11e1f8)."""
+            m = PACKAGE_SPEC.fullmatch(word)
+            if not m or m.group(1) or not m.group(2):
+                return word
+            base = word[:-len(m.group(2))]
+            return base if judged_by_name(base) else word
+
         def package_run(self, words, d, depth, launcher):
             """The reason a package a launcher runs posts, None where it does not, or False where
             words[0] is not a package (#2865), which the caller then reads as before.
