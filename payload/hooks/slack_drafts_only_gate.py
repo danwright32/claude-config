@@ -866,7 +866,17 @@ _program_writes = load_lib("program_writes", "program-writes.py")
 ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
 # The files a runner or a compiler runs without the command naming them (claude-config#2844).
 _program_runs = load_lib("program_runs", "program-runs.py")
-ProgramRuns = _program_runs.make()
+
+
+def judged_by_name(name):
+    """Whether judge_written reads a program by its own name: a shell, a launcher, a package manager,
+    a sender, uv, an interpreter or pytest. A package run by a launcher is read as a package only
+    where its name is none of these (package_run, #2865)."""
+    return (name in SHELLS or name in LAUNCHERS or name in PACKAGERS or name in SENDERS or name == "uv"
+            or bool(INTERPRETER.match(name)) or name in _program_runs.PYTESTS)
+
+
+ProgramRuns = _program_runs.make(MARKER, judged_by_name)
 
 
 def draft_advice(where):
@@ -3948,9 +3958,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # alone, before the rest is cut into words.
         first = rest[:self.sh_word_end(rest, 0)]
         name = os.path.basename(first.strip("'\""))
-        if not first or first in ("source", ".") or not (
-                re.search(r"[$`/]", first) or name in SHELLS or name in LAUNCHERS or name in PACKAGERS
-                or name in SENDERS or name == "uv" or INTERPRETER.match(name) or name in _program_runs.PYTESTS):
+        if not first or first in ("source", ".") or not (re.search(r"[$`/]", first) or judged_by_name(name)):
             return None
         toks = self.sh_tokens(rest)
         if not toks or toks[0][0] != "word":
@@ -3978,8 +3986,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if not words:
             return None
         name = os.path.basename(words[0])
+        launcher = None
         if name in LAUNCHERS or (name == "uv" and len(words) > 1 and words[1] == "run"):
             k = 2 if name == "uv" else 1
+            launcher = name if name in LAUNCHERS else None
             while k < len(words) and words[k].startswith("-"):
                 k += 1
             words = words[k:]
@@ -4101,6 +4111,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     return self.script(words[1], d, depth, True, sourced=True)
                 return self.unworked_path(text, 1, d, "sources")
             return self.script(v, d, depth, True, sourced=True) if v is not None else None
+        if launcher:
+            reason = self.package_run(words, d, depth, launcher)
+            if reason is not False:
+                return reason
         if "/" in words[0]:
             if hit:
                 return f"{words[0]} is run with {hit.group(0)} in its arguments"
@@ -4264,7 +4278,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             words = words[k:]
         return words
 
-    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None, held_code=False):
+    def every_file(self, words, d, depth, shell_hint, lang=None, inline=None, held_code=False, actor=None):
         """The reason any word after the program that names a file posts, or None.
 
         Which word is the script depends on each program's own option table (python3 -I takes no
@@ -4287,6 +4301,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         text judged as a data file's is. Where the script word is not certain, every file not shaped
         like data is read as code, as above.
 
+        actor, (its label, what it can do), is a program the gate does not read that counts as able to
+        act: a package a launcher runs (package_run, #2865). Every file it is handed is read as a data
+        file, by its own text: what the package does with a file is not something the gate can tell,
+        and before #2865 none of them was read at all.
+
         inline, (its label, its text, the directory it runs in), is code the program was given by an
         option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
         first file read as code is, so a data file it is handed is read when it can act on it.
@@ -4297,10 +4316,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if inline:
             label, text, here = inline
             code.append((label, lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
+        if actor:
+            code.append((actor[0], lambda runs_only=False: actor[1]))
         # The word the program runs as its script (operands), and whether it is certain to name no
         # file (empty_slot, claude-config#2786): a program whose script is not there runs nothing,
         # so a data file after that word is an argument, judged as data even with no script to act.
-        slot = None if inline else self.operands(words)[0]
+        slot = None if inline or actor else self.operands(words)[0]
         empty = self.empty_slot(words, d) if slot else None
         # And where the script word certainly names a file on disk (held_slot, claude-config#2797),
         # a code shaped file after it is the script's argument too: read as a script only where
@@ -4333,7 +4354,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
-            if (code or past) and self.data_shaped(path):
+            if (code or past) and (actor or self.data_shaped(path)):
                 data.append((w, path, False))
                 continue
             if after_held and code:
@@ -5080,6 +5101,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 rest = rest[1:]
             if not rest or depth >= MAX_DEPTH:
                 return None
+            reason = self.package_run(rest, where, depth, f"{name} {sub}")
+            if reason is not False:
+                return reason
             return self.record(where, " ".join(rest), "", "", depth + 1, " ".join(rest))
         if name == "npm" and sub not in NPM_RUN:
             script = NPM_LIFECYCLE.get(sub)

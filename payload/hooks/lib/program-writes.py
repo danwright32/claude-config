@@ -32,7 +32,8 @@ followed: `python3 -c "open('run.sh','w')..." && bash run.sh`, `sed -i ... run.s
     read (git_fetch); a clone of anything but a local repository is a download, and unreadable.
   * NON_WRITERS never write a file they are handed, and naming a file and then running it is
     everyday with them (`chmod +x run.sh && ./run.sh`), so their words are not read as writes; nor
-    are git's subcommands that leave the working tree as it is (GIT_READS), the files handed to a
+    are git's subcommands that leave the working tree as it is (GIT_READS), claude mcp's that change
+    only Claude Code's settings (CLAUDE_MCP_SETTINGS, #2865), the files handed to a
     script on disk (whose writes the gate leaves alone, as it does a shell script's), or a sed or
     awk program's input files unless it edits them in place.
 
@@ -65,6 +66,14 @@ NON_WRITERS = frozenset({
     "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi", "do",
     "done", "function", "{", "}", "!", "]]", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "shopt", "setopt"})
+# Claude Code's mcp subcommands that change only its own settings (~/.claude.json, a project's
+# .mcp.json): the words they are handed are a server's name, command, arguments and environment, kept
+# as settings and never written to a file or run (#2865). `claude mcp add lr -- npx -y @scope/name@1`
+# marked the spec as a file claude may write, so running it next was refused. serve is not here: it
+# runs Claude Code's tools for whatever connects, and claude's other commands (claude -p) may write
+# any file they name.
+CLAUDE_MCP_SETTINGS = frozenset({"add", "add-json", "add-from-claude-desktop", "remove", "list", "get",
+                                 "reset-project-choices"})
 GIT_READS = frozenset({
     "status", "diff", "log", "show", "add", "commit", "push", "fetch", "blame", "grep", "ls-files",
     "rev-parse", "branch", "tag", "remote", "config", "describe", "shortlog", "rev-list", "merge-base",
@@ -185,6 +194,8 @@ def make(interpreter, shells, awks, senders):
             """note_writes for a program that is not a copier, printf, echo, cat or tee: the files it
             may write. Returns what it prints, as pieces, or None where that is not known."""
             if self.shell.get("on_disk") or name in NON_WRITERS or name in senders:
+                return None
+            if name == "claude" and vals[1:2] == ["mcp"] and vals[2:3] and vals[2] in CLAUDE_MCP_SETTINGS:
                 return None
             if name == "dd":
                 return self.note_dd(args, vals, d, stdin)
