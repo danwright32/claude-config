@@ -82,6 +82,29 @@ const WRITES: Record<string, unknown> = {
   "for t in \"*push*\" 'gate'; do bash check.sh --like \"$t\"; done": { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '*push*', folder: '/w/app', quoted: true }, { word: '$t', path: '/w/app/gate' }] }] },
   'for t in "a" "b"; do bash check.sh --like "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t', path: '/w/app/a' }, { word: '$t', path: '/w/app/b' }] }] },
   'for t in $(cat list); do bash check.sh "$t"; done': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: '$t' }] }] },
+  // #2823: a test runner handed folders, the same with an update flag or an output option, and a runner
+  // beside a redirect, tee, cp, sed -i or a python heredoc.
+  "npx vitest run src/ src/lib src/big.test.ts | grep -v \"^ok\" | tail -20": {"files":[],"changes":[],"unnamed":[]},
+  "npx jest src/ src/lib": {"files":[],"changes":[],"unnamed":[]},
+  "python3 -m pytest src/ src/lib -q": {"files":[],"changes":[],"unnamed":[]},
+  "python3 -m unittest src/big_test.py src/lib": {"files":[],"changes":[],"unnamed":[]},
+  "bun test src/ src/lib": {"files":[],"changes":[],"unnamed":[]},
+  "node --test src/ src/lib": {"files":[],"changes":[],"unnamed":[]},
+  "npx vitest run -u src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"vitest","tool":true,"args":[{"word":"run","path":"/w/app/run"},{"word":"src/","path":"/w/app/src"}]}]},
+  "npx vitest run --update src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"vitest","tool":true,"args":[{"word":"run","path":"/w/app/run"},{"word":"src/","path":"/w/app/src"}]}]},
+  "npx jest --updateSnapshot src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"jest","tool":true,"args":[{"word":"src/","path":"/w/app/src"}]}]},
+  "python3 -m pytest --snapshot-update src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 module run with -m","script":"pytest","tool":true,"args":[{"word":"src/","path":"/w/app/src"}]}]},
+  "bun test --update-snapshots src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"the test runner bun test","script":"bun test","tool":true,"args":[{"word":"src/","path":"/w/app/src"}]}]},
+  "npx vitest run src/ --outputFile=src/big.ts": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"vitest","tool":true,"args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "npx vitest run src/ --outputFile.junit src/big.ts": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"vitest","tool":true,"args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "npx vitest run --outputFile.junit=src/big.ts src/lib": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a tool run through npx","script":"vitest","tool":true,"args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "node --test --test-reporter-destination=src/big.ts src/": {"files":[],"changes":[],"unnamed":[],"runs":[{"what":"the test runner node --test","script":"node --test","tool":true,"args":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]}]},
+  "npx vitest run src/ > src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}],"changes":[],"unnamed":[],"stdout":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]},
+  "python3 -m pytest src/ 2>&1 | tee src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}],"changes":[],"unnamed":[]},
+  "node --test src/ src/lib >> src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}],"changes":[],"unnamed":[],"stdout":[{"word":"src/big.ts","path":"/w/app/src/big.ts"}]},
+  "npx vitest run src/ && cp /tmp/big.ts src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts","sources":["/tmp/big.ts"],"mayBeFolder":true}],"changes":[],"unnamed":[]},
+  "npx vitest run src/ && sed -i '' 's/a/b/' src/big.ts": {"files":[{"word":"src/big.ts","path":"/w/app/src/big.ts","edits":true}],"changes":[],"unnamed":[]},
+  "npx vitest run src/ && python3 - <<'EOF'\nopen('src/big.ts', 'w').write('x')\nEOF": {"files":[],"changes":[],"unnamed":[{"what":"a python3 script on standard input","words":["python3","-","<<EOF"],"inputs":[],"targets":["/w/app/src/big.ts"],"program":"open('src/big.ts', 'w').write('x')","folder":"/w/app"}]},
 }
 
 // The area check in a session (#1506): the first edit a session makes to each existing source or
@@ -1171,4 +1194,57 @@ test('with its open issues unread, a command that names a fast growing file is s
   const why = refusal(await bash($ as never, w, `${CLEAR} && sed -i '' 's/a/b/' src/big.ts`))
   expect(why).toContain('which writes src/big.ts.')
   expect(why).toContain('so its growth alone decided')
+})
+
+// #2823: `npx vitest run <three test paths> | grep -v ... | tail` was held as a write to a source file
+// under one of the folders it named: a tool run through npx handed every word on as a file it may
+// write, and a folder it was handed was judged for every held file under it. A test runner changes
+// the files it is handed only when a flag says so (vitest -u), so without one its operands are no
+// writes. Each runner below ran on this Mac in the 14 days before the fix.
+const RUNNERS = [
+  'npx vitest run src/ src/lib src/big.test.ts | grep -v "^ok" | tail -20',
+  'npx jest src/ src/lib',
+  'python3 -m pytest src/ src/lib -q',
+  'python3 -m unittest src/big_test.py src/lib',
+  'bun test src/ src/lib',
+  'node --test src/ src/lib',
+]
+
+test('a test runner handed folders holding held files runs, judging no file (#2823)', KIT, async ($, on) => {
+  const w = world($, on)
+  const ran: string[] = []
+  for (const [i, command] of RUNNERS.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    ran.push(r.result === 'done' ? `${command}: ran` : `${command}: ${refusal(r)}`)
+  }
+  expect(ran).toEqual(RUNNERS.map(c => `${c}: ran`))
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'unread')).toEqual([])
+})
+
+test('a test runner that really writes a held file is still held: a flag that updates what it is handed, an output option, a redirect, tee, cp, sed -i, a python heredoc (#2823)', KIT, async ($, on) => {
+  const w = world($, on)
+  const writers = [
+    'npx vitest run -u src/',
+    'npx vitest run --update src/',
+    'npx jest --updateSnapshot src/',
+    'python3 -m pytest --snapshot-update src/',
+    'bun test --update-snapshots src/',
+    'npx vitest run src/ --outputFile=src/big.ts',
+    'npx vitest run src/ --outputFile.junit src/big.ts',
+    'npx vitest run --outputFile.junit=src/big.ts src/lib',
+    'node --test --test-reporter-destination=src/big.ts src/',
+    'npx vitest run src/ > src/big.ts',
+    'python3 -m pytest src/ 2>&1 | tee src/big.ts',
+    'node --test src/ src/lib >> src/big.ts',
+    'npx vitest run src/ && cp /tmp/big.ts src/big.ts',
+    "npx vitest run src/ && sed -i '' 's/a/b/' src/big.ts",
+    "npx vitest run src/ && python3 - <<'EOF'\nopen('src/big.ts', 'w').write('x')\nEOF",
+  ]
+  const held: string[] = []
+  for (const [i, command] of writers.entries()) {
+    const r = await bash($ as never, w, command, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `${command}: ran` : `${command}: ${/which writes (src\/big\.ts|python3 - <<EOF)\./.test(refusal(r)) ? 'held' : refusal(r)}`)
+  }
+  expect(held).toEqual(writers.map(c => `${c}: held`))
 })

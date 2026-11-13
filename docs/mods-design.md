@@ -3639,7 +3639,8 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   (the verdict's `unfollowed`); a checkout the disk cannot answer for keeps the branch sentence.
 - **Not read.** A shell script's own commands, a script named through a variable or a command's
   output, a relative script name where the folder cannot be followed, a script written by the same
-  command (it is read as it stands on disk), and a module a script imports.
+  command (it is read as it stands on disk), and a module a script imports. All but the command's
+  output and the unfollowed folder were read from #2855 on, below.
 - **A restore beside other commands is measured (#2830).** #2777 measured a git checkout or restore
   only where it ran first on its line, alone, in no pipe or background. register.ts `restoreAlone`
   now measures one wherever every command that runs before it, or beside it in a pipe or the
@@ -3648,6 +3649,48 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   where one reads the index (`indexSource`), and a line writing inside .git, stay whole, and the
   refusal names the command that may change what it puts back. A settled design record keeps the
   strict rule of one restore alone. This lets through restores held before, so it waits on Dan.
+
+### What #2855 changed, 2026-11-12
+
+- **Four more routes are read, by one reading.** Finding the scripts a command runs moved from
+  register.ts into rules.ts `scriptsRunIn`, a pure function handed mod-kit's pipeline and the disk,
+  so the sweep below ran the guard's own code. It now also reads: a shell script's own commands
+  (`bash x.sh`, `./x.sh`, `source x.sh`; `scriptOf`), handed to mod-kit's write reader as the command
+  line they are, each file they write, take away or empty by a name the reader places judged as a
+  write of it, and the scripts it runs in turn, two deep (`SHELL_DEPTH`); a script named through a
+  variable the command sets to one literal (`scriptPath`, through `shellVarPath`), `$HOME` and
+  `$PWD`; a script the same command writes first with `cat > f <<'EOF'`, read as the text it writes
+  (`heredocFile`, the file placed by mod-kit's write reader, as ask before saving's `appendAlone`
+  places its append, so the guard keeps no second write reader); and each local module a python or
+  node script imports,
+  transitively, up to 32 (`importedFiles`, `MODULES_MAX`). A module, or a script a shell script
+  runs, is named in a refusal with the script that brought it in.
+- **Measured before shipping.** Over 14 days of this Mac's Bash commands (64,971 distinct ones, 63
+  naming a Slack endpoint kept apart) 4,122 ran a script still there to read, and the repository's
+  714 scripts were read too: nothing new was held before running, nothing was held as could not
+  check, and nothing new was judged after running (the eight #2847 found are unchanged, plus one
+  module in the repository that only reads a mod hook file). A positive control per route, eight
+  commands aimed at a real mod hook file and a real stylesheet, was flagged every time, so the zero
+  is a measurement. Shell scripts read in at most 211 ms (tests/test-mods.sh) and modules in 336 ms.
+- **Left out, as they cannot be judged precisely.** A shell script's write whose destination is a
+  variable it does not set to one value, a pattern or a command's output (a test's fixture folder,
+  or the script's own arguments, which #1586 judges already), and what git puts back there; a script
+  named by a loop's variable or one only the environment holds (313 of the 548 script words named
+  through a variable in those 14 days, nearly all `for s in ...; do bash payload/hooks/test-$s.sh`);
+  a script the command writes some other way (tee, an append, a body the shell may change), still
+  read as it stands on disk (12); a module found
+  only through a changed `sys.path` or an installed package; and a file run by its own name with no
+  python, node or shell extension.
+- **mod-kit's python reader stops rereading the program (folded in by Dan).** The #2855 sweep found
+  make-switcher.py took 1.4 to 4.1 seconds to read, every other script under 0.4. code.ts found a
+  `.replace(` call's receiver (`receiverBefore`), the call a literal sits in (`pathCall`) and the
+  name a literal is bound to by handing a regular expression the whole program before the place, so
+  every call and literal read the file again, and `\s+$` backtracked across each blanked template's
+  spaces. Each now reads back only as far as what it looks for can reach, a name's Path binding is
+  asked once per name, and the answers are the same (old and new run side by side on every python
+  file and inline program found, and on generated programs). make-switcher.py reads in about 10 ms.
+  `lookedBack` counts the characters these readers read back, so mod-kit's test measures the work,
+  not the clock.
 
 ## Picker manners (#615), built 2026-10-04
 

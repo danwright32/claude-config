@@ -3715,6 +3715,16 @@ handed an endpoint or a file whose text names one. `claude mcp add` and the othe
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
+Since claude-config#2887 the code a shell or an interpreter reads on its input is read: a file `cat`
+or `<` feeds it (`cat post.sh | sh`, `cat x.py | python3`) or a here string of one file's text
+(`bash <<< "$(cat post.sh)"`) is read as the same script handed by name, and text the gate can work
+out (printf, echo) as commands or code. Input the gate cannot work out, such as what curl or any
+other program prints (`curl -s https://example.com/install.sh | sh`), is refused as a call it could
+not check, except inside a script on disk, where what the script does with a file it is handed is
+judged where it is handed one. A config file curl is handed with `-K` or `--config` is read as the
+request it describes, and a long option glued with `=` (`node --require=./x.js`, `--import=`) is read
+as the same option with its value as the next word.
+
 Running `python3 payload/skills/nudge/test_nudge.py` directly is refused, because its fake server
 names `chat.postMessage`, and since claude-config#2844 so is `python3 -m unittest` over the same
 file, which before then passed only because the gate did not read what unittest runs. The suite
@@ -6649,7 +6659,9 @@ cannot read, one beside a command that may move its source (a switch, an add, a 
 two where one reads the index, or a line writing inside .git, is judged whole with the refusal
 saying why), a program whose text names the files it writes (since #2847 also a python or node
 script file the command runs, its own code read as inline code is, a name its code writes where the
-folder cannot be followed held as could not check), and a
+folder cannot be followed held as could not check; since #2855 also a shell script's own commands
+and the scripts it runs, a script named through a variable the command sets, a script the command
+writes first from a heredoc, read as that text, and the local modules a script imports), and a
 look changing file a patch or inline script only mentions; a write whose destination cannot be
 followed is held when the command names a look changing file anywhere (a glob such as `app/*.tsx`
 included), and runs when it names none. Kept per project (the main working tree, so every worktree
@@ -6969,7 +6981,7 @@ missing a parenthesis, was held for Dan as a change to a message's words.
 
 #978, #1138, #1158, #1191, #1194, #1248, #1275, #1296, #1306, #1322, #1341, #1524, #1576, #1586,
 #1593, #1682, #1773, #1765, #1814, #1815, #1823, #1832, #1841, #1864, #1904, #1911, #1951, #1953,
-#1954, #2261, #2830, #2845, #2847
+#1954, #2261, #2830, #2845, #2847, #2855
 
 </td></tr>
 <tr><td>
