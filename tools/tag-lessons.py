@@ -26,6 +26,8 @@ import re
 import subprocess
 import sys
 
+# No cache left in tools/lib (#2854).
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from lessons_core import band_owner, read_bands  # noqa: E402
 

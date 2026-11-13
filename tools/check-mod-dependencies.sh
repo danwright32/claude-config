@@ -24,7 +24,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "check-mod-dependencies: python3 is not installed, so no mod's dependencies were read." >&2
   exit 3
 fi
-python3 - "${dir%/}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" <<'PY'
+python3 -B - "${dir%/}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" <<'PY'
 import json, os, re, sys
 
 root = sys.argv[1]

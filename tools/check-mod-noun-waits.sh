@@ -100,7 +100,7 @@ else
   PINNED_TS_WHY="tools/lib/pinned-compiler.sh, which installs it, is missing"
 fi
 export PINNED_TS_WHY
-python3 - "${dir%/}" "$here/lib" "${CHECK_MODS_TS_DIR:-$here/typescript}" <<'PY'
+python3 -B - "${dir%/}" "$here/lib" "${CHECK_MODS_TS_DIR:-$here/typescript}" <<'PY'
 import ast, json, os, re, subprocess, sys
 
 root = sys.argv[1]
