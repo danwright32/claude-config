@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
 # send-gate: scans settings.hooks.json
-# Tests for the gate that refuses a builder dispatch naming no model (claude-config#2027).
+# Tests for the gate that refuses a builder dispatch naming no model, in a session that is
+# orchestrating builders (claude-config#2027).
 #
-# Measured on 2026-11-13 over this Mac's transcripts since the tiers changed on 2026-11-09: 8 of 204
-# builder dispatches named no model, so the written rule was being skipped (L27). The payload shape
-# is the one the transcripts record for an Agent call: tool_name Agent, with subagent_type, prompt,
-# isolation and model inside tool_input.
+# Measured on 2026-11-13 over this Mac's transcripts since the tiers changed on 2026-11-09: 8 of 216
+# builder dispatches named no model, so the written rule was being skipped (L27). Dan chose on
+# 2026-11-13 to narrow the refusal to sessions orchestrating builders, as #2027 scoped it, so an
+# ordinary session sees no new stop. The payload shape is the one the transcripts record for an
+# Agent call: tool_name Agent, with subagent_type, prompt, isolation and model inside tool_input,
+# and transcript_path naming the session's transcript (the parent's, for a call made inside a
+# subagent). The fixture transcripts carry Agent tool_use lines in the shape Claude Code writes.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
@@ -31,11 +35,57 @@ if [ ! -f "$HOOK" ]; then
   exit 2
 fi
 
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/bm-gate.XXXXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+# transcript <file> <kind>...: a session transcript holding one Agent dispatch per kind, in the
+# shape Claude Code writes them (compact JSON, one content block per assistant line). A kind is
+# "builder" (a worktree dispatch), "explore" (read only), "session" (a brief carrying the commit
+# session line, no worktree), "self" (a builder whose id is this call's own, toolu_x) or "junk" (a
+# line that is not JSON). A line of ordinary chat comes first.
+transcript() {
+  python3 - "$@" <<'PY'
+import json, sys
+path, kinds = sys.argv[1], sys.argv[2:]
+lines = [json.dumps({"type": "user", "message": {"role": "user", "content": "work the list"}},
+                    separators=(",", ":"))]
+for n, k in enumerate(kinds):
+    if k == "junk":
+        lines.append('{"type":"assistant","name":"Agent" this is not json')
+        continue
+    inp = {"description": "item %d" % n, "prompt": "build item %d" % n, "model": "opus"}
+    if k in ("builder", "self"):
+        inp["isolation"] = "worktree"
+    elif k == "explore":
+        inp = {"description": "look", "prompt": "find it", "subagent_type": "Explore"}
+    elif k == "session":
+        inp["prompt"] += " Claude-Session: https://claude.ai/code/session_x"
+    tid = "toolu_x" if k == "self" else "toolu_%d" % n
+    lines.append(json.dumps({"type": "assistant", "timestamp": "2026-11-13T10:00:00Z",
+                             "message": {"role": "assistant", "content": [
+                                 {"type": "tool_use", "id": tid, "name": "Agent", "input": inp}]}},
+                            separators=(",", ":")))
+open(path, "w").write("\n".join(lines) + "\n")
+PY
+}
+ORCH="$WORK/orchestrating.jsonl"; transcript "$ORCH" builder builder
+ORDINARY="$WORK/ordinary.jsonl"; transcript "$ORDINARY"
+ONE="$WORK/one-builder.jsonl"; transcript "$ONE" builder
+READONLY="$WORK/readonly.jsonl"; transcript "$READONLY" explore explore explore builder
+OWN="$WORK/own-call.jsonl"; transcript "$OWN" builder self
+SESSIONLINE="$WORK/session-line.jsonl"; transcript "$SESSIONLINE" session builder
+JUNK="$WORK/junk.jsonl"; transcript "$JUNK" junk builder junk builder
+
+# The session transcript every payload names, set before a run; NONE leaves the field out. AGENT_ID
+# set marks the call as made inside a subagent.
+TRANSCRIPT="$ORCH"
+AGENT_ID=""
+
 # payload <tool> <subagent_type> <isolation> <model> <prompt>: an empty argument is a field left OUT.
 payload() {
   python3 -c '
 import json, sys
-tool, st, iso, model, prompt = sys.argv[1:6]
+tool, st, iso, model, prompt, transcript, agent = sys.argv[1:8]
 ti = {"description": "do the work", "prompt": prompt}
 if st:
     ti["subagent_type"] = st
@@ -45,9 +95,14 @@ if model == "EMPTY":
     ti["model"] = ""
 elif model:
     ti["model"] = model
-print(json.dumps({"session_id": "s", "cwd": "/tmp", "hook_event_name": "PreToolUse",
-                  "tool_name": tool, "tool_input": ti, "tool_use_id": "toolu_x"}))
-' "$1" "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+d = {"session_id": "s", "cwd": "/tmp", "hook_event_name": "PreToolUse",
+     "tool_name": tool, "tool_input": ti, "tool_use_id": "toolu_x"}
+if transcript != "NONE":
+    d["transcript_path"] = transcript
+if agent:
+    d["agent_id"] = agent
+print(json.dumps(d))
+' "$1" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "$TRANSCRIPT" "$AGENT_ID"
 }
 
 RC=0; OUT=""; ERR=""
@@ -74,7 +129,7 @@ allowed "a worktree builder naming sonnet"
 run Agent "" "" fable "build it. $SESSION_LINE"
 allowed "a builder with no type naming fable"
 
-echo "builder model gate: a builder with no model is refused"
+echo "builder model gate: a builder with no model is refused in an orchestrating session"
 run Agent general-purpose worktree "" "build the thing"
 refused "a worktree builder with no model"
 says "and it names the tiers" "sonnet"
@@ -88,7 +143,7 @@ refused "a brief carrying the commit session line is a builder"
 run Agent general-purpose worktree EMPTY "build the thing"
 refused "an empty model is no model"
 
-echo "builder model gate: what is not a builder is left alone"
+echo "builder model gate: what is not a builder is left alone, even while orchestrating"
 run Agent Explore "" "" "find where it lives"
 allowed "a read only Explore agent"
 run Agent Plan "" "" "plan it"
@@ -103,6 +158,49 @@ run Agent fork worktree "" "carry on"
 allowed "a fork ignores model, so it cannot be asked for one"
 run Bash "" "" "" "ls"
 allowed "a call to another tool"
+
+echo "builder model gate: a session that is not orchestrating builders is never stopped"
+TRANSCRIPT="$ORDINARY"
+run Agent general-purpose worktree "" "build the thing"
+allowed "a builder with no model, in a session that has dispatched nothing"
+run Agent "" "" "" "fix it. $SESSION_LINE"
+allowed "a session line brief with no model, in that session"
+TRANSCRIPT="$ONE"
+run Agent general-purpose worktree "" "build the thing"
+allowed "a session's second builder with no model"
+TRANSCRIPT="$READONLY"
+run Agent general-purpose worktree "" "build the thing"
+allowed "read only agents dispatched before do not make a session orchestrating"
+TRANSCRIPT="$OWN"
+run Agent general-purpose worktree "" "build the thing"
+allowed "this call's own line in the transcript is not counted as an earlier builder"
+
+echo "builder model gate: an orchestrating session is recognised however its builders went out"
+TRANSCRIPT="$SESSIONLINE"
+run Agent general-purpose worktree "" "build the thing"
+refused "earlier builders sent with the commit session line and no worktree count"
+TRANSCRIPT="$JUNK"
+run Agent general-purpose worktree "" "build the thing"
+refused "lines that are not JSON are skipped, not taken as a reason to stop counting"
+TRANSCRIPT="$ORCH"; AGENT_ID="agent_123"
+run Agent general-purpose worktree "" "build the thing"
+refused "a call made inside a subagent of an orchestrating session (transcript_path is the parent's)"
+AGENT_ID=""
+
+echo "builder model gate: when it cannot tell whether the session is orchestrating"
+TRANSCRIPT="NONE"
+run Agent general-purpose worktree "" "build the thing"
+if [ "$RC" -eq 0 ]; then check "a payload naming no transcript is let through" ok; else check "a payload naming no transcript is let through" "exit $RC"; fi
+notices "and says the gate did not run" "BUILDER MODEL GATE DID NOT RUN"
+TRANSCRIPT="$WORK/not-there.jsonl"
+run Agent general-purpose worktree "" "build the thing"
+if [ "$RC" -eq 0 ]; then check "a transcript that is not there is let through" ok; else check "a transcript that is not there is let through" "exit $RC"; fi
+notices "and says so" "BUILDER MODEL GATE DID NOT RUN"
+run Agent general-purpose worktree opus "build the thing"
+allowed "a builder naming a model never needs the transcript"
+run Agent Explore "" "" "find where it lives"
+allowed "nor does a read only agent"
+TRANSCRIPT="$ORCH"
 
 echo "builder model gate: a payload it cannot read"
 run_raw 'this is not json'
