@@ -1,6 +1,6 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { SlackAlertApproval, SlackAlertChoice, SlackAlertPending } from '../types/index.d.ts'
+import type { SlackAlertApproval, SlackAlertChoice, SlackAlertPending, SlackAlertSend } from '../types/index.d.ts'
 import {
   APPROVE,
   CHANGE,
@@ -41,6 +41,9 @@ import {
   stringsOf,
   testFile,
   tokenRanges,
+  UNTRACED_EDIT,
+  UNTRACED_LANGUAGE,
+  UNTRACED_NONE,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -76,8 +79,8 @@ const cannotCheck = (why: string) =>
 const HELD = cannotCheck('unknown failure')
 
 // A held edit or shell write to a file that posts to Slack by itself (#2837); literal: the
-// placeholders the added text writes as text (#2361).
-type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; literal?: string[] }
+// placeholders the added text writes as text (#2361); send: where the held text goes (#2586).
+type Hold = { file: string; added: string[]; removed: string[]; keys: string[]; literal?: string[]; send?: SlackAlertSend }
 // Could not check: git or a read failed for the file itself, so the call is held and told to try again.
 type Unchecked = { unchecked: string }
 type Verdict = { pass: true } | { own: true } | Unchecked | { hold: Hold } | { merge: string }
@@ -483,30 +486,44 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // is left out (#2475), so a model's instructions beside an alert are never held, nor shown to Dan
     // as one.
     type Part = { added: string[]; removed: string[] }
-    const holdFor = async (part: Part): Promise<Verdict> => {
+    // `sendOf` says where the held text goes, from the hold itself (#2586).
+    const holdFor = async (part: Part, sendOf: (hold: Hold) => SlackAlertSend): Promise<Verdict> => {
       const [beforeKept, afterKept] = await postable($, path, lang, [{ text: before, lits: beforeLits, changed: part.removed }, { text: after, lits: afterLits, changed: part.added }], deadline)
       const kept = wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[]))
       const hold = await holdOf({ added: kept.added.filter(s => part.added.includes(s)), removed: kept.removed.filter(s => part.removed.includes(s)) })
-      return hold ? { hold } : PASS
+      return hold ? { hold: { ...hold, send: sendOf(hold) } } : PASS
     }
+    const untraced = (why: string) => (): SlackAlertSend => ({ untraced: why })
     const python = lang === 'python'
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
-    if (edited === undefined || !(python || (lang === 'c' && isJs(path)))) return holdFor(change)
+    if (edited === undefined) return holdFor(change, untraced(UNTRACED_EDIT))
+    if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))
     const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
     const was = scanWork()
     const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
     // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
     $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
     // A file that posts to Slack by a send the guard cannot find is held for all of it.
-    if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(change)
+    if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(change, untraced(UNTRACED_NONE))
     // Only wording one of its own sends carries is held (#2570): a log line, an error or a route's
     // answer beside the alert passes.
     const here: Part = {
       added: change.added.filter(s => afterLits.some(l => l.text === s && l.start >= 0 && sentAt(tAfter, l.start))),
       removed: change.removed.filter(s => beforeLits.some(l => l.text === s && l.start >= 0 && sentAt(tBefore, l.start))),
     }
-    return here.added.length || here.removed.length ? holdFor(here) : PASS
+    // The sends the held text reaches, each once: added text in the file as the edit leaves it, text
+    // taken away in the file as it was.
+    const reached = (hold: Hold): SlackAlertSend => {
+      const [texts, lits, t] = hold.added.length ? [hold.added, afterLits, tAfter] : [hold.removed, beforeLits, tBefore]
+      const sends = new Map<string, { callee: string; line: number }>()
+      for (const l of lits) {
+        const s = texts.includes(l.text) && l.start >= 0 ? sentAt(t, l.start) : undefined
+        if (s) sends.set(`${s.line}:${s.callee}`, { callee: s.callee, line: s.line })
+      }
+      return { sends: [...sends.values()].sort((a, b) => a.line - b.line) }
+    }
+    return here.added.length || here.removed.length ? holdFor(here, reached) : PASS
   } catch (err) {
     return { unchecked: message(err) }
   }
@@ -609,18 +626,18 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, i
     await drawCard($, id, 'This pull request carries Slack alert wording chosen overnight that you have not approved.', 'It merges once you approve the wording.')
     return v.merge
   }
-  const { file, added, removed, keys, literal } = v.hold
+  const { file, added, removed, keys, literal, send } = v.hold
   // Asleep, wording an edit changes is chosen by the session itself and kept for Dan's morning
   // (#2628); a shell command's wording cannot be read before it runs, so it is held as before.
   const choosing = id !== '' && (added.length > 0 || removed.length > 0) && (await isAsleep($))
   if (id) {
-    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(literal ? { literal } : {}), ...(agent ? { agent: true as const } : {}) }
+    const waiting: SlackAlertPending = { id, tool, file, added, removed, keys, ...(literal ? { literal } : {}), ...(agent ? { agent: true as const } : {}), ...(send ? { send } : {}) }
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.id !== id), waiting])
     const safeWay = choosing ? 'You are asleep: Claude chooses the wording and asks you in the morning.' : agent ? 'The main session asks you about it.' : 'Claude shows you the message as Slack will post it and asks you to approve the wording.'
-    await drawCard($, id, `${heldText(file, added, removed)}.`, safeWay)
+    await drawCard($, id, `${heldText(file, added, removed, send)}.`, safeWay)
   }
-  if (choosing) return asleepRefusal(blocked(file, added, removed), id)
-  return agent ? agentRefusal(id, file, added, removed) : refusal(id, file, added, removed)
+  if (choosing) return asleepRefusal(blocked(file, added, removed, send), id)
+  return agent ? agentRefusal(id, file, added, removed, send) : refusal(id, file, added, removed, send)
 }
 
 type AskInput = { questions?: unknown[]; answers?: unknown; metadata?: Record<string, unknown> }
@@ -793,7 +810,7 @@ export const register: Register = on => {
       return { deny: `No Slack alert edit of yours is held under ${call}: it was chosen or answered already, or never held. Send the edit, and if it is held you are told what to do.` }
     if (!(await isAsleep($)))
       return {
-        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed) : refusal(call, waiting.file, waiting.added, waiting.removed)}`,
+        deny: `Dan is awake, so he approves this wording himself rather than a choice being made for him: ${waiting.agent ? agentRefusal(call, waiting.file, waiting.added, waiting.removed, waiting.send) : refusal(call, waiting.file, waiting.added, waiting.removed, waiting.send)}`,
       }
     const problem = renderedProblem(input.rendered, waiting.added, waiting.literal ?? [])
     if (problem !== undefined) return { deny: problem.replace('Give metadata "rendered"', 'Give "rendered"') }

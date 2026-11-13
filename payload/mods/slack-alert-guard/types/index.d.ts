@@ -16,7 +16,15 @@ export type SlackAlertPending = {
   literal?: string[]
   /** A subagent's call, told to stop and report rather than ask. */
   agent?: true
+  /** The send the held text reaches, or why that could not be traced (#2586). None for a shell command. */
+  send?: SlackAlertSend
 }
+
+/**
+ * Where held text goes (#2586): the file's own send calls it reaches, each by what it calls and its
+ * line, or the reason no send could be traced, when the guard held all the file's new wording.
+ */
+export type SlackAlertSend = { sends: { callee: string; line: number }[] } | { untraced: string }
 
 /** Dan's approval of one exact wording (or one removal, or one shell call), kept in the mod's store. */
 export type SlackAlertApproval = { at: number; file: string; text: string[]; rendered: string }
