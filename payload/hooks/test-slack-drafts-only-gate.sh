@@ -1589,6 +1589,38 @@ for shape in hookdir twice local default realpath cdquiet groupsub fibrace funcs
   run_bash "bash $T/sv/quiet/$shape.sh"
   allowed "the same script sourcing a file that does not post: $shape.sh"
 done
+# The shapes #2538's measurement found the gate could not follow in this repository's own scripts.
+# Each is in both trees: where lib/x.sh posts, the file is read and refused as the post it is; before
+# each was read it was let through unread (the refusal of an unread path was off), so refused is what
+# the reader fix changes, and the quiet tree shows nothing else in the shape refuses.
+for tree in posts quiet; do
+  # claude-sync's library lookup: one path kept where a file is there, another where it is not, then
+  # sourced behind the same test. A file test is answered from the disk as the gate reads the command.
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/lib/x.sh"' '[ -f "$P" ] || P="$ROOT/none/x.sh"' \
+    'if [ -f "$P" ]; then' '  . "$P"' 'fi' > "$T/sv/$tree/filekept.sh"
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/none/x.sh"' '[ -f "$P" ] || P="$ROOT/lib/x.sh"' \
+    '[ -e "$P" ] && . "$P"' > "$T/sv/$tree/filefallback.sh"
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/lib"' '[ -d "$P" ] || P="$ROOT/none"' '. "$P/x.sh"' \
+    > "$T/sv/$tree/dirkept.sh"
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/none/x.sh"' 'test ! -f "$P" && P="$ROOT/lib/x.sh"' '. "$P"' \
+    > "$T/sv/$tree/filenegated.sh"
+done
+for shape in filekept filefallback dirkept filenegated; do
+  run_bash "bash $T/sv/posts/$shape.sh"
+  refused "#2538 a script sourcing, through a path the resolver works out, a file that posts: $shape.sh"
+  says "#2538 and it is the post it read, not a path it could not work out: $shape.sh" "REFUSED: this command posts to Slack"
+  run_bash "bash $T/sv/quiet/$shape.sh"
+  allowed "#2538 the same script sourcing a file that does not post: $shape.sh"
+done
+# The controls: kept where no file is, the replacement is read (it is not there, so nothing posts); and
+# a relative path in a folder that is not certain gets no answer from the disk, so it stays unread.
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/lib/x.sh"' '[ -f "$P.none" ] || P="$ROOT/none/x.sh"' '. "$P"' \
+  > "$T/sv/posts/filenot.sh"
+run_bash "bash $T/sv/posts/filenot.sh"
+allowed "#2538 a path replaced where its file test fails is read as the replacement, which is not there to post"
+printf '%s\n' '#!/bin/bash' 'cd "$1"' 'P=lib/x.sh' '[ -f "$P" ] || P=none/x.sh' '. "./$P"' > "$T/sv/posts/filerel.sh"
+run_bash "cd $T/sv/posts && bash filerel.sh /nonexistent-2538"
+allowed "#2538 the refusal is off: a relative file test where the folder is not certain is not answered"
 # A `bash -c` string's $1 is the argument after it only where nothing can change it first (#2538).
 # Each of these hands the file that posts as $1 but never sources it, as $1 has changed by then (a
 # shift or set --) or is the outer shell's (the string in double quotes). Read as the file that
