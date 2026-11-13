@@ -1594,9 +1594,14 @@ beyond splitting words and removing quotes, whether bash runs it or it is run by
 pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
 tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
 check of an idea about them piped to grep, for another account too; the same words unquoted, a
-substitution, another script, another subcommand, any other assignment in front, a pipe into
-anything else or a second command are refused as before, and a declared script refused for its
-shape is told the shapes its declared call passes in.
+substitution, another script, another subcommand, any other assignment in front or a pipe into
+anything else are refused as before, and a declared script refused for its shape is told the shapes
+its declared call passes in. Since #1492 such a call may stand beside the command's other
+pipelines, after `;`, `&&`, `||` or a line break (`cd <dir> && <note>`, two notes, the duplicate
+check then `gh label list`): `lib/shell-words.py data_set_aside` replaces it with `:` and the rest is
+judged as if it were not there, so an unread wrapper beside it is refused as before and a push,
+merge or issue command beside it is read by the gates as usual. Never inside a subshell or a
+substitution, and never in a command naming `BASH_ENV`.
 
 One call is declared read only (#1669, Dan's approval of 2026-10-24, "Allow lesson only"):
 `~/claude-config-sync/claude-sync lesson <id>`, in `READ_ONLY_CALLS`. It reads LESSONS.md and
