@@ -491,6 +491,53 @@ test('a shell write into a file that itself posts to Slack is held; one into a f
   expect(searches(w)).toBe(0)
 })
 
+// The exact holds #2675 reported from a work repository on 2026-11-10: three screen labels added to a
+// copy module a Slack posting file imports for one unrelated parser function, then a class name in a
+// page component whose page posts to Slack. Each is pinned here as passing, with the page's own Slack
+// message still held, so the passes are the guard deciding rather than a guard that judges nothing.
+const SHIFT_COPY = '/w/app/src/lib/shift-copy.ts'
+const SHIFT_COPY_TEXT = [
+  "export const parseShiftKind = (raw: string) => (raw === 'free' ? 'free' : 'shift')",
+  "export const LABELS = { free: 'Free time' }",
+  '',
+].join('\n')
+const SHIFTS = '/w/app/src/app/shifts/page.tsx'
+const SHIFTS_TEXT = [
+  "import { parseShiftKind } from '../../lib/shift-copy'",
+  "import { ShiftRow } from './shift-row'",
+  'export default async function Page({ rows }: { rows: { kind: string; id: string }[] }) {',
+  "  const late = rows.filter(r => parseShiftKind(r.kind) === 'shift')",
+  "  if (late.length) await fetch(process.env.SLACK_WEBHOOK_URL as string, { method: 'POST', body: JSON.stringify({ text: `${late.length} shifts have no cover` }) })",
+  '  return (',
+  '    <ul>',
+  '      {rows.map(r => (',
+  '        <li key={r.id} className="row">{r.id}</li>',
+  '      ))}',
+  '    </ul>',
+  '  )',
+  '}',
+  '',
+].join('\n')
+const ROW = '/w/app/src/app/shifts/shift-row.tsx'
+const ROW_TEXT = 'export const ShiftRow = ({ kind }: { kind: string }) => <div className="hr">{kind}</div>\n'
+
+test('screen labels added to a copy module a Slack sender imports for an unrelated function pass, and so does a class name in a page that posts to Slack, or in its component (#2675)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [SHIFT_COPY]: SHIFT_COPY_TEXT, [SHIFTS]: SHIFTS_TEXT, [ROW]: ROW_TEXT } })
+  const labels = { tool: 'Edit', file_path: SHIFT_COPY, old_string: "free: 'Free time' }", new_string: "free: 'Free time', shift: 'On shift', open: 'Open shift', swap: 'Swap requested' }" }
+  expect(refusalOf(await call($, labels))).toBe('')
+  const className = 'className={`hr ${kind === "free" ? "hr-free" : "hr-shift"}`}'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: ROW, old_string: 'className="hr"', new_string: className }))).toBe('')
+  const inPage = { tool: 'Edit', file_path: SHIFTS, old_string: 'className="row"', new_string: 'className={`hr ${r.kind === "free" ? "hr-free" : "hr-shift"}`}' }
+  expect(refusalOf(await call($, inPage))).toBe('')
+  // An attribute value on the page is screen text, never what its send carries.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: SHIFTS, old_string: '<ul>', new_string: '<ul aria-label="Shifts this week">' }))).toBe('')
+  expect(w.ran.length).toBe(4)
+  expect(w.cards).toEqual([])
+  // The page's own Slack message is still held.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: SHIFTS, old_string: 'shifts have no cover', new_string: 'shifts this week have no cover' }))).toContain('${late.length} shifts this week have no cover')
+  expect(w.ran.length).toBe(4)
+})
+
 test('a test file sends nothing: its titles and fixtures pass, by an edit and by a shell write, while the same wording in the sender is held', withKit, async ($, on) => {
   const w = world($, on)
   const TEST = '/w/app/lib/alert.test.ts'
@@ -1145,6 +1192,36 @@ test('a file that posts to Slack in a way the guard cannot trace is held as befo
   const CONFIG = '/w/app/src/lib/digest-config.ts'
   world($, on, { files: { [CONFIG]: "const CHANNEL = process.env.SLACK_ALERT_CHANNEL\nexport const config = { channel: CHANNEL, intro: 'Morning digest' }\n" } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: CONFIG, old_string: 'Morning digest', new_string: 'Morning digest for the team' }))).toContain('Morning digest for the team')
+})
+
+// claude-config#2586: the refusal, the agent refusal and the card name the send each held line
+// reaches, and a line held because its send could not be traced says that, and why, instead.
+test('a held line names the Slack send it reaches; one whose send could not be traced says so and why (#2586)', withKit, async ($, on) => {
+  const CONFIG = '/w/app/src/lib/digest-config.ts'
+  const PAGER = '/w/app/scripts/pager.sh'
+  const w = world($, on, {
+    files: {
+      [DIGEST]: DIGEST_TEXT,
+      [CONFIG]: "const CHANNEL = process.env.SLACK_ALERT_CHANNEL\nexport const config = { channel: CHANNEL, intro: 'Morning digest' }\n",
+      [PAGER]: '#!/bin/bash\ncurl -s --data "Disk is full" "$SLACK_WEBHOOK_URL"\n',
+    },
+  })
+  const traced = `"Deploy \${id} failed on production", which reaches the Slack send fetch on line 1 of ${ALERT}`
+  expect(refusalOf(await call($, REWORD))).toContain(`${traced}. Every new Slack alert`)
+  expect(w.cards.at(-1)?.reason).toContain(traced)
+  expect(refusalOf(await call($, { ...REWORD, agentId: 'agent-a1' }))).toContain(`${traced}. Slack alert wording waits`)
+  const python = refusalOf(await call($, { tool: 'Edit', file_path: DIGEST, old_string: 'bookings are late', new_string: 'bookings are running late' }))
+  expect(python).toContain(`"{len(rows)} bookings are running late", which reaches the Slack send client.chat_postMessage on line 6 of ${DIGEST}`)
+  // Held because no send could be traced: each says so and why, and names no send.
+  const none = refusalOf(await call($, { tool: 'Edit', file_path: CONFIG, old_string: 'Morning digest', new_string: 'Morning digest for the team' }))
+  expect(none).toContain('"Morning digest for the team"; the guard could not trace which Slack send in it carries this text, because it found no send call in the file that it could follow')
+  const shell = refusalOf(await call($, { tool: 'Edit', file_path: PAGER, old_string: 'Disk is full', new_string: 'Disk is full on the build box' }))
+  expect(shell).toContain('the guard could not trace which Slack send in it carries this text, because it follows sends only in JavaScript, TypeScript and python')
+  const stale = refusalOf(await call($, { tool: 'Edit', file_path: ALERT, old_string: '`Deploy ${id} failed badly`', new_string: '`Deploy ${id} failed badly again`' }))
+  expect(stale).toContain('the guard could not trace which Slack send in it carries this text, because the edit does not match the file as it is now')
+  for (const r of [none, shell, stale]) expect(r).not.toContain('which reaches')
+  // The wording changes nothing about what is held: every call above stayed held.
+  expect(w.ran).toEqual([])
 })
 
 // A docstring documents code and is sent nowhere (#2574): on 2026-11-09 one added to a Slack gate's
