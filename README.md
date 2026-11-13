@@ -1594,9 +1594,14 @@ beyond splitting words and removing quotes, whether bash runs it or it is run by
 pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
 tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
 check of an idea about them piped to grep, for another account too; the same words unquoted, a
-substitution, another script, another subcommand, any other assignment in front, a pipe into
-anything else or a second command are refused as before, and a declared script refused for its
-shape is told the shapes its declared call passes in.
+substitution, another script, another subcommand, any other assignment in front or a pipe into
+anything else are refused as before, and a declared script refused for its shape is told the shapes
+its declared call passes in. Since #1492 such a call may stand beside the command's other
+pipelines, after `;`, `&&`, `||` or a line break (`cd <dir> && <note>`, two notes, the duplicate
+check then `gh label list`): `lib/shell-words.py data_set_aside` replaces it with `:` and the rest is
+judged as if it were not there, so an unread wrapper beside it is refused as before and a push,
+merge or issue command beside it is read by the gates as usual. Never inside a subshell or a
+substitution, and never in a command naming `BASH_ENV`.
 
 One call is declared read only (#1669, Dan's approval of 2026-10-24, "Allow lesson only"):
 `~/claude-config-sync/claude-sync lesson <id>`, in `READ_ONLY_CALLS`. It reads LESSONS.md and
@@ -7203,7 +7208,11 @@ milestone's open issues) with `next`, or, for a goal naming no issue, to work th
 of its own and note each step as `progress`, counted by its own counter on disk, until a circuit
 breaker (3 blocks or 20 active minutes with no new commit, claim or note; a commit is one on the
 claim's `sleep/N` branch or in its reserved worktree, whoever made it, #1119), the night's cap, the
-weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a claim is parked
+weekly limit at 95% or an hour with no weekly reading lets it stop with a note; a Stop while the
+session's own subagent is still working (running, and not judged quiet by the job watcher) or a job
+it kept has not stalled is no idle turn: the session rests, unblocked, until that work's report
+starts it or ten minutes pass, each rest counted against the night's cap, and the breaker counts
+afresh from it (#2511, `hooks/busy.ts`); a claim is parked
 after 2 attempts or 2 active hours; a rate limit or server error is waited out at waits of five,
 ten, twenty and forty minutes, then hourly, each wait noted, and the session started again; `/sleep`
 refuses on battery and holds `caffeinate -i` for the night, and each refusal is also a notification
