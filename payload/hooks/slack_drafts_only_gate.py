@@ -137,6 +137,370 @@ OPTIONS = {
     "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
     "osascript": ({"-e"}, "", VALUED),
 }
+# The options known to load nothing, by family, for the words after code given inline (every_file,
+# claude-config#2691). node, perl and the rest go on reading their own options after the code, and
+# which of those options load a file is not a list the gate can keep complete: three rounds of review
+# of #2886 each found a loader it missed (--require=, --loader=, --experimental-loader), and each one
+# missed was a pass. So there the value of ANY option, separate or glued with =, is read as code, and
+# only an option matched here leaves the word after it as the code's argument. Each is measured to load
+# nothing (node 22, 2026-11-13: a file after each landed in process.argv unrun; -- ends node's options;
+# --input-type takes only module or commonjs) or is perl's own reading switches, which take no separate
+# value (perl_acts reads the rest). A family not listed has none. Python and the shell are not read
+# this way at all: Python stops at -c, and a shell given -c takes every word after the code as $0, $1
+# and on (bash, sh, zsh, dash and ksh measured 2026-11-13), so every word there is the code's argument.
+# Any other family (deno, php, osascript, whose option parsing after the code is not measured) is read
+# as one that goes on reading options, which refuses more rather than less.
+LOADS_NOTHING = {
+    "js": re.compile(r"--|--no-warnings|--no-deprecation|--trace-warnings|--enable-source-maps|--input-type|"
+                     r"--max-old-space-size|--stack-size"),
+    "perl": re.compile(r"--|-[nlpaw0-9]+"),
+}
+# perl -e code is judged by a safe list (perl_unsafe, claude-config#2691, #2886). Twelve rounds of
+# review of #2886 each found another spelling that sets @ARGV, the names perl's <> opens with the two
+# argument open (where a name ending in | runs a command), or another way to run code, while the
+# reading listed what acts: `@{ARGV}`, `${ARGV[0]}`, `*ARGV = [...]`, `@ ARGV`, `@$x`, `$ $x[0]`,
+# `$x->[0]`, `$x->@*`, and more. So the reading is turned around: the code is taken to only read,
+# match and print when every token in it is one this list knows, and anything else, named in the
+# refusal, is taken to act. Known: the words in PERL_SAFE_WORDS; a variable named directly (`$x`,
+# `@F`, `%h`, `$F[1]`, `$h{$k}`, `$#F`, and the punctuation variables in PERL_PUNCT_VARS), but never
+# one named ARGV except the scalar `$ARGV` read as the current file's name, and never one reached
+# through a block, another variable, an arrow or a second subscript, which is how a name is computed
+# at run time; numbers; strings, with any interpolation in them read the same way; m//, s/// without
+# the e flag, tr/// and split's patterns, with no code block in them; and operators.
+PERL_SAFE_WORDS = frozenset("""
+print say printf sprintf chomp chop chr ord lc uc lcfirst ucfirst length substr index rindex join split
+reverse sort keys values each defined exists delete scalar undef abs int sqrt hex oct rand time localtime
+gmtime push pop shift unshift splice grep map quotemeta pos my our local
+if unless else elsif while until for foreach and or not xor lt gt le ge eq ne cmp
+next last redo exit die warn BEGIN END close eof STDIN STDOUT STDERR
+""".split())
+# The punctuation variables code may name: $. $, $/ $\ $; $& $" $! $@ $|, all read or set harmlessly.
+PERL_PUNCT_VARS = set(".,/\\;&\"!@|")
+PERL_NAME = re.compile(r"[A-Za-z_]\w*|\d+")
+PERL_NUMBER = re.compile(r"0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?")
+PERL_OPS = sorted("""<=> **= ||= &&= //= ... <<= >>= ** =~ !~ == != <= >= && || // .. ++ -- += -= *= /= .= %=
+|= ^= << >> => + - * / % . = < > ! ~ ? : , ; | ^ \\""".split(), key=len, reverse=True)
+PERL_INDEX = re.compile(r"\s*(?:-?\d+|\$[A-Za-z_]\w*)(?:\s*(?:,|\.\.)\s*(?:-?\d+|\$[A-Za-z_]\w*))*\s*")
+PERL_CODE_BLOCK = re.compile(r"\(\?\??\{|\(\*\{")
+PERL_QUOTES = {"q", "qq", "qw", "m", "s", "tr", "y", "qr"}
+PERL_PAIRS = {"(": ")", "[": "]", "{": "}", "<": ">"}
+
+
+def perl_delimited(code, i):
+    """(the body between the delimiter at code[i] and its close, the index after the close), or None
+    where it never closes. A bracket delimiter nests; a backslash escapes the next character."""
+    open_, close = code[i], PERL_PAIRS.get(code[i], code[i])
+    depth, j = 1, i + 1
+    while j < len(code):
+        c = code[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c == close and open_ != close:
+            depth -= 1
+        elif c == open_ and open_ != close:
+            depth += 1
+        elif c == close:
+            depth = 0
+        if depth == 0:
+            return code[i + 1:j], j + 1
+        j += 1
+    return None
+
+
+def perl_code_block(pattern):
+    """The code block in a perl pattern (`(?{`, `(??{`, `(*{`), as text, or None."""
+    m = PERL_CODE_BLOCK.search(pattern)
+    return m.group(0) if m else None
+
+
+def perl_interpolated(text, regex=False):
+    """What in text, a string perl interpolates (or a pattern, where regex), is off the safe list, or
+    None. A variable in it is read as in code, with a subscript only of plain indexes."""
+    block = perl_code_block(text) if regex else None
+    if block:
+        return block
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c not in "$@" or i + 1 >= n:
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in "{$" and not (c == "$" and nxt == "$" and (i + 2 >= n or not re.match(r"[\w{$]", text[i + 2]))):
+            return c + nxt
+        if c == "$" and nxt.isspace():
+            return "$ "
+        m = PERL_NAME.match(text, i + 1)
+        if not m:
+            i += 2 if nxt == "$" else 1
+            continue
+        name, j = m.group(0), m.end()
+        if text.startswith("::", j) or re.match(r"'\w", text[j:j + 2]):
+            return c + name + text[j:j + 2]
+        if name.startswith("ARGV") and not (c == "$" and name == "ARGV" and text[j:j + 1] not in ("[", "{")):
+            return c + name
+        while j < n and text[j] in "[{" and not (regex and text[j] == "{" and re.match(r"\{\d", text[j:])):
+            body = perl_delimited(text, j)
+            if body is None or not (PERL_INDEX.fullmatch(body[0]) or (text[j] == "{" and re.fullmatch(r"\s*\w+\s*", body[0]))):
+                return c + name + text[j]  # a pattern's [abc] after a variable too: perl may read it as one
+            if any(v.startswith("$ARGV") for v in re.findall(r"\$\w+", body[0])):
+                return "$ARGV"
+            j = body[1]
+            if j < n and text[j] in "[{":
+                return c + name + "..." + text[j]
+        if text.startswith("->", j):
+            return "->"
+        i = j
+    return None
+
+
+def perl_unsafe(code):
+    """The first token of perl code that is not on the safe list, as text, or None when every token
+    is (see the comment above PERL_SAFE_WORDS). Code the reading trips over is taken to act."""
+    try:
+        return _perl_unsafe(code)
+    except (IndexError, AttributeError, TypeError):
+        return "code this reading could not follow"
+
+
+def _perl_unsafe(code):
+    i, n = 0, len(code)
+    term = True  # whether a term (an operand) is expected next, rather than an operator
+    stack = []  # the open brackets: "sub" for a subscript, else the bracket
+    last = []  # the significant tokens so far, for the words that depend on the ones before them
+    closed = None  # what the last token closed: "sub", ")" or None
+
+    def peek(k):
+        while k < n and code[k] in " \t\r\n":
+            k += 1
+        return k
+
+    while i < n:
+        c = code[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == "#":
+            j = code.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        was_closed, closed = closed, None
+        if c in "$@%" and (c != "%" or term):
+            j = i + 1
+            if c == "$" and code[j:j + 1] == "#":
+                m = PERL_NAME.match(code, j + 1)
+                if not m or m.group(0).startswith("ARGV"):
+                    return "$#" + code[j + 1:j + 2]
+                i, term = m.end(), False
+                last.append("$#" + m.group(0))
+                continue
+            nxt = code[j:j + 1]
+            if nxt in ("{", "$") and not (c == "$" and nxt == "$" and not re.match(r"[\w{$\s]", code[j + 1:j + 2] or ";")):
+                return c + nxt
+            m = PERL_NAME.match(code, j)
+            if m:
+                name, j = m.group(0), m.end()
+                if code.startswith("::", j) or re.match(r"'\w", code[j:j + 2]):
+                    return c + name + code[j:j + 2]
+                if name.startswith("ARGV") and not (c == "$" and name == "ARGV" and code[peek(j):peek(j) + 1] not in ("[", "{")):
+                    return c + name
+            elif c == "$" and nxt == "$":
+                name, j = "$", j + 1
+            elif c == "$" and nxt and nxt in PERL_PUNCT_VARS:
+                name, j = nxt, j + 1
+            elif c in "@%" and nxt in ("-", "+"):
+                name, j = nxt, j + 1
+            else:
+                return c + (nxt if nxt and not nxt.isspace() else " ")
+            k = peek(j)
+            if code[k:k + 1] in ("[", "{") and name != "$":
+                stack.append("sub")
+                term, i = True, k + 1
+            else:
+                term, i = False, j
+            last.append(c + name)
+            continue
+        if c == "&":
+            if code.startswith("&&=", i) or code.startswith("&&", i) and not term or code.startswith("&=", i) and not term:
+                op = "&&=" if code.startswith("&&=", i) else code[i:i + 2]
+                term, i = True, i + len(op)
+                last.append(op)
+                continue
+            return "&" + code[i + 1:i + 2]
+        if c == "*" and term:
+            return "*" + code[i + 1:i + 2]
+        if c == "-" and code.startswith("->", i):
+            return "->"
+        if c == "`":
+            return "`"
+        if c == "/" and term:
+            body = perl_delimited(code, i)
+            if body is None:
+                return "/"
+            hit = perl_interpolated(body[0], regex=True)
+            if hit:
+                return hit
+            i = body[1]
+            while i < n and code[i].isalpha():
+                i += 1
+            term = False
+            last.append("//")
+            continue
+        if c == "<" and term:
+            m = re.match(r"<<>>|<(?:STDIN|ARGV)?>", code[i:])
+            if not m:
+                return code[i:i + 3]
+            i += m.end()
+            term = False
+            last.append(m.group(0))
+            continue
+        if c in "\"'":
+            body = perl_delimited(code, i)
+            if body is None:
+                return c
+            if c == '"':
+                hit = perl_interpolated(body[0])
+                if hit:
+                    return hit
+            i, term = body[1], False
+            last.append(c)
+            continue
+        if c.isdigit():
+            m = PERL_NUMBER.match(code, i)
+            i, term = m.end(), False
+            last.append(m.group(0))
+            continue
+        if c.isalpha() or c == "_":
+            m = re.compile(r"[A-Za-z_]\w*").match(code, i)
+            word, j = m.group(0), m.end()
+            if code.startswith("::", j) or re.match(r"'\w", code[j:j + 2]):
+                return word + code[j:j + 2]
+            k = peek(j)
+            if code.startswith("=>", k) or (stack and stack[-1] == "sub" and code[k:k + 1] == "}"):
+                i, term = j, False
+                last.append(word)
+                continue
+            if word == "x" and not term:
+                i, term = j + (1 if code[j:j + 1] == "=" else 0), True
+                last.append("x")
+                continue
+            if word in PERL_QUOTES and (code[j:j + 1] and not re.match(r"[\w\s,;)\]}>=]", code[j]) or
+                                        code[k:k + 1] in ("{", "(", "[", "<", "/") and k > j):
+                d = j if not code[j].isspace() else k
+                first = perl_delimited(code, d)
+                if first is None:
+                    return word + code[d]
+                parts, end = [first[0]], first[1]
+                if word in ("s", "tr", "y"):
+                    if code[d] in PERL_PAIRS:
+                        e = peek(end)
+                        second = perl_delimited(code, e) if e < n else None
+                    else:
+                        second = perl_delimited(code, end - 1)
+                    if second is None:
+                        return word + code[d]
+                    parts.append(second[0])
+                    end = second[1]
+                m2 = re.compile(r"[a-z]*").match(code, end)
+                flags, end = m2.group(0), m2.end()
+                if word == "s" and "e" in flags:
+                    return "s///" + flags
+                hit = None
+                if word in ("m", "qr", "s"):
+                    hit = perl_interpolated(parts[0], regex=True) if code[d] != "'" else perl_code_block(parts[0])
+                if not hit and word == "s" and code[d] != "'":
+                    hit = perl_interpolated(parts[1])
+                if not hit and word == "qq":
+                    hit = perl_interpolated(parts[0])
+                if hit:
+                    return hit
+                i, term = end, False
+                last.append(word)
+                continue
+            if word == "ARGV" and (last[-1:] in (["close"], ["eof"]) or last[-2:] in (["close", "("], ["eof", "("])):
+                i, term = j, False
+                last.append(word)
+                continue
+            if word not in PERL_SAFE_WORDS:
+                return word
+            i, term = j, True
+            last.append(word)
+            continue
+        if c in "([{":
+            if c == "(":
+                stack.append("(")
+            elif not term and was_closed == ")" and c == "[":
+                stack.append("sub")
+            elif not term and was_closed == "sub":
+                return "][" if c == "[" else "]{"
+            elif c == "[" and not term:
+                return "["
+            else:
+                stack.append(c)
+            i, term = i + 1, True
+            last.append(c)
+            continue
+        if c in ")]}":
+            top = stack.pop() if stack else None
+            if top is None or (top != "sub" and PERL_PAIRS.get(top) != c):
+                return c
+            i += 1
+            closed = "sub" if top == "sub" or c == "]" else ")" if c == ")" else None
+            term = c == "}" and top != "sub"
+            last.append(c)
+            continue
+        op = next((o for o in PERL_OPS if code.startswith(o, i)), None)
+        if op is None:
+            return c
+        i += len(op)
+        if op in ("++", "--"):
+            continue  # postfix after a term, prefix before one: what is expected next is unchanged
+        term = True
+        last.append(op)
+    return None
+
+
+PERL_SWITCH = re.compile(r"-[nlpaw0-9eE]+|-F\S*|--")
+PERL_CODE = re.compile(r"-[nlpaw0-9]*[eE]")
+
+
+def perl_acts(words):
+    """How perl -e code can act on the files it is handed, as acts() phrases it, or None where it is
+    seen unable to (claude-config#2691). words are the command's words after perl. Every word after
+    a switch ending in e or E is code, the second -e of `perl -e '...' -e '...'` as much as the first;
+    any other switch beyond those that only read lines (a module by -M or -m, an in place edit by -i,
+    -x, -d) counts as acting, as does an argument perl's <> would open as a command or for writing.
+    The code, and a -F pattern, which perl compiles into the program as split's, act unless every
+    token in them is on the safe list (perl_unsafe). A write counts even where acts() is asked only
+    whether the code can run what it is handed (runs_only): the reading does not tell the two apart,
+    so it refuses more rather than less."""
+    codes, is_code = [], False
+    for w in words:
+        if is_code:
+            codes.append(w)
+        elif w.startswith("-F"):
+            # A pattern in //, '' or "" is used as written; any other is put in single quotes.
+            pattern = w[2:]
+            hit = perl_unsafe(pattern) if pattern[:1] in ("/", "'", '"') else perl_code_block(pattern)
+            if hit:
+                return f"is run with the -F pattern {pattern!r}, which uses {hit!r}, off the list of perl read as only reading"
+        elif w.startswith("-") and not PERL_SWITCH.fullmatch(w):
+            return f"is run with perl's {w} switch, which can load a module or write a file"
+        elif re.search(r"^\s*[|<>+&]|\|\s*$", w):
+            return f"is handed {w!r}, which perl's <> opens as a command or for writing"
+        is_code = not is_code and bool(PERL_CODE.fullmatch(w))
+    for code in codes:
+        hit = perl_unsafe(code)
+        if hit:
+            return (f"uses {hit!r}, which is not on the list of perl the gate reads as only reading, matching "
+                    "and printing, so it may run a command, load code or write a file")
+    return None
+
+
 SHELL_EXT = (".sh", ".bash", ".zsh", ".command")
 SHELL_BANG = re.compile(r"^#!\s*\S*?(?:/env\s+(?:-\S+\s+)*)?/?(?:\S*/)?(ba|z|da|k)?sh\b")
 MAX_FILE = 2 * 1024 * 1024
@@ -4270,9 +4634,29 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 reason = self.imports(label, None, here, code, lang) if lang else None
                 if reason:
                     return reason
-                # The files after it are the code's arguments, judged as a script's are: a data file
-                # is read when the code can act on it, and any other file is read as code (#2439).
-                return self.every_file([words[0]] + after, d, depth, False, lang, inline=(label, code, here))
+                # The files after it are the code's arguments, never a script the program runs: each is
+                # read as a script only where the code can run what it is handed, and its own text
+                # judged as a data file's (#2439, claude-config#2691). perl -e code is read for what it
+                # can do (perl_acts) rather than taken to act.
+                given = (label, code, here)
+                # node runs the LAST -e or -p it is given (measured 2026-11-13), and only the first is
+                # read here, so where another code option follows, the files keep the reading they had
+                # (any code shaped file read as code). perl_acts reads every -e; Python, and a shell
+                # given -c, take a second -c as an argument (bash and zsh measured 2026-11-13). A code
+                # option glued to its code (`--eval=...`) counts too: node runs it in place of the -e
+                # before it (measured 2026-11-13, #2886 review).
+                fam = self.family(name)
+                code_words, letters, _ = OPTIONS.get(fam, (set(), "", VALUED))
+                held = fam in ("py", "perl", "shell") or not any(
+                    w.split("=", 1)[0] in code_words or (letters and re.fullmatch(rf"-[A-Za-z]{{1,4}}[{letters}]", w))
+                    for w in after)
+                if fam == "perl":
+                    # The option holding the code; a word that is not one (a redirection moved the
+                    # count) is kept as an unknown switch, so the code is taken to act.
+                    opt = words[1 + len(before)] if len(words) > 1 + len(before) else ""
+                    perl_words = before + [opt if PERL_CODE.fullmatch(opt) else "-?", code] + after
+                    given += (lambda runs_only=False: perl_acts(perl_words),)
+                return self.every_file([words[0]] + after, d, depth, False, lang, inline=given, held_code=held)
             module = self.py_module(words) if lang == "py" else None
             if module:
                 return self.py_module_run(words[0], name, module, d, depth, here)
@@ -4284,7 +4668,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 at = words.index("-")
                 reason = (self.every_file(words[:at], d, depth, False, lang)
                           or self.every_file([words[0]] + words[at + 1:], d, depth, False, lang,
-                                             inline=(f"the code {name} reads from its input", fed, here)))
+                                             inline=(f"the code {name} reads from its input", fed, here),
+                                             held_code=True))
                 if reason:
                     return reason
             elif "-m" not in words[1:]:
@@ -4519,16 +4904,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         file, by its own text: what the package does with a file is not something the gate can tell,
         and before #2865 none of them was read at all.
 
-        inline, (its label, its text, the directory it runs in), is code the program was given by an
-        option (python3 -c), whose arguments the words are (claude-config#2439). It is judged as the
-        first file read as code is, so a data file it is handed is read when it can act on it.
-        held_code says that code is certainly the program (a module python3 -m runs,
-        claude-config#2827), so a code shaped file after it is handed to it, as after a held script
+        inline, (its label, its text, the directory it runs in[, how it is read for what it can do]),
+        is code the program was given by an option (python3 -c), whose arguments the words are
+        (claude-config#2439). It is judged as the first file read as code is, so a data file it is
+        handed is read when it can act on it. The fourth member, where given, replaces acts_inline
+        (perl_acts for perl -e, claude-config#2691). held_code says that code is certainly the program
+        (a module python3 -m runs, claude-config#2827; code given by -c or -e, or read from a heredoc,
+        claude-config#2691), so a code shaped file after it is handed to it, as after a held script
         word, and read as code only where the code can run what it is handed."""
         code, data = [], []
         if inline:
-            label, text, here = inline
-            code.append((label, lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
+            # A fourth member, where given, is how that code is read for what it can do (perl_acts).
+            label, text, here = inline[:3]
+            code.append((label, inline[3] if len(inline) > 3 else
+                         lambda runs_only=False: self.acts_inline(text, here, lang, runs_only=runs_only)))
         if actor:
             code.append((actor[0], lambda runs_only=False: actor[1]))
         # The word the program runs as its script (operands), and whether it is certain to name no
@@ -4546,6 +4935,17 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # it, as after a held script word (a module python3 -m runs, claude-config#2827).
         after_held = bool(inline and held_code)
         prog = os.path.basename(words[0])
+        # Except the value of an option after the code: node, ruby and perl go on reading their own
+        # options past -e, so `node -e '...' -r ./x.js` loads x.js (measured with node, 2026-11-13,
+        # claude-config#2691). Which options load a file is not known in full, so the value of any
+        # option there, separate or glued with =, is read as code unless the option is one known to
+        # load nothing (LOADS_NOTHING, #2886 review). Python stops at -c and -m, and a shell at -c's
+        # code, and every word after the code is its argument; any family not measured is taken to
+        # read options there.
+        fam = self.family(prog)
+        options_read = bool(inline) and fam not in ("py", "shell")
+        safe = LOADS_NOTHING.get(fam)
+        last = None
         # The word after a separate output redirection (`> out.txt`, `2>> log`, `&> out`, `>| out`)
         # is opened for writing by the shell before the program starts and is never handed to it, so
         # it is not read (claude-config#2771): reading it refused rerunning a suite whose earlier output
@@ -4553,6 +4953,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # every argument, and a file written here and run by a later command is judged there.
         written = False
         for w in words[1:]:
+            # The option this word may be the value of: the word before it, where that is an option
+            # whose value is not glued on (`--input-type=module ./x.js` hands x.js to the code).
+            option = last if last and last[:1] in "-+" and not self.glued_option(last, any_option=True) else None
+            last = w
             if written:
                 written = False
                 continue
@@ -4563,16 +4967,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 written = bool(OUTPUT_REDIRECT.match(w))
                 continue
             if w.startswith("-") or w.startswith("+"):
-                w = self.glued_value(w)  # `--require=./x.js` is read as `--require ./x.js` (#2887)
-                if w is None:
+                # `--require=./x.js` is read as `--require ./x.js` (#2887), its option name included, so
+                # a module node loads by it after the code is code, not the code's data (#2886 review).
+                # After the code any option glued to a value is split, known or not, whether or not the
+                # code is held (a second -e after it).
+                glued = self.glued_option(w, any_option=options_read and bool(code))
+                if glued is None:
                     continue
+                option, w = glued
             path = self.resolve(w, d)
             if not self.is_file(path):
                 continue
-            if (code or past) and (actor or self.data_shaped(path)):
+            # An option's value after the code is read as code whatever it is named: node runs
+            # `-r ./x.txt` as CommonJS, so the data shortcut below must not take it (#2886 review).
+            loaded = options_read and option is not None and not (safe and safe.fullmatch(option))
+            if (code or past) and not loaded and (actor or self.data_shaped(path)):
                 data.append((w, path, False))
                 continue
-            if after_held and code:
+            if after_held and code and not loaded:
                 data.append((w, path, True))
                 continue
             # A file read as code in the place of a script word that names no file is named by that
@@ -5419,12 +5831,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return "\n".join(bodies), True
 
     @staticmethod
-    def glued_value(w):
-        """The value of a long option that takes one, glued on with = (`--require=./x.js`), which the
-        program reads as the same option with its value as the next word; None for any other word
-        (claude-config#2887: node --require= and --import= loaded a module unread where -r did not)."""
+    def glued_option(w, any_option=False):
+        """(the option, its value) for a long option that takes one, glued on with = (`--require=./x.js`),
+        which the program reads as the same option with its value as the next word; None for any other
+        word (claude-config#2887: node --require= and --import= loaded a module unread where -r did not).
+        any_option takes any option word glued to a value, known or not (after inline code, #2886)."""
         name, eq, value = w.partition("=")
-        return value if eq and value and name.startswith("--") and name in VALUED else None
+        if not (eq and value):
+            return None
+        known = name.startswith("--") and name in VALUED
+        return (name, value) if known or (any_option and name[:1] in "-+" and len(name) > 1) else None
+
+    @classmethod
+    def glued_value(cls, w):
+        """The value glued_option finds, or None."""
+        glued = cls.glued_option(w)
+        return glued[1] if glued else None
 
     @staticmethod
     def family(name):

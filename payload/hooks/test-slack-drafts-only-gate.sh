@@ -1800,19 +1800,23 @@ done
 for acts in "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json" \
   "python3 -I -c 'import json, sys, urllib.request; urllib.request.urlopen(json.load(open(sys.argv[1]))[\"url\"])' $T/ds/msg.json" \
   "node -e 'fetch(require(process.argv[1]).url, { method: \"POST\" })' $T/ds/msg.json" \
-  "perl -ne 'print' $T/ds/session.jsonl"; do
+  "ruby -ne 'print' $T/ds/session.jsonl" "perl -ne 'system(\$_)' $T/ds/session.jsonl"; do
   run_bash "$acts"
   refused "inline code that can act on a data file naming the endpoint, or that the gate cannot judge: ${acts%% *}"
 done
 run_bash "python3 -c 'import sys, subprocess; subprocess.run([\"bash\", sys.argv[1]])' $T/ds/msg.json"
 says "that refusal names the data file" "msg.json"
-# A file with no extension handed to inline code may be a script, as for a script file, so it is read
-# as code; and a data file still read as the program's script is refused as before.
+# (perl -ne 'print' was the unread language here until #2691, which reads perl -e code; ruby is still
+# not read.) A file with no extension handed to inline code is that code's argument, never a script
+# the program runs (#2691), so it is read as code only where the code can run what it is handed; and a
+# data file still read as the program's script is refused as before.
 printf '%s\n' "curl -d text=hi https://slack.com/api/chat.postMessage" > "$T/ds/noext"
-for runs in "python3 -c 'print(1)' $T/ds/noext" "python3 -I $T/ds/issues.json -c 1"; do
+for runs in "python3 -c 'import runpy, sys; runpy.run_path(sys.argv[1])' $T/ds/noext" "python3 -I $T/ds/issues.json -c 1"; do
   run_bash "$runs"
-  refused "a file whose role cannot be told is still read as code: $runs"
+  refused "a file inline code can run, or that is the script, is still read as code: $runs"
 done
+run_bash "python3 -c 'print(1)' $T/ds/noext"
+allowed "a file with no extension handed to inline code that cannot run it passes (#2691)"
 
 echo "slack drafts only: a file copied and run in the same command is judged by its source (claude-config#2525)"
 
@@ -2373,6 +2377,135 @@ says "a writer parsed from the command line is still named" "is written earlier 
 run_df "printf '%s' 'echo hi' > made.sh; cp made.sh copy.sh; sh made.sh"
 allowed "a file made by printf from the command line and then run still passes"
 
+echo "slack drafts only: a file handed to code given inline is its argument, and a perl one-liner that only reads passes (claude-config#2691)"
+
+# 2026-11-10, the #2662 builder: `perl -ne 'print "$ARGV:$.: $_" if /[^\x00-\x7F]/; close ARGV if
+# eof' <a test script> <rules.ts> ...`, checking changed files for non ASCII text, was refused as
+# "the script rules.test.ts posts to Slack". The code perl runs is the -e string; the files after it
+# are what that code reads, never a script perl runs. The same held for python3 -c, node -e and the
+# code python3 reads from a heredoc. A file handed to inline code is now judged as one handed to a
+# script on disk is (#2797): read as a script only where the code can run what it is handed, and
+# its own text judged as a data file's. perl -e code is read for what it can do; a one-liner using
+# only perl's own reading, matching and printing is seen unable to act. The names are made up;
+# nothing here is run.
+mkdir -p "$T/rf"
+printf '%s\n' '#!/bin/sh' 'curl -X POST https://slack.com/api/chat.postMessage -d text=hi' > "$T/rf/post.sh"
+printf '%s\n' 'fetch("https://slack.com/api/chat.postMessage", { method: "POST" });' > "$T/rf/post.js"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen("https://slack.com/api/chat.postMessage", data=b"x")' > "$T/rf/post.py"
+printf '%s\n' 'the webhook lives at hooks.slack.com/services' > "$T/rf/notes.md"
+printf '%s\n' 'import sys' 'print(open(sys.argv[1]).read().count("slack"))' > "$T/rf/count.py"
+printf '%s\n' 'import { readFileSync } from "node:fs";' 'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/rf/count.ts"
+run_rf() { run_raw "$(payload Bash "$(bash_input "$1")" "$T/rf")"; }
+GATE_PY="$DIR/slack_drafts_only_gate.py"
+
+PERL_ASCII="perl -ne 'print \"\$ARGV:\$.: \$_\" if /[^\\x00-\\x7F]/; close ARGV if eof'"
+for reads in "$PERL_ASCII post.sh post.js post.py" "$PERL_ASCII $GATE_PY" \
+  "perl -lne 'print if /slack/' notes.md post.sh" "perl -ne 'print if 1 .. 3' post.py" \
+  "perl -nle 'print length' post.sh | sort -n" "perl -ne 'print \"\$ARGV: \$_\" if eof(ARGV)' notes.md post.sh" \
+  "perl -ne 'print; close(ARGV) if eof' post.sh" "perl -ne 'print \"\$\$: \$_\"' notes.md post.sh" \
+  "perl -ne 'print unless /^\\s*\$/' post.sh" "perl -ne 'print if /x/ && \$y' post.sh" "perl -ne 'print if /foo.*\$/' post.sh" \
+  "perl -lane 'print \$F[1]' post.sh" "perl -pe 's/a/b/' post.sh" "perl -pe 'tr/a-z/A-Z/' post.sh" \
+  "perl -ne 'print if 3 * 2 > 5 and \$. % 2' post.sh" "perl -nle 'print scalar reverse \$_' post.sh" \
+  "perl -lane '\$c{\$F[0]}++; END { print \"\$_ \$c{\$_}\" for sort keys %c }' post.sh" \
+  "perl -ne 'print join(q(,), (split /,/)[0, 2]), \"\\n\"' post.sh" "perl -F, -lane 'print \$F[0]' post.sh" \
+  "perl -ne 'BEGIN { \$/ = undef } print length' post.sh" "perl -n -e 'print if /slack/' -e 'print 1' notes.md post.js" \
+  "python3 -c 'import sys; print(len(open(sys.argv[1]).read()))' post.sh" \
+  "python3 -c 'import sys; print(open(sys.argv[1]).read().count(\"slack\"))' post.py $GATE_PY" \
+  "node -e 'console.log(require(\"fs\").readFileSync(process.argv[1], \"utf8\").length)' post.js" \
+  "$(printf '%s\n' "python3 - post.sh post.py <<'EOF'" 'import sys' 'for f in sys.argv[1:]: print(len(open(f).read()))' 'EOF')"; do
+  run_rf "$reads"
+  allowed "inline code that only reads the files it is handed passes: ${reads%%$'\n'*}"
+done
+# A plain word after an option known to load nothing is still the code's argument, not its value
+# (measured with node 22, 2026-11-13: each file below lands in process.argv and is never loaded), and
+# so is a word after --, which ends node's options, or after an option whose value is glued on. A
+# shell given -c reads no options after the code at all (bash, sh, zsh, dash and ksh each put -x, --
+# and --rcfile in $0 and $1, measured 2026-11-13), so every word there is the code's argument.
+for reads in "node -e 'console.log(1)' --no-warnings ./post.js" "node -e 'read' --no-warnings notes.md" \
+  "node -e 'console.log(1)' -- ./post.js" "node -e 'console.log(1)' --max-old-space-size=4096 ./post.js" \
+  "node -e 'console.log(1)' --input-type=commonjs --no-deprecation ./post.js" \
+  "perl -ne 'print' -l post.sh" "python3 -c 'print(1)' -X ./post.py" \
+  "bash -c 'wc -l \"\$@\"' -- ./post.sh" "bash -c 'wc -l \"\$@\"' _ -n ./post.sh" "sh -c 'wc -l \"\$1\"' -x ./post.sh" \
+  "bash -c 'wc -l \"\$@\"' _ -c ./post.sh"; do
+  run_rf "$reads"
+  allowed "a file after an option that loads nothing is the code's argument: $reads"
+done
+
+# Reads that passed before, kept passing: a program that only reads, and a script on disk that does.
+for reads in "cat post.sh" "grep -n slack post.sh" "head -5 post.sh" "sed -n 1,2p post.sh" "rg -n slack post.sh" \
+  "wc -l post.sh" "awk '/slack/' post.sh" "python3 count.py post.sh post.py" "bun count.ts $GATE_PY" \
+  "node count.ts post.js"; do
+  run_rf "$reads"
+  allowed "a program or script that only reads a file naming an endpoint passes: $reads"
+done
+
+# Still refused: the file run, sourced or fed to a shell as its script; inline code that runs, loads,
+# evaluates or writes what it is handed; a file node loads by an option after the code (node parses
+# its options there too, measured with node 2026-11-13); perl code using anything beyond its own
+# reading and printing, or a switch that loads a module or edits in place; code in a language the gate
+# does not read (ruby); and a reader's output written to a script that the same command runs.
+for runs in "bash post.sh" "sh post.sh" "./post.sh" "source post.sh" ". post.sh" "bash < post.sh" \
+  "python3 post.py" "perl post.sh" "node post.js" \
+  "node -e 'console.log(1)' -r ./post.js" "node -e 'console.log(1)' --require ./post.js" \
+  "node -e 'require(process.argv[1])' ./post.js" "node -e 'console.log(1)' -e 'require(process.argv[1])' ./post.js" \
+  "node -e 'console.log(1)' -p 'require(process.argv[1])' ./post.js" \
+  "python3 -c 'import sys; exec(open(sys.argv[1]).read())' post.py" \
+  "python3 -c 'import runpy, sys; runpy.run_path(sys.argv[1])' post.py" \
+  "$(printf '%s\n' "python3 - post.py <<'EOF'" 'import sys' 'exec(open(sys.argv[1]).read())' 'EOF')" \
+  "perl -ne 'system(\$_)' post.sh" "perl -ne 'print \`cat \$ARGV\`' post.sh" "perl -ne 'print qx(sh \$ARGV)' post.sh" \
+  "perl -pe 's/(.*)/\$1/ee' post.sh" "perl -ne 'eval' post.sh" "perl -ne 'do \$ARGV' post.py" \
+  "perl -ne 'require \$ARGV' post.py" "perl -ne 'open(my \$f, \"|-\", \"sh\"); print \$f \$_' post.sh" \
+  "perl -ne 'exec \"sh\", \$ARGV' post.sh" "perl -MLWP::Simple -ne 'print' post.sh" \
+  "perl -mPOSIX -ne 'print' notes.md" "perl -i -pe 's/a/b/' post.sh" "perl -i.bak -ne 'print' notes.md" \
+  "perl -ne 'CORE::system(\$_)' post.sh" "perl -ne '@ARGV = (\"post.sh\"); print' notes.md" \
+  "perl -ne 'BEGIN { \$ARGV[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'print' notes.md 'sh post.sh |'" "perl -ne 'print' notes.md '| sh post.sh'" \
+  "perl -ne 'print' -e 'system(\"sh post.sh\")' notes.md" "perl -e 'print 1' -e 'system(\$_)' post.sh" \
+  "perl -F'/(?{system(qw(sh))})/' -ane 'print' notes.md" \
+  "perl -ne 'BEGIN { (\$x, @ARGV) = (1, \"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { @{ARGV} = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \${ARGV}[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \${ARGV[0]} = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { *ARGV = [\"sh post.sh |\"] } print' notes.md" \
+  "perl -ne 'BEGIN { @ ARGV = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$ ARGV [0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { @{\"AR\".\"GV\"} = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; @\$x = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$\$x[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$ \$x[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->[0] = \"sh post.sh |\" } print' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; \$x->@* = (\"sh post.sh |\") } print' notes.md" \
+  "perl -ne 'BEGIN { \$ARGV[0] =~ s/^/sh post.sh | /; @ARGV[1,2] = (1, 2) } print' notes.md" \
+  "perl -ne 'BEGIN { @x = (q(ARGV)); \$x[0][0] = q(sh post.sh |) } print' notes.md" \
+  "perl -ne 'BEGIN { \$y = q(AR).q(GV); local *{\$y} = [q(sh post.sh |)] } print' notes.md" \
+  "perl -ne 'print \"@{[ system(q(sh post.sh)) ]}\"' notes.md" \
+  "perl -ne 'print if /(?{ system(q(sh post.sh)) })/' notes.md" \
+  "perl -ne 'print if m{(??{ system(q(sh post.sh)) })}' notes.md" \
+  "perl -ne 'sysopen(my \$f, q(x), 1)' notes.md" "perl -ne 'print STDOUT readpipe(q(sh post.sh))' notes.md" \
+  "perl -ne 'print <<\"E\"' notes.md" "perl -ne 'print -e q(post.sh)' notes.md" \
+  "perl -ne 'BEGIN { \$x = \"AR\".\"GV\"; *\$x = [\"sh post.sh |\"] } print' notes.md" \
+  "ruby -ne 'print' post.sh" \
+  "perl -ne 'print' post.sh > run.sh && bash run.sh" \
+  "python3 -c 'import sys; print(open(sys.argv[1]).read())' post.sh > run.sh; sh run.sh" \
+  "cat post.sh > run.sh && bash run.sh"; do
+  run_rf "$runs"
+  refused "a file run, or handed to code that can act on it, is still refused: ${runs%%$'\n'*}"
+done
+run_rf "perl -ne 'system(\$_)' post.sh"
+says "a perl one-liner refused names what it can do" "the code given to perl"
+# perl -e code is read by a safe list (#2886 review, twelve rounds of spellings): what is not on it
+# refuses, and the refusal names it.
+run_rf "perl -ne 'frobnicate(\$_)' notes.md"
+says "a perl word off the safe list is named in the refusal" "frobnicate"
+# node runs the last code option, the glued long form included (`--eval=...` ran in place of the -e
+# before it, measured with node 2026-11-13), so a file after it keeps the reading it had before #2691
+# (lessons review of #2886: only the bare -e, --eval, -p, --print words counted as a second option).
+for runs in "node -e 'console.log(1)' --eval='require(process.argv[1])' ./post.js" \
+  "node -e 'console.log(1)' --print='require(process.argv[1])' ./post.js"; do
+  run_rf "$runs"
+  refused "a file after a second, glued code option is read as code: $runs"
+done
+
 echo "slack drafts only: an output redirect target is written, not read (claude-config#2771)"
 
 # every_file read the word after a separate > as a file handed to the script, so rerunning a suite
@@ -2432,6 +2565,9 @@ cp "$T/si/x.js" "$T/si/x.mjs"
 printf '%s\n' 'console.log(1);' > "$T/si/clean.js"
 cp "$T/si/clean.js" "$T/si/clean.mjs"
 cp "$T/si/clean.js" "$T/si/app.js"
+# node runs a module of any extension as CommonJS, so a loader's value may be shaped like data.
+for ext in txt md json; do cp "$T/si/x.js" "$T/si/x.$ext"; cp "$T/si/clean.js" "$T/si/clean.$ext"; done
+cp "$T/si/x.js" "$T/si/xnoext"; cp "$T/si/clean.js" "$T/si/cleannoext"
 printf '%s\n' 'url = "https://slack.com/api/chat.postMessage"' 'data = "text=hi"' > "$T/si/slack.curlrc"
 printf '%s\n' 'url = "https://example.com/"' > "$T/si/clean.curlrc"
 si_pair() { # si_pair <command with FILE> <file that posts> <clean file> <what the refusal says>
@@ -2458,6 +2594,37 @@ for shape in "node --require=./FILE -e 1" "node --require=./FILE app.js" "node -
 done
 for shape in "node --import=./FILE -e 1" "node --import=./FILE app.js"; do
   si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
+# node reads its own options after the code too (#2691), so a module it loads by an option glued with
+# = after -e is code, as the same option with its value as the next word is (lessons review of #2886:
+# `node -e 1 --require=./x.js` read x.js as the code's data and passed).
+for shape in "node -e 1 --require=./FILE" "node -e 'console.log(1)' --require=./FILE" "node -e 1 -r ./FILE" \
+  "node -e 1 --require ./FILE"; do
+  si_pair "$shape" x.js clean.js "x.js"
+done
+for shape in "node -e 1 --import=./FILE" "node -e 1 --loader=./FILE" "node -e 1 --import ./FILE"; do
+  si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
+# Which options load a file is not a list the gate can keep complete: three rounds of review each found
+# one it missed (--require=, --loader=, then --experimental-loader), and each missed one was a pass. So
+# after the code, the value of ANY option, separate or glued with =, is read as code, unless the option
+# is one known to load nothing; an option nobody has named yet is read as code too (#2886 review).
+for shape in "node -e 1 --experimental-loader ./FILE" "node -e 1 --experimental-loader=./FILE" \
+  "node -e 1 --some-future-flag=./FILE" "node -e 1 --some-future-flag ./FILE" "node -e 1 -x ./FILE" \
+  "node -e 1 -e 2 --some-future-flag=./FILE" "node -e 1 -e 2 --some-future-flag ./FILE"; do
+  si_pair "$shape" x.mjs clean.mjs "x.mjs"
+done
+# A loaded file is read as code whatever it is named: node runs `-r ./x.txt` as CommonJS, so the
+# shortcut that hands a data shaped file to the code as its data must not take an option's value
+# (#2886 review, round 4: `node -e 1 -r ./payload.txt` read the module as data and passed).
+for ext in txt md json; do
+  for shape in "node -e 1 -r ./FILE" "node -e 1 --require ./FILE" "node -e 1 --require=./FILE" \
+    "node -e 1 --some-future-flag ./FILE"; do
+    si_pair "$shape" "x.$ext" "clean.$ext" "x.$ext"
+  done
+done
+for shape in "node -e 1 -r ./FILE" "node -e 1 --require=./FILE"; do
+  si_pair "$shape" xnoext cleannoext "xnoext"
 done
 # What a command prints that cannot be read, piped into a shell or an interpreter as its code, is
 # refused: the gate cannot see what it runs.
@@ -3271,9 +3438,14 @@ done
 # The second reading (#2678) of code fed in a heredoc, its argument written through a variable, finds
 # the heredoc by the command as the script writes it, so the file after - is judged as the same
 # command with a literal path is, and not against the whole script taken as the code's input.
-ur_plain heredoc-arg 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'print(len(open(sys.argv[1]).read()))' 'EOF'
+# The heredoc's code runs the file it is handed, so the file is read as code (#2691: code that only
+# reads its argument passes, below).
+ur_plain heredoc-arg 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'exec(open(sys.argv[1]).read())' 'EOF'
 run_bash "bash $UR/posts/tests/heredoc-arg.sh"
 says "a heredoc's argument written through a variable is judged as the literal path is (#2683)" "act.py posts to Slack"
+ur_plain heredoc-read 'python3 - "$ROOT/tools/lib/act.py" <<'"'EOF'" 'import sys' 'print(len(open(sys.argv[1]).read()))' 'EOF'
+run_bash "bash $UR/posts/tests/heredoc-read.sh"
+allowed "and code that only reads that argument passes, as with a literal path (#2691)"
 for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign read-ifs read-chained read-case; do
   run_ur refuse "bash $UR/quiet/tests/$shape.sh"
   says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \

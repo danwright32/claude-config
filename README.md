@@ -3669,6 +3669,29 @@ refused. Cost: the clear line takes about 0.21 s
 in the gate (median of 10 at load average about 15), since `issue-spool.sh` is read for what it does
 with its arguments as well as for what it names.
 
+Code given inline (`python3 -c`, `node -e`, `perl -ne`, the code `python3 -` reads from a heredoc) is
+certainly the program, so every file after it is that code's argument in the same way (#2691), except
+a file named as the value of any option after the code, separate or glued with `=` and whatever its
+extension (`node -e '...' -r ./x.js` loads `x.js`, and `-r ./x.txt` runs `x.txt`; node, ruby and perl go
+on reading their options there; Python and a shell given `-c` do not, and a family whose parsing there
+is not measured is taken to). Which options load a file is not a list the gate can
+keep complete, so such a file is read as code unless the option is one known to load nothing
+(`LOADS_NOTHING`: `--`, `--no-warnings` and a few more for node, perl's reading switches). And `perl -e` code is judged
+by a safe list (`perl_unsafe`, #2886): a one-liner whose switches only read lines (`-n`, `-p`, `-l`, `-a`, `-0`,
+`-F`, `-w`), every token of whose code, in every `-e` it is given, is one the list knows, and that is
+handed no argument perl's `<>` would open as a command or for writing (`'sh x |'`), is seen unable to act.
+The list knows the words in `PERL_SAFE_WORDS` (`print`, `split`, `join`, `sort`, `chomp`, `if`, `BEGIN`, `END`
+and the like), a variable named directly (`$x`, `$F[1]`, `$h{$k}`, `$.`), numbers, strings, `m//`, `s///` without
+`e`, `tr///`, `<>`, `<STDIN>` and operators. `ARGV` is known only as the scalar `$ARGV` or the filehandle given to
+`close`, `eof` or `<ARGV>`, and a variable reached through a block, another scalar, an arrow or a second subscript
+is not known, since each computes a name at run time and can set `@ARGV`, the names `<>` opens. Anything else
+acts, and the refusal names it, so `perl -ne 'frobnicate($_)'` is refused saying `frobnicate`. The list is
+there because twelve rounds of review of #2886 each found another spelling missing from a list of what acts
+(`@{ARGV}`, `${ARGV[0]}`, `*ARGV = [...]`, `@ ARGV`, `$x->@*` and more): a missing safe word refuses a
+harmless one-liner, where a missing dangerous one let a command through. So `perl -ne 'print if /x/'`
+over files that name an endpoint passes, and the same one-liner with `system`, `-MLWP::Simple` or `-i`
+is refused. Code in another language the gate does not read (`ruby -e`) is still taken to act.
+
 A file a command runs through a variable or a substitution is read where its value is certain
 (#2678). `python3 "$ROOT/tools/post.py"`, in a script whose first lines set `ROOT` from `BASH_SOURCE`,
 named no file as written, so a script that posts was never read there, where the same file run by a
