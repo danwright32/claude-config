@@ -196,6 +196,15 @@ TRANSCRIPT="$WORK/not-there.jsonl"
 run Agent general-purpose worktree "" "build the thing"
 if [ "$RC" -eq 0 ]; then check "a transcript that is not there is let through" ok; else check "a transcript that is not there is let through" "exit $RC"; fi
 notices "and says so" "BUILDER MODEL GATE DID NOT RUN"
+# The scan has a deadline inside the hook timeout, since a hook killed by its timeout refuses the
+# call under onFailure block. A deadline of zero stands in for a transcript too slow to read.
+TRANSCRIPT="$ORCH"
+BUILDER_MODEL_GATE_SCAN_SECONDS=0 run Agent general-purpose worktree "" "build the thing"
+if [ "$RC" -eq 0 ]; then check "a transcript scan past its deadline lets the call through" ok; else check "a transcript scan past its deadline lets the call through" "exit $RC"; fi
+notices "and says how long it took" "longer than 0 seconds"
+BUILDER_MODEL_GATE_SCAN_SECONDS=nonsense run Agent general-purpose worktree "" "build the thing"
+refused "a deadline that is not a number falls back to the default, and the gate still judges"
+TRANSCRIPT="$WORK/not-there.jsonl"
 run Agent general-purpose worktree opus "build the thing"
 allowed "a builder naming a model never needs the transcript"
 run Agent Explore "" "" "find where it lives"

@@ -80,9 +80,20 @@ if not isinstance(tp, str) or not tp:
     print("unknown\tthe hook payload names no transcript_path"); sys.exit()
 own = d.get("tool_use_id")
 earlier = 0
+# A deadline well inside the hook timeout of 10 seconds, after which the call is let through saying
+# so: a hook killed by its timeout is a failure, and onFailure block would refuse the call. The
+# 101 MB transcript of the busiest session measured took 0.08 seconds to scan.
+import os, time
+try:
+    budget = float(os.environ.get("BUILDER_MODEL_GATE_SCAN_SECONDS") or 5)
+except ValueError:
+    budget = 5.0
+stop_at = time.monotonic() + budget
 try:
     with open(tp, "rb") as f:
         for raw in f:
+            if time.monotonic() > stop_at:
+                print("unknown\treading the session transcript took longer than %g seconds" % budget); sys.exit()
             if b"\"Agent\"" not in raw:
                 continue
             try:
