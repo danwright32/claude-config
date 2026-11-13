@@ -3795,6 +3795,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return out
         rows, blocks = struct
         sealed = None
+        shopt = []  # whether s runs shopt, read once for all its locals: one search of claude-sync is 10 ms
         for idx, ((d, t), p) in enumerate(items):
             if rows[idx] is None:
                 continue
@@ -3820,7 +3821,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 words = words[1:]
             if any(w[:1] in ("-", "+") for w in words):
                 continue  # -a, -i, -n and the rest change what the value is
-            here, rest, end = {}, s[:p["start"]] + s[p["end"]:], blocks[stack[-1]]["close"]
+            here, end = {}, blocks[stack[-1]]["close"]
             for w in words:
                 m = re.match(r"([A-Za-z_]\w*)=", w)
                 if not m:
@@ -3832,8 +3833,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 here[n] = v
                 last, spans = idx, [(p["start"], p["end"])]
                 if v is not None:
+                    if not shopt:
+                        shopt.append(bool(re.search(r"\bshopt\b", s)))
                     v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
-                                                           script, here)
+                                                           script, here, shopt[0])
                 is_local = False
                 if toks[:1] == [("word", "local")]:
                     # A local is this function's own: what another function binds by that name
@@ -3873,7 +3876,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 out.setdefault(n, []).append((items[last][1]["end"], b, v))
         return out
 
-    def sh_local_settles(self, s, items, rows, blocks, stack, idx, end, n, v, known, script, here):
+    def sh_local_settles(self, s, items, rows, blocks, stack, idx, end, n, v, known, script, here, shopt):
         """(n's value, the index of the last command that settled it, the spans of s of every command
         that set it) after the NAME=value or local at items[idx], following the commands straight after it in
         the same block that only choose n's value: `[ test ] || n=value` (or &&) on a test the walk
@@ -3882,7 +3885,6 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         `case "${BASH_SOURCE[0]}" in */*) here=... ;; esac`). Where one cannot be followed, n's value
         is None (claude-config#2538)."""
         spans, last, k = [(items[idx][1]["start"], items[idx][1]["end"])], idx, idx + 1
-        shopt = bool(re.search(r"\bshopt\b", s))
         at = items[idx][1]["start"]
 
         def look(x):
