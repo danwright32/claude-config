@@ -574,6 +574,10 @@ printf 'X = 1\n' > "$TMPROOT/fault/lib/fault_probe.py"
 env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$P" -c 'import sys; sys.path.insert(0, sys.argv[1]); import fault_probe' "$TMPROOT/fault/lib"
 on="$(find "$TMPROOT/fault/lib" -name '*.pyc' | wc -l | tr -d ' ')"
 rm -rf "$TMPROOT/fault/lib/__pycache__"
+# Written again right before the second import: the Slack gate reads the module as this text only
+# where every program run since the write is one it knows writes nothing, and the first import, a
+# python run handed the folder, is not. So the suite stays allowed run on its own (#2854, #2876).
+printf 'X = 1\n' > "$TMPROOT/fault/lib/fault_probe.py"
 env -u PYTHONDONTWRITEBYTECODE -u PYTHONPYCACHEPREFIX "$P" -c 'import sys; sys.dont_write_bytecode = True; sys.path.insert(0, sys.argv[1]); import fault_probe' "$TMPROOT/fault/lib"
 off="$(find "$TMPROOT/fault/lib" -name '*.pyc' | wc -l | tr -d ' ')"
 [ "$on" -ge 1 ] && [ "$off" = 0 ] \

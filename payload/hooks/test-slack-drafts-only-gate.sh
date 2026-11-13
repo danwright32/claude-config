@@ -4285,6 +4285,9 @@ f2854() { # f2854 <name> <the write> [<between the write and the import>]: a scr
     [ -n "${3:-}" ] && printf '%s\n' "$3"
     printf '%s\n' "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fault_probe' \"\$TMPROOT/fault/lib\""
     printf '%s\n' 'on="$(find "$TMPROOT/fault/lib" -name "*.pyc" | wc -l)"' 'rm -rf "$TMPROOT/fault/lib/__pycache__"'
+    # Written again before the second import, as the suite does: the first import is a python run
+    # handed the folder, which the gate cannot see writes nothing there (raw_unchanged).
+    [ "$1" = twice ] || printf '%s\n' "printf 'X = 1\\n' > \"\$TMPROOT/fault/lib/fault_probe.py\""
     printf '%s\n' "python3 -c 'import sys; sys.dont_write_bytecode = True; sys.path.insert(0, sys.argv[1]); import fault_probe' \"\${TMPROOT}/fault/lib\""
   } > "$F/$1.sh"
 }
@@ -4304,8 +4307,32 @@ f2854 append "printf 'X = 1\\n' >> \"\$TMPROOT/fault/lib/fault_probe.py\""
 f2854 copied "$WRITE2854" 'cp /tmp/elsewhere.py "$TMPROOT/fault/lib/fault_probe.py"'
 f2854 unpacked "$WRITE2854" 'tar -xf /tmp/elsewhere.tar -C "$TMPROOT/fault/lib"'
 f2854 sourced "$WRITE2854" 'source "$TMPROOT/env.sh"'
+# Lessons review of PR #2876: a program the gate does not know to write nothing, handed the module's
+# folder, a parent of it or a word it cannot work out, may rewrite the module between the write and
+# the import, so the import is no longer read as the text written (raw_unchanged).
+f2854 gen-folder "$WRITE2854" 'gen_tool "$TMPROOT/fault/lib"'
+f2854 gen-slash "$WRITE2854" 'gen_tool "$TMPROOT/fault/lib/"'
+f2854 gen-parent "$WRITE2854" 'gen_tool "$TMPROOT/fault"'
+f2854 gen-root "$WRITE2854" 'gen_tool --out="$TMPROOT"'
+f2854 gen-var "$WRITE2854" 'OUT="$TMPROOT/fault/lib"
+gen_tool "$OUT"'
+f2854 gen-subst "$WRITE2854" 'made="$(gen_tool "$TMPROOT/fault/lib")"'
+f2854 gen-unknown "$WRITE2854" 'gen_tool "$(pick_dir)"'
+f2854 gen-literal "$WRITE2854" 'gen_tool ../somewhere'
+f2854 gen-cond "$WRITE2854" 'if gen_tool "$TMPROOT/fault/lib"; then :; fi'
+f2854 gen-wrapped "$WRITE2854" 'timeout 5 gen_tool "$TMPROOT/fault/lib"'
+f2854 gen-piped "$WRITE2854" 'ls "$TMPROOT" | gen_tool'
+f2854 prog-var "$WRITE2854" '"$TOOL" "$TMPROOT/fault/lib"'
+f2854 removed "$WRITE2854" 'rm -rf "$TMPROOT/fault"'
+f2854 redirect-var "$WRITE2854" 'echo "X = 2" > "$TMPROOT/fault/lib/$NAME"'
+f2854 twice "$WRITE2854"
+# A program known to write nothing (NON_WRITERS) handed the folder, and a redirect to a file that is
+# not the module, leave it as written.
+f2854 ls-folder "$WRITE2854" 'ls -la "$TMPROOT/fault/lib"'
+f2854 wc-file "$WRITE2854" 'n="$(wc -l < "$TMPROOT/fault/lib/notes.txt")"'
+f2854 listing "$WRITE2854" 'ls "$TMPROOT/fault/lib" > "$TMPROOT/listing.txt"'
 run_f() { run_raw "$(payload Bash "$(bash_input "$1")" "$F")"; }
-for s in ok heredoc; do
+for s in ok heredoc ls-folder wc-file listing; do
   run_f "bash $s.sh"
   allowed "#2854 a module a script writes by a path it cannot work out, then imports from that folder, is read: $s"
 done
@@ -4317,6 +4344,11 @@ read_refused "#2854 that module's own imports are followed: one placed beside it
 for s in curl unreadable rebound cond chained append copied unpacked sourced; do
   run_f "bash $s.sh"
   read_refused "#2854 a module whose text the script does not certainly write, by those words, is still refused: $s"
+done
+for s in gen-folder gen-slash gen-parent gen-root gen-var gen-subst gen-unknown gen-literal gen-cond gen-wrapped \
+    gen-piped prog-var removed redirect-var twice; do
+  run_f "bash $s.sh"
+  read_refused "#2876 review: a module a program not known to write nothing may change after the write is not read as written: $s"
 done
 # The suite itself now runs alone, from the checkout this suite is in (lib/checkout-root.sh, #1663).
 REPO2854="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"

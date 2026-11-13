@@ -865,7 +865,7 @@ def load_reader():
 WrittenPaths = load_lib("written_paths", "written-paths.py").make(SH_PARAM, SH_UNKNOWN_DIR)
 # The files any other program writes by name (claude-config#2772): note_program and its readers.
 _program_writes = load_lib("program_writes", "program-writes.py")
-ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS, COPIERS)
+ProgramWrites = _program_writes.make(INTERPRETER, SHELLS, AWKS, SENDERS)
 # The files a runner or a compiler runs without the command naming them (claude-config#2844).
 _program_runs = load_lib("program_runs", "program-runs.py")
 

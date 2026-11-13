@@ -69,6 +69,11 @@ NON_WRITERS = frozenset({
     "for", "select", "case", "esac", "in", "while", "until", "if", "then", "elif", "else", "fi", "do",
     "done", "function", "{", "}", "!", "]]", "let", "read", "getopts", "alias", "builtin", "command",
     "exec", "eval", "trap", "ulimit", "umask", "shopt", "setopt"})
+# NON_WRITERS that can still change a module a script wrote before it imports it (raw_unchanged):
+# one that removes files, so Python finds the module somewhere else, and the shell's own words that
+# change directory, read a file as commands, run text given to them or run another program.
+RAW_CHANGERS = frozenset({"rm", "rmdir", "unlink", "cd", "pushd", "popd", "source", ".", "eval", "trap",
+                          "alias", "builtin", "command", "exec"})
 # Claude Code's mcp subcommands that change only its own settings (~/.claude.json, a project's
 # .mcp.json): the words they are handed are a server's name, command, arguments and environment, kept
 # as settings and never written to a file or run (#2865). `claude mcp add lr -- npx -y @scope/name@1`
@@ -215,14 +220,9 @@ def names_file(text, base):
     return bool(base) and re.search(r"(?<![\w.-])" + re.escape(base) + r"(?![\w-]|\.\w)", text) is not None
 
 
-def make(interpreter, shells, awks, senders, copiers=()):
+def make(interpreter, shells, awks, senders):
     """The base class for the gate's Judge. interpreter is its INTERPRETER pattern, shells its SHELLS,
-    awks its AWKS and senders its SENDERS, whose downloads it notes itself, and copiers its COPIERS."""
-    # The programs that write files they do not name whole (a copy into a folder, an unpack, a git
-    # tree write), by this file's and the gate's own tables: one run between a script's write of a
-    # module and its import of it may have replaced the module (raw_unchanged).
-    folder_writers = frozenset(copiers) | DIR_COPIERS | TARS | UNPACKERS | DECOMPRESSORS | SEDS | \
-        frozenset({"unzip", "git", "ln", "link"})
+    awks its AWKS and senders its SENDERS, whose downloads it notes itself."""
 
     class ProgramWrites:
         # ---- A module a script on disk writes by words it cannot work out (#2854) ---------------
@@ -295,15 +295,24 @@ def make(interpreter, shells, awks, senders, copiers=()):
 
         def raw_unchanged(self, want, start, end):
             """Whether nothing in the script between start and end can change what the words of want
-            name, or write that file: no variable they hold is bound again (sh_binds), no command binds
-            a name it does not spell out (sh_indirect), sources a file, evaluates text, calls one of
-            the script's own functions or changes directory, none names the module's file, and none
-            runs a program that writes files it does not name whole (folder_writers)."""
+            name, or write or remove that file: no variable they hold is bound again (sh_binds), no
+            command binds a name it does not spell out (sh_indirect), none names the module's file,
+            and every command runs a program known to write nothing (NON_WRITERS, by a name written
+            out) that is not one of the script's own functions and not in RAW_CHANGERS, with no
+            redirection writing a file that may be the module.
+
+            Any other program may write the module whatever it is handed, a folder or a parent of it,
+            a word the gate cannot work out, or a path whose variable's value is not known, so it is
+            never asked what its words name (lessons review of #2876: `gen_tool "$TMPROOT/fault/lib"`
+            between the write and the import had the import read as the earlier text). That holds
+            for a python run handed the folder, the first of two imports included: the gate does not
+            read inline code for whether it writes a file."""
             s = self.shell["text"]
             between = s[start:end]
             if any(self.sh_binds(n, between) for n in re.findall(r"\$([A-Za-z_]\w*)", want)):
                 return False
-            if os.path.basename(want) in between:
+            module = os.path.basename(want)
+            if module in between:
                 return False
             funcs = self.sh_funcs(s)
             for p in self.shell["raw_struct"]["parts"]:
@@ -312,10 +321,21 @@ def make(interpreter, shells, awks, senders, copiers=()):
                 text = s[p["start"]:p["end"]]
                 if self.sh_indirect(text):
                     return False
-                words = [os.path.basename(w) for w in self.words_of(self.rest_of(text)[0])]
-                if words[:1] and (words[0] in ("source", ".", "eval", "cd", "pushd", "popd") or words[0] in funcs):
-                    return False
-                if folder_writers.intersection(words):
+                args, redirs, odd = self.redirections(text)
+                if odd:
+                    return False  # a process substitution or the like, not worked out
+                for op, target in redirs:
+                    if ">" not in op or target is None or (op.endswith("&") and re.fullmatch(r"\d+|-", target)):
+                        continue  # a read, or one descriptor copied onto another
+                    path = raw_path(target) or literal_word(target)
+                    name = os.path.basename(path) if path else ""
+                    if not name or name == module or "$" in name:
+                        return False  # a file that may be the module
+                if not args:
+                    continue  # assignments alone: a substitution in them is a part of its own
+                prog = literal_word(args[0])
+                name = os.path.basename(prog) if prog else None
+                if name is None or name in funcs or name in RAW_CHANGERS or name not in NON_WRITERS:
                     return False
             return True
 
