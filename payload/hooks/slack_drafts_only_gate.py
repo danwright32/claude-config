@@ -3461,7 +3461,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
 
     def sh_test(self, head, d, var, script):
         """True or False for a test whose outcome is certain ([ or test comparing known words with =,
-        ==, != , -n, -z, or one word on its own), else None."""
+        ==, != , -n, -z, or one word on its own; -f, -e or -d on a known path, answered from the disk
+        as the gate reads the command, as every file it reads is; any of these after !), else None.
+        A file test is the claude-sync idiom of a path kept where its file is and replaced where it is
+        not (claude-config#2538); a relative path in a folder that is not certain has no answer."""
         toks = self.sh_tokens(head)
         if not toks or any(k == "op" for k, _ in toks):
             return None
@@ -3480,13 +3483,24 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if v is None or splits:
                 return None
             vals.append(v)
+        negate = len(vals) > 1 and vals[0] == "!"
+        if negate:
+            vals = vals[1:]
+        out = None
         if len(vals) == 3 and vals[1] in ("=", "==", "!="):
-            return (vals[0] == vals[2]) != (vals[1] == "!=")
-        if len(vals) == 2 and vals[0] in ("-n", "-z"):
-            return (vals[1] == "") == (vals[0] == "-z")
-        if len(vals) == 1:
-            return vals[0] != ""
-        return None
+            out = (vals[0] == vals[2]) != (vals[1] == "!=")
+        elif len(vals) == 2 and vals[0] in ("-n", "-z"):
+            out = (vals[1] == "") == (vals[0] == "-z")
+        elif len(vals) == 2 and vals[0] in ("-f", "-e", "-d") and vals[1]:
+            path = os.path.expanduser(vals[1])
+            if not os.path.isabs(path) and (d == SH_UNKNOWN_DIR or not d):
+                return None
+            path = self.resolve(path, d)
+            isfile, isdir = self.is_file(path), os.path.isdir(path) or os.path.realpath(path) in self.made_dirs
+            out = isfile if vals[0] == "-f" else isdir if vals[0] == "-d" else (isfile or isdir)
+        elif len(vals) == 1:
+            out = vals[0] != ""
+        return None if out is None else out != negate
 
     def sh_case(self, s, items, k, var, setv, spans, where, script, shopt, expect):
         """Follow the case at items[k] for sh_walk: True where it was followed, its esac the command
