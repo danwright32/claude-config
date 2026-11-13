@@ -3219,6 +3219,41 @@ for shape in suite-read suite-printfv sealed-read localsrc-rebinds declf-assign 
   says "switched on: a name the script binds again is not certain, so its file is refused unread ($shape)" \
     "a path the gate cannot work out"
 done
+# Measured again on 2026-11-12 with the switch on (#2683, second pass): more shapes where the path is
+# set plainly and the gate lost it. A comment holding an apostrophe inside an array assignment
+# (tools/check-mod-shared-parts.sh's PARTS) was read as opening a quote, so no compound after it
+# paired and the walk stopped at the first one. A plain NAME=value inside an if branch or a function
+# body (bug-bash/target-guard.sh's egress) was never given a value there at all, as the walk steps
+# over a compound and only a `local` had one.
+ur_plain arraynote 'PARTS=(' '  "a|b"' "  # the note's apostrophe" '  "c|d"' ')' 'for p in "${PARTS[@]}"; do' '  echo "$p"' 'done' \
+  "echo \"and the mod's last word\"" 'SUITE="$ROOT/tools/lib/act.sh"' 'bash "$SUITE"'
+ur_plain branch 'if [ -n "$1" ]; then' '  egress="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/lib/act.sh"' \
+  '  grep -q x /dev/null || echo none' '  bash "$egress"' 'fi'
+ur_plain funcplain 'run() {' '  helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../tools/lib/act.sh"' \
+  '  grep -q x /dev/null || echo none' '  bash "$helper"' '}' 'run'
+# The same shapes where the value really is not certain, which stay refused unread: a use in another
+# branch than the one that set it (else, elif), a name bound again, a file sourced that binds it, a
+# use past the function that set it, and an eval of what the script was handed.
+ur_plain branch-else 'if [ -n "$1" ]; then' '  egress="$ROOT/tools/lib/act.sh"' 'else' '  bash "$egress"' 'fi'
+ur_plain elsebranch 'if [ -n "$1" ]; then' '  egress="$ROOT/tools/lib/act.sh"' '  echo set' 'elif [ -n "$2" ]; then' \
+  '  bash "$egress"' 'fi'
+ur_plain branch-read 'if [ -n "$1" ]; then' '  egress="$ROOT/tools/lib/act.sh"' '  read -r egress < /dev/null' \
+  '  bash "$egress"' 'fi'
+ur_plain funcplain-src 'run() {' '  ensure="$ROOT/tools/lib/act.sh"' '  . "$ROOT/tools/lib/rebinds.sh"' '  bash "$ensure"' '}' 'run'
+ur_plain funcplain-after 'run() {' '  helper="$ROOT/tools/lib/act.sh"' '}' 'run' 'bash "$helper"'
+ur_plain arraynote-eval 'PARTS=(' '  "a|b"' "  # the note's apostrophe" ')' 'for p in "${PARTS[@]}"; do' '  echo "$p"' 'done' \
+  "echo \"and the mod's last word\"" 'SUITE="$ROOT/tools/lib/act.sh"' 'eval "$1"' 'bash "$SUITE"'
+for shape in arraynote branch funcplain; do
+  run_ur refuse "bash $UR/posts/tests/$shape.sh"
+  says "switched on: a path set plainly is read, and a file that posts refused as the post ($shape, #2683)" \
+    "REFUSED: this command posts to Slack"
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  allowed "switched on: the same path to a file that does not post is let through ($shape, #2683)"
+done
+for shape in branch-else elsebranch branch-read funcplain-src funcplain-after arraynote-eval; do
+  run_ur refuse "bash $UR/quiet/tests/$shape.sh"
+  says "switched on: a value that is not certain stays refused unread ($shape, #2683)" "a path the gate cannot work out"
+done
 
 # ---- #2569: the patterns sh_binds builds are compiled once per name ----
 # The merge helper's own script has a few thousand names, and sh_binds built three patterns per name

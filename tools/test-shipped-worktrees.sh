@@ -134,6 +134,15 @@ R="$WORK/primary"
 git clone -q "$BARE" "$R" 2>/dev/null
 git -C "$R" config user.email t@t.t
 git -C "$R" config user.name t
+# No git process outlives the step that started it (#1919). Every commit and fetch otherwise starts
+# `git maintenance run --auto --detach`, and every push starts one in the origin through
+# receive-pack: a daemon nobody waits for, standing in the worktree it was started from, still
+# running when the report reads the worktree list and who is standing in each worktree. The report
+# is a snapshot of both, so the fixture must be still when it is taken. Set on the primary, so the
+# worktrees, which share its config, inherit it, and before the first commit, so none is ever made.
+git -C "$R" config maintenance.auto false
+git -C "$BARE" config maintenance.auto false
+git -C "$BARE" config receive.autogc false
 printf '.claude/\n' > "$R/.gitignore"
 printf 'one\n' > "$R/f.txt"
 git_q "$R" add f.txt .gitignore; git_q "$R" commit -qm "the first commit"
@@ -172,7 +181,13 @@ printf 'unsaved\n' > "$WT/dirty/notes.txt"
 # 4. MERGED BUT WITH A COMMIT NOBODY PUSHED, made after the pull request merged.
 tip="$(agent unpushed fix/unpushed)"; merged_at fix/unpushed 14 "$tip"
 printf 'more\n' >> "$WT/unpushed/unpushed.txt"
-git_q "$WT/unpushed" commit -qam "a commit that exists only here"
+# Traced, to prove the setting above holds: a fixture commit starts no maintenance of its own.
+GIT_TRACE2_EVENT="$WORK/commit.trace" git_q "$WT/unpushed" commit -qam "a commit that exists only here"
+if [ ! -s "$WORK/commit.trace" ]; then
+  bad "the traced fixture commit wrote no trace, so whether it started maintenance is unmeasured"
+elif grep -q '"argv":\["git","maintenance"' "$WORK/commit.trace"; then
+  bad "a fixture commit started git maintenance, a process nobody waits for, so the report below reads a fixture still changing"
+else ok; fi
 
 # 5. NOT MERGED: its pull request is still open. This is every running agent's worktree.
 tip="$(agent open fix/open)"
@@ -212,17 +227,24 @@ git_q "$R" worktree add -q --detach "$WT/detached" main
 echo "shipped-worktrees: report mode judges every worktree and changes nothing"
 
 # 11. VANISHED: git still records it, but its directory was deleted by hand. Built last, right
-# before the report reads it, and waited on rather than assumed: it is the one fixture whose whole
-# point is a record git is allowed to drop, so the longer it sits between being made and being read
-# the more a loaded Mac can do to it in between (#1919: one run's report had no row for it, and
-# only this fixture can be lost that way). Nothing may still be standing in it when it is removed,
-# and git must be listing it, with its directory gone, before anything is judged.
+# before the report reads it, and waited on rather than assumed (#1919: one run's report had no row
+# for it). The report reads who is standing in every worktree, so before it does, nobody but the
+# squatter may be standing in any of them: the vanished one is removed only then, and git must be
+# listing it, with its directory gone, before anything is judged. A stray process here is one of
+# the fixture's own git commands outliving its step, which the maintenance setting above forbids.
 agent vanished fix/vanished >/dev/null
-nobody_in_vanished(){
-  local cwds; cwds="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
-  ! grep -Eq "^n$WT/vanished(/|\$)" <<< "$cwds"
+strays=""
+nobody_but_squatter(){
+  # Read in full, then matched: a pipe under pipefail kills lsof mid write (L183).
+  local cwds; cwds="$(lsof -a -d cwd -Fpcn 2>/dev/null || true)"
+  strays="$(awk -v root="$WT/" -v sq="$SQUATTER" '
+    /^p/ { pid = substr($0, 2) } /^c/ { cmd = substr($0, 2) }
+    /^n/ && pid != sq && substr($0, 2, length(root)) == root { printf "pid %s (%s) in %s; ", pid, cmd, substr($0, 2) }
+  ' <<< "$cwds")"
+  [ -z "$strays" ]
 }
-hang_wait nobody_in_vanished || bad "a process was still standing in the vanished worktree, so it could not be removed"
+if hang_wait nobody_but_squatter; then ok
+else bad "a process other than the squatter was still standing in a fixture worktree, so the report would judge a fixture still changing: $strays"; fi
 rm -rf "$WT/vanished"
 vanished_listed(){
   # Read in full, then matched: grep -q on a pipe under pipefail kills git mid write (L183).
@@ -235,13 +257,18 @@ if hang_wait vanished_listed; then ok; else bad "git does not list the vanished 
 # step worked, and git itself lists all eleven agent worktrees, the vanished one included. On
 # 2026-10-29, under a load average of 97, one run's report had no row for the vanished worktree and
 # kept only the bare count (#1919). Which side lost it is not known: that run kept no stderr, no
-# git listing and not the tool's own count. Ruled out since, each by a run or by the source: git
-# pruning the record (its 3 month expiry, and a probe of commit's detached maintenance); load alone
-# (24 runs side by side at loads of 28 to 62, all whole); and bash 3.2 dropping the end of a write a
-# child's exit interrupts (L1035), which needs a child of the WRITER running, and the tool starts
-# none it does not wait for, while a child of this capturing shell exiting mid capture lost nothing
-# in 165 runs. So when it happens again this check, and the diagnosis after the count below, name
-# the side that lost it rather than a count.
+# git listing and not the tool's own count, and its kept output aged out of the flaky output folder
+# before it was read again. Ruled out since, each by a run or by the source: git pruning the record
+# (its 3 month expiry; the default maintenance runs only gc, which a fixture this small never
+# needs); load alone (24 runs side by side at loads of 28 to 62, and 6 more at 149 during four full
+# runs, all whole); a failed fork in the tool (bash 3.2 then exits the tool with 128 and prints no
+# rows at all, not all but one); and bash 3.2 dropping the end of a write a child's exit interrupts
+# (L1035), which needs a child of the WRITER running, and the tool starts none it does not wait for,
+# while a child of this capturing shell exiting mid capture lost nothing in 165 runs. The count
+# reads two snapshots, git's list and who stands in each worktree, and the one actor that could
+# change either while it is taken, git's detached maintenance, is now off and checked above. So
+# when it happens again this check, and the diagnosis after the count below, name the side that
+# lost it rather than a count.
 fixture_built "the report"
 listed="$(git -C "$R" worktree list --porcelain 2>&1)"
 n_listed="$(grep -c "^worktree $WT/" <<< "$listed" || true)"

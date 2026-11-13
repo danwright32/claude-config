@@ -252,6 +252,26 @@ print(len(spans) == len(hd))' "$SW" 2>&1 | paste -sd'^' -)"
   && check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" ok \
   || check "#2722 spans names each body's opener, its command, and its text, one for each body heredocs is given" "got [$spans_read]"
 
+# ---- a comment inside an array's ( ) ends at the line break (#2683) ----
+# An apostrophe in such a comment opened a quote that ran on past the array. The comment ends where
+# the line does: a newline, or in the flattened form with no newline, the "; " standing for one.
+array_read="$(python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sw", sys.argv[1])
+sw = importlib.util.module_from_spec(spec); spec.loader.exec_module(sw)
+for c in sys.argv[2:]:
+    print("|".join(t.strip() for d, t in sw.commands(c, "/s")))' "$SW" \
+  "$(printf 'a=(\n  "x"\n  # the note'"'"'s\n  "y"\n)\necho after')" \
+  "a=(\"x\" # the note's; \"y\"); echo after" 2>&1)"
+want='a=(
+  "x"
+  # the note'"'"'s
+  "y"
+)|echo after
+a=("x" # the note'"'"'s; "y")|echo after'
+[ "$array_read" = "$want" ] && check "#2683 a comment in an array ends at the line break, newline or flattened" ok \
+  || check "#2683 a comment in an array ends at the line break, newline or flattened" "got [$array_read]"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
