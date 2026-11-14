@@ -64,6 +64,8 @@ for path, src in files.items():
                     found.append("%s:%d imports %s, which judgement-cache.py has not classified" % (short, node.lineno, a.name))
                 elif kind == "proxied" and (id(node) not in top or a.asname):
                     found.append("%s:%d imports %s inside a function or under another name, around install()" % (short, node.lineno, a.name))
+                elif a.name in jc.MODULE_USES and a.asname:
+                    found.append("%s:%d imports %s under another name, around the names it may use" % (short, node.lineno, a.name))
         elif isinstance(node, ast.ImportFrom):
             if jc.MODULES.get(node.module) != "pure":
                 found.append("%s:%d imports names from %s, which binds them around install()" % (short, node.lineno, node.module))
@@ -90,7 +92,7 @@ out="$(python3 -B "$T/scan.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "every import in the gate and its libraries is classified and reaches the disk only through the stand ins, and every variable read by name is keyed" "$out"
 # Seen to fail (L1): each way around the stand ins, put in a copy of the gate, is found.
 for probe in "from os.path import isfile" "import pathlib" "import os as real_os" "import glob" \
-             "return __builtins__" "return os.environ.get('NEW_GATE_SETTING')" "return shutil.which('git')"; do
+             "return __builtins__" "return os.environ.get('NEW_GATE_SETTING')" "return shutil.which('git')" "import shutil as sh"; do
   out="$(python3 -B "$T/scan.py" "$DIR/slack_drafts_only_gate.py" "$probe" 2>&1)"
   if [ "$out" != ok ] && [ -n "$out" ]; then check "the scan finds: $probe" ok
   else check "the scan finds: $probe" "it said: $out"; fi
