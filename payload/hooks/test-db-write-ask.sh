@@ -1057,14 +1057,14 @@ scripted() {  # scripted <template>: the template with its folders filled in
   local t="${1//@NOTES@/$NOTES}"
   printf '%s' "${t//@PROJ@/$PROJ}"
 }
-SHAPE="$(cat <<'CMD'
+# Read by read, not a substitution, which bash 3.2 refuses around a heredoc holding a quote (#1690).
+IFS= read -r -d '' SHAPE <<'CMD' || true
 D="@NOTES@"; for day in 2026-11-12 2026-11-13; do cat > "$D/q_$day.sql" <<EOF
 SELECT count(*) FROM runs WHERE created_at >= ('$day 00:00'::timestamp) AND created_at < ('$day 00:00'::timestamp + interval '1 day');
 EOF
 done
 cd @PROJ@ && for day in 2026-11-12 2026-11-13; do timeout 150 supabase db query --linked --output-format json -f "$D/q_$day.sql" 2>&1 | grep -v "^A new" | python3 -c "import json,sys; rows=json.load(sys.stdin); print(len(rows))"; done
 CMD
-)"
 both "the loop that writes each day's select from a heredoc and runs it is approved" allow none "$(apply_payload "$(scripted "$SHAPE")" "$APPLY/elsewhere" s1 "$NONE_T")"
 both "one heredoc with a quoted marker, then its query" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/one.sql <<\'SQL\'\nselect id, note from runs where note = \'$x\';\nSQL\nsupabase db query --linked -f @NOTES@/one.sql')" "$PROJ" s1 "$NONE_T")"
 UPDATE_LOOP="${SHAPE/SELECT count(\*) FROM runs WHERE/UPDATE runs SET note = 1 WHERE}"
