@@ -1089,6 +1089,31 @@ both "a heredoc write to a file no query reads is asked about" none ask "$(apply
 both "a heredoc write to a file not named .sql is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fourteen.txt <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fourteen.txt')" "$PROJ" s1 "$NONE_T")"
 both "python reaching a module through an allowed one is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fifteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fifteen.sql | python3 -c "import statistics; statistics.sys.modules"')" "$PROJ" s1 "$NONE_T")"
 both "python taking a module from an allowed one by import is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/sixteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/sixteen.sql | python3 -c "from json import codecs; print(codecs)"')" "$PROJ" s1 "$NONE_T")"
+# python3 -c puts the folder it runs in first on the import path, so a module file there runs in
+# place of the standard one the program imports, directly or through another (#2969). Read where the
+# step will run: after a cd, or where the command starts. With -I that folder is never on the path.
+SHADOW="$APPLY/shadow"; mkdir -p "$SHADOW" "$APPLY/deep" "$APPLY/plainfolder"
+printf 'import os\n' > "$SHADOW/json.py"
+printf 'import os\n' > "$APPLY/deep/fractions.py"
+printf 'notes\n' > "$APPLY/plainfolder/notes.txt"
+PY_STEP='| python3 -c "import json,sys; print(len(json.load(sys.stdin)))"'
+both "python run beside a json.py of its own is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twenty.sql <<EOF\nselect 1;\nEOF\n'"cd $SHADOW && supabase db query --linked -f @NOTES@/twenty.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+both "and where the command starts beside one, with no cd (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentyone.sql <<EOF\nselect 1;\nEOF\n'"supabase db query --linked -f @NOTES@/twentyone.sql $PY_STEP")" "$SHADOW" s1 "$NONE_T")"
+both "and beside a module only an allowed one imports, fractions under statistics (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentytwo.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/deep && supabase db query --linked -f @NOTES@/twentytwo.sql | python3 -c \"import statistics,sys; print(statistics.mean([1]))\"")" "$PROJ" s1 "$NONE_T")"
+both "python after a cd this check cannot follow is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentythree.sql <<EOF\nselect 1;\nEOF\n'"cd - && supabase db query --linked -f @NOTES@/twentythree.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+both "(control) python run with -I beside a json.py is approved, the folder never on its path (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfour.sql <<EOF\nselect 1;\nEOF\n'"cd $SHADOW && supabase db query --linked -f @NOTES@/twentyfour.sql | python3 -I -c \"import json,sys; print(len(json.load(sys.stdin)))\"")" "$PROJ" s1 "$NONE_T")"
+both "(control) python run in a folder holding no module is approved (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfive.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/plainfolder && supabase db query --linked -f @NOTES@/twentyfive.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+# The shell's cd .. is logical: after cd through a link it goes to the link's parent, never the
+# parent of where the link points (the lessons review of 1029c9f).
+mkdir -p "$APPLY/logical" "$APPLY/plainfolder/sub"
+printf 'import os\n' > "$APPLY/logical/json.py"
+ln -sfn "$APPLY/plainfolder/sub" "$APPLY/logical/hop"
+both "python after cd through a link and back up, beside a json.py, is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentyseven.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/logical/hop && cd .. && supabase db query --linked -f @NOTES@/twentyseven.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+# PYTHONPATH puts its folders ahead of the standard library too; the one here holds no module, so
+# the hooks' own python is unchanged by it, and only the rule can make the step ask.
+export PYTHONPATH="$APPLY/plainfolder"
+both "python run while PYTHONPATH is set is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentysix.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/plainfolder && supabase db query --linked -f @NOTES@/twentysix.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+unset PYTHONPATH
 both "python calling type on a stream is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/seventeen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/seventeen.sql | python3 -c "import sys; type(sys.stdin.buffer.raw)"')" "$PROJ" s1 "$NONE_T")"
 both "a proxy setting assigned by the command is asked about" none ask "$(apply_payload "$(scripted $'HTTPS_PROXY=http://127.0.0.1:9; cat > @NOTES@/eighteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/eighteen.sql')" "$PROJ" s1 "$NONE_T")"
 both "a query with its statement in its words, piped, is still left to the usual check" none none "$(apply_payload 'supabase db query --linked "select 1" 2>&1 | head -5' "$PROJ" s1 "$NONE_T")"

@@ -61,7 +61,7 @@ TIMEOUT_S = 1800
 STOP_GRACE_S = 5  # how long each signal is given to empty the group
 POLL_S = 0.05
 LOG_TAIL = 15
-FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$")
+FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png\Z")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # ASCII digits only: str.isdigit() is also true for a superscript, which int() then refuses.
 WHOLE_RE = re.compile(r"[0-9]{1,9}")
