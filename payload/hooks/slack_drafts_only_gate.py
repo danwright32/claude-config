@@ -1251,10 +1251,11 @@ SH_REDIRECT = re.compile(r"\d*(?:<<-|<<<|<<|<>|>>|>&|<&|&>>|&>|>\||<|>)")
 # certain, as inside a function, which runs wherever it is called from, or after a cd that can fail.
 # It holds a $, so nothing takes it for a real path.
 SH_UNKNOWN_DIR = "${unknown directory}"
-# An assignment, as raw_words steps past it: plain, an append, or an array element.
 # A here string that is one file's text, the file named by a plain word (stdin_of, claude-config#2887).
 HERE_FILE = re.compile(r"""("?)\$\((?:cat\s+|<\s*)([^\s$`()"'\\|;&<>*?\[\]{}~]+)\s*\)\1""")
-SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")# The builtins that cannot change a shell variable, the only commands a `local` value is taken across
+# An assignment, as raw_words steps past it: plain, an append, or an array element.
+SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+# The builtins that cannot change a shell variable, the only commands a `local` value is taken across
 # (claude-config#2465): any other command can be a function, and a function can set its caller's
 # local. printf is one only without -v.
 SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf", "return", "exit", "cd", "pwd"})
@@ -2556,9 +2557,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return None
 
     def unfollow(self, why):
-        """Record why that an import could not be followed, for main() to say the check could not be
-        made, keyed on this cause rather than on the words it is put in; and give it back. Every one
-        is kept, so a later cause the verdict does not carry cannot hide the one it does (#2922)."""
+        """Record why something could not be followed or read (an import, a path that cannot be worked
+        out, a file written earlier whose text cannot be read), for main() to say the check could not
+        be made, keyed on this cause rather than on the words it is put in; and give it back. Every
+        one is kept, so a later cause the verdict does not carry cannot hide the one it does (#2922)."""
         self.unfollowed.append(why)
         return why
 
@@ -5472,15 +5474,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 what = f"{w}, which {unread}"
             else:
                 try:
-                    # Not named text: the inline code's lambda above reads that name from this scope.
-                    held_text = self.content(path).decode("utf-8", "replace")
+                    # Read whole, comments and docstrings included: a script handed it as data can
+                    # read its text and post to an address it finds there (py_marker is only for
+                    # a file run as Python, lessons review at d05bf8b).
+                    hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
                 except OSError:
                     continue  # unreadable to us is unreadable to the script that would read it
-                hit = MARKER.search(held_text)
-                if hit and self.own_language(path) == "py":
-                    # Its comments and docstrings send nothing, nor do the patterns it searches with,
-                    # handed on or run (py_marker; #2913: the gate's own source handed to a helper).
-                    hit = py_marker(held_text)
                 if not hit:
                     continue
                 what = f"{w}, which names {hit.group(0)}"
@@ -6473,9 +6472,10 @@ def main():
         print("outoftime\n" + judge.out_of_time(e.doing))
         return
     if reason:
-        # A reason carrying an import the gate could not follow (recorded by modules() where it gives
-        # up, never matched by its wording) is not a post it found, so it says the check could not be
-        # made rather than claiming a post.
+        # A reason carrying anything the walk could not follow or read (each recorded by unfollow
+        # where it gives up: an import, a path it cannot work out, a file written earlier that it
+        # cannot read; never matched by its wording) is not a post it found, so it says the check
+        # could not be made rather than claiming a post (#2922).
         unfollowed = any(why in reason for why in judge.unfollowed)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
                 if unfollowed else "REFUSED: this command posts to Slack: ")

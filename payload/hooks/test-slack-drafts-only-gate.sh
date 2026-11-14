@@ -4932,10 +4932,13 @@ printf '%s\n' 'import subprocess, sys' 'print(len(open(sys.argv[1]).read()))' > 
 run_y() { run_raw "$(payload Bash "$(bash_input "$1")" "$Y")"; }
 run_y "python3 prose.py"
 allowed "#2913 a Python script naming an endpoint only in comments and docstrings passes"
+# Handed to a helper as data, the same file is still read whole: the helper can read its text and
+# post to an address it finds in a comment, so only a file run as Python leaves them out (lessons
+# review at d05bf8b). The gate's own source handed to such a helper stays refused for that reason.
 run_y "python3 helper.py prose.py"
-allowed "#2913 a helper that runs code, handed that file, passes"
+read_refused "#2913 a helper that runs code, handed that file as data, is still refused"
 run_y "python3 helper.py $DIR/slack_drafts_only_gate.py"
-allowed "#2913 a helper that runs code, handed the gate's own source, passes"
+read_refused "#2913 a helper that runs code, handed the gate's own source, is still refused"
 run_y "python3 names.py"
 read_refused "#2913 a Python script naming an endpoint in a string it can send is still refused"
 run_y "python3 helper.py names.py"
