@@ -6,7 +6,8 @@
 #   SYNC_NO_GIT  - skip all git operations
 set -uo pipefail
 
-# Both honour a value passed IN. A stopped-early run (#27) executes an extracted copy from a
+# SCRIPT_SELF honours a value passed IN, and SCRIPT one where no claude-sync is beside this file (see
+# below). A stopped-early run (#27) executes an extracted copy from a
 # temp directory, where deriving these from $0 points at a claude-sync that does not exist:
 # every run then silently did nothing while the suite reported the resulting failures as if
 # the code were broken.
@@ -1160,7 +1161,7 @@ fi
 # the lock and the deadline below, so the copy is the process that takes the lock rather than one
 # waiting on a parent that already holds it.
 #
-# SCRIPT and SCRIPT_SELF are handed over explicitly and still name the REAL files. Several checks
+# SCRIPT (exported once, above) and SCRIPT_SELF (handed over) still name the REAL files. Several checks
 # in this suite read their own source, and a temp copy is not what they mean to be reading. The
 # depth is passed through UNCHANGED for the same reason the SECTION_UNTIL path passes it through:
 # this is the same logical run re-executed, not a run nested inside another (#34).

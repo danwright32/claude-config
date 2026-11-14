@@ -1649,6 +1649,19 @@ printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/lib/x.sh"' '[ -f "$P.none" ] ||
 run_bash "bash $T/sv/posts/filenot.sh"
 allowed "#2538 a path replaced where its file test fails is read as the replacement, which is not there to post"
 printf '%s\n' '#!/bin/bash' 'cd "$1"' 'P=lib/x.sh' '[ -f "$P" ] || P=none/x.sh' '. "./$P"' > "$T/sv/posts/filerel.sh"
+# -e is true for any path that exists, a device too, so the path kept is the one read (lessons review).
+printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/lib/x.sh"' '[ -e /dev/null ] || P="$ROOT/none/x.sh"' '. "$P"' \
+  > "$T/sv/posts/edev.sh"
+run_bash "bash $T/sv/posts/edev.sh"
+says "#2538 -e on a device is true, so the file kept, which posts, is read and refused" "REFUSED: this command posts to Slack"
+# A quoted name handed to read or printf -v is still bound by it (lessons review): only text the
+# builtin itself sits inside quotes with is a fixture's words.
+for form in 'read -r "P" < /dev/null' 'printf -v "P" %s "$1"'; do
+  printf '%s\n' '#!/bin/bash' "$SV_ROOT" 'P="$ROOT/none/x.sh"' "$form" '. "$P"' > "$T/sv/posts/qbind.sh"
+  run_bash "bash $T/sv/posts/qbind.sh"
+  says "#2538 a quoted name handed to a builtin still binds it, so the path is not certain: $form" \
+    "a path the gate cannot work out"
+done
 run_bash "cd $T/sv/posts && bash filerel.sh /nonexistent-2538"
 refused "#2538 the sources refusal is on: a relative file test where the folder is not certain is not answered"
 says "#2538 and it is refused unread: a relative file test where the folder is not certain is not answered" "a path the gate cannot work out"
@@ -1705,7 +1718,7 @@ done
 # posts, each would be refused as the post; it is a path the gate cannot work out, so it is refused
 # unread, and the message says which. (A loop or a function in
 # the string also leaves $1 unknown where a positional is used inside or after it, and only there;
-# with the refusal off no fixture can tell that apart, as any loop that changes $1 really does
+# no fixture can tell a needless refusal there from a needed one, as any loop that changes $1 really does
 # source the other file. One placed after every use changes nothing, checked below.)
 P="$T/sv/posts/lib/x.sh" Q="$T/sv/quiet/lib/x.sh"
 # A sourced file shares the string's positionals, so one that sets them after an option changes $2.

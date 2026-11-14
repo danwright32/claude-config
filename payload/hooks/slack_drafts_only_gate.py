@@ -3425,7 +3425,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def sh_binds(name, text, allowed=0):
         """Whether text can bind name, beyond `allowed` NAME= forms that set it for one command alone:
         NAME=, NAME+=, NAME[i]=, ${NAME:=}, read, for, local, unset... NAME, or NAME inside (( )).
-        export and readonly with no = keep the value, so they do not count."""
+        export and readonly with no = keep the value, so they do not count. Text inside a quoted string
+        binds nothing (sh_quoted_word_at: a NAME= or a builtin a fixture writes), unless the string is
+        handed to export, local, declare, typeset or readonly, or is a trap's, and a quoted name handed
+        to a builtin outside the quotes (`read -r "NAME"`) still binds it (#2538)."""
         # Every form below spells the name out, so text without it binds nothing. That, and patterns
         # compiled once per name (sh_bind_patterns), are what keep a script with thousands of names
         # inside the gate's time: asked per name per compound command, this ran 344,464 times
@@ -3458,9 +3461,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 # A builtin binds only where it is the command (claude-config#2683): `check "and does
                 # not declare itself unrunnable" "it printed SUITE-NOT-RUN"` read as `declare ...
                 # SUITE`. A word in a sentence is not one; ${NAME:=} assigns wherever it expands.
+                # A name that is itself a quoted word handed to the builtin, `read -r "NAME"` or
+                # `printf -v "NAME"`, binds it (lessons review of #2538: they read as binding nothing, so
+                # a stale value was believed); text a fixture writes, the builtin in the quotes too or
+                # the name inside a longer quoted word (`local top='NAME=...'`), still binds nothing.
+                nm = m.end() - len(name)
+                handed = sh_quote_open(text, nm) == nm - 1 and text[nm - 2:nm - 1] in (" ", "\t") and \
+                    sh_quote_open(text, m.start() + 1) < 0
                 if not SH_VALUE_KEPT.match(m.group(0)) and (m.group(0).startswith("$")
                                                              or (sh_command_at(text, start, m.start()) and
-                                                                 not sh_quoted_word_at(text, m.end() - len(name)))):
+                                                                 (handed or not sh_quoted_word_at(text, nm)))):
                     return True
                 pos = m.start() + 1
             at = text.find(name, end + 1)
@@ -3587,7 +3597,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return None
             path = self.resolve(path, d)
             isfile, isdir = self.is_file(path), os.path.isdir(path) or os.path.realpath(path) in self.made_dirs
-            out = isfile if vals[0] == "-f" else isdir if vals[0] == "-d" else (isfile or isdir)
+            # -e is any path that exists, a device, fifo or socket too (lessons review of #2538:
+            # `[ -e /dev/null ] || P=other` read as replacing P, so the file really sourced went unread).
+            out = isfile if vals[0] == "-f" else isdir if vals[0] == "-d" else \
+                (isfile or isdir or os.path.exists(path))
         elif len(vals) == 1:
             out = vals[0] != ""
         return None if out is None else out != negate
@@ -4942,8 +4955,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if bad:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
-                # One built from what cannot be worked out is unread, and refused with the switch on
-                # (claude-config#2683).
+                # One built from what cannot be worked out is unread, and refused whatever the switch says
+                # (claude-config#2683, on for a sourced file since #2538).
                 if raw and not re.search(r"[$`]", raw):
                     return self.script(words[1], d, depth, True, sourced=True)
                 return self.unworked_path(text, 1, d, "sources")
@@ -5046,7 +5059,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return self.every_file([program] + after, d, depth, False, "py", inline=(label, code, here), held_code=True)
 
     def unworked_path(self, text, slot, d, verb):
-        """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
+        """For a sourced file always (#2538), and for a file run with the switch on (unworked_paths_refused,
+        claude-config#2683), the reason for a file run or
         sourced (verb) by a path the gate cannot work out: the word in slot of the command as written
         ("operand", the program's script by its option table; or a position), where it is built from a
         variable or a substitution whose value is not certain. That file is never read, so one that
