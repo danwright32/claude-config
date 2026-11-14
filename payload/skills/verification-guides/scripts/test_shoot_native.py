@@ -117,7 +117,9 @@ class Contract(Base):
     def test_a_bad_argument_is_a_usage_fault_naming_it(self):
         cases = [(5, "../escape.png", "picture name"), (4, "sepia", "light or dark"), (3, "wide", "width"),
                  (3, "100", "width"), (6, "-1", "row count"), (6, "many", "row count"),
-                 (1, "Target/$(id)", "test"), (2, "Invoice List", "frame")]
+                 (1, "Target/$(id)", "test"), (2, "Invoice List", "frame"),
+                 # isdigit() is true for a superscript that int() refuses: a usage fault, not a traceback.
+                 (3, "1440²", "width"), (6, "1²", "row count")]
         for i, value, word in cases:
             argv = list(ARGS)
             argv[i] = value
@@ -198,6 +200,8 @@ class Shooting(Base):
 
     def test_a_row_count_that_is_not_a_number_is_not_shot(self):
         self.assertEqual(self.run_mode("rows", "lots"), 1)
+        self.assertEqual(self.run_mode("rows", "13²"), 1)
+        self.assertFalse(os.path.exists(self.out()))
 
     def test_no_row_count_is_needed_when_none_is_asked(self):
         argv = list(ARGS)
