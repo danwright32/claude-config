@@ -765,8 +765,9 @@ export const register: Register = on => {
     return { decision: 'deny', reason: await refuse($, v, e.tool_use_id ?? '', e.tool, false) }
     // No replay here, unlike the tool.call hook above (#2948): a call this hook holds is first asked of
     // the checks beneath, so it has called next too, and replaying what they settled to could let a
-    // held call through. A failure beneath it is said as this guard's and the call stays held, as the
-    // design round guard's tool.check does.
+    // held call through. So any failure beneath it, a call it passed included, is said as this
+    // guard's and the call is held, as the design round guard's tool.check does. Telling the two
+    // apart needs a catch form tools/check-mod-shared-parts.sh does not yet accept.
   }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: hookFailed(next.error, message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's question, asked in Claude Code's own dialog. The guard words the question and its answers,
