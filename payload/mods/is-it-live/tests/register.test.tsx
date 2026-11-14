@@ -1785,6 +1785,31 @@ test('a draft the session saves after the hold lets the turn end, and the next m
   expect(w.slackCalls).toEqual([DRAFT])
 })
 
+// #2896, Dan, 2026-11-14: no skip. Since #2630 a draft is saved as it is shown, so there is no skip
+// left to record, and nothing but a saved draft settles the hold for a thread (or the session saying
+// its merges are unrelated, or Slack saying the thread is gone). Dan answering the old picker, Skip
+// this time on its own metadata, is a question like any other and leaves the next turn end held.
+test('an answer of Skip this time to a picker leaves the draft hold standing; only a saved draft settles it (#2896)', withKit, async ($, on) => {
+  world(on, { prView: merged(412) })
+  // The dialog, answered as Claude Code answers one whose answers came filled in.
+  on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: 'answered', text: 'answered' }) as never)
+  await start($)
+  await says($, THREAD)
+  await mergeAndCard($, 412)
+  const held = String((await turnEnd($)).block)
+  expect(held).toContain(SOURCE)
+  expect(held.toLowerCase()).not.toContain('skip')
+  const q = 'Save this reply as a Slack draft?'
+  await slack($, 'AskUserQuestion', {
+    questions: [{ question: q, header: 'Reply', multiSelect: false, options: [{ label: 'Save as a draft', description: 'Save it' }, { label: 'Skip this time', description: 'No reply' }] }],
+    answers: { [q]: 'Skip this time' },
+    metadata: { source: `is-it-live:${CH}:${TS}` },
+  })
+  expect((await turnEnd($)).block).toContain(SOURCE)
+  expect((await draft($)).isError).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
 // #2630: on 2026-11-10 the card showed the message for the person who asked in a thread, and the
 // draft was saved only after the turn end's picker. A thread a card asked a draft of its message for
 // is now held for that message, word for word, and never for a second reply or a question.
