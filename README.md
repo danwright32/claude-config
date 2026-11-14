@@ -3889,6 +3889,15 @@ What it approves:
   the same rule, or a `supabase db push --dry-run`. A pipe, a redirection, a second command or a flag
   it does not know leaves the call to the usual check. `db-write-ask.sh` reads the same command with
   the same library, so a call approved here is never asked about there.
+- Since #2952, a Bash command that writes its own `-f` files from heredocs and then runs them: literal
+  assignments, `for` loops over literal words, `cd`, `cat > <file> <<EOF` writes, `supabase db query`
+  runs (behind a `timeout` too), and `grep`, `head`, `tail`, `cut`, `wc`, `tr`, `jq` or a `python3 -c`
+  that only reads its input and prints, piped from a run. Each file's heredoc text is judged with
+  every loop value put in, and so is the file's present text, which a failed write would leave. A
+  file named by a variable the command never sets, a heredoc holding a substitution or an unset
+  variable, a file written by two heredocs or any other way, a background job, or any other command
+  leaves the call to the usual check, and `db-write-ask.sh` asks. The reading is
+  `scripted_queries()` in `lib/db-write-calls.py`.
 
 What it leaves to the usual check: any query that holds a semicolon other than one at the end, a
 comment, a character outside plain ASCII, any of the words insert, update, delete, merge, alter, drop,
