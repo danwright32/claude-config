@@ -212,6 +212,9 @@ ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _PREFIX = r"\s*(?:(?:" + "|".join(re.escape(w) for w in sorted(RESERVED)) + r")\s+)*"
 CASE_HEAD = re.compile(_PREFIX + r"case\s+\S.*?\s+in(?=[\s(]|$)", re.S)
 CASE_END = re.compile(_PREFIX + r"esac(?=[\s;&|()<>]|$)")
+# A function's header, `name()` or `function name`, before the { of its body: a ( after that brace
+# opens a subshell, the body of `f(){ (` ... `) }` (claude-config#2538).
+FUNC_HEADER = re.compile(r"\s*(?:function\s+[^\s(){}]+(?:\s*\(\s*\))?|[A-Za-z_][\w:.-]*\s*\(\s*\))(?=\s*\{)")
 # What ends a command, as (how it ended, its width). Two characters are looked up before one, so
 # && is never read as a backgrounding & and || never as a pipe.
 SEPARATORS = {"&&": ("&&", 2), "||": ("||", 2), "|&": ("|", 2), ";;": (";", 2),
@@ -422,6 +425,12 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             return
         text = s[f["start"]:end]
         head = CASE_HEAD.match(text)
+        if not head:
+            # A function whose body opens on the case, `num(){ case "$1" in ''|*[!0-9]*) ...`
+            # (tools/load-window.sh): read past its header, or the pattern's | was read as a pipe
+            # (claude-config#2538).
+            fh = FUNC_HEADER.match(text)
+            head = CASE_HEAD.match(text, fh.end()) if fh else None
         if head:
             f.setdefault("cases", []).append("pattern")
             f["pat"] = f["start"] + head.end()
@@ -677,7 +686,11 @@ def commands(s, cwd="", heredocs=None, parts=None, spans=None):
             i += 1
             continue
         if c == "(":
-            if all(w in RESERVED for w in s[f["start"]:i].split()):
+            before = s[f["start"]:i]
+            header = FUNC_HEADER.match(before)
+            if header:
+                before = before[header.end():]
+            if all(w in RESERVED for w in before.split()) and (not header or before.split()):
                 if nx == "(":
                     frames.append({"k": "arith", "depth": 0})
                     i += 2

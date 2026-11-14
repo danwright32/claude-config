@@ -256,10 +256,14 @@ CALLS="$TMP/calls"
 run_reader() { # <bin or ""> <definitions> <function> [args...]
   local bin="$1" defs="$2"; shift 2
   : > "$CALLS"
+  # A driver written beside the definitions sources them by their path written out, and is run as its
+  # own process: a path built at run time and sourced is one the Slack drafts gate cannot read, and it
+  # refuses it (#2538).
+  printf '. %q\n"$@"\n' "$defs" > "$defs.run"
   if [ -n "$bin" ]; then
-    STAT_CALLS="$CALLS" PATH="$bin:$PATH" bash -c '. "$1"; shift; "$@"' _ "$defs" "$@"
+    STAT_CALLS="$CALLS" PATH="$bin:$PATH" bash "$defs.run" "$@"
   else
-    bash -c '. "$1"; shift; "$@"' _ "$defs" "$@"
+    bash "$defs.run" "$@"
   fi
 }
 first_call() { head -1 "$CALLS" | cut -c1-2; }
@@ -282,7 +286,7 @@ for flavour in gnu bsd real; do
   done
 
   # claude-sync's batch reader: one stat for every path, and a name with a space in it kept whole.
-  got="$(printf '%s\n%s\n' "$TMP/files/plain" "$TMP/files/with space" | STAT_CALLS="$CALLS" PATH="${bin:+$bin:}$PATH" bash -c ': > "$1"; . "$2"; file_mtimes' _ "$CALLS" "$TMP/sync.sh")"
+  got="$(printf '%s\n%s\n' "$TMP/files/plain" "$TMP/files/with space" | run_reader "$bin" "$TMP/sync.sh" file_mtimes)"
   check "file_mtimes reads every mtime in one go under the $flavour stat" \
     "$(eq "$got" "$(printf '%s\t%s\n%s\t%s' "$WANT_PLAIN" "$TMP/files/plain" "$WANT_SPACE" "$TMP/files/with space")")"
   case "$flavour" in

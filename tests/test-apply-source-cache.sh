@@ -36,7 +36,8 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
-SCRIPT="${SCRIPT:-$ROOT/claude-sync}"
+# The claude-sync beside this suite, never one the environment names (claude-config#2538).
+SCRIPT="$ROOT/claude-sync"
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); echo "ok: $1"; }
 bad(){ fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,25p' | sed 's/^/    /'; return 0; }
@@ -44,26 +45,40 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-apply-source-cache.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 # ---- the shipped function, read out of claude-sync ----
-LIB="$WORK/lib.sh"
-{
-  grep -E '^TOKEN=' "$SCRIPT"
-  awk '/^LOCAL_FILE_GLOBS=/,/^unset _lg$/' "$SCRIPT"
-  awk '/^home_literal_swap\(\)/,/^}$/' "$SCRIPT"
-  grep -E '^detok\(\)' "$SCRIPT"
-  grep -E '^expanded_root_name\(\)' "$SCRIPT"
-  awk '/^apply_source_dir\(\)/,/^}$/' "$SCRIPT"
-} > "$LIB"
-if grep -q '^apply_source_dir()' "$LIB" && grep -q '^COMMON_EXCLUDES=' "$LIB" && grep -q '^TOKEN=' "$LIB"; then
+# It is extracted into a file made here, and this suite then runs a second time, in a bash of its
+# own started from a driver written beside that file, which sources it and then this file with
+# APPLY_SOURCE_HELPERS set. Sourcing the extracted file from here names a path made at run time,
+# which the Slack drafts gate cannot work out, and refuses (claude-config#2538).
+if [ -z "${APPLY_SOURCE_HELPERS:-}" ]; then
+  LIB="$WORK/lib.sh"
+  {
+    grep -E '^TOKEN=' "$SCRIPT"
+    awk '/^LOCAL_FILE_GLOBS=/,/^unset _lg$/' "$SCRIPT"
+    awk '/^home_literal_swap\(\)/,/^}$/' "$SCRIPT"
+    grep -E '^detok\(\)' "$SCRIPT"
+    grep -E '^expanded_root_name\(\)' "$SCRIPT"
+    awk '/^apply_source_dir\(\)/,/^}$/' "$SCRIPT"
+  } > "$LIB"
+  if grep -q '^apply_source_dir()' "$LIB" && grep -q '^COMMON_EXCLUDES=' "$LIB" && grep -q '^TOKEN=' "$LIB"; then
+    :  # all three were found; the second run below says so
+  else
+    bad "claude-sync defines apply_source_dir, TOKEN and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+    echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
+  fi
+  printf '%s\n' '. "${BASH_SOURCE[0]%/*}/lib.sh" || exit 1' 'APPLY_SOURCE_HELPERS=1' '. "$1"' > "$WORK/drive.sh"
+  bash "$WORK/drive.sh" "$DIR/test-apply-source-cache.sh"
+  exit $?
+fi
+# Here in the second run, with the helpers loaded, which is checked rather than assumed (L98).
+if declare -F apply_source_dir >/dev/null && declare -p COMMON_EXCLUDES >/dev/null 2>&1 && [ -n "${TOKEN:-}" ]; then
   ok "claude-sync defines apply_source_dir, TOKEN and COMMON_EXCLUDES where this suite reads them"
 else
-  bad "claude-sync defines apply_source_dir, TOKEN and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
+  bad "claude-sync defines apply_source_dir, TOKEN and COMMON_EXCLUDES where this suite reads them" "the driver did not load them"
   echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
 fi
 # The scratch helpers claude-sync defines far from here, as the two lines that matter.
 scratch_home_ready(){ mkdir -p "$WORK/scratch"; printf '%s' "$WORK/scratch"; }
 scratch_file(){ mktemp "$WORK/scratch/claude-sync-work.XXXXXXXX"; }
-# shellcheck source=/dev/null
-. "$LIB"
 
 # An rsync that writes down every expanded copy it is asked to build, then runs the real one. A
 # file named in $WORK/during is appended to once the copy is made, the way an edit landing mid

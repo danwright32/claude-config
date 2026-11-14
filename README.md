@@ -3714,6 +3714,9 @@ variable or a substitution whose value it cannot work out, a build or git comman
 disk or a package script, and an endpoint assembled from pieces on purpose. The threat it answers is
 a session that means well choosing the quickest way to post. It fails closed: a python that is
 missing or crashes, or a payload it cannot read that names a send route, is refused with the reason.
+A file sourced through a path it cannot work out is refused too, unread, since claude-config#2538:
+the refusal names the script, the line and what it could not follow, so the path can be written
+plainly (a file run through such a path stays unread and allowed, behind the #2683 switch).
 
 Since claude-config#2844 it also reads what a runner or a compiler runs without the command naming
 it as a script (`payload/hooks/lib/program-runs.py`): the script or module `python3 -m` runpy, pdb,

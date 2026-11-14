@@ -1871,10 +1871,15 @@ esac
 # The marker is only evidence while the stamping works, and a stamping that has quietly stopped
 # makes every write read as somebody else's, which is the guard going blind while passing (L345).
 # So the runner proves the mechanism on a throwaway spool before it trusts an absence, and says so
-# and counts every line the live spool gains against itself when it cannot. The seam points the proof at a library
-# that does not stamp.
+# and counts every line the live spool gains against itself when it cannot. The proof is pointed at a
+# library that does not stamp by a copy of the runner staged beside one: the runner reads only the
+# library beside it, never one the environment names, as the Slack drafts gate cannot read a sourced
+# path the environment chooses (claude-config#2538).
 rm -f "$SPOOL2"/*.jsonl "$SP2/suites"/test-libwriter.sh
-STUBLIB="$SP2/stub-issue-spool.sh"
+mkdir -p "$SP2/runner"
+cp "$RUNNER" "$SP2/runner/run-all-tests.sh"
+cp -R "$DIR/lib" "$SP2/runner/lib"
+STUBLIB="$SP2/runner/lib/issue-spool.sh"
 {
   printf '#!/usr/bin/env bash\n'
   printf 'issue_spool_note(){ printf %s >> "$CLAUDE_ISSUE_SPOOL_DIR/stub.jsonl"; }\n' \
@@ -1887,7 +1892,8 @@ STUBLIB="$SP2/stub-issue-spool.sh"
   printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
 } > "$SP2/suites/test-othersession.sh"
 chmod +x "$SP2/suites/test-othersession.sh"
-out_m3="$(sp2_run HOOK_SPOOL_LIB="$STUBLIB")"; code_m3=$?
+out_m3="$(env TMPDIR="$SP2/nottmp" CLAUDE_ISSUE_SPOOL_DIR="$SPOOL2" HOOK_TESTS_ROOT="$SP2_REPO" \
+  HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 bash "$SP2/runner/run-all-tests.sh" "$SP2/suites" 2>&1)"; code_m3=$?
 case "$out_m3" in
   *"could not be proved"*)
     check "#275 a marker that cannot be proved is announced rather than trusted" ok ;;

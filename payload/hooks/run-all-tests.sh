@@ -1365,7 +1365,10 @@ if [ "$ran" -gt 0 ]; then
   # library into a throwaway spool answers it. When it cannot be proved the run says so and counts
   # every line the live spool gains against itself, which fails closed.
   _sp_marker_works=0
-  _sp_lib="${HOOK_SPOOL_LIB:-$SELF_DIR/lib/issue-spool.sh}"
+  # Always the copy beside this runner, never one the environment names: a sourced path chosen by
+  # the environment is one the Slack drafts gate cannot read, so it refused every session that ran
+  # the runner (claude-config#2538). The suite stages a runner beside a stub library instead.
+  _sp_lib="$SELF_DIR/lib/issue-spool.sh"
   if [ -r "$_sp_lib" ]; then
     _sp_canary="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.spool-proof.XXXXXXXX" 2>/dev/null || true)"
     if [ -n "$_sp_canary" ]; then

@@ -80,10 +80,19 @@ set -uo pipefail
 SELF_DIR="${BASH_SOURCE[0]%/*}"; [ "$SELF_DIR" != "${BASH_SOURCE[0]}" ] || SELF_DIR=.
 SELF_DIR="$(cd "$SELF_DIR" && pwd)"
 LIB="$SELF_DIR/../payload/hooks/lib"
-for f in load-window.sh merge-turn.sh merge-phase.sh suite-pile.sh load-average.sh; do
-  # shellcheck disable=SC1090
-  . "$LIB/$f" 2>/dev/null || { echo "load-window: $LIB/$f is missing, so no window was started." >&2; exit 1; }
-done
+# One plain line per helper, never a loop over their names: the Slack drafts gate reads a sourced
+# path it can work out and refuses one it cannot, and a loop variable is one it cannot (#2538).
+lib_missing(){ echo "load-window: $LIB/$1 is missing, so no window was started." >&2; exit 1; }
+# shellcheck source=../payload/hooks/lib/load-window.sh
+. "$LIB/load-window.sh" 2>/dev/null || lib_missing load-window.sh
+# shellcheck source=../payload/hooks/lib/merge-turn.sh
+. "$LIB/merge-turn.sh" 2>/dev/null || lib_missing merge-turn.sh
+# shellcheck source=../payload/hooks/lib/merge-phase.sh
+. "$LIB/merge-phase.sh" 2>/dev/null || lib_missing merge-phase.sh
+# shellcheck source=../payload/hooks/lib/suite-pile.sh
+. "$LIB/suite-pile.sh" 2>/dev/null || lib_missing suite-pile.sh
+# shellcheck source=../payload/hooks/lib/load-average.sh
+. "$LIB/load-average.sh" 2>/dev/null || lib_missing load-average.sh
 KILL_TREE="$LIB/kill-tree.sh"
 
 MAX_SECONDS=180

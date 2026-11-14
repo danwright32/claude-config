@@ -1109,7 +1109,7 @@ held_gone(){   # $1 = name
   local p
   p="$(cat "$TMPROOT/$1.pid" 2>/dev/null)"
   [ -n "$p" ] || return 1
-  hang_wait "! kill -0 $p 2>/dev/null"
+  hang_wait '! kill -0 "$p" 2>/dev/null'
 }
 # Every held scanner this suite started, ended whatever state a failed case left it in, so none
 # outlives the suite (L235). Called at the end and from the exit trap.
@@ -1249,7 +1249,7 @@ _ydir="$(awk '/output: / { sub(/^.*output: /, ""); sub(/\/out$/, ""); print; exi
 _yleader="$(cat "$_ydir/pid" 2>/dev/null)"
 [ -n "$_yleader" ] && kill -9 -- "-$_yleader" 2>/dev/null
 held_gone upsilon
-hang_wait "! kill -0 ${_yleader:-0} 2>/dev/null"
+hang_wait '! kill -0 "${_yleader:-0}" 2>/dev/null'
 # A stranger in a process group of its own, as a recycled id that is a group leader would be.
 # Started by a subshell that ends at once and writes nowhere, its pid recorded, so it is never this
 # suite's child: its thirty seconds running out while a check was printing would cut the line short
@@ -1607,7 +1607,7 @@ nokey_case(){    # $1 = name  $2 = cause  $3 = what the refusal must name  [$4 =
     case "$3" in *"$mark"*) continue ;; esac
     grep -q -F "$mark" <<< "$out" && others="$others [$mark]"
   done <<< "$NOKEY_MARKS"
-  if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait "! kill -0 $pid 2>/dev/null" \
+  if [ "$rc" -eq 2 ] && [ -n "$pid" ] && hang_wait '! kill -0 "$pid" 2>/dev/null' \
      && grep -q 'stopped rather than left running' <<< "$out" && grep -q -F "$3" <<< "$out" \
      && grep -q 'a retry stops them' <<< "$out" && [ -z "$others" ] \
      && { [ -z "${4:-}" ] || grep -q -F "$4/runs/" <<< "$out"; } && [ "$took" -lt 15 ]; then
@@ -1637,7 +1637,7 @@ oEE1="$(HOOK_TESTS_RUNNING=1 HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/ear
   || check "#2206 under the test marker, the early end is honoured and the budget ends once its file exists" "exit=$cEE1 out=$oEE1"
 # The refused push left its run going, as a push with a key does; it is let finish, so the second
 # push's scanner is the only one running.
-hang_wait "ls '$TMPROOT/earlyend-state/runs/'*/*/rc >/dev/null 2>&1"
+hang_wait 'ls "$TMPROOT"/earlyend-state/runs/*/*/rc >/dev/null 2>&1'
 : > "$TMPROOT/earlyend-ready"
 oEE2="$(HOOK_TESTS_RUNNING= HELD_STARTS_LATE=2 SCANNERS_STATE_DIR="$TMPROOT/earlyend-state-unmarked" SCANNERS_BUDGET_SECONDS=20 \
          SCANNERS_BUDGET_ENDS_WHEN="$TMPROOT/earlyend-ready" fire "$REE" "git push")"; cEE2=$?

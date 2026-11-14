@@ -88,9 +88,10 @@ sys.dont_write_bytecode = True
 HERE = os.environ.get("GATE_DIR") or os.path.dirname(os.path.abspath(__file__))
 ISSUE = "claude-config#2302"
 
-# Refusing a file run or sourced by a path the gate cannot work out (Judge.unworked_path), OFF until
-# Dan decides from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10:
-# "measure first", as #2538 does for sourcing). It only ever adds refusals, so the environment may
+# Refusing a file RUN by a path the gate cannot work out (Judge.unworked_path), OFF until Dan decides
+# from the measurement of what it would newly refuse (claude-config#2683; Dan, 2026-11-10: "measure
+# first"). A file SOURCED by one is refused whatever this says, since claude-config#2538 measured and
+# rewrote what that newly refused (Dan, 2026-11-13: "Do all of it, switch on"). It only ever adds refusals, so the environment may
 # switch it on anywhere (SLACK_GATE_UNWORKED_PATHS=refuse, as the measurement and the suite do), and
 # nothing switches it off once this is True.
 REFUSE_UNWORKED_PATHS = False
@@ -564,7 +565,7 @@ RE_PATTERN_CALLS = frozenset({"compile", "search", "match", "fullmatch", "findal
 
 def py_marker(text):
     """MARKER's first hit in Python text outside the pattern of a regular expression, or None
-    (claude-config#2844). re.compile(r"slack_webhook|chat.postMessage") looks for the endpoint, as
+    (claude-config#2844). A re.compile whose pattern spells out an endpoint looks for it, as
     this gate's own rules do; it posts nothing, and naming it refused the script as one that posts
     (found by the #2847 builder on 2026-11-12, Dan chose to stop it). Only the pattern, the first
     argument (or pattern=) of re.<one of RE_PATTERN_CALLS>, written as a string literal, is left out:
@@ -771,7 +772,7 @@ IMPORT_MAX_FILES = 300
 # of these interpreters runs, and no #! (claude-config#2362). A file with no extension is read as
 # code, since a script is often written without one. The two refusals that asked for this were a
 # session transcript (.jsonl) handed to issue-spool.sh clear and a saved gh listing (.json) handed to
-# a node script; each named chat.postMessage in text nobody runs.
+# a node script; each named Slack's post method in text nobody runs.
 CODE_EXT = SHELL_EXT + JS_EXT + (".ksh", ".py", ".pyw", ".rb", ".pl", ".pm", ".php", ".applescript", ".scpt",
                                  ".lua", ".tcl", ".r", ".jl", ".ps1")
 # A redirection word that only WRITES, with its target in the next word: >, >>, >|, >&, &>, &>>, each
@@ -1091,6 +1092,46 @@ def sh_comment_at(text, at):
     the indent is a # (claude-config#2683)."""
     start = text.rfind("\n", 0, at) + 1
     return text[start:at + 1].lstrip(" \t").startswith("#")
+
+
+# The builtins that take NAME=value as a quoted word and still bind it: export 'A=1' sets A.
+SH_QUOTED_BINDER = re.compile(r"(?:^|[\s;&|(){}!`])(?:export|local|declare|typeset|readonly)\s[^;&|]*\Z")
+
+
+def sh_quote_open(text, at):
+    """Where the quoted string holding offset at opens, read from the start of its line (the index
+    of its ' or "), or -1 where at is in no quotes on its line. A string that began on an earlier
+    line is not seen, so what it holds still counts as code."""
+    i, q, open_at = text.rfind("\n", 0, at) + 1, None, -1
+    while i < at:
+        c = text[i]
+        if q != "'" and c == "\\":
+            i += 2
+            continue
+        if q is None and c in "'\"":
+            q, open_at = c, i
+        elif c == q:
+            q, open_at = None, -1
+        i += 1
+    return open_at if q else -1
+
+
+def sh_quoted_word_at(text, at):
+    """Whether the name at offset at sits in a quoted string, so writing it binds nothing: the gate
+    suite writes its fixture scripts with printf '%s\\n' 'DIR="$(cd ...)"' and keeps one in
+    `local top='DIR=...'`, and a call to a function doing either was read as binding DIR, so nothing
+    after it knew DIR (claude-config#2538). A quoted word handed to export, local, declare, typeset or
+    readonly (export 'A=1') still binds, as does anything in a trap's string, which runs here."""
+    q = sh_quote_open(text, at)
+    if q < 0:
+        return False
+    start = text.rfind("\n", 0, at) + 1
+    before = text[start:q]
+    if re.search(r"(?:^|[\s;&|(){}!`])trap\b", before):
+        return False
+    if text[q - 1:q] not in (" ", "\t"):
+        return True  # the quotes are inside a word, `top='DIR=...'`, which is no NAME=value of its own
+    return not SH_QUOTED_BINDER.search(before)
 
 
 # A case branch's pattern at the front of its first command: (a|b) or a|b), each alternative one word.
@@ -3291,6 +3332,35 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 a = max(a, y)
             return out + [(a, b)] if a < b else out
 
+        mentions, after_memo = {}, {}
+
+        def fspans(f):
+            return [(items[o][1]["start"], items[c][1]["end"]) for o, c in fbody.get(f, ())]
+
+        def called_after(f, a, seen=()):
+            """Whether every mention of the function of s named f, outside its own bodies, is past
+            offset a, or inside the body of another function of which that holds: so its body, written
+            above where a lasting value is set, only ever runs after it (pr-merge-quiz.sh's
+            release_held reads HOOK_DIR, set further down; claude-config#2538). A mention is any word
+            spelling the name, a message or a trap's string included, so one that may run it early
+            keeps the body unknown."""
+            if f in seen:
+                return False
+            if (f, a) in after_memo:
+                return after_memo[f, a]
+            if f not in mentions:
+                own_f, found = fspans(f), []
+                for m in re.finditer(r"(?<![\w.:/-])" + re.escape(f) + r"(?![\w.:/-])", s):
+                    at = m.start()
+                    if any(x <= at < y for x, y in own_f) or sh_comment_at(s, at):
+                        continue
+                    found.append((at, [g for g in fbody if g != f and any(x <= at < y for x, y in fspans(g))]))
+                mentions[f] = found
+            ok = all(all(called_after(g, a, seen + (f,)) for g in holders) if holders else at >= a
+                     for at, holders in mentions[f])
+            after_memo[f, a] = ok
+            return ok
+
         # The files sourced where the walk did not follow, whose paths these values work out, must
         # bind none of the names that last; dropping one can change those paths, so this goes round
         # until it settles.
@@ -3301,6 +3371,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     known["regions"].setdefault(n, []).extend((x, y, v) for x, y in carve(a, b))
             for n, (a, v) in final.items():
                 kept = [(a, len(s))] if n in cand else carve(a, top)
+                if n in cand:
+                    kept += [(x, y) for f in fbody for x, y in fspans(f) if y <= a and
+                             ("$" + n in s[x:y] or "${" + n in s[x:y]) and called_after(f, a)]
                 known["regions"].setdefault(n, []).extend((x, y, v) for x, y in kept)
             for n, r in self.sh_locals(s, items, struct, known, script).items():
                 known["regions"].setdefault(n, []).extend(r)
@@ -3316,7 +3389,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 if bad or not self.is_file(self.resolve(v, d)):
                     bound = set(cand)
                     break
-                bound |= self.sh_bound_in(self.resolve(v, d), cand, d, False, v, depth + 1, set())
+                # With evals, as the walk reads a file it follows: lib/hang-wait.sh evaluates a
+                # condition in its caller's shell on purpose, which, read as any eval, bound every
+                # name, so a script sourcing it anywhere the walk did not reach lost every value that
+                # lasts (test-scanners-before-push.sh; claude-config#2538). Each call the script makes
+                # to such a function then binds what its condition binds, or everything where the
+                # condition cannot be read.
+                bound |= self.sh_bound_in(self.resolve(v, d), cand, d, False, v, depth + 1, set(), evals)
+            for k in unfollowed if evals and bound != cand else ():
+                h, dk = head_of(k), items[k][0][0]
+                if self.sh_eval_unsafe(h, evals, dk):
+                    bound = set(cand)
+                    break
+                for lit in self.sh_eval_call(h, evals) or ():
+                    bound |= {n for n in cand if self.sh_binds(n, lit)}
             if not bound & cand:
                 return known
             cand -= bound
@@ -3339,7 +3425,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def sh_binds(name, text, allowed=0):
         """Whether text can bind name, beyond `allowed` NAME= forms that set it for one command alone:
         NAME=, NAME+=, NAME[i]=, ${NAME:=}, read, for, local, unset... NAME, or NAME inside (( )).
-        export and readonly with no = keep the value, so they do not count."""
+        export and readonly with no = keep the value, so they do not count. Text inside a quoted string
+        binds nothing (sh_quoted_word_at: a NAME= or a builtin a fixture writes), unless the string is
+        handed to export, local, declare, typeset or readonly, or is a trap's, and a quoted name handed
+        to a builtin outside the quotes (`read -r "NAME"`) still binds it (#2538)."""
         # Every form below spells the name out, so text without it binds nothing. That, and patterns
         # compiled once per name (sh_bind_patterns), are what keep a script with thousands of names
         # inside the gate's time: asked per name per compound command, this ran 344,464 times
@@ -3350,7 +3439,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # A line that is only a comment binds nothing (claude-config#2683): `# the case reads HOOK for
         # its verdict` read as `read ... HOOK`. Only a whole line is taken as one, its first character
         # past the indent a #, which no command, word or expansion ($#, ${#x}) starts with.
-        if sum(1 for m in assigns.finditer(text) if not sh_comment_at(text, m.start())) > allowed:
+        if sum(1 for m in assigns.finditer(text) if not sh_comment_at(text, m.start())
+               and not sh_quoted_word_at(text, m.start())) > allowed:
             return True
         if any(not sh_comment_at(text, m.start()) for m in arithmetic.finditer(text)):
             return True
@@ -3371,8 +3461,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 # A builtin binds only where it is the command (claude-config#2683): `check "and does
                 # not declare itself unrunnable" "it printed SUITE-NOT-RUN"` read as `declare ...
                 # SUITE`. A word in a sentence is not one; ${NAME:=} assigns wherever it expands.
+                # A name that is itself a quoted word handed to the builtin, `read -r "NAME"` or
+                # `printf -v "NAME"`, binds it (lessons review of #2538: they read as binding nothing, so
+                # a stale value was believed); text a fixture writes, the builtin in the quotes too or
+                # the name inside a longer quoted word (`local top='NAME=...'`), still binds nothing.
+                nm = m.end() - len(name)
+                handed = sh_quote_open(text, nm) == nm - 1 and text[nm - 2:nm - 1] in (" ", "\t") and \
+                    sh_quote_open(text, m.start() + 1) < 0
                 if not SH_VALUE_KEPT.match(m.group(0)) and (m.group(0).startswith("$")
-                                                             or sh_command_at(text, start, m.start())):
+                                                             or (sh_command_at(text, start, m.start()) and
+                                                                 (handed or not sh_quoted_word_at(text, nm)))):
                     return True
                 pos = m.start() + 1
             at = text.find(name, end + 1)
@@ -3422,7 +3520,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return False
             for a in args:
                 if a[:1] in ("-", "+"):
-                    if a[0] == "-" and "n" in a[1:]:
+                    # -n makes a nameref, except to export, where it takes the export off and keeps
+                    # the value (test-claude-sync.sh's `export -n SUITE_FILTERED ...`, #2538).
+                    if a[0] == "-" and "n" in a[1:] and w0 != "export":
                         return True
                     continue
                 if not re.fullmatch(name, a.split("=", 1)[0]):
@@ -3461,7 +3561,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
 
     def sh_test(self, head, d, var, script):
         """True or False for a test whose outcome is certain ([ or test comparing known words with =,
-        ==, != , -n, -z, or one word on its own), else None."""
+        ==, != , -n, -z, or one word on its own; -f, -e or -d on a known path, answered from the disk
+        as the gate reads the command, as every file it reads is; any of these after !), else None.
+        A file test is the claude-sync idiom of a path kept where its file is and replaced where it is
+        not (claude-config#2538); a relative path in a folder that is not certain has no answer."""
         toks = self.sh_tokens(head)
         if not toks or any(k == "op" for k, _ in toks):
             return None
@@ -3480,13 +3583,27 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if v is None or splits:
                 return None
             vals.append(v)
+        negate = len(vals) > 1 and vals[0] == "!"
+        if negate:
+            vals = vals[1:]
+        out = None
         if len(vals) == 3 and vals[1] in ("=", "==", "!="):
-            return (vals[0] == vals[2]) != (vals[1] == "!=")
-        if len(vals) == 2 and vals[0] in ("-n", "-z"):
-            return (vals[1] == "") == (vals[0] == "-z")
-        if len(vals) == 1:
-            return vals[0] != ""
-        return None
+            out = (vals[0] == vals[2]) != (vals[1] == "!=")
+        elif len(vals) == 2 and vals[0] in ("-n", "-z"):
+            out = (vals[1] == "") == (vals[0] == "-z")
+        elif len(vals) == 2 and vals[0] in ("-f", "-e", "-d") and vals[1]:
+            path = os.path.expanduser(vals[1])
+            if not os.path.isabs(path) and (d == SH_UNKNOWN_DIR or not d):
+                return None
+            path = self.resolve(path, d)
+            isfile, isdir = self.is_file(path), os.path.isdir(path) or os.path.realpath(path) in self.made_dirs
+            # -e is any path that exists, a device, fifo or socket too (lessons review of #2538:
+            # `[ -e /dev/null ] || P=other` read as replacing P, so the file really sourced went unread).
+            out = isfile if vals[0] == "-f" else isdir if vals[0] == "-d" else \
+                (isfile or isdir or os.path.exists(path))
+        elif len(vals) == 1:
+            out = vals[0] != ""
+        return None if out is None else out != negate
 
     def sh_case(self, s, items, k, var, setv, spans, where, script, shopt, expect):
         """Follow the case at items[k] for sh_walk: True where it was followed, its esac the command
@@ -3574,7 +3691,18 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 # the reader keeps the keyword in no command, so it is taken here from the text between
                 # the last command and the subshell's (, or the group's closing brace pairs with
                 # nothing and the whole structure is lost (ai-review-common.sh; claude-config#2538).
+                # Only a command of that subshell itself can show what opened it: one inside a
+                # substitution in it, read first, starts after `$(`, and taking that as the subshell
+                # entered lost the `if` before `if (d="$(...)"; ...); then` (the gate suite's own,
+                # claude-config#2538).
                 sub, start = p["scope"][1], p["start"]
+                if len(p["scope"]) > 2:
+                    rows.append(None)
+                    continue
+                if s is not None:
+                    # Its first command can start on the next line, `nap(){ (` then the body.
+                    while start > 0 and s[start - 1] in " \t\n":
+                        start -= 1
                 if s is not None and sub not in entered and s[start - 1:start] == "(" and \
                         s[start - 2:start - 1] not in ("$", "<", ">", "="):
                     lead = re.split(r"[;&|\n]", s[last_end:start - 1])[-1].strip()
@@ -3683,6 +3811,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return out
         rows, blocks = struct
         sealed = None
+        shopt = []  # whether s runs shopt, read once for all its locals: one search of claude-sync is 10 ms
         for idx, ((d, t), p) in enumerate(items):
             if rows[idx] is None:
                 continue
@@ -3694,8 +3823,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if before in ("&&", "||", "|", "&") or any(k == "op" for k, _ in toks):
                 continue
             if toks[:1] == [("word", "local")]:
-                if blocks[stack[-1]]["kind"] != "func":
-                    continue
+                if not any(blocks[x]["kind"] == "func" for x in stack):
+                    continue  # a local outside every function is an error, and sets nothing
+                # One in an if branch or a group inside the function lasts, as a plain NAME=value
+                # does, until that branch ends (check-free-space.sh's `local here` in an else).
                 words = [r for _, r in toks[1:]]
             else:
                 a = self.sh_assignment(head)
@@ -3706,7 +3837,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 words = words[1:]
             if any(w[:1] in ("-", "+") for w in words):
                 continue  # -a, -i, -n and the rest change what the value is
-            here, rest, end = {}, s[:p["start"]] + s[p["end"]:], blocks[stack[-1]]["close"]
+            here, end = {}, blocks[stack[-1]]["close"]
             for w in words:
                 m = re.match(r"([A-Za-z_]\w*)=", w)
                 if not m:
@@ -3716,13 +3847,36 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 v = self.sh_word(w[m.end():], SH_UNKNOWN_DIR, lambda x: here[x] if x in here else self.sh_home(
                     x, s, self.sh_at(known, x, p["start"])), script, True)[0]
                 here[n] = v
-                if v is None or self.sh_binds(n, rest) or \
+                last, spans = idx, [(p["start"], p["end"])]
+                if v is not None:
+                    if not shopt:
+                        shopt.append(bool(re.search(r"\bshopt\b", s)))
+                    v, last, spans = self.sh_local_settles(s, items, rows, blocks, stack, idx, end, n, v, known,
+                                                           script, here, shopt[0])
+                is_local = False
+                if toks[:1] == [("word", "local")]:
+                    # A local is this function's own: what another function binds by that name
+                    # changes it only when called from here, so where one does, below, any call ends
+                    # the value as though the text were not sealed (check-free-space.sh keeps a local
+                    # `here` in two functions; claude-config#2538).
+                    others = [(items[x["open"]][1]["start"], items[x["close"]][1]["end"]) for x in blocks
+                              if x["kind"] == "func" and not (items[x["open"]][1]["start"] <= p["start"]
+                                                               < items[x["close"]][1]["end"])]
+                    is_local = any(self.sh_binds(n, s[a0:b0]) for a0, b0 in others)
+                    spans += others
+                cut, upto = [], 0
+                for a0, b0 in sorted(spans):
+                    if a0 > upto:
+                        cut.append(s[upto:a0])
+                    upto = max(upto, b0)
+                cut = "".join(cut) + s[upto:]
+                if v is None or self.sh_binds(n, cut) or \
                         sum(1 for x in words if re.match(re.escape(n) + r"(?:=|$)", x)) > 1:
                     continue
                 b = items[end][1]["start"]
                 if sealed is None:
                     sealed = self.sh_sealed(items)
-                for j in range(idx + 1, end):
+                for j in range(last + 1, end):
                     if rows[j] is None:
                         continue  # a subshell's or a substitution's, which cannot set it
                     stack_j, head_j = rows[j]
@@ -3731,12 +3885,65 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                             (stack_j == stack and re.match(r"(?:elif|else)(?![\w-])", items[j][0][1].lstrip())):
                         b = items[j][1]["start"]
                         break
-                    if not sealed and not self.sh_keeps(head_j) and \
+                    if (not sealed or is_local) and not self.sh_keeps(head_j) and \
                             not self.sh_sources_without(head_j, n, s, known, script, items[j][1]["start"]):
                         b = items[j][1]["start"] + 1
                         break
-                out.setdefault(n, []).append((p["end"], b, v))
+                out.setdefault(n, []).append((items[last][1]["end"], b, v))
         return out
+
+    def sh_local_settles(self, s, items, rows, blocks, stack, idx, end, n, v, known, script, here, shopt):
+        """(n's value, the index of the last command that settled it, the spans of s of every command
+        that set it) after the NAME=value or local at items[idx], following the commands straight after it in
+        the same block that only choose n's value: `[ test ] || n=value` (or &&) on a test the walk
+        can answer (rtk-rewrite.sh's `[ "$d" != "${BASH_SOURCE[0]}" ] || d=.`), and a case on a known
+        word whose branches only set names (check-free-space.sh's `local here="."` then
+        `case "${BASH_SOURCE[0]}" in */*) here=... ;; esac`). Where one cannot be followed, n's value
+        is None (claude-config#2538)."""
+        spans, last, k = [(items[idx][1]["start"], items[idx][1]["end"])], idx, idx + 1
+        at = items[idx][1]["start"]
+
+        def look(x):
+            if x == n:
+                return v
+            return here[x] if x in here else self.sh_home(x, s, self.sh_at(known, x, at))
+        while v is not None and k < end and rows[k] is not None:
+            stack_k, head_k = rows[k]
+            how = items[k][1]["how"]
+            if stack_k == stack and how in ("&&", "||") and k + 1 < end and rows[k + 1] is not None and \
+                    rows[k + 1][0] == stack and items[k + 1][1]["how"] not in ("&&", "||", "|", "&"):
+                a = self.sh_assignment(rows[k + 1][1])
+                if not a or a[0] != n:
+                    break
+                t = self.sh_test(head_k, SH_UNKNOWN_DIR, look, script)
+                if t is None:
+                    return None, last, spans
+                if t == (how == "&&"):
+                    v = self.sh_word(a[1], SH_UNKNOWN_DIR, look, script, True)[0]
+                spans.append((items[k][1]["start"], items[k + 1][1]["end"]))
+                last, k = k + 1, k + 2
+                continue
+            blk = blocks[stack_k[-1]] if len(stack_k) == len(stack) + 1 and stack_k[:len(stack)] == stack else None
+            if blk and blk["kind"] == "case" and blk["open"] == k:
+                got = {}
+
+                def setv(x, val, _at):
+                    if x == n:
+                        got["v"] = val
+                if not self.sh_case(s, items, k, look, setv, {}, lambda _d: SH_UNKNOWN_DIR, script, shopt,
+                                    blk["close"] + 1):
+                    return None, last, spans
+                v = got.get("v", v)
+                spans.append((items[k][1]["start"], items[blk["close"]][1]["end"]))
+                last, k = blk["close"], blk["close"] + 1
+                continue
+            if stack_k == stack and how not in ("&&", "||", "|", "&") and \
+                    re.match(r"(?:local|declare|typeset)\s|[A-Za-z_]\w*=", head_k) and \
+                    self.sh_keeps(head_k) and not self.sh_binds(n, head_k):
+                k += 1  # another name declared or set between, which leaves n as it is
+                continue
+            break
+        return v, last, spans
 
     def sh_sealed(self, items):
         """Whether no command of the text sources a file or binds a name it does not spell out
@@ -4045,6 +4252,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             c = s[i]
             if c == "\n":
                 break
+            if c == "\\" and s[i + 1:i + 2] in ("", "\n"):
+                # A backslash newline joins the next line on, and one at the end is the command's own
+                # continuation, cut off by the reader (claude-sync's `read ... < "$ans" \`, then
+                # `&& ...`): no word, or it read as a name nobody could spell (claude-config#2538).
+                i += 2
+                continue
             if c.isspace():
                 i += 1
                 continue
@@ -4114,7 +4327,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     return n
                 i = j
             elif s.startswith("${", i):
-                j = s.find("}", i)
+                j = self.sh_brace_close(s, i + 2)
+                if j is None:
+                    # One it cannot pair (an apostrophe inside "${x:-it's}" is no quote) ends at the
+                    # first }, as every ${ } did before.
+                    j = s.find("}", i)
                 if j < 0:
                     return n
                 i = j
@@ -4122,6 +4339,42 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return i
             i += 1
         return n
+
+    @staticmethod
+    def sh_brace_close(s, i):
+        """The index of the } closing the ${ that ends just before i, or None. The text inside can
+        hold quotes, a substitution and another ${ } of its own (claude-sync's
+        `"${SYNC_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"`), so the first } is not
+        always the one: taken as it was, the word ended inside the substitution and the rest read as
+        words of their own, one of them a name nobody could spell (claude-config#2538)."""
+        dq, n = False, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'" and not dq:
+                j = s.find("'", i + 1)
+                if j < 0:
+                    return None
+                i = j + 1
+                continue
+            if c == '"':
+                dq = not dq
+            elif s.startswith("$(", i):
+                j = Judge.sh_close(s, i + 2)
+                if j is None:
+                    return None
+                i = j
+            elif s.startswith("${", i):
+                j = Judge.sh_brace_close(s, i + 2)
+                if j is None:
+                    return None
+                i = j
+            elif c == "}" and not dq:
+                return i
+            i += 1
+        return None
 
     def sh_word(self, raw, d, var, script, assign):
         """(the value of one raw shell word, or None where it is not certain; whether it can become
@@ -4696,15 +4949,14 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             # A path built from a variable or a substitution is worked out with the resolver (#2449)
             # and the file it names read (claude-config#2465): `. "$ROOT/lib/x.sh"` was never read, so a
             # sourced helper that posts passed. A literal path is read as it always was, ~ included. One
-            # that still cannot be worked out is not read, as before. Refusing it is the half of #2465
-            # kept off: on 2026-11-09 it still newly refused 80 of this repository's scripts, whose
-            # causes are the follow up issue's to explain before it is turned on (Dan, 2026-11-09).
+            # that still cannot be worked out is refused unread (claude-config#2538, on since
+            # 2026-11-13, once the scripts it newly refused were read or rewritten).
             v, bad = self.sh_source_word(text, self.sh_cwd(d), self.sh_source_var, self.shell["script"])
             if bad:
                 raw = self.sh_source_target(text)
                 # A literal path whose directory is not certain is read where the command runs, as on main.
-                # One built from what cannot be worked out is unread, and refused with the switch on
-                # (claude-config#2683).
+                # One built from what cannot be worked out is unread, and refused whatever the switch says
+                # (claude-config#2683, on for a sourced file since #2538).
                 if raw and not re.search(r"[$`]", raw):
                     return self.script(words[1], d, depth, True, sourced=True)
                 return self.unworked_path(text, 1, d, "sources")
@@ -4807,16 +5059,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return self.every_file([program] + after, d, depth, False, "py", inline=(label, code, here), held_code=True)
 
     def unworked_path(self, text, slot, d, verb):
-        """With the switch on (unworked_paths_refused, claude-config#2683), the reason for a file run or
+        """For a sourced file always (#2538), and for a file run with the switch on (unworked_paths_refused,
+        claude-config#2683), the reason for a file run or
         sourced (verb) by a path the gate cannot work out: the word in slot of the command as written
         ("operand", the program's script by its option table; or a position), where it is built from a
         variable or a substitution whose value is not certain. That file is never read, so one that
-        posts could hide behind it. None with the switch off, for a word with no variable or
+        posts could hide behind it. None for a file run with the switch off, for a word with no variable or
         substitution in it (read as written, as before), and for one whose value is worked out. Says
         which path, in which script and on which line, and what the gate could not follow, so whoever
         wrote the script can tell which line to make plain (the wording #2538's measurement used for a
         sourced path)."""
-        if not unworked_paths_refused():
+        # A file sourced by such a path is refused whatever the switch says (Dan, 2026-11-13: "Do all
+        # of it, switch on", claude-config#2538): it runs in this shell, where nothing else reads it.
+        # A file run by one stays behind the switch.
+        if not unworked_paths_refused() and verb != "sources":
             return None
         words = self.raw_words(text)
         if slot == "operand":
@@ -4827,7 +5083,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return None
         ctx = self.shell
         v, splits = self.sh_word(raw, self.sh_cwd(d), self.sh_source_var, ctx["script"], False)
-        if v is not None and not splits:
+        # A value worked out is a path only once its directory is too: a relative one where that is not
+        # certain is as unread as an unknown one (#2538: `go() { local p="lib/x.sh"; . "$p"; }` passed).
+        if v is not None and not splits and (os.path.isabs(os.path.expanduser(v)) or
+                                             self.sh_cwd(d) != SH_UNKNOWN_DIR):
             return None
         at = ctx["at"]
         where = f"the script {ctx['script']}" if ctx["script"] else "this command"
