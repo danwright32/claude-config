@@ -57,7 +57,8 @@
 #                             Empty turns the record off entirely: nothing is read, nothing written.
 #   HOOK_TESTS_FLAKY_OUTPUT   where the first, failing run of a suite marked FLAKY is kept, its
 #                             path named on the FAIL line (default
-#                             ~/.cache/claude-config/flaky-suite-output, newest 20; empty: none, #1788)
+#                             ~/.cache/claude-config/flaky-suite-output, kept 30 days or as one of
+#                             its suite's newest 3, under 20 MB in all; empty: none, #1788, #2895)
 #   HOOK_TESTS_LOCK_WAIT      seconds a suite may wait for a lock another run holds, handed to
 #                             each suite as SUITE_LOCK_WAIT (default 1200; always 0 under CI, #1297)
 #   HOOK_TESTS_SLOT           1 queues this run for the Mac's one full suite slot, 0 never; unset,
@@ -598,9 +599,17 @@ TIMINGS="${HOOK_TESTS_TIMINGS-$_timings_default}"
 # Where the first, failing run of each suite marked FLAKY is kept (claude-config#1788, L297). That
 # output lived in this run's work folder, which is removed at the end, so a flake left nothing to
 # diagnose it from but the few lines printed. Beside the timings, for the same reason: what failed on
-# this machine is not configuration. Pruned to the newest 20 (lib/kept-output.sh). Set
-# HOOK_TESTS_FLAKY_OUTPUT to move it, or to EMPTY to keep nothing; `-`, not `:-`, as above.
+# this machine is not configuration. Set HOOK_TESTS_FLAKY_OUTPUT to move it, or to EMPTY to keep
+# nothing; `-`, not `:-`, as above.
 FLAKY_OUTPUT="${HOOK_TESTS_FLAKY_OUTPUT-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/flaky-suite-output}"
+# Kept by age per suite, never the newest 20 overall (claude-config#2895, L202): 20 was about ten
+# days of flakes, so the one log #1919 named was deleted before anyone opened it. A copy stays for 30
+# days, or while it is among the newest 3 of its own suite however old, so a rare flake keeps its
+# evidence until that suite flakes again. 20 MB bounds the folder whatever the ages, oldest first;
+# on 2026-11-13 it held 20 files in 552 KB, the largest 240 KB. Read by lib/kept-output.sh.
+KEPT_OUTPUT_MAX_DAYS=30
+KEPT_OUTPUT_PER_LABEL=3
+KEPT_OUTPUT_MAX_KB=20480
 
 # A record is keyed on the suite's path WITHIN the repo, so the same suite is recognised in a
 # worktree, in a second clone, and on the other Mac. A suite that is not under the repo has no such

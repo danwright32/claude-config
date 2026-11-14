@@ -68,7 +68,7 @@ case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
-bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
+bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 
 if [ -z "$SETTINGS" ] || [ ! -f "$SETTINGS" ]; then
   echo "test-gates-fail-closed: no settings file beside $DIR names which hooks are registered, so no gate could be enumerated." >&2

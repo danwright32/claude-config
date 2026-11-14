@@ -56,6 +56,7 @@ import {
   outputTrusted,
   freshTemp,
   inScratchpad,
+  inSessionNotes,
   namesScratchpad,
   joinedOnly,
   addedOntoFolder,
@@ -421,6 +422,26 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
   expect(subjectsOf({ ...at, branch: 'release-2026', isDefault: true, issues: [2026] })[0]?.key).toBe(`record:${'/Users'}/dan/Apps/slate|branch:release-2026|session:s1`)
   // An issue named on the settled question, whatever the branch.
   expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|issue:12`, label: 'issue #12 in slate' }])
+})
+
+test('#2792: the session notes folder is known by the home folder, any session of any project, and nothing shaped like it elsewhere', () => {
+  const home = `${'/Users'}/dan`
+  const notes = `${home}/.claude/state/session-notes`
+  expect(inSessionNotes(`${notes}/-w-slate/s1/review/slate-copy`, home)).toBe(true)
+  expect(inSessionNotes(`${notes}/-w-slate/s1/review/slate-copy/app/page.tsx`, home)).toBe(true)
+  // Another session's, and another project's: a copy an earlier session left is a throwaway too.
+  expect(inSessionNotes(`${notes}/-w-other/s2/handoff.md`, home)).toBe(true)
+  expect(inSessionNotes(`${notes}/-w-slate`, `${home}/`)).toBe(true)
+  // The notes folder itself, a name that only starts like it, and a climb out are not in it.
+  expect(inSessionNotes(notes, home)).toBe(false)
+  expect(inSessionNotes(`${notes}/`, home)).toBe(false)
+  expect(inSessionNotes(`${notes}-old/-w-slate/s1/app/page.tsx`, home)).toBe(false)
+  expect(inSessionNotes(`${notes}/-w-slate/s1/../../../../../../../w/slate/app/page.tsx`, home)).toBe(false)
+  // A folder shaped like it anywhere else, a checkout included, another home's, and no home at all.
+  expect(inSessionNotes('/w/slate/.claude/state/session-notes/-w-slate/s1/app/page.tsx', home)).toBe(false)
+  expect(inSessionNotes(`${'/Users'}/eve/.claude/state/session-notes/-w-slate/s1/app/page.tsx`, home)).toBe(false)
+  expect(inSessionNotes('/.claude/state/session-notes/-w-slate/s1/app/page.tsx', '')).toBe(false)
+  expect(inSessionNotes('dan/.claude/state/session-notes/-w-slate/s1/app/page.tsx', 'dan')).toBe(false)
 })
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every

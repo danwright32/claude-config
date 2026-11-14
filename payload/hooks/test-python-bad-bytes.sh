@@ -43,7 +43,7 @@ case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
-bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
+bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 
 # ---------------------------------------------------------------------------
 echo "a refusal holding a lone surrogate is still a refusal"

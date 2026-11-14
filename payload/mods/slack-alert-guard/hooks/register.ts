@@ -39,7 +39,9 @@ import {
   refusal,
   removalKey,
   renderedProblem,
+  requestLanguage,
   shellKey,
+  shellLogWording,
   isSender,
   stringsOf,
   testFile,
@@ -506,8 +508,19 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const untraced = (why: string) => (): SlackAlertSend => ({ untraced: why })
     const python = lang === 'python'
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
-    // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
+    // TypeScript and python, an edit that does not apply) is held for all the wording it changes,
+    // except, in a shell script, wording only a log line prints (below).
     if (edited === undefined) return holdFor(change, untraced(UNTRACED_EDIT))
+    // In a shell script, wording that only a log reads is left out (#2792): a string every place of
+    // which is an argument of an echo or printf sent to the error stream and nowhere else. The script
+    // is read as its commands by mod-kit's reader, the one reader of shell there is (#712), and
+    // rules.ts shellLogWording judges those.
+    if (requestLanguage(path, current || after) === 'shell') {
+      const logOnly = async (text: string, lits: Lit[]) => shellLogWording(await $.modkit.pipeline({ command: text }), lits.map(l => l.text))
+      const [logBefore, logAfter] = [await logOnly(before, beforeLits), await logOnly(after, afterLits)]
+      const sent: Part = { added: change.added.filter(s => !logAfter.has(s)), removed: change.removed.filter(s => !logBefore.has(s)) }
+      return sent.added.length || sent.removed.length ? holdFor(sent, untraced(UNTRACED_LANGUAGE)) : PASS
+    }
     if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))
     const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
     const was = scanWork()

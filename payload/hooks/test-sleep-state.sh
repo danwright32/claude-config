@@ -22,7 +22,7 @@ FIXTURES="$DIR/../mods/scope-modes/tests/sleep-fixtures.ts"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
-check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '${3:0:300}')"; fi; }
+check_eq(){ if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '${3:0:300}')" | sed '2,$s/^/  /'; fi; }
 
 if ! . "$LIB"; then
   echo "FAIL: $LIB could not be sourced"

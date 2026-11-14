@@ -3692,6 +3692,24 @@ stops. Alert and Slack wording stay with the Slack alert guard.
   `lookedBack` counts the characters these readers read back, so mod-kit's test measures the work,
   not the clock.
 
+### What #2792 changed, 2026-11-13
+
+On 2026-11-11 a read only review agent cloned a repository into its folder under the session notes
+folder to read it, and `rm -rf` of that copy was refused as a look change with no settled design
+round. The copy is a checkout of its own, so its screen files were judged as a project's are. Two
+copies, about 4 GB, were left behind. Reproduced as the guard's test before the change: the copy
+on its default branch, held "for this session", and one file inside it held the same way.
+
+- **Taking a file or folder away in a throwaway place is never held.** The session's scratchpad
+  (rules.ts `inScratchpad`, as before) and anywhere inside `<home>/.claude/state/session-notes/`
+  (`inSessionNotes`): known by the home folder, any session's and any project's, since a copy an
+  earlier session left behind is as much a throwaway. The notes folder itself, a folder shaped like
+  it anywhere else, and a path that climbs out with `..` are not in it.
+- **A folder taken away there is never listed.** Listing every file under it with git was the
+  costly half, and a listing that fails holds the call.
+- **A write is judged as before.** A copy can be pushed, so what is written into one can reach the
+  product. Only a removal passes: `rm`, `rm -rf`, a pattern matched in a folder there.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
