@@ -570,7 +570,12 @@ def py_marker(text):
     (found by the #2847 builder on 2026-11-12, Dan chose to stop it). Only the pattern, the first
     argument (or pattern=) of re.<one of RE_PATTERN_CALLS>, written as a string literal, is left out:
     the replacement re.sub writes, a string built elsewhere and every other string are read as
-    before. Text Python cannot parse is read whole, as before."""
+    before. Text Python cannot parse is read whole, as before.
+
+    Nor are comments, or a string that is a statement of its own, a docstring included: Python
+    drops a comment and discards such a string, so naming an endpoint in either sends nothing
+    (claude-config#2913: the gate's own docstrings were reworded around this). A docstring is still
+    read where the text names __doc__ or getdoc, which hand it back to the code."""
     hit = MARKER.search(text)
     if not hit:
         return None
@@ -589,7 +594,16 @@ def py_marker(text):
         raw = text[a:starts[line] if line < len(starts) else len(text)].encode("utf-8", "surrogatepass")
         return a + len(raw[:col].decode("utf-8", "surrogatepass"))  # a lone surrogate keeps its place
     spans = []
+    docs_read = "__doc__" in text or "getdoc" in text
     for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list):
+            for k, st in enumerate(body):
+                if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and \
+                        isinstance(st.value.value, (str, bytes)) and st.end_lineno and \
+                        not (k == 0 and docs_read and isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                                                       ast.AsyncFunctionDef))):
+                    spans.append((offset(st.lineno, st.col_offset), offset(st.end_lineno, st.end_col_offset)))
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "re"
                 and node.func.attr in RE_PATTERN_CALLS):
@@ -597,6 +611,17 @@ def py_marker(text):
         pat = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "pattern"), None)
         if isinstance(pat, ast.Constant) and isinstance(pat.value, (str, bytes)) and pat.end_lineno:
             spans.append((offset(pat.lineno, pat.col_offset), offset(pat.end_lineno, pat.end_col_offset)))
+    if "#" in text:
+        import io
+        import tokenize  # only for a text that names an endpoint, so every other call skips the import
+        try:
+            # newline=None numbers lines on \r\n, \r and \n, as ast does; a token's column counts characters.
+            for tok in tokenize.generate_tokens(io.StringIO(text, newline=None).readline):
+                if tok.type == tokenize.COMMENT:
+                    a = starts[tok.start[0] - 1] + tok.start[1]
+                    spans.append((a, a + len(tok.string)))
+        except (tokenize.TokenError, SyntaxError):
+            pass  # comments left as they are: read as before
     if not spans:
         return hit
     out, last = [], 0
@@ -1229,8 +1254,7 @@ SH_UNKNOWN_DIR = "${unknown directory}"
 # An assignment, as raw_words steps past it: plain, an append, or an array element.
 # A here string that is one file's text, the file named by a plain word (stdin_of, claude-config#2887).
 HERE_FILE = re.compile(r"""("?)\$\((?:cat\s+|<\s*)([^\s$`()"'\\|;&<>*?\[\]{}~]+)\s*\)\1""")
-SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
-# The builtins that cannot change a shell variable, the only commands a `local` value is taken across
+SH_ASSIGN_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")# The builtins that cannot change a shell variable, the only commands a `local` value is taken across
 # (claude-config#2465): any other command can be a function, and a function can set its caller's
 # local. printf is one only without -v.
 SH_KEEPS = frozenset({"[", "[[", "test", ":", "true", "false", "echo", "printf", "return", "exit", "cd", "pwd"})
@@ -1405,7 +1429,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         nudge = os.path.join(os.path.dirname(HERE), "skills", "nudge", "nudge.py")
         self.nudge = os.path.realpath(nudge) if os.path.isfile(nudge) else None
         self.acting = set()  # the real path of each script acts() is judging, so a cycle ends
-        self.unfollowed = None  # the last import modules() could not follow (unfollow)
+        self.unfollowed = []  # each thing the walk could not follow or read (unfollow)
         # (the script, how many of its modules are read) while walk() is reading past
         # IMPORT_MAX_FILES, for late() to say how far it got (claude-config#2470); else None.
         self.past = None
@@ -1683,19 +1707,21 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     names.append(label)
             elif kind == "maybe" and with_maybe and label not in maybe and label != skip:
                 maybe.append(label)
+        # Each through unfollow: the gate could not read the file, which is no finding that it posts, so
+        # main() says the check could not be made and leaves out the draft advice (#2922, #2910).
         if found and not names:
-            return ("is written earlier in this command, but what wrote it could not be told, so what it "
-                    "holds cannot be read, and whether it posts cannot be checked")
+            return self.unfollow("is written earlier in this command, but what wrote it could not be told, so "
+                                 "what it holds cannot be read, and whether it posts cannot be checked")
         if names:
             listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-            return (f"is written earlier in this command by {listed}, so what it holds cannot be read, and "
-                    f"whether it posts cannot be checked")
+            return self.unfollow(f"is written earlier in this command by {listed}, so what it holds cannot be "
+                                 f"read, and whether it posts cannot be checked")
         if not maybe:
             return None
         # A program that names the file, or unpacks into its folder, may have written it (#2772).
         listed = maybe[0] if len(maybe) == 1 else ", ".join(maybe[:-1]) + " and " + maybe[-1]
-        return (f"may be written earlier in this command by {listed}, in a way this gate does not follow, "
-                f"so what it holds cannot be read, and whether it posts cannot be checked")
+        return self.unfollow(f"may be written earlier in this command by {listed}, in a way this gate does not "
+                             f"follow, so what it holds cannot be read, and whether it posts cannot be checked")
 
     def made_note(self, path, word):
         """For a refusal: which files (or heredoc) word was made from, or None when it was not made."""
@@ -2531,8 +2557,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
 
     def unfollow(self, why):
         """Record why that an import could not be followed, for main() to say the check could not be
-        made, keyed on this cause rather than on the words it is put in; and give it back."""
-        self.unfollowed = why
+        made, keyed on this cause rather than on the words it is put in; and give it back. Every one
+        is kept, so a later cause the verdict does not carry cannot hide the one it does (#2922)."""
+        self.unfollowed.append(why)
         return why
 
     def import_targets(self, text, kind, cur_dir, root, inserts=((), ()), strings=True):
@@ -3132,7 +3159,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
           - any other command that binds a name (read, for, unset, local...) leaves it unknown;
           - a cd that may not have run (chained, piped, or in a compound) leaves the directory unknown
             from then on, except that the commands joined to `cd X` by && run only where it worked,
-            and `cd X || exit` and `cd X || { ...; exit; }` end the script where it did not.
+            and `cd X || exit` and `cd X || { ...; exit; }` end the script where it did not; a cd
+            joined by && alone to the commands before it (`mkdir -p o && cd X && ...`) is read as
+            one at the start of its list is, since nothing after it runs unless it ran (#2913).
         Inside a function body only a value that lasts to the end of s holds, as the body runs when
         the function is called. A value lasts to the end of s where nothing else in s binds the name
         (a NAME=value in front of a command that is not a special builtin or a function of s sets it
@@ -3297,6 +3326,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             return None
 
         top, whole, prev, test, chain, i = len(s), True, ";", None, None, 0
+        # Whether the command being followed runs only where every command before it in its list
+        # worked: it is joined to them by && alone (claude-config#2913). A cd reached that way is
+        # followed as one at the start of the list is, so `mkdir -p x && cd X && bash suite.sh` runs
+        # the suite in X, as `cd X && bash suite.sh` does.
+        all_and = True
         while i < len(items):
             (d, t), p = items[i]
             if len(p["scope"]) > 1:
@@ -3332,7 +3366,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     if chain == "and":
                         lost.append((end, len(s)))
                     chain = None
-                i, prev, test = j + 1, items[j][1]["how"], None
+                i, prev, test, all_and = j + 1, items[j][1]["how"], None, False
                 continue
             i += 1
             handled.add(i - 1)
@@ -3343,8 +3377,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     break  # the last command of a pipeline may run in this shell
                 if is_cd and how not in ("|", "&"):
                     lost.append((p["end"], len(s)))  # commands() moves to it, the shell does not
-                prev, test, chain = how, None, None
+                prev, test, chain, all_and = how, None, None, False
                 continue
+            all_and = (all_and and prev == "&&") if prev in ("&&", "||") else True
             if prev in ("&&", "||"):
                 if chain and not (chain == "and" and prev == "&&"):
                     if chain == "or" and prev == "||" and re.match(r"exit\b", head):
@@ -3361,7 +3396,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     else:
                         res = effects(d, head, p, runs)
                 else:
-                    if is_cd:
+                    if is_cd and all_and and how in ("&&", "||"):
+                        # What is joined to it runs only where it and everything before it worked,
+                        # or, after ||, ends the script where any of them did not (#2913).
+                        chain = "and" if how == "&&" else "or"
+                    elif is_cd:
                         lost.append((p["end"], len(s)))  # a cd that may not run
                     res = effects(d, head, p, None)
                 test = None
@@ -5331,6 +5370,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         claude-config#2691), so a code shaped file after it is handed to it, as after a held script
         word, and read as code only where the code can run what it is handed."""
         code, data = [], []
+        on_disk = {}  # each script read from a file, by its label: what it writes is not otherwise noted
         if inline:
             # A fourth member, where given, is how that code is read for what it can do (perl_acts).
             label, text, here = inline[:3]
@@ -5417,6 +5457,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 return reason
             code.append((label or f"the script {w}",
                          lambda runs_only=False, path=path: self.acts(path, d, shell_hint, lang, runs_only)))
+            on_disk[label or f"the script {w}"] = path
             after_held = after_held or w == held
         for w, path, handed in data:
             if handed:
@@ -5431,16 +5472,30 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 what = f"{w}, which {unread}"
             else:
                 try:
-                    hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
+                    # Not named text: the inline code's lambda above reads that name from this scope.
+                    held_text = self.content(path).decode("utf-8", "replace")
                 except OSError:
                     continue  # unreadable to us is unreadable to the script that would read it
+                hit = MARKER.search(held_text)
+                if hit and self.own_language(path) == "py":
+                    # Its comments and docstrings send nothing, nor do the patterns it searches with,
+                    # handed on or run (py_marker; #2913: the gate's own source handed to a helper).
+                    hit = py_marker(held_text)
                 if not hit:
                     continue
                 what = f"{w}, which names {hit.group(0)}"
             for script_label, script_acts in code:
-                acts = script_acts()
+                # A file the gate cannot read (written earlier, by a download or a program) matters only
+                # to a script that can send a request or run code: one that only writes files cannot
+                # make it post (#2922). What such a script on disk may write, the files it is handed
+                # and the ones its text names, is noted as written by it, so a later command running
+                # one is refused as it would be after any write the gate cannot read (note_handed).
+                # A file naming an endpoint is still read against a script that writes, as before.
+                acts = script_acts(runs_only=True) if unread else script_acts()
                 if acts:
                     return f"{script_label} {acts}, and is handed {what}"
+                if unread and script_label in on_disk and script_acts():
+                    self.note_handed(on_disk[script_label], words, d, script_label)
             # Data every script beside it only reads; none sends or runs what it is handed.
         return None
 
@@ -5506,6 +5561,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             why = self.script(w, d, depth, shell_hint and not self.own_language(self.resolve(w, d)), lang, w)
             return f"{script_label} {runs}, and is handed {why}" if why else None
         return None
+
+    def note_handed(self, path, words, d, label):
+        """Note what a script on disk that writes files may write once it is handed a file the gate
+        cannot read (#2922): each file shaped word it is handed, and any file its text names (as code
+        a program is given is noted, lib/program-writes.py, never followed), each unreadable from here
+        on. Not inside a script on disk, whose own writes are outside what the gate follows."""
+        if self.shell.get("on_disk"):
+            return
+        try:
+            text = self.content(path).decode("utf-8", "replace")
+        except OSError:
+            text = ""
+        self.made_code.append((text, label, d, False, (), text))
+        for w in words[1:]:
+            if not w.startswith("-") and not self.sw.REDIRECT_WORD.match(w):
+                self.note_named(w, w, d, label)
 
     def own_language(self, path):
         """"js" or "py" where a file itself says what it is, by its extension or its #! (language with
@@ -6405,7 +6476,7 @@ def main():
         # A reason carrying an import the gate could not follow (recorded by modules() where it gives
         # up, never matched by its wording) is not a post it found, so it says the check could not be
         # made rather than claiming a post.
-        unfollowed = bool(judge.unfollowed) and judge.unfollowed in reason
+        unfollowed = any(why in reason for why in judge.unfollowed)
         lead = ("REFUSED: the gate could not check whether this command posts to Slack: "
                 if unfollowed else "REFUSED: this command posts to Slack: ")
         if unfollowed and not MARKER.search(cmd):

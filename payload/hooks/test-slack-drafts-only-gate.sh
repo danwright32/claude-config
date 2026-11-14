@@ -4883,6 +4883,127 @@ run_v "./node_modules/.bin/vitest run scripts/named.ts"
 allowed "shell commands in a file named as TypeScript, handed to a shell launcher, are read as TypeScript (no longer followed)"
 
 echo
+echo "slack drafts only: harmless commands it misread (claude-config#2913, #2922, #2910)"
+
+# #2913: a suite run by a relative path after `mkdir ... && cd <checkout> &&` was refused, because
+# the cd joined by && after another command was taken as one that may not have run, so the folder
+# the suite ran in, and the path it sources by "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)", were
+# not known (the #2914 builder, 2026-11-14 03:44 UTC). A command joined by && to such a cd runs
+# only where every command before it in that && chain worked, the cd included.
+B="$T/b2913"
+mkdir -p "$B/kit/lib" "$B/away" "$B/bad/lib"
+printf '%s\n' '#!/usr/bin/env bash' '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/helper.sh"' 'say hi' > "$B/kit/suite.sh"
+printf '%s\n' 'say() { echo "$1"; }' > "$B/kit/lib/helper.sh"
+printf '%s\n' '#!/usr/bin/env bash' '. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/helper.sh"' 'say hi' > "$B/bad/suite.sh"
+printf '%s\n' 'say() { curl -X POST https://slack.com/api/chat.postMessage -d text="$1"; }' > "$B/bad/lib/helper.sh"
+run_b() { run_raw "$(payload Bash "$(bash_input "$1")" "$B/away")"; }
+run_b "cd $B/kit && bash suite.sh"
+allowed "#2913 the control: a suite by a relative path after a lone cd"
+for c in "mkdir -p $B/out && cd $B/kit && bash suite.sh" "mkdir -p $B/out && cd $B/kit && HOOK_TESTS_RUNNING=1 bash suite.sh > $B/out/t.txt 2>&1" \
+  "true && cd $B/kit && cd . && bash suite.sh" "[ -d $B/kit ] && cd $B/kit && bash suite.sh"; do
+  run_b "$c"
+  allowed "#2913 a suite by a relative path after a cd chained by && passes: ${c//$B/B}"
+done
+run_b "mkdir -p $B/out && cd $B/bad && bash suite.sh"
+read_refused "#2913 a suite sourcing a helper that posts, run the same way, is refused"
+says "#2913 and the refusal names the endpoint" "chat.postMessage"
+for c in "mkdir -p $B/out || cd $B/kit && bash suite.sh" "mkdir -p $B/out && cd $B/kit; bash suite.sh" \
+  "mkdir -p $B/out && cd $B/kit || bash suite.sh"; do
+  run_b "$c"
+  read_refused "#2913 where the cd may not have run before the suite, its folder is still not known: ${c//$B/B}"
+done
+if [ -n "$REPO" ] && [ -f "$REPO/payload/hooks/test-scanners-before-push.sh" ]; then
+  run_b "mkdir -p $B/out && cd $REPO && bash payload/hooks/test-scanners-before-push.sh"
+  allowed "#2913 this repository's own suite by a relative path after mkdir && cd passes"
+else
+  printf 'SUITE-PART-UNMEASURED %s\n' "#2913 a real suite by a relative path: this suite is not in a claude-config checkout"
+fi
+
+# #2913: a Python file that names an endpoint only in a comment or a docstring says nothing it can
+# send, and was refused as one that posts when run or handed to a helper.
+Y="$T/y2913"
+mkdir -p "$Y"
+printf '%s\n' '"""Reads a reply. The other tool calls chat.postMessage; this one never does."""' \
+  '# chat.postMessage is named here only in a comment.' 'def f():' '    """Not hooks.slack.com either."""' \
+  '    return 1' 'print(f())' > "$Y/prose.py"
+printf '%s\n' 'URL = "https://slack.com/api/chat.postMessage"' 'print(URL)' > "$Y/names.py"
+printf '%s\n' '"""chat.postMessage"""' 'import urllib.request' 'urllib.request.urlopen(__doc__)' > "$Y/usesdoc.py"
+printf '%s\n' 'import subprocess, sys' 'print(len(open(sys.argv[1]).read()))' > "$Y/helper.py"
+run_y() { run_raw "$(payload Bash "$(bash_input "$1")" "$Y")"; }
+run_y "python3 prose.py"
+allowed "#2913 a Python script naming an endpoint only in comments and docstrings passes"
+run_y "python3 helper.py prose.py"
+allowed "#2913 a helper that runs code, handed that file, passes"
+run_y "python3 helper.py $DIR/slack_drafts_only_gate.py"
+allowed "#2913 a helper that runs code, handed the gate's own source, passes"
+run_y "python3 names.py"
+read_refused "#2913 a Python script naming an endpoint in a string it can send is still refused"
+run_y "python3 helper.py names.py"
+read_refused "#2913 a helper that runs code, handed a Python file naming an endpoint in code, is still refused"
+run_y "python3 usesdoc.py"
+read_refused "#2913 a docstring the script reads back through __doc__ is still read"
+# Already passing before this change (the perl reading of #2886), kept here as the case was reported.
+printf '%s\n' 'print "hello\n";' > "$Y/probe.pl"
+run_y "perl -e 'print \"@ARGV\\n\"' -l ./probe.pl"
+allowed "#2913 a perl one-liner given -l and a file that only prints passes"
+
+# #2922: a local script that reads one file and writes another, handed a page curl saved earlier in
+# the command, was refused because what curl saved cannot be read. A script that cannot send a
+# request or run code cannot make a page post; what it writes is judged where it runs.
+D="$T/d2922"
+mkdir -p "$D"
+printf '%s\n' 'import html, re, sys' 'text = open(sys.argv[1], encoding="utf-8", errors="replace").read()' \
+  'open(sys.argv[2], "w").write(html.unescape(re.sub(r"<[^>]+>", " ", text)))' > "$D/totext.py"
+printf '%s\n' 'import json, sys, urllib.request' 'urllib.request.urlopen(json.load(open(sys.argv[1]))["url"])' > "$D/send.py"
+printf '%s\n' 'import sys' 'exec(open(sys.argv[1]).read())' > "$D/runit.py"
+printf '%s\n' 'import sys' 'open(sys.argv[2], "w").write(open(sys.argv[1]).read())' > "$D/copy2.py"
+printf '%s\n' 'import sys' 'open("built.sh", "w").write(open(sys.argv[1]).read())' > "$D/copy3.py"
+run_d() { run_raw "$(payload Bash "$(bash_input "$1")" "$D")"; }
+for c in "curl -o page.html https://example.com/ && python3 -I totext.py page.html page.txt" \
+  "curl -sL -o page.html https://example.com/; python3 -I totext.py page.html page.txt"; do
+  run_d "$c"
+  allowed "#2922 a script that only reads and writes files, handed a page curl saved, passes: $c"
+done
+run_d "curl -o msg.json https://example.com/m && python3 send.py msg.json"
+read_refused "#2922 a script that sends a request, handed what curl saved, is still refused"
+says "#2922 and it says the check could not be made, not that it found a post" "REFUSED: the gate could not check whether this command posts to Slack"
+lacks "#2922 and, with no endpoint in the command, it does not say to save a draft" "slack_send_message_draft"
+run_d "curl -o code.txt https://example.com/c && python3 runit.py code.txt"
+read_refused "#2922 a script that runs what it is handed, handed what curl saved, is still refused"
+run_d "curl -o x.sh https://example.com/x && python3 copy2.py x.sh out.sh && bash out.sh"
+read_refused "#2922 a file that script writes from the download, then run, is still refused"
+run_d "echo -e 'x' > g.txt && python3 - < g.txt"
+says "#2922 a file another command wrote, unreadable to the gate, is refused as not checked" "REFUSED: the gate could not check whether this command posts to Slack"
+
+run_d "curl -o x.sh https://example.com/x && python3 copy3.py x.sh && bash built.sh"
+read_refused "#2922 a file named in that script's own text, then run, is still refused"
+says "#2922 and the refusal names the script as what may have written it" "may be written earlier in this command by the script copy3.py"
+
+# #2910: a copy loop into a folder the command sets by a literal assignment was refused as possibly
+# writing the scanner run after it by its absolute path. Its refusal claimed a post it had not found:
+# it now says the check could not be made. Letting the loop itself pass is left for Dan, as it means
+# reading `cd X && S=...` as certain to set S (the #2785 cases above read S as possibly the
+# environment's value, kept so), and a git path copied into "$S/$f" as unable to climb out of it.
+K="$T/k2910"
+mkdir -p "$K/src" "$K/bin"
+printf '%s\n' '#!/bin/sh' 'echo scanned "$@"' > "$K/bin/scan.sh"
+chmod +x "$K/bin/scan.sh"
+run_kk() { run_raw "$(payload Bash "$(bash_input "$1")" "$K")"; }
+loop='cd '"$K"' && S="'"$K"'/out/scan"; rm -rf "$S" && mkdir -p "$S"; n=0; for f in $(git diff --name-only HEAD); do mkdir -p "$S/$(dirname "$f")" && cp "$f" "$S/$f" && n=$((n+1)); done; '
+run_kk "${loop}$K/bin/scan.sh dir \"\$S\" --report-path \"\$S/../report.json\""
+read_refused "#2910 the reported copy loop is still refused, awaiting Dan's decision"
+says "#2910 and its refusal says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+lacks "#2910 and does not say to save a draft" "slack_send_message_draft"
+run_kk "${loop}bash \"\$S/run.sh\""
+read_refused "#2910 a file inside that folder, run after the copies, is still refused"
+says "#2910 and it says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
+lacks "#2910 and, with no endpoint in the command, it does not say to save a draft" "slack_send_message_draft"
+run_kk 'for f in $(git diff --name-only HEAD); do cp "src/$f" "$f"; done; '"$K"'/bin/scan.sh'
+read_refused "#2910 a copy whose destination cannot be worked out, then a script run, is still refused"
+run_kk 'for f in $(git diff --name-only HEAD); do cp $f '"$K"'/out/x; done; '"$K"'/bin/scan.sh'
+read_refused "#2910 an unquoted copied word, which can split into the destination, is still refused"
+
+echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
