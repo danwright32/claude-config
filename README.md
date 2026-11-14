@@ -2445,7 +2445,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2880,6 +2880,18 @@ find no rtk init; both with the full suite running beside it (load average 234)
 outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070
 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal
 MacBook, 7,604 (5.9%) reach the judge and 31 are refused
+
+</td></tr>
+<tr><td>
+
+`check-screenshot-window.sh` (#2908)
+
+</td><td>
+
+2026-11-13: 0.004 to 0.010 seconds on `git push -u origin feat/2908-screenshot-window`, five
+readings at load average 22 to 43, timed from outside, since a command naming neither screencapture
+nor a shell script leaves before python starts; 0.055 to 0.090 seconds on a capture or a script run,
+which the judge reads
 
 </td></tr>
 <tr><td>
