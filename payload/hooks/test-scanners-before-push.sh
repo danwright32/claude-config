@@ -1990,8 +1990,8 @@ out="$(wn_fire "$RG" "git push -u origin guard")"; rc=$?
 # A guard suite that HANGS (claude-config#2914). With no limit of its own the step held the push
 # until Claude Code killed the whole gate at its declared timeout, and the refusal then carried no
 # reason of the gate's. The stand in records its pid and sleeps far past the limit this case gives
-# (SCANNERS_SLACK_GUARD_SECONDS=1, so nothing here waits out the real one, L290), so a gate that
-# waits for it returns after 30 seconds and a pass instead.
+# (SCANNERS_SLACK_GUARD_SECONDS=1, so nothing here waits out the real one, L290); its sleep is a
+# setting, not a measurement, so a gate that waits for it returns late with a pass instead.
 RGH="$(sag_repo sag-hang)"
 mkdir -p "$RGH/payload/mods/slack-alert-guard/hooks"
 printf 'export const x = 1\n' > "$RGH/payload/mods/slack-alert-guard/hooks/x.ts"
@@ -2031,6 +2031,17 @@ out="$(wn_fire "$RGM" "git push -u origin guard")"; rc=$?
 grep -q -F "git status" <<< "$out" \
   && check "#2914 and does not send the person to git status, which cannot help" "out=$out" \
   || check "#2914 and does not send the person to git status, which cannot help" ok
+# A copy of the gate that cannot load lib/bounded-run.sh refuses, naming it, and never runs the
+# guard's suite unbounded (claude-config#2914). Read from the stand in's own record of runs, which
+# the control above showed it writes.
+SAG_NOLIB="$TMPROOT/sag-nolib-hooks"; mkdir -p "$SAG_NOLIB"
+cp "$H" "$SAG_NOLIB/scanners-before-push.sh"; cp -R "$DIR/lib" "$SAG_NOLIB/lib"; rm -f "$SAG_NOLIB/lib/bounded-run.sh"
+_sag_calls_before="$(grep -c . "$SAG_CALLS" 2>/dev/null)"
+out="$(H="$SAG_NOLIB/scanners-before-push.sh" wn_fire "$RG" "git push -u origin guard")"; rc=$?
+[ "$rc" -eq 2 ] && grep -q -F "sag-nolib-hooks/lib/bounded-run.sh" <<< "$out" \
+  && [ "$(grep -c . "$SAG_CALLS" 2>/dev/null)" = "$_sag_calls_before" ] \
+  && check "#2914 a gate that cannot load bounded-run.sh refuses a push changing the guard, naming it, and runs nothing unbounded" ok \
+  || check "#2914 a gate that cannot load bounded-run.sh refuses a push changing the guard, naming it, and runs nothing unbounded" "exit=$rc calls=$(cat "$SAG_CALLS" 2>/dev/null) out=$out"
 
 # --- no fixture reached the REAL pass cache (claude-config#789). The gate keys its record of passed
 #     scans by the repository's origin, or its path when it has none, as the fixtures do, so a

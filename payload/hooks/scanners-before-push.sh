@@ -343,7 +343,7 @@ if [ "$_sc_pc_rc" -eq 0 ] && grep -q '^payload/mods/slack-alert-guard/' <<< "$PC
       [ "$_wn_got" -lt "$_sc_sag_seconds_default" ] && _sc_sag_seconds="$_wn_got"
     else
       # Unreadable is the default, said rather than swallowed (L50, L90).
-      echo "scanners-before-push: SCANNERS_SLACK_GUARD_SECONDS is '$SCANNERS_SLACK_GUARD_SECONDS', not a whole number of seconds, so the default of $_sc_sag_seconds_default is used." >&2
+      echo "scanners-before-push: SCANNERS_SLACK_GUARD_SECONDS is '$SCANNERS_SLACK_GUARD_SECONDS', not a whole number of seconds above zero, so the default of $_sc_sag_seconds_default is used." >&2
     fi
   fi
   _sc_sag_tree="$(pc_push_tree)"
