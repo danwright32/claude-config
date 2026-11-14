@@ -89,8 +89,9 @@ for a in "$@"; do [[ "$a" =~ ^L[0-9]+$ ]] || usage; done
 for tool in gh jq; do
   command -v "$tool" >/dev/null 2>&1 || { echo "REFUSED: $tool is not installed, so nothing was filed." >&2; exit 1; }
 done
+LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$LIB_DIR" != "${BASH_SOURCE[0]}" ] || LIB_DIR=.; LIB_DIR="$(cd "${LIB_DIR:-/}" && pwd)"
 # shellcheck source=gh-poll.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh-poll.sh" || {
+. "$LIB_DIR/gh-poll.sh" || {
   echo "REFUSED: gh-poll.sh is missing beside this script, so a rate limit answer could not be told from any other failure. Nothing was filed." >&2
   exit 1
 }
