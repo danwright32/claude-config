@@ -28,12 +28,16 @@ back.
   to Claude on every request), and `outputStyle` (`Explanatory` since 2026-10-30, Dan's choice for
   every session; only a built in style, `default`, `Explanatory` or `Learning`, is accepted, since a
   custom style is a file under `output-styles` the sync does not carry), and
-  `env.CLAUDE_CODE_SUBAGENT_MODEL` (`opus` since 2026-11-10, the model an agent runs on when neither
-  the call nor the agent's definition names one, #2645; it is the only variable under `env` the sync
-  writes, and the rest of that block stays each Mac's own). It is edited in the
-  repo, never published back from a Mac, and a pull writes each value into `settings.json`
-  (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
-  value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
+  `env.CLAUDE_CODE_SUBAGENT_MODEL`, set to `null` since 2026-11-14, when Dan chose to stop setting a
+  default subagent model (#2949), so an agent that names no model runs on the session's model again.
+  It was `opus` from 2026-11-10 (#2645). `null` under `env` means remove: the pull deletes that one
+  variable from each Mac's `settings.json` and leaves every other variable there untouched, since
+  leaving the key out of this file would leave each Mac's old value in place. It is the only variable
+  under `env` the sync writes or removes, and the rest of that block stays each Mac's own. It is
+  edited in the repo, never published back from a Mac, and a pull writes each value into
+  `settings.json` (refusing the whole file, by name, if it holds any key not on the allowlist in
+  `claude-sync`, or a value Claude Code would not act on). Off is `false`, never a deletion; the one
+  deletion is that stated `null` under `env`. A `/effort` pick on one Mac
   lasts until the next pull puts the shared level back; change the level here instead.
   Because `settings.json` names an alias (`opus`), `claude-sync status` asks the claude command
   which full model that alias runs on this Mac (`claude -p --bare /model`, answered locally at no
@@ -3530,6 +3534,16 @@ What it refuses:
 What passes: every Slack read, `slack_send_message_draft`, a command that only mentions an endpoint
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
 2026-11-05), matched by its real path, so a copy anywhere else is refused.
+
+A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
+with nothing changed takes about 0.13 s instead of about 4 for `bash tests/test-claude-sync.sh`. The
+key is the gate's code, the Python, the command, its directories and the environment variables the
+gate reads; every file the judgement read and every disk test it answered is recorded and asked again
+before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
+`lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
+(a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
+Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+run, so a CI runner judges as before.
 
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
@@ -7184,8 +7198,17 @@ before the last of them at every stop for over half an hour): those are read aft
 so the looks go first to what can still finish, are still read whenever a look is spare, so a reopen
 or push from outside is seen, and keep their reading only while the look is held and only when it
 was read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is
-never kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
-another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
+never kept that way. A PR a turn end cannot read only because this session's own loops used the
+minute's looks (never a rate limit pause) is in hand while a merge-when-ready run of the session's
+is merging it (#2901, after six merging PRs had a session refused four stops running): its run
+listed as running in the `background_tasks` Claude Code sends with the stop, and a process running
+the helper for that PR and repository on this Mac now (`pgrep -lf`), both read through mod-kit's
+reader of the helper's words, never a log file. A run naming no repository counts as the session's
+own only when its command moves to no other folder first. With nothing else outstanding the turn
+ends, winding down stays on and the next stop reads again; with something else, the refusal names
+the PRs in hand apart. Anything unreadable, a PR without such a run, or a run on one side only still
+refuses. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for another
+issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
 checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
 turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
 only the mode they name. A message Dan types while a turn runs is read the same way, at Enter, as

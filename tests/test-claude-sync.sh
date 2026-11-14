@@ -24059,8 +24059,52 @@ out_sx23="$(sx_refused envshape '{"env": "opus"}')"
 dbg "shared subagent model, env of the wrong shape: $out_sx23"
 check "#2645 an env that is not an object of variables is refused" "line_has \"\$out_sx23\" 'settings.shared.json' 'env is not an object'"
 check "#2645 and nothing is written for that either" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx23\""
-check "#2645 the shared file in this repository names a default subagent model" \
-  "[ -n \"\$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL // empty' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" ]"
+# A VARIABLE THE FILE SETS TO null IS REMOVED (#2949). On 2026-11-14 Dan chose to stop setting a
+# default subagent model, so an agent naming no model runs on the session's again. Taking the key out
+# of the file leaves each Mac's value in place for ever, so the file says the variable is unset with
+# null, and the pull deletes exactly that leaf. Every other env variable is this Mac's own and may be
+# a credential, so it stays byte for byte and its value is never printed.
+SX24R="$WORK/sx24-repo"; sx_repo "$SX24R" '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": null}}' ''
+SX24H="$WORK/sx24-home"; mkdir -p "$SX24H"
+jq -c '. + {env: {CLAUDE_CODE_PLUGIN_DIRS: "/this/mac/mods", SOME_SERVICE_TOKEN: "keep-me-unprinted", CLAUDE_CODE_SUBAGENT_MODEL: "opus"}}' <<< "$SX_ORIG" > "$SX24H/settings.json"
+out_sx24="$(sx_pull "$SX24H" "$SX24R")"
+dbg "shared subagent model removed, first pull: $out_sx24"
+check "#2949 a pull removes a variable the shared file sets to null" \
+  "jq -e '.env | has(\"CLAUDE_CODE_SUBAGENT_MODEL\") | not' '$SX24H/settings.json' >/dev/null"
+check "#2949 and keeps every other env variable exactly as it was" \
+  "[ \"\$(jq -cS '.env' '$SX24H/settings.json')\" = '{\"CLAUDE_CODE_PLUGIN_DIRS\":\"/this/mac/mods\",\"SOME_SERVICE_TOKEN\":\"keep-me-unprinted\"}' ]"
+check "#2949 and leaves every setting outside env exactly as it was" \
+  "[ \"\$(jq -cS 'del(.env)' '$SX24H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "#2949 and the pull says it removed the variable" "line_has \"\$out_sx24\" 'settings.json' 'CLAUDE_CODE_SUBAGENT_MODEL' 'removed'"
+check "#2949 and never prints another variable's value" "! grep -q 'keep-me-unprinted' <<< \"\$out_sx24\""
+touch -t 202001010000 "$SX24H/settings.json"; _sx24sum="$(cksum < "$SX24H/settings.json")"
+out_sx24b="$(sx_pull "$SX24H" "$SX24R")"
+check "#2949 a second pull leaves settings.json byte for byte" "[ \"\$(cksum < '$SX24H/settings.json')\" = \"\$_sx24sum\" ]"
+check "#2949 and claims to have removed nothing there" "! line_has \"\$out_sx24b\" 'settings.json' 'CLAUDE_CODE_SUBAGENT_MODEL'"
+# A Mac that never had the variable, or any env block, is not given an empty one.
+SX25H="$WORK/sx25-home"; mkdir -p "$SX25H"; printf '%s\n' "$SX_ORIG" > "$SX25H/settings.json"
+out_sx25="$(sx_pull "$SX25H" "$SX24R")"
+check "#2949 a Mac with no env block is not given one by a removal" "jq -e 'has(\"env\") | not' '$SX25H/settings.json' >/dev/null"
+check "#2949 and the pull claims no removal there" "! line_has \"\$out_sx25\" 'settings.json' 'CLAUDE_CODE_SUBAGENT_MODEL'"
+# null is the only removal: a variable off the allowlist set to null is still refused by name.
+out_sx26="$(sx_refused envnull '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": null, "SOME_SERVICE_TOKEN": null}}')"
+check "#2949 a null for a variable the sync does not share is refused, naming it" "line_has \"\$out_sx26\" 'settings.shared.json' 'SOME_SERVICE_TOKEN'"
+check "#2949 and nothing from that file is written" "! grep -q 'SETTINGS.JSON WAS CHANGED' <<< \"\$out_sx26\""
+# STATUS judges a removal through the same definition: unapplied while the variable is still there.
+git -C "$SX8D" pull -q origin main 2>/dev/null
+printf '{"env": {"CLAUDE_CODE_SUBAGENT_MODEL": null}}\n' > "$SX8D/payload/settings.shared.json"
+git -C "$SX8D" add payload && git -C "$SX8D" -c user.name=t -c user.email=t@e commit -q -m 'unset subagent model' 2>/dev/null && git -C "$SX8D" push -q origin main 2>/dev/null
+git -C "$SX8C" pull -q origin main 2>/dev/null
+check "#2949 fixture: the clone holds the removal" "jq -e '.env | has(\"CLAUDE_CODE_SUBAGENT_MODEL\")' '$SX8C/payload/settings.shared.json' >/dev/null"
+jq -c '. + {env: {CLAUDE_CODE_PLUGIN_DIRS: "/this/mac/mods", CLAUDE_CODE_SUBAGENT_MODEL: "opus"}}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8f="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#2949 while the variable is still set, status lists the shared file as not applied" \
+  "line_has \"\$out_sx8f\" 'settings.shared.json' 'has not applied'"
+jq -c '. + {env: {CLAUDE_CODE_PLUGIN_DIRS: "/this/mac/mods"}}' <<< "$SX_ORIG" > "$SX8H/settings.json"
+out_sx8g="$(CLAUDE_HOME="$SX8H" SYNC_REPO="$SX8C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
+check "#2949 once it is gone, status no longer lists it" "! line_has \"\$out_sx8g\" 'settings.shared.json' 'has not applied'"
+check "#2949 the shared file in this repository removes the default subagent model (Dan, 2026-11-14)" \
+  "jq -e '.env | has(\"CLAUDE_CODE_SUBAGENT_MODEL\") and .CLAUDE_CODE_SUBAGENT_MODEL == null' '$(dirname "$SCRIPT")/payload/settings.shared.json' >/dev/null"
 
 # THE SHIPPED FILE is one the sync accepts: every value it carries lands. Asserts no particular
 # value, so changing the shared setting later needs no test change (L252).
