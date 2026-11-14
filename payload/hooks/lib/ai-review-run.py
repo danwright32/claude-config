@@ -971,7 +971,10 @@ def remove_input_when_stopped(diff_file, also=None):
     handling either would end a review those leave running. SIGKILL cannot be caught; the runner
     around this (pr-review.sh run_reviewer) and the next review's sweep remove the input then.
     `also` is a list main adds to once it has written more input (the lessons file, #2975), read
-    when the signal arrives, so a path written after this was set up is removed too."""
+    when the signal arrives, so a path written after this was set up is removed too. Neither of
+    those SIGKILL remedies covers the lessons file: it sits in the system temp folder, not beside
+    the input, so a killed review leaves it there for the system's own temp cleanup. It holds only
+    the public lessons index, the same text in every review, so nothing private is left behind."""
     def stopped(signum, _frame):
         for path in [diff_file, *(also or [])]:
             try:
