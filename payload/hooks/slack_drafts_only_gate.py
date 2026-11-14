@@ -129,14 +129,16 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 # relied on as complete by empty_slot (claude-config#2786): a script word it places that names no file
 # lets the data files after it go unread as code, so a valued Python option missing here would let
 # the file after its value run unread. Any other family's table is not relied on that way.
+# -i takes no separate value in any family that has it (claude-config#2893): bash -i is interactive,
+# node -i opens the REPL, and perl and ruby take an in place edit's suffix glued (-i.bak) or none.
+# Read as taking one, `perl -i -pe s/a/b/ post.sh` took -pe for its value and s/a/b/ for the script,
+# and `node -i -e CODE` took -e, so the code was never read as code.
 OPTIONS = {
-    "shell": ({"-c"}, "c", VALUED),
+    "shell": ({"-c"}, "c", VALUED - {"-i"}),
     "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
-    "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED),
+    "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED - {"-i"}),
     "deno": ({"eval"}, "", VALUED),
-    "ruby": ({"-e"}, "e", VALUED - {"-i"}),  # ruby -i[ext] as perl's: no separate value (#2893)
-    # perl's -i takes its backup suffix glued (-i.bak) or none, never the next word: `perl -i -pe
-    # s/a/b/ post.sh` read -pe as its value and s/a/b/ as the script (claude-config#2893).
+    "ruby": ({"-e"}, "e", VALUED - {"-i"}),
     "perl": ({"-e", "-E"}, "eE", VALUED - {"-i"}),
     "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
     "osascript": ({"-e"}, "", VALUED),
@@ -957,6 +959,11 @@ CURL_WRITES_LONG = {"--output", "--cookie-jar", "--dump-header", "--trace", "--t
 CURL_REMOTE_LONG = {"--remote-name", "--remote-name-all", "--remote-header-name", "--output-dir", "--config"}
 CURL_REMOTE_VALUED = {"--output-dir", "--config"}
 CURL_VALUED = "EKCbcdDFPHhmoUQreXYytzTuAwx"
+# An assignment to the variable %s (Judge.curl_defaults, claude-config#2893): where a command starts,
+# past export, env and their kin with their options, and past other assignments.
+CURLRC_NAMES = (".curlrc", "curlrc")
+CURL_ASSIGN = (r"(?:^|[;&|(`{])\s*(?:(?:export|env|declare|typeset|local|readonly)\s+(?:-\S*\s+)*)?"
+               r"""(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+)*%s=""")
 # One printf conversion the gate works out exactly (claude-config#2721): flags, a width and a precision
 # written as digits, and a string, %b, a character or an integer conversion.
 PRINTF_SPEC = re.compile(r"%([-+ #0]*)(\d*)(?:\.(\d*))?([sbcdiuxXo%])")
@@ -1514,6 +1521,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # which may write any file the code names.
         self.made_maybe = []
         self.made_code = []
+        # The curl config files (CURLRC_NAMES) a command has just written by name, for record() to
+        # read once that command's writes are noted, and whether a text assigns a variable placing
+        # curl's default config, worked out once for each text (claude-config#2893).
+        self.curlrc_noted = set()
+        self.curl_assign_memo = {}
         # The git commands that write tracked files they do not name, each the ref its files are read
         # from (note_git in lib/program-writes.py, claude-config#2827).
         self.made_git = []
@@ -2110,18 +2122,22 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         gate cannot work out (claude-config#2893). curl reads $CURL_HOME/.curlrc, then
         $XDG_CONFIG_HOME/curlrc, then ~/.curlrc, the first it finds; every one of those places is
         read here, each by both names and with ~/.config standing for an unset XDG_CONFIG_HOME,
-        since reading one curl skips refuses only more. A variable the text seems to set, on the
-        command itself or earlier, adds the places its value names, and never takes away the
-        session's own: `NAME=` is matched anywhere in the text, so it can be a curl argument
-        (`-d HOME=x`) rather than an assignment, and reading both refuses only more."""
+        since reading one curl skips refuses only more. A variable the text sets, on the command
+        itself or earlier, adds the places its value names, and never takes away the session's own,
+        so an assignment misread still refuses only more. Only an assignment is read as one: at a
+        command's start, past other assignments, export, env and the like (CURL_ASSIGN); a NAME=
+        inside a string or a curl argument is not (`echo "CURL_HOME=$CURL_HOME"` was refused)."""
         home = os.environ.get("HOME") or os.path.expanduser("~")
         env = {"CURL_HOME": [os.environ.get("CURL_HOME")], "XDG_CONFIG_HOME": [os.environ.get("XDG_CONFIG_HOME")],
                "HOME": [home]}
         for var, values in env.items():
-            set_here = re.search(rf"(?<![\w$]){var}=", text)
+            set_here = re.search(CURL_ASSIGN % var, text, re.M)
+            key = (var, whole or "")
+            if key not in self.curl_assign_memo:
+                self.curl_assign_memo[key] = re.search(CURL_ASSIGN % var, whole or "", re.M) is not None
             if set_here:
                 value = self.sh_value(text[set_here.end():self.sh_word_end(text, set_here.end())], d)
-            elif re.search(rf"(?<![\w$]){var}=", whole or ""):
+            elif self.curl_assign_memo[key]:
                 value = self.sh_var(var)
             else:
                 continue
@@ -2132,21 +2148,25 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         dirs += [os.path.join(h, ".config") for h in env["HOME"] if h]
         out = []
         for folder in dirs:
-            for base in (".curlrc", "curlrc"):
+            for base in CURLRC_NAMES:
                 path = os.path.join(folder, base) if folder else None
                 if path and (path, None) not in out:
                     out.append((path, None))
         return out
 
-    def curlrc_written(self, d, text, whole):
-        """The reason a write this command makes leaves a config file curl reads by default naming an
-        endpoint, or None (claude-config#2893): every later curl call without -q first would post
-        there, and those calls name no endpoint for this gate to find. Read as the write leaves it."""
-        if not (self.made or self.made_code):
-            return None
-        places = [p for p, _ in self.curl_defaults(text, whole, d) if p]
-        places += [p for p in self.made if os.path.basename(p) in (".curlrc", "curlrc") and p not in places]
-        for path in places:
+    def curlrc_written(self, by_code):
+        """The reason a write the command just read makes leaves a config file curl reads by default
+        naming an endpoint, or None (claude-config#2893): every later curl call without -q first
+        would post there, and those calls name no endpoint for this gate to find. Read as the write
+        leaves it: each curl config file written by name (note_file), and, where the command handed
+        a program code that may write files it names (by_code), every default place curl reads one
+        from. Asked only after a command that wrote one of those, never of every command: a scan per
+        command of a long script's whole text was the cost of the first version."""
+        places = set(self.curlrc_noted)
+        self.curlrc_noted.clear()
+        if by_code:
+            places.update(p for p, _ in self.curl_defaults("", "", None) if p)
+        for path in sorted(places):
             if not self.made_from(path):
                 continue
             hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
@@ -2262,6 +2282,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if append:
             pieces = self.pieces_of(target, d) + pieces
         self.made[real] = pieces
+        if os.path.basename(real) in CURLRC_NAMES:
+            self.curlrc_noted.add(real)
 
     def is_dir(self, word, d):
         real = os.path.realpath(self.resolve(word, d))
@@ -5090,8 +5112,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         try:
             reason = self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
+                codes = len(self.made_code)
                 self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
-                reason = self.curlrc_written(d, text, whole)  # for a later call this gate judges alone (#2893)
+                if self.curlrc_noted or len(self.made_code) != codes:
+                    # A curl config left naming an endpoint, for a later call judged alone (#2893).
+                    reason = self.curlrc_written(len(self.made_code) != codes)
             return reason
         finally:
             self.py_cmd = saved
@@ -5896,7 +5921,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def js_acts(text, writes=True):
         """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
         a phrase, or None when it is seen unable to. It is unable to only when every module it imports
-        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC,
+        that is not one of its own files is in JS_INERT (a type only import, which loads nothing, is
+        not counted), and it names none of JS_RUNS, JS_DYNAMIC,
         JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
         judges it with this same reading, and one that is not there is refused there. writes is False
         for code a shell script writes inline, where JS_WRITES is not counted (claude-config#2446)."""
@@ -5906,6 +5932,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if quoted[m.start()]:
                 # The keyword is inside a string ('--files-from', ', '), which loads nothing; a string
                 # run as code is JS_RUNS and JS_DYNAMIC's, below (claude-config#2844, as #2484 for the walk).
+                continue
+            if m.group(0).startswith("from") and TYPE_ONLY_IMPORT.search(code, 0, m.start()) is not None:
+                # `import type { X } from "some-pkg"` is erased before anything runs, so it loads nothing
+                # (as the walk reads it, erased_import, #2526, #2890); every other import of a package
+                # the gate does not know, `import { type X }` among them, still counts as acting.
                 continue
             spec = m.group(2)
             bare = spec.split("?", 1)[0]

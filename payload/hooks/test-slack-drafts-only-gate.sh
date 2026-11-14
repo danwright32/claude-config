@@ -510,6 +510,18 @@ printf '%s\n' "import type { A } from $D2526" 'import { execSync } from "node:ch
   'import { readFileSync } from "node:fs";' 'execSync(readFileSync(process.argv[2], "utf8"));' > "$T/imp/dts/tests/count.ts"
 run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
 refused "a script that runs what it is handed, importing types from a missing declaration file"
+# A type only import of a package is erased the same way, so it does not make an inert script one that
+# may act (#2890's fold): only a value import of a package the gate does not know is read as acting.
+printf '%s\n' 'import type { Options } from "some-pkg";' 'import { readFileSync } from "node:fs";' \
+  'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+allowed "an inert script importing only types from a package, handed a file naming the endpoint"
+for line in 'import { Options } from "some-pkg";' 'import { type Options } from "some-pkg";' 'import "some-pkg";'; do
+  printf '%s\n' "$line" 'import { readFileSync } from "node:fs";' \
+    'console.log(readFileSync(process.argv[2], "utf8").length);' > "$T/imp/dts/tests/count.ts"
+  run_bash "cd $T/imp/dts && node tests/count.ts msg.txt"
+  refused "the same script importing the package as: $line"
+done
 
 # Import text inside an ordinary string literal is data, not an import node runs (claude-config#2484,
 # narrowing signed off by Dan on 2026-11-09). Measured on the work MacBook: a test script holding an
@@ -5325,6 +5337,12 @@ run_bash "export CURL_HOME=$CH/home; curl -s https://example.com/status"
 read_refused "#2893 a CURL_HOME exported earlier in the command is read"
 CURL_HOME="$CH/empty" HOME="$CH/home" run_bash "curl -s -d HOME=$CH/quiet https://example.com/status"
 read_refused "#2893 a HOME= that is only curl's data does not stop ~/.curlrc being read"
+# Only an assignment moves where curl looks: a NAME= inside other text is not one (the replay of this
+# Mac's commands found `echo "CURL_HOME=${CURL_HOME:-unset}"; curl --version` refused).
+CURL_HOME="$CH/quiet" run_bash "echo \"CURL_HOME=\${CURL_HOME:-unset} XDG=\${XDG_CONFIG_HOME:-unset}\"; curl --version"
+allowed "#2893 a CURL_HOME= inside echoed text is no assignment, and the curl after it passes"
+run_bash "env CURL_HOME=$CH/home curl -s https://example.com/status"
+read_refused "#2893 a CURL_HOME set through env is read"
 run_bash "CURL_HOME=\"\$(mktemp -d)\" curl -s https://example.com/status"
 read_refused "#2893 a CURL_HOME the gate cannot work out is refused as unread"
 # A write that leaves a default config naming an endpoint is refused, so a later call cannot post.
@@ -5363,6 +5381,16 @@ lacks "#2893 not for a script it does not run, with a suffix either" "which perl
 run_at "ruby -i -pe 'x' post.sh" "$CH"
 read_refused "#2893 ruby -i -pe editing a file is refused"
 lacks "#2893 not for a script it does not run" "which ruby may run as its script"
+# bash -i (interactive) and node -i (the REPL) take no value either. Read as taking one, `node -i -e
+# CODE` took -e for -i's value, so the code was never read as code: an import of a file that posts
+# passed (measured at 07aed34).
+printf '%s\n' "fetch('https://slack.com/api/chat.postMessage');" > "$CH/post.mjs"
+run_at "node -i -e 'import(\"./post.mjs\")'" "$CH"
+read_refused "#2893 node -i -e importing a file that posts is refused"
+run_at "bash -i -c 'bash post.sh'" "$CH"
+read_refused "#2893 bash -i -c running a script that posts is refused"
+run_at "node -i -e 'console.log(1)'" "$CH"
+allowed "#2893 node -i -e with code that does nothing passes"
 
 echo "slack drafts only: a type only import of a file that is there is not followed (claude-config#2890)"
 
