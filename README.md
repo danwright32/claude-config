@@ -4069,7 +4069,11 @@ ref per line, blank lines and lines starting with `#` ignored (Dan, 2026-11-14: 
 and a run passes silently). It fails closed: a list missing, unreadable, not text, or holding any
 other line marks nothing, and the run is asked about as before, the question saying why it is not a
 test project. An inline write, a push, `--db-url`, `--local` and a project not on the list are asked
-about as before. The list is the checkout's own word: a live ref written into it would be trusted.
+about as before. The list is trusted only as git has committed it: its bytes must be what `git show
+HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
+included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
+itself asked about, which is why the hook's registration now takes those three tools. Still open: a
+session that edits the list and commits it in one shell command is trusted once the commit lands.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

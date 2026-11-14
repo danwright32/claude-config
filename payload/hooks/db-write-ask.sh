@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # db-write-ask.sh
-# Claude Code PreToolUse(Bash|mcp__.*)
+# Claude Code PreToolUse(Bash|Edit|Write|MultiEdit|mcp__.*)
 # hook: ask Dan before any database SQL call that is not read only (claude-config#2521, #2536),
 # and before an edge function deploy that turns JWT verification off, or may (#2660).
 #
@@ -66,6 +66,8 @@
 # directory's .claude/supabase-test-projects (Dan, 2026-11-14: a per project file, passing silently).
 # A list missing, unreadable or holding a line that is not a ref asks as before, as do an inline
 # write, a push, and any flag naming another target (lib/db-apply-approval.py, "A TEST PROJECT").
+# The list counts only as git has committed it, and an Edit, Write or MultiEdit of it is asked about
+# like a database write, which is why the hook is registered for those three tools too.
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
 # unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
@@ -242,6 +244,25 @@ if not isinstance(tool, str):
 
 if tool in SF_WRITES:
     emit(None, sf_notice())
+# An Edit, Write or MultiEdit of the list of test Supabase projects of a checkout, whose file runs pass
+# unasked, is held like a database write (claude-config#2643). Anything else they write is passed.
+if tool in ("Edit", "Write", "MultiEdit"):
+    ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
+    if ap is None:
+        ti = d.get("tool_input")
+        fp = ti.get("file_path") if isinstance(ti, dict) else None
+        if isinstance(fp, str) and "supabase-test-projects" in fp:
+            ask(ap_why + ", so whether " + fp + " is a test project list could not be told", "2643",
+                "edit of a test project list")
+        sys.exit()
+    try:
+        listed = ap.is_test_list(tool, d.get("tool_input"))
+    except Exception as e:
+        listed = "the file (" + type(e).__name__ + " reading its path)"
+    if listed is not None:
+        ask(tool + " writes " + listed + ", the list of the test Supabase projects of this checkout, whose "
+            "supabase db query -f runs pass without asking", "2643", "edit of a test project list")
+    sys.exit()
 if tool not in (DB_SQL, DB_MIGRATION) and tool != "Bash" and not tool.startswith("mcp__"):
     sys.exit()
 

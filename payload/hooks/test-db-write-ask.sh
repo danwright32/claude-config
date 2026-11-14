@@ -1022,10 +1022,20 @@ case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "th
 # such a run passes silently, with no notice. Anything the file cannot vouch for asks as before: the
 # file missing, unreadable or holding a line that is not a ref, a project not on it, no link, an
 # inline write, a push, any target flag, or anything else in the command. Every ref is invented.
+# The list is trusted only as git has committed it, so a session that adds a live ref to it is asked
+# about, and an Edit or Write of the list is itself held (the coordinator's review of #2643).
 TESTP="$APPLY/testproj"
 mkdir -p "$TESTP/supabase/.temp" "$TESTP/.claude"
 printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
-printf '# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n' > "$TESTP/.claude/supabase-test-projects"
+LIST="$TESTP/.claude/supabase-test-projects"
+TESTP_GIT=(git -C "$TESTP" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null)
+"${TESTP_GIT[@]}" init -q
+commit_list() {  # commit_list <printf format>: the list holding that text, committed
+  printf "$1" > "$LIST"
+  "${TESTP_GIT[@]}" add -f .claude/supabase-test-projects && "${TESTP_GIT[@]}" commit -q -m list
+}
+LIST_TEXT='# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n'
+commit_list "$LIST_TEXT"
 printf 'update a set note = 1 where id = 7;\n' > "$TESTP/carry.sql"
 CARRY='supabase db query --linked --yes -f carry.sql'
 both "a write from a file on a project marked as test passes (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
@@ -1048,19 +1058,49 @@ reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" 
 case "$reason" in *liveprojectref000009*supabase-test-projects*) check "the question names the project and the test list it is not on (#2643)" ok ;; *) check "the question names the project and the test list it is not on (#2643)" "reason: ${reason:0:400}" ;; esac
 rm "$TESTP/supabase/.temp/project-ref"
 both "a file run from a checkout linked to no project is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+printf 'liveprojectref000009' > "$TESTP/supabase/.temp/project-ref"
+# A live ref added to the list and not committed is not trusted, nor is any other uncommitted edit.
+printf "$LIST_TEXT"'liveprojectref000009\n' > "$LIST"
+both "a live ref added to the list without a commit is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")" reason)"
+case "$reason" in *committed*) check "the question says the list differs from what git has committed (#2643)" ok ;; *) check "the question says the list differs from what git has committed (#2643)" "reason: ${reason:0:400}" ;; esac
 printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
-mv "$TESTP/.claude/supabase-test-projects" "$TESTP/.claude/away"
+printf "$LIST_TEXT"'# a note\n' > "$LIST"
+both "a test ref in a list with any uncommitted edit is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+commit_list "$LIST_TEXT"
+both "the list as committed again passes (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+UNTRACKED="$APPLY/untracked"
+mkdir -p "$UNTRACKED/supabase/.temp" "$UNTRACKED/.claude"
+printf 'testprojectref000001' > "$UNTRACKED/supabase/.temp/project-ref"
+printf "$LIST_TEXT" > "$UNTRACKED/.claude/supabase-test-projects"
+printf 'update a set note = 1 where id = 7;\n' > "$UNTRACKED/carry.sql"
+both "a list in a checkout git does not track is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$UNTRACKED" s1 "$NONE_T")"
+git -C "$UNTRACKED" init -q
+both "a list git has never committed is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$UNTRACKED" s1 "$NONE_T")"
+mv "$LIST" "$TESTP/.claude/away"
 both "a file run with no test list is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
-mkdir "$TESTP/.claude/supabase-test-projects"
+mkdir "$LIST"
 both "a test list that is a folder is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
-rmdir "$TESTP/.claude/supabase-test-projects"
-printf 'testprojectref000001\nnot a ref; drop table a\n' > "$TESTP/.claude/supabase-test-projects"
-both "a test list holding a line that is not a ref is asked about, the good line included (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
-printf 'testprojectref000001 \n' > "$TESTP/.claude/supabase-test-projects"
+rmdir "$LIST"
+commit_list 'testprojectref000001\nnot a ref; drop table a\n'
+both "a committed test list holding a line that is not a ref is asked about, the good line included (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+commit_list 'testprojectref000001 \n'
 both "a ref with trailing space on its line still reads as that ref (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
-printf '\xff\xfe\n' > "$TESTP/.claude/supabase-test-projects"
-both "a test list that is not text is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
-rm "$TESTP/.claude/supabase-test-projects"; mv "$TESTP/.claude/away" "$TESTP/.claude/supabase-test-projects"
+commit_list '\xff\xfe\n'
+both "a committed test list that is not text is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+rm "$TESTP/.claude/away"; commit_list "$LIST_TEXT"
+# An Edit or Write of the list is held like a database write; other files, and a file of that name
+# outside a .claude folder, are not.
+file_payload() {  # file_payload <tool> <file path>: an edit of that file, as Claude Code sends it
+  python3 -c 'import json, sys; print(json.dumps({"session_id": "s1", "hook_event_name": "PreToolUse", "tool_name": sys.argv[1], "tool_input": {"file_path": sys.argv[2], "old_string": "a", "new_string": "b", "content": "liveprojectref000009"}}))' "$1" "$2"
+}
+expect "an Edit of a checkout's test project list is asked about (#2643)" ask "$(file_payload Edit "$LIST")"
+expect "a Write of a checkout's test project list is asked about (#2643)" ask "$(file_payload Write "$LIST")"
+expect "a MultiEdit of a checkout's test project list is asked about (#2643)" ask "$(file_payload MultiEdit "$LIST")"
+expect "a Write of the list by a relative path is asked about (#2643)" ask "$(file_payload Write .claude/supabase-test-projects)"
+expect "an Edit of another file in .claude is not (#2643)" none "$(file_payload Edit "$TESTP/.claude/settings.json")"
+expect "a Write of a file of that name outside .claude is not (#2643)" none "$(file_payload Write "$TESTP/notes/supabase-test-projects")"
+expect "a Write of a migration file is not, as before (#2643)" none "$(file_payload Write "$TESTP/supabase/migrations/003.sql")"
 # The read hook still decides a read from a file there, and this hook says nothing about it.
 printf 'select count(*) from a;\n' > "$TESTP/look.sql"
 both "a read from a file on a test project is the read hook's, as before (#2643)" allow none "$(apply_payload 'supabase db query --linked -f look.sql' "$TESTP" s1 "$NONE_T")"
@@ -1184,8 +1224,10 @@ want = ["mcp__claude_ai_Supabase__execute_sql", "mcp__claude_ai_Supabase__apply_
         "mcp__claude_ai_Supabase__merge_branch", "mcp__claude_ai_Supabase__reset_branch",
         "mcp__claude_ai_Supabase__rebase_branch", "mcp__supabase__delete_branch",
         # Since #2660: an edge function deploy, asked about when it turns JWT verification off.
-        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction"]
-never = ["Edit", "Write", "Read", "Monitor", "Agent"]
+        "mcp__claude_ai_Supabase__deploy_edge_function", "mcp__supabase__deployEdgeFunction",
+        # Since #2643: an Edit or Write of the test project list of a checkout.
+        "Edit", "Write", "MultiEdit"]
+never = ["Read", "Monitor", "Agent", "Glob"]
 bad = [t for t in want if not re.fullmatch(m, t)] + ["also " + t for t in never if re.search(m, t)]
 if h.get("onFailure") != "block":
     bad.append("onFailure is not block, so a crash or a timeout would let a write through unasked")
