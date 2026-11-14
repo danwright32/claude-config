@@ -221,6 +221,94 @@ rc, out, _ = make("with-exception", spec(exceptions=[
      "date": "2026-10-19", "source": "https://github.com/Acme-Corp/storefront/issues/3941#issuecomment-1"}]))
 check("an exception in Dan's words is kept and shown", rc == 0 and "the clock can differ, it&#x27;s live" in open(
     os.path.join(T, "with-exception.html"), encoding="utf-8").read(), out)
+
+# --- a design frozen from a settled one (claude-config#2942) -------------------------------------------
+# A work repository, 2026-11-13: a new settled design froze its admin page from an earlier settled design
+# whose header account button was excepted on every frame, was sealed with no exceptions, and the same
+# exception had to be put to Dan again after its build was scored. Naming the source in "frozenFrom"
+# makes make-settled.py list every exception of the source the new frames still show, and refuse until
+# each is carried (with Dan's original words, date and place) or named in "notCarried".
+HEADER = [1192, 12, 38, 38]
+SOURCE_WORDS = "the account button shows whoever is signed in, leave it"
+rc, out, frozen_src = make("frozen-source", spec(
+    frames=[{"id": "f1", "title": "Tuesday", "width": 1280, "variant": {"day": "Tue"}},
+            {"id": "f3", "title": "Tuesday again", "width": 1280, "variant": {"day": "Tue"}},
+            {"id": "f2", "title": "Wednesday, phone", "width": 390, "height": 844, "variant": {"day": "Wed"}}],
+    exceptions=[
+        {"id": "X1", "frame": "f1", "region": HEADER, "words": SOURCE_WORDS, "date": "2026-10-27",
+         "source": "https://example.invalid/issues/7#issuecomment-1"},
+        {"id": "X4", "frame": "f3", "region": HEADER, "words": SOURCE_WORDS, "date": "2026-10-27",
+         "source": "https://example.invalid/issues/7#issuecomment-1"},
+        {"id": "X2", "frame": "f2", "region": [0, 0, 390, 40], "words": "the phone clock is live",
+         "date": "2026-10-28", "source": "https://example.invalid/issues/7#issuecomment-2"},
+        {"id": "X3", "decision": "D2", "words": "sky is close enough", "date": "2026-10-29",
+         "source": "https://example.invalid/issues/7#issuecomment-3"}]))
+check("the source of a frozen design is written", rc == 0, out)
+GFRAMES = [{"id": "g1", "title": "Admin, Tuesday", "width": 1280, "variant": {"day": "Tue"}},
+           {"id": "g2", "title": "Admin, Wednesday", "width": 1280, "variant": {"day": "Wed"}}]
+GDECISIONS = [dict(d, frames=["g1", "g2"]) if d.get("frames") else d for d in spec()["decisions"]]
+
+
+def frozen(**changes):
+    return spec(**dict({"frozenFrom": "frozen-source.html", "frames": GFRAMES, "decisions": GDECISIONS}, **changes))
+
+
+def carry(xid, fid, region=HEADER, **more):
+    return dict({"id": "%s-%s" % (xid, fid), "frame": fid, "region": region, "carriedFrom": xid}, **more)
+
+
+rc, out, path = make("frozen-unanswered", frozen())
+check("a design frozen from a settled one, its source's exceptions unanswered, is refused, writing nothing",
+      rc == 2 and not os.path.exists(path), out)
+check("and the refusal lists each source exception the new frames still show, in Dan's words, with its date",
+      "X1" in out and SOURCE_WORDS in out and "2026-10-27" in out and "X3" in out and "sky is close enough" in out, out)
+check("naming the new frames each one fits and how to answer it",
+      "g1" in out and "g2" in out and '"carriedFrom": "X1"' in out and "notCarried" in out, out)
+check("and it says which source exceptions it left behind, and why",
+      "X2" in out and "390" in out, out)
+check("the same answer recorded on two source frames is one question, never asked twice",
+      "with X4" in out and '"carriedFrom": "X4"' not in out, out)
+
+rc, out, path = make("frozen-carried", frozen(exceptions=[carry("X1", "g1"), carry("X1", "g2")], notCarried=["X3"]))
+check("carrying the header exception onto both new frames, and declining the other, writes the design",
+      rc == 0 and "exceptions=2" in out, out)
+fsrc = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+fm = re.search(r'id="design-exceptions">(.*?)</script>', fsrc, re.S)
+fexc = json.loads(fm.group(1))["exceptions"] if fm else []
+check("each carried exception keeps the source's words, date and where Dan said them, and names its source",
+      len(fexc) == 2 and all(x.get("words") == SOURCE_WORDS and x.get("date") == "2026-10-27"
+                             and x.get("source") == "https://example.invalid/issues/7#issuecomment-1"
+                             and x.get("carriedFromDesign") == "frozen-source.html" for x in fexc), fexc)
+check("and the page says each was carried, and from where",
+      "carried from frozen-source.html X1" in text_of(fsrc), text_of(fsrc)[:1500])
+gate = subprocess.run([sys.executable, SCORE, "frames", path], capture_output=True, text=True)
+check("the score still reads the design a carried exception is in", gate.returncode == 0, gate.stdout + gate.stderr)
+
+rc, out, path = make("frozen-partial", frozen(exceptions=[carry("X1", "g1")], notCarried=["X3"]))
+check("an exception carried onto one new frame and not another it fits is refused, naming the other",
+      rc == 2 and "g2" in out and not os.path.exists(path), out)
+rc, out, _ = make("frozen-partial-declined", frozen(exceptions=[carry("X1", "g1")], notCarried=["X1", "X3"]))
+check("unless the source exception is also named in notCarried", rc == 0 and "exceptions=1" in out, out)
+rc, out, _ = make("frozen-declined", frozen(notCarried=["X1", "X3"]))
+check("declining every source exception writes the design with none", rc == 0 and "exceptions=0" in out, out)
+
+for n, (label, s, needle) in enumerate([
+    ("a carried exception in other words than Dan's",
+     frozen(exceptions=[carry("X1", "g1", words="close enough"), carry("X1", "g2")], notCarried=["X3"]), "keeps Dan's words"),
+    ("a carried exception over another region",
+     frozen(exceptions=[carry("X1", "g1", region=[0, 0, 40, 40]), carry("X1", "g2")], notCarried=["X3"]), "region"),
+    ("a carried exception onto a frame of another width",
+     frozen(exceptions=[carry("X1", "g1"), carry("X1", "g2"), carry("X2", "g1", region=[0, 0, 390, 40])],
+            notCarried=["X3"]), "390 wide"),
+    ("a carried exception the source does not hold",
+     frozen(exceptions=[carry("X9", "g1")], notCarried=["X1", "X3"]), "X9"),
+    ("a notCarried id the source does not hold", frozen(notCarried=["X1", "X3", "X8"]), "X8"),
+    ("a carried exception with no frozenFrom", spec(exceptions=[carry("X1", "f1")]), "frozenFrom"),
+    ("a frozenFrom that is not there", frozen(frozenFrom="gone.html", notCarried=["X1"]), "gone.html"),
+    ("a frozenFrom that is not a settled design", frozen(frozenFrom="chrome.html", notCarried=["X1"]), "chrome.html"),
+]):
+    rc, out, path = make("frozen-bad-%d" % n, s)
+    check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
 sm = re.search(r'id="design-frames">(.*?)</script>', src, re.S)
 check("a design in one captured page names no chrome on its frames and keeps one template",
       sm is not None and '"chrome"' not in sm.group(1) and "DR_TEMPLATES" not in src and "DR_TEMPLATE = " in src,

@@ -523,6 +523,23 @@ the frame or the region of a frame it covers, his words quoted exactly, the date
 them (the issue comment, or this session's link), then write the file again. The score skips it and
 lists it every time; nothing else excuses a difference.
 
+**A design frozen from a settled one names it, and answers its exceptions before sealing**
+(claude-config#2942). When a new design's page is taken from an earlier settled design (its chrome,
+header included), the differences Dan excepted there come with it. In a work repository on 2026-11-13
+a design frozen that way was sealed with none, its frames scored 99.9% with every differing pixel in
+the header region Dan had excepted on the source, and he was asked the same question again after the
+build was scored. So name the source in `settled.json` as `"frozenFrom": "<path to its settled
+file>"`. `make-settled.py` then refuses, writing nothing, until each of the source's exceptions that
+still covers what the new frames show is answered, and its refusal lists each one in Dan's words with
+its date, the new frames it fits (a region means the same place only in a frame of the same width, and
+a decision exception fits only the same decision saying the same thing), and the entries that carry
+it. Ask Dan once, one picker per exception, whether it carries across. On his yes, add the entries as
+given (`{"id", "frame", "region", "carriedFrom": "<source id>"}`): the words, date and where he said
+them are filled in from the source, never retyped, and the page says each was carried and from where.
+On his no, list its id in `"notCarried"`; carried onto some frames only, list it there too. The same
+answer recorded on several source frames is one question. Exceptions covering nothing the new design
+shows are left behind, and it says which.
+
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it
    came from. The options file the tool writes beside the page goes with the chooser:
