@@ -3961,6 +3961,79 @@ else
   echo "SUITE-PART-UNMEASURED #2918: no claude-config checkout with tests/test-claude-sync.sh beside this suite, so the time to judge it was not measured"
 fi
 
+# The second round of #2918 cut work no verdict needs, each checked here for what it skips and for
+# answering as before: sh_binds stops counting assignments once the count settles it; its patterns
+# are compiled only when reached; the gate's reader splits a command into words for cd_target only
+# where cd can be spelled; and the reader's shell_split answers as shlex.split does.
+cat > "$T/cuts.py" <<'PY'
+import importlib.util, os, random, shlex, sys
+gate_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("gate", gate_path)
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+wrong = []
+# sh_binds: a name assigned 400 times is settled by the first, so only it is read for quotes.
+asked = []
+real_quoted = gate.sh_quoted_word_at
+gate.sh_quoted_word_at = lambda t, at: asked.append(at) or real_quoted(t, at)
+text = "".join("WIDE=%d\n" % i for i in range(400))
+if gate.Judge.sh_binds("WIDE", text, 0) is not True or gate.Judge.sh_binds("WIDE", text, 3) is not True:
+    wrong.append("sh_binds did not find WIDE assigned")
+if len(asked) > 1 + 4:
+    wrong.append("sh_binds read %d assignments for quotes to settle two questions that need 5" % len(asked))
+asked.clear()
+if gate.Judge.sh_binds("WIDE", text, 400) is not False or len(asked) != 400:
+    wrong.append("sh_binds with 400 allowed answered wrong or read %d assignments, not all 400" % len(asked))
+# A comment and a quoted word are still passed over before the count settles.
+if gate.Judge.sh_binds("Q", "# Q=1\necho 'Q=2'\n", 0) is not False or gate.Judge.sh_binds("Q", "# Q=1\nQ=2\n", 0) is not True:
+    wrong.append("sh_binds counted a comment or a quoted word, or missed the assignment after them")
+gate.sh_quoted_word_at = real_quoted
+# The binders pattern is compiled only for a name that reaches it.
+seen = []
+real_compile = gate.re.compile
+gate.re.compile = lambda p, *a: seen.append(p) or real_compile(p, *a)
+gate.sh_bind_pattern.cache_clear()
+gate.Judge.sh_binds("SETTLED", "SETTLED=1\n", 0)
+settled = len(seen)
+gate.Judge.sh_binds("LATER", "read -r LATER\n", 0)
+gate.re.compile = real_compile
+if settled != 1 or len(seen) != 4:
+    wrong.append("compiled %d patterns for a name its assignment settles (want 1) and %d in all (want 4)" % (settled, len(seen)))
+# cd_target: the gate's reader splits nothing that cannot spell cd, and finds every spelling.
+sw = gate.load_reader()
+split = []
+real_join = sw.join_continuations
+sw.join_continuations = lambda t: split.append(t) or real_join(t)
+for t, want in (("echo hi there", None), ("git status --short", None), ("cd /tmp", "/tmp"), ("c'd' /a", "/a"),
+                ('c""d /b', "/b"), ("c\\d /c", "/c"), ("c\\\nd /e", "/e"), ("if cd x", "x"), ("cd", "~")):
+    got = sw.cd_target(t)
+    if got != want:
+        wrong.append("cd_target(%r) gave %r, not %r" % (t, got, want))
+if any(t in ("echo hi there", "git status --short") for t in split):
+    wrong.append("the gate's reader split %r for a cd" % split[0])
+sw.join_continuations = real_join
+# shell_split against shlex.split over texts made of every character either treats specially.
+rnd = random.Random(2918)
+chars = list("ab cd\t\r\n'\"\\$=-") + ["\x0b", "\x0c", "\x1c", "\x85", "\xa0", " ", "\x00"]
+def both(t):
+    out = []
+    for f in (lambda: shlex.split(t, posix=True), lambda: sw.shell_split(t)):
+        try:
+            out.append(("ok", f()))
+        except ValueError as e:
+            out.append(("raised", str(e)))
+    return out
+for i in range(20000):
+    t = "".join(rnd.choice(chars) for _ in range(rnd.randint(0, 10)))
+    a, b = both(t)
+    if a != b:
+        wrong.append("shell_split(%r) gave %r, shlex.split %r" % (t, b, a))
+        break
+print("; ".join(wrong) or "ok")
+PY
+cuts="$(python3 -B "$T/cuts.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
+check "sh_binds, its patterns, cd_target and shell_split do only the work a verdict needs, and answer as before (#2918)" "$cuts"
+
 echo "slack drafts only: a module python3 -m runs, a zip unpacked past -x, and what a git checkout writes are read (claude-config#2827)"
 
 # Three ways a file reached a program unread (measured through this wrapper on main at a2490ad,

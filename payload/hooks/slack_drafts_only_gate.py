@@ -1085,8 +1085,12 @@ SH_BINDERS = (r"\b(?:read|for|select|local|declare|typeset|export|readonly|unset
               r"[^\n;&|]*?(?<![\w$]){0}\b|\bprintf\b[^\n;&|]*?\s-v\s*['\"]?{0}\b|\$\{{{0}:?=")
 # export and readonly with no = keep a name's value, so sh_binds does not count them as binding it.
 SH_VALUE_KEPT = re.compile(r"(?:export|readonly)\b")
-# A run of word characters, as the lookarounds in SH_BINDERS and sh_bind_patterns see one.
+# A run of word characters, as the lookarounds in SH_BINDERS and sh_bind_pattern see one.
 SH_WORD_RUN = re.compile(r"\w+")
+# Where a word cd can be spelled: the reader's cd_target joins continued lines and splits as shlex
+# does, which takes out only quotes, backslashes and those line breaks, so cd as a word needs a c and
+# a d with nothing else between them (load_reader, claude-config#2918).
+SH_CD_SPELLED = re.compile(r"c[\\'\"\n]*d")
 # A run of the characters a function name is mentioned between (sh_walk's called_after).
 SH_FUNC_RUN = re.compile(r"[\w.:/-]+")
 
@@ -1197,12 +1201,17 @@ def sh_command_at(text, start, at):
 # (?<![\w$]) does. The order is the cost: re looks for a pattern's leading literal with a fast scan,
 # but a pattern opening on a lookbehind is tried at every character, 16 ms a pass over claude-sync's
 # 973,000, and sh_locals asks once per local (claude-config#2784).
+# Each is compiled only when sh_binds first reaches it for that name: most names are settled by the
+# first, and compiling all three for each of the claude-sync suite's 1,000 names was a twentieth of
+# judging it (claude-config#2918).
 @functools.lru_cache(maxsize=None)
-def sh_bind_patterns(name):
+def sh_bind_pattern(kind, name):
     n = re.escape(name)
-    return (re.compile(n + r"(?<![\w$]" + n + r")(?:\[[^\]\n]*\])?\+?="),
-            re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b"),
-            re.compile(SH_BINDERS.format(n)))
+    if kind == "assign":
+        return re.compile(n + r"(?<![\w$]" + n + r")(?:\[[^\]\n]*\])?\+?=")
+    if kind == "arithmetic":
+        return re.compile(r"\(\([^()]*(?<![\w$])" + n + r"\b")
+    return re.compile(SH_BINDERS.format(n))
 
 
 # The builtins after which a NAME=value in front of them outlives the command (POSIX special builtins,
@@ -1293,7 +1302,11 @@ def remember_readings(mod):
 
     def cd_target(text):
         if text not in cds:
-            cds[text] = plain_cd(text)
+            # Only a text holding a c and a d with nothing but quotes, backslashes and line breaks
+            # between them can have cd for a word, and most commands hold none: the reader's split of
+            # each into words, to find none was cd, was a tenth of judging the claude-sync suite
+            # (claude-config#2918).
+            cds[text] = plain_cd(text) if SH_CD_SPELLED.search(text) else None
         return cds[text]
 
     mod.commands, mod.command_rest, mod.cd_target = commands, command_rest, cd_target
@@ -3519,24 +3532,30 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         handed to export, local, declare, typeset or readonly, or is a trap's, and a quoted name handed
         to a builtin outside the quotes (`read -r "NAME"`) still binds it (#2538)."""
         # Every form below spells the name out, so text without it binds nothing. That, and patterns
-        # compiled once per name (sh_bind_patterns), are what keep a script with thousands of names
+        # compiled once per name (sh_bind_pattern), are what keep a script with thousands of names
         # inside the gate's time: asked per name per compound command, this ran 344,464 times
         # judging the merge helper and compiled a pattern 1,002,444 times (claude-config#2569).
         if name not in text:
             return False
-        assigns, arithmetic, binders = sh_bind_patterns(name)
         # A line that is only a comment binds nothing (claude-config#2683): `# the case reads HOOK for
         # its verdict` read as `read ... HOOK`. Only a whole line is taken as one, its first character
         # past the indent a #, which no command, word or expansion ($#, ${#x}) starts with.
-        if sum(1 for m in assigns.finditer(text) if not sh_comment_at(text, m.start())
-               and not sh_quoted_word_at(text, m.start())) > allowed:
-            return True
-        if any(not sh_comment_at(text, m.start()) for m in arithmetic.finditer(text)):
+        # Counted only until the count passes allowed, which settles it: sh_locals asks this of the
+        # whole of claude-sync less the bodies around one local, 629 times for the claude-sync suite,
+        # and counting every assignment there was 0.4 s of it (claude-config#2918).
+        count = 0
+        for m in sh_bind_pattern("assign", name).finditer(text):
+            if not sh_comment_at(text, m.start()) and not sh_quoted_word_at(text, m.start()):
+                count += 1
+                if count > allowed:
+                    return True
+        if any(not sh_comment_at(text, m.start()) for m in sh_bind_pattern("arithmetic", name).finditer(text)):
             return True
         # A binder never spans a line (no newline can sit inside one), so only the lines that hold the
         # name are read, each by its own bounds: a lookbehind and \b still see the text around them,
         # and the line break at the end reads as the end does. The same matches as one pass over the
         # whole text, without trying a keyword at every character of it (claude-config#2784).
+        binders = None
         at = text.find(name)
         while at >= 0:
             start = text.rfind("\n", 0, at) + 1
@@ -3544,6 +3563,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             end = len(text) if end < 0 else end
             pos = start if not text[start:end].lstrip(" \t").startswith("#") else end
             while pos < end:
+                binders = binders or sh_bind_pattern("binders", name)
                 m = binders.search(text, pos, end)
                 if not m:
                     break

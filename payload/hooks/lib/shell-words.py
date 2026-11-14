@@ -100,6 +100,21 @@ def join_continuations(s):
     return "".join(out)
 
 
+# What shlex.split(text, posix=True) makes of a text holding no quote and no backslash: shlex then
+# only ends a word at its whitespace, which is these four characters and no others.
+SHLEX_PLAIN_WORD = re.compile(r"[^ \t\r\n]+")
+
+
+def shell_split(text):
+    """shlex.split(text, posix=True), raising as it does. Most commands hold no quote and no
+    backslash, the only characters shlex reads as other than a word's own, and their words are the
+    runs between its whitespace: found by one regular expression, where shlex reads one character
+    at a time, and judging the claude-sync suite asked for 48,000 splits (claude-config#2918)."""
+    if "'" in text or '"' in text or "\\" in text:
+        return shlex.split(text, posix=True)
+    return SHLEX_PLAIN_WORD.findall(text)
+
+
 def split(s, limit=None):
     """(the leading NAME=value assignments of s, the text after them); at most limit of them when
     limit is given, so past_redirects can read one redirection's target as one value."""
@@ -324,7 +339,7 @@ def cd_target(text):
     """
     text = join_continuations(text)
     try:
-        words = shlex.split(text, posix=True)
+        words = shell_split(text)
     except ValueError:
         words = text.split()
     i, n = 0, len(words)
@@ -722,7 +737,7 @@ def command_words(text):
     """
     text = join_continuations(text)
     try:
-        words = shlex.split(text, posix=True)
+        words = shell_split(text)
     except ValueError:
         words = text.split()
     i = 0
@@ -1309,7 +1324,7 @@ def rtk_field(passed):
         return ""
     after = join_continuations(passed[-1][1])
     try:
-        words = shlex.split(after, posix=True)
+        words = shell_split(after)
     except ValueError:
         words = after.split()
     if not words:
@@ -1379,7 +1394,7 @@ def _script_run(word, rest):
     rest = join_continuations(rest)
     if word in ("source", "."):
         try:
-            operands = shlex.split(rest, posix=True)[1:]
+            operands = shell_split(rest)[1:]
         except ValueError:
             return ("source", None, WHY_QUOTE)
         if operands and operands[0] == "--":
@@ -1413,7 +1428,7 @@ def wrapped(rest):
     if name not in SHELLS and name not in ("eval", "env") and name not in ARGUMENT_RUNNERS:
         return _script_run(word, rest)
     try:
-        words = shlex.split(rest, posix=True)
+        words = shell_split(rest)
     except ValueError:
         if name == "env" and "-S" not in rest and "--split-string" not in rest:
             return None
