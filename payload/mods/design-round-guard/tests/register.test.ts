@@ -1042,6 +1042,74 @@ test('#2934: a removal of a name a shell variable or a command\'s output fills i
   expect(w.ran.length).toBe(4)
 })
 
+// On 2026-11-13 `find tools tests -name "lr_history*.pyc" -delete`, clearing bytecode before a test
+// run, was held as taking away tools/blindtest/template.html: a find -delete was judged as taking away
+// every file under the folders it starts from, whatever its -name said. One whose names no look
+// changing file can have takes none away; one whose names may be one, or that anything may widen
+// (an -o, a !, a -path), or whose name a variable fills in, is judged by every file under it.
+test('a find -delete limited to names no look changing file can have runs; one that may reach one is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/tools/blindtest/template.html': '<p>x</p>\n', '/w/slate/tools/__pycache__/lr_history.cpython-312.pyc': 'x', '/w/slate/tests/test_lr.py': 'x\n' } })
+  for (const command of [
+    'cd /w/slate && find tools tests -name "lr_history*.pyc" -delete',
+    "cd /w/slate && find . -type f -iname '*.PYC' -delete",
+    "find /w/slate/tools -name '*.pyc' -mtime +1 -delete",
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(3)
+  for (const command of [
+    "cd /w/slate && find tools -name '*.html' -delete",
+    "cd /w/slate && find tools -iname 'TEMPLATE.*' -delete",
+    "cd /w/slate && find tools -name x -o -name '*.pyc' -delete",
+    "cd /w/slate && find tools ! -name '*.pyc' -delete",
+    'cd /w/slate && find tools -name "$P" -delete',
+    'cd /w/slate && find tools -delete',
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command })).includes('tools/blindtest/template.html')]).toEqual([command, true])
+  // A name no look changing file has, which a mod's TypeScript hook file may have, is no such limit.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "cd /w/slate && find tools -name '*.ts' -delete" }))).toContain('tools/blindtest/template.html')
+  expect(w.ran.length).toBe(3)
+})
+
+// #2960: the #2934 hold reached a name a variable or a command's output fills in only where that is
+// the last part, so `cd /w/slate && rm -rf "$ROOT/app"` still ran unasked: `app` is no look changing
+// name, and mod-kit gives a word built on a variable it cannot follow neither a path nor a folder. A
+// removal anywhere under such a folder may take a whole screen folder away, so it is held as one the
+// guard cannot follow, wherever it runs. A folder the command makes with bare mktemp (#2171) or the
+// temp folder itself names no screen, unless the name climbs out of it.
+test("#2960: a removal under a folder a shell variable or a command's output fills in is held as one the guard cannot follow; one in a new temp folder runs", withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/page.tsx': 'export default function Page() { return <main /> }\n', '/w/slate/app/globals.css': 'a{}\n' } })
+  for (const [command, word, kind] of [
+    ['cd /w/slate && rm -rf "$ROOT/app"', '$ROOT/app', "a shell variable's value"],
+    ['rm -rf "$ROOT/app"', '$ROOT/app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf $ROOT/app', '$ROOT/app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf "${ROOT:?}/app"', '${ROOT:?}/app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf "$PWD/app"', '$PWD/app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf "$OLDPWD/app"', '$OLDPWD/app', "a shell variable's value"],
+    ['cd /w/slate && mv "$ROOT/app" /tmp/kept', '$ROOT/app', "a shell variable's value"],
+    ['cd /w/slate && git rm -r "$ROOT/app"', '$ROOT/app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf "$(git rev-parse --show-toplevel)/app"', '$(git rev-parse --show-toplevel)/app', "a command's output"],
+    ['cd /w/slate && rm -rf "$(cat root.txt)/app"', '$(cat root.txt)/app', "a command's output"],
+    [`cd ${NOTES_FOLDER} && rm -rf "$ROOT/app"`, '$ROOT/app', "a shell variable's value"],
+    // A temp folder's name that climbs out of it, or one given another value too, may be anywhere.
+    ['D=$(mktemp -d); cd /w/slate && rm -rf "$D/../app"', '$D/../app', "a shell variable's value"],
+    ['cd /w/slate && rm -rf "$TMPDIR/../../w/slate/app"', '$TMPDIR/../../w/slate/app', "a shell variable's value"],
+    ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D/sub"', '$D/sub', "a shell variable's value"],
+  ] as [string, string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
+  }
+  expect(w.ran).toEqual([])
+  for (const command of [
+    'D=$(mktemp -d); cd /w/slate && rm -rf "$D/sub"',
+    // A screen file's name in it too, since the folder is new (until #2960 held as one not followed).
+    'cd /w/slate && D=$(mktemp -d); rm -f "${D}/page.tsx"',
+    'cd /w/slate && rm -rf "$TMPDIR/build-cache"',
+    // A variable set to a plain name has a path, judged by it, outside every screen path here.
+    'R=/w/slate/notes; rm -rf "$R/old"',
+    // Every $ in single quotes is text: the folder is named `$ROOT`, in no screen path.
+    "cd /w/slate && rm -rf '$ROOT/old'",
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(5)
+})
+
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {
   const w = world($, on, { agents: ['agent-a1'] })
   const r = await call($, { tool: 'Edit', file_path: '/w/slate-wt/app/globals.css', old_string: 'a{}', new_string: 'a{color:red}', agentId: 'agent-a1' })
@@ -4157,4 +4225,53 @@ test('#2726: a shell command a lost hooks worker left unjudged is held naming th
   expect(w.ran).toEqual([])
   expect(refusalOf(await call($, { tool: 'Bash', command, agentId: 'agent-a1' }))).toBe('')
   expect(w.ran.map(x => x.input.command)).toEqual([command])
+})
+
+// #2727: a held call that a hook timing out left unjudged says it timed out and is no refusal, so
+// it is told apart from one that will be refused again; any other failure keeps its own words.
+test('#2727: a call a lost hooks worker left unjudged is said to have timed out, not to be refused', withStalls(1), async ($, on) => {
+  world($, on)
+  const r = refusalOf(await call($, { tool: 'Bash', command: "echo 'x' > /w/slate/app/__tests__/Header.tsx" }))
+  expect([r.includes('timed out'), r.includes('not a refusal'), r.includes('try the same call again')]).toEqual([true, true, true])
+})
+
+// #2727: an inline script that only reads and prints changes no screen. On 2026-11-10 a node script
+// requiring a JSON file by a name built at run time and printing its keys, and on 2026-11-13 an awk
+// program printing the function above two lines of a component (`print "88 -> " h`), were each held
+// as a write of the file they read: mod-kit read the first as one that may load anything and the
+// second as printing to a file, so the guard read every name either named as one it may write. A
+// program that writes, or prints to a file after its string, is held as before.
+test('#2727: an inline script that only reads and prints passes, whatever look changing file it reads', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/components/Panel.tsx': 'export function Panel() { return <div /> }\n', '/w/slate/app/tokens.json': '{}\n' } })
+  for (const command of [
+    `cd /w/slate && awk 'NR<=130 { if ($0 ~ /^(export )?(function|const) /) h=NR": "$0 } NR==88 { print "88 -> " h } NR==130 { print "130 -> " h }' app/components/Panel.tsx | cut -c1-200; gh issue list --limit 5`,
+    `cd /w/slate && node -e "const j=require(process.argv[1]); console.log(Object.keys(j))" ./app/tokens.json`,
+    `cd /w/slate && node -e "const path=require('path'); const j=require(path.resolve('app/tokens.json')); console.log(JSON.stringify(j, null, 2).slice(0, 400))"`,
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(3)
+  for (const command of [
+    `cd /w/slate && awk '{ print "88 -> " $0 > "app/globals.css" }' notes.txt`,
+    `cd /w/slate && node -e "require('fs').writeFileSync(process.argv[1], 'x')" app/tokens.json`,
+    `cd /w/slate && node -e "const m=require(process.argv[1]); require('fs').writeFileSync('app/components/Panel.tsx', m.x)" ./data.json`,
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command })).includes('issue #978 in slate')]).toEqual([command, true])
+  expect(w.ran.length).toBe(3)
+})
+
+// #2924: on 2026-11-13, in a repository with no screens, a command tidying a test file through a
+// python program and then running sed on a builder script was held as a write of page.html: one block
+// the program put in the test held `open(os.path.join(self.out, "img", name), "w")`, which mod-kit read
+// as the program's own open of a name it could not tell, so the guard read every name the program's
+// text quoted. The program names the one file it writes, so it is judged by that file alone. Word for
+// word but for its names.
+const TIDY_2924 = `python3 -I - <<'EOF'\nimport re\np = "tests/test_gallery_page.py"\ns = open(p).read()\ns = s.replace('''        page = open(os.path.join(self.out, "page.html")).read()\n''', '''        with open(os.path.join(self.out, "page.html")) as fh:\n            page = fh.read()\n''')\ns = s.replace('''            open(os.path.join(self.out, "img", name), "w").write("old")\n''', '''            with open(os.path.join(self.out, "img", name), "w") as fh:\n                fh.write("old")\n''')\nopen(p, "w").write(s)\nEOF\nP=work/gallery/page.py\nrun() { python3 -I -m unittest discover -s tests -k GalleryPage 2>&1 | grep -E "^(FAIL|ERROR|OK|FAILED|Ran)" ; }\necho "== baseline"; run\necho "== mutation 1: size check off"; sed -i '' 's/if size(a) != size(b):/if False:/' $P; run; git checkout -- $P\necho "== restored"; git status --short $P; run`
+test('#2924: a program writing a test file whose text quotes a page passes; one writing the page is held', withKit, async ($, on) => {
+  const w = world($, on)
+  expect(refusalOf(await call($, { tool: 'Bash', command: TIDY_2924 }))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The same program opening the page in its own code, by name or by a name it cannot tell, is held.
+  for (const command of [
+    TIDY_2924.replace('open(p, "w").write(s)', 'open(p, "w").write(s)\nopen("app/page.html", "w").write(s)'),
+    TIDY_2924.replace('open(p, "w").write(s)', 'open(p, "w").write(s)\nopen(os.path.join("app", "page.html"), "w").write(s)'),
+  ]) expect([command.slice(-60), refusalOf(await call($, { tool: 'Bash', command })).includes('page.html')]).toEqual([command.slice(-60), true])
+  expect(w.ran.length).toBe(1)
 })

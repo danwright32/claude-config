@@ -217,6 +217,55 @@ const pythonJudge = (code: string): CodeVerdict | undefined => pythonOpen(code) 
 // judges every bare call once more as that module's; and posix and nt are os.
 const SAME_MODULE = new Map([['posix', 'os'], ['nt', 'os']])
 const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
+
+// #2727: an awk program read with what its double quoted strings hold blanked, quotes kept and every
+// character a space, so a > or a | a string holds (`print "88 -> " h`) is text and never a redirect
+// or a pipe, while one after the string (`print h > "out.txt"`) still is. A regex literal (`/"/`) and
+// a comment are stepped over whole, so a quote in one never pairs with a string's: a / is a regex
+// where awk expects an operand, after anything but a name, a number, a closing bracket or a string,
+// and after the keywords that take one (print, printf, return). Where that cannot be told (a / after
+// ++ or --), or a string or a regex is never closed on its line, the program is read as written.
+const AWK_TAKES_OPERAND = /(?:^|[^\w$])(?:print|printf|return)$/
+const awkCanonical = (code: string): string => {
+  let out = ''
+  // Whether what came last ends an operand, so a / after it divides: 'no', 'yes', or 'unsure'.
+  let operand: 'no' | 'yes' | 'unsure' = 'no'
+  for (let i = 0; i < code.length; ) {
+    const c = code[i] as string
+    if (c === '"' || (c === '/' && operand !== 'yes')) {
+      if (c === '/' && operand === 'unsure') return code
+      let j = i + 1
+      let bracket = false
+      for (; j < code.length && code[j] !== '\n'; j++) {
+        if (code[j] === '\\') j++
+        else if (c === '/' && code[j] === '[') bracket = true
+        else if (c === '/' && code[j] === ']') bracket = false
+        else if (code[j] === c && !bracket) break
+      }
+      if (j >= code.length || code[j] !== c) return code
+      out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : code.slice(i, j + 1)
+      i = j + 1
+      operand = 'yes'
+      continue
+    }
+    if (c === '#') {
+      const end = code.indexOf('\n', i)
+      out += code.slice(i, end < 0 ? code.length : end)
+      i = end < 0 ? code.length : end
+      continue
+    }
+    out += c
+    i++
+    // A newline ends a statement, as ; does, so what follows starts afresh and a / there is a regex
+    // (lessons review at a08a0f6). A line continued by a backslash runs on, and so does its operand.
+    if (c === '\n' && code[i - 2] !== '\\') operand = 'no'
+    if (/\s/.test(c)) continue
+    if ((c === '+' || c === '-') && code[i - 2] === c) operand = 'unsure'
+    else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(out) ? 'no' : 'yes'
+    else operand = 'no'
+  }
+  return out
+}
 const pythonCanonical = (code: string): string => {
   let text = ''
   let at = 0
@@ -454,6 +503,7 @@ const SURFACES: Record<Lang, Surface> = {
     ],
     write: [{ re: /\bprintf?\b[^;{}\n]*?>>?\s*["A-Za-z_($]/, seen: 'print to a file' }],
     dynamic: [{ re: /@(include|load)\b/, seen: m => `@${m[1]}` }],
+    canonical: awkCanonical,
   },
   sed: {
     // GNU sed's e command and s///e flag run the pattern space as a shell command; w writes it.
@@ -604,10 +654,23 @@ const onlyQuietModules = (inline: string): boolean => {
   }
   return read === words
 }
-const pythonTargets = (code: string): string[] | undefined => {
+const pythonTargets = (whole: string): string[] | undefined => {
   const s = SURFACES.python
-  if (first(s.process, code) || first(s.dynamic, code) || pythonFileinput(code) || pythonMoves(code)) return undefined
-  if (/\bchdir\b|\b(?:globals|locals|vars|setattr)\s*\(/.test(code)) return undefined
+  if (first(s.process, whole) || first(s.dynamic, whole) || pythonFileinput(whole) || pythonMoves(whole)) return undefined
+  if (/\bchdir\b|\b(?:globals|locals|vars|setattr)\s*\(/.test(whole)) return undefined
+  // #2924: the writes below are looked for in the program's code alone, what a comment or a plain
+  // string holds blanked, so a block a program puts into a file or replaces (a test's own
+  // `open(os.path.join(d, "img", n), "w")`) is text and leaves its files named. Nothing in a string
+  // can run here: a program that runs a process or builds code is refused above on its whole text.
+  // An f-string or a t-string is kept, its braces holding code. A blanked character becomes a space,
+  // so every place in `code` is the same place in `whole`, where a call's arguments are read.
+  let code = ''
+  let at = 0
+  for (const t of pythonText(whole)) {
+    code += whole.slice(at, t.from) + (t.kind === 'formatted' ? whole.slice(t.from, t.to) : whole.slice(t.from, t.to).replace(/[^\n]/g, ' '))
+    at = t.to
+  }
+  code += whole.slice(at)
   // pathlib's writers the judge has no rule for (Path.copy, copy_into, move and move_into, new in
   // 3.14; lchmod; link_to), whatever they are called on.
   if (/\.\s*(?:copy|copy_into|move|move_into|lchmod|link_to)\s*\(/.test(code)) return undefined
@@ -617,33 +680,33 @@ const pythonTargets = (code: string): string[] | undefined => {
   // stays allowed, since the text cannot tell the two apart there.
   if (/\.\s*rename\s*\(/.test(code)) return undefined
   for (const m of code.matchAll(/\.\s*replace\s*\(/g)) {
-    const receiver = receiverBefore(code, m.index ?? 0)
+    const receiver = receiverBefore(whole, m.index ?? 0)
     if (receiver === undefined) continue
     if (PY_PATH.test(receiver)) return undefined
-    if (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(code)) return undefined
-    if (argsAt(code, (m.index ?? 0) + m[0].length - 1).some(a => /^\w+\s*=/.test(a))) return undefined
+    if (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(whole)) return undefined
+    if (argsAt(whole, (m.index ?? 0) + m[0].length - 1).some(a => /^\w+\s*=/.test(a))) return undefined
   }
   if (first(s.write.filter(r => r !== PY_PATH_METHODS), code)) return undefined
   const out: string[] = []
   const add = (expr: string | undefined) => {
-    const v = expr === undefined ? undefined : pyLiteral(expr, code)
+    const v = expr === undefined ? undefined : pyLiteral(expr, whole)
     if (v === undefined || v === '') return false
     if (!out.includes(v)) out.push(v)
     return true
   }
   for (const m of code.matchAll(new RegExp(PY_PATH_METHODS.re.source, 'g'))) {
     if (m[1] !== 'write_text' && m[1] !== 'write_bytes') return undefined
-    if (!add(receiverBefore(code, m.index ?? 0))) return undefined
+    if (!add(receiverBefore(whole, m.index ?? 0))) return undefined
   }
   for (const m of code.matchAll(/(?:\b([A-Za-z_]\w*)\s*\.\s*|(\.)\s*|(?<![\w.]))open\s*\(/g)) {
     const receiver = m[1] ?? (m[2] ? '' : undefined)
-    const args = argsAt(code, (m.index ?? 0) + m[0].length - 1)
+    const args = argsAt(whole, (m.index ?? 0) + m[0].length - 1)
     const named = (name: string) => args.find(a => new RegExp(`^${name}\\s*=`).test(a))?.replace(/^\w+\s*=\s*/, '')
     const positional = args.filter(a => !/^\w+\s*=/.test(a))
     if (receiver !== undefined && !MODE_SECOND.has(receiver)) {
       // os.open, dbm, shelve and a method's open (a pathlib Path's): its file is not named here, so
       // one the judge reads as a write leaves the program's files unnamed.
-      if (pythonOpen(code.slice(m.index ?? 0, callAt(code, (m.index ?? 0) + m[0].length - 1).end))) return undefined
+      if (pythonOpen(whole.slice(m.index ?? 0, callAt(whole, (m.index ?? 0) + m[0].length - 1).end))) return undefined
       continue
     }
     const modeArg = named('mode') ?? positional[1]

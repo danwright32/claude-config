@@ -182,3 +182,26 @@ test('a string is a console log line only as a whole argument of console.log, in
   // A python file has no console.
   expect(consoleArgs(py("print('x')\n"), [])).toEqual(new Set())
 })
+
+// #2529: a logged constant handed to the send by a change of code alone reaches it afterwards and
+// did not before. A model's instructions already reach it through the model's answer in the send's
+// text, as the trace follows every name a value uses, so the guard settles that one by what only a
+// model reads (register.ts, routedTo), never by the trace alone.
+test('a constant handed to a send by name reaches it, and did not before; a model prompt reaches it through the answer either way (#2529)', async () => {
+  const before = [
+    `const slack = new WebClient(process.env.SLACK_BOT_TOKEN)`,
+    'const SUMMARY_PROMPT = `Summarise the night in three plain sentences.`',
+    `const FINISHED = 'The nightly backup finished without errors'`,
+    `export const run = async (log: string) => {`,
+    `  console.log(FINISHED)`,
+    `  const res = await new Anthropic().messages.create({ model: 'claude-x', system: SUMMARY_PROMPT, messages: [{ role: 'user', content: log }] })`,
+    `  await slack.${CHAT}({ channel: 'C1', text: \`Nightly summary: \${String(res.content)}\` })`,
+    `}`,
+  ].join('\n')
+  const prompt = before.replace("content)}` })", 'content)}`, attachments: [{ text: SUMMARY_PROMPT }] })')
+  const logged = before.replace('  console.log(FINISHED)', `  console.log(FINISHED)\n  await slack.${CHAT}({ channel: 'C1', text: FINISHED })`)
+  expect(reached(js(before))['Summarise the night in three plain sentences.']).toBe(`slack.${CHAT}`)
+  expect(reached(js(before))['The nightly backup finished without errors']).toBe('')
+  expect(reached(js(prompt))['Summarise the night in three plain sentences.']).not.toBe('')
+  expect(reached(js(logged))['The nightly backup finished without errors']).not.toBe('')
+})

@@ -7961,6 +7961,12 @@ that declares it. A route's 409 answer, a log line or a thrown error beside the 
 whose sends cannot be traced (a workflow, a shell script, any other language, a send the reading
 cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
 docstring is never message text (#2574).
+An edit that changes no words but newly hands a send text the same file already held is held as
+new wording of that text (#2529): a line only a log printed, now posted, or a model's own
+instructions handed to the send as well. As the trace follows a model's answer into the send, a
+model's instructions count as routed only when only a model read them before the edit and more
+than a model reads them after it. Text another file holds, brought in by a new import, is not read
+(#2837).
 One kind of string passes in a shell script that posts (#2792): one whose every place in the script
 is a whole argument of an `echo` or `printf` sent to the error stream and nowhere else
 (`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch, a group or a function.
@@ -8023,6 +8029,10 @@ that cannot be read, holds the call as could not check, which trying again may g
 gh killed at its time limit, or a check Claude Code cuts off for running past a hook's time, is
 told as a timeout, not a refusal: send the call again in about a minute, and after three in a row
 tell Dan (#2792). A shell write to a path the write reader cannot name is outside it.
+A call the guard has judged and passed on in its tool.call hook is replayed as it settled beneath
+it when a hook beneath fails, a wedged hooks worker included (#2948), so that failure is said by
+the hook that failed, never as the Slack alert guard being unable to check the call. Its tool.check
+hook still holds on any failure, since a call it holds has asked the checks beneath first.
 In sleep mode the wording is chosen, never approved (#2628; Dan, 2026-11-09: "You should just
 choose the alert in sleep mode and put it to me in the morning to see if I want something else").
 While scope modes reads sleep mode as on, an edit the guard holds (a shell command still is held as

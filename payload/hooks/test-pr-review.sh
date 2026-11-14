@@ -67,6 +67,11 @@ for a in "$@"; do
 done
 printf 'called\n' >> "$FAKE_LOG/calls"
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
+# The lessons arrive in a file the runner removes once claude ends (claude-config#2975), so what
+# it held is kept here while it still exists.
+prev=""; for a in "$@"; do
+  [ "$prev" = --append-system-prompt-file ] && cat "$a" > "$FAKE_LOG/appended"; prev="$a"
+done
 env > "$FAKE_LOG/env"
 # Read into this call's own file first: the groups of one branch (#601) are reviewed at once.
 cat > "$FAKE_LOG/stdin.$$"
@@ -314,14 +319,18 @@ check "the reviewer is told this is a whole branch" "WHOLE BRANCH" "$(tr '\036' 
 # Only the lessons ride in the appended system prompt, the part a review started within five minutes
 # of another reads back from the prompt cache; the pr scope stays in the message, after the context
 # lines and in front of the instructions, as it was (claude-config#1599).
-python3 - "$FAKE_LOG/args" "$DIR/lib" <<'EOF' && ok || bad "#1599 the message ends with the pr scope then the prompt file, and the appended system prompt carries neither"
+# The lessons travel in a file since #2975 (Linux caps one argument at 131,072 bytes); the fake keeps
+# its text in $FAKE_LOG/appended.
+python3 - "$FAKE_LOG/args" "$DIR/lib" "$FAKE_LOG/appended" <<'EOF' && ok || bad "#1599 the message ends with the pr scope then the prompt file, and the appended system prompt carries neither"
 import os, sys
 args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
 scope = open(os.path.join(sys.argv[2], "ai-review-pr-scope.txt"), encoding="utf-8").read().strip()
 prompt = open(os.path.join(sys.argv[2], "ai-review-prompt.txt"), encoding="utf-8").read()
-if args.count("--append-system-prompt") != 1:
+if args.count("--append-system-prompt-file") != 1 or "--append-system-prompt" in args:
     sys.exit(1)
-fixed = args[args.index("--append-system-prompt") + 1]
+if not os.path.exists(sys.argv[3]):
+    sys.exit(1)
+fixed = open(sys.argv[3], encoding="utf-8").read()
 sent = args[args.index("-p") + 1]
 ok = (sent.endswith("\n\n" + scope + "\n\n" + prompt) and fixed.startswith("===== LESSONS")
       and "SCOPE OF THIS REVIEW" not in fixed and "Act as a senior developer" not in fixed)
