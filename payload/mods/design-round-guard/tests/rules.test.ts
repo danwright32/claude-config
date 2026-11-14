@@ -424,8 +424,6 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
   expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: `record:${'/Users'}/dan/Apps/slate|issue:12`, label: 'issue #12 in slate' }])
 })
 
-// #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
-// session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
 test('#2792: the session notes folder is known by the home folder, any session of any project, and nothing shaped like it elsewhere', () => {
   const home = `${'/Users'}/dan`
   const notes = `${home}/.claude/state/session-notes`
@@ -446,6 +444,8 @@ test('#2792: the session notes folder is known by the home folder, any session o
   expect(inSessionNotes('dan/.claude/state/session-notes/-w-slate/s1/app/page.tsx', 'dan')).toBe(false)
 })
 
+// #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
+// session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
 test("the session's scratchpad is known by the session's id, under Claude Code's own temp folder", () => {
   // CLAUDE_CODE_TMPDIR when it is set, else /tmp; macOS spells /tmp and /var under /private too.
   expect(tempRoots(undefined)).toEqual(['/tmp', '/private/tmp'])

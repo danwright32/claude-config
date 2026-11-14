@@ -27,7 +27,8 @@
 // TypeScript or python file, a changed string is held only when sends.ts traces it to one of the
 // file's own send calls. A file whose send cannot be traced (any other language, a send the reading
 // cannot find) is held for all the wording it changes. A python docstring is never message text
-// (#2574).
+// (#2574). In a shell script, a string only an echo or printf to the error stream prints passes
+// (#2792, shellLogWording).
 //
 // Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
 // refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
@@ -346,7 +347,7 @@ const isRedirect = (word: string): boolean => /^(?:\d+|&)?[<>]/.test(word)
  * it, once per place.
  *
  * Never a log, since each can carry the text to a send: standard output (a caller may capture it), a
- * pipe, a file, a variable, any other command, a command inside a substitution, a string that runs
+ * pipe, a file, a variable (`printf -v`), any other command, a command inside a substitution, a string that runs
  * a command itself (`$(...)`, backticks), a line of a heredoc's body, and any line of a script that
  * points its own error stream somewhere (exec with a redirect) or opens a heredoc that never ends,
  * which takes every line after it. A string in one log line and anywhere else is no log either: a
@@ -368,6 +369,8 @@ export const shellLogWording = (commands: ShellCommand[], literals: string[]): S
     const redirects = c.words.filter(isRedirect)
     const [program, ...told] = c.words.filter(w => !isRedirect(w))
     if (program !== 'echo' && program !== 'printf') continue
+    // printf -v sets a variable instead of printing, and a variable can be posted later.
+    if (program === 'printf' && told.some(w => /^-[^-]*v/.test(w))) continue
     if (!redirects.length || !redirects.every(r => /^1?>&2$/.test(r))) continue
     if (c.substitution || c.heredocs || c.derived?.some(d => d) || fed.has(key(c.words))) continue
     if (told.some(w => w.includes('$(') || w.includes('`'))) continue

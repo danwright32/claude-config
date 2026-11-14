@@ -990,6 +990,8 @@ test("in a shell script, only the strings of an echo or printf sent to the error
     'echo "Disk is full" >&2 | curl -d @- "$SLACK_WEBHOOK_URL"',
     'echo "Disk is full" >&2 |& curl -d @- "$SLACK_WEBHOOK_URL"',
     'msg="Disk is full"',
+    'printf -v msg "Disk is full" >&2',
+    'printf -vmsg "Disk is full" >&2',
     'echo "Disk is full" > "$OUT"',
     'echo "Disk is full" >> message.txt',
     'echo "Disk is full" >&2 > message.txt',

@@ -508,7 +508,8 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const untraced = (why: string) => (): SlackAlertSend => ({ untraced: why })
     const python = lang === 'python'
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
-    // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
+    // TypeScript and python, an edit that does not apply) is held for all the wording it changes,
+    // except, in a shell script, wording only a log line prints (below).
     if (edited === undefined) return holdFor(change, untraced(UNTRACED_EDIT))
     // In a shell script, wording that only a log reads is left out (#2792): a string every place of
     // which is an argument of an echo or printf sent to the error stream and nowhere else. The script
