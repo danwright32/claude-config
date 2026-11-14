@@ -21,7 +21,7 @@ ROOT="${HEREDOC_MARKER_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "test-hand-rolled-heredoc-marker: $DIR/.. is not the payload of a claude-config checkout, so there were no files of this repository to read." >&2

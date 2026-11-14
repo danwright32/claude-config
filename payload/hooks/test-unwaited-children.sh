@@ -36,7 +36,7 @@ SCAN="$DIR/lib/unwaited-children.py"
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/unwaited-children.XXXXXXXX")" || TMPROOT=""
 case "${TMPROOT%/}" in
