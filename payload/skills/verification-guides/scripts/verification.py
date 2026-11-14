@@ -366,10 +366,11 @@ def _check_serve_settings(p, doc, cmds, native, web_areas):
     all three: one that pictures no screens at all is told key by key, as it always was, and one
     with a native screen is told which area made serving necessary.
     """
-    cmds = cmds if isinstance(cmds, dict) else {}
-    # Given means the key is there: a null is the wrong type, already said, not also missing.
-    present = [k for k in SERVE_SETTINGS if k.split(".")[-1] in (doc if k == "url" else cmds)]
-    missing = [k for k in SERVE_SETTINGS if k not in present]
+    # Given means the key is there: a null is the wrong type, already said, not also missing. With no
+    # commands object, that is already said too, and only url is judged here.
+    judged = SERVE_SETTINGS if isinstance(cmds, dict) else ("url",)
+    present = [k for k in judged if k.split(".")[-1] in (doc if k == "url" else cmds)]
+    missing = [k for k in judged if k not in present]
     if not missing:
         return
     if native and not web_areas:

@@ -202,6 +202,16 @@ class AreasTests(unittest.TestCase):
         self.refused(doc, "areas-empty-command")
         self.refused(native_only_doc(url=7), "areas-wrong-type")
 
+    def test_missing_commands_is_said_once_not_again_for_serve_and_ready(self):
+        for broken in (None, "pnpm preview"):
+            doc = areas_doc()
+            if broken is None:
+                del doc["commands"]
+            else:
+                doc["commands"] = broken
+            err = self.refused(doc, "areas-missing-key" if broken is None else "areas-wrong-type")
+            self.assertNotIn("commands.serve", " ".join(m for _, m in err.problems), err.problems)
+
     def test_a_setting_given_as_null_is_the_wrong_type_not_also_missing(self):
         doc = areas_doc()
         doc["commands"]["serve"] = None
