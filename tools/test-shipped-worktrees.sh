@@ -49,7 +49,7 @@ trap cleanup EXIT
 pass=0
 fail=0
 ok() { pass=$((pass + 1)); }
-bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
+bad() { echo "FAIL: $1" | sed '2,$s/^/  /'; fail=$((fail + 1)); }
 says() {  # says <description> <literal needle> <text>
   case "$3" in *"$2"*) ok ;; *) bad "$1 (wanted [$2] in: ${3:0:600})" ;; esac
 }

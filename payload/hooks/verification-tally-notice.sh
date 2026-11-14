@@ -63,7 +63,7 @@ due="$(python3 "$SCRIPTS/verification.py" tally due 2>/dev/null)" || exit 0
 # it cannot place (measured through the gate's wrapper, 2026-11-10). Never cut from BASH_SOURCE
 # with %/* here: that leaves a bare name whole, so run as `bash verification-tally-notice.sh` from
 # this folder the folder was not found and the notice ended with nothing said.
-reason="$(printf '%s' "$due" | python3 -c '
+reason="$(printf '%s' "$due" | python3 -B -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import verification as v

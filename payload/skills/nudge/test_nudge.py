@@ -1,10 +1,12 @@
 """Tests for nudge.py: link parsing, the lines file, the post, and every Slack failure."""
 
 import os
+import sys
 import tempfile
 import unittest
 
-import nudge
+sys.dont_write_bytecode = True  # nudge.py beside this file is carried by the sync: leave no cache (#2919)
+import nudge  # noqa: E402
 
 
 LINK = "https://example.slack.com/archives/C0123ABCDEF/p1793208433546939"

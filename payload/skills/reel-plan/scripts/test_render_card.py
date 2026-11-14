@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
+
 HERE = Path(__file__).parent
 RENDER = HERE / "render_card.py"
 

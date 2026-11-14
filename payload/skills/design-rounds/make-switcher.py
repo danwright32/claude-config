@@ -90,6 +90,7 @@ import os
 import re
 import sys
 
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import chrome_frame  # noqa: E402
 from chrome_frame import top_level_names  # noqa: E402,F401  (the switcher's tests read it here)

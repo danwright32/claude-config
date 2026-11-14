@@ -30,7 +30,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 
 pass=0
 fail=0
-check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')"; fi; }
+check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')" | sed '2,$s/^/  /'; fi; }
 
 # ---- the helper ----
 # Each case prints one line: the slug, or "refused: <message>" when it raised RepoSlugError. Anything
