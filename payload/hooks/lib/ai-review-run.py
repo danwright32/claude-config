@@ -10,7 +10,7 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --started EPOCH
 
 It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_PROMPT_CACHE_TTL=5m CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p
-<message> --append-system-prompt <lessons> --exclude-dynamic-system-prompt-sections --output-format
+<message> --append-system-prompt-file <lessons file> --exclude-dynamic-system-prompt-sections --output-format
 stream-json --verbose --include-partial-messages --model <model> --settings {"disableAllHooks":true}
 --strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with the diff on
 stdin (each part is explained where the command is built), reading the review from the stream's
@@ -83,6 +83,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -940,18 +941,43 @@ def usage_meta(res):
     return out
 
 
-def remove_input_when_stopped(diff_file):
+def write_lessons_file(text):
+    """The lessons, in a file only this user can read, for --append-system-prompt-file
+    (claude-config#2975). They used to ride as the value of --append-system-prompt, ONE argument,
+    and Linux refuses any single argument over 131,072 bytes (MAX_ARG_STRLEN) before the program
+    starts: the index passed that on 2026-11-14 (131,104 bytes), and on the CI runner no review
+    started at all, while macOS, which caps only the total, went on working. A file has no such
+    cap. The text is written as is, so the appended system prompt is still exactly the lessons and
+    every review sends the same one for the prompt cache (#1599). main removes the file once the
+    review has ended, and remove_input_when_stopped does when a signal ends it first."""
+    fd, path = tempfile.mkstemp(prefix="ai-review-lessons-", suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+    except BaseException:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def remove_input_when_stopped(diff_file, also=None):
     """A review stopped by a signal removes its input, then dies of that signal as it would have
     (claude-config#1745). The input is otherwise removed only in main's last finally, which a
     termination never reaches. Only a signal still at its default is taken over: the runner starts
     this under nohup, which ignores SIGHUP, and in the background, where SIGINT is ignored, and
     handling either would end a review those leave running. SIGKILL cannot be caught; the runner
-    around this (pr-review.sh run_reviewer) and the next review's sweep remove the input then."""
+    around this (pr-review.sh run_reviewer) and the next review's sweep remove the input then.
+    `also` is a list main adds to once it has written more input (the lessons file, #2975), read
+    when the signal arrives, so a path written after this was set up is removed too."""
     def stopped(signum, _frame):
-        try:
-            os.remove(diff_file)
-        except OSError:
-            pass
+        for path in [diff_file, *(also or [])]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
     # SIGINT's default in Python is its own default_int_handler, never SIG_DFL.
@@ -977,7 +1003,8 @@ def main(argv):
     ap.add_argument("--name", default="")
     ap.add_argument("--started", type=int, required=True)
     a = ap.parse_args(argv)
-    remove_input_when_stopped(a.diff_file)
+    lessons_files = []   # the lessons file once written (#2975), removed with the input
+    remove_input_when_stopped(a.diff_file, lessons_files)
 
     name = a.name or f"{a.key}-{a.sha}"
     meta = {
@@ -1061,9 +1088,13 @@ def main(argv):
         # would otherwise differ for every repository and worktree ahead of the lessons.
         # The stream (THE STREAM, above): --verbose is required with stream-json under -p, and
         # --include-partial-messages makes the first event arrive when the answer begins.
+        # The lessons go in a FILE (write_lessons_file, #2975): as one argument they passed Linux's
+        # 131,072 byte cap on a single argument, and no review could start on the CI runner.
+        if fixed:
+            lessons_files.append(write_lessons_file(fixed))
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
                "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
-               *(["--append-system-prompt", fixed] if fixed else []),
+               *(["--append-system-prompt-file", lessons_files[-1]] if fixed else []),
                "--exclude-dynamic-system-prompt-sections",
                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
@@ -1170,10 +1201,11 @@ def main(argv):
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=30, check=False)
     finally:
-        try:
-            os.remove(a.diff_file)
-        except OSError:
-            pass
+        for path in [a.diff_file, *lessons_files]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
     return 0
 
 
