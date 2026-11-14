@@ -329,74 +329,53 @@ export const stringsOf = (text: string, hash: boolean, js = false): Str[] => {
 export const withoutComments = (text: string, hash: boolean): string =>
   text.replace(new RegExp(hash ? HASH_TOKENS : C_TOKENS, 'g'), t => (t.startsWith('#') || t.startsWith('//') || t.startsWith('/*') ? ' ' : t))
 
+/** One command of a shell script as mod-kit's reader gives it ($.modkit.pipeline), of it what a log line is judged by. */
+export type ShellCommand = { words: string[]; pipedFrom?: string[]; heredocs?: unknown; substitution?: true; derived?: unknown[] }
+
+// A word of a command that is a redirect, as mod-kit's reader gives one (a word of its own): an
+// optional descriptor or &, then > or <.
+const isRedirect = (word: string): boolean => /^(?:\d+|&)?[<>]/.test(word)
+
 /**
- * Where each string of a shell script starts that only a log can read (#2792): an argument of an
- * echo or printf whose output goes to the error stream and nowhere else (`echo "..." >&2`, `>&2
- * echo "..."`), alone, after a test, or in a branch or a group. The guard follows no send in a shell
- * script, so until this every string in one that posts was held, a log line included.
+ * The strings of a shell script that only a log can read (#2792), by their text: each one whose
+ * every place in the script is a whole argument of an echo or printf whose output goes to the error
+ * stream and nowhere else (`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch
+ * or a group. The guard follows no send in a shell script, so until this every string in one that
+ * posts was held, a log line included. `commands` is the script as mod-kit's reader gives it
+ * ($.modkit.pipeline: this file reads no shell itself, #712), `literals` the text of each string in
+ * it, once per place.
  *
  * Never a log, since each can carry the text to a send: standard output (a caller may capture it), a
- * pipe that takes the error stream, a file, a variable, any other command, a string that runs a
- * command itself (`$(...)`, backticks), a line of a heredoc's body, and any line of a script that
- * points its own error stream somewhere (exec with a redirection). The gap, decided with the rule:
- * a caller that joins the error stream of the function a log line is in to what it posts (`tell 2>&1
- * | curl ...`) is not followed.
+ * pipe, a file, a variable, any other command, a command inside a substitution, a string that runs
+ * a command itself (`$(...)`, backticks), a line of a heredoc's body, and any line of a script that
+ * points its own error stream somewhere (exec with a redirect) or opens a heredoc that never ends,
+ * which takes every line after it. A string in one log line and anywhere else is no log either: a
+ * text is one only when the log lines carry it as many times as the script holds it. The gap,
+ * decided with the rule: a caller that joins the error stream of the function a log line is in to
+ * what it posts (`tell 2>&1 | curl ...`) is not followed.
  */
-export const shellLogStrings = (text: string): Set<number> => {
-  const out = new Set<number>()
-  // The strings, and the text with each string's inside and each comment blanked, so that a line of
-  // it is a line of commands whatever its strings hold.
-  const spans: { at: number; body: string }[] = []
-  let code = ''
-  let last = 0
-  for (const m of text.matchAll(new RegExp(HASH_TOKENS, 'g'))) {
-    const [t, at] = [m[0], m.index ?? 0]
-    const comment = t.startsWith('#')
-    code += text.slice(last, at) + (comment ? ' '.repeat(t.length) : `${t[0]}${'S'.repeat(t.length - 2)}${t[t.length - 1]}`)
-    if (!comment) spans.push({ at, body: t.slice(1, -1) })
-    last = at + t.length
+export const shellLogWording = (commands: ShellCommand[], literals: string[]): Set<string> => {
+  const out = new Set<string>()
+  const opensHeredoc = (word: string) => /^\d*<</.test(word) && !/^\d*<<</.test(word)
+  // The reader gives `exec 2> f` as its redirects alone, exec being a launcher it reads through, so
+  // a command that is only redirects is the script pointing its own streams somewhere.
+  const ownStreams = (c: ShellCommand) => c.words.some(isRedirect) && (c.words.every(isRedirect) || c.words.find(w => !isRedirect(w)) === 'exec')
+  if (commands.some(c => ownStreams(c) || (!c.heredocs && c.words.some(opensHeredoc)))) return out
+  const key = (words: string[]) => words.join('\u0000')
+  const fed = new Set(commands.flatMap(c => (c.pipedFrom ? [key(c.pipedFrom)] : [])))
+  const logged = new Map<string, number>()
+  for (const c of commands) {
+    const redirects = c.words.filter(isRedirect)
+    const [program, ...told] = c.words.filter(w => !isRedirect(w))
+    if (program !== 'echo' && program !== 'printf') continue
+    if (!redirects.length || !redirects.every(r => /^1?>&2$/.test(r))) continue
+    if (c.substitution || c.heredocs || c.derived?.some(d => d) || fed.has(key(c.words))) continue
+    if (told.some(w => w.includes('$(') || w.includes('`'))) continue
+    for (const w of told) logged.set(w, (logged.get(w) ?? 0) + 1)
   }
-  code += text.slice(last)
-  if (/(^|[\n;&|({])\s*exec\s[^\n]*[<>]/.test(code)) return out
-  // Where each line of a heredoc's body starts.
-  const inDoc = new Set<number>()
-  let closes: { word: string; tabs: boolean } | undefined
-  let offset = 0
-  for (const line of text.split('\n')) {
-    if (closes) {
-      if ((closes.tabs ? line.replace(/^\t+/, '') : line) === closes.word) closes = undefined
-      else inDoc.add(offset)
-    } else {
-      const m = /(?<!<)<<(?!<)(-?)\s*(['"]?)([A-Za-z_][\w.-]*)\2/.exec(line)
-      if (m) closes = { word: m[3] as string, tabs: m[1] === '-' }
-    }
-    offset += line.length + 1
-  }
-  for (const s of spans) {
-    const from = code.lastIndexOf('\n', s.at) + 1
-    if (inDoc.has(from)) continue
-    const to = code.indexOf('\n', s.at)
-    const line = code.slice(from, to < 0 ? code.length : to)
-    // The one command of the line the string is in: cut at each ; && || | and &, never the & of >&2.
-    const pos = s.at - from
-    let start = 0
-    let end = line.length
-    for (const m of line.matchAll(/\|\||&&|;|\||(?<!>)&(?!&)/g)) {
-      const i = m.index ?? 0
-      if (i > pos) {
-        end = i
-        break
-      }
-      start = i + m[0].length
-    }
-    // A pipe that takes the error stream too (|&) carries the line on.
-    if (line.slice(end, end + 2) === '|&') continue
-    const command = line.slice(start, end).trim().replace(/^(?:(?:then|else|do|!|\{)\s+)+/, '')
-    if (!/^(?:echo|printf)(?:\s[^<>()`]*)?\s1?>&2$/.test(command) && !/^1?>&2\s+(?:echo|printf)(?:\s[^<>()`]*)?$/.test(command)) continue
-    // A string of the command that runs a command itself can post by itself.
-    if (spans.some(x => x.at >= from + start && x.at < from + end && /\$\(|`/.test(x.body))) continue
-    out.add(s.at + 1)
-  }
+  const held = new Map<string, number>()
+  for (const l of literals) held.set(l, (held.get(l) ?? 0) + 1)
+  for (const [text, places] of held) if ((logged.get(text) ?? 0) >= places) out.add(text)
   return out
 }
 

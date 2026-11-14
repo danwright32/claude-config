@@ -7904,8 +7904,9 @@ cannot find, an edit that does not apply) is held for all the wording the edit c
 docstring is never message text (#2574).
 One kind of string passes in a shell script that posts (#2792): one whose every place in the script
 is an argument of an `echo` or `printf` sent to the error stream and nowhere else (`echo "..." >&2`,
-`>&2 echo "..."`), alone, after a test, or in a branch or a group. Only a log reads it
-(`rules.ts` `shellLogStrings`). The same string on standard output, piped, written to a file, set in
+`>&2 echo "..."`), alone, after a test, or in a branch or a group. Only a log reads it. The script
+is read as its commands by mod-kit's reader (`$.modkit.pipeline`), never by the guard itself, and
+`rules.ts` `shellLogWording` judges those. The same string on standard output, piped, written to a file, set in
 a variable, handed to any other command, holding a command substitution, inside a heredoc, or in a
 script that points its own error stream somewhere with `exec` is held as before, and so is a log
 line in ruby or any other language the guard does not read. The gap: a caller that joins the error

@@ -41,7 +41,7 @@ import {
   renderedProblem,
   requestLanguage,
   shellKey,
-  shellLogStrings,
+  shellLogWording,
   isSender,
   stringsOf,
   testFile,
@@ -511,11 +511,13 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes.
     if (edited === undefined) return holdFor(change, untraced(UNTRACED_EDIT))
     // In a shell script, wording that only a log reads is left out (#2792): a string every place of
-    // which is an echo or printf sent to the error stream and nowhere else (rules.ts shellLogStrings).
+    // which is an argument of an echo or printf sent to the error stream and nowhere else. The script
+    // is read as its commands by mod-kit's reader, the one reader of shell there is (#712), and
+    // rules.ts shellLogWording judges those.
     if (requestLanguage(path, current || after) === 'shell') {
-      const [logBefore, logAfter] = [shellLogStrings(before), shellLogStrings(after)]
-      const logged = (lits: Lit[], log: Set<number>) => (s: string) => lits.filter(l => l.text === s).every(l => l.start >= 0 && log.has(l.start))
-      const sent: Part = { added: change.added.filter(s => !logged(afterLits, logAfter)(s)), removed: change.removed.filter(s => !logged(beforeLits, logBefore)(s)) }
+      const logOnly = async (text: string, lits: Lit[]) => shellLogWording(await $.modkit.pipeline({ command: text }), lits.map(l => l.text))
+      const [logBefore, logAfter] = [await logOnly(before, beforeLits), await logOnly(after, afterLits)]
+      const sent: Part = { added: change.added.filter(s => !logAfter.has(s)), removed: change.removed.filter(s => !logBefore.has(s)) }
       return sent.added.length || sent.removed.length ? holdFor(sent, untraced(UNTRACED_LANGUAGE)) : PASS
     }
     if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))

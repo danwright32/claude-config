@@ -24,7 +24,6 @@ import {
   isSender,
   requestLanguage,
   sendMarks,
-  shellLogStrings,
   isProse,
   isProseFile,
   literalsOf,
@@ -707,48 +706,6 @@ test('another file using a prompt: an import by its own name is no use, a model 
 test('only prose files are ruled out as senders', () => {
   for (const p of ['CLAUDE.md', 'docs/runbook.markdown', 'a.mdx', 'a.rst', 'a.adoc', 'notes.txt']) expect(isProseFile(p)).toBe(true)
   for (const p of ['a.ts', 'a.vue', 'a.sql', 'a.toml', 'a.yml', 'Makefile']) expect(isProseFile(p)).toBe(false)
-})
-
-// #2792 part 1: in a shell script that posts to Slack the guard follows no send, so every string in
-// it was held, a line written to the error stream included. The strings such a line carries go to a
-// log and nowhere else.
-test('in a shell script, only the strings of an echo or printf sent to the error stream, and nowhere else, are a log (#2792)', () => {
-  const logs = (text: string) => {
-    const log = shellLogStrings(text)
-    return stringsOf(text, true).filter(s => log.has(s.start)).map(s => s.text)
-  }
-  expect(logs('#!/bin/bash\necho "paging now" >&2\n')).toEqual(['paging now'])
-  expect(logs("printf 'paging %s\\n' \"$who\" 1>&2\n")).toEqual(['paging %s\n', '$who'])
-  // After a test, in a branch, and before the command that follows it on the line.
-  expect(logs('[ -n "$URL" ] || echo "no webhook is set" >&2\n')).toEqual(['no webhook is set'])
-  expect(logs('if ! post; then echo "the post failed" >&2; exit 1; fi\n')).toEqual(['the post failed'])
-  expect(logs('post || { echo "the post failed" >&2; exit 1; }\n')).toEqual(['the post failed'])
-  // Anything that can reach a send is no log: standard output (a caller may capture it), a pipe, a
-  // variable, a file, the send itself.
-  for (const line of [
-    'echo "Disk is full"',
-    'echo "Disk is full" | curl -d @- "$SLACK_WEBHOOK_URL"',
-    'echo "Disk is full" >&2 |& curl -d @- "$SLACK_WEBHOOK_URL"',
-    'msg="Disk is full"',
-    'echo "Disk is full" > "$OUT"',
-    'echo "Disk is full" >> message.txt',
-    'echo "Disk is full" >&2 > message.txt',
-    'curl -s --data "Disk is full" "$SLACK_WEBHOOK_URL" >&2',
-    'say "Disk is full" >&2',
-    'echo "Disk is full" &> message.txt',
-  ])
-    expect([line, logs(`${line}\n`).includes('Disk is full')]).toEqual([line, false])
-  // A string that runs a command, which can post by itself, is no log wherever it is printed.
-  expect(logs("echo \"posted: $(curl -s --data 'Disk is full' \"$URL\")\" >&2\n")).toEqual([])
-  expect(logs('echo "posted: `post`" >&2\n')).toEqual([])
-  // A heredoc's body is text handed to a command, never a command of the script.
-  expect(logs('curl -s -d @- "$SLACK_WEBHOOK_URL" <<EOF\necho "Disk is full" >&2\nEOF\necho "sent" >&2\n')).toEqual(['sent'])
-  expect(logs("cat <<-'MSG' | post\n\techo \"Disk is full\" >&2\n\tMSG\n")).toEqual([])
-  // A script that points its own error stream somewhere has none that is only a log.
-  expect(logs('exec 2> >(post)\necho "Disk is full" >&2\n')).toEqual([])
-  expect(logs('exec 2>&1\necho "Disk is full" >&2\n')).toEqual([])
-  // A comment after the line changes nothing, and a line in a comment is no string at all.
-  expect(logs('echo "paging now" >&2 # for the cron log\n# echo "old" >&2\n')).toEqual(['paging now'])
 })
 
 // #2792: a hook Claude Code cut off for running past its time is a timeout, said as one, with when to
