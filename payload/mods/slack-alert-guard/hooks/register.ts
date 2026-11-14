@@ -30,6 +30,7 @@ import {
   languageOf,
   mentionsStore,
   modelCandidates,
+  modelFed,
   modelLiteral,
   modelOnlyDecls,
   modelReading,
@@ -54,7 +55,7 @@ import {
   wordingOf,
   writesOwnRecord,
 } from './rules.ts'
-import { type Reading, consoleArgs, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
+import { type Reading, type Traced, consoleArgs, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
@@ -100,6 +101,22 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
 // start: where the string's text starts in its file, or -1 where it has no one place (a YAML value,
 // a CI step's message).
 type Lit = { text: string; literal: string[]; start: number }
+
+/** Both sides of an edit read and traced for their sends. */
+type Sides = { rBefore: Reading; rAfter: Reading; tBefore: Traced; tAfter: Traced }
+/**
+ * The wording a send carries once an edit is made (#2529), each once, split by whether a send could
+ * carry it before: `fresh`, none could; `both`, one could, which a model's instructions can also be
+ * where the trace follows a model's answer into the send, so that text is judged by what only a model
+ * reads (postable) before it counts. A file whose sends cannot be found on either side gives none.
+ */
+const routedWording = ({ tBefore, tAfter }: Sides, before: Lit[], after: Lit[]): { fresh: string[]; both: string[] } => {
+  if (!tBefore.sends.length && !tAfter.sends.length) return { fresh: [], both: [] }
+  const sentIn = (t: Traced, lits: Lit[]) => new Set(lits.filter(l => l.start >= 0 && sentAt(t, l.start)).map(l => l.text))
+  const was = sentIn(tBefore, before)
+  const now = wordingOf([...sentIn(tAfter, after)])
+  return { fresh: now.filter(s => !was.has(s)), both: now.filter(s => was.has(s)) }
+}
 // Every string a file's text holds, read as its language reads them, past any handed to a query
 // builder call (#2364), with the placeholders JavaScript writes as text (#2361).
 const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, text: string): Promise<Lit[]> => {
@@ -128,18 +145,20 @@ const literals = async ($: EngineInterface, path: string, lang: ReturnType<typeo
  * that cannot be read in time, or at all, leaves the string counted, so it is held as before.
  */
 type Side = { text: string; lits: Lit[]; changed: string[] }
+/** A JavaScript, TypeScript or python file's text read for what only a model reads. */
+const modelReadingOf = async ($: EngineInterface, text: string, python: boolean): Promise<ModelReading> => {
+  let ranges = tokenRanges(text, false)
+  if (python) {
+    const spans = text ? await $.modkit.pythonText({ code: text }) : []
+    ranges = { strings: spans.filter(x => x.kind !== 'comment'), comments: spans.filter(x => x.kind === 'comment') }
+  }
+  return modelReading(text, python, ranges)
+}
 const postable = async ($: EngineInterface, path: string, lang: ReturnType<typeof languageOf>, sides: Side[], deadline: number): Promise<Lit[][]> => {
   const python = lang === 'python'
   if (!python && !(lang === 'c' && isJs(path))) return sides.map(s => s.lits)
   const readings: ModelReading[] = []
-  for (const s of sides) {
-    let ranges = tokenRanges(s.text, false)
-    if (python) {
-      const spans = s.text ? await $.modkit.pythonText({ code: s.text }) : []
-      ranges = { strings: spans.filter(x => x.kind !== 'comment'), comments: spans.filter(x => x.kind === 'comment') }
-    }
-    readings.push(modelReading(s.text, python, ranges))
-  }
+  for (const s of sides) readings.push(await modelReadingOf($, s.text, python))
   const candidates = sides.map((s, i) => {
     const changed = new Set(s.changed)
     return modelCandidates(readings[i] as ModelReading, s.lits.filter(l => l.start >= 0 && changed.has(l.text)).map(l => l.start))
@@ -490,24 +509,55 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     }
     let origin: Set<string> | undefined
     const change = wordingChange(wording(beforeLits), wording(afterLits))
-    if (!(await holdOf(change))) return PASS
+    const python = lang === 'python'
+    const traceSides = async (): Promise<Sides> => {
+      const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
+      const was = scanWork()
+      const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
+      // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
+      $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
+      return { rBefore, rAfter, tBefore, tAfter }
+    }
+    // A file whose sends are followed (an edit that applies, in JavaScript, TypeScript or python) is
+    // traced on both sides before anything else, for the text an edit newly hands a send (#2529).
+    const traced = edited !== undefined && requestLanguage(path, current || after) !== 'shell' && (python || (lang === 'c' && isJs(path))) ? await traceSides() : undefined
+    // Text the file already held that the edit newly hands one of its sends, changing no words
+    // (#2529): a model's instructions, or a line only a log printed, now posted. Counted as wording
+    // the edit adds, so Slack never posts text Dan never saw as a message. Text another file holds,
+    // brought in by a new import, is not read: a file whose own code sends nothing is never a reason
+    // to stop (#2837).
+    const routedTo = async ({ fresh, both }: { fresh: string[]; both: string[] }): Promise<string[]> => {
+      if (!both.length) return fresh
+      // Text a send could carry before only through a model's answer, the model's own instructions
+      // among it, is routed when only a model read it before and more than a model reads it now.
+      const fedModel = await modelReadingOf($, before, python)
+      const fed = both.filter(s => beforeLits.some(l => l.text === s && l.start >= 0 && modelFed(fedModel, l.start)))
+      if (!fed.length) return fresh
+      const [keptBefore, keptAfter] = await postable($, path, lang, [{ text: before, lits: beforeLits, changed: fed }, { text: after, lits: afterLits, changed: fed }], (await $.clock.now()) + SCAN_MS)
+      const [wasSent, isSent] = [new Set((keptBefore as Lit[]).map(l => l.text)), new Set((keptAfter as Lit[]).map(l => l.text))]
+      return [...fresh, ...fed.filter(s => !wasSent.has(s) && isSent.has(s))]
+    }
+    const routed = traced ? (await routedTo(routedWording(traced, beforeLits, afterLits))).filter(s => !change.added.includes(s)) : []
+    if (!(await holdOf(change)) && !(routed.length && (await holdOf({ added: routed, removed: [] })))) return PASS
     // In a repository and no test, as a file posting by itself must be.
     const place = await postsItself($, path)
     if (!('posts' in place)) return 'unchecked' in place ? place : PASS
     const deadline = (await $.clock.now()) + SCAN_MS
     // The hold for `part` of the change, of it only what Slack can be sent: text only a model reads
     // is left out (#2475), so a model's instructions beside an alert are never held, nor shown to Dan
-    // as one.
+    // as one. Routed text is in the file on both sides, so it is no change of words; it is kept where
+    // the edit leaves it sendable by more than a model.
     type Part = { added: string[]; removed: string[] }
     // `sendOf` says where the held text goes, from the hold itself (#2586).
     const holdFor = async (part: Part, sendOf: (hold: Hold) => SlackAlertSend): Promise<Verdict> => {
       const [beforeKept, afterKept] = await postable($, path, lang, [{ text: before, lits: beforeLits, changed: part.removed }, { text: after, lits: afterLits, changed: part.added }], deadline)
       const kept = wordingChange(wording(beforeKept as Lit[]), wording(afterKept as Lit[]))
-      const hold = await holdOf({ added: kept.added.filter(s => part.added.includes(s)), removed: kept.removed.filter(s => part.removed.includes(s)) })
+      const sendable = new Set((afterKept as Lit[]).map(l => l.text))
+      const moved = routed.filter(s => part.added.includes(s) && !kept.added.includes(s) && sendable.has(s))
+      const hold = await holdOf({ added: [...kept.added.filter(s => part.added.includes(s)), ...moved], removed: kept.removed.filter(s => part.removed.includes(s)) })
       return hold ? { hold: { ...hold, send: sendOf(hold) } } : PASS
     }
     const untraced = (why: string) => (): SlackAlertSend => ({ untraced: why })
-    const python = lang === 'python'
     // A file whose sends cannot be traced (a workflow, a shell script, any language but JavaScript,
     // TypeScript and python, an edit that does not apply) is held for all the wording it changes,
     // except, in a shell script, wording only a log line prints (below).
@@ -522,10 +572,11 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
       const sent: Part = { added: change.added.filter(s => !logAfter.has(s)), removed: change.removed.filter(s => !logBefore.has(s)) }
       return sent.added.length || sent.removed.length ? holdFor(sent, untraced(UNTRACED_LANGUAGE)) : PASS
     }
-    if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))
-    const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
+    if (!traced) return holdFor(change, untraced(UNTRACED_LANGUAGE))
+    const { rBefore, rAfter, tBefore, tAfter } = traced
     // Wording only a console call logs is left out (#2907), wherever the call stands: a string every
-    // place of which is a whole argument of console.log, info, warn, error or debug.
+    // place of which is a whole argument of console.log, info, warn, error or debug. Routed text
+    // reaches a send, so it is never only logged.
     const consoleOnly = (r: Reading, lits: Lit[]): Set<string> => {
       const at = consoleArgs(r, jsSpans(r.text).strings)
       const out = new Set(lits.filter(l => at.has(l.start)).map(l => l.text))
@@ -533,12 +584,8 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
       return out
     }
     const [logBefore, logAfter] = [consoleOnly(rBefore, beforeLits), consoleOnly(rAfter, afterLits)]
-    const sent: Part = { added: change.added.filter(s => !logAfter.has(s)), removed: change.removed.filter(s => !logBefore.has(s)) }
+    const sent: Part = { added: [...change.added.filter(s => !logAfter.has(s)), ...routed], removed: change.removed.filter(s => !logBefore.has(s)) }
     if (!sent.added.length && !sent.removed.length) return PASS
-    const was = scanWork()
-    const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
-    // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
-    $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
     // A file that posts to Slack by a send the guard cannot find is held for all of it but the
     // console log lines above.
     if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(sent, untraced(UNTRACED_NONE))
@@ -700,7 +747,11 @@ export const register: Register = on => {
     } finally {
       fromAgent.delete(id)
     }
-  }).catch(($, e, next) => neverThrows(() => ({ deny: hookFailed(next.error, message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
+    // Once next was called the guard had judged the call and passed it on (#2948): a failure after
+    // that is a hook's beneath it, a hooks worker another hook wedged included, so what the call
+    // settled to is replayed and the failure is said by the hook that failed, never as this guard
+    // having been unable to check it (#2039, as the secret guard and ask before saving do).
+  }).catch(($, e, next) => next.called ? next(e) : neverThrows(() => ({ deny: hookFailed(next.error, message(next.error)) }), () => ({ deny: HELD }), { deny: HELD }))
 
   // The main session's call, judged beneath every mod's tool.call hook. One that is refused goes to
   // the settings hooks first, so a call one of them refuses is refused in its words and never turned
@@ -712,6 +763,10 @@ export const register: Register = on => {
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
     return { decision: 'deny', reason: await refuse($, v, e.tool_use_id ?? '', e.tool, false) }
+    // No replay here, unlike the tool.call hook above (#2948): a call this hook holds is first asked of
+    // the checks beneath, so it has called next too, and replaying what they settled to could let a
+    // held call through. A failure beneath it is said as this guard's and the call stays held, as the
+    // design round guard's tool.check does.
   }).catch(($, e, next) => neverThrows(() => ({ decision: 'deny' as const, reason: hookFailed(next.error, message(next.error)) }), () => ({ decision: 'deny' as const, reason: HELD }), { decision: 'deny' as const, reason: HELD }))
 
   // Dan's question, asked in Claude Code's own dialog. The guard words the question and its answers,

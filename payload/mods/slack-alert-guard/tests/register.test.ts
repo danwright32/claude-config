@@ -119,7 +119,8 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
   // gitTakes, ghTakes: the test clock time each git or gh command takes before it answers (#2792), so
   // a git killed at its timeout, as a heavily loaded Mac's is, is gitFails with gitTakes of SCAN_MS
   // or more, and a gh the same with ghFails.
-  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app' }
+  // beneathFails: what the hooks beneath the guard fail with, once it has passed a call on (#2948).
+  const ctl = { storeGetFails: false, storeSetFails: false, unreadable: '', gitFails: '', gitThrows: false, gitTakes: 0, ghTakes: 0, cwd: '/w/app', beneathFails: '' }
   // #2628: the session's id; each pull request's diff as gh pr diff prints it, by the selector gh is
   // given ('' for the current branch's), and whether gh fails; each file as origin's default branch holds it, by
   // its path from the top (absent: not there upstream), and whether git show fails another way.
@@ -356,6 +357,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string> } 
       const result = { questions: a.questions, answers: dialog.answer === undefined ? {} : { [q]: dialog.answer }, ...(dialog.afk ? { afkTimeoutMs: 60_000 } : {}) }
       return { result, text: `User has answered: ${dialog.answer ?? ''}` } as never
     }
+    if (ctl.beneathFails) throw new Error(ctl.beneathFails)
     ran.push({ tool: String(tool), input })
     if (tool === 'Write') files[String(input.file_path)] = String(input.content)
     return { result: 'written', text: 'written' } as never
@@ -2170,4 +2172,124 @@ test('a string only a console call logs is not Slack wording, inside a .catch, a
   for (const [name, input, wording] of held) expect([name, refusalOf(await call($, input)).includes(wording)]).toEqual([name, true])
   expect(refusalOf(await call($, held[0]?.[1] as Record<string, unknown>))).not.toContain('notify failed')
   expect(w.ran.length).toBe(passes.length)
+})
+
+// #2948: on 2026-11-13 and 14, in a work repository, one git apply of a 2,234 line patch changing
+// seven files under docs/design was held five times as "the Slack alert guard could not check this
+// call (no answer to a heartbeat within 5000ms: the hooks worker is wedged ...)". The guard's check of
+// a git apply is its command, read once: it had passed the call on, and the hook that stopped
+// answering was one beneath it. Its catch read any failure after that as its own, so the guard that
+// was named was not the one that wedged. It now replays what the call settled to beneath it, as the
+// secret guard, ask before saving, the design round guard and the area check do (#2039), so the
+// failure reaches Claude in the words of the hook that failed.
+const WEDGED = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
+const DESIGN_PATCH = '/w/app/design.patch'
+// Seven files under docs/design: three 720 line HTML captures and four edits, as in the report.
+const designPatch = (): string => {
+  const out: string[] = []
+  for (const name of ['before', 'after', 'settled']) {
+    out.push(`diff --git a/docs/design/capture-${name}.html b/docs/design/capture-${name}.html`, 'new file mode 100644', '--- /dev/null', `+++ b/docs/design/capture-${name}.html`, '@@ -0,0 +1,720 @@')
+    for (let i = 0; i < 720; i++) out.push(`+<div class="row r${i}"><span>Row ${i} of the ${name} capture</span></div>`)
+  }
+  for (const name of ['build.ts', 'settled.json', 'checks.ts', 'sealed.html']) {
+    out.push(`diff --git a/docs/design/${name} b/docs/design/${name}`, `--- a/docs/design/${name}`, `+++ b/docs/design/${name}`, '@@ -1,3 +1,3 @@', ' first', '-old', '+new', ' last')
+  }
+  return `${out.join('\n')}\n`
+}
+test('a git apply of a 2,000 line patch across seven files is checked and passed on, and a hook beneath the guard that stops answering is never reported as the Slack alert guard (#2948)', withKit, async ($, on) => {
+  const patch = designPatch()
+  expect(patch.split('\n').length).toBeGreaterThanOrEqual(2000)
+  expect(patch.match(/^diff --git /gm)?.length).toBe(7)
+  const w = world($, on, { files: { [DESIGN_PATCH]: patch } })
+  const apply = { tool: 'Bash', command: `git apply ${DESIGN_PATCH}` }
+  expect(refusalOf(await call($, apply))).toBe('')
+  expect(refusalOf(await call($, { ...apply, agentId: 'agent-a1' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  // A hook beneath stops answering once the guard has passed the call on, from the main session and
+  // from a subagent: what reaches Claude is that failure, never a refusal naming the Slack alert guard.
+  w.ctl.beneathFails = WEDGED
+  for (const who of ['main session', 'agent-a1']) {
+    const settled = await call($, { ...apply, ...(who === 'main session' ? {} : { agentId: who }) }).then(
+      r => `${refusalOf(r)}${String(r.text ?? '')}`,
+      (err: unknown) => String(err),
+    )
+    // Before #2948 this was "Blocked: the Slack alert guard could not check this call (...)".
+    expect([who, settled !== '', settled.includes('Slack alert guard'), settled.includes('could not check')]).toEqual([who, true, false, false])
+  }
+  expect(w.cards).toEqual([])
+  // What the guard judges itself is still held while the hooks beneath fail: it is held before it is
+  // passed on.
+  expect(refusalOf(await call($, { ...REWORD, agentId: 'agent-a1' }))).toContain('Stop and report')
+  expect(refusalOf(await call($, REWORD))).toContain('realistic example')
+  expect(w.ran.length).toBe(2)
+})
+
+// #2529: an edit that changes no words but newly hands text already in a Slack posting file to its
+// send makes Slack post text Dan never saw as a message: a model's own instructions, or a line only a
+// log printed. That text is judged as new wording. Text another file holds, brought in by a new
+// import, still passes: Dan chose in #2837 that a file whose own code sends nothing is never a reason
+// to stop, and #2850 named that route as part of the trade.
+const NIGHTLY = '/w/app/src/jobs/nightly.ts'
+const NIGHTLY_TEXT = [
+  "import { WebClient } from '@slack/web-api'",
+  "import Anthropic from '@anthropic-ai/sdk'",
+  'const slack = new WebClient(process.env.SLACK_BOT_TOKEN)',
+  'const SUMMARY_PROMPT = `Summarise the night in three plain sentences.`',
+  "const FINISHED = 'The nightly backup finished without errors'",
+  'export const run = async (log: string) => {',
+  '  console.log(FINISHED)',
+  "  const res = await new Anthropic().messages.create({ model: 'claude-x', max_tokens: 400, system: SUMMARY_PROMPT, messages: [{ role: 'user', content: log }] })",
+  "  await slack.chat.postMessage({ channel: 'C1', text: `Nightly summary: ${String(res.content)}` })",
+  '}',
+  '',
+].join('\n')
+test('an edit routing text a Slack sender already holds into its send is held as new wording: a model prompt or a logged line now posted (#2529)', withKit, async ($, on) => {
+  const w = world($, on, { files: { [NIGHTLY]: NIGHTLY_TEXT } })
+  // A change to the send that hands it no new text passes, so the holds below are the routing.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: NIGHTLY, old_string: "channel: 'C1'", new_string: "channel: 'C2'" }))).toBe('')
+  // The model's own instructions handed to the send as well (the system: PROMPT to text: PROMPT of the issue).
+  const prompt = { tool: 'Edit', file_path: NIGHTLY, old_string: '${String(res.content)}` })', new_string: '${String(res.content)}`, attachments: [{ text: SUMMARY_PROMPT }] })' }
+  const why = refusalOf(await call($, prompt))
+  expect(why).toContain('Summarise the night in three plain sentences.')
+  expect(why).not.toContain('Nightly summary')
+  // A line only a log printed, now posted too.
+  const logged = { tool: 'Edit', file_path: NIGHTLY, old_string: '  console.log(FINISHED)\n', new_string: "  console.log(FINISHED)\n  await slack.chat.postMessage({ channel: 'C1', text: FINISHED })\n" }
+  const said = refusalOf(await call($, logged))
+  expect(said).toContain('The nightly backup finished without errors')
+  expect(w.ran.length).toBe(1)
+  // Approved as the message Slack posts, the routing goes through.
+  await ask($, w, said, APPROVE, { rendered: 'The nightly backup finished without errors' })
+  expect(refusalOf(await call($, logged))).toBe('')
+  expect(w.ran.length).toBe(2)
+})
+
+// #2962: on 2026-11-14 a subagent in a work repository added a new alert sentence to a constant map in
+// a pure copy builder, the file a sender renders its Slack alerts from, and it went through unheld.
+// Reproduced: the subagent's route is judged as the main session's is, and the edit passes because the
+// copy builder's own code sends nothing, the rule Dan chose in #2837. The same subagent adding a
+// sentence to the file that sends is held and told to stop and report.
+const ALERT_COPY = '/w/app/src/alerts/copy.ts'
+const ALERT_COPY_TEXT = [
+  'export const SENTENCES = {',
+  "  late: 'The nightly backup is late',",
+  '} as const',
+  'export const sentenceFor = (kind: keyof typeof SENTENCES) => SENTENCES[kind]',
+  '',
+].join('\n')
+const ALERT_SENDER = '/w/app/src/alerts/send.ts'
+const ALERT_SENDER_TEXT = [
+  "import { sentenceFor } from './copy'",
+  "export const page = (kind: 'late') => fetch(process.env.SLACK_WEBHOOK_URL as string, { method: 'POST', body: JSON.stringify({ text: sentenceFor(kind) }) })",
+  '',
+].join('\n')
+test("a subagent's new sentence in a copy builder a sender imports passes by #2837's rule, and the same subagent's new sentence in the sender is held (#2962)", withKit, async ($, on) => {
+  const w = world($, on, { files: { [ALERT_COPY]: ALERT_COPY_TEXT, [ALERT_SENDER]: ALERT_SENDER_TEXT } })
+  const added = { tool: 'Edit', file_path: ALERT_COPY, old_string: "  late: 'The nightly backup is late',", new_string: "  late: 'The nightly backup is late',\n  stuck: 'The nightly backup is stuck and needs a restart',", agentId: 'agent-a1' }
+  expect(refusalOf(await call($, added))).toBe('')
+  expect(w.ran.length).toBe(1)
+  const inSender = { tool: 'Edit', file_path: ALERT_SENDER, old_string: 'text: sentenceFor(kind)', new_string: 'text: `Backup alert: ${sentenceFor(kind)}`', agentId: 'agent-a1' }
+  const why = refusalOf(await call($, inSender))
+  expect(why).toContain('Backup alert: ${sentenceFor(kind)}')
+  expect(why).toContain('Stop and report')
+  expect(w.ran.length).toBe(1)
 })
