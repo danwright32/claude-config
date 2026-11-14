@@ -16,10 +16,11 @@ other names for these (gh pr new, gh issue new, gh release new and the rest) are
 form by lib/shell-words.py. Only where the target is PUBLIC: a private repository passes without the
 list ever being read, and so does a secret gist. A public repository owned by a work owner passes
 too, a work repository naming its own work. The text judged is the whole command (so a heredoc fed
-body is read) and every body, notes or gist file it names that can be read. Since claude-config#2909
-two parts of the command that are never posted are left out of that (posted_text): a plain cd, and
-the path after a gh pr or issue command's --body-file or -F, whose file is judged by its text and
-refused when it cannot be read.
+body is read) and every body, notes or gist file it names that can be read. Since claude-config#2909,
+for gh pr and issue commands, gh release and gh api writes (not gh repo or gist), two parts of the
+command that are never posted are left out of that (posted_text): a plain cd, unless the command can
+read the directory back, and the path after a gh pr or issue command's --body-file or -F, whose file
+is judged by its text and refused when it cannot be read.
 
 THE NAMES. Read live on every judged command and never written anywhere, so no file on disk lists
 them: the work repository list (repos.json in the repo digest, the list lib/lesson-fanout.sh reads,
@@ -510,8 +511,9 @@ def _file_bodies(args, command, place, flags, shown_as):
     the text of one read from disk, None for one this command writes from something it does not show,
     and a clause for one written from more than one redirection of standard input (claude-config#2469).
     One whose text is in the command (written from text it shows, or standard input) is judged with
-    the command; one missing or unreadable is the issue field gate's to refuse, and gh's. One named
-    inside clustered short flags (`-dF body.md`) is read too (claude-config#2412)."""
+    the command; one missing or unreadable is refused here with a clause of its own (claude-config#2909),
+    for a release's notes file as well as a body file. One named inside clustered short flags
+    (`-dF body.md`) is read too (claude-config#2412)."""
     bodies, unseen = [], []
     for word, state, detail in _body_files(args, command, place, flags, clustered=True):
         if state == "hidden":
@@ -521,8 +523,9 @@ def _file_bodies(args, command, place, flags, shown_as):
         elif state == "mixed":
             unseen.append(MIXED_INPUT % ("%s %s" % (shown_as, word)))
         elif state in ("missing", "unreadable"):
-            # Its path is not judged (posted_text), so a file that cannot be read is refused here, in a
-            # message of its own, never passed as clean (claude-config#2909).
+            # A file that cannot be read is refused here, in a message of its own, never passed as clean
+            # (claude-config#2909): a gh pr or issue body file's path is no longer judged (posted_text),
+            # so this is what stops one that is not there. A release notes file's path is still judged.
             unseen.append(UNREAD_FILE % (("the file %s names" % shown_as, "it is missing or empty, or its path cannot be worked out")
                                          if _WITHHOLD else ("%s %s" % (shown_as, word), detail)))
     return bodies, unseen
@@ -964,6 +967,11 @@ def _word_spans(text):
     return out
 
 
+# What in a command can read back the directory a cd entered: a substitution or backquote (realpath .,
+# git rev-parse --show-toplevel and the rest), pwd and dirs, and the variables holding it.
+READS_DIR = re.compile(r"\$\(|`|\bpwd\b|\bdirs\b|\bPWD\b|\bOLDPWD\b")
+
+
 def posted_text(command):
     """command as it is judged for what it posts (claude-config#2909): the text of every plain cd, and
     the path after each --body-file or -F of a gh pr or issue command, blanked out. Neither is posted:
@@ -977,11 +985,16 @@ def posted_text(command):
     the command judged as written. A cd or gh with a substitution, a redirection, a heredoc or a
     variable assignment in front is judged whole, as before; so is a body file named inside clustered
     short flags (`-dF path`) or as `-Fpath`. Anything that goes wrong here returns command unchanged:
-    blanking less can only refuse more."""
+    blanking less can only refuse more.
+
+    A cd is left in whenever anything in the command could read back the directory it entered and
+    post it (READS_DIR): a substitution, a backquote, pwd, dirs, $PWD or $OLDPWD, as in
+    `cd <checkout> && gh issue create --title "$(basename $PWD)"` (the lessons review of #2909)."""
     try:
         parts = []
         found = scan._sw.commands(command, parts=parts)
         blank = []
+        keep_cd = bool(READS_DIR.search(command))
         for _entry, part in zip(found, parts):
             if part.get("inner") or part.get("openers"):
                 continue
@@ -991,7 +1004,7 @@ def posted_text(command):
             if not spans or [w for w, _s, _e in spans] != scan._sw.shell_tokens(text):
                 continue
             words = [w for w, _s, _e in spans]
-            if words[0] == "cd" and scan._sw.cd_target(text) is not None:
+            if words[0] == "cd" and not keep_cd and scan._sw.cd_target(text) is not None:
                 blank.append((start + spans[0][1], start + spans[-1][2]))
                 continue
             if words[0] != "gh":

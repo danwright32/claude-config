@@ -414,6 +414,15 @@ run "cd $WORKCO && echo 'the acme-widgets board' > made.md && gh issue create --
 check "#2909 a body file this command writes from text naming one is refused: $out" refused
 run "cd \"\$(echo $WORKCO)\" && gh issue create --repo danwright-test/public-notes --title x --body-file clean.md"
 check "#2909 (control) a cd whose directory comes from a substitution is still judged as written: $out" refused
+# A cd is left out only while nothing in the command can read back the directory it entered.
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"\$(basename \$(pwd))\" --body-file clean.md"
+check "#2909 a title read from the directory a cd entered is still judged with the cd: $out" refused
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"from \$PWD\" --body-file clean.md"
+check "#2909 and so is one naming \$PWD: $out" refused
+run "cd $WORKCO && echo \"\$PWD\" > made.md && gh issue create --repo danwright-test/public-notes --title x --body-file made.md"
+check "#2909 and a body file written from \$PWD: $out" refused
+run "cd $WORKCO && pwd | gh issue create --repo danwright-test/public-notes --title x --body-file -"
+check "#2909 and a body piped from pwd: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/nowhere.md"
 check "#2909 a body file that cannot be read is refused: $out" refused
 check "#2909 saying it could not be read: $out" has "$out" "could not be read"
