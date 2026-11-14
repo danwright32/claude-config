@@ -66,7 +66,7 @@ last="$(cat "$STAMP" 2>/dev/null || echo 0)"
 printf '%s' "$now" >"$STAMP" 2>/dev/null
 
 cmd="bash $CLAUDE_HOME/hooks/lib/lesson-fanout.sh $pending"
-reason="New lesson(s) not yet checked for in Dan's other projects: $pending. Run this now, as its own Bash call, exactly as written: $cmd
+reason="New lesson(s) not yet checked for in Dan's projects: $pending. Run this now, as its own Bash call, exactly as written: $cmd
 
-It files one issue per repo in the repo-digest lists, asking that project to be checked for the same defect, skipping the repo the lesson came from and any repo that already has one. Report its outcome to Dan in one or two plain lines: how many issues were filed, and every line it marked FAILED or REFUSED with its reason. If it reports anything not filed, say so plainly; rerunning later files only the gaps."
+It files one issue per repo in the repo-digest lists, asking that project to be checked for the same defect, the repo the lesson came from included, and skipping any repo that already has one. Report its outcome to Dan in one or two plain lines: how many issues were filed, and every line it marked FAILED or REFUSED with its reason. If it reports anything not filed, say so plainly; rerunning later files only the gaps."
 jq -cn --arg r "$reason" '{decision: "block", reason: $r}'

@@ -2,9 +2,10 @@
 #
 # lesson-fanout.sh
 # For each lesson named, file one "sweep this project for that defect" issue in every repo the
-# repo-digest reports cover, except the repo the lesson was learned in. A lesson recorded from one
-# project is evidence the same defect may be sitting in the others (L195), and nothing else ever
-# goes and looks.
+# repo-digest reports cover. A lesson recorded from one project is evidence the same defect may be
+# sitting in the others (L195), and nothing else ever goes and looks. The repo the lesson was
+# learned in gets one too, worded for it, since it is the likeliest to hold another instance
+# (claude-config#2945).
 #
 #   lesson-fanout.sh L739 [L740 ...]
 #
@@ -164,7 +165,7 @@ done <<<"$repos"
 # ---- one lesson ----
 # overall was set above, and is already 1 when a duplicated number was refused there.
 fan_out(){   # $1 = Lnnn
-  local num="$1" entry id rule short title body_file source_names r tok existing hit url err ok=0
+  local num="$1" entry id rule short title body_file source_body body source_names r tok existing hit url err ok=0
   if ! entry="$(CLAUDE_HOME="$CLAUDE_HOME" "$SYNC_TOOL" lesson "$num" 2>&1)"; then
     echo "REFUSED $num: could not read it: $entry"
     return 1
@@ -179,27 +180,37 @@ fan_out(){   # $1 = Lnnn
   short="$(awk 'sub(/^[[:space:]]*SHORT:[[:space:]]*/, "") { print; exit }' <<<"$entry")"
   title="Lesson $num sweep: ${short:-$rule}"
   # Any digest repo the entry cites as name#N, by repo name or by digest label, is where the lesson
-  # came from.
+  # came from. That repo gets a sweep too, worded for it: it is the one most likely to hold more of
+  # the same defect, since the fix that taught the lesson covered only the case in front of it
+  # (claude-config#2945).
   source_names="$(printf '%s\n' "$entry" | grep -oE '[A-Za-z0-9_.-]+#[0-9]+' | sed 's/#.*//' | tr '[:upper:]' '[:lower:]' | sort -u)"
 
   body_file="$(mktemp)"
-  cat >"$body_file" <<BODY
-A new lesson was recorded in another project. Check whether this project has the same defect.
+  source_body="$(mktemp)"
+  write_body(){   # $1 = file, $2 = opening paragraph, $3 = what to look for
+    cat >"$1" <<BODY
+$2
 
 **$num.** $rule
 
-What to do: look for code in this project that matches the situation the rule describes, fix any instance found, and close this issue saying where you looked. If nothing here can hit it, close it with that reason. The full lesson, with its evidence, is \`claude-sync lesson $id\` on Dan's Macs.
+What to do: look for $3, fix any instance found, and close this issue saying where you looked. If nothing here can hit it, close it with that reason. The full lesson, with its evidence, is \`claude-sync lesson $id\` on Dan's Macs.
 
 ## Open questions
 None
 
 <!-- lesson-id: $id -->
 BODY
+  }
+  write_body "$body_file" "A new lesson was recorded in another project. Check whether this project has the same defect." \
+    "code in this project that matches the situation the rule describes"
+  write_body "$source_body" "This lesson was recorded from a defect found in this project. The fix that taught it covered the case in front of it, so check this project for other places with the same defect." \
+    "other code in this project that matches the situation the rule describes, beyond the instance already fixed"
 
   while IFS=' ' read -r r tok label; do
     [ -n "$r" ] || continue
+    body="$body_file"
     if grep -qixF -e "${r#*/}" ${label:+-e "$label"} <<<"$source_names"; then
-      echo "SKIPPED $num $r: the lesson came from here"; continue
+      body="$source_body"
     fi
     if [ "$tok" = "-" ]; then
       echo "FAILED $num $r: no signed in account can write to it"; ok=1; continue
@@ -217,19 +228,19 @@ BODY
       echo "FAILED $num $r: could not make sure the priority labels exist: $err"; ok=1; continue
     fi
     if ! err="$(GH_TOKEN="$tok" gh label create "$LABEL" --repo "$r" --color C5DEF5 \
-        --description "Check this project for a defect a lesson recorded elsewhere" --force 2>&1)"; then
+        --description "Check this project for a defect a recorded lesson describes" --force 2>&1)"; then
       echo "FAILED $num $r: could not make sure the $LABEL label exists: $err"; ok=1; continue
     fi
     if ! err="$(GH_TOKEN="$tok" bash "$HELPERS/ensure-milestone.sh" "$r" "$MILESTONE" 2>&1)"; then
       echo "FAILED $num $r: could not resolve the $MILESTONE milestone: $err"; ok=1; continue
     fi
-    if ! url="$(GH_TOKEN="$tok" gh issue create --repo "$r" --title "$title" --body-file "$body_file" \
+    if ! url="$(GH_TOKEN="$tok" gh issue create --repo "$r" --title "$title" --body-file "$body" \
         --label "$PRIORITY,$LABEL" --milestone "$MILESTONE" 2>&1)"; then
       echo "FAILED $num $r: the create was refused: $url"; ok=1; continue
     fi
     echo "CREATED $num $r $(printf '%s' "$url" | tail -1)"
   done <<<"$repo_tokens"
-  rm -f "$body_file"
+  rm -f "$body_file" "$source_body"
 
   if [ "$ok" -eq 0 ]; then
     mkdir -p "$(dirname "$LEDGER")"
