@@ -94,8 +94,9 @@
 # it bounds how long one run holds the lock that keeps the next one waiting. One removal measured
 # at 0.13 to 0.18 seconds on 2026-10-14, so the default leaves room for hundreds.
 #
-# ONE network call, not one per worktree: the merged PRs come back in a single list. A repo where
-# git lists no worktree but the main checkout costs nothing at all.
+# TWO network calls, never one per worktree: the merged PRs come back in a single list, and the open
+# ones in another (rule 6, the sweep only; --just-merged makes the first alone). A repo where git
+# lists no worktree but the main checkout costs nothing at all.
 #
 # Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [--just-merged <worktree>] [repo-dir]
 #
@@ -288,13 +289,17 @@ fi
 # folder itself or anything under it, by the path git lists or the real one.
 sleeper_in(){   # $1 = the path git lists, $2 = its real path
   [ -n "$sleepers" ] || return 1
-  printf '%s\n' "$sleepers" | awk -F '\t' -v p="$1" -v r="$2" '
-    $2 == p || index($2, p "/") == 1 || $2 == r || index($2, r "/") == 1 { print $1; exit }'
+  # A real path that could not be read is the listed one again, never empty: an empty one would
+  # make every absolute place match. Read from a here string, not a pipe, so the awk that stops at
+  # the first match cannot cut a writer off under pipefail.
+  local r="${2:-$1}"
+  awk -F '\t' -v p="$1" -v r="$r" '
+    $2 == p || index($2, p "/") == 1 || $2 == r || index($2, r "/") == 1 { print $1; exit }' <<<"$sleepers"
 }
 # The open pull request of a branch, by number, or nothing.
 open_pr_of(){
   [ -n "$open" ] && [ -n "$1" ] || return 0
-  printf '%s\n' "$open" | awk -F '\t' -v b="$1" '$1 == b { print $2; exit }'
+  awk -F '\t' -v b="$1" '$1 == b { print $2; exit }' <<<"$open"
 }
 
 # The working directories of every running process, read once. Without lsof or /proc nothing can

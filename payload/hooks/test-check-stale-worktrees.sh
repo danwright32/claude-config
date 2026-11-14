@@ -783,6 +783,14 @@ printf '{"v":1,"sessionId":"s-nowhere","cwd":"%s","startedAt":1,"lastSeen":1,"cl
 run --remove "$SREPO"
 check "#2943 a worker found in the registry's archive is read there" "removed agent-unknown [fix/804-unknown]" "$OUT"
 check "#2943 and the sleeper is still kept" "keeping agent-sleeper [fix/803-sleeper]" "$OUT"
+# A folder that has gone has no real path to read. It must not be matched as "/", which every
+# worker's absolute place is under, and be credited to a worker that never touched it.
+sadd fix/805-vanished agent-vanished
+rm -rf "$SWT/agent-vanished"
+run --remove "$SREPO"
+check_not "#2943 a worktree whose folder has gone is not credited to a worker" "keeping agent-vanished [fix/805-vanished]: session" "$OUT"
+check "#2943 it is kept for the folder being gone instead" "keeping agent-vanished [fix/805-vanished]: its folder is not there" "$OUT"
+G -C "$SREPO" worktree prune
 
 # lib/sleep-worker-places.py on its own: the shapes it refuses rather than reading as "nowhere".
 PLACES="$DIR/lib/sleep-worker-places.py"
