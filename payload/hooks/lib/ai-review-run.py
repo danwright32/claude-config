@@ -952,7 +952,9 @@ def write_lessons_file(text):
     review has ended, and remove_input_when_stopped does when a signal ends it first."""
     fd, path = tempfile.mkstemp(prefix="ai-review-lessons-", suffix=".md")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        # strict: lessons_block read every file with errors="replace", so the text holds no lone
+        # surrogate; one appearing would mean the lessons were not what was read, so refuse.
+        with os.fdopen(fd, "w", encoding="utf-8", errors="strict", newline="") as f:
             f.write(text)
     except BaseException:
         try:
