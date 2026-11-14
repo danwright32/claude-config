@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A whole tree scan: a send touching these paths runs this suite (claude-config#809).
 # send-gate: scans hooks/ skills/ mods/ commands/ agents/
-# Every program that imports a module from payload/hooks/lib or tools/lib (and, #2854, a heredoc written to a .py file) turns bytecode off first (#2600).
+# Every program that imports a module from payload/hooks/lib, tools/lib or a folder the sync carries (#2919) (and, #2854, a heredoc written to a .py file) turns bytecode off first (#2600).
 #
 # THE FAULT. Python caches what it imports in a __pycache__ folder beside the module, unless told not
 # to. A program that imports from lib/ with bytecode on leaves lib/__pycache__/<module>.pyc behind,
@@ -9,6 +9,14 @@
 # a part's suites in parallel, so the suite that fails is whichever runs beside the program, on a
 # pull request that touched neither (#2600: lib/bundle-budget.py and scan-absence-needles.py, both
 # importing ratchet). The class was fixed one importer at a time before: #2076, #2345, #2353, #2444.
+#
+# WHERE. "lib/" below means every folder judged: the hooks lib, tools/lib, and since #2919 every
+# folder holding a Python file the sync carries, as lib/synced-trees.sh's synced_files lists them. A
+# full run on 2026-11-13 left __pycache__ in payload/hooks, payload/skills/design-rounds and its score
+# folder, none of them judged then. claude-sync leaves __pycache__ and *.pyc out of every mirrored
+# tree, so such a cache does not travel; it is still the installed hooks' and skills' own folders a
+# run of a skill's script fills, and a module beside a program in one of them is not that program's
+# own to cache.
 #
 # THE RULE. A program that imports from lib/ sets `sys.dont_write_bytecode = True` before the import:
 #   a .py file, always in its own text. Its callers are not counted, even where every caller today
@@ -88,8 +96,8 @@ import re
 import sys
 import tokenize
 
-root, listing = sys.argv[1], sys.argv[2]
-show = "--list" in sys.argv[3:]
+root, listing, carried_list = sys.argv[1], sys.argv[2], sys.argv[3]
+show = "--list" in sys.argv[4:]
 # The one reader of python3 -c programs (#2066) and the one reader of shell quoting and heredocs
 # (#1663), both from the lib/ of the checkout this suite belongs to.
 sys.path.insert(0, os.environ["LIB_BYTECODE_READERS"])
@@ -99,9 +107,17 @@ from shell_code_lines import read_lines
 LIB_REL = os.path.join("payload", "hooks", "lib")
 LIB = os.path.join(root, LIB_REL)
 # The folders whose modules a program must not leave a cache beside: the hooks lib, and tools/lib
-# where tools/lib/ts_source.py is imported by the mod scans and their suites (#2854). A folder a
-# checkout lacks is skipped, so a probe tree holding only the hooks lib still reads.
-LIB_DIRS = [LIB] + [d for d in (os.path.join(root, "tools", "lib"),) if os.path.isdir(d)]
+# where tools/lib/ts_source.py is imported by the mod scans and their suites (#2854), and every
+# folder holding a Python file the sync carries (#2919: a full run left __pycache__ in
+# payload/hooks, payload/skills/design-rounds and its score folder, none of them judged). That last
+# set is read from <carried list>, the folders lib/synced-trees.sh's synced_files names, so a skill
+# or mod gaining a Python file is judged the day it lands rather than when somebody lists it (L96).
+# A folder a checkout lacks is skipped, so a probe tree holding only the hooks lib still reads.
+with open(carried_list, encoding="utf-8") as f:
+    CARRIED = [os.path.join(root, l.strip()) for l in f if l.strip()]
+LIB_DIRS = [LIB] + [d for d in [os.path.join(root, "tools", "lib")] + CARRIED
+                    if os.path.isdir(d) and os.path.normcase(d) != os.path.normcase(LIB)]
+LIB_DIRS = list(dict.fromkeys(LIB_DIRS))
 LIB_FILES = sorted({f for d in LIB_DIRS for f in os.listdir(d) if f.endswith(".py")})
 LIB_NAMES = {f[:-3] for f in LIB_FILES if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\.py", f)}
 IMPORT = re.compile(r"^\s*(?:import\s+([A-Za-z_][\w.]*(?:\s+as\s+\w+)?(?:\s*,\s*[A-Za-z_][\w.]*(?:\s+as\s+\w+)?)*)|from\s+([A-Za-z_]\w*)\s+import\b)")
@@ -212,7 +228,7 @@ def judge(src, own_dir, extra=""):
         for n, line in enumerate(code, 1):
             for m in LOAD.finditer(line):
                 loads.append((n, m.start()))
-                what.append("code by path (%s) in a program naming lib/" % m.group(1))
+                what.append("code by path (%s) in a program naming a lib or carried file" % m.group(1))
     if not loads:
         return None
     loads.sort()
@@ -334,8 +350,8 @@ def report(rel, line, shape, res, how, at=None):
                 said = f.read().split("\n")[where - 1].strip()[:160]
         except (OSError, IndexError):
             said = "(the line could not be read)"
-        print("HIT %s:%d: %s loads %s with bytecode on, which can leave a lib/__pycache__ "
-              "behind%s; %s; the line reads: %s" % (rel, where, shape, ", ".join(what), late, fix, said))
+        print("HIT %s:%d: %s loads %s with bytecode on, which can leave a __pycache__ behind in a "
+              "lib or carried folder%s; %s; the line reads: %s" % (rel, where, shape, ", ".join(what), late, fix, said))
 
 
 for rel in paths:
@@ -437,7 +453,26 @@ for rel in paths:
 print("READ files=%d programs=%d importers=%d" % (files, progs, importers))
 PY
 
-scan() { LIB_BYTECODE_READERS="$DIR/lib" python3 -I -B "$TMPROOT/scan.py" "$@" 2>&1; }
+# carried_dirs <root> <out file>: every folder, relative to <root>, holding a Python file the sync
+# carries out of <root>/payload, one per line, read through lib/synced-trees.sh's synced_files: the
+# trees claude-sync mirrors, with what it leaves out left out (#2919, L96, L247). Fails, rather than
+# writing an empty list, when the trees cannot be listed or hold no Python file, since an empty list
+# would judge only the two lib folders and read as a clean tree (L98).
+carried_dirs() {
+  local files f d
+  files="$( . "$DIR/lib/synced-trees.sh" && synced_files "$1/payload" )" || return 1
+  while IFS= read -r f; do
+    case "$f" in "$1"/*.py) d="${f#"$1"/}"; printf '%s\n' "${d%/*}" ;; esac
+  done <<< "$files" | sort -u > "$2"
+  [ -s "$2" ]
+}
+# scan <root> <list file> [--list]: the folders judged are <root>'s own, its lib folders and the
+# folders its payload carries.
+scan() {
+  carried_dirs "$1" "$TMPROOT/carried.list" \
+    || { echo "CARRIED-UNREAD the folders the sync carries out of $1/payload could not be listed, so nothing was judged"; return 1; }
+  LIB_BYTECODE_READERS="$DIR/lib" python3 -I -B "$TMPROOT/scan.py" "$1" "$2" "$TMPROOT/carried.list" "${@:3}" 2>&1
+}
 
 # ---------------------------------------------------------------------------
 # The scan has to find each shape an import from lib/ takes, and pass each way of turning bytecode
@@ -458,6 +493,26 @@ printf 'import sys\nsys.dont_write_bytecode = True\nfrom ratchet import read\n' 
 printf 'import importlib.util, os\ns = importlib.util.spec_from_file_location("w", os.path.join(os.path.dirname(__file__), "lib", "shell-words.py"))\n' > "$PROBE/payload/hooks/by-path.py"
 printf '"""Says import ratchet in prose,\nimport ratchet\nand spec_from_file_location("x", "lib/shell-words.py")."""\n# import ratchet\nx = 1\n' > "$PROBE/payload/hooks/prose.py"
 printf 'import json\nimport ratchet\n' > "$PROBE/payload/skills/own/local.py"
+# #2919: every folder holding a Python file the sync carries is judged, so local.py above, importing
+# the ratchet.py beside it in a skill, now loads from a carried folder. So does a skill's test file
+# reaching its skill's module through sys.path, the shape of design-rounds/score/tests/score_tests.py,
+# and a hooks file with a hyphen loaded by path under -I, the shape design-score-reopen.py was loaded
+# in. A neighbour in a folder the sync does not carry (tests/ at the top, a skill under .trash) is
+# still the program's own: the folders are the ones synced_files lists, not every folder in payload.
+mkdir -p "$PROBE/payload/skills/own/tests" "$PROBE/tests/own" "$PROBE/payload/skills/.trash/gone"
+: > "$PROBE/payload/skills/own/ownmod.py"
+printf 'import os, sys\nsys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\nimport ownmod\n' > "$PROBE/payload/skills/own/tests/own_tests.py"
+printf 'import os, sys\nsys.dont_write_bytecode = True\nsys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\nimport ownmod\n' > "$PROBE/payload/skills/own/tests/own_tests_ok.py"
+: > "$PROBE/tests/own/ratchet.py"
+printf 'import ratchet\n' > "$PROBE/tests/own/local.py"
+: > "$PROBE/payload/skills/.trash/gone/goneprobe.py"
+printf 'import goneprobe\n' > "$PROBE/payload/skills/.trash/gone/user.py"
+: > "$PROBE/payload/hooks/carried-probe.py"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf "$P -I -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location(\"r\", sys.argv[1])' \"\$D/carried-probe.py\"\n"     # 2: a carried hooks file, -I
+  printf "$P -I -B -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location(\"r\", sys.argv[1])' \"\$D/carried-probe.py\"\n"  # 3: the same, -B
+} > "$PROBE/payload/hooks/reopen.sh"
 printf 'def f():\n    import ratchet\n' > "$PROBE/payload/hooks/lib/sibling.py"
 printf 'import importlib.util\ns = importlib.util.spec_from_file_location("g", "gh_issue_scan.py")\n' > "$PROBE/payload/hooks/not-lib.py"
 # #2840: tools/review-score.py set the setting inside the function that loads the runner, and
@@ -523,22 +578,25 @@ printf 'def f():\n    import tsprobe\n' > "$PROBE/tools/lib/neighbour.py"
   printf "IFS= read -r -d '' LATEV <<'EOF' || true\nimport ratchet\nimport sys; sys.dont_write_bytecode = True\nEOF\n"   # 35 to 38: set too late
   printf "$P -c \"\$LATEV\"\n"                                                                                      # 39: held, the setting after
 } > "$PROBE/payload/hooks/probe.sh"
-( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py; echo tools/lib/neighbour.py ) > "$TMPROOT/probe.list"
+( cd "$PROBE" && find payload -type f ! -path '*/lib/*' | sort; echo payload/hooks/lib/sibling.py; echo tools/lib/neighbour.py; echo tests/own/local.py ) > "$TMPROOT/probe.list"
 probe="$(scan "$PROBE" "$TMPROOT/probe.list" --list)"
 hits="$(printf '%s\n' "$probe" | sed -n 's/^HIT \([^:]*:[0-9]*\):.*/\1/p' | sort | tr '\n' ' ')"
-want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/scoped.py:6 payload/hooks/writer.sh:4 tools/lib/neighbour.py:2 "
-# Twenty seven importers: eight Python files (by-name, late, early, by-path, sibling, scoped,
-# scoped-ok, and tools/lib's neighbour) and seventeen shell programs (lines 2, 3, 4, 5, 10, 13, 15 to
-# 19, 21, 22, 29, 30, 34, 39), and two heredocs written to a Python file, in tools/lib's reach
+want="payload/hooks/by-name.py:3 payload/hooks/by-path.py:2 payload/hooks/late.py:2 payload/hooks/lib/sibling.py:2 payload/hooks/probe.sh:10 payload/hooks/probe.sh:17 payload/hooks/probe.sh:18 payload/hooks/probe.sh:2 payload/hooks/probe.sh:21 payload/hooks/probe.sh:29 payload/hooks/probe.sh:34 payload/hooks/probe.sh:39 payload/hooks/probe.sh:5 payload/hooks/reopen.sh:2 payload/hooks/scoped.py:6 payload/hooks/writer.sh:4 payload/skills/own/local.py:2 payload/skills/own/tests/own_tests.py:3 tools/lib/neighbour.py:2 "
+# Thirty two importers: eleven Python files (by-name, late, early, by-path, sibling, scoped,
+# scoped-ok, tools/lib's neighbour, and in a carried skill local, own_tests and own_tests_ok, #2919)
+# and nineteen shell programs (probe.sh's lines 2, 3, 4, 5, 10, 13, 15 to 19, 21, 22, 29, 30, 34, 39,
+# and reopen.sh's 2 and 3, #2919), and two heredocs written to a Python file, in tools/lib's reach
 # (writer.sh, writer-ok.sh, #2854).
-# prose.py, local.py, not-lib.py and lines 6 and 24 load nothing from lib.
+# prose.py, not-lib.py, probe.sh's lines 6 and 24 (a file no judged folder of the probe holds),
+# tests/own/local.py and the .trash skill's user.py (neighbours in folders the sync does not carry)
+# load nothing from a judged folder.
 [ "$hits" = "$want" ] \
-  && check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" ok \
-  || check "the scan finds an import from lib in each shape, and passes -B, the variable, the setting first, prose and a file not in lib" "it found [$hits], wanted [$want]: $probe"
+  && check "the scan finds an import from lib or a carried folder in each shape, and passes -B, the variable, the setting first, prose and a file in neither" ok \
+  || check "the scan finds an import from lib or a carried folder in each shape, and passes -B, the variable, the setting first, prose and a file in neither" "it found [$hits], wanted [$want]: $probe"
 nimp="$(printf '%s\n' "$probe" | grep -c '^IMPORTER ' || true)"
-[ "$nimp" = 27 ] \
+[ "$nimp" = 32 ] \
   && check "the scan lists every importer in the probe, the ones that turn bytecode off too" ok \
-  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 27: $probe"
+  || check "the scan lists every importer in the probe, the ones that turn bytecode off too" "it listed $nimp, wanted 32: $probe"
 # A finding names the line that loads from lib, as it reads, so a failure on the real tree says which
 # writer it found and where (#2854: the #2866 builder saw detection only on its probe files).
 case "$probe" in
@@ -562,7 +620,7 @@ case "$probe" in
   *) check "#2840 a late setting inside a held program is named by its own line in the file" "it said: $probe" ;;
 esac
 case "$probe" in
-  *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave a lib/__pycache__ behind (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
+  *"HIT payload/hooks/late.py:2: the file loads ratchet with bytecode on, which can leave a __pycache__ behind in a lib or carried folder (it is set on line 3, after the import); set sys.dont_write_bytecode = True before it"*)
     check "a finding names the file, the line, the module and the fix" ok ;;
   *) check "a finding names the file, the line, the module and the fix" "it said: $probe" ;;
 esac
@@ -591,7 +649,19 @@ bash "$DIR/lib/repo-files.sh" "$ROOT" > "$TMPROOT/files.list" 2>/dev/null
 [ -s "$TMPROOT/files.list" ] \
   && check "the files to judge were listed" ok \
   || check "the files to judge were listed" "lib/repo-files.sh gave nothing for $ROOT, so nothing below was read"
-TREE_RULE="#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it"
+TREE_RULE="#2600 every program importing from payload/hooks/lib, tools/lib or a folder the sync carries (#2919) turns bytecode off before it"
+# The folders judged beside the two libs are the ones the sync carries, and the three a full run left
+# a cache in on 2026-11-13 are among them (#2919). An empty or short list would judge only the libs
+# and read as a clean tree (L98).
+if carried_dirs "$ROOT" "$TMPROOT/root-carried.list"; then
+  for want_dir in payload/hooks payload/skills/design-rounds payload/skills/design-rounds/score; do
+    grep -qx "$want_dir" "$TMPROOT/root-carried.list" \
+      && check "#2919 $want_dir is a carried folder the scan judges" ok \
+      || check "#2919 $want_dir is a carried folder the scan judges" "lib/synced-trees.sh's synced_files did not list a Python file in it: $(tr '\n' ' ' < "$TMPROOT/root-carried.list")"
+  done
+else
+  check "#2919 the folders the sync carries were listed" "lib/synced-trees.sh's synced_files listed no Python file under $ROOT/payload"
+fi
 # tree_said <a scan's output>: what the tree check says of it, "ok" or its findings, one to a line:
 # the file and line, what it loads, the fix, and the line as it reads. Each is indented under the
 # FAIL, because the runner prints a failing suite's FAIL line and only the lines indented under it

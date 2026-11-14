@@ -60,6 +60,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "score"))
 import headless_chrome  # noqa: E402

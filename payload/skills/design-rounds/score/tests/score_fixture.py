@@ -14,6 +14,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCORE_DIR = os.path.dirname(HERE)
 SCORE = os.path.join(SCORE_DIR, "design_score.py")
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, SCORE_DIR)
 import pngio  # noqa: E402
 
