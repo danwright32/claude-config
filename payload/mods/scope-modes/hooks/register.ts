@@ -121,10 +121,14 @@ import {
   closingComments,
   filesSaid,
   filesWritten,
+  inHandSaid,
   isLeftClosed,
   issueRefs,
   LEAVE_BRANCH_TOOL,
   leftByChoice,
+  liveRuns,
+  mergeRunOf,
+  mergeRunsIn,
   NEW_WORK,
   neverMergeSaid,
   neverMergeWhy,
@@ -132,11 +136,13 @@ import {
   newWork,
   outstanding,
   patchedPaths,
+  pgrepWords,
   porcelainFiles,
   prLinks,
   prRefs,
   quoteOf,
   refSaid,
+  runningCommands,
   settledByBranchChoice,
   settledByDan,
   stashTaken,
@@ -144,6 +150,7 @@ import {
   whoseFiles,
   type DeployState,
   type IssueRead,
+  type MergeRun,
   type NeverMerge,
   type PrComment,
   type PrRef,
@@ -205,8 +212,9 @@ let checkingFresh = false
 // What the finish check found: what is still to do, the PRs settled by being left as they are on
 // Dan's own choice, open (#917) or closed (#1033), and the branches he chose to leave as they are
 // (#1074), each said apart from what is outstanding, and the uncommitted files this session did not
-// write (#1108), said once it finishes.
-type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[]; notMine?: string[] }
+// write (#1108), said once it finishes; and the PRs in hand (#2901), unread only because this
+// session's own loops used the minute's looks while a merge run of its own is merging each.
+type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[]; notMine?: string[]; inHand?: string[] }
 
 // An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
 // skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
@@ -3776,7 +3784,7 @@ const isPr = async ($: EngineInterface, gh: GhRead, repo: string | undefined, n:
     return { unreadable: `${failed.said}; GitHub is asked again in ${Math.ceil((failed.at + failed.wait - now) / 1000)}s` }
   const poll = await pollOf($)
   const held = await heldLook($, poll, now)
-  if (held !== undefined) return { unreadable: held }
+  if (held !== undefined) return { unreadable: held.said }
   const res = await gh(['pr', 'view', String(n), ...(repo ? ['--repo', repo] : []), '--json', 'number'])
   if (res.exitCode === 0 || NOT_A_PR.test(res.stderr)) {
     prNumbers.set(key, res.exitCode === 0)
@@ -3865,20 +3873,61 @@ const pollFailed = ($: EngineInterface, err: unknown) => {
   pollNoted = true
   $.ui.log(`scope-modes: the polling policy (gh-poll.sh) could not be asked, so winding down reads its PRs without it: ${msg(err)}`, { to: 'debug' })
 }
-/** Why the policy holds this look, or undefined when the look is taken. */
-const heldLook = async ($: EngineInterface, poll: Poll | undefined, now: number): Promise<string | undefined> => {
+/**
+ * Why the policy holds this look, in words (`said`) and by its cause (`why`: a rate limit pause, or
+ * this session's loops having used the minute's looks, #2901), or undefined when the look is taken.
+ */
+const heldLook = async ($: EngineInterface, poll: Poll | undefined, now: number): Promise<{ said: string; why: 'pause' | 'cap' } | undefined> => {
   if (!poll) return undefined
   try {
     const t = await takeLook(poll, now)
     if (t.take) return undefined
     const secs = Math.ceil(t.waitMs / 1000)
     return t.why === 'pause'
-      ? `GitHub is not being asked: this session's looks are paused for its rate limit (${t.said || 'it refused a read'}), for ${secs}s more`
-      : `GitHub is not being asked: this session's loops have used their looks for this minute, so for ${secs}s more`
+      ? { why: t.why, said: `GitHub is not being asked: this session's looks are paused for its rate limit (${t.said || 'it refused a read'}), for ${secs}s more` }
+      : { why: t.why, said: `GitHub is not being asked: this session's loops have used their looks for this minute, so for ${secs}s more` }
   } catch (err) {
     pollFailed($, err)
     return undefined
   }
+}
+
+// The merge runs of this session alive now (#2901, winddown.ts says why both halves): those Claude
+// Code lists as running work of the session's that a process running the helper on this Mac
+// confirms. Anything that cannot be read gives none, so the PR it is about holds the turn end, and
+// is said in the debug log.
+const mergeRunsAlive = async ($: EngineInterface, inFlight: unknown): Promise<MergeRun[]> => {
+  const none = (why: string) => {
+    $.ui.log(`scope-modes: no merge run of this session is taken as in hand, since ${why}`, { to: 'debug' })
+    return []
+  }
+  const lines = runningCommands(inFlight)
+  if (!lines) return none("Claude Code's list of work in flight sent with the stop is not a list")
+  try {
+    const listed: MergeRun[] = []
+    for (const line of lines) listed.push(...mergeRunsIn(await readCommands($, line)))
+    if (!listed.length) return []
+    const p = await run($, ['pgrep', '-lf', 'merge-when-ready'])
+    // pgrep's exit 1 is no process matched; any other failure is a list that could not be read.
+    if (p.exitCode === 1) return []
+    if (p.exitCode !== 0) return none(`pgrep could not list the processes running the helper (${p.stderr.trim() || `exit ${p.exitCode}`})`)
+    const running: MergeRun[] = []
+    for (const words of pgrepWords(p.stdout)) {
+      const r = mergeRunOf(await $.modkit.mergeHelper({ words } as Cmd))
+      if (r) running.push(r)
+    }
+    return liveRuns(listed, running)
+  } catch (err) {
+    return none(`a merge run's words could not be read (${msg(err)})`)
+  }
+}
+/** The PR in hand, as said, when a live merge run of this session is merging PR `n` of `repo` (the session's own when undefined). */
+const inHandFor = async ($: EngineInterface, runs: () => Promise<MergeRun[]>, repo: string | undefined, n: number): Promise<string | undefined> => {
+  const own = await sessionSlug($)
+  const home = repo ?? own
+  if (!home) return undefined
+  const merging = (await runs()).some(r => r.number === n && (r.repo ?? own?.toLowerCase()) === home.toLowerCase())
+  return merging ? `PR #${n} in ${home}` : undefined
 }
 
 /** The files uncommitted in a checkout, by git status (#1051), or why they could not be read. */
@@ -3903,7 +3952,9 @@ const uncommittedOwn = async ($: EngineInterface, root: string): Promise<{ own: 
 // repository its kept reading's link names and its number, as the finish check finds it.
 // `into` are the branches this session pushed the target's branch into (#2533), whose PR is its PR
 // when it has none of its own.
-type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[]; into?: readonly string[] }
+// `merging` gives this session's live merge runs (#2901), asked only of a turn end's read the
+// minute's looks hold; absent, no PR is ever in hand.
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean; choices?: readonly ScopeModesLeftAsIs[]; into?: readonly string[]; merging?: () => Promise<MergeRun[]> }
 const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
   const { repo, elsewhere = false, fresh = false, inherited = false } = o
   const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
@@ -3945,7 +3996,13 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     const held = poll ? await heldLook($, poll, now) : undefined
     // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none,
     // unless its last reading was of a PR left as it is on Dan's choice (#2433).
-    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, await seenChoice($, seen, slug, o.choices)))))) return { reading: { ...r, pr: { unreadable: held } } }
+    // One the minute's looks hold while a merge run of this session's is merging it is in hand (#2901).
+    if (held !== undefined && (!seen || (fresh && !(t.pr && keptByChoice(seen, await seenChoice($, seen, slug, o.choices)))))) {
+      const seenNumber: unknown = seen?.pr?.number
+      const n = t.pr ?? (typeof seenNumber === 'number' ? seenNumber : undefined)
+      const inHand = held.why === 'cap' && o.merging && typeof n === 'number' ? await inHandFor($, o.merging, slug, n) : undefined
+      return { reading: { ...r, pr: { unreadable: held.said }, ...(inHand ? { inHand } : {}) } }
+    }
     if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
@@ -4156,12 +4213,16 @@ const inheritedBranch = (t: ScopeModesTarget, mine: readonly string[]) => !t.isD
 
 // What is still to do and what Dan chose to leave as it is, or null when winding down is not on.
 // `fresh` asks GitHub again about everything that can still change (a turn end); the minute's check
-// asks only once a PR's wait has passed (#1037).
-const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
+// asks only once a PR's wait has passed (#1037). `inFlight` is Claude Code's list of the session's
+// work in flight a turn end was sent with (#2901), from which a PR can be in hand.
+const check = ($: EngineInterface, fresh = false, inFlight?: unknown): Promise<Checked | null> => {
   if (checking && (checkingFresh || !fresh)) return checking
   // A turn end waits for a minute's check under way, then asks afresh.
-  if (checking) return checking.then(() => check($, true))
+  if (checking) return checking.then(() => check($, true, inFlight))
   checkingFresh = fresh
+  // Read once a check, and only when a held read asks.
+  let runs: Promise<MergeRun[]> | undefined
+  const merging = inFlight === undefined ? undefined : () => (runs ??= mergeRunsAlive($, inFlight))
   checking = (async (): Promise<Checked | null> => {
     if ((await scopeOf($)) !== 'WINDING DOWN') return null
     let t = (await $.state.get(targetRef)).value ?? null
@@ -4194,12 +4255,14 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
       // The branches this session pushed its branch into (#2533): with no PR of its own, theirs is its PR.
       const ownBranch = t.branch
       const into = ((await $.state.get(pushedIntoRef)).value ?? []).filter(p => p.from === ownBranch).map(p => p.to)
-      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices, into })
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine), choices, into, ...(merging ? { merging } : {}) })
       t = await keepFound($, t, found)
       const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
       const keptBranches: ScopeModesLeftBranch[] = []
+      const inHand: string[] = []
       const toDo = (r: Reading, repo: string | undefined) => {
+        if (r.inHand) inHand.push(r.inHand)
         const pr = r.pr
         const d = repo && pr && !('unreadable' in pr) ? choiceFor(choices, repo, pr.number) : undefined
         const b = repo && r.branch ? branchChoiceFor(branchChoices, repo, r.branch) : undefined
@@ -4229,7 +4292,7 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, choices })
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh, choices, ...(merging ? { merging } : {}) })
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
@@ -4237,7 +4300,7 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
         left.push(...toDo(one.reading, o.repo))
       }
       // One unreadable GitHub answers every read the same way, said once.
-      return { left: [...new Set(left)], kept, keptBranches, ...(reading.notMine ? { notMine: reading.notMine } : {}) }
+      return { left: [...new Set(left)], kept, keptBranches, ...(reading.notMine ? { notMine: reading.notMine } : {}), ...(inHand.length ? { inHand } : {}) }
     } catch (err) {
       return { left: [`the finish check failed (${msg(err)})`], kept: [], keptBranches: [] }
     }
@@ -5104,7 +5167,8 @@ export const register: Register = on => {
           // before winding down ends: only GitHub's answer now finishes it (lessons review).
           const kept = await check($)
           const c = kept && kept.left.length === 0 ? await check($, true) : kept
-          if (c && c.left.length === 0) await finish($, c)
+          // A PR only in hand (#2901) is not finished: winding down stays on until it is read.
+          if (c && c.left.length === 0 && !c.inHand?.length) await finish($, c)
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })
         }
@@ -5743,16 +5807,24 @@ export const register: Register = on => {
     hear(e)
     const driven = await driveStop($)
     if (driven !== 'not-driven') return driven ?? {}
-    // A turn end asks GitHub afresh about everything that can still change (#1037).
-    const c = await check($, true)
+    // A turn end asks GitHub afresh about everything that can still change (#1037), with Claude
+    // Code's list of the session's work in flight, from which a PR can be in hand (#2901).
+    const c = await check($, true, (e as { background_tasks?: unknown }).background_tasks)
     if (c === null) return next(e)
+    const inHand = c.inHand ?? []
     if (c.left.length === 0) {
+      // Nothing outstanding but PRs this session's own merge runs are merging, unread only for the
+      // minute's looks (#2901): the turn ends, winding down stays on, and the next stop reads again.
+      if (inHand.length) {
+        $.ui.log(`scope-modes: winding down let the turn end with ${inHand.join('; ')} in hand, read again at the next stop`, { to: 'debug' })
+        return next(e)
+      }
       await finish($, c)
       return next(e)
     }
     // A PR Dan chose to leave open (#917) or closed (#1033), and a branch he chose to leave as it is
-    // (#1074), are said apart, never as outstanding.
-    const kept = `${keptSaid(c.kept, "Dan's")}${keptBranchesSaid(c.keptBranches, "Dan's")}`
+    // (#1074), are said apart, never as outstanding; so are the PRs in hand (#2901).
+    const kept = `${keptSaid(c.kept, "Dan's")}${keptBranchesSaid(c.keptBranches, "Dan's")}${inHandSaid(inHand)}`
     return {
       block: `Winding down is not finished: ${c.left.join('; ')}.${kept} ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
     }
