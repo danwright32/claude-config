@@ -71,7 +71,12 @@ const atIdsPath = async ($: EngineInterface): Promise<{ path: string } | { misse
   }
   if (!home) return { missed, failed: ['HOME is not set'] }
   if (!SESSION_ID.test(id)) return { missed, failed: [`this session's id is not one (${JSON.stringify(id)})`] }
-  const started = (await $.state.get(startCwdRef).catch(() => ({ value: undefined }))).value
+  let started: string | undefined
+  try {
+    started = (await $.state.get(startCwdRef)).value
+  } catch (err) {
+    failed.push(`the folder this session started in could not be read (${errorText(err, MOD)}), so only the one it is in now was looked in`)
+  }
   const projects = `${home}/.claude/projects`
   for (const dir of new Set([started, here].filter((d): d is string => typeof d === 'string' && !!d))) {
     let places: string[]
@@ -99,9 +104,11 @@ const inRegistry = async ($: EngineInterface): Promise<{ path: string } | { why:
     const list = await $.sessions.list()
     if (!list.selfId) return { why: 'the session registry has no record of this session' }
     const me = list.open.find(r => r.sessionId === list.selfId)
-    if (me?.transcriptPath) return { path: me.transcriptPath }
+    const ended = list.closed.find(r => r.sessionId === list.selfId)
+    const named = me?.transcriptPath ?? ended?.transcriptPath
+    if (named) return { path: named }
     if (me) return { why: me.transcriptUnread ?? "the session registry's search for it found nothing" }
-    if (list.closed.some(r => r.sessionId === list.selfId)) return { why: 'the session registry counts this session as ended, so it did not look its transcript up' }
+    if (ended) return { why: 'the session registry counts this session as ended, so it did not look its transcript up' }
     return { why: 'the session registry has no record of this session' }
   } catch (err) {
     return { why: `the session registry could not be read (${errorText(err, MOD)})` }

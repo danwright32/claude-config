@@ -131,7 +131,7 @@ type World = {
    * as the real registry lists a live session whose record a session end it outlived closed (no
    * transcript looked up for it); or absent, with no id of its own (selfId null).
    */
-  registry: 'open' | 'closed' | 'absent'
+  registry: 'open' | 'closed' | 'closed naming it' | 'absent'
   /** Where a transcript is on disk, by path; a string is the error checking that path gives. */
   disk: Record<string, true | string>
   /** The folder the session is in now, where it started in /repo. */
@@ -179,6 +179,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     if (e.argv[0] === '__sessions') {
       const me = { sessionId: 's1', transcriptPath: w.transcript || null, ...(w.transcript ? {} : { transcriptUnread: 'the transcript search was cut off' }) }
       if (w.registry === 'closed') return ok(JSON.stringify({ open: [], closed: [{ sessionId: 's1', transcriptPath: null }], unreadable: [], selfId: 's1' }))
+      if (w.registry === 'closed naming it') return ok(JSON.stringify({ open: [], closed: [{ sessionId: 's1', transcriptPath: w.transcript }], unreadable: [], selfId: 's1' }))
       if (w.registry === 'absent') return ok(JSON.stringify({ open: [], closed: [], unreadable: [], selfId: null }))
       return ok(JSON.stringify({ open: [me], closed: [], unreadable: [], selfId: 's1' }))
     }
@@ -564,6 +565,14 @@ for (const registry of ['closed', 'absent'] as const) {
     expect(await cards()).toHaveLength(1)
   })
 }
+
+test("a record the registry counts as ended that still names its transcript is used, as it was before (#2898)", withKit, async ($, on) => {
+  const { cards } = world(on, { registry: 'closed naming it' })
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+})
 
 test("the transcript is looked for in the folder the session started in, after it moved into another (#2898)", withKit, async ($, on) => {
   const { cards } = world(on, { registry: 'closed', disk: { [T]: true }, here: '/repo/.claude/worktrees/fix' })
