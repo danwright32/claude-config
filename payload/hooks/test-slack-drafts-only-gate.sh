@@ -4789,6 +4789,100 @@ else
 fi
 
 echo
+echo "slack drafts only: a TypeScript, JavaScript or Python file a shell script is handed is read as what it is, not as commands (claude-config#2792)"
+
+# On 2026-11-11 a test run was refused on the work MacBook: vitest, run by the launcher pnpm writes
+# into node_modules/.bin (a shell script that execs node on the package), handed one test file. The
+# launcher's being a shell script made the gate read the file it was handed as shell commands, so
+# `return b => // a comment` read as a command writing a file named //, and the next comment line as
+# a run of that file, which nothing could read: "the script // is written earlier in this command by
+# return". The same reading reached any shell script handing its arguments on (a test wrapper). A
+# file that says what it is, by its extension or its #!, is now read as that when it is handed to a
+# script, as it already was when the launcher is a node script (npm's own node_modules/.bin).
+V="$T/v2792"
+mkdir -p "$V/node_modules/.bin" "$V/node_modules/vitest/dist" "$V/src" "$V/scripts"
+# pnpm's launcher, as it writes one (measured from a real one, 2026-11-13, its paths renamed).
+cat > "$V/node_modules/.bin/vitest" <<'SHIM'
+#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\,/,g')")
+basedir_win="$basedir"
+exe=""
+
+case `uname -a` in
+  *CYGWIN*|*MINGW*|*MSYS*)
+    if command -v cygpath > /dev/null 2>&1; then
+      basedir_win=`cygpath -w "$basedir"`
+    fi
+    exe=".exe"
+  ;;
+esac
+
+if [ -z "$NODE_PATH" ]; then
+  export NODE_PATH="/w/app/node_modules/.pnpm/vitest@3.2.4/node_modules/vitest/node_modules:/w/app/node_modules/.pnpm/node_modules"
+else
+  export NODE_PATH="/w/app/node_modules/.pnpm/vitest@3.2.4/node_modules/vitest/node_modules:/w/app/node_modules/.pnpm/node_modules:$NODE_PATH"
+fi
+if [ -n "$exe" ] && [ -x "$basedir/node.exe" ]; then
+  exec "$basedir/node.exe"  "$basedir_win/../vitest/vitest.mjs" "$@"
+elif [ -x "$basedir/node" ]; then
+  exec "$basedir/node"  "$basedir/../vitest/vitest.mjs" "$@"
+else
+  exec node  "$basedir/../vitest/vitest.mjs" "$@"
+fi
+SHIM
+chmod +x "$V/node_modules/.bin/vitest"
+printf '%s\n' '#!/usr/bin/env node' "import './dist/cli.js'" > "$V/node_modules/vitest/vitest.mjs"
+# The runner starts workers, so it counts as able to run what it is handed, as the real one does.
+printf '%s\n' "import { fork } from 'node:child_process'" 'for (const f of process.argv.slice(3)) fork(f)' > "$V/node_modules/vitest/dist/cli.js"
+printf '%s\n' '#!/bin/sh' 'exec node node_modules/vitest/vitest.mjs run "$@"' > "$V/scripts/test.sh"
+chmod +x "$V/scripts/test.sh"
+# The test file: an arrow function before a comment, inside a function that returns it, then a
+# comment line of its own.
+printf '%s\n' "import { expect, it } from 'vitest'" '' 'const adder = (a: number) => {' '  return b => // b is added to a' '    a + b' '}' '' \
+  '// Adding is the same in either order.' "it('adds', () => {" '  expect(adder(1)(2)).toBe(3)' '})' > "$V/src/adder.test.ts"
+printf '%s\n' 'import { it } from "vitest"' '// posts for real' 'it("posts", () => fetch("https://slack.com/api/chat.postMessage"))' > "$V/src/posts.test.ts"
+printf '%s\n' 'export const post = (text: string) => fetch("https://hooks.slack.com/services/T0/B0/x", { method: "POST", body: text })' > "$V/src/poster.ts"
+printf '%s\n' 'import { it } from "vitest"' 'import { post } from "./poster"' '// sends through the poster' 'it("posts", () => post("hi"))' > "$V/src/imports-poster.test.ts"
+printf '%s\n' '#!/bin/sh' 'curl -d hi https://hooks.slack.com/services/T0/B0/x' > "$V/scripts/poster.sh"
+# Shell commands in a file with no extension and no #!, in one whose #! names a shell whatever its
+# extension, and in one named as TypeScript with no #!.
+printf '%s\n' 'sh scripts/poster.sh' > "$V/scripts/plain"
+printf '%s\n' '#!/bin/sh' 'sh scripts/poster.sh' > "$V/scripts/shebang.ts"
+printf '%s\n' 'sh scripts/poster.sh' > "$V/scripts/named.ts"
+run_v() { run_raw "$(payload Bash "$(bash_input "$1")" "$V")"; }
+
+for runs in "./node_modules/.bin/vitest run src/adder.test.ts" "node_modules/.bin/vitest run src/adder.test.ts" \
+  "$V/node_modules/.bin/vitest run src/adder.test.ts" "bash scripts/test.sh src/adder.test.ts" "./scripts/test.sh src/adder.test.ts"; do
+  run_v "$runs"
+  allowed "a test file whose comments follow an arrow, handed to a shell launcher, is read as TypeScript: ${runs#"$V"/}"
+done
+# What the file is read for is unchanged: the endpoint it names, and now the modules it imports, as
+# when a node script is handed it.
+run_v "./node_modules/.bin/vitest run src/posts.test.ts"
+read_refused "a test file naming an endpoint, handed to a shell launcher, is still refused"
+says "the refusal names the endpoint in the test file" "src/posts.test.ts posts to Slack (it names chat.postMessage)"
+run_v "./node_modules/.bin/vitest run src/imports-poster.test.ts"
+read_refused "a test file importing a module that posts, handed to a shell launcher, is refused as TypeScript is"
+says "the refusal follows the import to the module that posts" "poster"
+run_v "node node_modules/vitest/vitest.mjs run src/imports-poster.test.ts"
+read_refused "the same test file handed to the node script itself is refused the same way (the control)"
+# A file that does not say what it is, or says it is a shell script, is still read as commands.
+run_v "./node_modules/.bin/vitest run scripts/plain"
+read_refused "a file with no extension and no #!, handed to a shell launcher, is still read as commands"
+says "the refusal follows the command in it" "scripts/poster.sh runs a command that posts"
+run_v "./node_modules/.bin/vitest run scripts/shebang.ts"
+read_refused "a file whose #! names a shell is read as commands whatever its extension"
+# A shell run on the file itself reads it as commands, as the shell would: only a file handed to a
+# script is read by its own name.
+run_v "bash scripts/named.ts"
+read_refused "a shell run on a file named as TypeScript still reads it as commands"
+# The one thing that passed through no longer followed: shell commands in a file named as
+# TypeScript with no #!, handed to a shell script as an argument. Read as TypeScript it imports
+# nothing and names no endpoint. Recorded here so the change is a decision, not a surprise.
+run_v "./node_modules/.bin/vitest run scripts/named.ts"
+allowed "shell commands in a file named as TypeScript, handed to a shell launcher, are read as TypeScript (no longer followed)"
+
+echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
