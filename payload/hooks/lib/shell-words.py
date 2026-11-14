@@ -100,6 +100,21 @@ def join_continuations(s):
     return "".join(out)
 
 
+# What shlex.split(text, posix=True) makes of a text holding no quote and no backslash: shlex then
+# only ends a word at its whitespace, which is these four characters and no others.
+SHLEX_PLAIN_WORD = re.compile(r"[^ \t\r\n]+")
+
+
+def shell_split(text):
+    """shlex.split(text, posix=True), raising as it does. Most commands hold no quote and no
+    backslash, the only characters shlex reads as other than a word's own, and their words are the
+    runs between its whitespace: found by one regular expression, where shlex reads one character
+    at a time, and judging the claude-sync suite asked for 48,000 splits (claude-config#2918)."""
+    if "'" in text or '"' in text or "\\" in text:
+        return shlex.split(text, posix=True)
+    return SHLEX_PLAIN_WORD.findall(text)
+
+
 def split(s, limit=None):
     """(the leading NAME=value assignments of s, the text after them); at most limit of them when
     limit is given, so past_redirects can read one redirection's target as one value."""
@@ -324,7 +339,7 @@ def cd_target(text):
     """
     text = join_continuations(text)
     try:
-        words = shlex.split(text, posix=True)
+        words = shell_split(text)
     except ValueError:
         words = text.split()
     i, n = 0, len(words)
@@ -722,7 +737,7 @@ def command_words(text):
     """
     text = join_continuations(text)
     try:
-        words = shlex.split(text, posix=True)
+        words = shell_split(text)
     except ValueError:
         words = text.split()
     i = 0
@@ -1309,7 +1324,7 @@ def rtk_field(passed):
         return ""
     after = join_continuations(passed[-1][1])
     try:
-        words = shlex.split(after, posix=True)
+        words = shell_split(after)
     except ValueError:
         words = after.split()
     if not words:
@@ -1379,7 +1394,7 @@ def _script_run(word, rest):
     rest = join_continuations(rest)
     if word in ("source", "."):
         try:
-            operands = shlex.split(rest, posix=True)[1:]
+            operands = shell_split(rest)[1:]
         except ValueError:
             return ("source", None, WHY_QUOTE)
         if operands and operands[0] == "--":
@@ -1413,7 +1428,7 @@ def wrapped(rest):
     if name not in SHELLS and name not in ("eval", "env") and name not in ARGUMENT_RUNNERS:
         return _script_run(word, rest)
     try:
-        words = shlex.split(rest, posix=True)
+        words = shell_split(rest)
     except ValueError:
         if name == "env" and "-S" not in rest and "--split-string" not in rest:
             return None
@@ -1667,21 +1682,26 @@ def script_text(path, d, wrapper):
     return path, text
 
 
-def _records(s, cwd, depth, scripts=None):
+def _records(s, cwd, depth, scripts=None, fields=True):
     """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
     wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
     wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
     0x1d the reason for one whose string cannot be read; depth is how many wrappers it is inside; crude
     says s itself could only be read by the crude cut. scripts, a list, asks for the commands of each
     script file a command runs as well, right after its record, and is given (path, text) for each
-    one read (claude-config#2301)."""
+    one read (claude-config#2301). fields=False leaves each field "" for a caller that reads none: it
+    is a reading of each command's words, and every_command, which drops it, asked for all 14,000 of
+    claude-sync's on every claude-sync line the Slack drafts gate judged (claude-config#2918)."""
     try:
         cut, crude = commands(s, cwd), False
     except Unreadable:
         cut, crude = crude_commands(s, cwd), True
     out = []
     for d, t in cut:
-        rest, assigns, field = program_field(t)
+        if fields:
+            rest, assigns, field = program_field(t)
+        else:
+            (rest, assigns), field = command_rest(t), ""
         found = wrapped(rest)
         if found is None:
             out.append((d, t, "", rest, assigns, field, depth))
@@ -1696,14 +1716,14 @@ def _records(s, cwd, depth, scripts=None):
                 scripts.append(found_script)
                 at = len(scripts) - 1
                 # Its commands, never its reason: the script's record keeps WHY_FILE below.
-                inner, _ = _records(found_script[1], d, depth + 1, scripts)
+                inner, _ = _records(found_script[1], d, depth + 1, scripts, fields)
                 if not inner:
                     del scripts[at]
         if string is not None:
             if depth >= MAX_DEPTH:
                 why = why or WHY_DEEP
             else:
-                inner, inner_crude = _records(string, d, depth + 1, scripts)
+                inner, inner_crude = _records(string, d, depth + 1, scripts, fields)
                 if inner_crude:
                     why = why or WHY_QUOTE
                 for _, t2, _, rest2, _, _, _ in inner:
@@ -1728,7 +1748,7 @@ def every_command(s, cwd="", scripts=None):
     record one wrapper deeper, and is given (path, text) for each file read (claude-config#2301); a
     relative script name is resolved only against an absolute cwd, so pass the session's directory."""
     out = []
-    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts)[0]:
+    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0, scripts, fields=False)[0]:
         wrapper, _, why = wrap.partition("\x1d")
         out.append((d, t, wrapper, why, depth))
     return out
