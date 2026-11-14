@@ -1047,6 +1047,61 @@ both "a -f path that is a folder is asked about" none ask "$(apply_payload "supa
 both "a -f file written by the same command is asked about" none ask "$(apply_payload "echo 'delete from a;' > $APPLY/readback.sql; supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
 both "a relative -f file with --workdir is asked about" none ask "$(apply_payload "supabase db query --linked --workdir $PROJ -f readback.sql" "$APPLY" s1 "$NONE_T")"
 both "a read from a file with a redirection is read by neither hook, so it is asked about" none ask "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql > $APPLY/out.txt" "$PROJ" s1 "$NONE_T")"
+
+# A command that writes its own -f files from heredocs and then runs them (#2952 part 2): the
+# heredocs' statements are judged, each loop value put into the text, and anything else asks.
+# Each template is written with @NOTES@ and @PROJ@ for the folders, so the shell text stays literal.
+NOTES="$APPLY/notes"
+mkdir -p "$NOTES"
+scripted() {  # scripted <template>: the template with its folders filled in
+  local t="${1//@NOTES@/$NOTES}"
+  printf '%s' "${t//@PROJ@/$PROJ}"
+}
+# Read by read, not a substitution, which bash 3.2 refuses around a heredoc holding a quote (#1690).
+IFS= read -r -d '' SHAPE <<'CMD' || true
+D="@NOTES@"; for day in 2026-11-12 2026-11-13; do cat > "$D/q_$day.sql" <<EOF
+SELECT count(*) FROM runs WHERE created_at >= ('$day 00:00'::timestamp) AND created_at < ('$day 00:00'::timestamp + interval '1 day');
+EOF
+done
+cd @PROJ@ && for day in 2026-11-12 2026-11-13; do timeout 150 supabase db query --linked --output-format json -f "$D/q_$day.sql" 2>&1 | grep -v "^A new" | python3 -c "import json,sys; rows=json.load(sys.stdin); print(len(rows))"; done
+CMD
+both "the loop that writes each day's select from a heredoc and runs it is approved" allow none "$(apply_payload "$(scripted "$SHAPE")" "$APPLY/elsewhere" s1 "$NONE_T")"
+both "one heredoc with a quoted marker, then its query" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/one.sql <<\'SQL\'\nselect id, note from runs where note = \'$x\';\nSQL\nsupabase db query --linked -f @NOTES@/one.sql')" "$PROJ" s1 "$NONE_T")"
+UPDATE_LOOP="${SHAPE/SELECT count(\*) FROM runs WHERE/UPDATE runs SET note = 1 WHERE}"
+both "the same loop whose heredoc holds an update is asked about" none ask "$(apply_payload "$(scripted "$UPDATE_LOOP")" "$APPLY/elsewhere" s1 "$NONE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$(scripted "$UPDATE_LOOP")" "$APPLY/elsewhere" s1 "$NONE_T")")" reason)"
+case "$reason" in
+  *"UPDATE runs SET note = 1 WHERE created_at >= ('2026-11-12 00:00'"*) check "the question names the update with the loop value put in" ok ;;
+  *) check "the question names the update with the loop value put in" "reason: ${reason:0:400}" ;;
+esac
+both "a heredoc file also appended to another way is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/two.sql <<EOF\nselect 1;\nEOF\necho "delete from runs;" >> @NOTES@/two.sql\nsupabase db query --linked -f @NOTES@/two.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc with a substitution in it is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/three.sql <<EOF\nselect * from runs where day = \'$(date +%F)\';\nEOF\nsupabase db query --linked -f @NOTES@/three.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc with a variable the command never sets is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/four.sql <<EOF\nselect * from runs where id = $RUN_ID;\nEOF\nsupabase db query --linked -f @NOTES@/four.sql')" "$PROJ" s1 "$NONE_T")"
+both "a file written by two heredocs is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/five.sql <<EOF\nselect 1;\nEOF\ncat > @NOTES@/five.sql <<EOF\nselect 2;\nEOF\nsupabase db query --linked -f @NOTES@/five.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc query beside another command is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/six.sql <<EOF\nselect 1;\nEOF\nrm -f @NOTES@/old.txt; supabase db query --linked -f @NOTES@/six.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc query piped into python that opens a file is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/seven.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/seven.sql | python3 -c "import sys; open(\'out.txt\', \'w\').write(sys.stdin.read())"')" "$PROJ" s1 "$NONE_T")"
+both "a query of a file no heredoc in the command wrote is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/eight.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f '"$APPLY"$'/readback.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc query sent to the background is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/nine.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/nine.sql &')" "$PROJ" s1 "$NONE_T")"
+both "a folder held in a substitution is asked about" none ask "$(apply_payload "$(scripted $'D=$(mktemp -d); cat > "$D/ten.sql" <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f "$D/ten.sql"')" "$PROJ" s1 "$NONE_T")"
+printf 'delete from runs;\n' > "$NOTES/eleven.sql"
+both "a file already holding a write, which a failed heredoc would leave, is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/eleven.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/eleven.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc write to a file no query reads is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/never-read.sql <<EOF\nselect 2;\nEOF\ncat > @NOTES@/thirteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/thirteen.sql')" "$PROJ" s1 "$NONE_T")"
+both "a heredoc write to a file not named .sql is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fourteen.txt <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fourteen.txt')" "$PROJ" s1 "$NONE_T")"
+both "python reaching a module through an allowed one is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/fifteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/fifteen.sql | python3 -c "import statistics; statistics.sys.modules"')" "$PROJ" s1 "$NONE_T")"
+both "python taking a module from an allowed one by import is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/sixteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/sixteen.sql | python3 -c "from json import codecs; print(codecs)"')" "$PROJ" s1 "$NONE_T")"
+both "python calling type on a stream is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/seventeen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/seventeen.sql | python3 -c "import sys; type(sys.stdin.buffer.raw)"')" "$PROJ" s1 "$NONE_T")"
+both "a proxy setting assigned by the command is asked about" none ask "$(apply_payload "$(scripted $'HTTPS_PROXY=http://127.0.0.1:9; cat > @NOTES@/eighteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/eighteen.sql')" "$PROJ" s1 "$NONE_T")"
+both "a query with its statement in its words, piped, is still left to the usual check" none none "$(apply_payload 'supabase db query --linked "select 1" 2>&1 | head -5' "$PROJ" s1 "$NONE_T")"
+# Every module PY_MODULES allows must be one the python check can look chains up on, or a program
+# importing it is refused (or, before, crashed) while the list says it is allowed.
+agree="$(python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("calls", sys.argv[1])
+lib = importlib.util.module_from_spec(spec); spec.loader.exec_module(lib)
+bad = [m for m in sorted(lib.PY_MODULES) if not lib._python_reads_only("import " + m + "\nprint(1)")]
+print("ok" if not bad else "refused: " + ", ".join(bad))' "$DIR/lib/db-write-calls.py" 2>&1)"
+check "every module the python check allows can be imported by a program it passes" "$agree"
+both "PATH set by the command is asked about" none ask "$(apply_payload "$(scripted $'PATH=@NOTES@; cat > @NOTES@/twelve.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/twelve.sql')" "$PROJ" s1 "$NONE_T")"
 # With the predicate missing, a read from a file is asked about too.
 r="$(run "$WORK/nolib/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")")"
 [ "$(decision "$r")" = "ask rc=0" ] && check "with lib/sql-read-only.py missing, a select in a file is asked about" ok || check "with lib/sql-read-only.py missing, a select in a file is asked about" "$(decision "$r")"

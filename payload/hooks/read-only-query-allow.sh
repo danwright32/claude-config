@@ -41,6 +41,12 @@
 #      db-write-ask.sh reads the same command with, so a call approved here is never asked about
 #      there. A command holding anything else (a pipe, a redirection, a second command, a flag this
 #      does not know) is left to the usual check.
+#   4. Since #2952, a Bash command that writes its own -f files from heredocs and then runs them
+#      (literal assignments, for loops over literal words, cd, `cat > <file> <<EOF` writes, the
+#      `supabase db query` runs, and read only text processing piped from a run), when every text
+#      each file can hold, every loop value put in, and its present text, is a read by judge().
+#      Which commands those are is scripted_queries() in lib/db-write-calls.py; anything else in
+#      the command leaves it to the usual check, and db-write-ask.sh asks.
 #
 # WHAT IT CANNOT SEE: the database's own definitions. A select that reads a view whose definition
 # calls a function that writes, uses an operator or cast the database defined, calls a function on

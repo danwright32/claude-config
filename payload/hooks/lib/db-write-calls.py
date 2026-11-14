@@ -30,7 +30,12 @@ call without signing in.
                                          lib/db-apply-approval.py
   cli_read_approval(command, cwd, judge, sw)
                                          (True, why) when a Bash command is one Supabase CLI read,
-                                         for read-only-query-allow.sh; else (False, why not)
+                                         or reads only from files it writes itself from heredocs
+                                         (scripted_queries()), for read-only-query-allow.sh; else
+                                         (False, why not)
+  scripted_queries(command, sw, cwd)     the `db query` runs of a command that writes their -f
+                                         files from heredocs, with every text each file can hold
+                                         when read; None when the command is not that shape (#2952)
   dry_push_dir(command, sw, cwd)         the directory whose migrations a Bash command previews,
                                          when it is one `supabase db push --dry-run` of the linked
                                          project, else None; lib/db-apply-approval.py reads the
@@ -121,13 +126,33 @@ echo, a commit message, a heredoc body, `command -v psql`) is not.
   - ONE SUPABASE RUN, since #2763. When the whole Bash command is one Supabase CLI run, with
     nothing before it but cd (plain_supabase()), nothing in the command can write a file before
     that run reads it, so its `db query -f` file IS read and each statement judged, the same as
-    execute_sql; L64 is why a file is read in no other command. A file that cannot be read
+    execute_sql; L64 is why a file is read in no other command, but one whose only writes are its
+    own heredocs (the next item). A file that cannot be read
     (missing, a folder, not a regular file, not UTF-8, too large, named relative to a --workdir)
     is asked about. Such a `db push`, and such a `db query` write from a file it read, is
     Applicable, which db-write-ask.sh lets through when Dan's /db-apply Apply covers it
     (lib/db-apply-approval.py). cli_read_approval() is what
     read-only-query-allow.sh approves a CLI call by: a `db query` whose every statement judge()
     shows to be read only, or a `db push --dry-run`.
+  - A COMMAND THAT WRITES ITS OWN FILES, since #2952. A read only investigation in a work
+    repository was asked about on every query, because it wrote each query from a heredoc and ran
+    it, often in a for loop over days, and L64 kept every such -f file unread. Since every
+    statement that command can run is in its own text, scripted_queries() reads it, when it holds
+    nothing but literal assignments, for loops over literal words, cd, `cat > /abs/path <<EOF`
+    writes, `supabase db query` runs (behind timeout too, with only 2>&1 or 2>/dev/null) and,
+    piped from a run, SCRIPT_FILTERS or a python3 -c that _python_reads_only(). The loops are
+    unrolled and each $NAME filled in from the command's own values, so each file a run reads is
+    judged with every text its one heredoc write can have put there, and with its present text,
+    which a write that fails or is skipped leaves. A write must name a .sql file in full that a
+    run reads before anything writes it again, so an approved command can only replace a .sql
+    file that was missing or held one read only statement, with another a run then reads.
+    Anything else (another command, a file no heredoc or two heredocs write, a relative path, a
+    substitution or an unset variable anywhere, an unquoted glob, a background job, a compound
+    command other than for, a run reading no file the command wrote, a variable name
+    _script_name_ok() refuses) leaves the command to the readings above, which ask. A write found
+    there is asked about, never Applicable: an Apply covers only a run that stands alone.
+    python3 -c puts its directory first on the import path, so a json.py where it runs would be
+    imported in place of the standard one; that is not seen.
   - a client run through CARRIERS (docker exec, ssh, npx, a secret runner) is read from the
     client's own name on, or from the quoted command line handed over.
 
@@ -549,11 +574,12 @@ def asked_words():
             | {"supabase"})
 
 
-def strip_redirects(s):
+def strip_redirects(s, found=None):
     """One command's text with each redirection written OUTSIDE quotes taken out, operator and
     target, so `sqlite3 app.db "select 1" > out.txt 2>&1` leaves the statement as its last word.
     One inside quotes is a word of the command and stays: `sqlite3 app.db '>' 'delete from t'`
-    runs both words as statements."""
+    runs both words as statements. found, a list, is given each one taken out as (its operator with
+    any descriptor number written against it, its target as written), in order (#2952)."""
     out, i, n, quote = [], 0, len(s), None
     while i < n:
         ch = s[i]
@@ -584,11 +610,15 @@ def strip_redirects(s):
         j = len(out)
         while j > 0 and out[j - 1].isdigit():
             j -= 1
+        number = ""
         if j == 0 or out[j - 1].isspace():
+            number = "".join(out[j:])
             del out[j:]
+        operator = number + m.group(0)
         i = m.end()
         while i < n and s[i] in " \t":
             i += 1
+        target = i
         if i < n and s[i] == "(":
             depth = 0
             while i < n:
@@ -610,6 +640,8 @@ def strip_redirects(s):
                 elif c.isspace() or c in ";|&<>()":
                     break
                 i += 1
+        if found is not None:
+            found.append((operator, s[target:i]))
         out.append(" ")
     return "".join(out)
 
@@ -991,14 +1023,393 @@ DRY_PUSH_FLAGS = {"--dry-run", "--linked", "--local", "--yes", "--workdir", "--d
                   "--include-roles", "--include-seed"}
 
 
+# ---- a command that writes its own `db query -f` files from heredocs, then runs them (#2952) ----
+#
+# The shape: assignments of literal values, for loops over literal words, cd, `cat > <file> <<EOF`
+# writes, `supabase db query` runs of those files, and read only text processing piped from a run.
+# Every statement such a command can run is in its text, so it is judged; any other command, or
+# anything this cannot settle to literal text, leaves the command to the usual reading, which asks.
+SCRIPT_FILTERS = {"grep", "egrep", "fgrep", "head", "tail", "cut", "wc", "tr", "jq"}
+SCRIPT_PYTHONS = {"python3", "python"}
+SCRIPT_QUIET = {("2>&", "1"), ("2>", "/dev/null")}
+SCRIPT_TIMEOUTS = {"timeout", "gtimeout"}
+SCRIPT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?\Z")
+SCRIPT_MAX_STEPS = 400
+# A value put into an unquoted word must stay one word that globs to nothing.
+SCRIPT_SAFE = re.compile(r"[A-Za-z0-9_./:@%+,=-]+\Z")
+SCRIPT_QUOTED_BAD = re.compile(r'["\\$`\n]')
+SCRIPT_VARIABLE = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
+# Names whose value changes what the shell, cd, python or the Supabase CLI does.
+SCRIPT_DENIED_NAMES = {"PATH", "IFS", "CDPATH", "HOME", "ENV", "PWD", "OLDPWD", "SHELLOPTS", "BASHOPTS",
+                       "GLOBIGNORE", "PS4"}
+SCRIPT_DENIED_PREFIXES = ("BASH", "LD_", "DYLD_", "PYTHON", "SUPABASE", "PG")
+
+
+def _script_name_ok(name):
+    """Whether the command may set a shell variable of this name. An assignment to a name already
+    exported changes the environment of every program after it, and exported names are, by
+    convention, upper case: so only a single letter or a name with a lower case letter in it, never
+    one naming a proxy (http_proxy is lower case too), and never one listed above."""
+    return (name not in SCRIPT_DENIED_NAMES and not name.startswith(SCRIPT_DENIED_PREFIXES)
+            and "proxy" not in name.lower() and (len(name) == 1 or name != name.upper()))
+SCRIPT_RESERVED = {"do", "done", "then", "else", "elif", "fi", "if", "while", "until", "case", "esac",
+                   "select", "function", "time", "!", "{", "}", "(", ")"}
+# python3 -c, read only: these modules, imported under their own names; sys only for its streams,
+# argv and exit; no name or attribute starting with an underscore (the way back to open and
+# __import__); none of PY_BANNED (type, called on a stream, is a class that opens any file); and no
+# module reached through an allowed one, by attribute or by import (statistics.sys, json.codecs),
+# which is checked against the real modules.
+PY_MODULES = {"json", "sys", "csv", "collections", "datetime", "decimal", "re", "math", "statistics",
+              "itertools", "functools", "textwrap"}
+PY_SYS = {"stdin", "stdout", "stderr", "argv", "exit", "maxsize"}
+PY_BANNED = {"open", "exec", "eval", "compile", "getattr", "setattr", "delattr", "globals", "locals",
+             "vars", "breakpoint", "input", "help", "type", "super", "object"}
+
+
+def _python_reads_only(code):
+    """Whether a python3 -c program can do nothing but read its input and print: it imports only
+    PY_MODULES, each under its own name, touches sys only for PY_SYS, reaches no module through
+    another, and names nothing in PY_BANNED or starting with _."""
+    import ast
+    import types
+    # The real modules each chain is looked up on, imported by name from the standard library.
+    import collections, csv, datetime, decimal, functools, itertools, math, statistics, sys, textwrap
+    real = {m.__name__: m for m in (collections, csv, datetime, decimal, functools, itertools, json,
+                                    math, re, statistics, sys, textwrap)}
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+    parent, modules = {}, set()
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+        if isinstance(node, ast.Import):
+            # A name on PY_MODULES missing from real fails closed (test-db-write-ask.sh checks they agree).
+            if any(a.name not in PY_MODULES or a.name not in real or a.asname for a in node.names):
+                return False
+            modules.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level or node.module not in PY_MODULES or node.module not in real:
+                return False
+            found = real[node.module]
+            for a in node.names:
+                if (a.name == "*" or a.name.startswith("_") or (node.module == "sys" and a.name not in PY_SYS)
+                        or not hasattr(found, a.name) or isinstance(getattr(found, a.name), types.ModuleType)):
+                    return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if node.id.startswith("_") or node.id in PY_BANNED:
+                return False
+            if node.id not in modules:
+                continue
+            # A module's name stands only at the root of an attribute chain, each step of which is
+            # looked up on the real module and must be there and be no module itself.
+            up, value, first = parent.get(node), real[node.id], True
+            if not (isinstance(up, ast.Attribute) and up.value is node):
+                return False
+            while isinstance(up, ast.Attribute):
+                if (up.attr.startswith("_") or (node.id == "sys" and first and up.attr not in PY_SYS)
+                        or not hasattr(value, up.attr)):
+                    return False
+                value, first = getattr(value, up.attr), False
+                if isinstance(value, types.ModuleType):
+                    return False
+                above = parent.get(up)
+                up = above if isinstance(above, ast.Attribute) and above.value is up else None
+        elif isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            return False
+    return True
+
+
+def _script_expand(text, env, heredoc=False):
+    """text with each $NAME or ${NAME} filled in from env, as the shell would: not inside single
+    quotes, and in a heredoc body with only \\$, \\`, \\\\ and a backslashed line break read as
+    escapes. None when anything is left the shell fills in only as it runs (another variable, a
+    substitution, a backquote) or, outside a heredoc, an unquoted glob, brace or tilde, or a value
+    that would not stay the one word it is written as."""
+    out, i, n, quote = [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            out.append(c)
+            i += 1
+            if c == "'":
+                quote = None
+            continue
+        if c == "\\" and i + 1 < n:
+            nxt = text[i + 1]
+            if not heredoc:
+                out.append(c + nxt)
+            elif nxt in "$`\\":
+                out.append(nxt)
+            elif nxt != "\n":
+                out.append(c + nxt)
+            i += 2
+            continue
+        if not heredoc:
+            if c == "'" and quote is None:
+                quote = "'"
+                out.append(c)
+                i += 1
+                continue
+            if c == '"':
+                quote = None if quote == '"' else '"'
+                out.append(c)
+                i += 1
+                continue
+            if quote is None and c in "*?[]{}~":
+                return None
+        if c == "`":
+            return None
+        if c == "$":
+            m = SCRIPT_VARIABLE.match(text, i)
+            name = m and (m.group(1) or m.group(2))
+            if not name or name not in env:
+                return None
+            value = env[name]
+            if not heredoc and (SCRIPT_QUOTED_BAD.search(value) if quote == '"' else not SCRIPT_SAFE.match(value)):
+                return None
+            out.append(value)
+            i = m.end()
+            continue
+        out.append(c)
+        i += 1
+    return None if quote else "".join(out)
+
+
+def _script_tree(command, sw, cwd):
+    """The command as a list of nodes, ("for", text, body nodes) and ("cmd", text, how, heredoc,
+    after a pipe), or None when it holds anything but simple commands and for loops at its top
+    level: a subshell, a substitution, a background job, another compound command."""
+    hd, parts, spans = [], [], []
+    try:
+        cmds = sw.commands(command, cwd, heredocs=hd, parts=parts, spans=spans)
+    except Exception:
+        return None
+    if len(hd) != len(spans) or len(parts) != len(cmds):
+        return None
+    body_at = {span[0]: k for k, span in enumerate(spans)}
+    root, stack, want_do, prev_how = [], [], False, ""
+    stack.append(root)
+    for (_, text), part in zip(cmds, parts):
+        if tuple(part["scope"]) != (0,) or part["inner"] or part["how"] in ("&", ")", "case"):
+            return None
+        how, openers = part["how"], part["openers"]
+        if len(openers) > 1 or (openers and openers[0][0] not in body_at):
+            return None
+        heredoc = hd[body_at[openers[0][0]]] if openers else None
+        t = text.strip()
+        head = t.split(None, 1)[0] if t else ""
+        if want_do:
+            if head != "do":
+                return None
+            want_do = False
+            t = t[2:].strip()
+            if not t:
+                if heredoc is not None or how == "|":
+                    return None
+                continue
+            head = t.split(None, 1)[0]
+        piped = prev_how == "|"
+        prev_how = how
+        if head == "for":
+            if how != ";" or heredoc is not None or piped:
+                return None
+            node = ("for", t, [])
+            stack[-1].append(node)
+            stack.append(node[2])
+            want_do = True
+            continue
+        if head == "done":
+            if t != "done" or len(stack) == 1 or heredoc is not None or piped or how == "|":
+                return None
+            stack.pop()
+            continue
+        if not t or head in SCRIPT_RESERVED or head in sw.RESERVED:
+            return None
+        stack[-1].append(("cmd", t, how, heredoc, piped))
+    if len(stack) != 1 or want_do:
+        return None
+    return root
+
+
+def scripted_queries(command, sw, cwd):
+    """The `supabase db query` runs of a command that writes their -f files itself, from heredocs,
+    as a list of (subject, {file: the texts it can hold when read}, the statements in its words);
+    None when the command is not that shape (claude-config#2952). A file's texts are every heredoc
+    text its one write can have put there before that read, each loop value put in, and the file's
+    present text, which a write that fails or is skipped leaves in place. Every file a run reads
+    must be named by an absolute path that exactly one heredoc write in the command names, every
+    file written must be a .sql file a run reads before it is written again, and at least one run
+    must read such a file."""
+    if not isinstance(cwd, str) or not cwd.startswith("/") or "supabase" not in command:
+        return None
+    tree = _script_tree(command, sw, cwd)
+    if tree is None:
+        return None
+    env, source, texts, disk, runs, unread = {}, {}, {}, {}, {}, set()
+    steps = [0]
+    pipe = [None]
+
+    def step(node):
+        _, raw, how, heredoc, piped = node
+        steps[0] += 1
+        if steps[0] > SCRIPT_MAX_STEPS:
+            return False
+        expanded = _script_expand(raw, env)
+        if expanded is None:
+            return False
+        found = []
+        try:
+            words = sw.shell_split(strip_redirects(expanded, found))
+            redirects = []
+            for op, target in found:
+                target_words = sw.shell_split(target)
+                if len(target_words) != 1:
+                    return False
+                redirects.append((op, target_words[0]))
+        except ValueError:
+            return False
+        if not words:
+            return False
+        if piped != (pipe[0] is not None):
+            return False
+        if piped:
+            # A member after the first: text processing that only reads the run's output.
+            if heredoc is not None or not set(redirects) <= SCRIPT_QUIET or not pipe[0]:
+                return False
+            if _base(words[0]) in SCRIPT_PYTHONS:
+                ok = len(words) == 3 and words[1] == "-c" and _python_reads_only(words[2])
+            else:
+                ok = words[0] in SCRIPT_FILTERS
+            if not ok:
+                return False
+            if how != "|":
+                pipe[0] = None
+            return True
+        if all(sw.ASSIGNMENT.match(w) for w in words):
+            if redirects or heredoc is not None or how == "|":
+                return False
+            for w in words:
+                name, _, value = w.partition("=")
+                if not _script_name_ok(name):
+                    return False
+                env[name] = value
+            return True
+        if words[0] == "cd":
+            return len(words) == 2 and not redirects and heredoc is None and how != "|"
+        if words == ["cat"] and heredoc is not None:
+            ops = sorted(op for op, _ in redirects)
+            target = [t for op, t in redirects if op in (">", ">|")]
+            if how == "|" or len(redirects) != 2 or ops[0] not in ("<<", "<<-") or ops[1] not in (">", ">|"):
+                return False
+            # Only a .sql file, named in full, which a run then reads before anything writes it
+            # again: so every text written is judged, and so is what the file held before.
+            key = os.path.realpath(target[0])
+            if not target[0].startswith("/") or not key.endswith(".sql") or key in unread:
+                return False
+            quoted, _, body = heredoc
+            text = body if quoted else _script_expand(body, env, heredoc=True)
+            if text is None:
+                return False
+            if source.setdefault(key, id(node)) != id(node):
+                return False
+            texts.setdefault(key, []).append(text)
+            unread.add(key)
+            return True
+        if words[0] in SCRIPT_TIMEOUTS and len(words) > 2 and SCRIPT_DURATION.match(words[1]):
+            words = words[2:]
+        if _base(words[0]) != "supabase" or heredoc is not None or not set(redirects) <= SCRIPT_QUIET:
+            return False
+        path, flags = _supabase_words(words, SUPABASE_VALUED)
+        if path[:2] != ["db", "query"] or not {name for name, _, _ in flags} <= READ_QUERY_FLAGS:
+            return False
+        files, statements = runs.setdefault(id(node), ({}, []))
+        for name, _, value in flags:
+            if name not in ("-f", "--file"):
+                continue
+            if not value.startswith("/"):
+                return False
+            key = os.path.realpath(value)
+            if key not in texts:
+                return False
+            unread.discard(key)
+            if key not in disk:
+                disk[key] = None
+                if os.path.lexists(key):
+                    present, _ = read_statement_file("/", key, ())
+                    if present is None:
+                        return False
+                    disk[key] = present
+            held = files.setdefault(value, [])
+            for t in texts[key] + ([disk[key]] if disk[key] is not None else []):
+                if t not in held:
+                    held.append(t)
+        statements.extend(s for s in path[2:] if s not in statements)
+        if not files and not statements:
+            return False
+        if how == "|":
+            pipe[0] = True
+        return True
+
+    def walk(nodes):
+        for node in nodes:
+            if node[0] == "cmd":
+                if not step(node):
+                    return False
+                continue
+            steps[0] += 1
+            expanded = _script_expand(node[1], env)
+            try:
+                words = sw.shell_split(expanded) if expanded is not None else []
+            except ValueError:
+                return False
+            if (len(words) < 3 or words[0] != "for" or words[2] != "in"
+                    or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", words[1])
+                    or not _script_name_ok(words[1])):
+                return False
+            for value in words[3:]:
+                env[words[1]] = value
+                if not walk(node[2]):
+                    return False
+        return True
+
+    # A command whose runs read no file it wrote is not this shape, and is read as before.
+    if not walk(tree) or pipe[0] is not None or unread or not any(files for files, _ in runs.values()):
+        return None
+    return [("supabase db query", files, statements) for files, statements in runs.values()]
+
+
+def _scripted_findings(queries, judge):
+    """The findings for scripted_queries()'s runs: each text a file can hold, and each statement
+    word, judged by the one predicate."""
+    out = []
+    for name, files, statements in queries:
+        for f, held in files.items():
+            out.extend(_judged(name + " -f " + f, held, judge))
+        out.extend(_judged(name, statements, judge, shell=True))
+    return out
+
+
 def cli_read_approval(command, cwd, judge, sw):
     """(True, why) when the whole Bash command is one Supabase CLI run that changes nothing: a `db
     query` whose every statement, in its words or its -f files, judge() shows to be read only, or a
-    `db push --dry-run`. Else (False, why not). db-write-ask.sh asks about neither, by the same
-    reading (bash_findings()), so the two hooks cannot disagree about one (L342)."""
+    `db push --dry-run`; or, since #2952, a command whose `db query` runs read files it writes
+    itself from heredocs (scripted_queries()), when every text those files can hold and every
+    statement in the runs' words judge() shows to be read only. Else (False, why not).
+    db-write-ask.sh asks about none of these, by the same reading (bash_findings()), so the two
+    hooks cannot disagree about one (L342)."""
     plain = plain_supabase(command, sw, cwd)
     if plain is None:
-        return False, "the command is not one Supabase CLI run"
+        scripted = scripted_queries(command, sw, cwd)
+        if scripted is None:
+            return False, "the command is not one Supabase CLI run"
+        found = _scripted_findings(scripted, judge)
+        if found:
+            return False, found[0][0]
+        return True, ("supabase db query runs only statements that read, from files the command "
+                      "writes itself from heredocs")
     here, text = plain
     path, flags = _supabase_words(sw.command_words(text), SUPABASE_VALUED)
     names = {name for name, _, _ in flags}
@@ -1045,4 +1456,7 @@ def bash_findings(command, judge, sw, cwd=""):
     directory, which a plain Supabase run is read against."""
     if not CLIENT_WORD.search(command):
         return []
+    scripted = scripted_queries(command, sw, cwd)
+    if scripted is not None:
+        return _scripted_findings(scripted, judge)
     return _line(command, judge, sw, 0, plain_supabase(command, sw, cwd))
