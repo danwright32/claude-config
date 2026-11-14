@@ -26,11 +26,11 @@ starts and stops serve is [scripts/run_session.py](scripts/run_session.py). Both
 |---|---|
 | `schema` | `"verification-areas/1"` |
 | `mode` | `"warn"` or `"block"`: how the merge check treats a missing or failing record. Start at `warn`. |
-| `url` | Where serve listens. Only `http://127.0.0.1`, `http://localhost` or `http://[::1]`, any port: a run never drives a deployment. |
+| `url` | Where serve listens. Only `http://127.0.0.1`, `http://localhost` or `http://[::1]`, any port: a run never drives a deployment. Optional with serve and ready when every area is native (below). |
 | `commands.serve` | Builds and serves the app in the foreground, from the checkout root. A production build, never a dev server, with no URL or key pointing at production (L719). |
 | `commands.ready` | Exits 0 once serve answers. Retried every `ready_interval_s` until `ready_s`. |
 | `commands.stop` | The project's own cleanup (containers, a seeded database). Run before serve's process group is stopped. |
-| `commands.drive` | The project's drive helper. Called with the arguments the runner passes, and with `VERIFICATION_URL`, `VERIFICATION_AREA`, `VERIFICATION_WORKTREE` and `VERIFICATION_RECEIPT_DIR` set; it saves screenshots into `VERIFICATION_RECEIPT_DIR`. |
+| `commands.drive` | The project's drive helper. Called with the arguments the runner passes, and with `VERIFICATION_URL` (when the run serves), `VERIFICATION_AREA`, `VERIFICATION_WORKTREE` and `VERIFICATION_RECEIPT_DIR` set; it saves screenshots into `VERIFICATION_RECEIPT_DIR`. |
 | `commands.stamp` | Optional. Prints the commit the SERVED build reports (a `/__build` route, a footer). Recorded as the receipt's `build_stamp`; the merge check wants it to equal the head SHA. |
 | `commands.native_shot` | Required when any screen is native, else absent. Runs the offscreen test that photographs one native screen, from the checkout root, with the shot named in `VERIFICATION_SHOT_*` (below). |
 | `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long the egress monitor's canary may take to show up, at the start and at the end). |
@@ -53,6 +53,17 @@ a route, the offscreen test that photographs it (`Target`, `Target/Suite` or
 rows the frame must report drawing. A screen gives a `path` or a `test`, never both, and a native
 one has no CSS selector. Its pictures are the same eight under the same names, so publish, render
 and the merge check treat the two alike. What the native app's test must do is under Screenshots.
+
+`url`, `commands.serve` and `commands.ready` are what a run needs to serve the app
+(claude-config#2951). A project whose areas are all native (at least one native screen and no web
+screen; an area with no screens is neither) has nothing to serve, so it may leave all three out, or
+give all three when it does serve something; a partial set is refused as `areas-serve-incomplete`,
+naming what is missing. Any other project needs all three: one with a native screen and a web one
+is refused as `areas-web-needs-serve`, naming the web area and each missing setting, and one with no
+native screen (web screens only, or none) as `areas-missing-key`, as before. A run with nothing to serve starts no serve and
+waits for no ready command; its supervisor still runs the egress monitor around every drive call
+and ends the run on `stop` or the deadline, its receipt records `url`, `serve_pid` and `serve_pgid`
+as null, and the drive helper gets no `VERIFICATION_URL`.
 
 Ownership: every file in the repository lands in EXACTLY one bucket, an area or `exempt`. A file
 in none is unowned and a file in two is ambiguous, and both are refusals, never guesses. Patterns
@@ -140,7 +151,8 @@ For a project that has no `.claude/verification/areas.json` yet.
    against every tracked file: `git ls-files | python3 ~/.claude/skills/verification-guides/scripts/verification.py bucket .claude/verification/areas.json`
    must exit 0. Fix the rules until it does.
 3. Settle the commands. Serve must be a local production build reading no production credential;
-   read its env before writing it down. If the project has no drive helper, building one (a
+   read its env before writing it down. A project whose areas are all native leaves out serve,
+   ready and url unless it has something to serve. If the project has no drive helper, building one (a
    headless browser script or request sender the project owns) is its own issue in that project:
    the runner may never drive through the Playwright tools. Add `stamp` if the build can report
    its commit, and say so if it cannot.
@@ -302,6 +314,4 @@ These are what the merge check expects that nothing here can supply yet, said ra
 - **Inline pictures in a private repository.** Unmeasured, so private repositories get the private
   link until it is measured (claude-config#2699).
 - **The native app's camera.** Each native app's test supplies its own offscreen camera and frame
-  list; none ships here. A run also still needs `url`, `serve` and `ready`, which a native app has
-  nothing to fill with: serve can build the test target and then wait, ready check the build
-  finished, and the url name a local port nothing listens on, said in the project's areas.json.
+  list; none ships here.
