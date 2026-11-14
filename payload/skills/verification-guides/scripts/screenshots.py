@@ -46,6 +46,7 @@ import re
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verification as v  # noqa: E402
 

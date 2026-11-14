@@ -36,7 +36,7 @@ command -v python3 >/dev/null 2>&1 || { echo "test-gh_issue_scan: python3 is not
 # Every question is asked of the module itself, through one helper, so a check reads as the
 # question it is asking rather than as python.
 ask() { # ask <mode> <command>  -> one line of output
-  PYTHONPATH="$DIR" python3 - "$1" "$2" <<'PY'
+  PYTHONPATH="$DIR" python3 -B - "$1" "$2" <<'PY'
 import sys
 import gh_issue_scan as g
 
@@ -319,7 +319,7 @@ printf 'raise RuntimeError("broken on purpose")\n' > "$FB_BROKEN/lib/shell-words
 # The control: each copy really has no reader and the real one really has it, or every check below
 # asks the shared reader and passes (L1).
 reader_of() { # reader_of <dir> -> shared or missing
-  python3 - "$1/gh_issue_scan.py" <<'PY'
+  python3 -B - "$1/gh_issue_scan.py" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -337,7 +337,7 @@ PY
 # A create in a substitution in the body of a heredoc whose end marker is unquoted is run by the
 # shell, so it is a create (claude-config#2053). A quoted marker keeps the body text.
 count_in() { # count_in <dir> <command> -> how many creates that copy of the scanner finds
-  python3 - "$1/gh_issue_scan.py" "$2" <<'PY'
+  python3 -B - "$1/gh_issue_scan.py" "$2" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
 m = importlib.util.module_from_spec(spec)

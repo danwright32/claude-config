@@ -1238,7 +1238,7 @@ grep -qi 'exit 9' "$SKILL" && grep -q '9 a read only run whose proxy this Mac co
   || bad "SKILL.md and the guard's header both say what the guard's 9 means"
 # Every rejection reason the skill names is one report.py accepts, and the reverse (L89).
 skill_reasons="$(grep -o '`[a-z][a-z-]*`' "$SKILL" | tr -d '`' | sort -u)"
-py_reasons="$(python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("r",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print("\n".join(sorted(m.REJECT_REASONS)))' "$REPORT")"
+py_reasons="$(python3 -B -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("r",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print("\n".join(sorted(m.REJECT_REASONS)))' "$REPORT")"
 missing=""
 while IFS= read -r r; do grep -qx -- "$r" <<< "$skill_reasons" || missing="$missing $r"; done <<< "$py_reasons"
 [ -z "$missing" ] && ok || bad "SKILL.md names every rejection reason report.py accepts (missing:$missing)"
