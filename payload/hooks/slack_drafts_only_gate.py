@@ -5332,14 +5332,31 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         read as a script, its imports followed (#2318), only where something the program runs can
         run what it is handed (acts with runs_only: importing, requiring or executing it, or a module
         the gate does not know); a script that only reads or writes text cannot make it run. Its own
-        text is judged afterwards as any data file's is."""
+        text is judged afterwards as any data file's is.
+
+        shell_hint says the program is a shell, which reads its own script as commands whatever the
+        file is called. A file the script is handed is not the shell's script: one that says what it
+        is, JavaScript, TypeScript or Python by its extension or its #!, is read as that, as it is
+        when a node script is handed it (claude-config#2792: a test file handed to pnpm's shell
+        launcher for vitest was read as commands, and `return b => // a comment` as a command writing
+        a file named //). One that says nothing, or whose #! names a shell, is read as commands still."""
         for script_label, script_acts in code:
             runs = script_acts(runs_only=True)
             if not runs:
                 continue
-            why = self.script(w, d, depth, shell_hint, lang, w)
+            why = self.script(w, d, depth, shell_hint and not self.own_language(self.resolve(w, d)), lang, w)
             return f"{script_label} {runs}, and is handed {why}" if why else None
         return None
+
+    def own_language(self, path):
+        """"js" or "py" where a file itself says what it is, by its extension or its #! (language with
+        no program to go by), else None: a file with neither, one of another kind, one that cannot be
+        read."""
+        try:
+            first = self.content(path, 512).split(b"\n", 1)[0].decode("utf-8", "replace")
+        except OSError:
+            first = ""
+        return self.language(os.path.realpath(path), first, None)
 
     def data_shaped(self, path):
         """Whether a file is shaped like data rather than a script: an extension none of the programs
