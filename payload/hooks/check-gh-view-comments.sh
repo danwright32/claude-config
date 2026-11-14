@@ -13,8 +13,8 @@
 # and neither rtk nor the rewrite hook drops anything. gh cannot be told to print both, so the command
 # is refused, loudly, with the one that does: `--json title,body,comments`.
 #
-# WHAT IT DOES. Refuses (exit 2) a `gh issue view` or `gh pr view` carrying --comments or -c (alone,
-# clustered with -w, or as --comments=true) with neither --json nor --web, and says the command to run
+# WHAT IT DOES. Refuses (exit 2) a `gh issue view` or `gh pr view` carrying --comments, -c or
+# --comments=true with neither --json nor --web (-w, alone or clustered as -cw), and says the command to run
 # instead. The command is read in COMMAND POSITION by push-scope.sh's reader, which reads past rtk
 # proxy, env, sudo and a shell's -c, so a view quoted in an argument or a heredoc body is not one.
 #

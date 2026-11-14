@@ -843,7 +843,13 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash('rtk proxy git push --force origin main')).toBe('force push')
     expect(await bash('rtk proxy git status')).toBeUndefined()
   })
-  test('a command named proxy that rtk does not run is no proxy', async () => {
+  test('a command named proxy that rtk does not run is no proxy, whatever else the line says', async () => {
     expect(await bash('proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
+    expect(await bash('echo rtk proxy && proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
+    expect(await bash(`echo 'rtk proxy' ; proxy gh issue view 7 -R other/x`, { look: nowhere })).toBe(unresolved)
+  })
+  test('rtk named by its path, or behind another runner, is still rtk', async () => {
+    expect(await bash('/opt/homebrew/bin/rtk proxy gh issue view 7 -R other/x', { look: nowhere })).toBeUndefined()
+    expect(await bash('env A=1 rtk proxy git push --force origin main')).toBe('force push')
   })
 })

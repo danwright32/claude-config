@@ -14,7 +14,9 @@ import { browserRefusal, type Browser } from './browser.ts'
 //   and labels on this checkout's repository (Dan, 2026-11-09, #2581); any other GitHub write (a comment, which
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
-//   whose repository cannot be resolved is refused (L75);
+//   whose repository cannot be resolved is refused (L75); a gh or git that `rtk proxy` runs is
+//   judged as the same command written plainly, and a gh's output there may be redirected only
+//   into the session notes folder or the scratchpad (#2937, recorded on its PR);
 // - LESSONS.md written by any route in command position, a script file handed it as its argument
 //   included (#1592);
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
@@ -589,18 +591,39 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
 // judged by nothing at all (`rtk proxy git push --force` went ahead). So a gh or git that rtk's
 // proxy runs is read again as a command line of its own, by the same reader, and judged exactly as
 // written plainly. Only those two: anything else proxy runs is judged as before, since reading it
-// again would drop what the first reading held (a heredoc feeding it). The line must show rtk in
-// front of proxy, so a program of its own named proxy is no proxy, and a word the shell would
-// change ($, a backtick) is not quoted back as text: those are judged as before, which refuses gh.
-const RTK_PROXY = /(?:^|[\s;&|(`])(?:\S*\/)?rtk\s+(?:-\S+\s+)*proxy(?=\s|$)/
+// again would drop what the first reading held (a heredoc feeding it). A word the shell would change
+// ($, a backtick) is not quoted back as text: those are judged as before, which refuses gh.
+//
+// Which commands rtk itself runs is asked of the same reader, never of the line's text: the line is
+// read again with every word rtk renamed to a program no reader passes over, and a command that
+// then comes back named so, with proxy after rtk's own options, is the one rtk's proxy runs. So a
+// program of its own named proxy is no proxy, even beside `echo rtk proxy` (lessons review of
+// 1346447: the text of the line could not tell the two apart).
+const RTK_WORD = /(^|[\s;&|(`'"/])rtk(?=[\s;&|)`'"]|$)/g
+const RTK_RENAMED = 'rtk-read-as-a-program'
 const PROXY_OPTIONS = /^(?:-v+|--verbose|-u|--ultra-compact|--skip-env)$/
+// The places in call.commands of each command rtk's proxy runs; none where the second reading does
+// not line up with the first, command for command.
+const rtkProxied = async (call: OvernightCall): Promise<ReadonlySet<number>> => {
+  const at = new Set<number>()
+  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return at
+  const renamed = await call.read(call.raw.replace(RTK_WORD, `$1${RTK_RENAMED}`))
+  if (renamed.length !== call.commands.length) return at
+  renamed.forEach((r, i) => {
+    if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') return
+    let k = 1
+    while (k < r.words.length && (r.words[k] as string).startsWith('-')) k++
+    if (r.words[k] === 'proxy') at.add(i)
+  })
+  return at
+}
 // A redirection among a command's words, as mod-kit's reader leaves them: an operator whose target
 // is the next word, or one with its target joined on. An input redirection is taken out too.
 const REDIRECT_OP = /^(?:\d*|&)(?:>>?|>\||<)$/
 const REDIRECT_JOINED = /^(?:\d*|&)(?:>>?|>\||<)(.+)$/
 type Proxied = { cmd: Cmd; targets: string[] }
 const throughProxy = async (c: Cmd, call: OvernightCall): Promise<Proxied | undefined> => {
-  if (name(c.words[0]) !== 'proxy' || c.heredocs?.length || !RTK_PROXY.test(call.raw)) return undefined
+  if (name(c.words[0]) !== 'proxy' || c.heredocs?.length) return undefined
   let i = 1
   while (i < c.words.length && PROXY_OPTIONS.test(c.words[i] as string)) i++
   if (c.words[i] === '--') i++
@@ -735,9 +758,10 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
-  for (const written of call.commands) {
+  const byProxy = await rtkProxied(call)
+  for (const [at, written] of call.commands.entries()) {
     // A gh or git rtk's proxy runs is judged as that gh or git (#2937); its redirections are its own.
-    const proxied = await throughProxy(written, call)
+    const proxied = byProxy.has(at) ? await throughProxy(written, call) : undefined
     const c = proxied?.cmd ?? written
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
