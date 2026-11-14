@@ -26,7 +26,7 @@ LIB="$DIR/lib/suite-deadline.sh"
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 if [ ! -f "$LIB" ]; then
   echo "FAIL: there is no helper at $LIB, so no suite can bound its own wall clock"

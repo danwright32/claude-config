@@ -591,18 +591,75 @@ bash "$DIR/lib/repo-files.sh" "$ROOT" > "$TMPROOT/files.list" 2>/dev/null
 [ -s "$TMPROOT/files.list" ] \
   && check "the files to judge were listed" ok \
   || check "the files to judge were listed" "lib/repo-files.sh gave nothing for $ROOT, so nothing below was read"
+TREE_RULE="#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it"
+# tree_said <a scan's output>: what the tree check says of it, "ok" or its findings, one to a line:
+# the file and line, what it loads, the fix, and the line as it reads. Each is indented under the
+# FAIL, because the runner prints a failing suite's FAIL line and only the lines indented under it
+# (#253). Written at the margin, as they were, a full run's report ended at "these do not:" and
+# named no file (#2854), and until #2876 a full run was the only way this suite could be run.
+tree_said() {
+  local hits
+  hits="$(printf '%s\n' "$1" | sed -n 's/^HIT /  /p')"
+  if [ -z "$hits" ]; then printf 'ok'; else printf 'these do not:\n%s' "$hits"; fi
+}
 tree="$(scan "$ROOT" "$TMPROOT/files.list" --list)"
-tree_hits="$(printf '%s\n' "$tree" | grep '^HIT ' || true)"
-[ -z "$tree_hits" ] \
-  && check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" ok \
-  || check "#2600 every program importing from payload/hooks/lib or tools/lib turns bytecode off before it" "these do not:
-$tree_hits"
+check "$TREE_RULE" "$(tree_said "$tree")"
 # A scan that found a handful of importers is reading the wrong tree (L98): 63 on 2026-11-10,
 # counted by this scan.
 nimp="$(printf '%s\n' "$tree" | sed -n 's/^READ files=[0-9]* programs=[0-9]* importers=\([0-9]*\)$/\1/p')"
 [ "${nimp:-0}" -ge 40 ] \
   && check "the scan found the repository's importers" ok \
   || check "the scan found the repository's importers" "it found ${nimp:-no} importers in $ROOT, where 63 were found on 2026-11-10"
+# ---------------------------------------------------------------------------
+# A tree that still has a writer (#2854). The check above was only ever seen to name its own probe
+# files, and a full run showed none of what it found on the real tree: the runner prints a failing
+# suite's FAIL line and the lines indented under it (#253), and the findings were written at the
+# margin, so the report stopped at "these do not:". Three real importers, one in each shape #2866
+# found, are copied beside the two lib folders with the bytecode setting put back the way it was
+# before #2866. The same check is asked about that tree, and what it prints is handed to the runner
+# as a failing suite's output: a full run has to show each writer and the line that loads from lib.
+# ---------------------------------------------------------------------------
+REAL="$TMPROOT/real"
+mkdir -p "$REAL/payload/hooks/lib" "$REAL/tools/lib" "$REAL/tests"
+cp "$ROOT"/payload/hooks/lib/*.py "$REAL/payload/hooks/lib/"
+cp "$ROOT"/tools/lib/*.py "$REAL/tools/lib/"
+# put_back <file> <sed expression taking its setting out>: a copy the expression changed nothing in
+# is not a writer, and the checks below would then fail for a reason that is not theirs (L100).
+put_back() {
+  if [ ! -f "$ROOT/$1" ]; then
+    check "#2854 $1 is copied with its bytecode setting taken out" "it is not in $ROOT any more: choose another importer of this shape"
+  elif sed "$2" "$ROOT/$1" > "$REAL/$1" && ! cmp -s "$ROOT/$1" "$REAL/$1"; then
+    check "#2854 $1 is copied with its bytecode setting taken out" ok
+  else
+    check "#2854 $1 is copied with its bytecode setting taken out" "the setting was not found in it as #2866 wrote it, so the copy is no writer: choose an importer that still turns bytecode off this way"
+  fi
+}
+put_back tools/tag-lessons.py '/^sys\.dont_write_bytecode = True$/d'                 # a .py file, the setting in its text
+put_back tools/check-mod-dependencies.sh "s/^$P -B - /$P - /"                        # a heredoc fed to the interpreter, -B on the run
+put_back tests/test-mod-line-builder-reader.sh '/^sys\.dont_write_bytecode = True$/d'  # a heredoc written to a .py file and run
+printf '%s\n' tools/tag-lessons.py tools/check-mod-dependencies.sh tests/test-mod-line-builder-reader.sh > "$TMPROOT/real.list"
+real="$(scan "$REAL" "$TMPROOT/real.list" --list)"
+# What the tree check prints for that tree. Run in a subshell, so its failure is not this suite's.
+said="$(check "$TREE_RULE" "$(tree_said "$real")")"
+SHOWN="$TMPROOT/shown"
+mkdir -p "$SHOWN"
+printf '%s\n' "$said" > "$SHOWN/said.txt"
+printf '#!/usr/bin/env bash\ncat "%s"\necho "SUITE-RESULT passed=0 failed=1"\nexit 1\n' "$SHOWN/said.txt" > "$SHOWN/test-said.sh"
+shown="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKY_OUTPUT= HOOK_TESTS_FLAKE_RECHECK=0 HOOK_TESTS_SLOT=0 bash "$DIR/run-all-tests.sh" "$SHOWN" 2>&1)"
+shown_as="a full run showed:
+$(printf '%s\n' "$shown" | sed 's/^/    /')"
+named() {  # <file> <the shape and module the finding states> <how the line that loads from lib starts>
+  local row
+  row="$(printf '%s\n' "$shown" | grep -F " $1:" || true)"
+  case "$row" in
+    *" $1:"[0-9]*": $2 with bytecode on"*"; the line reads: $3"*)
+      check "#2854 a full run names $1 and the line that loads from lib" ok ;;
+    *) check "#2854 a full run names $1 and the line that loads from lib" "$shown_as" ;;
+  esac
+}
+named tools/tag-lessons.py "the file loads lessons_core" "from lessons_core import "
+named tools/check-mod-dependencies.sh "the heredoc fed to python3 loads ts_source" "from ts_source import "
+named tests/test-mod-line-builder-reader.sh "the heredoc written to a Python file loads ts_source" "from ts_source import "
 # The two #2600 named, the one whose shape they copy, the #2751 writer, whose file to load is
 # named by a variable, and the two #2840 writers (a load in a function the setting was not in, and a
 # program held in a variable) are among those read.

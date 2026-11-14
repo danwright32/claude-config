@@ -2,7 +2,7 @@ import { expect, mock, type Engine } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { EngineInterface, On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { APPROVE, CHANGE, HEADER, SCAN_MS, wordingKey } from '../hooks/rules.ts'
+import { APPROVE, CHANGE, HEADER, SCAN_MS, shellLogWording, stringsOf, wordingKey } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
@@ -910,6 +910,119 @@ test('a comment only edit, or a string only a log reads, in a file a Slack sende
   expect(w.ran.length).toBe(4)
 })
 
+// #2792 part 1, what was still held after #2850: in a sender whose sends the guard does not follow
+// (a shell script, a workflow, ruby, a JavaScript file whose send it cannot find), a comment already
+// passed, and so did a log line everywhere but in a shell script and in a language it does not read.
+// A shell script's line written to the error stream now passes too; the same string where it can
+// reach the send, and a log line in ruby, are held as before.
+test('an edit that changes no string a Slack send can carry passes in every kind of sender: a comment, and a shell line written to the error stream (#2792)', withKit, async ($, on) => {
+  const SH = '/w/app/scripts/pager.sh'
+  const YML = '/w/app/.github/workflows/deploy.yml'
+  const NOSEND = '/w/app/lib/hidden.ts'
+  const PY = '/w/app/notify.py'
+  const RB = '/w/app/notify.rb'
+  const w = world($, on, {
+    files: {
+      [SH]: '#!/bin/bash\n# Pages the on call person.\ncurl -s --data "Disk is full" "$SLACK_WEBHOOK_URL"\n',
+      [YML]: 'name: deploy\non: push\njobs:\n  tell:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -s --data "Deploy finished" "$SLACK_WEBHOOK_URL"\n',
+      [NOSEND]: "import { post } from './post'\nconst hook = process.env.SLACK_WEBHOOK_URL\nexport const tell = () => post(hook, 'Queue is stuck')\n",
+      [PY]: 'import os, requests\ndef tell():\n    requests.post(os.environ["SLACK_WEBHOOK_URL"], json={"text": "Nightly sync finished"})\n',
+      [RB]: 'require "net/http"\nNet::HTTP.post(URI(ENV["SLACK_WEBHOOK_URL"]), "Backup finished")\n',
+      [ALERT]: ALERT_TEXT,
+    },
+  })
+  const tries: [string, Record<string, unknown>][] = [
+    ['sh comment', { tool: 'Edit', file_path: SH, old_string: '# Pages the on call person.', new_string: '# Pages whoever is on call tonight.' }],
+    ['sh new comment line', { tool: 'Edit', file_path: SH, old_string: 'curl -s', new_string: '# Uses the shared webhook.\ncurl -s' }],
+    ['sh log line', { tool: 'Edit', file_path: SH, old_string: 'curl -s', new_string: 'echo "paging the on call person now" >&2\ncurl -s' }],
+    ['sh log line after a test', { tool: 'Edit', file_path: SH, old_string: 'curl -s', new_string: '[ -n "$SLACK_WEBHOOK_URL" ] || { echo "no webhook is set, so nobody was paged" >&2; exit 1; }\ncurl -s' }],
+    ['sh logic', { tool: 'Edit', file_path: SH, old_string: 'curl -s', new_string: 'set -euo pipefail\ncurl -s' }],
+    ['yml comment', { tool: 'Edit', file_path: YML, old_string: '    steps:', new_string: '    # Tells the channel a deploy landed.\n    steps:' }],
+    ['yml log step', { tool: 'Edit', file_path: YML, old_string: '      - run: curl', new_string: '      - run: echo "telling the channel"\n      - run: curl' }],
+    ['nosend comment', { tool: 'Edit', file_path: NOSEND, old_string: 'export const tell', new_string: '// Tells the channel the queue is stuck.\nexport const tell' }],
+    ['nosend log', { tool: 'Edit', file_path: NOSEND, old_string: 'export const tell', new_string: "console.log('telling the channel')\nexport const tell" }],
+    ['py comment', { tool: 'Edit', file_path: PY, old_string: 'def tell():', new_string: '# Tells the channel the sync is done.\ndef tell():' }],
+    ['py log', { tool: 'Edit', file_path: PY, old_string: '    requests.post', new_string: '    print("telling the channel")\n    requests.post' }],
+    ['py docstring', { tool: 'Edit', file_path: PY, old_string: '    requests.post', new_string: '    """Tells the channel the sync is done."""\n    requests.post' }],
+    ['rb comment', { tool: 'Edit', file_path: RB, old_string: 'Net::HTTP', new_string: '# Tells the channel.\nNet::HTTP' }],
+    ['ts stale edit comment', { tool: 'Edit', file_path: ALERT, old_string: 'export const alarm', new_string: '// A comment.\nexport const alarm' }],
+    ['ts jsdoc', { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: '/** Posts a deploy failure to the alerts channel. */\nexport const alert' }],
+    ['ts error', { tool: 'Edit', file_path: ALERT, old_string: 'export const alert', new_string: "export const check = (id: string) => { if (!id) throw new Error('a deploy needs an id') }\nexport const alert" }],
+    ['ts write comment', { tool: 'Write', file_path: ALERT, content: `// Posts a deploy failure.\n${ALERT_TEXT}` }],
+  ]
+  for (const [name, input] of tries) expect([name, refusalOf(await call($, input))]).toEqual([name, ''])
+  expect(w.ran.length).toBe(tries.length)
+  expect(w.cards).toEqual([])
+  // Still held, each naming its wording, so the passes above were judged: the same shell line
+  // written where a caller or a pipe can carry it to the send, new wording on the send itself, a
+  // string the script both logs and sends, and a log line in a language the guard does not read.
+  const held: [string, Record<string, unknown>, string][] = [
+    ['sh standard output', { tool: 'Edit', file_path: SH, old_string: 'curl -s', new_string: 'echo "The disk on db-1 is full"\ncurl -s' }, 'The disk on db-1 is full'],
+    ['sh piped to the send', { tool: 'Edit', file_path: SH, old_string: 'curl -s --data "Disk is full"', new_string: 'echo "The disk on db-1 is full" | curl -s --data @-' }, 'The disk on db-1 is full'],
+    ['sh the send itself', { tool: 'Edit', file_path: SH, old_string: 'Disk is full', new_string: 'Disk is full on db-1' }, 'Disk is full on db-1'],
+    ['sh logged and sent', { tool: 'Edit', file_path: SH, old_string: 'curl -s --data "Disk is full"', new_string: 'echo "Disk is nearly full" >&2\ncurl -s --data "Disk is nearly full"' }, 'Disk is nearly full'],
+    ['rb log', { tool: 'Edit', file_path: RB, old_string: 'Net::HTTP', new_string: 'puts "telling the channel now"\nNet::HTTP' }, 'telling the channel now'],
+  ]
+  for (const [name, input, wording] of held) expect([name, refusalOf(await call($, input)).includes(wording)]).toEqual([name, true])
+  expect(w.ran.length).toBe(tries.length)
+})
+
+// #2792 part 1: which strings of a shell script only a log reads, judged on the commands mod-kit's
+// reader gives for the script, the one reader of shell there is (the guard's first rule read heredocs
+// and separators its own way, which tools/check-mod-shared-parts.sh refuses, L613). This runs the
+// real reader, so a change to what it gives for a redirect, a pipe or a heredoc turns red here.
+test("in a shell script, only the strings of an echo or printf sent to the error stream, and nowhere else, are a log, read by mod-kit's reader (#2792)", () => {
+  const logs = (text: string) => [...shellLogWording(pipeline(text), stringsOf(text, true).map(s => s.text))]
+  expect(logs('#!/bin/bash\necho "paging now" >&2\n')).toEqual(['paging now'])
+  expect(logs('>&2 echo "paging now"\n')).toEqual(['paging now'])
+  expect(logs("printf '%s\\n' \"paging the on call person\" 1>&2\n")).toContain('paging the on call person')
+  // After a test, in a branch, in a group, and in a function's body.
+  expect(logs('[ -n "$URL" ] || echo "no webhook is set" >&2\n')).toContain('no webhook is set')
+  expect(logs('if ! post; then echo "the post failed" >&2; exit 1; fi\n')).toEqual(['the post failed'])
+  expect(logs('post || { echo "the post failed" >&2; exit 1; }\n')).toEqual(['the post failed'])
+  // The gap: a function's log line is a log, whatever a caller does with the function's error stream.
+  expect(logs('tell() { echo "paging now" >&2; }\ntell 2>&1 | curl -d @- "$SLACK_WEBHOOK_URL"\n')).toEqual(['paging now'])
+  // Anything that can reach a send is no log: standard output (a caller may capture it), a pipe, a
+  // variable, a file, the send itself, another command.
+  for (const line of [
+    'echo "Disk is full"',
+    'echo "Disk is full" | curl -d @- "$SLACK_WEBHOOK_URL"',
+    'echo "Disk is full" >&2 | curl -d @- "$SLACK_WEBHOOK_URL"',
+    'echo "Disk is full" >&2 |& curl -d @- "$SLACK_WEBHOOK_URL"',
+    'msg="Disk is full"',
+    'printf -v msg "Disk is full" >&2',
+    'printf -vmsg "Disk is full" >&2',
+    'echo "Disk is full" > "$OUT"',
+    'echo "Disk is full" >> message.txt',
+    'echo "Disk is full" >&2 > message.txt',
+    'echo "Disk is full" 2>&1',
+    'curl -s --data "Disk is full" "$SLACK_WEBHOOK_URL" >&2',
+    'say "Disk is full" >&2',
+    'echo "Disk is full" &> message.txt',
+    'x=$(echo "Disk is full" >&2)',
+  ])
+    expect([line, logs(`${line}\n`).includes('Disk is full')]).toEqual([line, false])
+  // A heredoc's body is text handed to a command, never a command of the script.
+  expect(logs('curl -s -d @- "$SLACK_WEBHOOK_URL" <<EOF\necho "Disk is full" >&2\nEOF\necho "sent" >&2\n')).toEqual(['sent'])
+  for (const script of [
+    // A string the script both logs and sends is no log.
+    'echo "Disk is full" >&2\ncurl -s --data "Disk is full" "$SLACK_WEBHOOK_URL"\n',
+    // A string that runs a command, which can post by itself, is no log wherever it is printed.
+    "echo \"posted: $(curl -s --data 'Disk is full' \"$URL\")\" >&2\n",
+    'echo "posted: `post`" >&2\n',
+    // A heredoc's body is text handed to a command, never a command of the script, and one that
+    // never ends takes every line after it.
+    "cat <<-'MSG' | post\n\techo \"Disk is full\" >&2\n\tMSG\n",
+    'curl -s -d @- "$SLACK_WEBHOOK_URL" <<EOF\necho "Disk is full" >&2\n',
+    // A script that points its own error stream somewhere has none that is only a log.
+    'exec 2> >(post)\necho "Disk is full" >&2\n',
+    'exec 2>&1\necho "Disk is full" >&2\n',
+  ])
+    expect([script, logs(script)]).toEqual([script, []])
+  // A comment after the line changes nothing, and a line in a comment is no string at all.
+  expect(logs('echo "paging now" >&2 # for the cron log\n# echo "old" >&2\n')).toEqual(['paging now'])
+})
+
 test("python alerts are read through mod-kit's reader, and the guard's own record is never written by a call", withKit, async ($, on) => {
   const w = world($, on, { files: { '/w/app/notify.py': 'from slack_sdk import WebClient\nmsg = "Nightly sync finished"\n' } })
   expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/app/notify.py', old_string: 'Nightly sync finished', new_string: 'Nightly sync finished late' }))).toContain('Nightly sync finished late')
@@ -1359,11 +1472,18 @@ test('a script that refuses a Slack post and also makes one is still held: the h
   const BOTH = '/w/app/payload/hooks/gate-and-tell.sh'
   const posting = `${GATE_SH_TEXT}tell_dan() {\n  curl -s -X POST -H 'Content-type: application/json' --data "{\\"text\\":\\"$1\\"}" "$SLACK_WEBHOOK_URL"\n}\n`
   const w = world($, on, { files: { [BOTH]: posting } })
-  const why = refusalOf(await call($, ADVISE(BOTH)))
+  // The advice handed to the script's own send is held, naming the script: it is a sender, whatever
+  // else in it only refuses.
+  const why = refusalOf(await call($, { tool: 'Edit', file_path: BOTH, old_string: 'case "$verdict" in', new_string: `tell_dan '${ADVICE}'\ncase "$verdict" in` }))
   expect(why).toContain(BOTH)
   expect(why).toContain('do not retry it in a loop')
   expect(refusalOf(await call($, { tool: 'Bash', command: `printf 'exit 0\\n' >> ${BOTH}` }))).toContain('shell command')
   expect(w.ran).toEqual([])
+  // The same advice printed for the session on the error stream is a log line, which no send of the
+  // script carries, and passes since #2792. Until then it was held, as every string in a shell
+  // script that posts was.
+  expect(refusalOf(await call($, ADVISE(BOTH)))).toBe('')
+  expect(w.ran.length).toBe(1)
 })
 
 test('a file that matches a Slack endpoint and then calls it is still held, in a glob and in a pattern (#2662)', withKit, async ($, on) => {

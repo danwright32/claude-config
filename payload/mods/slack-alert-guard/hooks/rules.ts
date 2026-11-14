@@ -27,7 +27,8 @@
 // TypeScript or python file, a changed string is held only when sends.ts traces it to one of the
 // file's own send calls. A file whose send cannot be traced (any other language, a send the reading
 // cannot find) is held for all the wording it changes. A python docstring is never message text
-// (#2574).
+// (#2574). In a shell script, a string only an echo or printf to the error stream prints passes
+// (#2792, shellLogWording).
 //
 // Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
 // refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
@@ -328,6 +329,58 @@ export const stringsOf = (text: string, hash: boolean, js = false): Str[] => {
 /** A file's text with its comments blanked, its strings kept. */
 export const withoutComments = (text: string, hash: boolean): string =>
   text.replace(new RegExp(hash ? HASH_TOKENS : C_TOKENS, 'g'), t => (t.startsWith('#') || t.startsWith('//') || t.startsWith('/*') ? ' ' : t))
+
+/** One command of a shell script as mod-kit's reader gives it ($.modkit.pipeline), of it what a log line is judged by. */
+export type ShellCommand = { words: string[]; pipedFrom?: string[]; heredocs?: unknown; substitution?: true; derived?: unknown[] }
+
+// A word of a command that is a redirect, as mod-kit's reader gives one (a word of its own): an
+// optional descriptor or &, then > or <.
+const isRedirect = (word: string): boolean => /^(?:\d+|&)?[<>]/.test(word)
+
+/**
+ * The strings of a shell script that only a log can read (#2792), by their text: each one whose
+ * every place in the script is a whole argument of an echo or printf whose output goes to the error
+ * stream and nowhere else (`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch
+ * or a group. The guard follows no send in a shell script, so until this every string in one that
+ * posts was held, a log line included. `commands` is the script as mod-kit's reader gives it
+ * ($.modkit.pipeline: this file reads no shell itself, #712), `literals` the text of each string in
+ * it, once per place.
+ *
+ * Never a log, since each can carry the text to a send: standard output (a caller may capture it), a
+ * pipe, a file, a variable (`printf -v`), any other command, a command inside a substitution, a string that runs
+ * a command itself (`$(...)`, backticks), a line of a heredoc's body, and any line of a script that
+ * points its own error stream somewhere (exec with a redirect) or opens a heredoc that never ends,
+ * which takes every line after it. A string in one log line and anywhere else is no log either: a
+ * text is one only when the log lines carry it as many times as the script holds it. The gap,
+ * decided with the rule: a caller that joins the error stream of the function a log line is in to
+ * what it posts (`tell 2>&1 | curl ...`) is not followed.
+ */
+export const shellLogWording = (commands: ShellCommand[], literals: string[]): Set<string> => {
+  const out = new Set<string>()
+  const opensHeredoc = (word: string) => /^\d*<</.test(word) && !/^\d*<<</.test(word)
+  // The reader gives `exec 2> f` as its redirects alone, exec being a launcher it reads through, so
+  // a command that is only redirects is the script pointing its own streams somewhere.
+  const ownStreams = (c: ShellCommand) => c.words.some(isRedirect) && (c.words.every(isRedirect) || c.words.find(w => !isRedirect(w)) === 'exec')
+  if (commands.some(c => ownStreams(c) || (!c.heredocs && c.words.some(opensHeredoc)))) return out
+  const key = (words: string[]) => words.join('\u0000')
+  const fed = new Set(commands.flatMap(c => (c.pipedFrom ? [key(c.pipedFrom)] : [])))
+  const logged = new Map<string, number>()
+  for (const c of commands) {
+    const redirects = c.words.filter(isRedirect)
+    const [program, ...told] = c.words.filter(w => !isRedirect(w))
+    if (program !== 'echo' && program !== 'printf') continue
+    // printf -v sets a variable instead of printing, and a variable can be posted later.
+    if (program === 'printf' && told.some(w => /^-[^-]*v/.test(w))) continue
+    if (!redirects.length || !redirects.every(r => /^1?>&2$/.test(r))) continue
+    if (c.substitution || c.heredocs || c.derived?.some(d => d) || fed.has(key(c.words))) continue
+    if (told.some(w => w.includes('$(') || w.includes('`'))) continue
+    for (const w of told) logged.set(w, (logged.get(w) ?? 0) + 1)
+  }
+  const held = new Map<string, number>()
+  for (const l of literals) held.set(l, (held.get(l) ?? 0) + 1)
+  for (const [text, places] of held) if ((logged.get(text) ?? 0) >= places) out.add(text)
+  return out
+}
 
 /**
  * A YAML file's plain (unquoted) values, each line's text after its key or list mark; quoted ones are
