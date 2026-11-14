@@ -71,6 +71,9 @@ for path, src in files.items():
             found.append("%s:%d names %s, a way to the builtin open around install()" % (short, node.lineno, node.id))
         elif isinstance(node, ast.Attribute) and node.attr in ("import_module", "__import__"):
             found.append("%s:%d calls %s, an import around install()" % (short, node.lineno, node.attr))
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                and node.value.id in jc.MODULE_USES and node.attr not in jc.MODULE_USES[node.value.id]:
+            found.append("%s:%d uses %s.%s, which can read the disk with no audit event" % (short, node.lineno, node.value.id, node.attr))
         elif isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \
                 and isinstance(node.args[0].value, str) and ast.unparse(node.func) in ("os.environ.get", "os.getenv"):
             env_names.add(node.args[0].value)
@@ -87,7 +90,7 @@ out="$(python3 -B "$T/scan.py" "$DIR/slack_drafts_only_gate.py" 2>&1)"
 check "every import in the gate and its libraries is classified and reaches the disk only through the stand ins, and every variable read by name is keyed" "$out"
 # Seen to fail (L1): each way around the stand ins, put in a copy of the gate, is found.
 for probe in "from os.path import isfile" "import pathlib" "import os as real_os" "import glob" \
-             "return __builtins__" "return os.environ.get('NEW_GATE_SETTING')"; do
+             "return __builtins__" "return os.environ.get('NEW_GATE_SETTING')" "return shutil.which('git')"; do
   out="$(python3 -B "$T/scan.py" "$DIR/slack_drafts_only_gate.py" "$probe" 2>&1)"
   if [ "$out" != ok ] && [ -n "$out" ]; then check "the scan finds: $probe" ok
   else check "the scan finds: $probe" "it said: $out"; fi
@@ -125,7 +128,7 @@ rec = jc.Recorder()
 spaces = [vars(gate)] + [vars(m) for m in gate.LIBS if m is not jc]
 proxies = jc.install(rec, spaces)
 for ns in spaces:
-    for name in ("os", "glob", "importlib"):
+    for name in ("os", "glob", "importlib", "ast"):
         if name in ns:
             expect("%s's %s is the stand in" % (ns.get("__name__"), name), ns[name] is proxies[name])
     expect("%s's open is the stand in" % ns.get("__name__"), ns.get("open") is proxies["open"])
@@ -147,7 +150,15 @@ with gate.open(os.path.join(work, "t", "a", "f.txt"), encoding="utf-8", errors="
     expect("open in text gives the text", f.read() == "hello\n")
 expect("an environment variable read by a name worked out at run time is recorded",
        g.environ.get("JC_" + "RUNTIME_NAME") is None and ("env", "JC_RUNTIME_NAME") in rec.reads)
-expect("none of that marks the record", rec.tainted is None)
+# Text that does not parse: CPython tries to open the file the source is said to come from, which
+# the ast stand in records as a read rather than leaving to the audit hook.
+try:
+    gate.ast.parse("x = (")
+    expect("a syntax error still raises through the stand in", False)
+except SyntaxError:
+    pass
+expect("and the attempted read of its file is recorded", ("read", "<unknown>") in rec.reads)
+expect("none of that marks the record: %r" % rec.tainted, rec.tainted is None)
 expect("each read is recorded", ("read", os.path.join(work, "t", "a", "f.txt")) in rec.reads
        and ("dirsplit", os.path.join(work, "t")) in rec.reads)
 
@@ -190,9 +201,14 @@ expect("a record not whole is not kept", not os.path.exists(os.path.join(cache, 
 r = jc.Recorder()
 jc.install(r, [vars(gate)])
 gate.open(src).read()
-open(src, "w").write("echo two\n")  # changed after it was read, before it was kept
+# Changed after it was read, before it was kept. The write is this test's, not the judgement's, so the
+# record is closed first: otherwise the audit hook would see the write and the case would pass on that.
+r.closed = True
+open(src, "w").write("echo two\n")
 jc.store(cache, "k2", r)
-expect("a judgement whose input changed while it was judged is not kept", not os.path.exists(os.path.join(cache, "k2.json")))
+expect("a judgement whose input changed while it was judged is not kept, for that reason: %r" % traced()[-160:],
+       r.tainted is None and not os.path.exists(os.path.join(cache, "k2.json"))
+       and "not stored: something changed while it was judged: read" in traced())
 r = jc.Recorder()
 jc.install(r, [vars(gate)])
 gate.open(src).read()

@@ -13,7 +13,7 @@ the top of a call, which is the only place a judgement is kept, so the key recor
 
 WHAT IT RECORDS AND CHECKS AGAIN (Recorder): everything else the judgement read. Every disk read the
 gate and its libraries make goes through one place, the stand ins install() puts in each one's
-namespace under the names os, glob, importlib and open, so a new direct call such as os.path.isfile
+namespace under the names os, glob, importlib, ast and open, so a new direct call such as os.path.isfile
 is recorded without anybody remembering to (L621). Each question is recorded with its answer: the
 bytes of each file read (as a hash), each file test (isfile, isdir, exists, lexists, islink), each
 realpath, size, access test, directory listing and walk, each glob, each import lookup, and each
@@ -80,6 +80,9 @@ MODULES = {
     "io": "audited", "lzma": "audited", "tarfile": "audited", "zipfile": "audited", "configparser": "audited",
     "tempfile": "audited", "shutil": "audited", "subprocess": "audited",
 }
+# An audited module some of whose functions read the disk with no audit event (shutil.which and its
+# stat and access helpers): only the names listed may be used, which test-judgement-cache.sh checks.
+MODULE_USES = {"shutil": ("rmtree",)}
 
 # What an audit event outside the stand ins means: a read or an effect nobody recorded.
 UNRECORDED_EVENTS = ("open", "os.", "subprocess.", "socket.", "shutil.", "tempfile.", "glob.", "pathlib.",

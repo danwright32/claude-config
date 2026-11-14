@@ -4904,8 +4904,10 @@ echo "slack drafts only: a judgement kept in the cache is used only while everyt
 JC="$T/jc"; mkdir -p "$JC/w"
 export SLACK_GATE_CACHE_DIR="$T/jc-cache" SLACK_GATE_CACHE_TRACE="$T/jc-trace"
 jc_run() { : > "$SLACK_GATE_CACHE_TRACE"; run_raw "$(payload Bash "$(bash_input "$1")" "$JC/w")"; }
-traced() { if grep -q -F -- "$2" "$SLACK_GATE_CACHE_TRACE"; then check "$1" ok
-           else check "$1" "the cache traced: $(tr '\n' '|' < "$SLACK_GATE_CACHE_TRACE")"; fi; }
+# traced <what> <start> [<also>]: a trace line starts with <start> (so "stored" is never "not stored")
+# and, where given, holds <also>.
+traced() { if awk -v p="$2" -v q="${3:-}" 'index($0, p) == 1 && (q == "" || index($0, q)) { f = 1 } END { exit !f }' "$SLACK_GATE_CACHE_TRACE"
+           then check "$1" ok; else check "$1" "the cache traced: $(tr '\n' '|' < "$SLACK_GATE_CACHE_TRACE")"; fi; }
 printf '%s\n' '#!/bin/bash' 'D="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' '. "$D/lib.sh"' 'bash "$D/later.sh"' > "$JC/run.sh"
 printf '%s\n' 'greet() { echo hi; }' > "$JC/lib.sh"
 POSTS="curl -s https://slack.com/api/chat""\x2epostMessage -d text=hi"
@@ -4920,7 +4922,7 @@ cp "$JC/lib.sh" "$JC/lib.sh.was"
 printf "$POSTS\n" >> "$JC/lib.sh"
 jc_run "bash $JC/run.sh"
 refused "once the file it sources posts, the same command is refused"
-traced "the kept judgement is not used once a file it read has changed" "miss: "
+traced "the kept judgement is not used once a file it read has changed" "miss: read" "answers differently now"
 traced "a refusal is never kept" "not stored: refused"
 cp "$JC/lib.sh.was" "$JC/lib.sh"
 jc_run "bash $JC/run.sh"
@@ -4930,22 +4932,22 @@ traced "and answered from the cache, which keys a file on what it holds" "hit"
 printf "$POSTS\n" > "$JC/later.sh"
 jc_run "bash $JC/run.sh"
 refused "once the script it runs is there and posts, the same command is refused"
-traced "the kept judgement is not used once a disk test it answered would answer differently" "miss: "
+traced "the kept judgement is not used once a disk test it answered would answer differently" "miss: " "later.sh'] answers differently now"
 rm -f "$JC/later.sh"
 # A corrupt entry: unreadable as an entry, it is no judgement, and the call is judged afresh.
 for f in "$T/jc-cache"/*.json; do printf 'not an entry' > "$f"; done
 jc_run "bash $JC/run.sh"
 allowed "with its kept entry corrupt, the command is judged afresh and allowed"
-traced "a corrupt entry is not used" "miss: "
+traced "a corrupt entry is not used" "miss: the entry is not an entry"
 traced "and the fresh judgement is kept in its place" "stored"
 for f in "$T/jc-cache"/*.json; do python3 -c 'import sys; p = sys.argv[1]; s = open(p).read(); open(p, "w").write(s[: len(s) // 2])' "$f"; done
 jc_run "bash $JC/run.sh"
-traced "an entry cut short is not used" "miss: "
+traced "an entry cut short is not used" "miss: the entry is not an entry"
 for f in "$T/jc-cache"/*.json; do
   python3 -c 'import json, sys; p = sys.argv[1]; e = json.load(open(p)); e["reads"] = e["reads"][1:]; json.dump(e, open(p, "w"))' "$f"
 done
 jc_run "bash $JC/run.sh"
-traced "an entry with a recorded read taken out is not used" "miss: "
+traced "an entry with a recorded read taken out is not used" "miss: the entry is not a whole allow"
 # A change to anything the key covers is a different entry: an environment variable the gate reads.
 CDPATH="$JC" jc_run "bash $JC/run.sh"
 traced "a call judged with a different value of a variable the gate reads finds no entry" "miss: no entry"
