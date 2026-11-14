@@ -60,7 +60,7 @@ screen; an area with no screens is neither) has nothing to serve, so it may leav
 give all three when it does serve something; a partial set is refused as `areas-serve-incomplete`,
 naming what is missing. Any other project needs all three: one with a native screen and a web one
 is refused as `areas-web-needs-serve`, naming the web area and each missing setting, and one with no
-screens at all as `areas-missing-key`, as before. A run with nothing to serve starts no serve and
+native screen (web screens only, or none) as `areas-missing-key`, as before. A run with nothing to serve starts no serve and
 waits for no ready command; its supervisor still runs the egress monitor around every drive call
 and ends the run on `stop` or the deadline, its receipt records `url`, `serve_pid` and `serve_pgid`
 as null, and the drive helper gets no `VERIFICATION_URL`.

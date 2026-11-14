@@ -363,8 +363,8 @@ def _check_serve_settings(p, doc, cmds, native, web_areas):
     A project is all native when at least one of its screens is native and none is web; an area
     with no screens is neither. Such a project has nothing to serve, so the three are optional, but
     a run cannot serve without all three, so it gives all of them or none. Any other project needs
-    all three: one that pictures no screens at all is told key by key, as it always was, and one
-    with a native screen is told which area made serving necessary.
+    all three: one with no native screen (web screens only, or none) is told key by key, as it
+    always was, and one with a native screen is told which area made serving necessary.
     """
     # Given means the key is there: a null is the wrong type, already said, not also missing. With no
     # commands object, that is already said too, and only url is judged here.
