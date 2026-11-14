@@ -28,7 +28,8 @@
 // file's own send calls. A file whose send cannot be traced (any other language, a send the reading
 // cannot find) is held for all the wording it changes. A python docstring is never message text
 // (#2574). In a shell script, a string only an echo or printf to the error stream prints passes
-// (#2792, shellLogWording).
+// (#2792, shellLogWording). In JavaScript or TypeScript, a string only a console call logs passes,
+// traced or not (#2907, sends.ts consoleArgs).
 //
 // Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
 // refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
@@ -939,8 +940,34 @@ export const renderedProblem = (rendered: unknown, added: string[], literal: str
 
 /** Whether a path is this mod's own store file, which only Dan's answer may write. */
 export const isOwnRecord = (path: string): boolean => /\/plugins\/store\/slack-alert-guard[_.]/.test(path) || /(^|\/)slack-alert-guard_[^/]*$/.test(path)
-/** Whether a shell command names the plugin store, which the write reader may not follow into. */
+/** Whether a shell command names the plugin store, where any write the reader cannot place is refused (writesOwnRecord). */
 export const mentionsStore = (text: string): boolean => /plugins\/store/.test(text)
+
+/** A place a shell command writes or changes, as mod-kit's write reader gives it. */
+type Placed = { path?: string }
+/**
+ * Whether a shell command, as mod-kit's write reader reads it, can write this mod's own record
+ * (#2904): any file it writes, changes or has git change is the record, in any command; and in a
+ * command naming the store, any place it reaches is the store folder or a folder holding it (a
+ * removal, a move or a copy onto it), or anything it writes cannot be named: a path the reader could
+ * not resolve, a program, xargs, a patch, or a script handed arguments. A listing, a search or a read
+ * of the store writes nothing, so it passes.
+ */
+export const writesOwnRecord = (
+  w: { files: Placed[]; changes: Placed[]; byGit?: Placed[]; unnamed: unknown[]; runs?: unknown[] },
+  home: string,
+  named: boolean,
+): boolean => {
+  const placed = [...w.files, ...w.changes, ...(w.byGit ?? [])]
+  if (placed.some(p => p.path !== undefined && isOwnRecord(p.path))) return true
+  if (!named) return false
+  const store = `${home}/.claude/plugins/store`
+  const holdsStore = (path: string): boolean => {
+    const p = path.replace(/\/+$/, '')
+    return /\/plugins\/store$/.test(p) || (p !== '' && store.startsWith(`${p}/`))
+  }
+  return placed.some(p => p.path === undefined || holdsStore(p.path)) || w.unnamed.length > 0 || (w.runs ?? []).length > 0
+}
 
 const listed = (xs: string[]): string => xs.map(x => `"${x}"`).join(', ')
 
