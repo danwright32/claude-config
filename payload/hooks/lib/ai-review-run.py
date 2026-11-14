@@ -1003,6 +1003,8 @@ LESSONS_OPTION = "--append-system-prompt-file"
 UNKNOWN_OPTION = re.compile(r"""unknown option ['"]?(--[A-Za-z0-9][A-Za-z0-9-]*)""")
 # How it says a file for LESSONS_OPTION is missing, measured on 2.1.325: proof the option is known.
 MISSING_LESSONS_FILE = "Append system prompt file not found"
+# Between the fields of the probe's answer line: the ASCII unit separator, which no field carries.
+PROBE_SEP = "\x1f"
 
 
 def refused_option(errtext, cmd):
@@ -1040,12 +1042,14 @@ def refused_body(option, version):
 
 
 def probe_lessons_option(claude, timeout):
-    """(verdict, version, detail): whether the installed claude still accepts LESSONS_OPTION, asked
+    """(verdict, version, detail, lasting): whether the installed claude still accepts LESSONS_OPTION, asked
     without calling any model (claude-config#2982). It is handed a file that does not exist, so the
     option known reads "Append system prompt file not found" and the option dropped reads "unknown
     option", both before anything is sent. The prompt is /model, which Claude Code answers locally,
     so even a version that stopped checking the file up front calls no model. verdict is accepted,
-    refused, or unmeasured, with detail saying why for the last (L98, L11)."""
+    refused, or unmeasured, with detail saying why for the last (L98, L11). lasting is False for
+    an answer that says nothing about this claude (it hung, or could not be run), so it is asked
+    again next time rather than kept for a day."""
     version = claude_version(claude, timeout)
     folder = tempfile.mkdtemp(prefix="ai-review-probe-")
     missing = os.path.join(folder, "no-such-lessons-file.md")   # never created
@@ -1056,7 +1060,7 @@ def probe_lessons_option(claude, timeout):
     try:
         rc, _got, err, timed_out = run_stream(cmd, subprocess.DEVNULL, timeout, lambda: None)
     except OSError as e:
-        return "unmeasured", version, f"the claude command could not be run ({e})"
+        return "unmeasured", version, f"the claude command could not be run ({e})", False
     finally:
         try:
             os.rmdir(folder)
@@ -1064,14 +1068,15 @@ def probe_lessons_option(claude, timeout):
             pass
     errtext = err.decode("utf-8", errors="replace")
     if timed_out:
-        return "unmeasured", version, f"the claude command did not answer within {timeout}s and was stopped"
+        return ("unmeasured", version,
+                f"the claude command did not answer within {timeout}s and was stopped", False)
     if refused_option(errtext, [LESSONS_OPTION]):
-        return "refused", version, ""
+        return "refused", version, "", True
     if MISSING_LESSONS_FILE in errtext:
-        return "accepted", version, ""
+        return "accepted", version, "", True
     return ("unmeasured", version,
             f"handed a file that does not exist, it exited {rc} with neither the missing file error "
-            f"nor an unknown option error")
+            f"nor an unknown option error", True)
 
 
 def _probe_key(claude):
@@ -1084,7 +1089,7 @@ def _probe_key(claude):
 
 def probe_main(argv):
     """`ai-review-run.py --probe-lessons-option --claude BIN --cache FILE --every SECONDS --timeout
-    SECONDS`, for `claude-sync status` (claude-config#2982). Prints one line, tab separated: verdict,
+    SECONDS`, for `claude-sync status` (claude-config#2982). Prints one line, separated by PROBE_SEP: verdict,
     version, the epoch it was checked, the option, detail. Asks claude at most once per --every
     seconds for the same claude command, reading the answer back from --cache in between."""
     ap = argparse.ArgumentParser()
@@ -1111,22 +1116,27 @@ def probe_main(argv):
         except (OSError, ValueError):
             pass
         if rec is None:
-            verdict, version, detail = probe_lessons_option(a.claude, a.timeout)
+            verdict, version, detail, lasting = probe_lessons_option(a.claude, a.timeout)
             rec = {"key": key, "verdict": verdict, "version": version or "", "checked": now,
                    "detail": detail}
-            try:
-                os.makedirs(os.path.dirname(os.path.abspath(a.cache)), exist_ok=True)
-                tmp = a.cache + ".tmp"
-                with open(tmp, "w", encoding="utf-8", errors="strict") as f:
-                    json.dump(rec, f)
-                os.replace(tmp, a.cache)
-            except OSError:
-                pass   # not recorded means asked again next time, never a wrong answer
+            # A hang or a claude that could not be run says nothing about this claude, so it is
+            # not kept and the next status asks again (lessons review of #2982).
+            if lasting:
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(a.cache)), exist_ok=True)
+                    tmp = a.cache + ".tmp"
+                    with open(tmp, "w", encoding="utf-8", errors="strict") as f:
+                        json.dump(rec, f)
+                    os.replace(tmp, a.cache)
+                except OSError:
+                    pass   # not recorded means asked again next time, never a wrong answer
     fields = [rec.get("verdict", ""), rec.get("version", ""), str(rec.get("checked", "")),
               LESSONS_OPTION, rec.get("detail", "")]
     # The record came from JSON, which can carry a lone surrogate; printing one must not raise.
     sys.stdout.reconfigure(errors="replace")
-    print("\t".join(str(x).replace("\t", " ").replace("\n", " ") for x in fields))
+    # Separated by the unit separator, never a tab: bash's read folds runs of whitespace IFS into
+    # one, so an empty version would shift every later field (lessons review of #2982).
+    print(PROBE_SEP.join(str(x).replace(PROBE_SEP, " ").replace("\n", " ") for x in fields))
     return 0
 
 

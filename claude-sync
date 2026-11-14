@@ -6110,8 +6110,10 @@ report_review_option(){
   fi
   line="$(python3 "$runner" --probe-lessons-option --claude "$bin" --cache "$CLAUDE_HOME/state/review-option-probe.json" \
     --every "$SYNC_REVIEW_OPTION_PROBE_EVERY" --timeout "$SYNC_CLAUDE_CHECK_TIMEOUT" 2>/dev/null)" || rc=$?
-  IFS=$'\t' read -r verdict version checked option detail <<< "$line" || true
-  who="Claude Code${version:+ $version}"
+  # The unit separator, never a tab: read folds runs of a whitespace IFS into one, so an empty
+  # version would shift every later field (lessons review of #2982).
+  IFS=$'\037' read -r verdict version checked option detail <<< "$line" || true
+  if [ -n "$version" ]; then who="Claude Code $version"; else who="Claude Code (its version could not be read)"; fi
   when=""
   case "$checked" in ''|*[!0-9]*) ;; *) when=" (checked $(age_in_words "$(( $(date +%s) - checked ))"))" ;; esac
   case "$verdict" in
@@ -14414,12 +14416,9 @@ case "$SYNC_SCRATCH_LEGACY_EVERY" in
     exit 2 ;;
 esac
 
-# How often a mutating run reclaims the abandoned scratch in the tool's own directory
-# (claude-config#314). Checked for the same reason as the two above: an unreadable value would
-# either sweep on every run or never, and both read as the feature working. 0 means every run.
 # How often `status` asks the installed claude whether it still accepts the option the lessons
-# review needs (claude-config#2982). 0 asks on every status. Checked like the two around it, since an
-# unreadable value would either ask every time or never, and both read as the check working.
+# review needs (claude-config#2982). 0 asks on every status. Checked like the intervals around it,
+# since an unreadable value would either ask every time or never, and both read as the check working.
 SYNC_REVIEW_OPTION_PROBE_EVERY="${SYNC_REVIEW_OPTION_PROBE_EVERY:-86400}"
 case "$SYNC_REVIEW_OPTION_PROBE_EVERY" in
   ''|*[!0-9]*)
@@ -14427,6 +14426,9 @@ case "$SYNC_REVIEW_OPTION_PROBE_EVERY" in
     exit 2 ;;
 esac
 
+# How often a mutating run reclaims the abandoned scratch in the tool's own directory
+# (claude-config#314). Checked for the same reason as the two above: an unreadable value would
+# either sweep on every run or never, and both read as the feature working. 0 means every run.
 SYNC_REAP_INTERVAL="${SYNC_REAP_INTERVAL:-86400}"
 case "$SYNC_REAP_INTERVAL" in
   ''|*[!0-9]*)

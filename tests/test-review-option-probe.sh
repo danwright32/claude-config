@@ -52,6 +52,7 @@ write_fake(){
   cat > "$FAKE" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$LOG"
+[ "${1:-}" = --version ] && [ -n "${FAKE_VFAIL:-}" ] && exit 1
 [ "${1:-}" = --version ] && { echo "${FAKE_V:-2.1.325} (Claude Code)"; exit 0; }
 prev=""; f=""
 for a in "$@"; do [ "$prev" = --append-system-prompt-file ] && f="$a"; prev="$a"; done
@@ -125,6 +126,21 @@ H7="$WORK/home-hang"
 out7="$(status_in "$H7" SYNC_CLAUDE_BIN="$FAKE" FAKE_MODE=hang SYNC_CLAUDE_CHECK_TIMEOUT=1)"; rc7=$?
 check "a claude that does not answer is said as not checked, with the bound" has "$out7" "did not answer within 1s"
 check "and status still finishes cleanly" [ "$rc7" -eq 0 ]
+# A hang is passing, so it is not kept for a day: the next status asks again, and a claude that now
+# answers is judged on that answer (lessons review of #2982).
+n7="$(probes)"
+out7b="$(status_in "$H7" SYNC_CLAUDE_BIN="$FAKE" FAKE_MODE=refuse SYNC_CLAUDE_CHECK_TIMEOUT=1)"
+check "a claude that did not answer is asked again on the next status" [ "$(probes)" -gt "$n7" ]
+check "and its answer then is the one said" has "$out7b" "no longer accepts --append-system-prompt-file"
+
+# ---- 6b. a version that cannot be read leaves every other field where it belongs ----
+# The answer travels as one line of fields; an empty version must not shift the option and the
+# check time into the wrong places (lessons review of #2982).
+H9="$WORK/home-noversion"
+out9="$(status_in "$H9" SYNC_CLAUDE_BIN="$FAKE" FAKE_MODE=refuse FAKE_VFAIL=1)"
+check "with the version unread the refusal still names the option" has "$out9" "no longer accepts --append-system-prompt-file"
+check "and says the version could not be read" has "$out9" "version could not be read"
+check "and says when it was checked" has "$out9" "(checked just now)"
 
 # ---- 7. no claude command: the reviews cannot run either, and other sections say so ----
 H8="$WORK/home-none"
