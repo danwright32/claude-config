@@ -427,6 +427,12 @@ run "cd $WORKCO && cd /tmp && gh issue create --repo danwright-test/public-notes
 check "#2909 and \$OLDPWD after a second cd: $out" refused
 run "cd $WORKCO && cd /tmp && gh issue create --repo danwright-test/public-notes --title ~- --body-file $NOTES/body.md"
 check "#2909 and ~- after a second cd: $out" refused
+# Any expansion keeps the cd judged, not a list of the ones known to read it back: $_ is the cd's own
+# last argument and ${DIRSTACK[0]} the directory itself (the lessons review of 312c22b).
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"\$_\" --body-file clean.md"
+check "#2909 and \$_, the cd's own argument: $out" refused
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"\${DIRSTACK[0]}\" --body-file clean.md"
+check "#2909 and \${DIRSTACK[0]}: $out" refused
 run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"\`basename .\`\" --body-file clean.md"
 check "#2909 and a backquoted command: $out" refused
 run "cd $WORKCO && pwd | gh issue create --repo danwright-test/public-notes --title x --body-file -"

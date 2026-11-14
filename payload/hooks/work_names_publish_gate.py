@@ -970,10 +970,11 @@ def _word_spans(text):
     return out
 
 
-# What in a command can read back the directory a cd entered: a substitution or backquote (realpath .,
-# git rev-parse --show-toplevel and the rest), pwd and dirs, the variables holding it, and the tilde
-# forms the shell expands to them (~+ and ~-, and ~N for the directory stack).
-READS_DIR = re.compile(r"\$\(|`|\bpwd\b|\bdirs\b|\bPWD\b|\bOLDPWD\b|~[-+0-9]")
+# What in a command can read back the directory a cd entered: ANY expansion, never a list of the ones
+# known to (three review rounds each found another: $OLDPWD, then $_ and ${DIRSTACK[0]}). So a $ of
+# any kind (a variable, a substitution), a backquote, pwd and dirs, and the tilde forms the shell
+# expands to the directory (~+ and ~-, and ~N for the directory stack).
+READS_DIR = re.compile(r"\$|`|\bpwd\b|\bdirs\b|~[-+0-9]")
 
 
 def posted_text(command):
@@ -992,7 +993,7 @@ def posted_text(command):
     blanking less can only refuse more.
 
     A cd is left in whenever anything in the command could read back the directory it entered and
-    post it (READS_DIR): a substitution, a backquote, pwd, dirs, $PWD, $OLDPWD, ~+ or ~-, as in
+    post it (READS_DIR): any $ expansion, a backquote, pwd, dirs, ~+ or ~-, as in
     `cd <checkout> && gh issue create --title "$(basename $PWD)"` (the lessons review of #2909)."""
     try:
         parts = []
