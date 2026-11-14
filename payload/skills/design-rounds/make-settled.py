@@ -420,7 +420,8 @@ def carry_exceptions(spec, base, exceptions, decisions, frames):
                      "the region Dan excepted, and any other is a new exception for him to approve"
                      % (xid, label, cid, json.dumps(x.get("region")), cid, json.dumps(src.get("region", "its whole frame"))))
             sw = s_frame.get(src["frame"], {}).get("width")
-            own = new_frame.get(x["frame"])
+            # A frame named as anything but text is refused below, by check_exceptions, in its own words.
+            own = new_frame.get(x["frame"]) if isinstance(x["frame"], str) else None
             if own is not None and own["width"] != sw:
                 fail("exception %s carries %s %s, said of a frame %s wide, onto frame %s, which is %d wide: a region "
                      "is the same place only in a frame of the same width" % (xid, label, cid, sw, x["frame"], own["width"]))
