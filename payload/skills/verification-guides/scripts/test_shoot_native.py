@@ -47,6 +47,13 @@ if mode == "nothing":
     print("Executed 0 tests, with 0 failures"); sys.exit(0)
 if mode == "sleep":
     time.sleep(60); sys.exit(0)
+if mode == "stubborn":
+    # A child that ignores SIGTERM, as a test runner mid build can, left behind its parent.
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c",
+                              "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"])
+    open(os.path.join(os.environ["STUB_SPY"], "child.pid"), "w").write(str(child.pid))
+    time.sleep(60); sys.exit(0)
 if mode == "notpng":
     open(out, "wb").write(b"GIF89a not a png")
 elif mode == "narrow":
@@ -215,7 +222,29 @@ class Shooting(Base):
         self.assertFalse(os.path.exists(self.out()))
 
     def test_a_deadline_that_is_not_a_number_is_a_usage_fault(self):
-        self.assertEqual(self.run_mode("ok", env={"SHOOT_NATIVE_TIMEOUT_S": "soon"}), 2)
+        for bad in ("soon", "0", "-5", "inf", "nan", "infinity"):
+            self.assertEqual(self.run_mode("ok", env={"SHOOT_NATIVE_TIMEOUT_S": bad}), 2, bad)
+
+    def test_a_child_that_ignores_the_stop_is_killed_with_the_rest_of_its_group(self):
+        grace = n.STOP_GRACE_S
+        n.STOP_GRACE_S = 0.5
+        try:
+            self.assertEqual(self.run_mode("stubborn", env={"SHOOT_NATIVE_TIMEOUT_S": "1"}), 1)
+        finally:
+            n.STOP_GRACE_S = grace
+        with open(os.path.join(self.spy, "child.pid")) as f:
+            pid = int(f.read())
+        deadline = time.monotonic() + 10
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                alive = False
+        if alive:
+            os.kill(pid, 9)
+        self.assertFalse(alive, "the child ignoring SIGTERM outlived the stop")
 
 
 class BothEnds(Base):

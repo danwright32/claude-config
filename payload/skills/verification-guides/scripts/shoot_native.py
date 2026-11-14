@@ -42,12 +42,14 @@ Exit codes: 0 saved, 1 not shot, 2 usage.
 """
 
 import json
+import math
 import os
 import re
 import signal
 import struct
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verification as v  # noqa: E402
@@ -56,7 +58,8 @@ VERB = "screenshot-native"
 HEIGHT = 900  # the window height shoot_web.mjs shoots a web screen at
 SCALES = (1, 2, 3)
 TIMEOUT_S = 1800
-STOP_GRACE_S = 5
+STOP_GRACE_S = 5  # how long each signal is given to empty the group
+POLL_S = 0.05
 LOG_TAIL = 15
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -118,7 +121,7 @@ def timeout_s(env):
         value = float(raw)
     except ValueError:
         value = -1
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise Usage("SHOOT_NATIVE_TIMEOUT_S %r is not a number of seconds above 0" % raw)
     return value
 
@@ -151,17 +154,39 @@ def _tail(path):
     return "\n".join(lines[-LOG_TAIL:]) or "(it printed nothing)"
 
 
+def _group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def _stop_group(proc):
+    """Stop the test's whole process group, SIGTERM then SIGKILL, judged by the GROUP emptying.
+
+    The shell wrapper exits on SIGTERM at once, so waiting on it alone would skip the SIGKILL a
+    child ignoring SIGTERM needs (L321). The wrapper is reaped on every poll, so its own exit never
+    keeps the group looking alive.
+    """
+    pgid = proc.pid
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
-            os.killpg(proc.pid, sig)
+            os.killpg(pgid, sig)
         except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=STOP_GRACE_S)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+            break
+        deadline = time.monotonic() + STOP_GRACE_S
+        while True:
+            proc.poll()
+            if not _group_alive(pgid):
+                proc.wait()
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(POLL_S)
+    proc.poll()
 
 
 def shoot(o, cmd, deadline_s, env):
