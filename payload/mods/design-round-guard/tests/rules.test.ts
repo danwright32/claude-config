@@ -79,6 +79,8 @@ import {
   passesByShape,
   caughtCheck,
   caughtCall,
+  cannotCheck,
+  removalFilledIn,
   scriptLanguage,
   asProgram,
   mentionedModHookFiles,
@@ -2410,7 +2412,42 @@ test('#2223: four times as much mod hook code takes under six times as long to r
 // guard itself passes on its tool and input alone. The catch now answers those as the hook would, and
 // still refuses every call the guard would have to read to judge.
 const WEDGED = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
-const HELD_WEDGED = `Blocked: the design round guard could not check this call (${WEDGED}), so it was stopped. Try again; if it keeps failing, tell Dan.`
+// Since #2727 said to have timed out and to be no refusal, so it is told apart from one that repeats.
+const HELD_WEDGED = `Blocked: the design round guard could not check this call because it timed out (${WEDGED}), so it was stopped. This is not a refusal: try the same call again; if it keeps timing out, tell Dan.`
+// #2727: only a timeout is said to be one; every other failure keeps its words and says nothing of
+// timing out, since the guard measured no such thing (L11).
+test('#2727: a failure that timed out says so and that it is no refusal; any other failure does not', () => {
+  for (const why of [WEDGED, 'the hook timed out after 1000ms', 'operation timeout'])
+    expect([why, cannotCheck(why).includes('timed out'), cannotCheck(why).includes('This is not a refusal')]).toEqual([why, true, true])
+  for (const why of ['EACCES: /w/locked', 'mod-kit: the branch reader failed', 'unknown failure'])
+    expect([why, cannotCheck(why)]).toEqual([why, `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`])
+})
+
+// #2960: what fills in a removal's name where mod-kit gave it neither a path nor a folder: a command's
+// output or a shell variable anywhere in it, its folder included; a name in the temp folder itself
+// that does not climb out of it, nothing. Read from the word as mod-kit gives it, its quotes taken off.
+test('#2960: removalFilledIn names what fills in a removal anywhere in its name, and leaves the temp folder', () => {
+  for (const [word, filled] of [
+    ['$ROOT/app', 'variable'],
+    ['${ROOT:?}/app/', 'variable'],
+    ['$PWD/app', 'variable'],
+    ['$PWD', 'variable'],
+    ['app/$NAME', 'variable'],
+    ['$TARGET', 'variable'],
+    ['$TMPDIR/../app', 'variable'],
+    ['${TMPDIR}/x/$Y', 'variable'],
+    ['$(git rev-parse --show-toplevel)/app', 'output'],
+    ['`cat list`/app', 'output'],
+    ['$(cat list.txt)', 'output'],
+    ['$TMPDIR', null],
+    ['$TMPDIR/build-cache', null],
+    ['${TMPDIR}/a/b.css', null],
+    ['app/page.tsx', null],
+    ['notes', null],
+  ] as [string, 'variable' | 'output' | null][])
+    expect([word, removalFilledIn(word)]).toEqual([word, filled])
+})
+
 test('#2726: a call the guard passes on its tool and input alone is told apart from one it must read', () => {
   expect(passesByShape('AskUserQuestion', { questions: [{ question: 'Which one?' }] })).toBe(true)
   expect(passesByShape('Read', { file_path: '/w/slate/app/page.tsx' })).toBe(true)
