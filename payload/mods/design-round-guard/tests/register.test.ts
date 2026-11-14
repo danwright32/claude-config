@@ -997,6 +997,51 @@ test("#2792: taking away a throwaway copy of a repository in the session notes f
   expect(w.ran.length).toBe(passes.length)
 })
 
+// #2934: a removal whose name the shell fills in, a variable the command never sets or a command's
+// output, reached no judged target at all, so `cd /w/slate && rm -rf "$TARGET"` ran unasked in the
+// project itself: mod-kit gives such a word neither a path nor a folder. Its value may be any file,
+// anywhere, so it is held as a removal the guard cannot follow, after a cd into the session notes
+// folder too, where the value may climb out. A variable the command sets to a plain name is judged
+// by that name, and one every assignment gives bare mktemp output names a new file (#2171).
+test('#2934: a removal of a name a shell variable or a command\'s output fills in is held as one the guard cannot follow; one set to a plain name is judged by it', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/page.tsx': 'export default function Page() { return <main /> }\n', '/w/slate/app/globals.css': 'a{}\n' } })
+  for (const [command, word, kind] of [
+    ['cd /w/slate && rm -rf "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['rm -rf "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['cd /w/slate && rm -f app/$NAME', 'app/$NAME', "a shell variable's value"],
+    ['cd /w/slate && mv "$FROM" /tmp/kept', '$FROM', "a shell variable's value"],
+    ['cd /w/slate && rm -rf $(cat list.txt)', '$(cat list.txt)', "a command's output"],
+    ['cd /w/slate && rm -rf `cat list.txt`', '`cat list.txt`', "a command's output"],
+    // The rev-parse Dan trusts to name no file a script is handed (#1832) names the checkout itself here.
+    ['rm -rf "$(git rev-parse --show-toplevel)"', '$(git rev-parse --show-toplevel)', "a command's output"],
+    [`cd ${NOTES_FOLDER} && rm -rf "$TARGET"`, '$TARGET', "a shell variable's value"],
+    [`cd ${NOTES_FOLDER}/review && rm -rf $(cat list.txt)`, '$(cat list.txt)', "a command's output"],
+    // What git takes away (#1136) the same: git rm, and the source git mv moves.
+    ['cd /w/slate && git rm -r "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['cd /w/slate && git rm $(cat list.txt)', '$(cat list.txt)', "a command's output"],
+    ['cd /w/slate && git mv "$FROM" docs/kept', '$FROM', "a shell variable's value"],
+    // A temp variable given another value as well may hold any name.
+    ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D"', '$D', "a shell variable's value"],
+  ] as [string, string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
+  }
+  // A screen file under a folder a variable names is said to be taken away too, never written.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f "$ROOT/app/page.tsx"' }))).toContain('where the command takes away $ROOT/app/page.tsx could not be followed')
+  expect(w.ran).toEqual([])
+  // Set to a plain name: judged by it, so app waits on the issue's answer as app itself does.
+  const app = refusalOf(await call($, { tool: 'Bash', command: 'TARGET=app; cd /w/slate && rm -rf "$TARGET"' }))
+  expect([app.includes('app/page.tsx'), app.includes('could not be followed')]).toEqual([true, false])
+  for (const command of [
+    'TARGET=notes; cd /w/slate && rm -rf "$TARGET"',
+    'D=$(mktemp -d); cd /w/slate && rm -rf "$D"',
+    'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; rm -f "$T"',
+    // A folder variable names a folder outside every screen path here, as #1953 reads it.
+    'rm -rf "$TMPDIR"',
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(4)
+})
+
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {
   const w = world($, on, { agents: ['agent-a1'] })
   const r = await call($, { tool: 'Edit', file_path: '/w/slate-wt/app/globals.css', old_string: 'a{}', new_string: 'a{color:red}', agentId: 'agent-a1' })

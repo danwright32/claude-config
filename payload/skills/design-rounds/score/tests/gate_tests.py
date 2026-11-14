@@ -17,6 +17,7 @@ SCORE_DIR = os.path.dirname(HERE)
 HOOKS = os.path.normpath(os.path.join(SCORE_DIR, "..", "..", "..", "hooks"))
 GATE_SH = os.path.join(HOOKS, "design-score-gate.sh")
 SCORE = os.path.join(SCORE_DIR, "design_score.py")
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, SCORE_DIR)
 import score_github as sg  # noqa: E402
 

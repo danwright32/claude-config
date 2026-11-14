@@ -25,6 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, str(Path(__file__).parent))
 from render_card import notes_blocks  # noqa: E402
 

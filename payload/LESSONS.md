@@ -8276,6 +8276,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Codebase hygiene
 
+- **L854. A branch that handles a whole family as its one current member sends that member's
+  output for every later one, and a cast hides it, so switch on the member and refuse an unknown
+  one.**
+  (slate#4918, 2026-11-14)
+  SHORT: A branch treating a family as its one member mishandles every later one; switch on the member and refuse unknowns.
+
 - **L848. A file exclusion in a source scanning guard must be anchored to the directory and
   suffix it was written for, never a bare name pattern, because any source file elsewhere whose
   name happens to match is silently exempt from the guard that exists to catch it.**

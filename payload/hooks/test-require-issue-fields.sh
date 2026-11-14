@@ -359,7 +359,7 @@ done
 # ============================ the table is the extension point ============================
 # The point of the refactor: a new rule is one entry, not another copy of the hook. The Open
 # questions section (#1279) is the fourth, in the table like the rest.
-rules_n="$(python3 -c "
+rules_n="$(python3 -B -c "
 import importlib.util, os
 s = importlib.util.spec_from_file_location('g', '$DIR/issue_field_gate.py')
 m = importlib.util.module_from_spec(s); os.environ['GATE_DIR'] = '$DIR'; s.loader.exec_module(m)
