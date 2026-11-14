@@ -6,7 +6,7 @@ lessons review before any merge; read any one in full with
 ~/.claude/LESSONS-INDEX-<section>.md.
 
 - Building with AI (building-with-ai): 20 lessons, 8 in the core
-- Codebase hygiene (codebase-hygiene): 52 lessons, 30 in the core
+- Codebase hygiene (codebase-hygiene): 53 lessons, 30 in the core
 - Cross-system reliability (cross-system-reliability): 121 lessons, 35 in the core
 - Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 46 lessons, 17 in the core

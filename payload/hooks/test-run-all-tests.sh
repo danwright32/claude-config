@@ -2827,6 +2827,24 @@ FLP_KEPT="$TMPROOT/flaky-pass-kept"
 HOOK_TESTS_FLAKY_OUTPUT="$FLP_KEPT" HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FLP" >/dev/null 2>&1
 [ ! -e "$FLP_KEPT" ] && check "#1788 a passing run keeps no output" ok \
   || check "#1788 a passing run keeps no output" "$(ls -R "$FLP_KEPT" 2>&1)"
+# The runner keeps that output by age per suite, never the newest 20 overall (#2895, L202). The
+# newest 20 was about ten days of flakes, so the one log #1919 named was deleted before anyone read
+# it. A folder past 20, one suite flaking over and over and another flaking once long ago: the rare
+# suite's log survives as its suite's newest, and the busy suite's oldest copies go.
+FLR_KEPT="$TMPROOT/flaky-retention"; mkdir -p "$FLR_KEPT"
+for i in 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do
+  printf 'busy\n' > "$FLR_KEPT/202001${i}T000000Z-test-busy.sh.Bz${i}xx.log"
+done
+printf 'rare\n' > "$FLR_KEPT/20191201T000000Z-test-rare.sh.Rare01.log"
+rm -f "$MARKER"
+HOOK_TESTS_FLAKY_OUTPUT="$FLR_KEPT" HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FL" >/dev/null 2>&1
+[ -f "$FLR_KEPT/20191201T000000Z-test-rare.sh.Rare01.log" ] \
+  && check "#2895 a FLAKY suite's kept output stays while it is its suite's newest, past 20 files" ok \
+  || check "#2895 a FLAKY suite's kept output stays while it is its suite's newest, past 20 files" "$(ls "$FLR_KEPT" 2>&1)"
+{ [ ! -e "$FLR_KEPT/20200110T000000Z-test-busy.sh.Bz10xx.log" ] && [ -f "$FLR_KEPT/20200131T000000Z-test-busy.sh.Bz31xx.log" ] \
+  && [ "$(find "$FLR_KEPT" -name '*-test-flaky.sh.*.log' | wc -l | tr -d ' ')" = 1 ]; } \
+  && check "#2895 and a busy suite's oldest copies go, its newest and this run's stay" ok \
+  || check "#2895 and a busy suite's oldest copies go, its newest and this run's stay" "$(ls "$FLR_KEPT" 2>&1)"
 
 # A recheck that HANGS is a third outcome, and it has its own words (L11). A suite that fails and
 # then hangs on the second run is not a flake and is not a clean failure, and without a deadline it

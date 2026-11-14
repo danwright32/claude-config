@@ -20,6 +20,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKILL = HERE.parent
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, str(SKILL))
 
 import analyze  # noqa: E402

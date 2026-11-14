@@ -49,7 +49,10 @@ const modKit: { name: string; register: Register } = {
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
-          for (const root of ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
+          // #2792: and three throwaway copies of slate, each a checkout of its own: in this session's
+          // notes folder, in its scratchpad, and in a folder shaped like the notes folder inside slate.
+          const copies = ['/Users' + '/dan/.claude/state/session-notes/-w-slate/s1/review/slate-copy', '/private/tmp/claude-501/-w-slate/s1/scratchpad/slate-copy', '/w/slate/.claude/state/session-notes/-w-slate/s1/review/slate-copy']
+          for (const root of [...copies, '/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
           return null
         },
         branch: async (input: { path: string }) => ask('branch', input),
@@ -116,6 +119,14 @@ const HOME = `${'/Users'}/dan`
 // The moment every test's clock starts at.
 const T0 = Date.UTC(2026, 9, 9, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34ef56.json`
+// #2792: three throwaway copies of slate, each a checkout of its own, as the stand-in's walk finds
+// them: in this session's notes folder, in its scratchpad, and in a folder shaped like the notes
+// folder inside slate itself.
+const NOTES_FOLDER = `${HOME}/.claude/state/session-notes/-w-slate/s1`
+const COPY_IN_NOTES = `${NOTES_FOLDER}/review/slate-copy`
+const COPY_IN_SCRATCH = '/private/tmp/claude-501/-w-slate/s1/scratchpad/slate-copy'
+const COPY_IN_SLATE = '/w/slate/.claude/state/session-notes/-w-slate/s1/review/slate-copy'
+const COPIES = [COPY_IN_NOTES, COPY_IN_SCRATCH, COPY_IN_SLATE]
 
 type Dialog = { answer?: string; afk?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
@@ -133,7 +144,7 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 // as `dialog` says), every call that ran, every card drawn and every git command asked.
 const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
-  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
+  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop', ...Object.fromEntries(COPIES.map(c => [c, 'main'])) }
   const store: Record<string, unknown> = {}
   // `shell`: what a Bash command writes when it runs, by path (#1296); `writeFails`: the paths
   // $.fs.write refuses; `afterWrite`: run once a write lands (another writer arriving, say);
@@ -239,7 +250,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (cmd === '__modkit' && args[0] === 'branch') {
       if (ctl.branchFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit: the branch reader failed', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const { path } = JSON.parse(String(args[1])) as { path: string }
-      const root = ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
+      const root = [...COPIES, '/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
     }
     if (cmd === '__modkit' && args[0] === 'repo') {
@@ -949,6 +960,86 @@ test('#2395: a whole folder whose files git cannot list is held, saying so; one 
   // A folder in no checkout, written from one in no checkout, is in no project.
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R /tmp/kit/ /tmp/out/' }))).toBe('')
   expect(w.ran.length).toBe(1)
+})
+
+// #2792: on 2026-11-11 a read only review agent cloned a repository into the session's notes folder
+// to read it, and `rm -rf` of that copy was held as an unsettled design change, twice, so two copies
+// (about 4 GB) were left behind. Taking away a throwaway copy there, or in the session's scratchpad,
+// changes no screen of any product.
+test("#2792: taking away a throwaway copy of a repository in the session notes folder, or in the session's scratchpad, runs unasked; a write there, and a delete anywhere else, is held as before", withKit, async ($, on) => {
+  const copy = (root: string) => ({ [`${root}/app/page.tsx`]: 'export default function Page() { return <main /> }\n', [`${root}/app/globals.css`]: 'a{}\n' })
+  const w = world($, on, { files: { ...copy(COPY_IN_NOTES), ...copy(COPY_IN_SCRATCH), ...copy(COPY_IN_SLATE), ...copy('/w/slate') } })
+  const passes = [
+    `rm -rf ${COPY_IN_NOTES}`,
+    'rm -rf ~/.claude/state/session-notes/-w-slate/s1/review/slate-copy',
+    `cd ${NOTES_FOLDER}/review && rm -rf slate-copy`,
+    `rm -f ${COPY_IN_NOTES}/app/page.tsx`,
+    `rm -rf ${NOTES_FOLDER}/review/slate-*`,
+    `rm -rf ${COPY_IN_SCRATCH}`,
+    `rm ${COPY_IN_SCRATCH}/app/globals.css`,
+  ]
+  for (const command of passes) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(passes.length)
+  // Listing the copy's files is what a busy Mac is slowest at, so a copy being taken away is never listed.
+  expect(w.gitRuns.filter(g => g.includes('ls-files'))).toEqual([])
+  // Still held: a write into the copy, which a push could carry to the product; a delete in a folder
+  // only shaped like the notes folder; one reaching out of it; and one in the project itself.
+  for (const [command, shown] of [
+    [`printf 'a{color:red}' > ${COPY_IN_NOTES}/app/globals.css`, 'app/globals.css'],
+    [`rm -rf ${COPY_IN_SLATE}`, 'app/page.tsx'],
+    [`rm -rf ${NOTES_FOLDER}/../../../../../../../w/slate/app`, 'app/page.tsx'],
+    [`rm -rf ${COPY_IN_NOTES} /w/slate/app`, 'app/page.tsx'],
+    ['cd /w/slate && rm -rf app', 'app/page.tsx'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes(shown)]).toEqual([command, true])
+  }
+  expect(w.ran.length).toBe(passes.length)
+})
+
+// #2934: a removal whose name the shell fills in, a variable the command never sets or a command's
+// output, reached no judged target at all, so `cd /w/slate && rm -rf "$TARGET"` ran unasked in the
+// project itself: mod-kit gives such a word neither a path nor a folder. Its value may be any file,
+// anywhere, so it is held as a removal the guard cannot follow, after a cd into the session notes
+// folder too, where the value may climb out. A variable the command sets to a plain name is judged
+// by that name, and one every assignment gives bare mktemp output names a new file (#2171).
+test('#2934: a removal of a name a shell variable or a command\'s output fills in is held as one the guard cannot follow; one set to a plain name is judged by it', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/app/page.tsx': 'export default function Page() { return <main /> }\n', '/w/slate/app/globals.css': 'a{}\n' } })
+  for (const [command, word, kind] of [
+    ['cd /w/slate && rm -rf "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['rm -rf "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['cd /w/slate && rm -f app/$NAME', 'app/$NAME', "a shell variable's value"],
+    ['cd /w/slate && mv "$FROM" /tmp/kept', '$FROM', "a shell variable's value"],
+    ['cd /w/slate && rm -rf $(cat list.txt)', '$(cat list.txt)', "a command's output"],
+    ['cd /w/slate && rm -rf `cat list.txt`', '`cat list.txt`', "a command's output"],
+    // The rev-parse Dan trusts to name no file a script is handed (#1832) names the checkout itself here.
+    ['rm -rf "$(git rev-parse --show-toplevel)"', '$(git rev-parse --show-toplevel)', "a command's output"],
+    [`cd ${NOTES_FOLDER} && rm -rf "$TARGET"`, '$TARGET', "a shell variable's value"],
+    [`cd ${NOTES_FOLDER}/review && rm -rf $(cat list.txt)`, '$(cat list.txt)', "a command's output"],
+    // What git takes away (#1136) the same: git rm, and the source git mv moves.
+    ['cd /w/slate && git rm -r "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['cd /w/slate && git rm $(cat list.txt)', '$(cat list.txt)', "a command's output"],
+    ['cd /w/slate && git mv "$FROM" docs/kept', '$FROM', "a shell variable's value"],
+    // A temp variable given another value as well may hold any name.
+    ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D"', '$D', "a shell variable's value"],
+  ] as [string, string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
+  }
+  // A screen file under a folder a variable names is said to be taken away too, never written.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f "$ROOT/app/page.tsx"' }))).toContain('where the command takes away $ROOT/app/page.tsx could not be followed')
+  expect(w.ran).toEqual([])
+  // Set to a plain name: judged by it, so app waits on the issue's answer as app itself does.
+  const app = refusalOf(await call($, { tool: 'Bash', command: 'TARGET=app; cd /w/slate && rm -rf "$TARGET"' }))
+  expect([app.includes('app/page.tsx'), app.includes('could not be followed')]).toEqual([true, false])
+  for (const command of [
+    'TARGET=notes; cd /w/slate && rm -rf "$TARGET"',
+    'D=$(mktemp -d); cd /w/slate && rm -rf "$D"',
+    'cd /w/slate && T=$(mktemp); git show HEAD:app/page.tsx > "$T"; rm -f "$T"',
+    // A folder variable names a folder outside every screen path here, as #1953 reads it.
+    'rm -rf "$TMPDIR"',
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(4)
 })
 
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {

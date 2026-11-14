@@ -14,6 +14,7 @@ import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, HERE)
 
 import egress  # noqa: E402

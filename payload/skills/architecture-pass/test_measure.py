@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).parent
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, str(HERE))
 import measure  # noqa: E402
 

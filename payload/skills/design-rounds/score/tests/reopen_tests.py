@@ -22,6 +22,7 @@ SCORE_DIR = os.path.dirname(HERE)
 HOOKS = os.path.normpath(os.path.join(SCORE_DIR, "..", "..", "..", "hooks"))
 CHECK_PY = os.path.join(HOOKS, "design-score-reopen.py")
 HOOK_SH = os.path.join(HOOKS, "design-score-reopen.sh")
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, SCORE_DIR)
 sys.path.insert(0, HERE)
 import fake_world  # noqa: E402

@@ -68,7 +68,7 @@ case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
-bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
+bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 
 if [ -z "$SETTINGS" ] || [ ! -f "$SETTINGS" ]; then
   echo "test-gates-fail-closed: no settings file beside $DIR names which hooks are registered, so no gate could be enumerated." >&2
@@ -678,6 +678,7 @@ bash_call(){ python3 -c 'import json, sys; print(json.dumps({"command": sys.argv
   judged check-rtk-init.sh            Bash "$(bash_call 'rtk init -g')" '{}' refuse
   # In zsh -c, so it is refused whatever shell runs this suite (bash on the Linux runner).
   judged check-zsh-builtins.sh        Bash "$(bash_call "zsh -c 'log show --last 1m'")" '{}' refuse
+  judged check-screenshot-window.sh   Bash "$(bash_call 'screencapture -x /tmp/shot.png')" '{}' refuse
   judged check-wrapped-commands.sh    Bash "$(bash_call 'eval $CMD && git status')" '{}' refuse
   judged stacked-branch-delete-gate.sh Bash "$(bash_call 'git push origin :feat/x')" '{}' refuse
   # Five gates let a call they cannot parse through, saying so, by the decision each records in its

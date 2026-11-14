@@ -2445,7 +2445,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2880,6 +2880,18 @@ find no rtk init; both with the full suite running beside it (load average 234)
 outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070
 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal
 MacBook, 7,604 (5.9%) reach the judge and 31 are refused
+
+</td></tr>
+<tr><td>
+
+`check-screenshot-window.sh` (#2908)
+
+</td><td>
+
+2026-11-13: 0.004 to 0.010 seconds on `git push -u origin feat/2908-screenshot-window`, five
+readings at load average 22 to 43, timed from outside, since a command naming neither screencapture
+nor a shell script leaves before python starts; 0.055 to 0.090 seconds on a capture or a script run,
+which the judge reads
 
 </td></tr>
 <tr><td>
@@ -3760,6 +3772,20 @@ handed an endpoint or a file whose text names one. `claude mcp add` and the othe
 commands that change only Claude Code's settings are not read as writing the files they name, so
 `claude mcp add lr -- npx -y @scope/name@1; npx -y @scope/name@1 install` is no longer refused.
 
+Since claude-config#2792 a file handed to a shell script as an argument is read as what the file
+itself says it is: JavaScript, TypeScript or Python by its extension or its `#!` is read as that,
+its imports followed, as it already was when the script it is handed to is a node script. Before, a
+shell launcher made the gate read the file as shell commands: on 2026-11-11
+`./node_modules/.bin/vitest run <a test file>` was refused as a Slack post, because the launcher
+pnpm writes there is a shell script and `return b => // a comment` in the test read as a command
+writing a file named `//`. A file that says nothing (no extension, no `#!`), or whose `#!` names a
+shell, is read as commands still, and so is the file a shell is run on (`bash named.ts`). Two things
+change for a caller. Newly refused: a test file whose imports reach a module that posts, handed to a
+shell launcher, as it already was when handed to a node script. Newly passing: shell commands in a
+file named `.ts`, `.js` or `.py` with no `#!`, handed to a shell script as an argument, are no
+longer followed as shell, so a line in it that runs a script that posts is not seen; an endpoint the
+file names in its own text is refused as before.
+
 Since claude-config#2887 the code a shell or an interpreter reads on its input is read: a file `cat`
 or `<` feeds it (`cat post.sh | sh`, `cat x.py | python3`) or a here string of one file's text
 (`bash <<< "$(cat post.sh)"`) is read as the same script handed by name, and text the gate can work
@@ -4430,10 +4456,13 @@ order its runs by numbers from hardware it does not have.
 Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by
 the time and the suite, and the FAIL line names that file. That output used to live only in the
 run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few
-lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned
-after each write to the newest 20 copies, by the time in their names, and nothing else in the folder
-is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep
-nothing, and the FAIL line says so.
+lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. After
+each write a copy stays while it is under 30 days old by the time in its name, or while it is one of
+the newest 3 copies of its own suite however old, and the folder is held under 20 MB in all, oldest
+first. It used to keep the newest 20 copies overall, about ten days of flakes, so the one log #1919
+named was gone before anyone read it (#2895, L202). Nothing else in the folder is touched
+(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which still keeps its newest 20). Set
+it to empty to keep nothing, and the FAIL line says so.
 
 </td></tr>
 <tr><td>
@@ -6776,7 +6805,13 @@ beside it) and any name when the disk cannot answer. The gap, from the lessons r
 reads text, not the folder a join's variable holds, so a new look changing file at the very top of a
 checkout, joined onto the checkout by a program that also names the scratchpad, passes. Every
 refusal of a look changing edit, and Dan's Run /design-rounds, says a round's files go in the
-scratchpad, so a held round is never sent back to /design-rounds, which held it. Since #1165 a
+scratchpad, so a held round is never sent back to /design-rounds, which held it. Since #2792 a file
+or folder taken away (`rm`, `rm -rf`, a pattern) in the session's scratchpad, or anywhere inside the
+session notes folder (`~/.claude/state/session-notes/`, any session's, known by the home folder), is
+never held and its files are never listed, whatever checkout it is: a copy of a repository an agent
+cloned there to read is a checkout of its own, and deleting it was held as a look change. A write
+into such a copy, a delete in a folder only shaped like the notes folder, and one that climbs out of
+it are judged as before. Since #1165 a
 python program is judged only by the names it can open, never those in what it holds as data (a
 comment, a block spanning lines it puts in a file), read from mod-kit's `code`; where data cannot be
 told from code (another language, a program that runs a process, builds code at run time or cuts
@@ -7892,6 +7927,21 @@ that declares it. A route's 409 answer, a log line or a thrown error beside the 
 whose sends cannot be traced (a workflow, a shell script, any other language, a send the reading
 cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
 docstring is never message text (#2574).
+One kind of string passes in a shell script that posts (#2792): one whose every place in the script
+is a whole argument of an `echo` or `printf` sent to the error stream and nowhere else
+(`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch, a group or a function.
+Only a log reads it. The script is read as its commands by mod-kit's reader
+(`$.modkit.pipeline`), never by the guard itself, and `rules.ts` `shellLogWording` judges those.
+The same string on standard output, piped, written to a file, set in a variable, handed to any
+other command, inside a command substitution or holding one, inside a heredoc, or in a script that
+points its own streams somewhere (`exec 2>...`) or opens a heredoc that never ends is held as
+before, and so is a log line in ruby or any other language the guard does not read. The gap: a
+caller that joins the error stream of the function a log line is in to what it posts
+(`tell 2>&1 | curl ...`) is not followed, so such a line can reach Slack unseen. Measured
+2026-11-13 on one Mac: of the 22 edits its session transcripts show the guard holding, all in this
+repository's own files, 3 were this kind (an advice line a gate prints to the error stream); and
+of this repository's 553 shell scripts none is read as posting to Slack by itself today, so the
+rule changes nothing here now. Shell scripts in other repositories were not counted.
 No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
 a template, copy module or script whose own code names nothing of Slack, however a sender reaches
 it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
