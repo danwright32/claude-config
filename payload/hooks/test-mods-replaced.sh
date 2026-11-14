@@ -22,7 +22,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 pass=0; fail=0
 check_eq(){ # check_eq <name> <expected> <actual>
-  if [ "$2" = "$3" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1"; echo "  expected: $2"; echo "  actual:   $3"; fi
+  if [ "$2" = "$3" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); { echo "FAIL: $1"; echo "  expected: $2"; echo "  actual:   $3"; } | sed '2,$s/^/  /'; fi
 }
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 H="$TMP/home"

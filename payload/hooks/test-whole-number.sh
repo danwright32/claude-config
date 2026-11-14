@@ -30,7 +30,7 @@ ROOT="${WHOLE_NUMBER_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/n
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 # ---------------------------------------------------------------------------
 # The helper.

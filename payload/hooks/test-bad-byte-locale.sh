@@ -26,7 +26,7 @@ case "${WORK%/}" in ''|/|"${HOME%/}") echo "refusing to run: throwaway directory
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
-bad(){ fail=$((fail + 1)); echo "FAIL: $1"; }
+bad(){ fail=$((fail + 1)); echo "FAIL: $1" | sed '2,$s/^/  /'; }
 check_eq(){ if [ "$2" = "$3" ]; then ok; else bad "$1: wanted '$2', got '$3'"; fi; }
 
 if ! . "$DIR/lib/test_bad_byte_locale.sh"; then
