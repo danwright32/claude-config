@@ -203,7 +203,7 @@ expect("but not under another key", not jc.lookup(cache, "k4"))
 entry = os.path.join(cache, "k3.json")
 os.chmod(entry, 0)
 if os.access(entry, os.R_OK):
-    print("UNMEASURED: this user reads a file with no permissions, so an unreadable entry cannot be made")
+    print("SUITE-PART-UNMEASURED an entry the cache cannot read, because this user reads a file with no permissions, so one cannot be made")
 else:
     expect("an entry that cannot be read is a miss", not jc.lookup(cache, "k3") and "could not be read" in traced())
 os.chmod(entry, 0o600)
@@ -236,7 +236,7 @@ print("; ".join(bad) or "ok")
 PY
 out="$(env -u SLACK_GATE_CACHE_DIR python3 -B "$T/units.py" "$DIR/slack_drafts_only_gate.py" "$T/work" 2>&1)"
 case "$out" in
-  *UNMEASURED*) echo "SUITE-PART-UNMEASURED ${out%%$'\n'*}"; out="${out#*$'\n'}" ;;
+  SUITE-PART-UNMEASURED*) echo "${out%%$'\n'*}"; out="${out#*$'\n'}" ;;
 esac
 check "the stand ins, failing closed, and the size bound" "$out"
 

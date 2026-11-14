@@ -88,7 +88,7 @@ def _sha(data):
 
 def _read_hash(path):
     """The hash of a file's bytes, as the gate's read of it finds them, or None past MAX_READ."""
-    with builtins.open(path, "rb") as f:
+    with builtins.open(path, mode="rb") as f:
         data = f.read(MAX_READ + 1)
     return None if len(data) > MAX_READ else _sha(data)
 
@@ -202,11 +202,11 @@ class Recorder:
         if (not isinstance(file, str) or set(mode) - set("rbt") or buffering != -1 or not closefd
                 or opener is not None):
             self.taint(f"open({file!r}, {mode!r}) is not a plain read")
-            return builtins.open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+            return builtins.open(file, mode, buffering, encoding=encoding, errors=errors, newline=newline, closefd=closefd, opener=opener)
         self.inside += 1
         try:
             try:
-                with builtins.open(file, "rb") as f:
+                with builtins.open(file, mode="rb") as f:
                     data = f.read(MAX_READ + 1)
             except Exception as e:
                 answer = ["raise", type(e).__name__, getattr(e, "errno", None)]
@@ -216,7 +216,7 @@ class Recorder:
                 raise
             if len(data) > MAX_READ:
                 self.taint(f"{file} is larger than {MAX_READ} bytes")
-                return builtins.open(file, mode, buffering, encoding, errors, newline)
+                return builtins.open(file, mode, buffering, encoding=encoding, errors=errors, newline=newline)
         finally:
             self.inside -= 1
         answer = ["ok", _sha(data)]
@@ -426,7 +426,7 @@ def trace(line):
     where = _os.environ.get("SLACK_GATE_CACHE_TRACE")
     if where:
         try:
-            with builtins.open(where, "a") as f:
+            with builtins.open(where, "a", encoding="utf-8", errors="replace") as f:
                 f.write(line + "\n")
         except OSError:
             pass
@@ -500,7 +500,7 @@ def call(command, cwd, code, here, gate_file, as_itself):
 
 
 def file_hash(path):
-    with builtins.open(path, "rb") as f:
+    with builtins.open(path, mode="rb") as f:
         return _sha(f.read())
 
 
@@ -512,12 +512,12 @@ def key(command, cwd, code):
         "python": [sys.version, sys.executable, sys.platform, list(sys.path), list(sys.flags)],
         "env": {n: _os.environ.get(n) for n in KEY_ENV},
     }
-    return _sha(json.dumps(parts, sort_keys=True).encode())
+    return _sha(json.dumps(parts, sort_keys=True).encode("utf-8", errors="surrogatepass"))
 
 
 def _checksum(entry):
     body = {k: entry[k] for k in ("format", "key", "verdict", "reads")}
-    return _sha(json.dumps(body, sort_keys=True).encode())
+    return _sha(json.dumps(body, sort_keys=True).encode("utf-8", errors="surrogatepass"))
 
 
 def changed(reads):
@@ -539,7 +539,7 @@ def lookup(dirpath, k):
     same now. Any doubt is False."""
     path = _os.path.join(dirpath, k + ".json")
     try:
-        with builtins.open(path, "rb") as f:
+        with builtins.open(path, mode="rb") as f:
             raw = f.read(MAX_ENTRY + 1)
     except FileNotFoundError:
         trace("miss: no entry")
@@ -587,7 +587,7 @@ def store(dirpath, k, recorder):
         return
     entry = {"format": FORMAT, "key": k, "verdict": "allow", "reads": reads}
     entry["sum"] = _checksum(entry)
-    data = json.dumps(entry).encode()
+    data = json.dumps(entry).encode("utf-8", errors="surrogatepass")
     if len(data) > MAX_ENTRY:
         trace(f"not stored: the entry would be {len(data)} bytes")
         return
