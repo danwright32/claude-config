@@ -132,7 +132,7 @@ D6="$TMPROOT/six"; mkdir -p "$D6"
 for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
   printf 'busy\n' > "$D6/202611${d}T000000Z-test-busy.sh.Bz${d}xx.log"
 done
-# The busy suite's older copies, beyond 30 days and beyond its newest 3.
+# The busy suite's older copies, beyond 30 days and beyond its newest 2.
 for d in 01 02 03 04; do printf 'busy old\n' > "$D6/202609${d}T000000Z-test-busy.sh.Bo${d}xx.log"; done
 # A suite that flaked once, 45 days ago: the log an issue cites. It is its suite's newest copy.
 printf 'rare\n' > "$D6/20260929T190147Z-test-rare.sh.Rare01.log"
