@@ -250,8 +250,8 @@ def make(param_re, unknown_dir):
 
         def git_diff_names(self, t, text):
             """Whether the loop word t is `$(git diff --name-only ...)` (claude-config#2910): git run
-            by name, not a function or alias of the text, with only plain words (revisions, ranges,
-            pathspecs) and options that cannot change what it prints. What git prints holds no ..
+            by name, not a function or alias of the text, with options that cannot change what it
+            prints and revisions only, never a pathspec. What git prints holds no ..
             part; a tracked name with a space can still split into a word that does, which Dan's
             decision accepts (see the module docstring).
 
