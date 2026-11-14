@@ -41,6 +41,7 @@ import os
 import re
 import sys
 
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 # The one reader of a settled design's JSON blocks, shared with the design match score (#1364).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from design_file import find_blocks, read_requirements  # noqa: E402

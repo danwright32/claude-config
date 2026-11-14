@@ -2445,7 +2445,7 @@ Reading an old checkout is the other half, and that one is said rather than refu
 
 ### What a push actually waits on
 
-Forty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Forty-one PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -2880,6 +2880,18 @@ find no rtk init; both with the full suite running beside it (load average 234)
 outside, since a command not naming log as a word leaves before python starts; 0.055 to 0.070
 seconds on `git log -1`, which the judge reads. Over 129,500 past Bash commands on the personal
 MacBook, 7,604 (5.9%) reach the judge and 31 are refused
+
+</td></tr>
+<tr><td>
+
+`check-screenshot-window.sh` (#2908)
+
+</td><td>
+
+2026-11-13: 0.004 to 0.010 seconds on `git push -u origin feat/2908-screenshot-window`, five
+readings at load average 22 to 43, timed from outside, since a command naming neither screencapture
+nor a shell script leaves before python starts; 0.055 to 0.090 seconds on a capture or a script run,
+which the judge reads
 
 </td></tr>
 <tr><td>
@@ -7744,6 +7756,11 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once
+for the folder (#2920): every held file under it is named in one refusal, and one decision covers
+them all, each file claimed and decided on record, where it was held once per file, each needing its
+own decision and a resend. It folds only into an issue shown for every file, and Dan's restructure
+answer is kept for each file.
 A folder a script is handed is judged as a write of every file under it (#2321), unless every
 write in the script's own text can be placed (#2407, #2565): a full path, a path under the home
 folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
@@ -7758,7 +7775,12 @@ held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. A loop over quoted
+arithmetic names no command. A script in another language (node, python, ruby) whose only part
+mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
+`importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
+importing a local module by a fixed name reads, so the folder it is handed is read, not written
+(#2920); one whose text also writes, runs a process (`execFileSync('git', ...)`) or runs code it
+builds (eval, new Function, vm) keeps the hold. A loop over quoted
 search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).

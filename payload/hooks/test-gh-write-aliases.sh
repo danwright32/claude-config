@@ -444,7 +444,7 @@ gh release create v1 $PRIV --notes-file notes.md"
 check "#2469 (control) and written that way for a private repository it passes: $out" passed
 # Where the writes cannot be read for the mixed input check, the file is refused as one whose writer
 # could not be read, never passed as judged from the command (L11).
-unread="$(cd "$CO" && GATE_DIR="$HERE" python3 -c 'import importlib.util, sys
+unread="$(cd "$CO" && GATE_DIR="$HERE" python3 -B -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
 def broken(*a, **k):
     raise g.scan.Unreadable("a test stand in")

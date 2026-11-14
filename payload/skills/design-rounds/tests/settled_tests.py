@@ -19,6 +19,7 @@ SKILL = os.path.dirname(HERE)
 MAKE = os.path.join(SKILL, "make-settled.py")
 CHECK = os.path.join(SKILL, "check-decision-map.py")
 SCORE = os.path.join(SKILL, "score", "design_score.py")
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, SKILL)
 sys.path.insert(0, os.path.join(SKILL, "score"))
 import chrome_frame  # noqa: E402

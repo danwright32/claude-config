@@ -130,7 +130,7 @@ if [[ -n "$design" ]]; then
   design_rel="${design_real#"$design_top_real"/}"
   # The marks the close gate (hooks/design-score-gate.py) and `design_score.py post` read, written by
   # the one helper that writes them, so the writer and the readers cannot drift (score_github.py).
-  marks="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import score_github as g; print(g.mark(g.ISSUE_MARK, sys.argv[2])); print(g.mark(g.MILESTONE_MARK, sys.argv[2]))' "$HERE/../design-rounds/score" "$design_rel" 2>&1)"
+  marks="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import score_github as g; print(g.mark(g.ISSUE_MARK, sys.argv[2])); print(g.mark(g.MILESTONE_MARK, sys.argv[2]))' "$HERE/../design-rounds/score" "$design_rel" 2>&1)"
   issue_mark="$(printf '%s\n' "$marks" | sed -n 1p)"
   milestone_mark="$(printf '%s\n' "$marks" | sed -n 2p)"
   if [[ "$issue_mark" != "<!-- design-score-issue "* || "$milestone_mark" != "<!-- design-score-milestone "* ]]; then

@@ -101,6 +101,7 @@ chmod +x "$WORK/bin/gh"
 # receipt here has the shape the real writers give it.
 cat > "$WORK/fixture.py" <<'PY'
 import json, os, sys
+sys.dont_write_bytecode = True  # verification.py is carried by the sync: leave no cache beside it (#2919)
 sys.path.insert(0, os.environ["SCRIPTS"])
 import verification as v
 fake, home, spec = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])

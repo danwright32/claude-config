@@ -1605,3 +1605,27 @@ describe('writes: the values a variable alone is given (#2171)', () => {
     expect(values('T=$(mktemp); echo x > "$T"; echo "$(echo y > "$T")"')).toEqual([undefined])
   })
 })
+
+// #2920: a script a folder is handed, fed as its text on standard input, that loads a module by a
+// computed name (`await import(rulesPath)`) and otherwise only reads. Its judge reads it as code it
+// cannot read, the same as eval, while a static import of a local module (whose code no reader follows
+// either) reads as no write at all. `onlyLoads` says the computed loads are all that left it unread,
+// so a guard asking only what the script's own text writes can tell the two apart.
+describe('writes: a program whose only unread part is a module it loads by a computed name (#2920)', () => {
+  const fed = (text: string) => read(`node <<'AREA_CHECK_SCRIPT'\n${text}\nAREA_CHECK_SCRIPT`).unnamed
+  const READS = "import { readFileSync, readdirSync } from 'node:fs'\nfor (const r of process.argv.slice(3)) for (const n of readdirSync(r)) console.log(readFileSync(`${r}/${n}`, 'utf8').length)"
+  test('a computed import or require, and nothing else unread, is marked', () => {
+    expect(fed(`const rules = await import(process.argv[2])\n${READS}`).map(u => u.onlyLoads)).toEqual([true])
+    expect(fed(`const rules = require(process.argv[2])\n${READS}`).map(u => u.onlyLoads)).toEqual([true])
+    expect(read(`python3 - <<'EOF'\nimport importlib, sys\nm = importlib.import_module(sys.argv[1])\nprint(open(sys.argv[2]).read())\nEOF`).unnamed.map(u => u.onlyLoads)).toEqual([true])
+  })
+  test('one that also writes, runs a process or runs code it builds is not', () => {
+    for (const also of ["writeFileSync(process.argv[3] + '/x.ts', 'x')", "require('node:child_process').execSync('git status')", 'eval(process.argv[4])', 'new Function(process.argv[4])()', "vm.runInThisContext(process.argv[4])"]) {
+      expect([also, fed(`const rules = await import(process.argv[2])\n${READS}\n${also}`).map(u => u.onlyLoads)]).toEqual([also, [undefined]])
+    }
+  })
+  test('one whose text the shell may have changed is not, and one that only reads is no write at all', () => {
+    expect(read(`node <<EOF\nconst rules = await import(process.argv[2])\n${READS}\nEOF`).unnamed.map(u => u.onlyLoads)).toEqual([undefined])
+    expect(fed(READS)).toEqual([])
+  })
+})

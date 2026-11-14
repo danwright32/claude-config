@@ -76,6 +76,8 @@ const WRITES: Record<string, unknown> = {
   'bash scan.sh src/ && bash rewrite.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash rewrite.sh src/ && bash scan.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'rewrite.sh', path: '/w/app/rewrite.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
   'bash scan.sh src/ && bash scan.sh ./src': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: 'src/', path: '/w/app/src' }] }, { what: 'a bash script file', script: 'scan.sh', path: '/w/app/scan.sh', args: [{ word: './src', path: '/w/app/src' }] }] },
+  // #2920: a node script handed a module to load and a folder to read, its output redirected.
+  'node measure.mjs lib/rules.ts src/ > /tmp/notes/out.txt': { files: [{ word: '/tmp/notes/out.txt', path: '/tmp/notes/out.txt' }], changes: [], unnamed: [], runs: [{ what: 'a node script file', script: 'measure.mjs', path: '/w/app/measure.mjs', args: [{ word: 'lib/rules.ts', path: '/w/app/lib/rules.ts' }, { word: 'src/', path: '/w/app/src' }] }], stdout: [{ word: '/tmp/notes/out.txt', path: '/tmp/notes/out.txt' }] },
   // #2527: a check like tools/check-mods.sh handed a folder, held by Dan's decision, and a loop handing
   // a script quoted search terms, plain words, and words it cannot read.
   'bash check.sh src/': { files: [], changes: [], unnamed: [], runs: [{ what: 'a bash script file', script: 'check.sh', path: '/w/app/check.sh', args: [{ word: 'src/', path: '/w/app/src' }] }] },
@@ -309,6 +311,15 @@ test("a subagent's edit is held for itself, and restructure hands the question t
   expect((await edit($ as never, w, SLACK, { agentId: 'a1' }, 'c5')).result).toBe('done')
   const after = (await $.prompt.submit({ text: 'next', origin: { kind: 'composer' }, wait: false } as never)) as R
   expect((after.context ?? []).join(' ')).not.toContain('area-check:c1')
+})
+
+test("a subagent's command held once for a folder hands one question to the main session, which is told every file it waits on (#2920)", KIT, async ($, on) => {
+  const w = genWorld($, on, 2)
+  await bash($ as never, w, 'python3 rewrite.py gen', { agentId: 'a1' })
+  const d = await decide($ as never, { call: 'b1', decision: 'restructure' }, { agentId: 'a1' })
+  expect(said(d)).toContain('whether to restructure gen/f1.ts and gen/f2.ts first')
+  const p = (await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' }, wait: false } as never)) as R
+  expect((p.context ?? []).join(' ')).toContain("subagent a1's Bash command, which writes gen/f1.ts and gen/f2.ts, in dan/app, until Dan decides whether to restructure them first")
 })
 
 // #2136: the reply to a decision is worded for whoever took it. A subagent deciding its own held edit
@@ -742,16 +753,15 @@ test('a write chained with a findings note is still judged, and a copy of the he
 // back) reaches every file under it, so each one the area check could hold there is judged.
 const FIND = "find src -name '*.ts' -exec sed -i '' 's/a/b/' {} +"
 
-test('a shell write reaching a whole folder is held for each file under it that could be held, and goes ahead once each is decided', KIT, async ($, on) => {
+test('a shell write reaching a whole folder is held once for every file under it that could be held, and goes ahead on one decision (#2920)', KIT, async ($, on) => {
   const w = world($, on)
-  // The fast growing file under the folder, then the file a structural issue names, each on its own.
-  expect(refusal(await bash($ as never, w, FIND))).toContain('The area check held this Bash command, which writes src/big.ts.')
-  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
-  const why = refusal(await bash($ as never, w, FIND, {}, 'b2'))
-  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  // The fast growing file under the folder and the file a structural issue names, in one hold.
+  const why = refusal(await bash($ as never, w, FIND))
+  expect(why).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(why).toContain('src reaches every file under it, and the area check also holds src/lib/slack.ts.')
   expect(why).toContain('#41 (p2, tech-debt)')
-  await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
-  expect((await bash($ as never, w, FIND, {}, 'b3')).result).toBe('done')
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, FIND, {}, 'b2')).result).toBe('done')
   expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
 })
 
@@ -787,16 +797,77 @@ const genWorld = ($: unknown, on: Parameters<typeof world>[1], n: number) => {
   return w
 }
 
-test('a script handed a folder holding a held file is held, naming the file, and goes ahead once each is decided (#2321)', KIT, async ($, on) => {
+// #2920: held once for the folder, naming every held file under it, and one decision lets it run,
+// where it was held once per file, each needing its own decision and a resend.
+test('a script handed a folder holding held files is held once, naming each, and goes ahead on one decision (#2321, #2920)', KIT, async ($, on) => {
   const w = world($, on)
-  expect(refusal(await bash($ as never, w, SCRIPT_SRC))).toContain('The area check held this Bash command, which writes src/big.ts.')
-  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
-  const why = refusal(await bash($ as never, w, SCRIPT_SRC, {}, 'b2'))
-  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
-  expect(why).toContain('#41 (p2, tech-debt)')
-  await decide($ as never, { call: 'b2', decision: 'proceed', reason: REASON })
-  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b3')).result).toBe('done')
+  const why = refusal(await bash($ as never, w, SCRIPT_SRC))
+  expect(why).toContain('The area check held this Bash command, which writes src/big.ts.')
+  expect(why).toContain('src/ reaches every file under it, and the area check also holds src/lib/slack.ts')
+  expect(why).toContain('src/lib/slack.ts has open structural issues: #41 (p2, tech-debt).')
+  expect(why).toContain('One decision covers all 2 files.')
+  // src/big.ts is held for growth alone, so no issue is shown for every file, and there is none to fold.
+  expect(why).not.toContain('"decision": "fold"')
+  expect(refusal(await decide($ as never, { call: 'b1', decision: 'fold', issue: 41 }))).toContain('not an issue shown for every file')
+  expect(said(await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON }))).toContain('this work goes ahead on src/big.ts and src/lib/slack.ts')
+  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b2')).result).toBe('done')
   expect(w.judged().map(j => j.path)).toEqual(['src/big.ts', 'src/lib/slack.ts'])
+  // Each file is decided on record, so the pull request carries a line for each.
+  expect(w.records().filter(x => x.kind === 'decided').map(x => [x.path, x.call, x.decision])).toEqual([
+    ['src/big.ts', 'b1', 'proceed'],
+    ['src/lib/slack.ts', 'b1', 'proceed'],
+  ])
+})
+
+test('a file under a folder whose judging throws is passed and kept in the error file, and the rest are still held once (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.existsFails.push(`${APP}/src/big.ts`)
+  const why = refusal(await bash($ as never, w, SCRIPT_SRC))
+  expect(why).toContain('The area check held this Bash command, which writes src/lib/slack.ts.')
+  expect(why).not.toContain('also holds')
+  expect(w.records(ERRORS)[0]).toMatchObject({ kind: 'error', session: 's1', path: `${APP}/src/big.ts` })
+  await decide($ as never, { call: 'b1', decision: 'proceed', reason: REASON })
+  expect((await bash($ as never, w, SCRIPT_SRC, {}, 'b2')).result).toBe('done')
+})
+
+test('a folder every one of whose files throws while judged holds nothing, each kept in the error file (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.ctl.existsFails.push(`${APP}/src/big.ts`, `${APP}/src/lib/slack.ts`)
+  expect((await bash($ as never, w, SCRIPT_SRC)).result).toBe('done')
+  expect(w.records(ERRORS).map(x => x.path)).toEqual([`${APP}/src/big.ts`, `${APP}/src/lib/slack.ts`])
+})
+
+test('a folder whose held files all show one issue is held once and folds into it for every file (#2920)', KIT, async ($, on) => {
+  const w = genWorld($, on, 2)
+  const why = refusal(await bash($ as never, w, 'python3 rewrite.py gen'))
+  expect(why).toContain('which writes gen/f1.ts.')
+  expect(why).toContain('the area check also holds gen/f2.ts')
+  expect(why).toContain('"decision": "fold", "issue": <one of #50>')
+  await decide($ as never, { call: 'b1', decision: 'fold', issue: 50 })
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
+  expect(w.records().filter(x => x.kind === 'decided').map(x => [x.path, x.decision, x.issue])).toEqual([
+    ['gen/f1.ts', 'fold', 50],
+    ['gen/f2.ts', 'fold', 50],
+  ])
+})
+
+test("Dan's answer for a folder held once is recorded for each file and releases them all (#2920)", KIT, async ($, on) => {
+  const w = genWorld($, on, 2)
+  await bash($ as never, w, 'python3 rewrite.py gen')
+  expect(said(await decide($ as never, { call: 'b1', decision: 'restructure' }))).toContain('area-check:b1')
+  w.ctl.answer = 'Proceed anyway'
+  const q = await askDan($ as never, 'b1')
+  expect(w.asked[0]?.question.startsWith('Restructure gen/f1.ts and gen/f2.ts before this work?')).toBe(true)
+  expect(said(q)).toContain('this work goes ahead on gen/f1.ts and gen/f2.ts')
+  expect((await bash($ as never, w, 'python3 rewrite.py gen', {}, 'b2')).result).toBe('done')
+  // His answer stands for a week for each file, under each file's own key (the SHA-256 of
+  // "dan/app\ngen/f1.ts" and of "dan/app\ngen/f2.ts", measured with shasum).
+  expect(w.store['question:b5fef5992ca3b5c245e605893fa529d8ee112e91ed43751b7b628737fb42877c']).toMatchObject({ state: 'answered', answer: 'Proceed anyway', issues: [50] })
+  expect(w.store['question:bfe7343bf8d7a5f740ca51682428de85d5c3e5a2e95be13ea47c5ef3f0edecaa']).toMatchObject({ state: 'answered', answer: 'Proceed anyway', issues: [50] })
+  expect(w.records().filter(x => x.kind === 'decided').map(x => [x.path, x.by])).toEqual([
+    ['gen/f1.ts', 'dan'],
+    ['gen/f2.ts', 'dan'],
+  ])
 })
 
 test('a script handed a folder holding no held file, or a folder not on the disk, runs judging no file (#2321)', KIT, async ($, on) => {
@@ -1094,6 +1165,40 @@ test('a script that writes nothing still runs judging no file, though it holds a
   expect(ran).toEqual(STILL_READ_ONLY.map(([what]) => `ran: a script that ${what}`))
   expect(w.judged().length).toBe(0)
   expect(w.records().filter(x => x.kind === 'script-reads').map(x => x.decision)).toEqual(STILL_READ_ONLY.map(() => 'passed'))
+})
+
+// #2920: a node script handed project folders it only reads, its output redirected into a notes folder,
+// that loads the module it is handed by a computed name (`await import(rulesPath)`), as the #2792
+// builder's count did on 2026-11-13 (21:27 ET, 02:27 UTC the next day in the area check's log). Its own text writes nothing, as a script importing a local module
+// by a fixed name reads, so the folder it is handed is read, not written. The same script whose text
+// also writes, runs a process or runs code it builds is still held for the files under the folder.
+const MEASURE = 'node measure.mjs lib/rules.ts src/ > /tmp/notes/out.txt'
+const LOADS = "import { readFileSync, readdirSync } from 'node:fs'\nconst [rulesPath, ...roots] = process.argv.slice(2)\nconst rules = await import(rulesPath)\nfor (const r of roots) for (const n of readdirSync(r)) console.log(rules.count(readFileSync(`${r}/${n}`, 'utf8')))\n"
+
+test('a node script that only reads the folder it is handed, loading a module by a computed name, runs judging no file (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  w.files[`${APP}/measure.mjs`] = LOADS
+  expect((await bash($ as never, w, MEASURE)).result).toBe('done')
+  expect(w.judged().length).toBe(0)
+  expect(w.records().filter(x => x.kind === 'script-reads')).toMatchObject([{ word: 'src/', script: `${APP}/measure.mjs`, decision: 'passed', placed: 0 }])
+})
+
+const LOADS_AND: [string, string][] = [
+  ['writes a file', "import { writeFileSync } from 'node:fs'\nwriteFileSync(`${process.argv[3]}/gen.ts`, 'x')\n"],
+  ['runs a process', "import { execFileSync } from 'node:child_process'\nexecFileSync('git', ['-C', process.argv[3], 'ls-files'])\n"],
+  ['runs code it builds', 'eval(process.argv[4])\n'],
+]
+
+test('a node script loading a module by a computed name that also writes, runs a process or builds code is still held (#2920)', KIT, async ($, on) => {
+  const w = world($, on)
+  const held: string[] = []
+  for (const [i, [what, extra]] of LOADS_AND.entries()) {
+    w.files[`${APP}/measure.mjs`] = `${extra}${LOADS}`
+    const r = await bash($ as never, w, MEASURE, {}, `b${i + 1}`)
+    held.push(r.result === 'done' ? `ran: one that ${what}` : refusal(r).includes('The area check held this Bash command, which writes src/big.ts.') ? `held: one that ${what}` : refusal(r))
+  }
+  expect(held).toEqual(LOADS_AND.map(([what]) => `held: one that ${what}`))
+  expect(w.records().filter(x => x.kind === 'script-reads')).toEqual([])
 })
 
 // #2619: the one line function form was a gap in mod-kit's reader itself, so a write typed in a

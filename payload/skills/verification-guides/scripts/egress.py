@@ -49,7 +49,8 @@ import sys
 import threading
 import time
 
-import verification as v
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
+import verification as v  # noqa: E402
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 LOG = "/usr/bin/log"
