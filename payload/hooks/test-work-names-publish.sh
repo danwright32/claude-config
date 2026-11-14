@@ -499,6 +499,22 @@ run "gh issue create --repo danwright-test/public-notes --title x --body-file \"
 check "#2961 \$_ after a body file's path is refused as unreadable: $out" refused
 run "gh issue comment 5 --repo danwright-test/public-notes --body \"\${_}\""
 check "#2961 and so is \${_}: $out" refused
+# A new public repository's name, description and homepage are judged the same way.
+run "gh repo create danwright-test/fresh --public --description \"from \$WN_TEST_DIR\""
+check "#2961 a public repository described from a variable naming a work repository is refused: $out" refused
+run "gh repo create danwright-test/fresh --public --homepage \"\$WN_TEST_NOT_SET\""
+check "#2961 and one with a homepage from a variable set nowhere: $out" refused
+run "gh repo create danwright-test/fresh --public --description \"\$WN_TEST_CLEAN\""
+check "#2961 (control) a public repository described from a clean variable passes: $out" passed
+run "gh repo create danwright-test/fresh --private --description \"from \$WN_TEST_DIR\""
+check "#2961 (control) a private one is not asked about its variables: $out" passed
+# A sync posts no text of its own; a variable naming either repository leaves it unreadable, refused.
+run "gh repo sync \"\$WN_TEST_NOT_SET\" --source danwright-test/private-notes"
+check "#2961 a sync to a repository named by a variable is refused: $out" refused
+export WN_TEST_SRC="danwright-test/private-notes"
+run "gh repo sync danwright-test/public-notes --source \"\$WN_TEST_SRC\""
+check "#2961 and so is one from a source named by a variable: $out" refused
+unset WN_TEST_SRC
 # A gh api write is judged where it runs too, with what the command set before it (the lessons
 # review of af806e6: it was judged from the environment alone, so a clean assignment was refused).
 run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""

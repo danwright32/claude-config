@@ -404,10 +404,11 @@ def pushed_text(where, history):
     return "branch %s\n%s" % (names_, log.stdout)
 
 
-def judge_repo_create(what, args, where, command):
+def judge_repo_create(what, args, where, command, place=None):
     """gh repo create's own text, its name, description and homepage, is public on the new repository
     (claude-config#2398), and --push sends the whole history to it (#2326). Judged unless the
-    repository is made private or internal, or a work owner's."""
+    repository is made private or internal, or a work owner's. A variable in that text is judged by
+    its value, and refused where its value cannot be read, as judge_public does (#2961)."""
     if _given(args, ("--private", "--internal")):
         return None
     name = (_positionals(args, REPO_CREATE_VALUES) or [""])[0]
@@ -418,6 +419,15 @@ def judge_repo_create(what, args, where, command):
     hit = find(command, matcher, odd)
     if hit:
         return "%s makes %s, a public repository, and its text names %s." % (what, shown, _shown(hit))
+    for var, value, why in variables_posted(command, place):
+        if why:
+            return ("%s makes %s, a public repository, with %s in its text, which %s, so whether its value "
+                    "names a work organisation or repository cannot be told. Write the value out in the "
+                    "command." % (what, shown, var, why))
+        hit = find(value, matcher, odd)
+        if hit:
+            return "%s makes %s, a public repository, and its text expands %s, whose value names %s." % (
+                what, shown, var, _shown(hit))
     if not _given(args, ("--push",)):
         return None
     source = os.path.expanduser((scan.flag_values(args, "--source", "-s") or ["."])[-1])
@@ -1273,7 +1283,7 @@ def evaluate(command, cwd, depth=0):
         where = place.cwd or place.start or cwd
         try:
             if kind in REPO_CREATE:
-                why = judge_repo_create(what, args, where, command)
+                why = judge_repo_create(what, args, where, command, place)
             elif kind == REPO_SYNC:
                 why = judge_repo_sync(what, args, where)
             elif kind in RELEASE:
