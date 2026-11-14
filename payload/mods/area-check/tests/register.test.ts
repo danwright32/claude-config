@@ -313,6 +313,15 @@ test("a subagent's edit is held for itself, and restructure hands the question t
   expect((after.context ?? []).join(' ')).not.toContain('area-check:c1')
 })
 
+test("a subagent's command held once for a folder hands one question to the main session, which is told every file it waits on (#2920)", KIT, async ($, on) => {
+  const w = genWorld($, on, 2)
+  await bash($ as never, w, 'python3 rewrite.py gen', { agentId: 'a1' })
+  const d = await decide($ as never, { call: 'b1', decision: 'restructure' }, { agentId: 'a1' })
+  expect(said(d)).toContain('whether to restructure gen/f1.ts and gen/f2.ts first')
+  const p = (await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' }, wait: false } as never)) as R
+  expect((p.context ?? []).join(' ')).toContain("subagent a1's Bash command, which writes gen/f1.ts and gen/f2.ts, in dan/app, until Dan decides whether to restructure them first")
+})
+
 // #2136: the reply to a decision is worded for whoever took it. A subagent deciding its own held edit
 // is told to send it again itself; the main session, recording Dan's answer for a subagent's edit, is
 // told to pass that on to the agent.
@@ -1160,7 +1169,7 @@ test('a script that writes nothing still runs judging no file, though it holds a
 
 // #2920: a node script handed project folders it only reads, its output redirected into a notes folder,
 // that loads the module it is handed by a computed name (`await import(rulesPath)`), as the #2792
-// builder's count did on 2026-11-14. Its own text writes nothing, as a script importing a local module
+// builder's count did on 2026-11-13 (21:27 ET, 02:27 UTC the next day in the area check's log). Its own text writes nothing, as a script importing a local module
 // by a fixed name reads, so the folder it is handed is read, not written. The same script whose text
 // also writes, runs a process or runs code it builds is still held for the files under the folder.
 const MEASURE = 'node measure.mjs lib/rules.ts src/ > /tmp/notes/out.txt'

@@ -987,7 +987,9 @@ const waitingLines = async ($: EngineInterface): Promise<string[]> => {
     const h = await heldOf($, q.call)
     if (!h) continue
     const whose = h.agent === null ? 'this session\'s' : `subagent ${h.agent}'s`
-    lines.push(`The area check holds ${whose} ${heldCall(h)}, in ${h.repo}, until Dan decides whether to restructure it first: ${asking(h)}.`)
+    // A folder held once (#2920) waits on every file it stands for.
+    const call = h.more?.length ? `Bash command, which writes ${heldNames(h)}` : heldCall(h)
+    lines.push(`The area check holds ${whose} ${call}, in ${h.repo}, until Dan decides whether to restructure ${h.more?.length ? 'them' : 'it'} first: ${asking(h)}.`)
   }
   return lines
 }
