@@ -126,6 +126,16 @@ type World = {
   verdicts: Record<string, { state: string; at: number }>
   /** This session's transcript as its registry record names it ('' when it names none). */
   transcript: string
+  /**
+   * How the session registry holds this session (#2898): open, as a live session's record is; closed,
+   * as the real registry lists a live session whose record a session end it outlived closed (no
+   * transcript looked up for it); or absent, with no id of its own (selfId null).
+   */
+  registry: 'open' | 'closed' | 'absent'
+  /** Where a transcript is on disk, by path; a string is the error checking that path gives. */
+  disk: Record<string, true | string>
+  /** The folder the session is in now, where it started in /repo. */
+  here: string
   /** The transcript's pr-link records, as Claude Code writes them. */
   links: string[]
   /** What `gh pr list --state open` answers per repository; absent answers an empty list. */
@@ -143,7 +153,7 @@ const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, registry: 'open', disk: {}, here: '/repo', owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], held: [], holdFails: '', view: () => ({ exitCode: 1, stdout: '', stderr: 'unexpected' }), ...init }
   const runs: string[][] = []
   const views: { pr: string; repo?: string; cwd?: string; token?: string; fields?: string }[] = []
   const submitted: { text: string; origin: unknown }[] = []
@@ -168,6 +178,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     if (e.argv[0] === '__sessions') {
       const me = { sessionId: 's1', transcriptPath: w.transcript || null, ...(w.transcript ? {} : { transcriptUnread: 'the transcript search was cut off' }) }
+      if (w.registry === 'closed') return ok(JSON.stringify({ open: [], closed: [{ sessionId: 's1', transcriptPath: null }], unreadable: [], selfId: 's1' }))
+      if (w.registry === 'absent') return ok(JSON.stringify({ open: [], closed: [], unreadable: [], selfId: null }))
       return ok(JSON.stringify({ open: [me], closed: [], unreadable: [], selfId: 's1' }))
     }
     if (e.argv[0] === '__live') return ok(JSON.stringify({ owed: w.owed, verdicts: w.verdicts }))
@@ -196,6 +208,13 @@ const world = (on: On, init: Partial<World> = {}) => {
     return ok('', 1, 'unexpected')
   })
   on('agent.list', () => ({ value: w.agents.map(a => ({ description: 'a task', type: 'general-purpose', ...a })) }) as never)
+  on('session.id', () => ({ value: 's1' }) as never)
+  on('session.cwd', () => ({ value: w.here }) as never)
+  on('env.get', ($, e) => ({ value: (e as unknown as { name: string }).name === 'HOME' ? `${'/Users'}/dan` : undefined }) as never)
+  on('fs.exists', ($, e) => {
+    const at = w.disk[e.path]
+    return (typeof at === 'string' ? { deny: at } : { value: at === true }) as never
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('tool.register', ($, e) => {
@@ -527,6 +546,58 @@ test("a session whose transcript the registry cannot name holds the box, saying 
   await says($, 'Add the goal box')
   expect((await box($, ASKED)).deny).toMatch(/the transcript search was cut off/)
   expect(await cards()).toEqual([])
+})
+
+// #2898: a live session the registry counts as ended, or holds no record of, was refused with "this
+// session's transcript was not found in the session registry" though its transcript sat where Claude
+// Code keeps it. Reproduced against the real registry: a session end the process outlives (a resume
+// keeping its id, before the look that reopens it; any other reason, for good) leaves the record
+// closed, and a closed record's transcript is never looked up. So the session's own transcript is
+// first the one at its id's path, as scope-modes finds its own (#1678), and the registry's after.
+for (const registry of ['closed', 'absent'] as const) {
+  test(`a live session the registry holds as ${registry} finds its transcript at its id's path, and the box shows (#2898)`, withKit, async ($, on) => {
+    const { cards } = world(on, { registry, disk: { [T]: true }, links: [link('danwright32/claude-config', 1700)] })
+    await start($)
+    await says($, 'Add the goal box')
+    const r = await box($, ASKED)
+    expect(r.deny).toBeUndefined()
+    expect(await cards()).toHaveLength(1)
+  })
+}
+
+test("the transcript is looked for in the folder the session started in, after it moved into another (#2898)", withKit, async ($, on) => {
+  const { cards } = world(on, { registry: 'closed', disk: { [T]: true }, here: '/repo/.claude/worktrees/fix' })
+  await start($)
+  await says($, 'Add the goal box')
+  expect((await box($, ASKED)).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
+})
+
+test("a transcript found nowhere is refused saying where it looked and how the registry holds the session, never that a goal is open (#2898)", withKit, async ($, on) => {
+  const { w, cards } = world(on, { registry: 'absent' })
+  await start($)
+  await says($, 'Add the goal box')
+  const absent = (await box($, ASKED)).deny ?? ''
+  expect(absent).toContain(`not at ${T}`)
+  expect(absent).toMatch(/the session registry has no record of this session/)
+  expect(absent).not.toMatch(/not found in the session registry|still set/)
+  w.registry = 'closed'
+  const closed = (await box($, ASKED, 'b2')).deny ?? ''
+  expect(closed).toMatch(/the session registry counts this session as ended, so it did not look its transcript up/)
+  expect(await cards()).toEqual([])
+})
+
+test("a check at the id's path that fails is said beside the registry's why, and the registry's transcript is used when it names one (#2898)", withKit, async ($, on) => {
+  const { w, cards } = world(on, { transcript: '', disk: { [T]: "EACCES: permission denied, stat" } })
+  await start($)
+  await says($, 'Add the goal box')
+  const r = (await box($, ASKED)).deny ?? ''
+  expect(r).toContain(`whether it is at ${T} could not be checked`)
+  expect(r).toMatch(/permission denied/)
+  expect(r).toMatch(/the transcript search was cut off/)
+  w.transcript = T
+  expect((await box($, ASKED, 'b2')).deny).toBeUndefined()
+  expect(await cards()).toHaveLength(1)
 })
 
 test('not while an agent this session started is still running; one a plugin started, or one finished, holds nothing', withKit, async ($, on) => {

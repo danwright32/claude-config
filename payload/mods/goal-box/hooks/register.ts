@@ -6,6 +6,7 @@ import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { askPr } from './mod-kit/prmerged.ts'
 import { errorText } from './mod-kit/skew.ts'
 import { HOLD_MAX_MS, whileHeld } from './mod-kit/held.ts'
+import { transcriptPlaces } from './mod-kit/projects.ts'
 
 // The Goal accomplished box (claude-config#1563). Two ways a session's work ends, one box for both:
 //
@@ -38,6 +39,8 @@ const shownRef = { plugin: 'goal-box', key: 'shown' } as const
 const askedRef = { plugin: 'goal-box', key: 'asked' } as const
 const requestAtRef = { plugin: 'goal-box', key: 'requestAt' } as const
 const askedDoneRef = { plugin: 'goal-box', key: 'askedDone' } as const
+// The folder the session started in, where Claude Code files its transcript (#2898).
+const startCwdRef = { plugin: 'goal-box', key: 'startCwd' } as const
 // is it live's own record of this session's merges, read here; it may not be loaded at all.
 const owedRef = { plugin: 'is-it-live', key: 'owed' } as const
 const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
@@ -45,16 +48,78 @@ const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
 const msg = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const debug = ($: EngineInterface, text: string) => void $.ui.log(`${MOD}: ${text}`, { to: 'debug' })
 
-/** This session's transcript, from its own record in the session registry, or why it is not known. */
-const transcriptNow = async ($: EngineInterface): Promise<{ path: string } | { why: string }> => {
+// What a session id looks like; anything else never goes into a path.
+const SESSION_ID = /^[A-Za-z0-9-]+$/
+
+/**
+ * This session's transcript where Claude Code keeps it by the session's id (#2898), in the folder
+ * the session started in or the one it is in now, or every place it is not and every check that
+ * failed. Read first, as scope-modes reads its own (#1678): the registry lists a live session as
+ * ended once a session end it outlived closed its record (a resume keeping its id, before the look
+ * that reopens it; any other reason, for good), and never looks a closed record's transcript up.
+ */
+const atIdsPath = async ($: EngineInterface): Promise<{ path: string } | { missed: string[]; failed: string[] }> => {
+  const missed: string[] = []
+  const failed: string[] = []
+  let id: string, home: string | undefined, here: string | null
+  try {
+    id = await $.session.id()
+    home = await $.env.get('HOME')
+    here = await $.session.cwd()
+  } catch (err) {
+    return { missed, failed: [`this session's id or folder could not be read (${errorText(err, MOD)})`] }
+  }
+  if (!home) return { missed, failed: ['HOME is not set'] }
+  if (!SESSION_ID.test(id)) return { missed, failed: [`this session's id is not one (${JSON.stringify(id)})`] }
+  const started = (await $.state.get(startCwdRef).catch(() => ({ value: undefined }))).value
+  const projects = `${home}/.claude/projects`
+  for (const dir of new Set([started, here].filter((d): d is string => typeof d === 'string' && !!d))) {
+    let places: string[]
+    try {
+      places = await transcriptPlaces(d => $.fs.list(d), projects, dir, id)
+    } catch (err) {
+      failed.push(`the folders under ${projects} could not be listed (${errorText(err, MOD)})`)
+      continue
+    }
+    for (const p of places) {
+      try {
+        if (await $.fs.exists(p)) return { path: p }
+        missed.push(p)
+      } catch (err) {
+        failed.push(`whether it is at ${p} could not be checked (${errorText(err, MOD)})`)
+      }
+    }
+  }
+  return { missed, failed }
+}
+
+/** This session's transcript, from its own record in the session registry, or why it is not there. */
+const inRegistry = async ($: EngineInterface): Promise<{ path: string } | { why: string }> => {
   try {
     const list = await $.sessions.list()
-    const me = [...list.open, ...list.closed].find(r => r.sessionId === list.selfId)
+    if (!list.selfId) return { why: 'the session registry has no record of this session' }
+    const me = list.open.find(r => r.sessionId === list.selfId)
     if (me?.transcriptPath) return { path: me.transcriptPath }
-    return { why: me?.transcriptUnread ?? "this session's transcript was not found in the session registry" }
+    if (me) return { why: me.transcriptUnread ?? "the session registry's search for it found nothing" }
+    if (list.closed.some(r => r.sessionId === list.selfId)) return { why: 'the session registry counts this session as ended, so it did not look its transcript up' }
+    return { why: 'the session registry has no record of this session' }
   } catch (err) {
-    return { why: errorText(err, MOD) }
+    return { why: `the session registry could not be read (${errorText(err, MOD)})` }
   }
+}
+
+/**
+ * This session's transcript, or why it is not known: at its id's path first, else the registry's.
+ * The why names where it is not and how the registry holds the session (#2898), so a transcript
+ * that cannot be found is never read as a /goal that is open.
+ */
+const transcriptNow = async ($: EngineInterface): Promise<{ path: string } | { why: string }> => {
+  const own = await atIdsPath($)
+  if ('path' in own) return own
+  const reg = await inRegistry($)
+  if ('path' in reg) return reg
+  const notAt = own.missed.length ? [`it is not at ${own.missed.join(' or ')}, where Claude Code keeps it by this session's id`] : []
+  return { why: [...notAt, ...own.failed, reg.why].join('; ') }
 }
 
 /** The goal mod-kit reads in this session's transcript; never throws, so a failure holds the box. */
@@ -262,6 +327,7 @@ const askIfDone = async ($: EngineInterface): Promise<void> => {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(interactiveRef, e.isInteractive === true)
+    if (typeof e.cwd === 'string' && e.cwd) await $.state.set(startCwdRef, e.cwd)
     // Only where somebody is at the prompt to see it; offered in full, not behind a search, so the
     // session knows when to call it.
     if (e.isInteractive) await $.tool.register({ name: NAME, description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
