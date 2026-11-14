@@ -303,6 +303,14 @@ sag_publish(){   # $1 = repo: commits everything and publishes it as main on its
   git -C "$1" push -q origin main >/dev/null 2>&1; git -C "$1" fetch -q origin >/dev/null 2>&1
 }
 sag_branch(){ git -C "$1" checkout -q main; git -C "$1" checkout -q -B "$2"; }   # $1 = repo  $2 = a branch cut fresh from main
+# The gate's own limit on the guard's suite is 60 seconds by default, the same as this suite's
+# deadline on each gate call (FIRE_DEADLINE), and the gate spends time before that step, so a slow
+# guard suite would be cut off by this suite's deadline first, and fail as a gate that hung rather
+# than as the refusal it is (claude-config#2914). So every call here that can run the guard's suite
+# gives the step half the call deadline: a slow suite is then refused by the gate itself, in words,
+# inside the call deadline. A setting, not a measurement.
+SAG_LIMIT=$(( FIRE_DEADLINE / 2 )); [ "$SAG_LIMIT" -ge 1 ] || SAG_LIMIT=1
+sag_fire(){ SCANNERS_SLACK_GUARD_SECONDS="$SAG_LIMIT" wn_fire "$@"; }   # wn_fire's arguments
 
 # --- THE CASES AGAINST THE SLACK ALERT GUARD'S REAL SOURCE (claude-config#2834), one of the parts
 #     that read the checkout, so SCANNERS_SUITE_PART=checkout runs them (claude-config#2914). The
@@ -325,7 +333,7 @@ sag_real_part(){
     SAG_HOST="hooks.slack"; SAG_HOST="$SAG_HOST.com"
     # The #2826 mistake: a comment in the guard's own source naming the webhook host.
     sag_branch "$RSG" marked; printf '// posts nothing, only names %s\n' "$SAG_HOST" >> "$RSG/$SAG_FILE"; commit_all "$RSG"
-    out="$(wn_fire "$RSG" "git push -u origin marked")"; rc=$?
+    out="$(sag_fire "$RSG" "git push -u origin marked")"; rc=$?
     [ "$rc" -eq 2 ] && grep -q -F "$SAG_FILE" <<< "$out" && grep -q -F "Take the Slack marker out" <<< "$out" \
       && check "#2834 a push putting a Slack marker in the guard's own source is refused, naming the file and the fix" ok \
       || check "#2834 a push putting a Slack marker in the guard's own source is refused, naming the file and the fix" "exit=$rc out=$out"
@@ -335,14 +343,14 @@ sag_real_part(){
     # Judged as the push DELIVERS it: taking the marker out of the working copy alone changes nothing
     # the push carries, so the push is still refused.
     git -C "$RSG" show "main:$SAG_FILE" > "$RSG/$SAG_FILE"
-    out="$(wn_fire "$RSG" "git push -u origin marked")"; rc=$?
+    out="$(sag_fire "$RSG" "git push -u origin marked")"; rc=$?
     [ "$rc" -eq 2 ] && grep -q -F "$SAG_FILE" <<< "$out" \
       && check "#2834 the guard is judged as the push delivers it, not as the working copy holds it" ok \
       || check "#2834 the guard is judged as the push delivers it, not as the working copy holds it" "exit=$rc out=$out"
     git -C "$RSG" checkout -q -- "$SAG_FILE"
     # The same push with the markers right: a comment that names nothing goes through.
     sag_branch "$RSG" clean; printf '// a comment that names nothing\n' >> "$RSG/$SAG_FILE"; commit_all "$RSG"
-    out="$(wn_fire "$RSG" "git push -u origin clean")"; rc=$?
+    out="$(sag_fire "$RSG" "git push -u origin clean")"; rc=$?
     [ "$rc" -eq 0 ] && grep -q -F "1 whole tree scan(s) passed" <<< "$out" \
       && check "#2834 a push changing the guard's source with no Slack marker in it is let through" ok \
       || check "#2834 a push changing the guard's source with no Slack marker in it is let through" "exit=$rc out=$out"
@@ -1983,38 +1991,58 @@ out="$(wn_fire "$RG" "git push -u origin docs")"; rc=$?
 # The control: the same stand in IS run by a push changing the guard, so the silence above is the
 # gate choosing not to run it, never a stand in that cannot record (L1).
 sag_branch "$RG" guard; printf 'export const y = 2\n' >> "$RG/payload/mods/slack-alert-guard/hooks/x.ts"; commit_all "$RG"
-out="$(wn_fire "$RG" "git push -u origin guard")"; rc=$?
+out="$(sag_fire "$RG" "git push -u origin guard")"; rc=$?
 [ "$rc" -eq 0 ] && [ "$(grep -c . "$SAG_CALLS" 2>/dev/null)" = 1 ] \
   && check "#2834 (control) a push changing the Slack alert guard runs the guard's suite, once" ok \
   || check "#2834 (control) a push changing the Slack alert guard runs the guard's suite, once" "exit=$rc calls=$(cat "$SAG_CALLS" 2>/dev/null) out=$out"
+# SCANNERS_SLACK_GUARD_SECONDS only ever SHORTENS the step's limit (claude-config#2914): a longer
+# value is held to the default, so no setting carries the step past the hook's timeout. Read from
+# the line the gate prints, from the very variable it hands bounded-run.sh, whenever the setting is
+# given, so nothing here waits out the limit. The default is read from the hook, never restated. The
+# control, a shorter value, is reported as given, so the line is the value used, not the default.
+_sag_default="$(sed -n 's/^_sc_sag_seconds_default=\([0-9][0-9]*\)$/\1/p' "$H")"
+out="$(SCANNERS_SLACK_GUARD_SECONDS=$(( ${_sag_default:-60} * 10 )) wn_fire "$RG" "git push -u origin guard")"; rc=$?
+[ "$rc" -eq 0 ] && [ -n "$_sag_default" ] && grep -q -F "so the Slack alert guard suite's limit is $_sag_default seconds" <<< "$out" \
+  && check "#2914 a longer SCANNERS_SLACK_GUARD_SECONDS is held to the default limit" ok \
+  || check "#2914 a longer SCANNERS_SLACK_GUARD_SECONDS is held to the default limit" "exit=$rc default=${_sag_default:-unread} out=$out"
+out="$(SCANNERS_SLACK_GUARD_SECONDS=7 wn_fire "$RG" "git push -u origin guard")"; rc=$?
+[ "$rc" -eq 0 ] && grep -q -F "so the Slack alert guard suite's limit is 7 seconds" <<< "$out" \
+  && check "#2914 (control) a shorter one is the limit used" ok \
+  || check "#2914 (control) a shorter one is the limit used" "exit=$rc out=$out"
 # A guard suite that HANGS (claude-config#2914). With no limit of its own the step held the push
 # until Claude Code killed the whole gate at its declared timeout, and the refusal then carried no
-# reason of the gate's. The stand in records its pid and sleeps far past the limit this case gives
-# (SCANNERS_SLACK_GUARD_SECONDS=1, so nothing here waits out the real one, L290); its sleep is a
-# setting, not a measurement, so a gate that waits for it returns late with a pass instead.
+# reason of the gate's. The stand in records its pid and then never ends by itself, so only a kill
+# stops it; this case sets the step's limit to 1 second (SCANNERS_SLACK_GUARD_SECONDS, a setting, not
+# a measurement), so nothing here waits out the real one (L290). A gate that waits for it is stopped by this suite's own call
+# deadline instead (fire, exit 124), and the checks below say that was not the gate's doing.
 RGH="$(sag_repo sag-hang)"
 mkdir -p "$RGH/payload/mods/slack-alert-guard/hooks"
 printf 'export const x = 1\n' > "$RGH/payload/mods/slack-alert-guard/hooks/x.ts"
 SAG_HANG_PID="$TMPROOT/sag-hang.pid"
-printf '#!/usr/bin/env bash\necho $$ > %q\necho "stand in guard suite started"\nsleep 30\necho "stand in guard suite woke"\nexit 0\n' "$SAG_HANG_PID" > "$RGH/tests/test-slack-alert-guard-real-gate.sh"
+printf '#!/usr/bin/env bash\necho $$ > %q\necho "stand in guard suite started"\nwhile :; do sleep 1; done\n' "$SAG_HANG_PID" > "$RGH/tests/test-slack-alert-guard-real-gate.sh"
 sag_publish "$RGH"
 sag_branch "$RGH" guard; printf 'export const y = 2\n' >> "$RGH/payload/mods/slack-alert-guard/hooks/x.ts"; commit_all "$RGH"
 _sag_t0="$(date +%s)"
 out="$(SCANNERS_SLACK_GUARD_SECONDS=1 wn_fire "$RGH" "git push -u origin guard")"; rc=$?
 _sag_took=$(( $(date +%s) - _sag_t0 ))
+# Read at once, before anything else can stop it.
+_sag_hung="$(cat "$SAG_HANG_PID" 2>/dev/null)"
+_sag_alive=""; [ -n "$_sag_hung" ] && kill -0 "$_sag_hung" 2>/dev/null && _sag_alive=1
 [ "$rc" -eq 2 ] && grep -q -F "did not finish within 1 seconds" <<< "$out" && grep -q -F "stand in guard suite started" <<< "$out" \
   && check "#2914 a guard suite that hangs is stopped at the step's limit and the push refused, saying it ran out of time" ok \
   || check "#2914 a guard suite that hangs is stopped at the step's limit and the push refused, saying it ran out of time" "exit=$rc took=${_sag_took}s out=$out"
-[ "$_sag_took" -lt 15 ] \
-  && check "#2914 and the gate returns at the limit, not when the suite would have finished" ok \
-  || check "#2914 and the gate returns at the limit, not when the suite would have finished" "took=${_sag_took}s"
-_sag_hung="$(cat "$SAG_HANG_PID" 2>/dev/null)"
-if [ -n "$_sag_hung" ] && kill -0 "$_sag_hung" 2>/dev/null; then
+[ "$rc" -ne 124 ] && [ "$_sag_took" -lt 15 ] \
+  && check "#2914 and the gate returns at the limit by itself, never held until this suite's call deadline" ok \
+  || check "#2914 and the gate returns at the limit by itself, never held until this suite's call deadline" "exit=$rc took=${_sag_took}s"
+# Stopped BY THE GATE: a suite still running when the gate returned, or one only this suite's call
+# deadline stopped (exit 124, which kills everything the call started), was not stopped by the gate.
+if [ -z "$_sag_hung" ]; then
+  check "#2914 and the gate stops the hung suite itself, leaving nothing running" "the stand in never recorded its pid"
+elif [ -n "$_sag_alive" ] || [ "$rc" -eq 124 ]; then
   kill -9 "$_sag_hung" 2>/dev/null
-  check "#2914 and the hung suite is stopped with it, not left running" "pid $_sag_hung was still running"
+  check "#2914 and the gate stops the hung suite itself, leaving nothing running" "exit=$rc, pid $_sag_hung running when the gate returned: ${_sag_alive:-no}"
 else
-  [ -n "$_sag_hung" ] && check "#2914 and the hung suite is stopped with it, not left running" ok \
-    || check "#2914 and the hung suite is stopped with it, not left running" "the stand in never recorded its pid"
+  check "#2914 and the gate stops the hung suite itself, leaving nothing running" ok
 fi
 # A delivered tree with NO copy of the suite (claude-config#2914): a branch cut before the suite
 # existed, or one deleting it. The refusal names that cause, and no longer sends the person to git
@@ -2024,7 +2052,7 @@ mkdir -p "$RGM/payload/mods/slack-alert-guard/hooks"
 printf 'export const x = 1\n' > "$RGM/payload/mods/slack-alert-guard/hooks/x.ts"
 sag_publish "$RGM"
 sag_branch "$RGM" guard; printf 'export const y = 2\n' >> "$RGM/payload/mods/slack-alert-guard/hooks/x.ts"; commit_all "$RGM"
-out="$(wn_fire "$RGM" "git push -u origin guard")"; rc=$?
+out="$(sag_fire "$RGM" "git push -u origin guard")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "has no copy of tests/test-slack-alert-guard-real-gate.sh" <<< "$out" \
   && check "#2914 a push changing the guard whose tree has no copy of the guard's suite is refused, naming that cause" ok \
   || check "#2914 a push changing the guard whose tree has no copy of the guard's suite is refused, naming that cause" "exit=$rc out=$out"
@@ -2037,7 +2065,7 @@ grep -q -F "git status" <<< "$out" \
 SAG_NOLIB="$TMPROOT/sag-nolib-hooks"; mkdir -p "$SAG_NOLIB"
 cp "$H" "$SAG_NOLIB/scanners-before-push.sh"; cp -R "$DIR/lib" "$SAG_NOLIB/lib"; rm -f "$SAG_NOLIB/lib/bounded-run.sh"
 _sag_calls_before="$(grep -c . "$SAG_CALLS" 2>/dev/null)"
-out="$(H="$SAG_NOLIB/scanners-before-push.sh" wn_fire "$RG" "git push -u origin guard")"; rc=$?
+out="$(H="$SAG_NOLIB/scanners-before-push.sh" sag_fire "$RG" "git push -u origin guard")"; rc=$?
 [ "$rc" -eq 2 ] && grep -q -F "sag-nolib-hooks/lib/bounded-run.sh" <<< "$out" \
   && [ "$(grep -c . "$SAG_CALLS" 2>/dev/null)" = "$_sag_calls_before" ] \
   && check "#2914 a gate that cannot load bounded-run.sh refuses a push changing the guard, naming it, and runs nothing unbounded" ok \

@@ -345,6 +345,10 @@ if [ "$_sc_pc_rc" -eq 0 ] && grep -q '^payload/mods/slack-alert-guard/' <<< "$PC
       # Unreadable is the default, said rather than swallowed (L50, L90).
       echo "scanners-before-push: SCANNERS_SLACK_GUARD_SECONDS is '$SCANNERS_SLACK_GUARD_SECONDS', not a whole number of seconds above zero, so the default of $_sc_sag_seconds_default is used." >&2
     fi
+    # Whenever the setting is given, the limit actually used is said, from the variable handed to
+    # bounded-run.sh below, so a value held to the default is visible and the tests read it without
+    # waiting the limit out.
+    echo "scanners-before-push: SCANNERS_SLACK_GUARD_SECONDS is '$SCANNERS_SLACK_GUARD_SECONDS' (only a shorter limit than the default of $_sc_sag_seconds_default is taken), so the Slack alert guard suite's limit is $_sc_sag_seconds seconds." >&2
   fi
   _sc_sag_tree="$(pc_push_tree)"
   _sc_sag_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-slack-guard.XXXXXXXX" 2>/dev/null)" || _sc_sag_dir=""
