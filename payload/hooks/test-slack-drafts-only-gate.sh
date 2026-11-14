@@ -2198,6 +2198,7 @@ allowed "and the same command passes with nothing in the environment"
 # an unknown part keeps only the text after it, from its last .. on, and a literal glob is escaped.
 cat > "$T/written-paths-check.py" <<'PY'
 import os, sys
+sys.dont_write_bytecode = True  # the gate is carried by the sync: leave no cache beside it (#2919)
 hooks = sys.argv[1]
 sys.path.insert(0, hooks)
 import slack_drafts_only_gate as gate
@@ -2339,6 +2340,7 @@ says "a sed edit is judged by its program" "chat.postMessage"
 # it does lib/written-paths.py; a copy of it anywhere else would leave the gate on the old reading.
 cat > "$T/program-writes-check.py" <<'PY'
 import os, sys
+sys.dont_write_bytecode = True  # the gate is carried by the sync: leave no cache beside it (#2919)
 sys.path.insert(0, sys.argv[1])
 import slack_drafts_only_gate as gate
 code = getattr(gate.Judge, "note_program", None)
@@ -4180,6 +4182,7 @@ read_refused() {
 # lib/program-writes.py is; a copy of it anywhere else would leave the gate on the old reading.
 cat > "$T/program-runs-check.py" <<'PY'
 import os, sys
+sys.dont_write_bytecode = True  # the gate is carried by the sync: leave no cache beside it (#2919)
 sys.path.insert(0, sys.argv[1])
 import slack_drafts_only_gate as gate
 where = {os.path.basename(getattr(gate.Judge, n).__code__.co_filename) for n in ("py_runner", "note_build", "built_from")}
