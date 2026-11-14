@@ -221,7 +221,15 @@ for theme in light dark; do
   if [ "$rc" -eq 0 ] && [ -f "$RDIR/rows-$theme.png" ]; then ok
   else bad "the $theme shot through shoot_native.py was not kept (exit $rc)" "$(cat "$T/rows-$theme.png.out"; tail -n 20 "$RDIR/native-shot/rows-$theme.png.log" 2>/dev/null)"; continue
   fi
-  read -r w h backdrop inked < <(python3 -I "$T/pixels.py" "$RDIR/rows-$theme.png" 2>&1)
+  measured="$(python3 -I "$T/pixels.py" "$RDIR/rows-$theme.png" 2>&1)"
+  # A reading that is not four numbers is the reader failing, said as such, never fed to arithmetic.
+  if ! printf '%s\n' "$measured" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+\.[0-9]+ [0-9]+$'; then
+    bad "the $theme picture's pixels could not be read" "$measured"; continue
+  fi
+  w=""; h=""; backdrop=""; inked=""
+  read -r w h backdrop inked <<EOF
+$measured
+EOF
   # Width is shoot_native's to judge; height is the window's 900 points at the same scale, at least.
   if [ -n "${inked:-}" ] && [ $((h * 480)) -ge $((w * 900)) ]; then ok
   else bad "the $theme picture is ${w:-?} by ${h:-?} pixels, shorter than 900 points at its scale"
