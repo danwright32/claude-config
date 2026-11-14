@@ -539,7 +539,8 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
     // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
     $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
-    // A file that posts to Slack by a send the guard cannot find is held for all of it.
+    // A file that posts to Slack by a send the guard cannot find is held for all of it but the
+    // console log lines above.
     if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(sent, untraced(UNTRACED_NONE))
     // Only wording one of its own sends carries is held (#2570): a log line, an error or a route's
     // answer beside the alert passes.

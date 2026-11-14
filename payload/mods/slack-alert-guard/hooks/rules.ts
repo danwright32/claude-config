@@ -28,7 +28,8 @@
 // file's own send calls. A file whose send cannot be traced (any other language, a send the reading
 // cannot find) is held for all the wording it changes. A python docstring is never message text
 // (#2574). In a shell script, a string only an echo or printf to the error stream prints passes
-// (#2792, shellLogWording).
+// (#2792, shellLogWording). In JavaScript or TypeScript, a string only a console call logs passes,
+// traced or not (#2907, sends.ts consoleArgs).
 //
 // Narrowed to code that posts (#2662; Dan, 2026-11-10: "Recognise refusal code"). A gate that
 // refuses Slack posts has to name what it refuses, and was read as a file that posts: on 2026-11-09
