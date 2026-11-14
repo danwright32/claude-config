@@ -3309,6 +3309,9 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L855. Any code that reads text a person can paste or upload (a script, a template, a setting, a file) gets a limit on that text's length before the first reading, and a test that the reading's work grows in step with the length. Without both, one long or oddly shaped input exhausts the process with no message, and no ordinary test ever feeds it one.** (bidspoke#3734, 2026-11-14)
+  SHORT: Limit the length of any text a person can paste before reading it, and test that the reading's work grows in step with length, or one input kills it.
+
 - **L847. A deliberate refusal expressed as a failed build, job or deploy is read by every watcher of that thing as breakage, so they retry it and alert with the wrong cause; give the refusal a marker those watchers recognise, in the same change that introduces it.** (project-enrollment-tracker#2023, 2026-11-06)
   SHORT: A refusal shipped as a failed build is retried and misreported by every watcher; give it a marker they recognise in the same change.
 - **L838. A component that runs inside someone else's page (an embed, a widget, a script tag) must report its own failures, timeouts and slow loads included and not only thrown errors, back to your own system, because a failure surfaced only to the host page lands in the host's analytics, which nobody on your side watches.** (slate#4456, 2026-11-01)
