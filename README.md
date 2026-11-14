@@ -3531,6 +3531,16 @@ What passes: every Slack read, `slack_send_message_draft`, a command that only m
 (a grep, an echo, a test assertion), and `/nudge` at `skills/nudge/nudge.py`, the one exemption (Dan,
 2026-11-05), matched by its real path, so a copy anywhere else is refused.
 
+A call the gate allowed is kept in `~/.claude/state/slack-gate-cache/` (#2918), so judging it again
+with nothing changed takes about 0.13 s instead of about 4 for `bash tests/test-claude-sync.sh`. The
+key is the gate's code, the Python, the command, its directories and the environment variables the
+gate reads; every file the judgement read and every disk test it answered is recorded and asked again
+before a kept allow is used, through stand ins for `os`, `glob`, `importlib`, `ast` and `open` that
+`lib/judgement-cache.py` puts in the gate and each library. A refusal is never kept, and any doubt
+(a corrupt entry, a changed answer, a disk read the stand ins did not see) is a fresh judgement.
+Under a test run the cache is off unless `SLACK_GATE_CACHE_DIR` names one. It does nothing for a cold
+run, so a CI runner judges as before.
+
 A package script (`npm run x`, `npm test`, `pnpm x`, `yarn x`) is followed through the nearest
 `package.json`, its pre and post scripts included, and judged as the command line it runs.
 
