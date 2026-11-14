@@ -5133,6 +5133,17 @@ handler that releases the sync lock, so no read-only command ever removes anythi
 every mutating run, and a value that is not a whole number is refused.
 
 </td></tr>
+<tr><td><code>SYNC_REVIEW_OPTION_PROBE_EVERY</code></td><td><code>86400</code></td><td>
+
+Seconds between the times `status` asks the installed claude whether it still accepts
+`--append-system-prompt-file`, the option the lessons review hands claude the lessons in
+(claude-config#2982). The question calls no model: claude is handed a file that does not exist,
+and its "file not found" error is the answer that the option is still known. The answer is kept in
+`~/.claude/state/review-option-probe.json` and asked again at once when the claude command changes.
+`status` says nothing while the option is accepted. `0` asks on every `status`, and a value that is
+not a whole number is refused.
+
+</td></tr>
 <tr><td><code>SYNC_SCRATCH_NOTE</code></td><td><code>1</code></td><td>
 
 Whether a run writes the note naming what it was doing beside its scratch. `0` turns it off.
