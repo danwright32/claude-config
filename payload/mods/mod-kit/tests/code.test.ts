@@ -296,6 +296,9 @@ describe("mod-kit's awk reader (#2974)", () => {
     expect(codeVerdict('awk', '{ x++ / 2; print \\\n > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
     expect(codeVerdict('awk', '{ print "unclosed \\\n > x }')).toEqual({ does: 'write files', seen: 'print to a file' })
     expect(codeVerdict('awk', '{ print /unclosed \\\n | "sort" }')).toEqual({ does: 'run a process', seen: 'a pipe' })
+    // Lessons review at 7c17b96: a regex literal is kept as written, and a continued line inside one
+    // is joined there too.
+    expect(codeVerdict('awk', '{ print /a\\\nb/ > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
     // A comment is never continued, in awk or here, so the line after one ending in a backslash is
     // read for itself.
     expect(codeVerdict('awk', '# a note \\\n/"/ { print > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })

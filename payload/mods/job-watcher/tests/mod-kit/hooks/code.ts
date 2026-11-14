@@ -231,10 +231,12 @@ const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
 // the name being read alone, so the reading takes time in step with the program's length (#2974: it
 // asked of the whole output so far at every name, about 1.5 s for 92,000 characters).
 const AWK_TAKES_OPERAND = /^(?:print|printf|return)$/
+// Each continued line joined to the next, the backslash and its line break made spaces.
+const awkJoined = (text: string): string => text.replace(/\\(\r?\n)/g, (_, nl: string) => ' '.repeat(1 + nl.length))
 const awkCanonical = (code: string): string => {
   // The program as written, its continued lines still joined to the next (lessons review at
   // 4207042). Joining one a comment ends too only lengthens a line, so no rule sees less for it.
-  const asWritten = () => code.replace(/\\(\r?\n)/g, (_, nl: string) => ' '.repeat(1 + nl.length))
+  const asWritten = () => awkJoined(code)
   let out = ''
   // Whether what came last ends an operand, so a / after it divides: 'no', 'yes', or 'unsure'.
   let operand: 'no' | 'yes' | 'unsure' = 'no'
@@ -260,7 +262,8 @@ const awkCanonical = (code: string): string => {
         else if (code[j] === c && !bracket) break
       }
       if (j >= code.length || code[j] !== c) return asWritten()
-      out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : code.slice(i, j + 1)
+      // A regex is kept as written, a continued line in it joined (lessons review at 7c17b96).
+      out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : awkJoined(code.slice(i, j + 1))
       i = j + 1
       operand = 'yes'
       word = ''
