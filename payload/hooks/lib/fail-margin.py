@@ -350,6 +350,11 @@ def fail_helpers(lines):
         return {int(x) for x in re.findall(r'\$\{?([1-9])', stmt)}
 
     def words(stmt):
+        # A call inside a helper's body, split into words to see which of the helper's arguments it
+        # hands on. A quote left open on that line (the rest of the string is on the next) makes
+        # shlex refuse; splitting on spaces then reads a quoted argument holding a space as several,
+        # which can only shift WHICH argument numbers count as printed, so the cost is a missed or
+        # extra finding on that helper's callers, never a crash or a pass over an unread file.
         try:
             return shlex.split(stmt, comments=False, posix=True)
         except ValueError:
