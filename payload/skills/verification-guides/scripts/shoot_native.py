@@ -32,9 +32,9 @@ earlier shot is removed before the test starts, so it can never stand for this o
 that matches nothing runs zero tests and passes (L98), which is why the picture, not the exit
 code, is the proof. The test's own output is kept as native-shot/<file>.log beside the receipt.
 
-The test must render offscreen and never order a window front or activate an app. Ovation's
-OffscreenShot.swift is the camera that does that: a window ordered BACK outside every display, its
-appearance set to the theme, not released on close.
+The test must render offscreen and never order a window front or activate an app.
+../native/VerificationShot.swift is the camera that does that, adapted from Ovation's OffscreenShot.swift:
+a window ordered BACK outside every display, its appearance set to the theme, not released on close.
 
 Env: SHOOT_NATIVE_TIMEOUT_S, how long one test run may take (default 1800: the first shot of a
 run builds the test target in a fresh worktree), after which its process group is stopped.

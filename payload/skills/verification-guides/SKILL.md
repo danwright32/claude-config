@@ -234,9 +234,13 @@ this in the same run, before step 5 stops the head run:
    `commands.native_shot` in the worktree with `VERIFICATION_SHOT_TEST`, `_FRAME`, `_WIDTH`,
    `_HEIGHT` (900), `_THEME`, `_FILE`, `_ROWS_FILE` and `_MIN_ROWS` set, each also with the
    `TEST_RUNNER_` prefix xcodebuild passes into a test. The app's test draws that frame offscreen
-   (a window ordered back outside every display, never front, as Ovation's `OffscreenShot.swift`
-   does), writes the PNG to `_FILE` and the rows it drew to `_ROWS_FILE`, and FAILS on a frame it
-   does not know. The picture is kept only when the test exited 0, wrote a PNG the asked width at a
+   (a window ordered back outside every display, never front), writes the PNG to `_FILE` and the
+   rows it drew to `_ROWS_FILE`, and FAILS on a frame it does not know.
+   [native/VerificationShot.swift](native/VerificationShot.swift) is that camera: copy it unchanged
+   into the app's test target and hand `VerificationShot.shoot` the app's frame list, each frame
+   with the rows it drew (its head comment shows the test). An ordinary test run names no frame, so
+   the test skips. `scripts/test-shoot-native-swift.sh` builds it and shoots it through
+   shoot_native.py on every macOS run of the suites. The picture is kept only when the test exited 0, wrote a PNG the asked width at a
    scale of 1, 2 or 3, and reported at least the minimum rows; a run of zero tests passes, so the
    picture is the proof. A SwiftPM command needs `--disable-sandbox`, since the run's own sandbox
    already wraps it.
@@ -301,7 +305,7 @@ These are what the merge check expects that nothing here can supply yet, said ra
   (shoot_web.mjs for a route, shoot_native.py for a native screen).
 - **Inline pictures in a private repository.** Unmeasured, so private repositories get the private
   link until it is measured (claude-config#2699).
-- **The native app's camera.** Each native app's test supplies its own offscreen camera and frame
-  list; none ships here. A run also still needs `url`, `serve` and `ready`, which a native app has
+- **The native app's frame list.** The camera ships here (native/VerificationShot.swift); each
+  native app's test supplies its frames. A run also still needs `url`, `serve` and `ready`, which a native app has
   nothing to fill with: serve can build the test target and then wait, ready check the build
   finished, and the url name a local port nothing listens on, said in the project's areas.json.
