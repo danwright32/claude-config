@@ -256,6 +256,9 @@ const awkCanonical = (code: string): string => {
     }
     out += c
     i++
+    // A newline ends a statement, as ; does, so what follows starts afresh and a / there is a regex
+    // (lessons review at a08a0f6). A line continued by a backslash runs on, and so does its operand.
+    if (c === '\n' && code[i - 2] !== '\\') operand = 'no'
     if (/\s/.test(c)) continue
     if ((c === '+' || c === '-') && code[i - 2] === c) operand = 'unsure'
     else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(out) ? 'no' : 'yes'

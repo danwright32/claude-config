@@ -1250,6 +1250,10 @@ describe('writes: what a program can do, judged by mod-kit\'s per language judge
       `{ x++ / 2; s = "a/b"; print > "f" }`,
       `# say "hi\n{ print > "f" }`,
       `{ print /"/ > "f" }`,
+      // Lessons review at a08a0f6: a newline ends a statement, so a regex starting the next line is
+      // one, never a division after the name or number the line before ended in.
+      `NR == 2\n/"/ { print > "out.txt"; if ($0 ~ /"/) n++ }`,
+      `{ n = 1 } END\n/"/ { system("rm x"); if ($0 ~ /"/) n++ }`,
     ])
       expect([program, read(`awk '${program}' in.txt`).unnamed.map(u => u.what)]).toEqual([program, ['an inline awk script']])
   })
