@@ -261,8 +261,12 @@ def make(param_re, unknown_dir):
             if words[:2] != ["git", "diff"] or "--name-only" not in words:
                 return False
             for w in words[2:]:
-                if not re.fullmatch(r"[A-Za-z0-9._/=:^@,+-][A-Za-z0-9._/=:^~@,+-]*", w):
-                    return False  # a quote, an expansion or a glob: what it becomes is not known
+                if not re.fullmatch(r"[A-Za-z0-9._=:^@,+-][A-Za-z0-9._/=:^~@,+-]*", w):
+                    return False  # a quote, an expansion, a glob or an absolute path
+                if ".." in re.split(r"[/=]", w):
+                    # Given a path outside the working tree, git diff compares the two paths as
+                    # --no-index does and prints them as given (lessons review at 125f910).
+                    return False
                 if w.startswith("-") and not GIT_DIFF_SAFE.fullmatch(w):
                     return False
             return True

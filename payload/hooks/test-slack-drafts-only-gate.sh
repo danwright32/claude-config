@@ -5122,10 +5122,11 @@ read_refused "#2910 the same loop after a cd into a folder that is not there is 
 says "#2910 and its refusal says the check could not be made" "REFUSED: the gate could not check whether this command posts to Slack"
 lacks "#2910 and does not say to save a draft" "slack_send_message_draft"
 # A path list from any other source can hold .., so the copy can land anywhere; so can one from a
-# git diff whose options change what it prints, or a git the command defines itself.
+# git diff whose options change what it prints, one handed a path outside the working tree (which it
+# compares as --no-index does, printing the paths as given), or a git the command defines itself.
 for src in '$(cat list.txt)' '$(git diff --name-only HEAD | sed s/x/y/)' '$(git diff --name-only --no-index a b)' \
   '$(git diff --name-only --line-prefix=../ HEAD)' '$(git diff --name-only $OPTS HEAD)' '$(git ls-files)' \
-  '$(find . -name "*.sh")'; do
+  '$(find . -name "*.sh")' '$(git diff --name-only ../a b)' '$(git diff --name-only /tmp/a /tmp/b)'; do
   run_kk 'cd '"$K"' && S="'"$K"'/out/scan"; for f in '"$src"'; do cp "$f" "$S/$f"; done; '"$B"'/scan.sh'
   read_refused "#2910 a copy loop over a path list from another source is still refused: $src"
 done
