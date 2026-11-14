@@ -291,6 +291,14 @@ describe("mod-kit's awk reader (#2974)", () => {
     expect(codeVerdict('awk', '{ n = n \\\n / 2; print n > "out" }')).toEqual({ does: 'write files', seen: 'print to a file' })
     expect(codeVerdict('awk', '{ print \\\n /"/ > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
     expect(codeVerdict('awk', '{ print $1 \\\n | "sort" }')).toEqual({ does: 'run a process', seen: 'a pipe' })
+    // Lessons review at 4207042: where the program is read as written (a / after ++, a string or a
+    // regex never closed), its continued lines are still one line with the next.
+    expect(codeVerdict('awk', '{ x++ / 2; print \\\n > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print "unclosed \\\n > x }')).toEqual({ does: 'write files', seen: 'print to a file' })
+    expect(codeVerdict('awk', '{ print /unclosed \\\n | "sort" }')).toEqual({ does: 'run a process', seen: 'a pipe' })
+    // A comment is never continued, in awk or here, so the line after one ending in a backslash is
+    // read for itself.
+    expect(codeVerdict('awk', '# a note \\\n/"/ { print > "f" }')).toEqual({ does: 'write files', seen: 'print to a file' })
     // A newline with no backslash still ends the statement, so a regex starting the next line is one.
     expect(codeVerdict('awk', 'NR == 2\n/"/ { print > "out.txt" }')).toEqual({ does: 'write files', seen: 'print to a file' })
   })
