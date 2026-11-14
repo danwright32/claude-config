@@ -1011,9 +1011,7 @@ def posted_text(command):
             if words[0] == "cd" and not keep_cd and scan._sw.cd_target(text) is not None:
                 blank.append((start + spans[0][1], start + spans[-1][2]))
                 continue
-            if words[0] != "gh":
-                continue
-            got = scan.gh_command(words)
+            got = scan.gh_command(words)  # None for anything but gh, read the one shared way
             if not got or got[0] not in ("pr", "issue") or tuple(got[:2]) not in KINDS:
                 continue
             files = set(scan.flag_values(words[1:], *BODY_FILE_FLAGS))
