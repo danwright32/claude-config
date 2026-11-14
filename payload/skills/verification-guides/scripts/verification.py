@@ -367,7 +367,8 @@ def _check_serve_settings(p, doc, cmds, native, web_areas):
     with a native screen is told which area made serving necessary.
     """
     cmds = cmds if isinstance(cmds, dict) else {}
-    present = [k for k in SERVE_SETTINGS if (doc if k == "url" else cmds).get(k.split(".")[-1]) is not None]
+    # Given means the key is there: a null is the wrong type, already said, not also missing.
+    present = [k for k in SERVE_SETTINGS if k.split(".")[-1] in (doc if k == "url" else cmds)]
     missing = [k for k in SERVE_SETTINGS if k not in present]
     if not missing:
         return

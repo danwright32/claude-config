@@ -202,6 +202,12 @@ class AreasTests(unittest.TestCase):
         self.refused(doc, "areas-empty-command")
         self.refused(native_only_doc(url=7), "areas-wrong-type")
 
+    def test_a_setting_given_as_null_is_the_wrong_type_not_also_missing(self):
+        doc = areas_doc()
+        doc["commands"]["serve"] = None
+        err = self.refused(doc, "areas-wrong-type")
+        self.assertEqual(kinds_of(err), ["areas-wrong-type"], err.problems)
+
     def test_stop_and_drive_stay_required_for_an_all_native_project(self):
         for name in ("stop", "drive"):
             doc = native_only_doc()
