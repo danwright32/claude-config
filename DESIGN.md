@@ -1130,6 +1130,18 @@ and a notification. The value is an alias (`opus`, `sonnet`, `haiku`, `fable`) o
 unlike `modelSettings`, this variable takes either. Taking it out of the file leaves each Mac's
 value in place, as with a model the file stops naming.
 
+On 2026-11-14 Dan chose to stop setting a default subagent model (#2949), so an agent that names no
+model runs on the session's model again. Because taking the key out would have left `opus` in both
+Macs' `settings.json` for ever, the file now says the variable is unset: `null` under `env` means
+remove it, and the pull deletes exactly that leaf from the Mac's `env` block, leaving every other
+variable there byte for byte and creating no `env` block where there was none. The removal is
+stated, never inferred from an absence, so "off is `false`, never a deletion" still holds everywhere
+else. Only a variable on the allowlist may be `null`; any other is refused by name as before, so
+`null` cannot be used to delete a Mac's own variable, a credential included. "Applied" is still the
+one jq definition, so `status` lists the file as unapplied while a Mac still holds the variable. The
+shipped file carries `"CLAUDE_CODE_SUBAGENT_MODEL": null`; once both Macs have pulled it, the entry
+could be dropped, but keeping it costs nothing and covers a Mac restored from an old backup.
+
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
 
@@ -1148,7 +1160,9 @@ assistant turns, never from what an agent says about itself:
 So a workflow agent naming no model takes the default subagent model, Opus, and does not copy its
 Fable parent, and one naming a model gets it: the panel follows the default as intended. The run
 had to come from a Fable session, since from an Opus one following the default and copying the
-parent both read as Opus.
+parent both read as Opus. Since 2026-11-14 no default is set (#2949), so an agent naming no model
+is expected to run on its parent session's model: the ad hoc agent measured above did exactly that
+with nothing set, but workflow agents have not been measured without the variable.
 
 ## rtk's excluded commands are written into rtk's own config (#1427)
 

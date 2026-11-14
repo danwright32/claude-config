@@ -12,6 +12,12 @@ receipt id. `drive` runs the project's drive helper (never the Playwright tools,
 may not use) and logs every call against the area it was for. `stop` ends the run. A record of the
 run can only be rendered once the receipt shows serve stopped.
 
+A project whose areas are all native may give no serve, ready or url (claude-config#2951). Its run
+starts no serve and waits for no ready command: the supervisor still holds the run's locks and its
+egress monitor around every drive call, and still ends it on `stop` or the deadline, running the
+project's stop command and removing the worktree. Its receipt records `url`, `serve_pid` and
+`serve_pgid` as null, and the drive helper gets no VERIFICATION_URL.
+
 Serve is stopped on EVERY path, which is why a supervisor and not the caller owns it. The
 supervisor is a detached process that started serve in a process group of its own, holds a lock
 for exactly as long as it lives, and stops serve, runs the project's stop command and removes the
@@ -358,19 +364,28 @@ def supervise(rdir, repo_lock_fd, pipe_w):
         wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
         update_receipt(rdir, egress_sandbox=wrap,
                        egress_monitor_pgid=None if unavailable else monitor.proc.pid)
-        log = open(os.path.join(rdir, "serve.log"), "ab")
-        proc = subprocess.Popen((wrap or []) + ["/bin/sh", "-c", doc["commands"]["serve"]], cwd=rec["worktree"],
-                                start_new_session=True, stdin=subprocess.DEVNULL, stdout=log,
-                                stderr=subprocess.STDOUT)
-        update_receipt(rdir, supervisor_pid=os.getpid(), serve_pid=proc.pid, serve_pgid=proc.pid)
+        if v.serves(doc):
+            log = open(os.path.join(rdir, "serve.log"), "ab")
+            proc = subprocess.Popen((wrap or []) + ["/bin/sh", "-c", doc["commands"]["serve"]], cwd=rec["worktree"],
+                                    start_new_session=True, stdin=subprocess.DEVNULL, stdout=log,
+                                    stderr=subprocess.STDOUT)
+            update_receipt(rdir, supervisor_pid=os.getpid(), serve_pid=proc.pid, serve_pgid=proc.pid)
+        else:
+            # Every area is native and nothing is served (claude-config#2951): the supervisor still
+            # holds the run, its lock and its egress monitor, until a stop or the deadline.
+            update_receipt(rdir, supervisor_pid=os.getpid())
         os.write(pipe_w, b"ok\n")
         os.close(pipe_w)
         pipe_w = None
-        try:
-            exited = proc.wait(timeout=deadline_s(doc))
-            reason, detail = "serve_exited", "serve exited by itself with %s" % exited
-        except subprocess.TimeoutExpired:
+        if proc is None:
+            time.sleep(deadline_s(doc))  # a stop signal raises StopRequested out of the sleep
             reason = "deadline"
+        else:
+            try:
+                exited = proc.wait(timeout=deadline_s(doc))
+                reason, detail = "serve_exited", "serve exited by itself with %s" % exited
+            except subprocess.TimeoutExpired:
+                reason = "deadline"
     except StopRequested:
         reason = requested_reason(rdir)
     except Exception as e:
@@ -500,7 +515,7 @@ def start(repo, sha, areas_csv):
         os.lseek(lock_fd, 0, os.SEEK_SET)
         os.write(lock_fd, rid.encode("utf-8", "replace"))
         update_receipt(rdir, schema=v.RECEIPT_SCHEMA, receipt_id=rid, machine=v.machine_name(), repo=repo,
-                       head_sha=sha, checkout_sha=None, areas=wanted, url=doc["url"], started_at=v.utc_now(),
+                       head_sha=sha, checkout_sha=None, areas=wanted, url=doc.get("url"), started_at=v.utc_now(),
                        ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
                        stop_command_exit=None, worktree=wt, worktree_removed=False, supervisor_pid=None,
                        serve_pid=None, serve_pgid=None, build_stamp=None, build_stamp_source="none",
@@ -544,8 +559,9 @@ def start(repo, sha, areas_csv):
 
     t = doc["timeouts"]
     attempts = max(1, int(math.ceil(t["ready_s"] / t["ready_interval_s"])))
-    ready, last = False, ""
-    for i in range(attempts):
+    # With nothing served there is nothing to wait for: the run is ready once the supervisor is up.
+    ready, last = not v.serves(doc), ""
+    for i in range(attempts if v.serves(doc) else 0):
         rec = read_receipt(rdir)
         if rec.get("stopped_at"):
             v.fail("serve-stopped", "serve stopped before it was ready (%s); serve.log: %s"
@@ -570,7 +586,7 @@ def start(repo, sha, areas_csv):
     rec = update_receipt(rdir, ready_at=v.utc_now(), build_stamp=stamp, build_stamp_source=source)
     if rec.get("stopped_at"):
         v.fail("serve-stopped", "serve stopped as it became ready (%s)" % rec.get("stopped_by"))
-    print(json.dumps({"receipt_id": rid, "receipt_dir": rdir, "url": doc["url"], "worktree": wt,
+    print(json.dumps({"receipt_id": rid, "receipt_dir": rdir, "url": doc.get("url"), "worktree": wt,
                       "build_stamp": stamp, "build_stamp_source": source}))
     return 0
 
@@ -590,8 +606,11 @@ def drive(rid, area, args):
         v.fail("run-stopped", "the supervisor of run %s is gone; run run_session.py stop %s" % (rid, rid))
     with open(os.path.join(rdir, "areas.json"), errors="replace") as f:
         doc = json.load(f)
-    env = dict(os.environ, VERIFICATION_URL=rec["url"], VERIFICATION_RECEIPT_DIR=rdir,
-               VERIFICATION_WORKTREE=rec["worktree"], VERIFICATION_AREA=area)
+    env = dict(os.environ, VERIFICATION_RECEIPT_DIR=rdir, VERIFICATION_WORKTREE=rec["worktree"],
+               VERIFICATION_AREA=area)
+    env.pop("VERIFICATION_URL", None)  # set only when this run serves, never inherited (claude-config#2951)
+    if rec.get("url"):
+        env["VERIFICATION_URL"] = rec["url"]
     # Under the same reporting sandbox as serve, so the run's egress verdict covers the drive helper
     # too. None when the monitor could not start, and then the verdict is already unmeasured.
     wrap = rec.get("egress_sandbox") or []

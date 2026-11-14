@@ -188,8 +188,10 @@ check_eq "happy: exits 0 when every repo is covered" "0" "$rc"
 created="$(cat "$FAKE/created" 2>/dev/null)"
 check "happy: files in storefront" "--repo Acme-Corp/storefront" "$created"
 check "happy: files in overture" "--repo danwright32/overture" "$created"
-check_not "happy: never files in the repo the lesson came from" "Acme-Corp/bidboard" "$created"
-check "happy: says it skipped the source repo" "Acme-Corp/bidboard" "$out"
+# The repo a lesson came from is the one most likely to hold more of the same defect, since the fix
+# that taught it covered the case in front of it, so it gets a sweep too (claude-config#2945).
+check "happy: files in the repo the lesson came from" "--repo Acme-Corp/bidboard" "$created"
+check_not "happy: skips no repo" "SKIPPED" "$out"
 check "happy: title names the lesson and uses the short form" \
   "Lesson L900 sweep: A clock bounded partitioned query locks every partition; pass literal bounds." "$created"
 check "happy: priority and category labels" "priority-p2,lesson-sweep" "$created"
@@ -205,12 +207,18 @@ check "happy: body carries the rule sentence, whitespace collapsed" \
 check "happy: body carries the stable id marker" "<!-- lesson-id: abc1234567 -->" "$bodies"
 check_not "happy: body never carries the evidence (public repos)" "SECRET-EVIDENCE" "$bodies"
 check_not "happy: body never names the source repo (public repos)" "bidboard" "$bodies"
+check "happy: the source repo's body says the lesson came from there" \
+  "This lesson was recorded from a defect found in this project" "$(cat "$FAKE/body-Acme-Corp_bidboard" 2>/dev/null)"
+check_not "happy: the source repo's body does not say another project" "recorded in another project" \
+  "$(cat "$FAKE/body-Acme-Corp_bidboard" 2>/dev/null)"
+check "happy: other repos' bodies say another project" "A new lesson was recorded in another project" \
+  "$(cat "$FAKE/body-Acme-Corp_storefront" 2>/dev/null)"
 # Every issue carries an Open questions section (claude-config#1279), and the filing gate never sees
 # this script's body file (claude-config#1321), so each body sent is judged here by the gate's own
 # reader rather than a copy of its rule. The count first, so a loop over no bodies cannot pass.
 check "happy: body carries an Open questions section saying None" $'\n## Open questions\nNone\n' "$bodies"
 body_files=("$FAKE"/body-*)
-check_eq "happy: one body judged per issue created" "2" "${#body_files[@]}"
+check_eq "happy: one body judged per issue created" "3" "${#body_files[@]}"
 for b in "${body_files[@]}"; do
   check_eq "happy: the filing gate's own reader finds the section in ${b##*/}" "True" \
     "$(python3 -B -c 'import importlib.util, sys
@@ -225,7 +233,11 @@ reset_world noshort
 run L901
 check_eq "noshort: exits 0" "0" "$rc"
 check "noshort: title uses the rule" "Lesson L901 sweep: Short rule with no short form." "$(cat "$FAKE/created")"
-check "noshort: a non digest source excludes nothing" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created")"
+check "noshort: files in bidboard" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created")"
+check "noshort: a source outside the digest gives bidboard the another project wording" \
+  "A new lesson was recorded in another project" "$(cat "$FAKE/body-Acme-Corp_bidboard" 2>/dev/null)"
+check_not "noshort: and never the came from here wording" "recorded from a defect found in this project" \
+  "$(cat "$FAKE"/body-* 2>/dev/null)"
 
 # ---- 3. a rerun files nothing twice: matched by number ----
 reset_world rerun
@@ -311,12 +323,13 @@ run L900
 check_eq "noauth: exits nonzero" "1" "$rc"
 check "noauth: says so" "no GitHub account is signed in" "$out"
 
-# ---- 13b. a lesson citing a repo by its digest LABEL skips that repo too ----
+# ---- 13b. a lesson citing a repo by its digest LABEL is recognised as its source too ----
 reset_world bylabel
 run L902
 check_eq "bylabel: exits 0" "0" "$rc"
-check_not "bylabel: no issue in the repo cited by its label" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
-check "bylabel: says it skipped it" "SKIPPED L902 Acme-Corp/storefront" "$out"
+check "bylabel: files in the repo cited by its label" "--repo Acme-Corp/storefront" "$(cat "$FAKE/created")"
+check "bylabel: that repo's body says the lesson came from there" \
+  "This lesson was recorded from a defect found in this project" "$(cat "$FAKE/body-Acme-Corp_storefront" 2>/dev/null)"
 check "bylabel: still files elsewhere" "danwright32/overture" "$(cat "$FAKE/created")"
 
 # ---- 14. bad usage ----

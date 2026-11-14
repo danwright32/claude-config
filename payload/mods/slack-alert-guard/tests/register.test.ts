@@ -2092,3 +2092,82 @@ test('a CPU bound trace is charged against the search deadline on the test clock
   w.wallStart(SCAN_MS)
   expect(await w.readClock()).toBeGreaterThanOrEqual(deadline)
 })
+
+// #2904: on 2026-11-13 a listing of the plugin store piped to grep, a find there by name, and a
+// heredoc whose text only named the folder were each refused as changing the guard's own record,
+// because any command naming the store was refused before the write reader was asked. Now only a
+// command that can write the record is refused: one the write reader finds writing or changing it,
+// the store folder or a folder holding it, or, in a command naming the store, anything whose files
+// the reader cannot name (a program, xargs, a script handed arguments, a path it cannot resolve).
+test("a command that only lists or reads the plugin store passes; one that can write the guard's own record is refused (#2904)", withKit, async ($, on) => {
+  const DIR = `${HOME}/.claude/plugins/store`
+  const w = world($, on)
+  const passes = [
+    `ls -la ${DIR}/ | grep slack-alert-guard`,
+    `find ${DIR} -maxdepth 1 -name 'slack-alert-guard*'`,
+    `cat > /w/app/notes.md <<'EOF'\nWhat a test run leaves is in ~/.claude/plugins/store/, one file per mod.\nEOF`,
+    `cat ${DIR}/status-bar_inline-1.json`,
+    `grep -n own ${STORE}`,
+    `ls ${DIR} > /w/app/store-list.txt`,
+  ]
+  for (const command of passes) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(passes.length)
+  const refused = [
+    `printf '{}' > ${STORE}`,
+    `rm ${STORE}`,
+    `rm -rf ${DIR}`,
+    `mv ${DIR} /w/app/old-store`,
+    `cp /w/app/x.json ${DIR}`,
+    `find ${DIR} -name 'slack-alert-guard*' -delete`,
+    `find ${DIR} -name 'slack-alert-guard*' -exec rm {} +`,
+    `cat /w/app/x.json | tee ${STORE}`,
+    `rm ${DIR}/slack-alert-guard_*.json`,
+    `ls ${DIR}/slack-alert-guard_* | xargs rm`,
+    `python3 -c "open('${STORE}', 'w').write('{}')"`,
+    `bash /w/app/tidy.sh ${DIR}`,
+    `cd ${DIR} && echo '{}' > slack-alert-guard_inline-ab12cd34ef56.json`,
+    `sed -i '' 's/a/b/' ${STORE}`,
+    // Not naming the store at all, so only the write reader can see it (it was let through before).
+    `cd ${HOME}/.claude/plugins && rm store/slack-alert-guard_inline-ab12cd34ef56.json`,
+  ]
+  for (const command of refused) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, expect.stringContaining('own record')])
+  expect(w.ran.length).toBe(passes.length)
+})
+
+// #2907: on 2026-11-13 an edit adding a waitUntil whose .catch logs through console.error was held,
+// and the log line was the wording flagged. A string whose every place is a whole argument of a
+// console call is a log line, never Slack wording, in a file whose send the guard cannot find and
+// inside a send's own arguments alike; the same string anywhere a send can carry it is held.
+test('a string only a console call logs is not Slack wording, inside a .catch, a waitUntil or a send callback; the same string a send carries is held (#2907)', withKit, async ($, on) => {
+  const UNTRACED = '/w/app/src/worker.ts'
+  const TRACED = '/w/app/src/direct.ts'
+  const base = "import { reportSomething } from './report'\nexport default {\n  async fetch(req: Request, env: Env, executionCtx: ExecutionContext) {\n    return new Response('ok')\n  },\n}\n"
+  const w = world($, on, {
+    files: {
+      // A Slack marker only in a comment makes it a sender; the tracer finds no send call in it.
+      [UNTRACED]: `// Reports reach hooks.slack.com through report.ts.\n${base}`,
+      [TRACED]: `${base}export const direct = (env: Env) => fetch(env.SLACK_WEBHOOK_URL, { method: 'POST', body: JSON.stringify({ text: 'Queue is stuck' }) })\n`,
+    },
+  })
+  const at = (file: string, line: string) => ({ tool: 'Edit', file_path: file, old_string: "    return new Response('ok')", new_string: `${line}\n    return new Response('ok')` })
+  const passes: [string, Record<string, unknown>][] = [
+    ['the reported edit', at(UNTRACED, "    executionCtx.waitUntil(\n      reportSomething(env).catch((err) => console.error('[alert] report failed', err)),\n    )")],
+    ['console.warn and log', at(UNTRACED, "    console.warn('report is slow')\n    console.log(`report took ${ms} ms`, ms)")],
+    ['a callback inside the send', at(TRACED, "    direct(env).catch((err) => console.error('[alert] direct failed', err))")],
+  ]
+  for (const [name, input] of passes) expect([name, refusalOf(await call($, input))]).toEqual([name, ''])
+  expect(w.ran.length).toBe(passes.length)
+  expect(w.cards).toEqual([])
+  const held: [string, Record<string, unknown>, string][] = [
+    // The send's own wording beside a logged callback is held; the logged string is not named.
+    ['the send beside a log', at(TRACED, "    notifySlack(env.SLACK_WEBHOOK_URL, 'Queue is stuck again', { onError: (err) => console.error('[alert] notify failed', err) })"), 'Queue is stuck again'],
+    // Part of an argument, or handed to another call inside the console call, is not a log line.
+    ['part of an argument', at(UNTRACED, "    console.error('report failed for ' + reportSomething(env))"), 'report failed for '],
+    ['a call inside the log', at(UNTRACED, "    console.log(reportSomething('Disk is full on db-1'))"), 'Disk is full on db-1'],
+    // Logged in one place and handed to the send in another.
+    ['logged and sent', at(UNTRACED, "    console.error('Report queue is stuck')\n    executionCtx.waitUntil(reportSomething('Report queue is stuck'))"), 'Report queue is stuck'],
+  ]
+  for (const [name, input, wording] of held) expect([name, refusalOf(await call($, input)).includes(wording)]).toEqual([name, true])
+  expect(refusalOf(await call($, held[0]?.[1] as Record<string, unknown>))).not.toContain('notify failed')
+  expect(w.ran.length).toBe(passes.length)
+})
