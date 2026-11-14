@@ -491,7 +491,7 @@ that was not captured, a kind that is not one of the three or the terminal, or o
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
 hold, an exception without Dan's words, a date and where he said them, and, for a design frozen from a
-settled one, each refusal the paragraph on frozen designs below names.
+settled one, every refusal the paragraph on frozen designs below lists.
 
 **A design whose frames were captured from different pages is still one file** (claude-config#1474).
 Bidspoke's lead validation design had its panel captured in edit mode and its card in view mode, and
@@ -538,8 +538,12 @@ it. Ask Dan once, one picker per exception, whether it carries across. On his ye
 given (`{"id", "frame", "region", "carriedFrom": "<source id>"}`): the words, date and where he said
 them are filled in from the source, never retyped, and the page says each was carried and from where.
 On his no, list its id in `"notCarried"`; carried onto some frames only, list it there too. The same
-answer recorded on several source frames is one question. Exceptions covering nothing the new design
-shows are left behind, and it says which.
+answer recorded on several source frames is one question; another answer over the same region is
+asked on its own. Exceptions covering nothing the new design shows are left behind, and it says which.
+It also refuses a `"frozenFrom"` that is not a settled design, a carried exception whose words, date,
+source or region are not the source's, or that goes onto a frame of another width or a decision of
+that id saying something else, and a `"carriedFrom"` or `"notCarried"` naming an exception the source
+does not hold, or given with no `"frozenFrom"`.
 
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it

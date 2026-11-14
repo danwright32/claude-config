@@ -457,8 +457,10 @@ def carry_exceptions(spec, base, exceptions, decisions, frames):
                 continue
         if same(s) in declined_as or same(s) in asked:
             continue
+        # Answered on a frame only by a carry of this same answer: another exception over the same region in
+        # other words is another thing Dan said, and is asked about on its own.
         open_ = [f for f in fits if not any(
-            (x.get("decision") == s["decision"]) if f is None else (x.get("frame") == f and x.get("region") == s.get("region"))
+            same(by_id[x["carriedFrom"]]) == same(s) and (f is None or x.get("frame") == f)
             for x in out if "carriedFromDesign" in x)]
         if open_:
             asked.add(same(s))

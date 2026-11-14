@@ -284,6 +284,17 @@ check("and the page says each was carried, and from where",
 gate = subprocess.run([sys.executable, SCORE, "frames", path], capture_output=True, text=True)
 check("the score still reads the design a carried exception is in", gate.returncode == 0, gate.stdout + gate.stderr)
 
+source2 = json.load(open(os.path.join(T, "frozen-source.json")))
+source2["exceptions"] = source2["exceptions"] + [
+    {"id": "X5", "frame": "f1", "region": HEADER, "words": "the badge counts live alerts", "date": "2026-11-02",
+     "source": "https://example.invalid/issues/9#issuecomment-4"}]
+rc, out, _ = make("frozen-source-two", source2)
+check("a source with two different answers over one region is written", rc == 0, out)
+rc, out, path = make("frozen-two-answers", frozen(frozenFrom="frozen-source-two.html",
+                                                  exceptions=[carry("X1", "g1"), carry("X1", "g2")], notCarried=["X3"]))
+check("carrying one answer over a region leaves another answer over that region still asked, naming it",
+      rc == 2 and "X5" in out and "the badge counts live alerts" in out and not os.path.exists(path), out)
+
 rc, out, path = make("frozen-partial", frozen(exceptions=[carry("X1", "g1")], notCarried=["X3"]))
 check("an exception carried onto one new frame and not another it fits is refused, naming the other",
       rc == 2 and "g2" in out and not os.path.exists(path), out)
