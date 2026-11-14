@@ -87,7 +87,7 @@ def parse_shot(argv, env):
         raise Usage("the width %r is not a whole number of points, 320 or more" % width)
     if theme not in ("light", "dark"):
         raise Usage("the theme is light or dark, not %r" % theme)
-    if not FILE_RE.match(name):
+    if not FILE_RE.fullmatch(name):
         raise Usage("%r is not a picture name this run can keep" % name)
     if not WHOLE_RE.fullmatch(min_rows):
         raise Usage("the minimum row count %r is not a whole number" % min_rows)

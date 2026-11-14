@@ -128,7 +128,8 @@ class Contract(Base):
                  # isdigit() is true for a superscript that int() refuses: a usage fault, not a traceback.
                  (3, "1440²", "width"), (6, "1²", "row count"),
                  # $ also matches before a trailing newline: none may ride into the test's environment.
-                 (1, "Target/Suite\n", "test"), (2, "invoice-list\n", "frame"), (3, "1440\n", "width")]
+                 (1, "Target/Suite\n", "test"), (2, "invoice-list\n", "frame"), (3, "1440\n", "width"),
+                 (5, "x.png\n", "picture name")]
         for i, value, word in cases:
             argv = list(ARGS)
             argv[i] = value
