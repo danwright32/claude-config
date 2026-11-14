@@ -518,7 +518,7 @@ def _file_bodies(args, command, place, flags, shown_as):
     for word, state, detail in _body_files(args, command, place, flags, clustered=True):
         # The guard withholds the path as it withholds the name: a script's error output can land in a
         # log, and the path can hold the name (a notes folder named after a work project, #2909).
-        label = ("the file %s names" % shown_as) if _WITHHOLD else "%s %s" % (shown_as, word)
+        label = ("the file given to %s" % shown_as) if _WITHHOLD else "%s %s" % (shown_as, word)
         if state == "hidden":
             bodies.append((label, None))
         elif state == "text":
@@ -971,8 +971,9 @@ def _word_spans(text):
 
 
 # What in a command can read back the directory a cd entered: a substitution or backquote (realpath .,
-# git rev-parse --show-toplevel and the rest), pwd and dirs, and the variables holding it.
-READS_DIR = re.compile(r"\$\(|`|\bpwd\b|\bdirs\b|\bPWD\b|\bOLDPWD\b")
+# git rev-parse --show-toplevel and the rest), pwd and dirs, the variables holding it, and the tilde
+# forms the shell expands to them (~+ and ~-, and ~N for the directory stack).
+READS_DIR = re.compile(r"\$\(|`|\bpwd\b|\bdirs\b|\bPWD\b|\bOLDPWD\b|~[-+0-9]")
 
 
 def posted_text(command):
@@ -991,7 +992,7 @@ def posted_text(command):
     blanking less can only refuse more.
 
     A cd is left in whenever anything in the command could read back the directory it entered and
-    post it (READS_DIR): a substitution, a backquote, pwd, dirs, $PWD or $OLDPWD, as in
+    post it (READS_DIR): a substitution, a backquote, pwd, dirs, $PWD, $OLDPWD, ~+ or ~-, as in
     `cd <checkout> && gh issue create --title "$(basename $PWD)"` (the lessons review of #2909)."""
     try:
         parts = []

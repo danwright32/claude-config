@@ -421,8 +421,10 @@ run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"
 check "#2909 and so is one naming \$PWD: $out" refused
 run "cd $WORKCO && echo \"\$PWD\" > made.md && gh issue create --repo danwright-test/public-notes --title x --body-file made.md"
 check "#2909 and a body file written from \$PWD: $out" refused
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title ~+ --body-file clean.md"
+check "#2909 and a title of ~+, which the shell expands to the directory: $out" refused
 run "cd $WORKCO && pwd | gh issue create --repo danwright-test/public-notes --title x --body-file -"
-check "#2909 and a body piped from pwd: $out" refused
+check "#2909 (control) a body piped from pwd is refused, as any unshown standard input is: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/nowhere.md"
 check "#2909 a body file that cannot be read is refused: $out" refused
 check "#2909 saying it could not be read: $out" has "$out" "could not be read"
