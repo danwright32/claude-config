@@ -490,7 +490,8 @@ any other capture it says the picture half is unmeasured, so it is no score. It 
 that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder or its `screenShown` throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
-hold, and an exception without Dan's words, a date and where he said them.
+hold, an exception without Dan's words, a date and where he said them, and, for a design frozen from a
+settled one, each refusal the paragraph on frozen designs below names.
 
 **A design whose frames were captured from different pages is still one file** (claude-config#1474).
 Bidspoke's lead validation design had its panel captured in edit mode and its card in view mode, and
