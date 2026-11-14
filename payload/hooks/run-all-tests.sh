@@ -31,7 +31,8 @@
 # Environment:
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
-#   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
+#   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print (default 40); each place
+#                             it cuts a message adds one line saying how many were not shown
 #   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). With it
 #                             on, the failed suite's FAIL line says FLAKY, recheck timed out,
 #                             recheck could not run because another run holds the suite lock,
@@ -699,7 +700,8 @@ suite_result_line(){   # suite_result_line <a suite's output> -> the exact line,
 }
 
 # What a failing suite said about its failures: each FAIL (or `not ok`) line and every line after it
-# up to the next result line, at most <max> lines (claude-config#253, #2928).
+# up to the next result line, at most <max> of the suite's own lines, plus one line saying so at each
+# place a message was cut (claude-config#253, #2928).
 #
 # A message runs until the next FAIL, a passed check (a line starting `ok` or `PASS`), the suite's
 # own `passed: <n>` total (273 suites print one, counted on 2026-11-14), an agreed SUITE- line, or
