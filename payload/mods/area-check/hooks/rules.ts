@@ -846,7 +846,28 @@ export type Held = {
   // The branch and merge base the edit was held on (#1510), kept in its version 3 decision; absent in entries held before them.
   branch?: string | null
   mergeBase?: string | null
+  /**
+   * A command reaching a whole folder is held once for it (#2920): the first held file under it is
+   * this entry, `more` the other held files there, each judged as its own first edit would be, and
+   * `under` the folder as the command names it. One decision is taken for them all.
+   */
+  more?: Held[]
+  under?: string
 }
+
+/** Every file one hold stands for: the file it names, and the others held under the same folder (#2920). */
+export const heldFiles = (h: Held): Held[] => [h, ...(h.more ?? [])]
+
+/** The files one hold stands for, as a sentence lists them: `a`, `a and b`, `a, b and c`. */
+export const heldNames = (h: Held): string => listed(heldFiles(h).map(f => f.rel))
+
+const listed = (names: readonly string[]): string => (names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+
+/**
+ * The issues a hold may fold into: those it showed, and for a folder held once (#2920) only those
+ * shown for every file it stands for, since a fold is recorded for each of them.
+ */
+export const foldable = (h: Held): Match[] => h.shown.filter(m => (h.more ?? []).every(f => f.shown.some(x => x.n === m.n)))
 
 /** The held call as a sentence names it: a Bash command writing the file, or the edit tool to it. */
 export const heldCall = (h: Held): string => (h.tool === 'Bash' ? `Bash command, which writes ${h.rel}` : `${h.tool} to ${h.rel}`)
@@ -895,7 +916,7 @@ export const reasonProblem = (reason: unknown): string | undefined => {
   return undefined
 }
 
-const issueList = (h: Held) => h.shown.map(m => `#${m.n}`).join(', ')
+const issueList = (h: Held) => foldable(h).map(m => `#${m.n}`).join(', ')
 /** The fold a command whose files cannot be named may take (#2706), as the refusal and the card say it. */
 const foldWay = (h: Held, verb: 'fold' | 'folds' = 'fold') => `${verb} the structural fix for one of ${issueList(h)} into this work`
 
@@ -911,7 +932,14 @@ export const decideProblem = (input: { decision?: unknown; reason?: unknown; iss
       ? `This command writes a file whose name cannot be read, so there is no file to restructure: proceed with a reason, ${foldWay(h)}, or make the change with Edit or Write, which the area check can judge.`
       : 'This command writes a file whose name cannot be read, so there is no file to fold a fix into or restructure: proceed with a reason, or make the change with Edit or Write, which the area check can judge.'
   }
-  if (d === 'fold') {
+  if (d === 'fold' && h.more?.length) {
+    // A folder held once (#2920) folds only into an issue shown for every file, recorded for each.
+    if (!foldable(h).some(m => m.n === input.issue)) {
+      return foldable(h).length
+        ? `"${String(input.issue)}" is not an issue shown for every file the hold names: give "issue" as one of ${issueList(h)}, as a number.`
+        : `"${String(input.issue)}" is not an issue shown for every file the hold names, and none is, so there is none to fold in: proceed with a reason, or restructure.`
+    }
+  } else if (d === 'fold') {
     if (!h.shown.length) return `${h.rel} was held for its growth alone, so no issue was shown to fold in: proceed with a reason, or restructure.`
     if (!h.shown.some(m => m.n === input.issue)) return `"${String(input.issue)}" is not an issue the hold showed: give "issue" as one of ${issueList(h)}, as a number.`
   }
@@ -938,11 +966,29 @@ export const holdCard = (h: Held): { reason: string; safeWay: string; note?: str
     }
   }
   const parts: string[] = []
-  if (h.shown.length) parts.push(`${h.rel} has open structural issues: ${h.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}.`)
-  else if (h.why.includes('growth')) parts.push(`${h.rel} is among the fastest growing large files in ${h.repo}.`)
+  const what = (f: Held): string | undefined =>
+    f.shown.length ? `open structural issues: ${f.shown.map(m => `#${m.n} (${priorityOf(m)}, ${m.structural.join(', ')})`).join('; ')}` : f.why.includes('growth') ? `among the fastest growing large files in ${f.repo}` : undefined
+  const lead = what(h)
+  if (lead) parts.push(`${h.rel} ${h.shown.length ? 'has' : 'is'} ${lead}.`)
   if (h.issues.state === 'unread') parts.push(`Its open issues could not be read (${h.issues.why}), so its growth alone decided.`)
   const note = growthLine(h)
-  return { reason: parts.join(' '), safeWay: 'Claude decides whether this edit goes ahead, folds a structural fix in, or restructures first.', ...(note ? { note } : {}) }
+  const safeWay = 'Claude decides whether this edit goes ahead, folds a structural fix in, or restructures first.'
+  if (!h.more?.length) return { reason: parts.join(' '), safeWay, ...(note ? { note } : {}) }
+  // A folder held once (#2920): the first file's facts with its growth, then the others, those
+  // held for the same facts named together, and that one decision covers them all.
+  if (note) parts.push(note)
+  parts.push(`${h.under ?? 'The folder'} reaches every file under it, and the area check also holds ${listed(h.more.map(f => f.rel))}.`)
+  const alike = new Map<string, { names: string[]; issues: boolean }>()
+  for (const f of h.more) {
+    const w = what(f)
+    if (!w) continue
+    const g = alike.get(w) ?? { names: [], issues: f.shown.length > 0 }
+    g.names.push(f.rel)
+    alike.set(w, g)
+  }
+  for (const [w, g] of alike) parts.push(`${listed(g.names)} ${g.names.length > 1 ? (g.issues ? 'have' : 'are') : g.issues ? 'has' : 'is'} ${w}.`)
+  parts.push(`One decision covers all ${h.more.length + 1} files.`)
+  return { reason: parts.join(' '), safeWay: 'Claude decides whether this command goes ahead for every file it names, folds a structural fix in, or restructures first.' }
 }
 
 /** What the held session reads: the facts, and how to decide under this call's id. */
@@ -952,7 +998,7 @@ export const holdRefusal = (h: Held): string => {
   const call = (rest: string) => `${DECIDE_TOOL} with {"call": "${h.id}", ${rest}}`
   const ways = [`${call('"decision": "proceed", "reason": "<why this change does not add to the problem>"')} when it does not`]
   // For a command whose files cannot be named, the issues are the repository's it may fold into (#2706).
-  if (h.shown.length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
+  if (foldable(h).length) ways.push(`${call('"decision": "fold", "issue": <one of ' + issueList(h) + '>')} to fold that structural fix into this work`)
   if (h.unread) return `The area check held this ${heldCall(h)}. ${facts} Decide: call ${ways.join('; or ')}, or make the change with Edit or Write instead, which the area check can judge. Then send the Bash command again, unchanged.`
   ways.push(
     h.agent === null
@@ -970,16 +1016,18 @@ export const restructureQuestion = (h: Held): { question: string; options: { lab
     { label: 'Restructure first', description: 'The structural fix is done before this work, and the file is released for it.' },
     { label: 'Proceed anyway', description: 'This work goes ahead on the file as it is.' },
   ]
-  if (h.shown.length) options.push({ label: 'Fold in', description: `The structural fix for ${issueList(h)} is folded into this work.` })
-  return { question: `Restructure ${h.rel} before this work? ${facts}`, options }
+  if (foldable(h).length) options.push({ label: 'Fold in', description: `The structural fix for ${issueList(h)} is folded into this work.` })
+  return { question: `Restructure ${heldNames(h)} before this work? ${facts}`, options }
 }
 
 /** Asleep (decision 7): one note per issue shown, which bedtime posts into its Open questions; for growth alone, one for the morning report. */
 export const sleepNotes = (h: Held): { kind: 'question'; repo: string; issue?: number; text: string; options: string[] }[] => {
   const q = restructureQuestion(h)
   const options = q.options.map(o => o.label)
-  if (!h.shown.length) return [{ kind: 'question', repo: h.repo, text: q.question, options }]
-  return h.shown.map(m => ({ kind: 'question', repo: h.repo, issue: m.n, text: q.question, options }))
+  // A folder held once (#2920) is one question about every issue any of its files showed.
+  const shown = [...new Set(heldFiles(h).flatMap(f => f.shown.map(m => m.n)))]
+  if (!shown.length) return [{ kind: 'question', repo: h.repo, text: q.question, options }]
+  return shown.map(n => ({ kind: 'question', repo: h.repo, issue: n, text: q.question, options }))
 }
 
 const sameSet = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every(x => b.includes(x))

@@ -7721,6 +7721,11 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once
+for the folder (#2920): every held file under it is named in one refusal, and one decision covers
+them all, each file claimed and decided on record, where it was held once per file, each needing its
+own decision and a resend. It folds only into an issue shown for every file, and Dan's restructure
+answer is kept for each file.
 A folder a script is handed is judged as a write of every file under it (#2321), unless every
 write in the script's own text can be placed (#2407, #2565): a full path, a path under the home
 folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,

@@ -55,7 +55,10 @@ import {
   couldHold,
   repoIssues,
   decideProblem,
+  foldable,
   heldCall,
+  heldFiles,
+  heldNames,
   holdCard,
   holdRefusal,
   heldUnder,
@@ -782,11 +785,31 @@ const gatePath = async ($: EngineInterface, id: string, t: Extract<ShellTarget, 
     return PASS
   }
   if ('unread' in under) return { word: t.word, unread: `${t.word} reaches every file under it, and ${under.unread}`, folder: t.path }
-  for (const p of under.paths) {
-    const w = await gate($, 'Bash', id, p, agent)
-    if ('deny' in w) return w
+  return gateFolder($, id, t.word, under.paths, agent)
+}
+
+// The files under a folder a command reaches, each judged as its first edit would be, and held once
+// for the folder (#2920): every held file named in one refusal under the call's id, and one decision
+// taken for them all, where each was held in turn, one decision and resend per file. A file whose
+// judging throws passes, said, as gate's own does, and the rest are still judged.
+const gateFolder = async ($: EngineInterface, id: string, word: string, paths: readonly string[], agent: string | null): Promise<{ deny: string } | typeof PASS> => {
+  const held: Held[] = []
+  for (const p of paths) {
+    try {
+      if (!(await $.fs.exists(p))) continue
+      const v = await judgeEdit($, 'Bash', id, p, agent)
+      if ('held' in v) held.push(v.held)
+    } catch (err) {
+      await failed($, p, err)
+    }
   }
-  return PASS
+  const [lead, ...more] = held
+  if (!lead) return PASS
+  const h: Held = more.length ? { ...lead, more, under: word } : lead
+  // Each judging kept its own entry under this id, each replacing the last; the one hold replaces them.
+  await updateHeld($, list => [...list.filter(x => x.id !== id), h].slice(-HELD_MAX))
+  await card($, id, holdCard(h))
+  return { deny: holdRefusal(h) }
 }
 
 // A command's verdict: the first file it writes that is held refuses it. The reader failing lets the
@@ -850,33 +873,40 @@ const again = (h: Held, by: string | null) => {
 }
 
 // A decision taken: the file claimed for whoever was held, the held entry gone, the decision logged.
+// A folder held once (#2920) is decided for every file it stands for: each claimed, each logged, so
+// the pull request carries a line for each, as it did when each was held in turn.
 const release = async ($: EngineInterface, h: Held, decided: { decision: Decision; reason?: string; issue?: number; by?: 'dan' }) => {
+  const files = heldFiles(h)
   // A write whose file cannot be named is claimed by its command, so only that command runs unjudged.
-  await claim($, h.unread ? h.unread.key : keyOf(h.main, h.rel, h.agent))
+  for (const f of files) await claim($, f.unread ? f.unread.key : keyOf(f.main, f.rel, f.agent))
   await updateHeld($, list => list.filter(x => x.id !== h.id))
-  // Version 3 (#1510): the branch and merge base, which the pull request line is matched by (L1010).
-  await logged($, `${h.main}/${h.rel}`, {
-    v: 3,
-    kind: 'decided',
-    at: new Date(await $.clock.now()).toISOString(),
-    session: await $.session.id(),
-    agent: h.agent,
-    repo: h.repo,
-    branch: h.branch ?? null,
-    mergeBase: h.mergeBase ?? null,
-    path: h.rel,
-    call: h.id,
-    ...decided,
-  })
+  for (const f of files) {
+    // Version 3 (#1510): the branch and merge base, which the pull request line is matched by (L1010).
+    await logged($, `${f.main}/${f.rel}`, {
+      v: 3,
+      kind: 'decided',
+      at: new Date(await $.clock.now()).toISOString(),
+      session: await $.session.id(),
+      agent: f.agent,
+      repo: f.repo,
+      branch: f.branch ?? null,
+      mergeBase: f.mergeBase ?? null,
+      path: f.rel,
+      call: h.id,
+      ...decided,
+    })
+  }
 }
 
 // A restructure question still waiting on Dan for this held call is settled by any decision.
 // Under its own key and the key it had before #2246, since a question asked then may still wait.
 const settleQuestion = async ($: EngineInterface, h: Held) => {
-  for (const k of [await questionKey(h.repo, h.rel), legacyQuestionKey(h.repo, h.rel)]) {
-    if (k === undefined) continue
-    const q = (await $.store.get(k)) as Question | undefined
-    if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+  for (const f of heldFiles(h)) {
+    for (const k of [await questionKey(f.repo, f.rel), legacyQuestionKey(f.repo, f.rel)]) {
+      if (k === undefined) continue
+      const q = (await $.store.get(k)) as Question | undefined
+      if (q?.state === 'pending' && q.call === h.id) await $.store.delete(k)
+    }
   }
 }
 
@@ -919,29 +949,31 @@ const holdAway = async ($: EngineInterface, label: string, prompt: string) => {
 const asking = (h: Held) => `call AskUserQuestion with one question and metadata {"source": "${ASK_SOURCE}:${h.id}"}; the area check words the question and its answers`
 
 const restructure = async ($: EngineInterface, h: Held, decideId: string) => {
+  // A folder held once (#2920) waits under its first file's key, and his answer is kept for each.
   const k = await questionKey(h.repo, h.rel)
+  const names = heldNames(h)
   const pending: Question = { state: 'pending', at: await $.clock.now(), issues: h.shown.map(m => m.n), session: await $.session.id(), call: h.id, agent: h.agent }
   // A subagent never asks Dan (decision 8): the main session is told at its next prompt.
   if (h.agent !== null) {
     await $.store.set(k, pending)
-    return { result: `The question is handed to the main session, which asks Dan whether to restructure ${h.rel} first. Stop and report to the main session that ${h.rel} waits on his answer, and do not edit it meanwhile.` }
+    return { result: `The question is handed to the main session, which asks Dan whether to restructure ${names} first. Stop and report to the main session that ${names} ${h.more?.length ? 'wait' : 'waits'} on his answer, and do not edit ${h.more?.length ? 'them' : 'it'} meanwhile.` }
   }
   if (await isAsleep($)) {
     let noted = true
     for (const note of sleepNotes(h)) noted = (await sleepNote($, note)) && noted
     if (noted) {
       await $.store.set(k, pending)
-      return { result: `Dan is asleep, so the question whether to restructure ${h.rel} first is noted for his morning report, and the file stays held. Go on with work that does not edit it.` }
+      return { result: `Dan is asleep, so the question whether to restructure ${names} first is noted for his morning report, and ${h.more?.length ? 'the files stay' : 'the file stays'} held. Go on with work that does not edit ${h.more?.length ? 'them' : 'it'}.` }
     }
   }
-  const away = await holdAway($, `whether to restructure ${h.rel} before this work`, `Ask Dan whether to restructure ${h.rel} first: call ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "restructure"} again.`)
+  const away = await holdAway($, `whether to restructure ${names} before this work`, `Ask Dan whether to restructure ${names} first: call ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "restructure"} again.`)
   if (away) {
     await $.store.set(k, pending)
     await card($, decideId, away.card, away.card.guard)
     return { deny: away.deny }
   }
   await $.store.set(k, pending)
-  return { result: `Ask Dan now: ${asking(h)}. ${h.rel} stays held until he answers.` }
+  return { result: `Ask Dan now: ${asking(h)}. ${names} ${h.more?.length ? 'stay' : 'stays'} held until he answers.` }
 }
 
 // The questions this session's subagents (or the session itself) left waiting on Dan, each still held.
@@ -1282,7 +1314,7 @@ export const register: Register = on => {
       return { result: `Recorded: the structural fix for #${String(input.issue)} is folded into this work. ${again(h, agent)}` }
     }
     await release($, h, { decision: 'proceed', reason: input.reason as string })
-    return { result: `Recorded: this work goes ahead on ${h.rel}. ${again(h, agent)}` }
+    return { result: `Recorded: this work goes ahead on ${heldNames(h)}. ${again(h, agent)}` }
   }).catch(($, e, next) => neverThrows(() => undecided(msg(next.error)), () => HELD, HELD))
 
   // Dan's restructure question, asked in Claude Code's own dialog: the hook words the question and
@@ -1300,12 +1332,12 @@ export const register: Register = on => {
     if (r.deny !== undefined || r.isError) return r
     const say = (text: string) => ({ ...r, context: [...(r.context ?? []), text] })
     const out = (r.result ?? {}) as AskResult
-    if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${h.rel} stays held. Ask him again when he is back.`)
+    if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing is recorded and ${heldNames(h)} ${h.more?.length ? 'stay' : 'stays'} held. Ask him again when he is back.`)
     const shown = typeof out.questions?.[0]?.question === 'string' ? (out.questions[0].question as string) : q.question
     const chosen = out.answers?.[shown] ?? out.answers?.[q.question]
-    if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer, so nothing is recorded and ${h.rel} stays held. Ask him again, or leave it.`)
+    if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer, so nothing is recorded and ${heldNames(h)} ${h.more?.length ? 'stay' : 'stays'} held. Ask him again, or leave it.`)
     if (!q.options.some(o => o.label === chosen)) {
-      const parts = { still: `${h.rel} stays held`, again: `ask him again: ${asking(h)}` }
+      const parts = { still: `${heldNames(h)} ${h.more?.length ? 'stay' : 'stays'} held`, again: `ask him again: ${asking(h)}` }
       try {
         return say(await $.modkit.typedAnswer({ guard: GUARD, typed: chosen, ...parts }))
       } catch (err) {
@@ -1318,15 +1350,17 @@ export const register: Register = on => {
     if (chosen === 'Fold in') {
       await $.store.delete(k)
       const who = h.agent === null ? 'Call' : `Tell subagent ${h.agent} to call`
-      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${h.shown.map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h, null)}`)
+      return say(`Dan chose Fold in. ${who} ${DECIDE_TOOL} with {"call": "${h.id}", "decision": "fold", "issue": <one of ${foldable(h).map(m => `#${m.n}`).join(', ')}>} to record it. ${again(h, null)}`)
     }
-    await $.store.set(k, { state: 'answered', answer: chosen, at: await $.clock.now(), issues: h.shown.map(m => m.n) } satisfies Question)
+    // His answer stands for each file a folder held once stands for (#2920), each with its own issues.
+    const at = await $.clock.now()
+    for (const f of heldFiles(h)) await $.store.set(await questionKey(f.repo, f.rel), { state: 'answered', answer: chosen, at, issues: f.shown.map(m => m.n) } satisfies Question)
     if (chosen === 'Restructure first') {
       await release($, h, { decision: 'restructure', by: 'dan' })
-      return say(`Dan chose Restructure first: do the structural fix on ${h.rel} before this work; the file is released for it. ${again(h, null)}`)
+      return say(`Dan chose Restructure first: do the structural fix on ${heldNames(h)} before this work; ${h.more?.length ? 'the files are' : 'the file is'} released for it. ${again(h, null)}`)
     }
     await release($, h, { decision: 'proceed', by: 'dan' })
-    return say(`Dan chose Proceed anyway: this work goes ahead on ${h.rel}. ${again(h, null)}`)
+    return say(`Dan chose Proceed anyway: this work goes ahead on ${heldNames(h)}. ${again(h, null)}`)
   })
 
   // The questions waiting on Dan, said beside each prompt of the main session until he answers.
