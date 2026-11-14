@@ -7756,6 +7756,11 @@ repository's open structural issues naming a file, which the hold lists, the ses
 where it is in no checkout, or where the repository has no fast growing file and no structural issue
 naming a file. Removals, `touch`, `mkdir` and mode changes are not judged, and a
 program that builds its own file names (`node gen.js`) reads as writing nothing, so it is not held.
+A command reaching a whole folder (a `find -exec` over it, a folder handed to a script) is held once
+for the folder (#2920): every held file under it is named in one refusal, and one decision covers
+them all, each file claimed and decided on record, where it was held once per file, each needing its
+own decision and a resend. It folds only into an issue shown for every file, and Dan's restructure
+answer is kept for each file.
 A folder a script is handed is judged as a write of every file under it (#2321), unless every
 write in the script's own text can be placed (#2407, #2565): a full path, a path under the home
 folder, or a name built on what the script is handed (`"$1/gen.ts"`, judged as `<folder>/gen.ts`,
@@ -7770,7 +7775,12 @@ held (Dan chose to keep that hold on #2527). A script whose text
 runs what cannot be read as commands keeps the hold too (#2619): text run through `eval`, an alias
 it sets, a command named by a value (`"$TOOL" --write "$1"`, `"$@"`, `bash -c "$FIX"`), and a trap
 whose own text, read as the commands it is, writes. A value in an argument, an assignment or
-arithmetic names no command. A loop over quoted
+arithmetic names no command. A script in another language (node, python, ruby) whose only part
+mod-kit's judge cannot read is a module it loads by a computed name (`await import(rulesPath)`,
+`importlib.import_module(name)`, mod-kit's `onlyLoads`) writes nothing in its own text, as one
+importing a local module by a fixed name reads, so the folder it is handed is read, not written
+(#2920); one whose text also writes, runs a process (`execFileSync('git', ...)`) or runs code it
+builds (eval, new Function, vm) keeps the hold. A loop over quoted
 search terms
 (`for t in "*push*" gate; do ... "$t"; done`) hands a script each term as its characters, judged as
 the one file they name (#2527).

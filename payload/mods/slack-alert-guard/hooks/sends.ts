@@ -359,6 +359,50 @@ const callsOf = (r: Reading): { calls: Call[]; fns: Fn[] } => {
   return { calls, fns }
 }
 
+const LOG = /^console\.(log|info|warn|error|debug)$/
+// The bracket depth of the skeleton between two places, read left to right.
+const depthAcross = (skel: string, from: number, to: number): number => {
+  let depth = 0
+  for (let i = from; i < to; i++) {
+    const c = skel[i] as string
+    if (OPEN[c]) depth++
+    else if (CLOSE[c]) depth--
+  }
+  return depth
+}
+
+/**
+ * Where each string of a JavaScript or TypeScript file starts that is a whole argument of a console
+ * call (#2907): `console.error('[alert] report failed', err)`, inside a `.catch`, a `waitUntil` or a
+ * send's own callback alike. A console call writes to the runtime's log, never to Slack, so its text
+ * is no alert's wording. A string that is only part of an argument (`'failed ' + id`), or handed to
+ * another call inside the console call, is not one. `strings` are the file's string insides, as
+ * jsSpans gives them; a python file has none.
+ */
+export const consoleArgs = (r: Reading, strings: Range[]): Set<number> => {
+  const out = new Set<number>()
+  if (r.python) return out
+  const logs = callsOf(r).calls.filter(c => LOG.test(c.callee))
+  if (!logs.length) return out
+  const { skel } = r
+  for (const s of strings) {
+    // The string's own quotes, which the skeleton keeps.
+    const [open, close] = [s.from - 1, s.to]
+    let before = open - 1
+    while (before >= 0 && /\s/.test(skel[before] as string)) before--
+    let after = close + 1
+    while (after < skel.length && /\s/.test(skel[after] as string)) after++
+    const whole = logs.some(l => {
+      if (open <= l.open || close >= l.close) return false
+      const starts = before === l.open || (skel[before] === ',' && depthAcross(skel, l.open + 1, before) === 0)
+      const ends = after === l.close || (skel[after] === ',' && depthAcross(skel, l.open + 1, after) === 0)
+      return starts && ends
+    })
+    if (whole) out.add(s.from)
+  }
+  return out
+}
+
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const word = (name: string) => `(?<![\\w$])${escape(name)}(?![\\w$])`
 // What follows a name given a value (= += ||= and the like, never == => <= or !=), a name a method is

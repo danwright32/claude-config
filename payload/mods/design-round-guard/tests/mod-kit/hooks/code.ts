@@ -17,7 +17,9 @@ import { pythonText } from './quoted.ts'
 /** What the code can do, and the words that showed it. */
 export type CodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
-type Rule = { re: RegExp; seen: string | ((m: RegExpExecArray) => string) }
+// `load` marks a dynamic rule that only loads a module or file by a computed name (#2920): what that
+// runs is the module's own code, which no rule here reads, as a static import's is not read either.
+type Rule = { re: RegExp; seen: string | ((m: RegExpExecArray) => string); load?: true }
 // `canonical` rewrites the language's other spellings of a capability to the one the rules read.
 type Surface = { process: Rule[]; write: Rule[]; dynamic: Rule[]; judge?: (code: string) => CodeVerdict | undefined; canonical?: (code: string) => string }
 
@@ -338,8 +340,8 @@ const SURFACES: Record<Lang, Surface> = {
     ],
     dynamic: [
       { re: /(?<![\w.])(eval|exec|compile)\s*\(/, seen: m => m[1] as string },
-      { re: /\b__import__\s*\(\s*(?!['"])/, seen: '__import__ of a computed name' },
-      { re: /\bimport_module\s*\(\s*(?!['"])/, seen: 'import_module of a computed name' },
+      { re: /\b__import__\s*\(\s*(?!['"])/, seen: '__import__ of a computed name', load: true },
+      { re: /\bimport_module\s*\(\s*(?!['"])/, seen: 'import_module of a computed name', load: true },
       { re: /\bgetattr\s*\(\s*(?:os|subprocess|shutil|builtins)\b/, seen: 'getattr on os' },
     ],
     judge: pythonJudge,
@@ -359,8 +361,8 @@ const SURFACES: Record<Lang, Surface> = {
     dynamic: [
       { re: /(?<![\w.$])eval\s*\(/, seen: 'eval' },
       { re: /\bnew\s+Function\s*\(|(?<![\w.$])Function\s*\(/, seen: 'new Function' },
-      { re: /\brequire\s*\(\s*(?!(['"])[^'"]*\1\s*\)|`[^`$]*`\s*\))/, seen: 'require of a computed path' },
-      { re: /\bimport\s*\(\s*(?!(['"])[^'"]*\1\s*\)|`[^`$]*`\s*\))/, seen: 'import of a computed path' },
+      { re: /\brequire\s*\(\s*(?!(['"])[^'"]*\1\s*\)|`[^`$]*`\s*\))/, seen: 'require of a computed path', load: true },
+      { re: /\bimport\s*\(\s*(?!(['"])[^'"]*\1\s*\)|`[^`$]*`\s*\))/, seen: 'import of a computed path', load: true },
       { re: /\bvm\s*\.\s*(?:runIn\w*|compileFunction|Script)\b/, seen: 'vm' },
       { re: /\bprocess\.(?:binding|dlopen)\b/, seen: 'process.binding' },
     ],
@@ -387,7 +389,7 @@ const SURFACES: Record<Lang, Surface> = {
       // A send whose method is named by a literal is read above; one built at run time cannot be.
       // `def send(x)` defines a method of that name, which sends nothing (#760, Dan's decision).
       { re: /(?<![\w.])(?<!\bdef\s+(?:self\s*\.\s*)?)(?:send|public_send|__send__)\s*(?:\(\s*|\s+)(?!(?::\w+[?!=]?|(['"])\w+[?!=]?\1)\s*(?:[,)\n;]|$))/, seen: 'send of a computed name' },
-      { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path` },
+      { re: /(?<![\w.])(require|require_relative|load)\s*\(?\s*(?!['"])[\w$@]/, seen: m => `${m[1]} of a computed path`, load: true },
     ],
     judge: rubyOpen,
     canonical: rubyCanonical,
@@ -846,8 +848,12 @@ const pathUses = (code: string, spans: ModKitPythonText[]): ((t: ModKitPythonTex
 // parsers of structured text (json, yaml, toml, csv, ast, shlex, configparser).
 const PARSES = /\.\s*(?:r?split|splitlines|r?partition|findall|finditer|search|match|fullmatch)\s*\(|\b(?:loads|load_all|safe_load|literal_eval)\s*\(|\b(?:csv|shlex|configparser|tomllib|toml|yaml)\s*\./
 
-/** What inline code in a language can do that no build refuses, or undefined when it only reads. */
-export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined => {
+/**
+ * What inline code in a language can do that no build refuses, or undefined when it only reads.
+ * `besideLoads` leaves out a module or file loaded by a computed name (#2920), so a caller can ask
+ * whether that is all that leaves the code unread.
+ */
+export const codeVerdict = (lang: Lang, inline: string, opts: { besideLoads?: true } = {}): CodeVerdict | undefined => {
   const s = SURFACES[lang]
   // Read in the one spelling the rules know, whichever of the language's others it was written in.
   const code = s.canonical?.(inline) ?? inline
@@ -858,7 +864,7 @@ export const codeVerdict = (lang: Lang, inline: string): CodeVerdict | undefined
   const write = first(s.write, code)
   if (write) return { does: 'write files', seen: write }
   if (judged) return judged
-  const dynamic = first(s.dynamic, code)
+  const dynamic = first(opts.besideLoads ? s.dynamic.filter(r => !r.load) : s.dynamic, code)
   if (dynamic) return { does: 'unreadable', seen: dynamic }
   return undefined
 }
