@@ -70,7 +70,7 @@ enum VerificationShot {
     var description: String {
       switch self {
       case .missing(let name):
-        return "VerificationShot: \(name) is unset or empty, so there is nothing to say where the picture goes"
+        return "VerificationShot: \(name) is unset or empty, and a shot needs it"
       case .notAPositiveWholeNumber(let name, let value):
         return "VerificationShot: \(name) is \"\(value)\", which is not a whole number of points above 0"
       case .notATheme(let value):
@@ -157,8 +157,9 @@ enum VerificationShot {
     defer { window.close() }
     window.layoutIfNeeded()
     window.displayIfNeeded()
-    // One pass of the run loop, so a view that lays itself out asynchronously has finished. A wait on
-    // the run loop, not on the clock.
+    // A fixed 0.2 second turn of the run loop, as Ovation's camera has, so a view that lays itself out
+    // asynchronously on the main run loop gets the chance to. It waits on no condition: a view that
+    // settles later than this is drawn unsettled, and the pixel checks are what would show it.
     RunLoop.current.run(until: Date().addingTimeInterval(0.2))
 
     guard let content = window.contentView,
