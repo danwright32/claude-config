@@ -94,6 +94,11 @@ printf 'called\n' >> "$FAKE_LOG/calls"
 # its deadline is told from one that finished by the state it leaves, not the time (#1577).
 printf '%s\n' "$$" > "$FAKE_LOG/pid"
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
+# The lessons arrive in a file the runner removes once claude ends (claude-config#2975), so what
+# it held is kept here while it still exists.
+prev=""; for a in "$@"; do
+  [ "$prev" = --append-system-prompt-file ] && cat "$a" > "$FAKE_LOG/appended"; prev="$a"
+done
 env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin"
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
@@ -251,7 +256,9 @@ grep -q '^AI_REVIEW_STATE_DIR=' "$FAKE_LOG/env" \
 # the appended system prompt, with the per machine sections moved out of it, a second review of
 # another diff read back 56,997. The instructions stay beside the diff: in the system prompt too,
 # fewer findings cited a lesson (11 of 64, against 21 of 69 before and 18 of 65 this way).
-python3 - "$FAKE_LOG/args" "$PROMPT" "$DIR/.." <<'EOF' && ok || bad "the appended system prompt is exactly the lessons, and the message is the context lines then lib/ai-review-prompt.txt (#1599)"
+# Since #2975 the lessons travel in a file (--append-system-prompt-file), never as an argument, which
+# Linux caps at 131,072 bytes; the fake keeps the file's text in $FAKE_LOG/appended.
+python3 - "$FAKE_LOG/args" "$PROMPT" "$DIR/.." "$FAKE_LOG/appended" <<'EOF' && ok || bad "the appended system prompt is exactly the lessons, and the message is the context lines then lib/ai-review-prompt.txt (#1599)"
 import glob, os, sys
 args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
 prompt = open(sys.argv[2], encoding="utf-8").read()
@@ -259,10 +266,14 @@ files = sorted(glob.glob(os.path.join(sys.argv[3], "LESSONS-INDEX-*.md")))
 if not files:
     print("  no LESSONS-INDEX-*.md beside the hooks, so there was nothing to check against")
     sys.exit(1)
-if args.count("--append-system-prompt") != 1:
-    print(f"  --append-system-prompt appeared {args.count('--append-system-prompt')} times")
+if args.count("--append-system-prompt-file") != 1 or "--append-system-prompt" in args:
+    print(f"  --append-system-prompt-file appeared {args.count('--append-system-prompt-file')} times,"
+          f" --append-system-prompt {args.count('--append-system-prompt')} times")
     sys.exit(1)
-fixed = args[args.index("--append-system-prompt") + 1]
+if not os.path.exists(sys.argv[4]):
+    print("  claude was not handed a lessons file it could read")
+    sys.exit(1)
+fixed = open(sys.argv[4], encoding="utf-8").read()
 expected = "===== LESSONS\n\n" + "\n\n".join(open(f, encoding="utf-8").read().strip() for f in files)
 if fixed != expected:
     at = next((i for i, (a, b) in enumerate(zip(fixed, expected)) if a != b), min(len(fixed), len(expected)))
@@ -336,10 +347,9 @@ grep -qx 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m' "$FAKE_LOG/env" \
   && ok || bad "the review's claude runs with the five minute prompt cache (#1599)"
 grep -q '^DISABLE_PROMPT_CACHING=' "$FAKE_LOG/env" \
   && bad "and caching is no longer switched off (#1599)" || ok
-python3 - "$FAKE_LOG/args" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the appended system prompt, verbatim"
+python3 - "$FAKE_LOG/appended" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the appended system prompt, verbatim"
 import glob, os, sys
-args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
-sent = args[args.index("--append-system-prompt") + 1]
+sent = open(sys.argv[1], encoding="utf-8").read() if os.path.exists(sys.argv[1]) else ""
 files = sorted(glob.glob(os.path.join(sys.argv[2], "LESSONS-INDEX-*.md")))
 if not files:
     print("  no LESSONS-INDEX-*.md beside the hooks, so there was nothing to check against")
