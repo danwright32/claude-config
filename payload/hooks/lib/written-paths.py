@@ -22,9 +22,9 @@ replay of real sessions, every one false. The word is now read for what it does 
     "$S/$f" stays inside $S: Dan's decision of 2026-11-14 (claude-config#2910). git never prints a ..
     part, but the unquoted list is split on spaces and, in bash, matched as globs, so a tracked name
     holding a space can become a word that starts with .. (`x ../y` splits into `x` and `../y`) or a
-    glob that matches it. The gate cannot see file names, so the decision accepts that; it is read
-    only for git diff itself with options that cannot change what it prints (not --no-index,
-    --line-prefix or -z, nor a path outside the tree), and never for a list from any other source.
+    glob that matches it. The gate cannot see file names, so the decision accepts that. It is read
+    only for one fixed shape of git diff (git_diff_names: a few options that cannot change what it
+    prints, then at most two revisions), and never for a list from any other source.
   * Where an unknown part is unquoted in a word the shell splits (any word but a redirection's target,
     where more than one word is an error), the words it becomes can end anywhere, so that write can be
     any file.
@@ -43,11 +43,13 @@ import re
 
 ANY = object()  # a part of a word whose text is not known
 INSIDE = object()  # a relative path with no .. part: one `git diff --name-only` prints (#2910)
-# The options of `git diff --name-only` that leave each line a path inside the repository. Any other
-# option is read as able to change that (--no-index prints paths as given, --line-prefix adds text,
-# -z joins the names), so the list is read as any word at all.
-GIT_DIFF_SAFE = re.compile(r"--(?:name-only|cached|staged|no-renames|merge-base|no-ext-diff|no-color|"
-                           r"relative(?:=[\w./-]+)?|ignore-submodules(?:=\w+)?|diff-filter=[A-Za-z*]+)|-M|--")
+# The one shape of git diff read as printing paths inside the repository (git_diff_names): these
+# options, --name-only among them, then at most two revisions. Any other option is read as able to
+# change what it prints (--no-index prints paths as given, --line-prefix adds text, -z joins the
+# names), and a path word (after --, or one git cannot take as a revision) as able to make it a
+# --no-index diff, so anything else leaves the list read as any word at all.
+GIT_DIFF_OPTION = re.compile(r"--(?:name-only|cached|staged|no-renames|merge-base|diff-filter=[A-Za-z]+)")
+GIT_REVISION = re.compile(r"[A-Za-z0-9_@][A-Za-z0-9._/^~@-]*")
 MAX_SHAPES = 64  # alternatives past this are read as any word at all
 
 
@@ -251,7 +253,13 @@ def make(param_re, unknown_dir):
             by name, not a function or alias of the text, with only plain words (revisions, ranges,
             pathspecs) and options that cannot change what it prints. What git prints holds no ..
             part; a tracked name with a space can still split into a word that does, which Dan's
-            decision accepts (see the module docstring)."""
+            decision accepts (see the module docstring).
+
+            Only one fixed shape is read so: options from GIT_DIFF_OPTION, then at most two words
+            matching GIT_REVISION with no .. part, and nothing after them. Three reviews of a looser
+            reading each found a word git reads another way (a path outside the tree, which makes it
+            a --no-index diff; --name-only after --, where it is a pathspec), so the reading is the
+            narrow shape a copy loop uses rather than every word git accepts."""
             m = re.fullmatch(r'"?\$\((.*)\)"?', t, re.S)
             if not m or t.count('"') % 2:
                 return False
@@ -262,18 +270,15 @@ def make(param_re, unknown_dir):
             if any(kind == "op" for kind, _ in words):
                 return False
             words = [w for _, w in words]
-            if words[:2] != ["git", "diff"] or "--name-only" not in words:
+            if words[:2] != ["git", "diff"]:
                 return False
-            for w in words[2:]:
-                if not re.fullmatch(r"[A-Za-z0-9._=:^@,+-][A-Za-z0-9._/=:^~@,+-]*", w):
-                    return False  # a quote, an expansion, a glob or an absolute path
-                if ".." in re.split(r"[/=]", w):
-                    # Given a path outside the working tree, git diff compares the two paths as
-                    # --no-index does and prints them as given (lessons review at 125f910).
-                    return False
-                if w.startswith("-") and not GIT_DIFF_SAFE.fullmatch(w):
-                    return False
-            return True
+            k = 2
+            while k < len(words) and GIT_DIFF_OPTION.fullmatch(words[k]):
+                k += 1
+            revisions = words[k:]
+            if "--name-only" not in words[2:k] or len(revisions) > 2:
+                return False
+            return all(GIT_REVISION.fullmatch(w) and ".." not in w.split("/") for w in revisions)
 
         def inside_patterns(self, shape, d):
             """shape_patterns for a shape holding one INSIDE and no ANY: everything under the folder
