@@ -84,7 +84,8 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
-# scan.py <root> <list file> [--list]: for each path in the list, relative to root, prints
+# scan.py <root> <list file> <carried list> [--list]: for each path in the list, relative to root,
+# judging the lib folders and the folders in <carried list> (carried_dirs below), prints
 #   HIT <path>:<line>: ...         for each program importing from lib/ with bytecode on
 #   IMPORTER <path>:<line> ...     with --list, for every program importing from lib/, and how it
 #                                  turns bytecode off
