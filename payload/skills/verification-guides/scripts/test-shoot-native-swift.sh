@@ -223,7 +223,8 @@ for theme in light dark; do
   fi
   measured="$(python3 -I "$T/pixels.py" "$RDIR/rows-$theme.png" 2>&1)"
   # A reading that is not four numbers is the reader failing, said as such, never fed to arithmetic.
-  if ! printf '%s\n' "$measured" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+\.[0-9]+ [0-9]+$'; then
+  four_numbers='^[0-9]+ [0-9]+ [0-9]+\.[0-9]+ [0-9]+$'
+  if ! [[ $measured =~ $four_numbers ]]; then
     bad "the $theme picture's pixels could not be read" "$measured"; continue
   fi
   w=""; h=""; backdrop=""; inked=""
