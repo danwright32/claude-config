@@ -5919,6 +5919,7 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
 # merge to get wrong. Only keys on SHARED_SETTINGS_ALLOWED are ever written: a file holding any other
 # key is refused whole, naming it, so it cannot become a way to carry the model or anything else
 # nobody chose to share. Off is false, never a deletion, so the apply never has to infer a removal.
+# The one removal is stated, never inferred: a variable under env set to null (#2949, below).
 #
 # Effort is shared PER MODEL (2026-10-06): Claude Code reads a user's effort from
 # modelSettings.<full model name>.effortLevel, where /effort saves it, and applies the top level
@@ -5946,6 +5947,13 @@ SHARED_SETTINGS_FILE="settings.shared.json"
 # an alias on SHARED_MODEL_ALIASES or a full model name: unlike modelSettings, this variable takes
 # either. Taking it out of the file leaves each Mac's value where it is, as with a model the file
 # stops naming.
+#
+# A shared variable can be removed (#2949). On 2026-11-14 Dan chose to stop setting a default
+# subagent model, so an agent naming no model runs on the session's again. Since leaving the key out
+# changes nothing on a Mac that already holds it, the file sets it to null, and the pull deletes
+# exactly that leaf from settings.json's env block and nothing else in it. Only a variable on
+# SHARED_ENV_ALLOWED may be null: any other is refused by name as before, so null cannot become a way
+# to delete a Mac's own variable, a credential included.
 SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars outputStyle env"
 SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars, outputStyle, env.CLAUDE_CODE_SUBAGENT_MODEL"
 SHARED_OUTPUT_STYLES="default Explanatory Learning"
@@ -5957,7 +5965,7 @@ SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e
   if $e.key == "modelSettings" then
     reduce ($e.value | to_entries[]) as $m (.; reduce ($m.value | to_entries[]) as $f (.; .modelSettings[$m.key][$f.key] = $f.value))
   elif $e.key == "env" then
-    reduce ($e.value | to_entries[]) as $v (.; .env[$v.key] = $v.value)
+    reduce ($e.value | to_entries[]) as $v (.; if $v.value == null then del(.env[$v.key]) else .env[$v.key] = $v.value end)
   else .[$e.key] = $e.value end);'
 STATUS_LINE_SCRIPT_REL="mods/status-bar/statusline.sh"
 status_line_command(){ printf 'bash %s/%s' "$CLAUDE_HOME" "$STATUS_LINE_SCRIPT_REL"; }
@@ -6011,8 +6019,9 @@ shared_settings_wanted(){
         (.env | if type != "object" then "env is not an object of variables" else
           ((keys - ($envok | split(" ")))[] | "env.\(.), whose value is left out of this message, is not a variable the sync shares (only \($envok | split(" ") | join(", ")))"),
           (to_entries[] | select(.key as $k | $envok | split(" ") | index($k)) |
-            (.value as $v | if ($v | type) == "string" and (($aliases | split(" ") | index($v)) or ($v | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$"))) then empty
-             else "env.\(.key) is \($v | tojson), not a model alias (\($aliases | split(" ") | join(", "))) or a full model name like claude-opus-5-5" end))
+            (.value as $v | if $v == null then empty
+             elif ($v | type) == "string" and (($aliases | split(" ") | index($v)) or ($v | test("^claude-[a-z0-9]+(-[a-z0-9]+)*$"))) then empty
+             else "env.\(.key) is \($v | tojson), not a model alias (\($aliases | split(" ") | join(", "))), a full model name like claude-opus-5-5, or null to remove it" end))
         end)
       else empty end)
     ] | join("; ")' --arg styles "$SHARED_OUTPUT_STYLES" --arg envok "$SHARED_ENV_ALLOWED" --arg aliases "$SHARED_MODEL_ALIASES" <<< "$obj" 2>/dev/null)" || bad="the file could not be checked (jq failed on it)"
@@ -6030,7 +6039,8 @@ write_settings_extras(){
   [ "$shared" = '{}' ] && [ -z "$want_sl" ] && [ "$sl_state" != unreadable ] && return 0
   # Every leaf by its path. Not paths(scalars): that keeps a path only where the filter's OUTPUT is
   # truthy, and for a false leaf the output is false, so a setting turned off went unnamed.
-  names="$(jq -r '[paths(type | . != "object" and . != "array") | map(tostring) | join(".")] | join(", ")' <<< "$shared" 2>/dev/null || true)"
+  # A null leaf is a removal (only env carries one, #2949), so it is named as removed, never as written.
+  names="$(jq -r '. as $s | [paths(type | . != "object" and . != "array") as $p | ($p | map(tostring) | join(".")) + (if ($s | getpath($p)) == null then " removed" else "" end)] | join(", ")' <<< "$shared" 2>/dev/null || true)"
   tmp="$(scratch_file)"
   # A Mac with no settings.json is written from an empty object, and the file appears only from the
   # finished write: a stub made first would be left behind by a write that then failed (review of #775).

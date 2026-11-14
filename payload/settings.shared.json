@@ -14,6 +14,6 @@
   "skillListingMaxDescChars": 300,
   "outputStyle": "Explanatory",
   "env": {
-    "CLAUDE_CODE_SUBAGENT_MODEL": "opus"
+    "CLAUDE_CODE_SUBAGENT_MODEL": null
   }
 }
