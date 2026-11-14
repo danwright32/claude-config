@@ -407,6 +407,10 @@ def carry_exceptions(spec, base, exceptions, decisions, frames):
             if x.get("decision") != src["decision"] or "frame" in x:
                 fail("exception %s carries %s %s, which excepts decision %s, so it names that decision and no frame"
                      % (xid, label, cid, src["decision"]))
+            if src["decision"] in said and said[src["decision"]] != s_said.get(src["decision"]):
+                fail('exception %s carries %s %s onto decision %s, which says "%s" here and "%s" there: Dan excepted '
+                     "the decision he saw, and this one is another for him to approve"
+                     % (xid, label, cid, src["decision"], said[src["decision"]], s_said.get(src["decision"])))
         else:
             if "frame" not in x or "decision" in x:
                 fail("exception %s carries %s %s, which excepts a frame, so it names one of this design's frames"
