@@ -189,6 +189,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-gh-view-comments.sh",
+            "timeout": 10,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-rtk-init.sh",
             "timeout": 10,
             "onFailure": "block"

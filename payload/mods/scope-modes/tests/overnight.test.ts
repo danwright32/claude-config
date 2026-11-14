@@ -798,3 +798,52 @@ describe('what is never approved, and the disk readers', () => {
     expect(primaryFrom('')).toBeNull()
   })
 })
+
+// rtk's proxy runs the words after its own options as they stand, and mod-kit's reader passes over
+// rtk but not its proxy, so `rtk proxy gh issue view 5` reached the judge as a command named proxy
+// and its gh as a word of another command: refused as a GitHub write to a repository that could not
+// be resolved. On the night of 13 to 14 November 2026 that refused a builder's two reads of its
+// issue (#2937). Dan, 14 November: reading an issue while he sleeps is not something he bans.
+describe('gh and git run through rtk proxy are judged as written plainly (#2937)', () => {
+  const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
+  const notes = `${HOME}/.claude/state/session-notes/-Users-x-repo/s1/2937`
+  const scratch = '/private/tmp/claude-501/-Users-x-repo/s1/scratchpad'
+  const nowhere = { ...look, repoOf: async () => null }
+  const outside = (p: string) => `write the output of gh run through rtk proxy to ${p}, outside the session notes folder and the scratchpad`
+  test('the two forms refused that night go ahead, the repository taken from --repo', async () => {
+    expect(await bash('rtk proxy gh issue view 7 --repo other/x --comments', { look: nowhere })).toBeUndefined()
+    expect(await bash(`rtk proxy gh issue view 7 --repo other/x --comments > ${notes}/i7.txt 2>&1; wc -c ${notes}/i7.txt`, { look: nowhere })).toBeUndefined()
+  })
+  test('every other read, any proxy option in front, and the scratchpad as the redirect target', async () => {
+    for (const c of [
+      'rtk proxy gh pr view 5 -R other/x --json state,body',
+      'rtk proxy -v gh issue list --repo other/x --limit 50',
+      'rtk proxy --skip-env gh search issues sleep --repo other/x',
+      'rtk -u proxy gh pr checks 5 --repo other/x',
+      'rtk proxy gh api repos/other/x/issues/7/comments',
+      `rtk proxy gh issue view 7 -R other/x > ${scratch}/i7.txt`,
+      `rtk proxy gh issue view 7 -R other/x 2>/dev/null >> ${notes}/i7.txt`,
+      `cd ${notes} && rtk proxy gh issue view 7 -R other/x > i7.txt`,
+    ])
+      expect({ c, r: await bash(c, { look: nowhere }) }).toEqual({ c, r: undefined })
+  })
+  test('a redirect of that read anywhere but the notes folder or the scratchpad is refused (the decision on #2937)', async () => {
+    expect(await bash('rtk proxy gh issue view 7 -R other/x > out.txt')).toBe(outside(`${CWD}/out.txt`))
+    expect(await bash(`rtk proxy gh issue view 7 -R other/x >${HOME}/elsewhere/i7.txt`)).toBe(outside(`${HOME}/elsewhere/i7.txt`))
+    expect(await bash(`rtk proxy gh issue view 7 -R other/x > ${notes}/../../../../escape.txt`)).toBe(outside(`${HOME}/.claude/state/escape.txt`))
+    expect(await bash('rtk proxy gh issue view 7 -R other/x > "$OUT"')).toBe(outside('$OUT'))
+  })
+  test('controls: a write through rtk proxy to a repository that cannot be resolved stays refused', async () => {
+    expect(await bash('rtk proxy gh issue comment 7 --body x', { look: nowhere })).toBe(unresolved)
+    expect(await bash('rtk proxy gh issue close 7', { look: nowhere })).toBe('run gh issue close')
+    expect(await bash('rtk proxy gh issue comment 7 -R other/x --body x')).toBe('write to other/x from a checkout of o/r')
+    expect(await bash(`rtk proxy gh issue comment 7 --body "$(cat ${notes}/c.md)"`, { look: nowhere })).toBe(unresolved)
+  })
+  test('git through rtk proxy is judged too, where before nothing judged it', async () => {
+    expect(await bash('rtk proxy git push --force origin main')).toBe('force push')
+    expect(await bash('rtk proxy git status')).toBeUndefined()
+  })
+  test('a command named proxy that rtk does not run is no proxy', async () => {
+    expect(await bash('proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
+  })
+})

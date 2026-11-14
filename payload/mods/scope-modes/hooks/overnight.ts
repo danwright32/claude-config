@@ -1,5 +1,5 @@
 import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, operations, type Cmd } from './nobuild.ts'
+import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, inScratch, operations, type Cmd } from './nobuild.ts'
 import { browserRefusal, type Browser } from './browser.ts'
 
 // Sleep mode phase 3 (#834): what is refused while the Mac sleeps, judged by what a call DOES and
@@ -579,6 +579,66 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
   return to === here ? { repo: here } : { why: `write to ${to} from a checkout of ${here}` }
 }
 
+// ---- rtk proxy (#2937) ----
+
+// rtk's proxy runs the words after its own options as they stand, unfiltered (rtk 0.31.0 `rtk proxy
+// --help`: -v, -u, --skip-env and -h, none taking a value). mod-kit's reader passes over rtk but not
+// its proxy, so `rtk proxy gh issue view 5` reached this judge as a command named proxy, and its gh
+// as a word of another command, refused as a write to a repository that could not be resolved: on
+// the night of 13 to 14 November 2026 that refused a builder's reads of its own issue. Its git was
+// judged by nothing at all (`rtk proxy git push --force` went ahead). So a gh or git that rtk's
+// proxy runs is read again as a command line of its own, by the same reader, and judged exactly as
+// written plainly. Only those two: anything else proxy runs is judged as before, since reading it
+// again would drop what the first reading held (a heredoc feeding it). The line must show rtk in
+// front of proxy, so a program of its own named proxy is no proxy, and a word the shell would
+// change ($, a backtick) is not quoted back as text: those are judged as before, which refuses gh.
+const RTK_PROXY = /(?:^|[\s;&|(`])(?:\S*\/)?rtk\s+(?:-\S+\s+)*proxy(?=\s|$)/
+const PROXY_OPTIONS = /^(?:-v+|--verbose|-u|--ultra-compact|--skip-env)$/
+// A redirection among a command's words, as mod-kit's reader leaves them: an operator whose target
+// is the next word, or one with its target joined on. An input redirection is taken out too.
+const REDIRECT_OP = /^(?:\d*|&)(?:>>?|>\||<)$/
+const REDIRECT_JOINED = /^(?:\d*|&)(?:>>?|>\||<)(.+)$/
+type Proxied = { cmd: Cmd; targets: string[] }
+const throughProxy = async (c: Cmd, call: OvernightCall): Promise<Proxied | undefined> => {
+  if (name(c.words[0]) !== 'proxy' || c.heredocs?.length || !RTK_PROXY.test(call.raw)) return undefined
+  let i = 1
+  while (i < c.words.length && PROXY_OPTIONS.test(c.words[i] as string)) i++
+  if (c.words[i] === '--') i++
+  const inner = c.words.slice(i)
+  if (!['gh', 'git'].includes(name(inner[0])) || inner.some(w => w.startsWith('<<'))) return undefined
+  // Its redirections, kept to judge where the output goes, and the words gh or git is handed.
+  const words: string[] = []
+  const targets: string[] = []
+  for (let k = 0; k < inner.length; k++) {
+    const w = inner[k] as string
+    const op = REDIRECT_OP.test(w)
+    const joined = op ? undefined : REDIRECT_JOINED.exec(w)?.[1]
+    if (!op && joined === undefined) {
+      words.push(w)
+      continue
+    }
+    const target = op ? inner[++k] : joined
+    if (target !== undefined && !w.includes('<')) targets.push(target)
+  }
+  if (words.some(w => /[$`]/.test(w))) return undefined
+  const again = await call.read(words.map(w => `'${w.replace(/'/g, `'\\''`)}'`).join(' '))
+  if (again.length !== 1) return undefined
+  return { cmd: again[0] as Cmd, targets }
+}
+// Where the output of a gh run through rtk proxy may be written (Dan's standing rule for this
+// repository, recorded on the PR for #2937's open question): the null device and the descriptors,
+// the session notes folder and the scratchpad, never any other path. `targets` are the redirections
+// as written; one the shell would decide ($) cannot be placed, so it is refused.
+const proxiedOutputRefusal = (targets: readonly string[], dir: string | null, home: string): string | undefined => {
+  for (const t of targets) {
+    if (/^&\d*-?$/.test(t) || ['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty'].includes(t)) continue
+    const p = resolveDir(t, dir, home)
+    if (p !== null && (inScratch(p) || p.startsWith(`${home}/.claude/state/session-notes/`))) continue
+    return `write the output of gh run through rtk proxy to ${p ?? t}, outside the session notes folder and the scratchpad`
+  }
+  return undefined
+}
+
 // ---- MCP tools ----
 
 // Chrome is judged by browser.ts before this list is read (#2064), so the list holds only the tools
@@ -675,7 +735,10 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
-  for (const c of call.commands) {
+  for (const written of call.commands) {
+    // A gh or git rtk's proxy runs is judged as that gh or git (#2937); its redirections are its own.
+    const proxied = await throughProxy(written, call)
+    const c = proxied?.cmd ?? written
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
     const cmd = name(words[0])
@@ -719,6 +782,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (cmd === 'gh') {
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
+      const out = proxied && proxiedOutputRefusal(proxied.targets, dir, call.home)
+      if (out) return out
       if (v && 'write' in v) {
         const to = await writeTarget(v.write, dir, call, look)
         if ('why' in to) return to.why

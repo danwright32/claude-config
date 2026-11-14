@@ -92,6 +92,7 @@ REFUSING=(
   simplify-before-push.sh
   check-public-assets.sh
   check-gh-watch-interval.sh
+  check-gh-view-comments.sh
 )
 
 # Never refuses: rtk-rewrite.sh rewrites a command for rtk and passes every one through, and
