@@ -2417,10 +2417,47 @@ const HELD_WEDGED = `Blocked: the design round guard could not check this call b
 // #2727: only a timeout is said to be one; every other failure keeps its words and says nothing of
 // timing out, since the guard measured no such thing (L11).
 test('#2727: a failure that timed out says so and that it is no refusal; any other failure does not', () => {
-  for (const why of [WEDGED, 'the hook timed out after 1000ms', 'operation timeout'])
+  for (const why of [WEDGED, 'the hook timed out after 1000ms'])
     expect([why, cannotCheck(why).includes('timed out'), cannotCheck(why).includes('This is not a refusal')]).toEqual([why, true, true])
-  for (const why of ['EACCES: /w/locked', 'mod-kit: the branch reader failed', 'unknown failure'])
+  // Nor a failure that only names something holding the word (lessons review of 68267d7).
+  for (const why of ['EACCES: /w/locked', 'mod-kit: the branch reader failed', 'unknown failure', 'EACCES: /w/timeout/page.tsx', "the hook 'heartbeat' threw: x is undefined"])
     expect([why, cannotCheck(why)]).toEqual([why, `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`])
+})
+
+// #2948: mentionedLookFiles found names with one pattern whose run of name characters, tried from
+// every place in a long run holding no dot and letters, went to its end and back each time: about 1.2
+// s for 40,000 such characters, inside the hooks worker's heartbeat, for a large patch or heredoc.
+// Judged by growth between two sizes, the median of seven rounds as #2223's test is (#2790): four
+// times the text took about sixteen times as long; in step with size it is about four. And what it
+// finds is the same as the one pattern found, on text shaped every way it reads.
+test('#2948: mentionedLookFiles reads four times the text in under six times as long, and finds what the one pattern found', () => {
+  const ONE_PATTERN = /[\w./~@+*[\]()-]+\.[A-Za-z]+\b/g
+  for (const text of [
+    "open('app/page.tsx','w') and src/app/(shop)/[...slug]/page.tsx, x.css2 y.css",
+    'a.b.c/d.e.tsx_1 ~/x/tokens.json @scope/ui+kit/theme.css (open(app/page.tsx).read()',
+    'docs/page.html, `src/styles/site.css` x(1)/page.tsx ...css .html. name.tar.gz.x9',
+    'aaaa'.repeat(50) + '.tsx ' + 'b/'.repeat(40) + 'c.css',
+  ]) {
+    const expected = new Set<string>()
+    // What the one pattern matched, read through the same rest of mentionedLookFiles.
+    for (const m of text.matchAll(ONE_PATTERN)) for (const w of mentionedLookFiles(m[0])) expected.add(w)
+    expect([text, mentionedLookFiles(text)]).toEqual([text, [...expected]])
+  }
+  const timed = (n: number) => {
+    const text = `${'a/b_c-d'.repeat(n)} app/page.tsx`
+    const start = performance.now()
+    expect(mentionedLookFiles(text)).toEqual(['app/page.tsx'])
+    return performance.now() - start
+  }
+  timed(100)
+  const ratios: number[] = []
+  for (let round = 0; round < 7; round++) {
+    const small = timed(1500)
+    const large = timed(6000)
+    ratios.push(large / Math.max(small, 0.05))
+  }
+  const middle = [...ratios].sort((a, b) => a - b)[3] ?? Infinity
+  expect({ ratio: Math.round(middle * 10) / 10, under: middle < 6 }).toEqual({ ratio: expect.any(Number), under: true })
 })
 
 // #2960: what fills in a removal's name where mod-kit gave it neither a path nor a folder: a command's

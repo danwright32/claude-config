@@ -80,6 +80,7 @@ import {
   nameFromVariable,
   removalFilledIn,
   leadingVariable,
+  findNamesReachNoLook,
   outputTrusted,
   freshTemp,
   relTo,
@@ -525,6 +526,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes)
     if (c.does === 'remove' || c.does === 'truncate') {
+      // A find -delete limited to a name no look changing file can have (`-name "*.pyc"`) takes no
+      // such file away, wherever it runs (seen 2026-11-13: one clearing bytecode was held for a page
+      // under the folder). One whose names may be one is judged by every file under it, as before.
+      if (c.names && findNamesReachNoLook(c.names)) continue
       // A removal of a variable mod-kit could not follow carries what it may hold, for freshTemp (#2934).
       const values = c.does === 'remove' && !c.path && !c.folder ? await removalValues($, command, c.word, at) : undefined
       targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}), ...(values ? { values } : {}) })

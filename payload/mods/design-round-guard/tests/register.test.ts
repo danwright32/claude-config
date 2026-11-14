@@ -1042,6 +1042,32 @@ test('#2934: a removal of a name a shell variable or a command\'s output fills i
   expect(w.ran.length).toBe(4)
 })
 
+// On 2026-11-13 `find tools tests -name "lr_history*.pyc" -delete`, clearing bytecode before a test
+// run, was held as taking away tools/blindtest/template.html: a find -delete was judged as taking away
+// every file under the folders it starts from, whatever its -name said. One whose names no look
+// changing file can have takes none away; one whose names may be one, or that anything may widen
+// (an -o, a !, a -path), or whose name a variable fills in, is judged by every file under it.
+test('a find -delete limited to names no look changing file can have runs; one that may reach one is held', withKit, async ($, on) => {
+  const w = world($, on, { files: { '/w/slate/tools/blindtest/template.html': '<p>x</p>\n', '/w/slate/tools/__pycache__/lr_history.cpython-312.pyc': 'x', '/w/slate/tests/test_lr.py': 'x\n' } })
+  for (const command of [
+    'cd /w/slate && find tools tests -name "lr_history*.pyc" -delete',
+    "cd /w/slate && find . -type f -iname '*.PYC' -delete",
+    "find /w/slate/tools -name '*.pyc' -mtime +1 -delete",
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(3)
+  for (const command of [
+    "cd /w/slate && find tools -name '*.html' -delete",
+    "cd /w/slate && find tools -iname 'TEMPLATE.*' -delete",
+    "cd /w/slate && find tools -name x -o -name '*.pyc' -delete",
+    "cd /w/slate && find tools ! -name '*.pyc' -delete",
+    'cd /w/slate && find tools -name "$P" -delete',
+    'cd /w/slate && find tools -delete',
+  ]) expect([command, refusalOf(await call($, { tool: 'Bash', command })).includes('tools/blindtest/template.html')]).toEqual([command, true])
+  // A name no look changing file has, which a mod's TypeScript hook file may have, is no such limit.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "cd /w/slate && find tools -name '*.ts' -delete" }))).toContain('tools/blindtest/template.html')
+  expect(w.ran.length).toBe(3)
+})
+
 // #2960: the #2934 hold reached a name a variable or a command's output fills in only where that is
 // the last part, so `cd /w/slate && rm -rf "$ROOT/app"` still ran unasked: `app` is no look changing
 // name, and mod-kit gives a word built on a variable it cannot follow neither a path nor a folder. A

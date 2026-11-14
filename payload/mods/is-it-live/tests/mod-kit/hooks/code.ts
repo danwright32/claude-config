@@ -220,9 +220,49 @@ const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
 
 // #2727: an awk program read with what its double quoted strings hold blanked, quotes kept and every
 // character a space, so a > or a | a string holds (`print "88 -> " h`) is text and never a redirect
-// or a pipe, while one after the string (`print h > "out.txt"`) still is. A string never closed on
-// its line is left as it is, so its text is read as before.
-const awkCanonical = (code: string): string => code.replace(/"(?:[^"\\\n]|\\.)*"/g, s => `"${' '.repeat(s.length - 2)}"`)
+// or a pipe, while one after the string (`print h > "out.txt"`) still is. A regex literal (`/"/`) and
+// a comment are stepped over whole, so a quote in one never pairs with a string's: a / is a regex
+// where awk expects an operand, after anything but a name, a number, a closing bracket or a string,
+// and after the keywords that take one (print, printf, return). Where that cannot be told (a / after
+// ++ or --), or a string or a regex is never closed on its line, the program is read as written.
+const AWK_TAKES_OPERAND = /(?:^|[^\w$])(?:print|printf|return)$/
+const awkCanonical = (code: string): string => {
+  let out = ''
+  // Whether what came last ends an operand, so a / after it divides: 'no', 'yes', or 'unsure'.
+  let operand: 'no' | 'yes' | 'unsure' = 'no'
+  for (let i = 0; i < code.length; ) {
+    const c = code[i] as string
+    if (c === '"' || (c === '/' && operand !== 'yes')) {
+      if (c === '/' && operand === 'unsure') return code
+      let j = i + 1
+      let bracket = false
+      for (; j < code.length && code[j] !== '\n'; j++) {
+        if (code[j] === '\\') j++
+        else if (c === '/' && code[j] === '[') bracket = true
+        else if (c === '/' && code[j] === ']') bracket = false
+        else if (code[j] === c && !bracket) break
+      }
+      if (j >= code.length || code[j] !== c) return code
+      out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : code.slice(i, j + 1)
+      i = j + 1
+      operand = 'yes'
+      continue
+    }
+    if (c === '#') {
+      const end = code.indexOf('\n', i)
+      out += code.slice(i, end < 0 ? code.length : end)
+      i = end < 0 ? code.length : end
+      continue
+    }
+    out += c
+    i++
+    if (/\s/.test(c)) continue
+    if ((c === '+' || c === '-') && code[i - 2] === c) operand = 'unsure'
+    else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(out) ? 'no' : 'yes'
+    else operand = 'no'
+  }
+  return out
+}
 const pythonCanonical = (code: string): string => {
   let text = ''
   let at = 0

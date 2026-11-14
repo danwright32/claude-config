@@ -1104,6 +1104,30 @@ describe('writes: changes that put no content in, carried over from the collisio
       `mode ${CWD}/c`,
     ])
   })
+  // The names a find -delete is limited to: a guard read `find tools tests -name "lr_history*.pyc"
+  // -delete` as taking away every file under both folders, a page among them (seen 2026-11-13). Given
+  // only where every test before -delete narrows the same entries (-name and -iname, -type, -mtime and
+  // the like, joined by -a or nothing); an -o, a !, a bracket, -path, -regex or anything else leaves
+  // it unlimited, and so does a name a variable or a command's output fills in.
+  test('find -delete carries the -name and -iname patterns it is limited to, only where nothing else can widen it', () => {
+    const only = (command: string) => read(command).changes.map(c => c.names)
+    expect(only(`find tools tests -name "lr_history*.pyc" -delete`)).toEqual([['lr_history*.pyc'], ['lr_history*.pyc']])
+    expect(only(`find . -type f -iname '*.PYC' -mtime +3 -a -name 'x*' -delete`)).toEqual([['*.PYC', 'x*']])
+    for (const command of [
+      `find build -delete`,
+      `find build -type f -delete`,
+      `find app -name x -o -name '*.pyc' -delete`,
+      `find app ! -name '*.pyc' -delete`,
+      `find app -not -name '*.pyc' -delete`,
+      `find app \\( -name '*.pyc' \\) -delete`,
+      `find app -path '*/cache/*' -name '*.pyc' -delete`,
+      `find app -regex '.*pyc' -delete`,
+      `find app -name "$P" -delete`,
+      `find app -name "$(cat p)" -delete`,
+      `find app -name '*.pyc' -delete -name x -delete`,
+    ])
+      expect([command, only(command)]).toEqual([command, [undefined]])
+  })
   test('find -delete removes what it finds under each folder it starts from, and -fprint writes a file', () => {
     expect(changes(`find build -name '*.o' -delete`)).toEqual([`remove ${CWD}/build tree`])
     expect(changes('find -delete')).toEqual([`remove ${CWD} tree`])
@@ -1208,9 +1232,25 @@ describe('writes: what a program can do, judged by mod-kit\'s per language judge
       `NR<=130 { if ($0 ~ /^(export )?(function|const) /) h=NR": "$0 } NR==88 { print "88 -> " h }`,
       `{ print "a | b", $1 }`,
       `{ printf "%s >> %s\\n", $1, "x \\" > y" }`,
+      // A quote in a regex literal is the regex's, and the string after it is still a string.
+      `/"/ { print "a -> b" }`,
+      `$0 ~ /["]/ { n = n / 2; print "half -> " n }`,
     ])
       expect([program, read(`awk '${program}' app/Panel.tsx`).unnamed]).toEqual([program, []])
-    for (const program of [`{ print "88 -> " h > "out.txt" }`, `{ print "x" | "sort" }`, `{ print h > out }`, `{ print "unclosed > x }`])
+    // Lessons review of 68267d7: a quote in a regex literal paired with the next string's opening
+    // quote blanked the code between them, a redirect or system() included. A regex, a comment and a
+    // / after ++ (a division or a regex, which cannot be told) keep every redirect after them seen.
+    for (const program of [
+      `{ print "88 -> " h > "out.txt" }`,
+      `{ print "x" | "sort" }`,
+      `{ print h > out }`,
+      `{ print "unclosed > x }`,
+      `/"/ { print > "out.txt" }`,
+      `$0 ~ /"/ { system("rm x") }`,
+      `{ x++ / 2; s = "a/b"; print > "f" }`,
+      `# say "hi\n{ print > "f" }`,
+      `{ print /"/ > "f" }`,
+    ])
       expect([program, read(`awk '${program}' in.txt`).unnamed.map(u => u.what)]).toEqual([program, ['an inline awk script']])
   })
   // #730: a heredoc or here-string feeding a shell's -c feeds the commands it runs.
