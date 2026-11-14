@@ -61,6 +61,11 @@
 # Since #2952 neither is a command that writes its own -f files from heredocs and then runs them,
 # when every text each file can hold is a read and the command does nothing else
 # (lib/db-write-calls.py, "A COMMAND THAT WRITES ITS OWN FILES").
+# Since #2643, a `supabase db query -f <file>` write alone in its command (cd aside) passes with no
+# Apply, no reason and no notice when the project its directory is linked to is listed in that
+# directory's .claude/supabase-test-projects (Dan, 2026-11-14: a per project file, passing silently).
+# A list missing, unreadable or holding a line that is not a ref asks as before, as do an inline
+# write, a push, and any flag naming another target (lib/db-apply-approval.py, "A TEST PROJECT").
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
 # unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
@@ -307,11 +312,26 @@ if tool == "Bash":
     pushes = [f for f in found if calls.is_applicable(f)]
     if pushes:
         ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
-        kept, released = [], []
+        kept, released, tested = [], [], 0
         for f in found:
             if not calls.is_applicable(f):
                 kept.append(f)
                 continue
+            # A `db query -f` run on a project its checkout marks as test needs no Apply, and passes
+            # with nothing said (claude-config#2643). Any doubt about the list falls through to the
+            # Apply, then to the question, which says why neither covers it.
+            test_why = None
+            if f.file is not None:
+                if ap is None:
+                    test_why = ap_why
+                else:
+                    try:
+                        is_test, test_why = ap.on_test_project(f.workdir, f.flags)
+                    except Exception as e:
+                        is_test, test_why = False, "whether its project is a test one could not be checked (" + type(e).__name__ + ")"
+                    if is_test:
+                        tested += 1
+                        continue
             if ap is None:
                 ok, why = False, ap_why
             else:
@@ -323,7 +343,11 @@ if tool == "Bash":
             if ok:
                 released.append(why)
             else:
-                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why, f[1]))
+                kept.append((f[0] + ", and no /db-apply Apply covers it: " + why
+                             + ("" if test_why is None else "; nor a test project: " + test_why), f[1]))
+        if not kept and not released:
+            sys.stdout.write("pass\x1f")
+            sys.exit()
         if not kept:
             release("db-write-ask.sh lets this through: " + "; ".join(released) + " (claude-config#2763)")
         found = kept
@@ -390,6 +414,11 @@ if [ "$rc" -eq 0 ]; then
       # characters that need no escaping, as read-only-query-allow.sh's approval does.
       reason="${out#allow$US}"
       printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "%s"}}\n' "${reason//[^A-Za-z0-9 .,:;()\/_=+#-]/}"
+      exit 0 ;;
+    "pass$US"*)
+      # A file run on a project its checkout marks as test (claude-config#2643): let through with
+      # no reason and no notice, as Dan chose (2026-11-14).
+      printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}\n'
       exit 0 ;;
   esac
 fi

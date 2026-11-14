@@ -1015,6 +1015,56 @@ both "an ad hoc write from a file edited since the Apply is asked about" none as
 reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$WRITE_Q" "$PROJ" s1 "$CHANGE_T")")" reason)"
 case "$reason" in *"delete from a"*changed*|*changed*"delete from a"*) check "the question about an edited write names the statement and says the file changed" ok ;; *) check "the question about an edited write names the statement and says the file changed" "reason: ${reason:0:400}" ;; esac
 
+# A write from a file run on a project marked as test (claude-config#2643). In a work repository
+# every owner step on its test Supabase project is a SQL file its scripts write, and each run was
+# asked about, four times for one flow version on 2026-11-10. Dan, 2026-11-14: the test refs live in
+# a per project file the hook reads, .claude/supabase-test-projects beside the supabase folder, and
+# such a run passes silently, with no notice. Anything the file cannot vouch for asks as before: the
+# file missing, unreadable or holding a line that is not a ref, a project not on it, no link, an
+# inline write, a push, any target flag, or anything else in the command. Every ref is invented.
+TESTP="$APPLY/testproj"
+mkdir -p "$TESTP/supabase/.temp" "$TESTP/.claude"
+printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
+printf '# the test projects of this checkout\n\ntestprojectref000001\nanothertestref000002\n' > "$TESTP/.claude/supabase-test-projects"
+printf 'update a set note = 1 where id = 7;\n' > "$TESTP/carry.sql"
+CARRY='supabase db query --linked --yes -f carry.sql'
+both "a write from a file on a project marked as test passes (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+both "the same run after a cd to the project passes (#2643)" none allow "$(apply_payload "cd $TESTP && supabase db query --linked -f $TESTP/carry.sql" "$APPLY/elsewhere" s1 "$NONE_T")"
+r="$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")"
+case "$r" in
+  *systemMessage*|*permissionDecisionReason*) check "a run on a test project passes with no notice and no reason shown (#2643)" "output: ${r:0:300}" ;;
+  *) check "a run on a test project passes with no notice and no reason shown (#2643)" ok ;;
+esac
+both "an inline write on a test project is still asked about (#2643)" none ask "$(apply_payload "supabase db query --linked --yes 'update a set note = 1'" "$TESTP" s1 "$NONE_T")"
+both "a file run on a test project with a statement beside it is asked about (#2643)" none ask "$(apply_payload "$CARRY 'delete from a'" "$TESTP" s1 "$NONE_T")"
+both "a file run on a test project beside another command is asked about (#2643)" none ask "$(apply_payload "$CARRY && rm -f note.txt" "$TESTP" s1 "$NONE_T")"
+both "a file run naming --db-url from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --yes --db-url postgresql://x -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a file run with --local from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --local -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a file run with --linked=false from a test project is asked about (#2643)" none ask "$(apply_payload "supabase db query --linked=false -f carry.sql" "$TESTP" s1 "$NONE_T")"
+both "a push on a test project is still asked about (#2643)" none ask "$(apply_payload 'supabase db push --linked --yes' "$TESTP" s1 "$NONE_T")"
+printf 'liveprojectref000009' > "$TESTP/supabase/.temp/project-ref"
+both "a file run on a project not marked as test is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+reason="$(field "$(run "$HOOK" "$EMPTY_HOME" "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")")" reason)"
+case "$reason" in *liveprojectref000009*supabase-test-projects*) check "the question names the project and the test list it is not on (#2643)" ok ;; *) check "the question names the project and the test list it is not on (#2643)" "reason: ${reason:0:400}" ;; esac
+rm "$TESTP/supabase/.temp/project-ref"
+both "a file run from a checkout linked to no project is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+printf 'testprojectref000001' > "$TESTP/supabase/.temp/project-ref"
+mv "$TESTP/.claude/supabase-test-projects" "$TESTP/.claude/away"
+both "a file run with no test list is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+mkdir "$TESTP/.claude/supabase-test-projects"
+both "a test list that is a folder is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+rmdir "$TESTP/.claude/supabase-test-projects"
+printf 'testprojectref000001\nnot a ref; drop table a\n' > "$TESTP/.claude/supabase-test-projects"
+both "a test list holding a line that is not a ref is asked about, the good line included (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+printf 'testprojectref000001 \n' > "$TESTP/.claude/supabase-test-projects"
+both "a ref with trailing space on its line still reads as that ref (#2643)" none allow "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+printf '\xff\xfe\n' > "$TESTP/.claude/supabase-test-projects"
+both "a test list that is not text is asked about (#2643)" none ask "$(apply_payload "$CARRY" "$TESTP" s1 "$NONE_T")"
+rm "$TESTP/.claude/supabase-test-projects"; mv "$TESTP/.claude/away" "$TESTP/.claude/supabase-test-projects"
+# The read hook still decides a read from a file there, and this hook says nothing about it.
+printf 'select count(*) from a;\n' > "$TESTP/look.sql"
+both "a read from a file on a test project is the read hook's, as before (#2643)" allow none "$(apply_payload 'supabase db query --linked -f look.sql' "$TESTP" s1 "$NONE_T")"
+
 # The commands the skill itself tells a session to run, read from its text, so the skill cannot
 # drift into a shape the hooks never let through (L562).
 SKILL_MD="$DIR/../skills/db-apply/SKILL.md"
