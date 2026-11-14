@@ -171,6 +171,17 @@ total7="$(cat "$D7"/*.log 2>/dev/null | wc -c | tr -d ' ')"
   && check "#2895 the size cap removes the oldest first and keeps the copy just written" ok \
   || check "#2895 the size cap removes the oldest first and keeps the copy just written" "$(ls "$D7")"
 
+# Oldest first means a large newer copy that does not fit takes every older one with it: an older,
+# smaller copy is never kept in its place.
+D7b="$TMPROOT/seven-b"; mkdir -p "$D7b"
+printf 'small\n' > "$D7b/20261101T000000Z-test-old.sh.Sm01xx.log"
+printf '%s\n' "$blob" > "$D7b/20261105T000000Z-test-big.sh.Bg05xx.log"
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=4 \
+  kept_output_save "$D7b" "test-new.sh" <<< "$blob"
+{ [ -f "$KEPT_OUTPUT_PATH" ] && [ ! -e "$D7b/20261105T000000Z-test-big.sh.Bg05xx.log" ] && [ ! -e "$D7b/20261101T000000Z-test-old.sh.Sm01xx.log" ]; } \
+  && check "#2895 once a copy does not fit the size cap, every older copy goes too" ok \
+  || check "#2895 once a copy does not fit the size cap, every older copy goes too" "$(ls "$D7b")"
+
 # 8. A clock that cannot be turned into a date keeps everything by age (the harmless side) and still
 #    holds the size cap; a policy setting that is not a whole number above zero is refused unwritten.
 D8="$TMPROOT/eight"; mkdir -p "$D8"

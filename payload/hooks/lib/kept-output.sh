@@ -122,7 +122,8 @@ kept_output_prune_by_age(){
           seen[label]++
           if (name == spare) { total += size; next }
           if (seen[label] > per && stamp < cutoff) { print name; next }
-          if (total + size > maxb) { print name; next }
+          # Oldest first: once one copy does not fit, every older one goes too, never kept in its place.
+          if (full || total + size > maxb) { full = 1; print name; next }
           total += size
         }' \
     | while IFS= read -r f; do
