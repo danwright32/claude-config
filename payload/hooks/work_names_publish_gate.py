@@ -765,8 +765,22 @@ def api_writes(command, cwd):
             slug = None if PLACEHOLDER.match(o) or PLACEHOLDER.match(r) else "%s/%s" % (o, r)
             files = [v.split("=@", 1)[1] for v in scan.flag_values(args, "--field", "-F") if "=@" in v]
             files += scan.flag_values(args, "--input")
-            out.append((slug, [p for p in files if p != "-"]))
+            out.append((slug, [p for p in files if p != "-"], args))
     return out
+
+
+def _api_place(args, command, cwd):
+    """Where the gh api write with these words runs (scan_gh_in_context's Place, with the variables the
+    command set before it and its cd), so its variables are judged by their values. A bare Place, which
+    knows only the environment, when the two readers do not agree on the command: its variables are
+    then refused as unset rather than judged from the wrong place."""
+    try:
+        for _kind, found, _envs, place in scan.scan_gh_in_context(command, cwd, dict(os.environ), {("api", "")}):
+            if found == args:
+                return place
+    except scan.Unreadable:
+        pass
+    return scan.Place(cwd, dict(os.environ))
 
 
 # gh's own top level commands, with the other names gh answers to for them, its help topics, its hidden
@@ -1275,10 +1289,10 @@ def evaluate(command, cwd, depth=0):
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
             reasons.append(why)
-    for slug, files in apis:
+    for slug, files, args in apis:
         try:
             bodies = [("the file %s" % p, _read(p, cwd)) for p in files]
-            why = judge("gh api", slug, cwd, None, posted, bodies, place=scan.Place(cwd, dict(os.environ)))
+            why = judge("gh api", slug, cwd, None, posted, bodies, place=_api_place(args, command, cwd))
         except CannotTell as e:
             why = "gh api: %s." % e
         if why and why not in reasons:

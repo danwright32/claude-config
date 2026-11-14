@@ -493,6 +493,14 @@ run "gh issue create --repo danwright-test/public-notes --title x --body-file \"
 check "#2961 (control) nor is the path of a body file: $out" passed
 run "gh issue create --repo danwright-test/private-notes --title \"from \$WN_TEST_NOT_SET \$WN_TEST_DIR\" --body x"
 check "#2961 (control) a private repository is not asked about its variables: $out" passed
+# A gh api write is judged where it runs too, with what the command set before it (the lessons
+# review of af806e6: it was judged from the environment alone, so a clean assignment was refused).
+run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 (control) a gh api write posting a variable this command set to clean text passes: $out" passed
+run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$WN_TEST_DIR\""
+check "#2961 a gh api write posting a variable whose value names a work repository is refused: $out" refused
+run "T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 and one set from a substitution is refused: $out" refused
 unset WN_TEST_DIR WN_TEST_CLEAN WN_TEST_NOTES
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
