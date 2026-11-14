@@ -493,6 +493,12 @@ run "gh issue create --repo danwright-test/public-notes --title x --body-file \"
 check "#2961 (control) nor is the path of a body file: $out" passed
 run "gh issue create --repo danwright-test/private-notes --title \"from \$WN_TEST_NOT_SET \$WN_TEST_DIR\" --body x"
 check "#2961 (control) a private repository is not asked about its variables: $out" passed
+# $_ is the last word of the command before, which can be a body file's path, never posted itself
+# and so never judged (the lessons review of 6bb51da).
+run "gh issue create --repo danwright-test/public-notes --title x --body-file \"$NOTES/body.md\" && gh issue comment 5 --repo danwright-test/public-notes --body \"\$_\""
+check "#2961 \$_ after a body file's path is refused as unreadable: $out" refused
+run "gh issue comment 5 --repo danwright-test/public-notes --body \"\${_}\""
+check "#2961 and so is \${_}: $out" refused
 # A gh api write is judged where it runs too, with what the command set before it (the lessons
 # review of af806e6: it was judged from the environment alone, so a clean assignment was refused).
 run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""

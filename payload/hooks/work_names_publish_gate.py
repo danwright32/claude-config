@@ -1065,9 +1065,10 @@ def posted_text(command, keep_cds=None):
 # escaped $, a quoted heredoc's body, a comment.
 PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # One character parameters whose value is a number, a flag set, or the command's own words (the
-# arguments of a function or script, the last argument of the command before), which the name check
-# already reads as written.
-SHOWN_PARAMS = frozenset("0123456789@*#?-$!_")
+# arguments of a function or script), which the name check already reads as written. Not $_, the
+# last word of the command before, which can be a body file's path or a cd's directory, words this
+# check does not judge as posted (the lessons review of 6bb51da).
+SHOWN_PARAMS = frozenset("0123456789@*#?-$!")
 
 
 def _param_at(text, i):
@@ -1218,7 +1219,7 @@ def variables_posted(text, place):
         if name is None:
             out.append((shown, None, "is a form of expansion this check does not work out"))
         elif name == "_":
-            continue
+            out.append((shown, None, "is the last word of the command before it, which this check does not follow"))
         elif name in ("PWD", "OLDPWD"):
             where = place.cwd if name == "PWD" else place.previous
             out.append((shown, where, None) if where else
