@@ -16,6 +16,17 @@
 # the files' modification times say. After each write the folder is pruned to the newest
 # KEPT_OUTPUT_KEEP copies (default 20), judged by that time, and only files named that way are
 # ever removed: anything else in the folder is left alone. The copy just written is never pruned.
+#
+# A caller may instead keep copies by AGE PER LABEL (claude-config#2895, L202), by setting all three
+# of KEPT_OUTPUT_MAX_DAYS, KEPT_OUTPUT_PER_LABEL and KEPT_OUTPUT_MAX_KB. The newest 20 overall was
+# about ten days of flaky suites on the personal MacBook, so a suite that flakes daily pushed out the
+# one log an issue had named before anyone opened it. Under this policy a copy stays while it is
+# younger than KEPT_OUTPUT_MAX_DAYS by the time in its name, OR while it is among the newest
+# KEPT_OUTPUT_PER_LABEL copies of its own label however old, so a rare failure keeps its evidence
+# until the same thing fails again. KEPT_OUTPUT_MAX_KB then bounds the folder's total size whatever
+# the ages, removing the oldest first, so keeping by age cannot fill the disk. A clock that cannot be
+# turned into a date removes nothing by age (the harmless side) and still holds the size cap.
+# KEPT_OUTPUT_NOW_EPOCH sets the clock, for tests (L524).
 
 KEPT_OUTPUT_KEEP="${KEPT_OUTPUT_KEEP:-20}"
 # The one test of a whole number above zero, 00 included as zero (claude-config#1948). Missing, every
@@ -34,6 +45,22 @@ kept_output_save(){
   if ! keep="$(whole_above_zero "$KEPT_OUTPUT_KEEP")"; then
     KEPT_OUTPUT_WHY="KEPT_OUTPUT_KEEP must be a whole number above 0, not '$KEPT_OUTPUT_KEEP'"
     cat > /dev/null; return 1
+  fi
+  local by_age="" per="" days="" maxkb=""
+  if [ -n "${KEPT_OUTPUT_MAX_DAYS:-}${KEPT_OUTPUT_PER_LABEL:-}${KEPT_OUTPUT_MAX_KB:-}" ]; then
+    by_age=1
+    if ! days="$(whole_above_zero "${KEPT_OUTPUT_MAX_DAYS:-}")"; then
+      KEPT_OUTPUT_WHY="KEPT_OUTPUT_MAX_DAYS must be a whole number above 0, not '${KEPT_OUTPUT_MAX_DAYS:-}'"
+      cat > /dev/null; return 1
+    fi
+    if ! per="$(whole_above_zero "${KEPT_OUTPUT_PER_LABEL:-}")"; then
+      KEPT_OUTPUT_WHY="KEPT_OUTPUT_PER_LABEL must be a whole number above 0, not '${KEPT_OUTPUT_PER_LABEL:-}'"
+      cat > /dev/null; return 1
+    fi
+    if ! maxkb="$(whole_above_zero "${KEPT_OUTPUT_MAX_KB:-}")"; then
+      KEPT_OUTPUT_WHY="KEPT_OUTPUT_MAX_KB must be a whole number above 0, not '${KEPT_OUTPUT_MAX_KB:-}'"
+      cat > /dev/null; return 1
+    fi
   fi
   if [ -z "$dir" ]; then
     KEPT_OUTPUT_WHY="no folder was named to keep it in"
@@ -58,8 +85,49 @@ kept_output_save(){
     return 1
   fi
   KEPT_OUTPUT_PATH="$tmp.log"
-  kept_output_prune "$dir" "$keep" "$KEPT_OUTPUT_PATH"
+  if [ -n "$by_age" ]; then
+    kept_output_prune_by_age "$dir" "$per" "$days" "$maxkb" "$KEPT_OUTPUT_PATH"
+  else
+    kept_output_prune "$dir" "$keep" "$KEPT_OUTPUT_PATH"
+  fi
   return 0
+}
+
+# _kept_output_stamp <epoch seconds>: that instant as the UTC stamp the names carry, by BSD date
+# (macOS) or GNU date (CI). Prints nothing and fails when neither can read it.
+_kept_output_stamp(){
+  local s
+  s="$(date -u -r "$1" +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -d "@$1" +%Y%m%dT%H%M%SZ 2>/dev/null)" || return 1
+  case "$s" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) printf '%s' "$s" ;; *) return 1 ;; esac
+}
+
+# kept_output_prune_by_age <folder> <per label> <days> <max KB> <spare>: the policy described at the
+# top. One pass over the named copies, newest first by the time in the name; the label is the name
+# between the stamp and the random suffix. <spare>, the copy just written, is never removed.
+kept_output_prune_by_age(){
+  local dir="$1" per="$2" days="$3" maxkb="$4" spare="${5##*/}" now cutoff f
+  # A clock that is not a whole number cannot be aged from: everything counts as young.
+  cutoff="00000000T000000Z"
+  if now="$(whole_above_zero "${KEPT_OUTPUT_NOW_EPOCH:-$(date -u +%s)}")"; then
+    cutoff="$(_kept_output_stamp "$(( now - days * 86400 ))")" || cutoff="00000000T000000Z"
+  fi
+  { ls -1 "$dir" 2>/dev/null || true; } | { grep -E '^[0-9]{8}T[0-9]{6}Z-.+\.log$' || true; } \
+    | LC_ALL=C sort -r | while IFS= read -r f; do
+      printf '%s\t%s\n' "$f" "$(wc -c < "$dir/$f" 2>/dev/null | tr -d ' ' || true)"
+    done \
+    | awk -F'\t' -v per="$per" -v cutoff="$cutoff" -v maxb="$(( maxkb * 1024 ))" -v spare="$spare" '
+        {
+          name = $1; size = $2 + 0; stamp = substr(name, 1, 16)
+          label = substr(name, 18); sub(/\.[^.]+\.log$/, "", label)
+          seen[label]++
+          if (name == spare) { total += size; next }
+          if (seen[label] > per && stamp < cutoff) { print name; next }
+          if (total + size > maxb) { print name; next }
+          total += size
+        }' \
+    | while IFS= read -r f; do
+      rm -f "$dir/$f" 2>/dev/null || true
+    done
 }
 
 # kept_output_prune <folder> <keep> <spare>: remove every copy older than the newest <keep>, never

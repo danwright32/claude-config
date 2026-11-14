@@ -4430,10 +4430,13 @@ order its runs by numbers from hardware it does not have.
 Where the first, failing run of a suite marked FLAKY is kept, its whole output in one file named by
 the time and the suite, and the FAIL line names that file. That output used to live only in the
 run's work folder, which is removed at the end, so a flake left nothing to diagnose from but the few
-lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. Pruned
-after each write to the newest 20 copies, by the time in their names, and nothing else in the folder
-is touched (`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`). Set it to empty to keep
-nothing, and the FAIL line says so.
+lines printed (#1788, L297). Only a FLAKY suite writes here: a passing run writes nothing. After
+each write a copy stays while it is under 30 days old by the time in its name, or while it is one of
+the newest 3 copies of its own suite however old, and the folder is held under 20 MB in all, oldest
+first. It used to keep the newest 20 copies overall, about ten days of flakes, so the one log #1919
+named was gone before anyone read it (#2895, L202). Nothing else in the folder is touched
+(`hooks/lib/kept-output.sh`, shared with `tools/check-mods.sh`, which still keeps its newest 20). Set
+it to empty to keep nothing, and the FAIL line says so.
 
 </td></tr>
 <tr><td>
