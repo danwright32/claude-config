@@ -461,7 +461,7 @@ def carry_exceptions(spec, base, exceptions, decisions, frames):
         # other words is another thing Dan said, and is asked about on its own.
         open_ = [f for f in fits if not any(
             same(by_id[x["carriedFrom"]]) == same(s) and (f is None or x.get("frame") == f)
-            for x in out if "carriedFromDesign" in x)]
+            for x in out if isinstance(x, dict) and "carriedFromDesign" in x)]
         if open_:
             asked.add(same(s))
             unanswered.append((s, open_))

@@ -319,6 +319,8 @@ for n, (label, s, needle) in enumerate([
             exceptions=[carry("X1", "g1"), carry("X1", "g2"), {"id": "X3-c", "decision": "D2", "carriedFrom": "X3"}]),
      "Open calls are amber"),
     ("a carried exception with no frozenFrom", spec(exceptions=[carry("X1", "f1")]), "frozenFrom"),
+    ("an exception that is not an object, in a frozen design",
+     frozen(exceptions=[None, carry("X1", "g1"), carry("X1", "g2")], notCarried=["X3"]), "exception 1 is not an object"),
     ("a frozenFrom that is not there", frozen(frozenFrom="gone.html", notCarried=["X1"]), "gone.html"),
     ("a frozenFrom that is not a settled design", frozen(frozenFrom="chrome.html", notCarried=["X1"]), "chrome.html"),
 ]):
