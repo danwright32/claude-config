@@ -82,8 +82,12 @@ NONCE_RE = re.compile(r"^vg-[0-9a-f]{16}$")
 NATIVE_TEST_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_][A-Za-z0-9_.]{0,99}){0,2}(\(\))?\Z")
 LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$")
 
-COMMANDS_REQUIRED = ("serve", "ready", "stop", "drive")
+COMMANDS_REQUIRED = ("stop", "drive")
 COMMANDS_OPTIONAL = ("stamp", "native_shot")
+# What a run needs to serve the app (claude-config#2951). Required as soon as one area is web; a
+# project whose areas are all native has nothing to serve, and gives all three or none.
+SERVE_COMMANDS = ("serve", "ready")
+SERVE_SETTINGS = ("url",) + tuple("commands." + c for c in SERVE_COMMANDS)
 TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "stop_s": 60, "egress_s": 30}
 # The hosts a served app may always reach: this machine. areas.json's egress.allow adds to them,
 # and a run's egress verdict is clean only when nothing outside the combined list was reached.
@@ -218,7 +222,8 @@ def parse_areas(text, root=None):
 
     for key, kind in (("mode", str), ("url", str), ("commands", dict), ("areas", list)):
         if key not in doc:
-            p.append(("areas-missing-key", "missing key: %s" % key))
+            if key != "url":  # settled with serve and ready, once the areas say whether anything is web
+                p.append(("areas-missing-key", "missing key: %s" % key))
         elif not isinstance(doc[key], kind):
             p.append(("areas-wrong-type", "%s must be a %s" % (key, "list" if kind is list else
                                                                "object" if kind is dict else "string")))
@@ -230,7 +235,7 @@ def parse_areas(text, root=None):
 
     cmds = doc.get("commands")
     if isinstance(cmds, dict):
-        for name in COMMANDS_REQUIRED + COMMANDS_OPTIONAL:
+        for name in COMMANDS_REQUIRED + SERVE_COMMANDS + COMMANDS_OPTIONAL:
             if name not in cmds:
                 if name in COMMANDS_REQUIRED:
                     p.append(("areas-missing-key", "missing key: commands.%s" % name))
@@ -264,7 +269,7 @@ def parse_areas(text, root=None):
         p.append(("areas-bad-screenshots-mode", "screenshots.mode %r is not one of %s" % (shots.get("mode"), ", ".join(MODES))))
 
     names = set()
-    native = False
+    native, web_areas = False, []
     for i, area in enumerate(doc.get("areas") if isinstance(doc.get("areas"), list) else []):
         where = "areas[%d]" % i
         if not isinstance(area, dict):
@@ -290,11 +295,16 @@ def parse_areas(text, root=None):
                 why = _glob_problem(g)
                 if why:
                     p.append(("areas-bad-glob", "%s owns %s" % (where, why)))
-        native |= _check_screens(p, where, area.get("screens", []), seeds)
+        kinds = _check_screens(p, where, area.get("screens", []), seeds)
+        native |= "native" in kinds
+        if "web" in kinds:
+            web_areas.append(name if isinstance(name, str) else where)
 
     if native and isinstance(cmds, dict) and "native_shot" not in cmds:
         p.append(("areas-native-no-shot-command", "a screen is a native one (a test and a frame), and"
                   " commands.native_shot, the command that runs the offscreen test photographing it, is missing"))
+
+    _check_serve_settings(p, doc, cmds, native, web_areas)
 
     exempt = doc.get("exempt", [])
     if not isinstance(exempt, list):
@@ -341,6 +351,40 @@ def parse_areas(text, root=None):
     return doc
 
 
+def serves(doc):
+    """Whether a run of this parsed areas.json serves the app: false only for a project whose areas
+    are all native and which gives no serve command (claude-config#2951)."""
+    return "serve" in doc["commands"]
+
+
+def _check_serve_settings(p, doc, cmds, native, web_areas):
+    """url, commands.serve and commands.ready: what a run needs to serve the app (claude-config#2951).
+
+    A project is all native when at least one of its screens is native and none is web; an area
+    with no screens is neither. Such a project has nothing to serve, so the three are optional, but
+    a run cannot serve without all three, so it gives all of them or none. Any other project needs
+    all three: one that pictures no screens at all is told key by key, as it always was, and one
+    with a native screen is told which area made serving necessary.
+    """
+    cmds = cmds if isinstance(cmds, dict) else {}
+    present = [k for k in SERVE_SETTINGS if (doc if k == "url" else cmds).get(k.split(".")[-1]) is not None]
+    missing = [k for k in SERVE_SETTINGS if k not in present]
+    if not missing:
+        return
+    if native and not web_areas:
+        if present:
+            p.append(("areas-serve-incomplete", "every area is native, so url, commands.serve and commands.ready"
+                      " may all be left out, but a run cannot serve with only %s; missing: %s"
+                      % (", ".join(present), ", ".join(missing))))
+        return
+    if not native:
+        for k in missing:
+            p.append(("areas-missing-key", "missing key: %s" % k))
+        return
+    p.append(("areas-web-needs-serve", "area %s has a web screen, a route on the served app, so the run must"
+              " serve it; missing: %s" % (", ".join(repr(a) for a in web_areas), ", ".join(missing))))
+
+
 def _parse_seeds(p, seeds):
     """The seeds screens are shot with, {name: {synthetic, why}} (claude-config#2516).
 
@@ -364,13 +408,14 @@ def _check_screens(p, where, screens, seeds):
 
     A web screen is a route on the served app, `path`, with an optional CSS selector `rows` and its
     `min_rows`. A native screen is an offscreen test, `test`, and the `frame` it draws, with an
-    optional `min_rows` the test reports it drew. Returns whether any screen is native.
+    optional `min_rows` the test reports it drew. Returns the set of kinds its screens are, "web"
+    and "native" (claude-config#2951).
     """
+    kinds = set()
     if not isinstance(screens, list):
         p.append(("areas-wrong-type", "%s screens must be a list" % where))
-        return False
+        return kinds
     seen = set()
-    native = False
     for j, sc in enumerate(screens):
         at = "%s screens[%d]" % (where, j)
         if not isinstance(sc, dict):
@@ -389,11 +434,12 @@ def _check_screens(p, where, screens, seeds):
         if "path" in sc and "test" in sc:
             p.append(("areas-bad-screen", "%s gives a path and a test: a screen is a route or a test, not both" % at))
         elif "test" in sc:
-            native = True
+            kinds.add("native")
             _check_native_screen(p, at, sc)
         else:
+            kinds.add("web")
             _check_web_screen(p, at, sc)
-    return native
+    return kinds
 
 
 def _check_web_screen(p, at, sc):

@@ -66,6 +66,21 @@ def areas_doc(**over):
     return doc
 
 
+def native_only_doc(**over):
+    """areas.json for a native app (claude-config#2951): one area pictured by an offscreen test, one
+    with no screens, and no url, serve or ready."""
+    doc = areas_doc(**over)
+    del doc["url"]
+    del doc["commands"]["serve"]
+    del doc["commands"]["ready"]
+    doc.update(over)
+    doc["commands"]["native_shot"] = "xcodebuild test -only-testing:\"$VERIFICATION_SHOT_TEST\""
+    doc["seeds"] = {"demo": {"synthetic": True, "why": "made up for the fixture"}}
+    doc["areas"][0]["screens"] = [{"name": "list", "test": "AppHostedTests/VerificationScreens",
+                                   "frame": "invoice-list", "seed": "demo"}]
+    return doc
+
+
 def kinds_of(err):
     return sorted({p[0] for p in err.problems})
 
@@ -127,6 +142,69 @@ class AreasTests(unittest.TestCase):
     def test_each_command_is_required(self):
         for name in ("serve", "ready", "stop", "drive"):
             doc = areas_doc()
+            del doc["commands"][name]
+            err = self.refused(doc, "areas-missing-key")
+            self.assertIn("commands." + name, " ".join(m for _, m in err.problems))
+
+    def test_a_web_project_still_needs_its_url_and_says_so_as_before(self):
+        doc = areas_doc()
+        del doc["url"]
+        err = self.refused(doc, "areas-missing-key")
+        self.assertEqual(kinds_of(err), ["areas-missing-key"])
+        self.assertIn("missing key: url", " ".join(m for _, m in err.problems))
+
+    def test_an_all_native_project_runs_with_no_url_serve_or_ready(self):
+        # claude-config#2951: a native app has nothing to serve, so the three are optional.
+        # The second area declares no screens at all and so is neither web nor native.
+        areas = self.load(native_only_doc())
+        self.assertNotIn("url", areas)
+        self.assertNotIn("serve", areas["commands"])
+        self.assertNotIn("ready", areas["commands"])
+        self.assertFalse(v.serves(areas))
+
+    def test_an_all_native_project_may_still_serve_with_all_three(self):
+        doc = native_only_doc(url="http://127.0.0.1:4173")
+        doc["commands"].update(serve="python3 mock_api.py", ready="curl -fsS http://127.0.0.1:4173/")
+        self.assertTrue(v.serves(self.load(doc)))
+
+    def test_an_all_native_project_giving_only_some_of_the_three_is_refused_naming_the_rest(self):
+        doc = native_only_doc()
+        doc["commands"]["serve"] = "python3 mock_api.py"
+        err = self.refused(doc, "areas-serve-incomplete")
+        self.assertEqual(kinds_of(err), ["areas-serve-incomplete"])
+        why = " ".join(m for _, m in err.problems)
+        self.assertIn("url, commands.ready", why)
+        self.assertNotIn("missing: url, commands.serve", why)
+
+    def test_a_mixed_project_without_the_three_is_refused_naming_each_and_the_web_area(self):
+        doc = native_only_doc()
+        doc["areas"][1]["screens"] = [{"name": "list", "path": "/clients", "seed": "demo"}]
+        err = self.refused(doc, "areas-web-needs-serve")
+        self.assertEqual(kinds_of(err), ["areas-web-needs-serve"])
+        why = " ".join(m for _, m in err.problems)
+        self.assertIn("url, commands.serve, commands.ready", why)
+        self.assertIn("clients", why)
+
+    def test_a_mixed_project_missing_one_names_only_that_one(self):
+        doc = native_only_doc(url="http://127.0.0.1:4173")
+        doc["commands"]["serve"] = "pnpm preview"
+        doc["areas"][1]["screens"] = [{"name": "list", "path": "/clients", "seed": "demo"}]
+        err = self.refused(doc, "areas-web-needs-serve")
+        why = " ".join(m for _, m in err.problems)
+        self.assertIn("missing: commands.ready", why)
+        self.assertNotIn("commands.serve,", why)
+
+    def test_an_all_native_project_still_checks_what_it_does_give(self):
+        self.refused(native_only_doc(url="https://example.com"), "areas-url-not-local")
+        doc = native_only_doc()
+        doc["commands"].update(serve="  ", ready="true")
+        doc["url"] = "http://127.0.0.1:4173"
+        self.refused(doc, "areas-empty-command")
+        self.refused(native_only_doc(url=7), "areas-wrong-type")
+
+    def test_stop_and_drive_stay_required_for_an_all_native_project(self):
+        for name in ("stop", "drive"):
+            doc = native_only_doc()
             del doc["commands"][name]
             err = self.refused(doc, "areas-missing-key")
             self.assertIn("commands." + name, " ".join(m for _, m in err.problems))
@@ -768,6 +846,11 @@ class SkillDocTests(unittest.TestCase):
         for phrase in ("never call a Playwright tool", "payload/CLAUDE.md", "run_session.py drive",
                        "run_session.py stop", "detached worktree", "hand back"):
             self.assertIn(phrase, self.text)
+
+    def test_the_optional_serve_settings_and_their_refusals_are_documented(self):
+        for phrase in ("areas-serve-incomplete", "areas-web-needs-serve", "every area is native"):
+            self.assertIn(phrase, self.text)
+        self.assertNotIn("A run also still needs `url`, `serve` and `ready`", self.text)
 
     def test_maintain_names_who_decides(self):
         self.assertIn("the runner, not the builder", self.text)
