@@ -1071,8 +1071,11 @@ def _python_reads_only(code):
     PY_MODULES, each under its own name, touches sys only for PY_SYS, reaches no module through
     another, and names nothing in PY_BANNED or starting with _."""
     import ast
-    import importlib
     import types
+    # The real modules each chain is looked up on, imported by name from the standard library.
+    import collections, csv, datetime, decimal, functools, itertools, math, statistics, sys, textwrap
+    real = {m.__name__: m for m in (collections, csv, datetime, decimal, functools, itertools, json,
+                                    math, re, statistics, sys, textwrap)}
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
@@ -1088,7 +1091,7 @@ def _python_reads_only(code):
         elif isinstance(node, ast.ImportFrom):
             if node.level or node.module not in PY_MODULES:
                 return False
-            found = importlib.import_module(node.module)
+            found = real[node.module]
             for a in node.names:
                 if (a.name == "*" or a.name.startswith("_") or (node.module == "sys" and a.name not in PY_SYS)
                         or not hasattr(found, a.name) or isinstance(getattr(found, a.name), types.ModuleType)):
@@ -1101,7 +1104,7 @@ def _python_reads_only(code):
                 continue
             # A module's name stands only at the root of an attribute chain, each step of which is
             # looked up on the real module and must be there and be no module itself.
-            up, value, first = parent.get(node), importlib.import_module(node.id), True
+            up, value, first = parent.get(node), real[node.id], True
             if not (isinstance(up, ast.Attribute) and up.value is node):
                 return False
             while isinstance(up, ast.Attribute):
