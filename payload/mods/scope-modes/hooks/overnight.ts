@@ -328,7 +328,8 @@ const callsWith = (subcommands: ReadonlySet<string>) => (after: readonly string[
   return next !== undefined && (next.startsWith('-') || subcommands.has(next))
 }
 const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
-export const runsGit = runsFrom('git', callsWith(GIT_SUBCOMMANDS))
+const runsGitFrom = callsWith(GIT_SUBCOMMANDS)
+export const runsGit = runsFrom('git', runsGitFrom)
 // gh's subcommands. A user's own gh alias or extension in that place is not seen; the wake check is
 // the backstop.
 const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
@@ -600,27 +601,38 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
 //   named proxy is no proxy;
 // - with `rtk` and its options kept and `proxy` left out after them, so the reader reads what proxy
 //   runs past rtk exactly as it reads `rtk gh ...`: quotes, heredocs, redirections and all.
-// The command at the same place in the second reading then stands for the proxy command. When the
-// readings do not line up command for command, or `proxy` was spelled so this cannot leave it out
-// (quoted), nothing is swapped, and the command is judged as before, which refuses a gh in it.
+// The command at the same place in the second reading then stands for the proxy command.
+//
+// What cannot be read that way fails closed (lessons review of 9c3b530: a proxy left unswapped ran
+// its git unjudged). A command rtk's proxy runs that the second reading could not take proxy out of
+// (`rtk 'proxy' ...`), and a line naming rtk whose readings do not line up command for command, are
+// refused whole. A command named proxy that is not swapped (a program of its own, or rtk spelled so
+// the first reading cannot find it) is judged as before, where a gh among its words is refused as
+// unresolved, and so is a git among them, below.
 const RTK_WORD = /(^|[\s;&|(`'"/])rtk(?=[\s;&|)`'"]|$)/g
+const NAMES_RTK = new RegExp(RTK_WORD.source)
 const RTK_RENAMED = 'rtk-read-as-a-program'
 const RTK_THEN_PROXY = /(^|[\s;&|(`'"/])rtk((?:[ \t]+-[A-Za-z-]+)*)[ \t]+proxy(?=[ \t])/g
-// Each command rtk's proxy runs, by its place in call.commands, read as written without the proxy.
-const rtkProxied = async (call: OvernightCall): Promise<ReadonlyMap<number, Cmd>> => {
-  const out = new Map<number, Cmd>()
-  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return out
+const PROXY_UNREAD = 'run a command through rtk proxy that could not be read as written plainly'
+// Each command rtk's proxy runs, by its place in call.commands, read as written without the proxy;
+// `unread` when one cannot be.
+const rtkProxied = async (call: OvernightCall): Promise<{ swaps: ReadonlyMap<number, Cmd> } | { unread: true }> => {
+  const swaps = new Map<number, Cmd>()
+  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return { swaps }
   const renamed = await call.read(call.raw.replace(RTK_WORD, `$1${RTK_RENAMED}`))
   const unproxied = await call.read(call.raw.replace(RTK_THEN_PROXY, '$1rtk$2'))
-  if (renamed.length !== call.commands.length || unproxied.length !== call.commands.length) return out
-  renamed.forEach((r, i) => {
-    if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') return
+  if (renamed.length !== call.commands.length || unproxied.length !== call.commands.length)
+    return NAMES_RTK.test(call.raw) ? { unread: true } : { swaps }
+  for (const [i, r] of renamed.entries()) {
+    if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') continue
     let k = 1
     while (k < r.words.length && (r.words[k] as string).startsWith('-')) k++
+    if (r.words[k] !== 'proxy') continue
     const plain = unproxied[i]
-    if (r.words[k] === 'proxy' && plain && name(plain.words[0]) !== 'proxy') out.set(i, plain)
-  })
-  return out
+    if (!plain || name(plain.words[0]) === 'proxy') return { unread: true }
+    swaps.set(i, plain)
+  }
+  return { swaps }
 }
 // Where the files a line writes may be, when a gh in it runs through rtk proxy (Dan's standing rule
 // for this repository, recorded on the PR for #2937's open question): the null device, the session
@@ -733,13 +745,16 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const temp = tempWords(call.raw)
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
   const byProxy = await rtkProxied(call)
+  if ('unread' in byProxy) return PROXY_UNREAD
   for (const [at, written] of call.commands.entries()) {
     // What rtk's proxy runs is judged as that command written plainly (#2937).
-    const proxied = byProxy.get(at)
+    const proxied = byProxy.swaps.get(at)
     const c = proxied ?? written
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
     const cmd = name(words[0])
+    // A proxy not swapped above runs what follows it, and nothing below judges a git that way.
+    if (cmd === 'proxy' && words.slice(1).some((w, i) => name(w) === 'git' && runsGitFrom(words.slice(i + 2)))) return 'run git through a command named proxy, which could not be judged'
     if (cmd === '(') {
       stack.push(dir)
       continue

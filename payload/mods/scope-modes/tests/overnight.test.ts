@@ -857,6 +857,12 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash('echo rtk proxy && proxy gh issue view 7 -R other/x', { look: nowhere })).toBe(unresolved)
     expect(await bash(`echo 'rtk proxy' ; proxy gh issue view 7 -R other/x`, { look: nowhere })).toBe(unresolved)
   })
+  test('what cannot be read as written plainly fails closed, git included (lessons review of 9c3b530)', async () => {
+    expect(await bash(`rtk 'proxy' git push --force origin main`)).toBe('run a command through rtk proxy that could not be read as written plainly')
+    expect(await bash(`rtk 'proxy' gh issue view 7 -R other/x`, { look: nowhere })).toBe('run a command through rtk proxy that could not be read as written plainly')
+    expect(await bash('proxy git push --force origin main')).toBe('run git through a command named proxy, which could not be judged')
+    expect(await bash(`echo rtk proxy; proxy -v git branch -D main`)).toBe('run git through a command named proxy, which could not be judged')
+  })
   test('rtk named by its path, or behind another runner, is still rtk', async () => {
     expect(await bash('/opt/homebrew/bin/rtk proxy gh issue view 7 -R other/x', { look: nowhere })).toBeUndefined()
     expect(await bash('env A=1 rtk proxy git push --force origin main')).toBe('force push')
