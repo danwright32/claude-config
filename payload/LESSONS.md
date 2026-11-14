@@ -8276,7 +8276,7 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Codebase hygiene
 
-- **L1038. A branch that handles a whole family as its one current member sends that member's
+- **L854. A branch that handles a whole family as its one current member sends that member's
   output for every later one, and a cast hides it, so switch on the member and refuse an unknown
   one.**
   (slate#4918, 2026-11-14)
