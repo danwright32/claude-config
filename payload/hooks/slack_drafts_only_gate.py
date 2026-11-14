@@ -563,7 +563,7 @@ RE_PATTERN_CALLS = frozenset({"compile", "search", "match", "fullmatch", "findal
                               "split"})
 
 
-def py_marker(text):
+def py_marker(text, docs_read=False):
     """MARKER's first hit in Python text outside the pattern of a regular expression, or None
     (claude-config#2844). A re.compile whose pattern spells out an endpoint looks for it, as
     this gate's own rules do; it posts nothing, and naming it refused the script as one that posts
@@ -575,7 +575,8 @@ def py_marker(text):
     Nor are comments, or a string that is a statement of its own, a docstring included: Python
     drops a comment and discards such a string, so naming an endpoint in either sends nothing
     (claude-config#2913: the gate's own docstrings were reworded around this). A docstring is still
-    read where the text names __doc__ or getdoc, which hand it back to the code."""
+    read where the text names __doc__ or getdoc, which hand it back to the code, and wherever
+    docs_read says so: a module another file imports, which can read its docstrings back."""
     hit = MARKER.search(text)
     if not hit:
         return None
@@ -594,7 +595,7 @@ def py_marker(text):
         raw = text[a:starts[line] if line < len(starts) else len(text)].encode("utf-8", "surrogatepass")
         return a + len(raw[:col].decode("utf-8", "surrogatepass"))  # a lone surrogate keeps its place
     spans = []
-    docs_read = "__doc__" in text or "getdoc" in text
+    docs_read = docs_read or "__doc__" in text or "getdoc" in text
     for node in ast.walk(tree):
         body = getattr(node, "body", None)
         if isinstance(body, list):
@@ -2405,7 +2406,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         for why, via, target, found in self.modules(start, origin, root, body, kind):
             if why:
                 return why
-            hit = py_marker(found) if kind == "py" else MARKER.search(found)
+            # An imported module's docstrings are read: the code importing it can hand them back
+            # (mod.__doc__), which the module's own text does not show (lessons review at 5abcf82).
+            hit = py_marker(found, docs_read=True) if kind == "py" else MARKER.search(found)
             if hit:
                 return f"{via} ({target}), which posts to Slack (it names {hit.group(0)})"
         return None
