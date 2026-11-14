@@ -84,8 +84,8 @@ LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(
 
 COMMANDS_REQUIRED = ("stop", "drive")
 COMMANDS_OPTIONAL = ("stamp", "native_shot")
-# What a run needs to serve the app (claude-config#2951). Required as soon as one area is web; a
-# project whose areas are all native has nothing to serve, and gives all three or none.
+# What a run needs to serve the app (claude-config#2951). Required unless the project is all native
+# (a native screen and no web one), which has nothing to serve and gives all three or none.
 SERVE_COMMANDS = ("serve", "ready")
 SERVE_SETTINGS = ("url",) + tuple("commands." + c for c in SERVE_COMMANDS)
 TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "stop_s": 60, "egress_s": 30}
