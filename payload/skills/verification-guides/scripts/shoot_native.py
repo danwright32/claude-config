@@ -41,7 +41,6 @@ run builds the test target in a fresh worktree), after which its process group i
 Exit codes: 0 saved, 1 not shot, 2 usage.
 """
 
-import json
 import math
 import os
 import re
