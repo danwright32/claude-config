@@ -2785,8 +2785,9 @@ esac
 # ---------------------------------------------------------------------------
 # EVERY line of a value of several lines a failing check prints (claude-config#2928).
 #
-# The #253 rule above carried only lines indented further than the FAIL, and about 270 suites' own
-# helpers print the value they are handed as is: `echo "FAIL: $1 ($2)"`, `echo "  actual: $3"`.
+# The #253 rule above carried only lines indented further than the FAIL, and most suites' own
+# helpers print the value they are handed as is (about 270 of them, counted for #2928 on
+# 2026-11-14): `echo "FAIL: $1 ($2)"`, `echo "  actual: $3"`.
 # When that value has several lines at run time (a scan's output held in a variable, a hook's
 # output), every line after the first sits at the margin, and the full run's report dropped it, so
 # the report said a scan found something and never said what. #2916's scan of the source could not
@@ -2833,6 +2834,17 @@ for want in "the second line of what it said" "the line after a blank one"; do
     *) check "#2928 a value of several lines on an indented line of its own reaches the report: $want" "out=$out_mv2" ;;
   esac
 done
+# The suite's own `passed: <n>` total, which most suites print before their SUITE-RESULT line (273
+# suites print one, counted on 2026-11-14), ends a message too: it is the score, not the finding.
+out_tot="$(fd_suite '
+echo "FAIL: the last check of the suite"
+echo "passed: 3, failed: 1"
+echo "SUITE-RESULT passed=3 failed=1"
+exit 1')"
+case "$out_tot" in
+  *"passed: 3, failed: 1"*) check "#2928 a suite's own passed total is not carried as part of a message" "out=$out_tot" ;;
+  *) check "#2928 a suite's own passed total is not carried as part of a message" ok ;;
+esac
 # And the cap on a failure's detail never hides a FAIL line behind another one's long message: the
 # message is cut, every FAIL line is printed, and the cut is said.
 out_cap="$(fd_suite '
@@ -2852,12 +2864,14 @@ case "$out_cap" in
     check "#2928 and so is the start of its own message" ok ;;
   *) check "#2928 and so is the start of its own message" "out=$out_cap" ;;
 esac
-printf '%s\n' "$out_cap" | grep -Eq 'more line\(s\) .*not shown' \
-  && check "#2928 and the cut is said" ok \
-  || check "#2928 and the cut is said" "out=$out_cap"
-printf '%s\n' "$out_cap" | grep -q 'finding number 79' \
-  && check "#2928 and what was cut is not printed as well" "out=$out_cap" \
-  || check "#2928 and what was cut is not printed as well" ok
+case "$out_cap" in
+  *"more line(s) of this message not shown"*) check "#2928 and the cut is said" ok ;;
+  *) check "#2928 and the cut is said" "out=$out_cap" ;;
+esac
+case "$out_cap" in
+  *"finding number 79"*) check "#2928 and what was cut is not printed as well" "out=$out_cap" ;;
+  *) check "#2928 and what was cut is not printed as well" ok ;;
+esac
 
 # ---------------------------------------------------------------------------
 # A suite that passes only on a second run is COUNTED as a flake (claude-config#245).
