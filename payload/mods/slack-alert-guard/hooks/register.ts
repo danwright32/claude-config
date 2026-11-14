@@ -35,6 +35,8 @@ import {
   modelOnlyDecls,
   modelReading,
   outOfTime,
+  patchFiles,
+  patchPlacing,
   plainYamlValues,
   question,
   refusal,
@@ -50,6 +52,7 @@ import {
   UNTRACED_EDIT,
   UNTRACED_LANGUAGE,
   UNTRACED_NONE,
+  FILES_JQ,
   wordingChange,
   wordingKey,
   wordingOf,
@@ -58,7 +61,8 @@ import {
 import { type Reading, type Traced, consoleArgs, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
-import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
+import { type InputFs, inputTexts } from './mod-kit/inputs.ts'
+import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion, waitingNamed } from './night.ts'
 
 // The Slack alert guard (claude-config#2242), in a session. Dan, 2026-11-04: "anytime a slack alert
 // is created, we need to have a design-rounds esque check on wording so I can approve the wording
@@ -336,30 +340,68 @@ const placeChoices = async ($: EngineInterface, chosen: string[], file: string):
  * it wherever it is. A merge that cannot be read, a diff gh cannot give, or a pull request whose
  * repository gh cannot say, is held as could not check; a diff gh did not give within its time is
  * held as a timeout (#2792). With no choice waiting, no command is read.
+ *
+ * A diff gh cannot give (#2973) holds the merge only over the choices that hold its repository: none
+ * there, and it passes. A diff gh cuts short is read again file by file, only the files that can carry
+ * wording (diffInParts). One that cannot be read either way is held as could not check, naming each
+ * choice it waits on, the session that made it and where it is approved.
  */
 const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict> => {
   const waiting = await choices($)
   if (!waiting.length) return PASS
   const cwd = await $.session.cwd()
   const home = (await $.env.get('HOME')) ?? ''
-  const unreadable: Verdict = { unchecked: 'a merge whose pull request cannot be read, while Slack alert wording chosen overnight waits on Dan' }
+  const self = await $.session.id()
+  // The choices named, with who asks Dan about each, by askedHere as the merge refusal's are.
+  const named = async (cs: SlackAlertChoice[], prRepo: string | null): Promise<string> => {
+    const mine = new Set((await askedHere($, cs, self)).map(x => x.id))
+    const away: Record<string, string> = {}
+    for (const x of cs) if (!mine.has(x.id)) away[x.id] = (await choiceRepos($, x)).repos[0] ?? prRepo ?? ''
+    return waitingNamed(cs, mine, away)
+  }
+  const waits = 'while Slack alert wording chosen overnight waits on Dan'
+  const unreadable = async (): Promise<Verdict> => ({ unchecked: `a merge whose pull request cannot be read, ${waits}: ${await named(waiting, null)}` })
   for (const c of await $.modkit.pipeline({ command, cwd, home })) {
     const m = mergeOf(((await $.modkit.gh({ words: c.words })) ?? (await $.modkit.mergeHelper(c))) as Parameters<typeof mergeOf>[0])
     if (m === undefined) continue
-    if ('unreadable' in m) return unreadable
-    const argv = ['gh', 'pr', 'diff', ...m.selector, ...(m.repo ? ['-R', m.repo] : [])]
+    if ('unreadable' in m) return unreadable()
+    const folder = c.folder ?? cwd
+    const repoArgs = m.repo ? ['-R', m.repo] : []
+    // The pull request's repository: the one the command names, else the one gh reads it in, asked
+    // only when it is needed.
+    let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
+    const repoOfPr = async (): Promise<string | null> => {
+      if (prRepo !== undefined) return prRepo
+      const v = await $.process.run(['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], { timeoutMs: SCAN_MS, cwd: folder })
+      const link = v.exitCode === 0 && !v.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.stdout.trim() }) : null
+      if (!link) return null
+      prRepo = link.toLowerCase()
+      return prRepo
+    }
+    const argv = ['gh', 'pr', 'diff', ...m.selector, ...repoArgs]
     const asked = await $.clock.now()
-    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
+    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: folder })
     // A gh that failed once its whole time was spent was killed at its timeout (#2792).
     if (r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS)
-      return { unchecked: `gh did not give the pull request's diff within ${SCAN_MS / 1000} seconds, while Slack alert wording chosen overnight waits on Dan`, late: true }
-    if (r.exitCode !== 0 || r.isStdoutTruncated)
-      return { unchecked: `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'}), while Slack alert wording chosen overnight waits on Dan` }
-    const carrying = carried(r.stdout, waiting)
+      return { unchecked: `gh did not give the pull request's diff within ${SCAN_MS / 1000} seconds, ${waits}`, late: true }
+    let diff = r.stdout
+    if (r.exitCode !== 0 || r.isStdoutTruncated) {
+      const why = `gh could not give the pull request's diff (exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || 'cut short'})`
+      const repo = await repoOfPr()
+      if (repo === null) return { unchecked: `${why}, nor say which repository it is in, ${waits}: ${await named(waiting, null)}` }
+      // Only a choice holding this repository, or whose own repository cannot be read, holds it.
+      const bearing: SlackAlertChoice[] = []
+      for (const x of waiting) {
+        const { repos, unread } = await choiceRepos($, x)
+        if (unread.length || repos.includes(repo)) bearing.push(x)
+      }
+      if (!bearing.length) continue
+      const parts = r.exitCode === 0 ? await diffInParts($, m.selector, repoArgs, folder) : { unread: 'it was not read again' }
+      if ('unread' in parts) return { unchecked: `${why}, and ${parts.unread}, ${waits}: ${await named(bearing, repo)}`, ...('late' in parts && parts.late ? { late: true as const } : {}) }
+      diff = parts.text
+    }
+    const carrying = carried(diff, waiting)
     if (!carrying.length) continue
-    // The pull request's repository: the one the command names, else the one gh reads it in, asked
-    // only once some choice's wording is carried.
-    let prRepo = typeof m.repo === 'string' ? m.repo.toLowerCase() : undefined
     const held: SlackAlertChoice[] = []
     const unreadFiles: string[] = []
     for (const x of carrying) {
@@ -369,24 +411,63 @@ const judgeMerge = async ($: EngineInterface, command: string): Promise<Verdict>
         unreadFiles.push(...unread)
         continue
       }
-      if (prRepo === undefined) {
-        const v = await $.process.run(['gh', 'pr', 'view', ...m.selector, '--json', 'url', '--jq', '.url'], { timeoutMs: SCAN_MS, cwd: c.folder ?? cwd })
-        const link = v.exitCode === 0 && !v.isStdoutTruncated ? await $.modkit.linkRepo({ link: v.stdout.trim() }) : null
-        if (!link) return unreadable
-        prRepo = link.toLowerCase()
-      }
-      if (repos.includes(prRepo)) held.push(x)
+      const repo = await repoOfPr()
+      if (repo === null) return unreadable()
+      if (repos.includes(repo)) held.push(x)
     }
     if (!held.length) continue
     // A choice this session may not ask about (askedHere, #2833) is said to be asked in its own
     // repository, never put to Dan from here.
-    const self = await $.session.id()
     const mine = new Set((await askedHere($, held, self)).map(x => x.id))
     const away: Record<string, string> = {}
     for (const x of held) if (!mine.has(x.id)) away[x.id] = prRepo ?? (await choiceRepos($, x)).repos[0] ?? ''
     return { merge: mergeRefusal(held, unreadFiles, away) }
   }
   return PASS
+}
+
+/**
+ * A pull request's diff read file by file (#2973), for one whose whole diff gh cut short (a work
+ * repository's, 7.6 MB of pictures embedded in settled design files): GitHub's list of its files, the
+ * patch given only for a file that can carry wording (WORDING_PATH, picked out by gh's own jq, so the
+ * pictures are never sent), joined for carried(). Unread, with why, when the list is cut short too,
+ * holds fewer files than the pull request changes (GitHub lists at most 3,000), or gives no patch for
+ * a file that could carry wording (GitHub leaves one out past its own size limit); late when gh was
+ * killed at its timeout (#2792).
+ */
+const diffInParts = async ($: EngineInterface, selector: string[], repoArgs: string[], folder: string): Promise<{ text: string } | { unread: string; late?: true }> => {
+  const ran = async (argv: string[]) => {
+    const asked = await $.clock.now()
+    const r = await $.process.run(argv, { timeoutMs: SCAN_MS, cwd: folder })
+    return { r, late: r.exitCode !== 0 && (await $.clock.now()) - asked >= SCAN_MS }
+  }
+  const firstLine = (r: { exitCode: number; stderr: string }, short: string) => `exit ${r.exitCode}: ${r.stderr.trim().split('\n')[0] || short}`
+  const v = await ran(['gh', 'pr', 'view', ...selector, ...repoArgs, '--json', 'url,changedFiles', '--jq', '"\\(.changedFiles) \\(.url)"'])
+  if (v.late) return { unread: `gh did not say which files it changes within ${SCAN_MS / 1000} seconds`, late: true }
+  const said = v.r.exitCode === 0 && !v.r.isStdoutTruncated ? /^(\d+) (\S+)$/.exec(v.r.stdout.trim()) : null
+  const link = said?.[2] ?? ''
+  const repo = said ? await $.modkit.linkRepo({ link }) : null
+  const number = /\/pull\/(\d+)/.exec(link)?.[1]
+  if (!said || !repo || !number) return { unread: `gh could not say which files it changes (${firstLine(v.r, v.r.stdout.trim().slice(0, 80) || 'nothing said')})` }
+  const f = await ran(['gh', 'api', `repos/${repo}/pulls/${number}/files?per_page=100`, '--paginate', '--jq', FILES_JQ])
+  if (f.late) return { unread: `GitHub did not list its files within ${SCAN_MS / 1000} seconds`, late: true }
+  if (f.r.exitCode !== 0 || f.r.isStdoutTruncated) return { unread: `GitHub's list of its files could not be read either (${firstLine(f.r, 'cut short')})` }
+  const files: [string, string | null | false][] = []
+  for (const line of f.r.stdout.split('\n')) {
+    if (!line.trim()) continue
+    let row: unknown
+    try {
+      row = JSON.parse(line)
+    } catch {
+      row = undefined
+    }
+    if (!Array.isArray(row) || typeof row[0] !== 'string' || !(typeof row[1] === 'string' || row[1] === null || row[1] === false)) return { unread: `GitHub's list of its files could not be read (${line.slice(0, 80)})` }
+    files.push([row[0], row[1]])
+  }
+  if (files.length !== Number(said[1])) return { unread: `GitHub listed ${files.length} of the ${said[1]} files it changes` }
+  const blind = files.filter(([, p]) => p === null).map(([n]) => n)
+  if (blind.length) return { unread: `GitHub gives no diff for ${blind.join(', ')}, which could carry wording` }
+  return { text: files.flatMap(([, p]) => (typeof p === 'string' ? [p] : [])).join('\n') }
 }
 
 /**
@@ -637,6 +718,88 @@ const isFolder = async ($: EngineInterface, f: { path?: string; sources?: string
   return false
 }
 
+type ShellCommand = Awaited<ReturnType<EngineInterface['modkit']['pipeline']>>[number]
+type Unnamed = Awaited<ReturnType<EngineInterface['modkit']['writes']>>['unnamed'][number]
+
+/**
+ * The text of each patch a patch command applies (#2971): the files it names, read by mod-kit's one
+ * input reader, which never opens a device or a fifo; else what its standard input is, a heredoc's
+ * body or the files a cat pipes in. Could not check for a patch the guard cannot read before it runs:
+ * a named one that is not a file, a heredoc whose $ or backticks the shell fills in, or anything else
+ * on standard input.
+ */
+const patchTexts = async ($: EngineInterface, u: Unnamed, cmd: ShellCommand, folder: string): Promise<{ texts: string[] } | Unchecked> => {
+  const fs: InputFs = { exists: p => $.fs.exists(p), stat: (p, o) => $.fs.stat(p, o), read: async p => String(await $.fs.read(p)) }
+  const readAll = async (paths: string[]): Promise<{ texts: string[] } | Unchecked> => {
+    const texts: string[] = []
+    for (const p of paths) {
+      const [t] = await inputTexts(fs, [p])
+      if (t === undefined) return { unchecked: `the patch ${p} is not a file the guard can read before it runs` }
+      texts.push(t)
+    }
+    return { texts }
+  }
+  if (u.inputs.length) return readAll(u.inputs)
+  const doc = cmd.heredocs?.find(h => h.fd === undefined && !h.replaced)
+  if (doc) {
+    if (!doc.quoted && /[$`]/.test(doc.body)) return { unchecked: 'the patch is a heredoc whose $ and backticks the shell fills in, so what it applies cannot be read before it runs' }
+    return { texts: [doc.body] }
+  }
+  const from = cmd.pipedFrom ?? []
+  if (from[0] === 'cat' && from.length > 1 && from.slice(1).every(a => !a.startsWith('-'))) return readAll(from.slice(1).map(a => (a.startsWith('/') ? a : `${folder}/${a}`)))
+  return { unchecked: 'what the patch is given on standard input cannot be read before it runs' }
+}
+
+/**
+ * A patch a shell command applies with git apply, git am or patch (#2971), judged file by file as an
+ * Edit to that file is (judgeEdit): each hunk replaces its lines before with its lines after, and a
+ * file the patch makes is a Write of its lines. So rewording an alert in a file that posts to Slack is
+ * held as the same Edit would be, and a patch to a file that sends nothing passes. A file the patch
+ * removes is a removal, as rm is, and passes. Names are placed as the command places them: git from
+ * the top of its checkout, patch from where it runs, each with its -p and directory; patch with no -p
+ * strips git's a/ and b/ when both sides carry them. Could not check for a patch that cannot be read
+ * as a diff, and for a file it changes that is not there to read, since the names may be placed wrong.
+ */
+const judgePatch = async ($: EngineInterface, u: Unnamed, commands: ShellCommand[], cwd: string): Promise<Verdict> => {
+  const cmd = commands.find(c => JSON.stringify(c.words) === JSON.stringify(u.words))
+  if (!cmd) return { unchecked: `the patch command ${u.words.join(' ')} could not be found among the commands it runs` }
+  if (cmd.folder === null) return { unchecked: `the folder ${u.words.join(' ')} runs in cannot be followed` }
+  const folder = cmd.folder ?? cwd
+  const g = await $.modkit.git({ words: cmd.words })
+  const isGit = !!g && (g.sub === 'apply' || g.sub === 'am')
+  const placing = patchPlacing(isGit ? g.args : cmd.words.slice(1), isGit)
+  const got = await patchTexts($, u, cmd, folder)
+  if ('unchecked' in got) return got
+  let base = folder
+  if (isGit) {
+    const dir = g.dir === undefined ? folder : g.dir.startsWith('/') ? g.dir : `${folder}/${g.dir}`
+    const w = await whereIs($, `${dir}/.`, (await $.clock.now()) + SCAN_MS)
+    if ('unchecked' in w) return w
+    base = 'top' in w ? w.top : dir
+  }
+  if (placing.into) base = placing.into.startsWith('/') ? placing.into : `${base}/${placing.into}`
+  for (const text of got.texts) {
+    const files = patchFiles(text)
+    if (!files) return { unchecked: `a patch ${u.words.join(' ')} applies could not be read as a diff` }
+    for (const f of files) {
+      if (f.to === null) continue
+      const gitNamed = f.to.startsWith('b/') && (f.from === null || f.from.startsWith('a/'))
+      const strip = placing.strip ?? (isGit || gitNamed ? 1 : 0)
+      const rel = placing.target ?? f.to.split('/').slice(strip).join('/')
+      const path = rel.startsWith('/') ? rel : `${placing.target ? folder : base}/${rel}`
+      if (!rel || !inScope(path, '#!')) continue
+      let v: Verdict
+      if (f.from === null && !placing.target) v = await judgeEdit($, 'Write', { file_path: path, content: `${f.hunks.map(h => h.after).join('\n')}\n` })
+      else {
+        if (!(await $.fs.exists(path))) return { unchecked: `${path}, a file the patch changes, is not there to read` }
+        v = await judgeEdit($, 'MultiEdit', { file_path: path, edits: f.hunks.map(h => ({ old_string: h.before, new_string: h.after })) })
+      }
+      if (!('pass' in v)) return v
+    }
+  }
+  return PASS
+}
+
 /**
  * A shell write is held only when a file it writes posts to Slack by itself (#2837): its own code
  * carries a Slack marker, as it is or with what the command puts there. A copy into a folder, and a
@@ -654,6 +817,13 @@ const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): P
     if (writesOwnRecord(w, home, mentionsStore(command))) return { own: true }
     const merging = await judgeMerge($, command)
     if (!('pass' in merging)) return merging
+    // A patch writes files its words do not name, so it is read for what it changes (#2971).
+    const patches = w.unnamed.filter(u => u.what === 'a patch')
+    const commands = patches.length ? await $.modkit.pipeline({ command, cwd, home }) : []
+    for (const u of patches) {
+      const v = await judgePatch($, u, commands, cwd)
+      if (!('pass' in v)) return v
+    }
     const key = shellKey(command, w.files.flatMap(f => (f.path === undefined ? [] : [f.path])))
     for (const f of w.files) {
       if (f.path === undefined) continue

@@ -2,6 +2,9 @@ import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   MARKERS,
+  WORDING_PATH,
+  patchFiles,
+  patchPlacing,
   hookFailed,
   agentRefusal,
   ciMessages,
@@ -123,6 +126,96 @@ test('a name that is used is still a sender, however the file also matches it (#
   expect(isSender('scripts/notify.sh', '#!/bin/bash\n# posts to $SLACK_WEBHOOK_URL\ncurl -s --data "Deploy failed" "$HOOK"\n', true)).toBe(true)
   expect(isSender('scripts/notify.sh', '#!/bin/bash\n# posts to $SLACK_WEBHOOK_URL\ncurl -s --data "Deploy failed" "$HOOK"\n')).toBe(false)
   expect(sendMarks('python', 'client.chat_postMessage(channel=c, text=t)\n')).toEqual([7])
+})
+
+// #2973: on 2026-11-14 a shell write adding one member to an event union in a work repository's file
+// of database types was held as Slack wording. A table column or an event name spelled in lower case
+// (slack_channel_id, 'slack_channel_linked') reads as the Slack setting marker, and the file made no
+// request of any kind. Such a name is a send only in a file that makes a request itself; a setting
+// spelled as one (SLACK_WEBHOOK_URL) is a send as before.
+const DB_TYPES = [
+  'export type Database = {',
+  '  public: {',
+  '    Tables: {',
+  '      teams: { Row: { id: string; slack_channel_id: string | null; slack_webhook_url: string | null } }',
+  '    }',
+  '  }',
+  '}',
+  "export type EventKind = 'shift_created' | 'slack_channel_linked'",
+  '',
+].join('\n')
+test('a lower case Slack setting name in a file that makes no request is no send; in one that does, or spelled as a setting, it is (#2973)', () => {
+  expect(slackMarked(DB_TYPES)).toBe(true)
+  expect(isSender('src/lib/db/types.ts', DB_TYPES)).toBe(false)
+  expect(isSender('src/lib/db/types.ts', DB_TYPES, true)).toBe(false)
+  expect(isSender('app/models.py', 'class Team(Base):\n    slack_channel_id: Mapped[str | None]\n')).toBe(false)
+  // The same name in a file that posts, as a settings object read beside a request, is a send.
+  expect(isSender('src/notify.ts', 'export const notify = (t: Team, text: string) => fetch(t.slack_webhook_url, { method: "POST", body: JSON.stringify({ text }) })\n')).toBe(true)
+  expect(isSender('jobs/late.py', 'import requests\nrequests.post(settings.slack_webhook_url, json={"text": "Backup is late"})\n')).toBe(true)
+  // A setting spelled as one is a send wherever it stands, as before, and so is any other marker.
+  expect(isSender('src/env.ts', 'export const hook = process.env.SLACK_WEBHOOK_URL\n')).toBe(true)
+  expect(isSender('src/lib/db/types.ts', `${DB_TYPES}export const notify = (text: string) => sendSlackAlert(text)\n`)).toBe(true)
+  // A language not read for requests keeps every marker, as before.
+  expect(isSender('config/teams.yml', 'slack_channel: "#alerts"\n')).toBe(true)
+})
+
+// #2973: the files of a pull request whose diff can carry wording are picked out by gh's jq, so its
+// pattern must pick exactly the paths inScope reads as code whatever their text.
+test('the pattern gh picks a pull request\'s files by is inScope for every kind of path (#2973)', () => {
+  const re = new RegExp(WORDING_PATH, 'i')
+  const paths = ['lib/alert.ts', 'src/App.TSX', 'jobs/late.py', '.github/workflows/deploy.yml', 'bin/notify', '.envrc', 'Makefile', 'app/globals.css', 'docs/design/settled.html', 'README.md', 'assets/logo.png', 'lib/odd.', 'a.b/c.ts', 'a.b/run']
+  for (const p of paths) expect([p, re.test(p)]).toEqual([p, inScope(p, '#!')])
+  expect(paths.filter(p => re.test(p)).length).toBe(9)
+})
+
+// #2971: a patch read as the Edits it makes.
+test('a patch is read file by file, each hunk as its lines before and after; text that is no diff is unread (#2971)', () => {
+  const diff = [
+    'From 1a2b Mon Sep 17 00:00:00 2001',
+    'Subject: [PATCH] reword',
+    '---',
+    ' lib/alert.ts | 2 +-',
+    'diff --git a/lib/alert.ts b/lib/alert.ts',
+    '--- a/lib/alert.ts\t2026-11-14',
+    '+++ b/lib/alert.ts',
+    '@@ -1,3 +1,3 @@',
+    ' first',
+    '-old',
+    '+new',
+    '',
+    '\\ No newline at end of file',
+    'diff --git a/lib/pager.ts b/lib/pager.ts',
+    '--- /dev/null',
+    '+++ b/lib/pager.ts',
+    '@@ -0,0 +1,2 @@',
+    '+one',
+    '+two',
+    '--- a/lib/gone.ts',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-bye',
+    '',
+  ].join('\n')
+  expect(patchFiles(diff)).toEqual([
+    { from: 'a/lib/alert.ts', to: 'b/lib/alert.ts', hunks: [{ before: 'first\nold\n', after: 'first\nnew\n' }] },
+    { from: null, to: 'b/lib/pager.ts', hunks: [{ before: '', after: 'one\ntwo' }] },
+    { from: 'a/lib/gone.ts', to: null, hunks: [{ before: 'bye', after: '' }] },
+  ])
+  expect(patchFiles('not a diff\n')).toBeUndefined()
+  // Lines that do not add up to the hunk's header, or a binary patch, are unread, never half read.
+  expect(patchFiles('--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-old\n')).toBeUndefined()
+  expect(patchFiles('--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n*old\n+new\n')).toBeUndefined()
+  expect(patchFiles('diff --git a/x.ts b/x.ts\nGIT binary patch\nliteral 3\n')).toBeUndefined()
+})
+
+test('a patch command places its names by its -p, its folder, and for patch a file named to take it (#2971)', () => {
+  expect(patchPlacing([], true)).toEqual({ into: '' })
+  expect(patchPlacing(['-p2', '--directory=sub/', 'x.patch'], true)).toEqual({ strip: 2, into: 'sub' })
+  expect(patchPlacing(['-p', '0', '--directory', 'sub', 'x.patch'], true)).toEqual({ strip: 0, into: 'sub' })
+  expect(patchPlacing(['-p1', '<', 'fix.patch'], false)).toEqual({ strip: 1, into: '' })
+  expect(patchPlacing(['-d', 'app', '--strip=1', '-i', 'fix.patch'], false)).toEqual({ strip: 1, into: 'app' })
+  expect(patchPlacing(['lib/alert.ts', 'fix.patch'], false)).toEqual({ into: '', target: 'lib/alert.ts' })
+  expect(patchPlacing(['<<', 'EOF'], false)).toEqual({ into: '' })
 })
 
 test('a file that matches a Slack endpoint and then makes a request is still a sender, in each language read for one (#2662)', () => {
