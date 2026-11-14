@@ -7903,19 +7903,20 @@ whose sends cannot be traced (a workflow, a shell script, any other language, a 
 cannot find, an edit that does not apply) is held for all the wording the edit changes. A python
 docstring is never message text (#2574).
 One kind of string passes in a shell script that posts (#2792): one whose every place in the script
-is an argument of an `echo` or `printf` sent to the error stream and nowhere else (`echo "..." >&2`,
-`>&2 echo "..."`), alone, after a test, or in a branch or a group. Only a log reads it. The script
-is read as its commands by mod-kit's reader (`$.modkit.pipeline`), never by the guard itself, and
-`rules.ts` `shellLogWording` judges those. The same string on standard output, piped, written to a file, set in
-a variable, handed to any other command, holding a command substitution, inside a heredoc, or in a
-script that points its own error stream somewhere with `exec` is held as before, and so is a log
-line in ruby or any other language the guard does not read. The gap: a caller that joins the error
-stream of the function a log line is in to what it posts (`tell 2>&1 | curl ...`) is not followed,
-so such a line can reach Slack unseen. Measured 2026-11-13 on one Mac: of the 22 edits its session
-transcripts show the guard holding, all in this repository's own files, 3 were this kind (an
-advice line a gate prints to the error stream); and of this repository's 553 shell scripts none is
-read as posting to Slack by itself today, so the rule changes nothing here now. Shell scripts in
-other repositories were not counted.
+is a whole argument of an `echo` or `printf` sent to the error stream and nowhere else
+(`echo "..." >&2`, `>&2 echo "..."`), alone, after a test, or in a branch, a group or a function.
+Only a log reads it. The script is read as its commands by mod-kit's reader
+(`$.modkit.pipeline`), never by the guard itself, and `rules.ts` `shellLogWording` judges those.
+The same string on standard output, piped, written to a file, set in a variable, handed to any
+other command, inside a command substitution or holding one, inside a heredoc, or in a script that
+points its own streams somewhere (`exec 2>...`) or opens a heredoc that never ends is held as
+before, and so is a log line in ruby or any other language the guard does not read. The gap: a
+caller that joins the error stream of the function a log line is in to what it posts
+(`tell 2>&1 | curl ...`) is not followed, so such a line can reach Slack unseen. Measured
+2026-11-13 on one Mac: of the 22 edits its session transcripts show the guard holding, all in this
+repository's own files, 3 were this kind (an advice line a gate prints to the error stream); and
+of this repository's 553 shell scripts none is read as posting to Slack by itself today, so the
+rule changes nothing here now. Shell scripts in other repositories were not counted.
 No longer held since #2837, which Dan chose knowing an alert can now reach Slack unseen: wording in
 a template, copy module or script whose own code names nothing of Slack, however a sender reaches
 it; a new import, or a name newly handed to a send, that brings such wording in; and a shell
