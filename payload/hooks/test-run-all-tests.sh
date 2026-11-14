@@ -2755,14 +2755,19 @@ case "$out_fd" in
   *)
     check "#253 and it carries the remedy under it" "out=$out_fd" ;;
 esac
-# The control: an UNINDENTED line after the FAIL belongs to the suite's ordinary chatter, not to
-# the message, and carrying it would turn every failing suite's whole output into the detail block.
+# The control: a line after the NEXT result line belongs to another check, not to the message, and
+# carrying it would turn every failing suite's whole output into the detail block. A passed check
+# (`ok`, `PASS`) and an agreed SUITE- line each end the message.
 {
   printf '#!/usr/bin/env bash\n'
   printf 'echo "FAIL: the rule that was broken"\n'
   printf 'echo "  the indented reason"\n'
+  printf 'echo "ok: a later check passed"\n'
   printf 'echo "an unrelated line at the margin"\n'
-  printf 'echo "SUITE-RESULT passed=0 failed=1"\n'
+  printf 'echo "PASS: another check passed"\n'
+  printf 'echo "a second unrelated line"\n'
+  printf 'echo "SUITE-RESULT passed=2 failed=1"\n'
+  printf 'echo "chatter after the score"\n'
   printf 'exit 1\n'
 } > "$FD/test-detail.sh"
 out_fd2="$(HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$FD" 2>&1)"
@@ -2771,11 +2776,88 @@ case "$out_fd2" in
   *) check "#253 the indented continuation is carried" "out=$out_fd2" ;;
 esac
 case "$out_fd2" in
-  *"an unrelated line at the margin"*)
-    check "#253 and a line back at the margin is not swept in" "out=$out_fd2" ;;
+  *"an unrelated line at the margin"*|*"a second unrelated line"*|*"chatter after the score"*)
+    check "#253 #2928 and a line after the next result line is not swept in" "out=$out_fd2" ;;
   *)
-    check "#253 and a line back at the margin is not swept in" ok ;;
+    check "#253 #2928 and a line after the next result line is not swept in" ok ;;
 esac
+
+# ---------------------------------------------------------------------------
+# EVERY line of a value of several lines a failing check prints (claude-config#2928).
+#
+# The #253 rule above carried only lines indented further than the FAIL, and about 270 suites' own
+# helpers print the value they are handed as is: `echo "FAIL: $1 ($2)"`, `echo "  actual: $3"`.
+# When that value has several lines at run time (a scan's output held in a variable, a hook's
+# output), every line after the first sits at the margin, and the full run's report dropped it, so
+# the report said a scan found something and never said what. #2916's scan of the source could not
+# see these, since the extra lines exist only while the suite runs. So the runner keeps every line
+# after a FAIL up to the next result line, and sits the ones that came at the margin under their
+# FAIL; with that, the scan had nothing left to catch and was removed.
+fd_suite() { # fd_suite <the suite's body, read as is>
+  { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$1"; } > "$FD/test-detail.sh"
+  chmod +x "$FD/test-detail.sh"
+  HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$FD" 2>&1
+}
+out_mv="$(fd_suite '
+check() { if [ "$2" = ok ]; then :; else echo "FAIL: $1 ($2)"; fi; }
+found="$(printf "%s\n" "first.sh:1: one" "second.sh:2: two" "third.sh:3: three")"
+check "the scan found nothing" "$found"
+echo "SUITE-RESULT passed=0 failed=1"
+exit 1')"
+for want in "first.sh:1: one" "second.sh:2: two" "third.sh:3: three)"; do
+  case "$out_mv" in
+    *"$want"*) check "#2928 a value of several lines handed to a failing check reaches the report: $want" ok ;;
+    *) check "#2928 a value of several lines handed to a failing check reaches the report: $want" "out=$out_mv" ;;
+  esac
+done
+# Under its FAIL, not at the report's own margin for a failure's detail, so it reads as part of it.
+fail_col="$(printf '%s\n' "$out_mv" | grep -E '^ *FAIL: the scan found nothing' | sed -n '1s/FAIL.*//p' | awk '{ print length($0) }')"
+cont_col="$(printf '%s\n' "$out_mv" | grep -E 'second\.sh:2: two' | sed -n '1s/second.*//p' | awk '{ print length($0) }')"
+[ -n "$fail_col" ] && [ -n "$cont_col" ] && [ "$cont_col" -gt "$fail_col" ] \
+  && check "#2928 and the lines that came at the margin sit under their FAIL line" ok \
+  || check "#2928 and the lines that came at the margin sit under their FAIL line" "fail at ${fail_col:-none}, continuation at ${cont_col:-none}"
+# The other shape: the value on an indented line of its own, its first line indented and the rest
+# at the margin, with a blank line inside it, which is part of the value and does not end it.
+out_mv2="$(fd_suite '
+echo "FAIL: the hook said the wrong thing"
+echo "  expected: nothing"
+echo "  actual: refused
+the second line of what it said
+
+the line after a blank one"
+echo "SUITE-RESULT passed=0 failed=1"
+exit 1')"
+for want in "the second line of what it said" "the line after a blank one"; do
+  case "$out_mv2" in
+    *"$want"*) check "#2928 a value of several lines on an indented line of its own reaches the report: $want" ok ;;
+    *) check "#2928 a value of several lines on an indented line of its own reaches the report: $want" "out=$out_mv2" ;;
+  esac
+done
+# And the cap on a failure's detail never hides a FAIL line behind another one's long message: the
+# message is cut, every FAIL line is printed, and the cut is said.
+out_cap="$(fd_suite '
+echo "FAIL: the first rule, with a long list"
+i=0; while [ $i -lt 80 ]; do echo "  finding number $i"; i=$((i + 1)); done
+echo "FAIL: the second rule, said after it"
+echo "  why the second rule failed"
+echo "SUITE-RESULT passed=0 failed=2"
+exit 1')"
+case "$out_cap" in
+  *"FAIL: the second rule, said after it"*)
+    check "#2928 a FAIL line after a message longer than the cap is still printed" ok ;;
+  *) check "#2928 a FAIL line after a message longer than the cap is still printed" "out=$out_cap" ;;
+esac
+case "$out_cap" in
+  *"why the second rule failed"*)
+    check "#2928 and so is the start of its own message" ok ;;
+  *) check "#2928 and so is the start of its own message" "out=$out_cap" ;;
+esac
+printf '%s\n' "$out_cap" | grep -Eq 'more line\(s\) .*not shown' \
+  && check "#2928 and the cut is said" ok \
+  || check "#2928 and the cut is said" "out=$out_cap"
+printf '%s\n' "$out_cap" | grep -q 'finding number 79' \
+  && check "#2928 and what was cut is not printed as well" "out=$out_cap" \
+  || check "#2928 and what was cut is not printed as well" ok
 
 # ---------------------------------------------------------------------------
 # A suite that passes only on a second run is COUNTED as a flake (claude-config#245).
