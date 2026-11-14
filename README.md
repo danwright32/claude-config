@@ -5469,8 +5469,13 @@ else, nothing in it is uncommitted, nothing changed in the last six hours, and n
 working in it. Its work counts as kept elsewhere when its PR merged holding every commit, or when
 every commit on its branch is also on another branch, local or remote (which covers work shipped in
 a combined batch branch, or pushed with no PR), or, for a worktree on no branch, when its HEAD is on
-the default branch. The `--just-merged` removal at a merge still judges only an agent worktree
-under `.claude/worktrees`, by its merged PR alone. Anything it cannot read (the folder, git's
+the default branch. The sweep also keeps a worktree whose branch has an open pull request, and,
+while the Mac is asleep, one that a session sleep mode has working overnight has worked in (its
+session registry folder or a file it edited is inside it), because a pushed branch counts as kept
+elsewhere and an idle session looks abandoned after six hours (#2943). When the open pull requests,
+the sleep record or a worker's places cannot be read, it removes nothing that run. The `--just-merged`
+removal at a merge still judges only an agent worktree under `.claude/worktrees`, by its merged PR
+alone, and asks neither question. Anything it cannot read (the folder, git's
 status, a file's age, or an lsof that lists no process at all) keeps the worktree and says why.
 Its branch is never deleted. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
