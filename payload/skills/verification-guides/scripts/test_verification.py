@@ -849,12 +849,27 @@ class TrailingNewlineTests(unittest.TestCase):
     (claude-config#2957)."""
 
     def test_no_module_pattern_ends_in_a_dollar(self):
+        # Every script of the skill, not only this one: shoot_native.py and screenshots.py anchored
+        # their file, folder and artifact names the same way.
+        import importlib
         import re
-        loose = sorted(name for name, val in vars(v).items()
+        scripts = sorted(f[:-3] for f in os.listdir(HERE)
+                         if f.endswith(".py") and not f.startswith("test_"))
+        self.assertIn("shoot_native", scripts)
+        loose = sorted("%s.%s" % (mod, name) for mod in scripts
+                       for name, val in vars(importlib.import_module(mod)).items()
                        if isinstance(val, re.Pattern) and val.pattern.endswith("$")
                        and not val.pattern.endswith("\\$"))
         self.assertEqual(loose, [], "these patterns accept a trailing newline; end them with \\Z")
         self.assertFalse(v.glob_to_regex("src/*.ts").pattern.endswith("$"))
+
+    def test_shot_folder_and_artifact_names_with_a_trailing_newline_are_refused(self):
+        import screenshots
+        import shoot_native
+        for rx, good in ((shoot_native.FILE_RE, "rows-light.png"), (screenshots.FOLDER_RE, "pr-12/" + SHA),
+                         (screenshots.ARTIFACT_RE, "https://claude.ai/artifact/abcdefgh12")):
+            self.assertTrue(rx.match(good), (rx.pattern, good))
+            self.assertIsNone(rx.match(good + "\n"), (rx.pattern, good))
 
     def test_names_with_a_trailing_newline_are_refused(self):
         for rx, good in ((v.AREA_NAME, "invoices"), (v.SHA_RE, SHA), (v.RECEIPT_ID_RE, RECEIPT_ID),
