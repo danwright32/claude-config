@@ -465,9 +465,11 @@ export type ModKitWrite = { word: string; path?: string; folder?: string; source
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),
  * emptied (truncate, shred), made a folder (mkdir) or its mode or owner changed; `tree` when it
- * reaches everything under a folder. `word`, `path` and `folder` as in a write.
+ * reaches everything under a folder. `word`, `path` and `folder` as in a write. `names`, on a tree a
+ * find -delete takes away, the -name and -iname patterns it is limited to: it takes away only an entry
+ * whose name matches every one (-iname's ignoring case); absent wherever anything may widen it.
  */
-export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true }
+export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true; names?: string[] }
 
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes
