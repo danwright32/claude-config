@@ -37,7 +37,7 @@ check() { # check <description> <result>   ("ok" passes, anything else is the fa
     pass=$((pass + 1))
   else
     fail=$((fail + 1))
-    echo "FAIL: $1 ($2)"
+    echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'
   fi
 }
 

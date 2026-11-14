@@ -34,7 +34,7 @@ ROOT="${TWO_FILE_AWK_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/n
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 
 # No repository here is not a failure of this suite's subject, it is a place this suite cannot be
 # asked (claude-config#155), said in the one shape the runner reads as NOT RUN.

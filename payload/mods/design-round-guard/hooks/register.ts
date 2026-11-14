@@ -41,6 +41,7 @@ import {
   stale,
   forged,
   inScratchpad,
+  inSessionNotes,
   isModHook,
   isModHookTs,
   drawnParts,
@@ -312,6 +313,11 @@ import { guardAsks } from './mod-kit/designquestions.ts'
 //   command that only reads, git reading only, or another restore of named paths (rules.ts
 //   leavesGitAlone, pathRestore). Two restores where one reads the index, and a write inside .git,
 //   stay whole. Until #2830 only a restore run first on its line, alone in no pipe, was (#2777).
+// - Since #2792: a file or folder taken away in the session's scratchpad or anywhere inside the
+//   session notes folder (rules.ts inSessionNotes, `<home>/.claude/state/session-notes/`) is never
+//   held, and a folder taken away there is never listed: on 2026-11-11 `rm -rf` of a copy of a
+//   repository a review agent had cloned into its notes folder was held as a look change, the copy
+//   being a checkout of its own. A write into such a copy is judged as before.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -359,6 +365,13 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
   session: await $.session.id(),
   temps: tempRoots(await $.env.get('CLAUDE_CODE_TMPDIR')),
 })
+
+// #2792: whether a path is in a place that holds only throwaway working files, the session's
+// scratchpad or the session notes folder. A file taken away there (a copy of a repository an agent
+// made to read, on 2026-11-11) takes no screen of any product away, whatever checkout the copy is, so
+// a removal there is never held, and the files under it are never listed. A write there is judged as
+// ever: a copy can be pushed, and what is written into one can reach the product.
+const throwaway = (path: string | undefined, at: Where): boolean => path !== undefined && (inScratchpad(path, at.session, at.temps) || inSessionNotes(path, at.home))
 
 // A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
@@ -499,7 +512,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   for (const c of w.changes)
     if (c.does === 'remove' || c.does === 'truncate') {
       targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}) })
-      if (c.tree && c.path) trees.push({ word: c.word, path: c.path, ...(c.does === 'remove' ? { removes: true as const } : {}) })
+      // A folder taken away in a throwaway place is never listed (#2792).
+      if (c.tree && c.path && !(c.does === 'remove' && throwaway(plainPath(c.path), at))) trees.push({ word: c.word, path: c.path, ...(c.does === 'remove' ? { removes: true as const } : {}) })
     }
   // What git itself changes (#1136, Dan, 2026-10-13): a checkout of a path or a restore puts a file
   // back, git rm and git mv take it away or move it, each changing the look as a write does. A git
@@ -1302,6 +1316,10 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     why ||= said
   }
   for (const t of targets) {
+    // A file or folder taken away in the session's scratchpad or the session notes folder (#2792)
+    // takes no screen away: by its path, or for a pattern by the folder it is matched in, where the
+    // pattern cannot climb out of it.
+    if (t.removes && throwaway(t.path !== undefined ? plainPath(t.path) : t.folder !== undefined && !/(^|\/)\.\.(\/|$)/.test(t.word) ? `${plainPath(t.folder)}/x` : undefined, at)) continue
     // A whole folder whose files cannot be listed (#2395), and a script's own write that cannot be
     // placed or a script that cannot be read (#2847), may hold a look changing file: held, saying why.
     if (t.unread !== undefined) {

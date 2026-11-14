@@ -30,7 +30,7 @@ CLI="$DIR/lib/branch-issues.mjs"
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 check_eq() { if [[ "$2" == "$3" ]]; then check "$1" ok; else check "$1" "expected '$2', got '$3'"; fi; }
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/branch-issue-reader.XXXXXXXX")" || TMPROOT=""
