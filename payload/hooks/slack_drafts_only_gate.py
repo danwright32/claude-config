@@ -2994,6 +2994,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         return d
 
     @staticmethod
+    def sh_cd_works(d):
+        """Whether a cd into d, as sh_walk's where() gives it, certainly works: d is a folder that is
+        there and can be entered (claude-config#2910). Not the directory the text was started in,
+        where no cd was read, and not one where() could not settle."""
+        return bool(d) and d != SH_UNKNOWN_DIR and os.access(d, os.X_OK)
+
+    @staticmethod
     def sh_at(known, name, at):
         """The value sh_walk found certain for name at offset at in its text, or None."""
         for a, b, v in known["regions"].get(name, ()):
@@ -3180,7 +3187,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             from then on, except that the commands joined to `cd X` by && run only where it worked,
             and `cd X || exit` and `cd X || { ...; exit; }` end the script where it did not; a cd
             joined by && alone to the commands before it (`mkdir -p o && cd X && ...`) is read as
-            one at the start of its list is, since nothing after it runs unless it ran (#2913).
+            one at the start of its list is, since nothing after it runs unless it ran (#2913);
+          - a cd that starts its list into a folder that is there and can be entered works, so a
+            NAME=value joined straight to it by && is certain to run, and the commands after its
+            chain run in that folder: Dan's decision of 2026-11-14 (claude-config#2910), reversing
+            #2785's reading of `cd X && S=...` as an assignment that may be skipped. Joined to
+            anything else, after a cd that may not run, or after one into a folder that is not
+            there, the assignment may still be skipped.
         Inside a function body only a value that lasts to the end of s holds, as the body runs when
         the function is called. A value lasts to the end of s where nothing else in s binds the name
         (a NAME=value in front of a command that is not a special builtin or a function of s sets it
@@ -3350,6 +3363,12 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # followed as one at the start of the list is, so `mkdir -p x && cd X && bash suite.sh` runs
         # the suite in X, as `cd X && bash suite.sh` does.
         all_and = True
+        # Whether the last command followed was a cd that starts its list, so it certainly runs
+        # (lead_cd), and whether the chain being followed was opened by one (chain_lead). Such a cd
+        # into a folder that is there works (sh_cd_works): Dan's decision of 2026-11-14 ("Make the
+        # change", claude-config#2910), reversing #2785's reading of `cd X && S=...` as a cd that may
+        # fail. So the assignment joined to it by && runs, and the commands after the chain run in X.
+        lead_cd = chain_lead = False
         while i < len(items):
             (d, t), p = items[i]
             if len(p["scope"]) > 1:
@@ -3382,10 +3401,10 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     top, whole = p["start"], whole and res == "stop"
                     break
                 if items[j][1]["how"] not in ("&&", "||"):
-                    if chain == "and":
+                    if chain == "and" and not (chain_lead and self.sh_cd_works(where(d, p["start"]))):
                         lost.append((end, len(s)))
                     chain = None
-                i, prev, test, all_and = j + 1, items[j][1]["how"], None, False
+                i, prev, test, all_and, lead_cd = j + 1, items[j][1]["how"], None, False, False
                 continue
             i += 1
             handled.add(i - 1)
@@ -3396,7 +3415,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     break  # the last command of a pipeline may run in this shell
                 if is_cd and how not in ("|", "&"):
                     lost.append((p["end"], len(s)))  # commands() moves to it, the shell does not
-                prev, test, chain, all_and = how, None, None, False
+                prev, test, chain, all_and, lead_cd = how, None, None, False, False
                 continue
             all_and = (all_and and prev == "&&") if prev in ("&&", "||") else True
             if prev in ("&&", "||"):
@@ -3410,6 +3429,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 res = None
                 if a:
                     runs = None if test is None else test == (prev == "&&")
+                    if runs is None and prev == "&&" and lead_cd and self.sh_cd_works(where(d, p["start"])):
+                        runs = True  # `cd X && S=...`, X a folder that is there (#2910)
                     if runs is False:
                         spans.setdefault(a[0], []).append((p["start"], p["end"]))  # written, never run
                     else:
@@ -3418,12 +3439,13 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                     if is_cd and all_and and how in ("&&", "||"):
                         # What is joined to it runs only where it and everything before it worked,
                         # or, after ||, ends the script where any of them did not (#2913).
-                        chain = "and" if how == "&&" else "or"
+                        chain, chain_lead = ("and" if how == "&&" else "or"), False
                     elif is_cd:
                         lost.append((p["end"], len(s)))  # a cd that may not run
                     res = effects(d, head, p, None)
-                test = None
+                test, lead_cd = None, False
             else:
+                lead_cd = chain_lead = is_cd and how == "&&"
                 chain = ("and" if how == "&&" else "or") if is_cd and how in ("&&", "||") else None
                 test = self.sh_test(head, where(d, p["start"]), look, script) if how in ("&&", "||") else None
                 res = effects(d, head, p, True)
@@ -3431,7 +3453,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 top, whole = p["end"], whole and res == "stop"
                 break
             if how not in ("&&", "||"):
-                if chain == "and":
+                if chain == "and" and not (chain_lead and self.sh_cd_works(where(d, p["start"]))):
                     lost.append((p["end"], len(s)))  # `cd X && a; b`: b runs whether or not the cd worked
                 chain = None
             prev = how
