@@ -1103,6 +1103,12 @@ both "and beside a module only an allowed one imports, fractions under statistic
 both "python after a cd this check cannot follow is asked about (#2969)" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentythree.sql <<EOF\nselect 1;\nEOF\n'"cd - && supabase db query --linked -f @NOTES@/twentythree.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
 both "(control) python run with -I beside a json.py is approved, the folder never on its path (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfour.sql <<EOF\nselect 1;\nEOF\n'"cd $SHADOW && supabase db query --linked -f @NOTES@/twentyfour.sql | python3 -I -c \"import json,sys; print(len(json.load(sys.stdin)))\"")" "$PROJ" s1 "$NONE_T")"
 both "(control) python run in a folder holding no module is approved (#2969)" allow none "$(apply_payload "$(scripted $'cat > @NOTES@/twentyfive.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/plainfolder && supabase db query --linked -f @NOTES@/twentyfive.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
+# The shell's cd .. is logical: after cd through a link it goes to the link's parent, never the
+# parent of where the link points (the lessons review of 1029c9f).
+mkdir -p "$APPLY/logical" "$APPLY/plainfolder/sub"
+printf 'import os\n' > "$APPLY/logical/json.py"
+ln -sfn "$APPLY/plainfolder/sub" "$APPLY/logical/hop"
+both "python after cd through a link and back up, beside a json.py, is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/twentyseven.sql <<EOF\nselect 1;\nEOF\n'"cd $APPLY/logical/hop && cd .. && supabase db query --linked -f @NOTES@/twentyseven.sql $PY_STEP")" "$PROJ" s1 "$NONE_T")"
 # PYTHONPATH puts its folders ahead of the standard library too; the one here holds no module, so
 # the hooks' own python is unchanged by it, and only the rule can make the step ask.
 export PYTHONPATH="$APPLY/plainfolder"

@@ -1280,7 +1280,7 @@ def scripted_queries(command, sw, cwd):
     steps = [0]
     pipe = [None]
     # The folder the command is in at each step, None once a cd goes where this cannot follow (#2969).
-    here = [os.path.realpath(cwd)]
+    here = [os.path.normpath(cwd)]
 
     def step(node):
         _, raw, how, heredoc, piped = node
@@ -1333,13 +1333,15 @@ def scripted_queries(command, sw, cwd):
         if words[0] == "cd":
             if len(words) != 2 or redirects or heredoc is not None or how == "|":
                 return False
+            # Followed as the shell's cd does by default, logically: `..` after a link is the link's
+            # parent, so the path is normalised as written, never resolved through its links.
             to = words[1]
             if to.startswith("/"):
-                here[0] = os.path.realpath(to)
+                here[0] = os.path.normpath(to)
             elif to == "-" or to.startswith("~") or here[0] is None:
                 here[0] = None
             else:
-                here[0] = os.path.realpath(os.path.join(here[0], to))
+                here[0] = os.path.normpath(os.path.join(here[0], to))
             return True
         if words == ["cat"] and heredoc is not None:
             ops = sorted(op for op, _ in redirects)
