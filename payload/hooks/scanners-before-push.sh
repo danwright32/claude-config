@@ -317,21 +317,87 @@ fi
 # 1.1 to 1.2 seconds, about half writing out payload/ and half the suite. A tree it could not write out
 # refuses, since a suite nobody ran is not one that passed (L98), and so does the suite failing,
 # node missing included, with the suite's own lines, which name each file and what was wrong.
+#
+# A TREE WITH NO COPY OF THE SUITE refuses in words of its own (claude-config#2914): a branch cut
+# before the suite existed, or one deleting it. It once shared the refusal for a tree that could not
+# be written out, which sent the person to git status, and git status finds nothing wrong there.
+#
+# THE SUITE HAS A TIME LIMIT OF ITS OWN (claude-config#2914). With none, a suite that hung held the
+# push until Claude Code killed the whole gate at its declared timeout (in settings.hooks.json), and
+# a killed hook's refusal carries no reason of the gate's own. So the suite runs under
+# lib/bounded-run.sh, in a process group of its own that is killed whole at the limit (L235, L321),
+# and the push is refused saying it ran out of time. 60 seconds by default, a setting rather than a
+# measurement: fifty times the step's measured second, and under the scanners' budget below, which
+# is counted from this gate's start, so the gate as a whole still ends at that budget, inside the
+# declared timeout. test-scanners-before-push.sh reads all three numbers from their files.
+# SCANNERS_SLACK_GUARD_SECONDS sets a SHORTER limit, for the tests (L524, L290); a longer one is held
+# to the default, so no setting can carry the step past the timeout. The suite's OWN deadline
+# (lib/suite-deadline.sh, which also exits 124) is 1200 seconds by default, so this limit is the one
+# that fires here.
 _sc_sag_suite="tests/test-slack-alert-guard-real-gate.sh"
+_sc_sag_seconds_default=60
 if [ "$_sc_pc_rc" -eq 0 ] && grep -q '^payload/mods/slack-alert-guard/' <<< "$PC_FILES"; then
+  _sc_sag_seconds="$_sc_sag_seconds_default"
+  if [ -n "${SCANNERS_SLACK_GUARD_SECONDS:-}" ]; then
+    if _wn_got="$(whole_above_zero "$SCANNERS_SLACK_GUARD_SECONDS")"; then
+      [ "$_wn_got" -lt "$_sc_sag_seconds_default" ] && _sc_sag_seconds="$_wn_got"
+    else
+      # Unreadable is the default, said rather than swallowed (L50, L90).
+      echo "scanners-before-push: SCANNERS_SLACK_GUARD_SECONDS is '$SCANNERS_SLACK_GUARD_SECONDS', not a whole number of seconds, so the default of $_sc_sag_seconds_default is used." >&2
+    fi
+  fi
   _sc_sag_tree="$(pc_push_tree)"
   _sc_sag_dir="$(mktemp -d "${TMPDIR:-/tmp}/scanners-slack-guard.XXXXXXXX" 2>/dev/null)" || _sc_sag_dir=""
   _sc_sag_rc=0; _sc_sag_out=""
-  if [ -z "$_sc_sag_tree" ] || [ -z "$_sc_sag_dir" ] \
-     || ! git cat-file -e "$_sc_sag_tree:$_sc_sag_suite" 2>/dev/null \
+  if [ -n "$_sc_sag_tree" ] && ! git cat-file -e "$_sc_sag_tree:$_sc_sag_suite" 2>/dev/null; then
+    _sc_sag_rc=absent
+  elif [ -z "$_sc_sag_tree" ] || [ -z "$_sc_sag_dir" ] \
      || ! git archive -o "$_sc_sag_dir/tree.tar" "$_sc_sag_tree" payload "$_sc_sag_suite" 2>/dev/null \
      || ! tar -x -f "$_sc_sag_dir/tree.tar" -C "$_sc_sag_dir" 2>/dev/null; then
     _sc_sag_rc=unread
+  elif ! { . "$HOOK_DIR/lib/bounded-run.sh" 2>/dev/null && declare -F bounded_run >/dev/null; }; then
+    # A suite that cannot be bounded is not run unbounded, and is not one that passed (L98).
+    _sc_sag_rc=unbounded
   else
-    _sc_sag_out="$(bash "$_sc_sag_dir/$_sc_sag_suite" 2>&1 < /dev/null)"; _sc_sag_rc=$?
+    bounded_run "$_sc_sag_seconds" bash "$_sc_sag_dir/$_sc_sag_suite" < /dev/null
+    _sc_sag_out="$BOUNDED_OUT"; _sc_sag_rc="$BOUNDED_RC"
   fi
   [ -n "$_sc_sag_dir" ] && rm -rf "$_sc_sag_dir"
-  if [ "$_sc_sag_rc" = unread ]; then
+  if [ "$_sc_sag_rc" = absent ]; then
+    {
+      echo "PUSH BLOCKED: this push changes the Slack alert guard, and the tree it delivers"
+      echo "has no copy of $_sc_sag_suite, the suite that checks the guard's reading"
+      echo "of its own source, so that was not checked (claude-config#2834, #2914). If the branch was cut"
+      echo "before the suite existed, bring it up to date with main, which carries it; if this push deletes"
+      echo "the suite, put it back. Then push again."
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  elif [ "$_sc_sag_rc" = unbounded ]; then
+    {
+      echo "PUSH BLOCKED: this push changes the Slack alert guard, and scanners-before-push.sh could not"
+      echo "load $HOOK_DIR/lib/bounded-run.sh, which gives $_sc_sag_suite its time limit, so"
+      echo "the suite was not run and the guard's reading of its own source was not checked"
+      echo "(claude-config#2914). Reinstall the hooks with claude-sync pull."
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  elif [ "$_sc_sag_rc" = 124 ]; then
+    {
+      echo "PUSH BLOCKED: this push changes the Slack alert guard, and $_sc_sag_suite"
+      echo "did not finish within $_sc_sag_seconds seconds on the tree the push delivers, so it was stopped, with"
+      echo "everything it started, and the guard's reading of its own source was not checked"
+      echo "(claude-config#2914). Its last lines:"
+      echo ""
+      printf '%s\n' "$_sc_sag_out" | tail -n 10 | sed 's/^/  /'
+      echo ""
+      echo "On a quiet Mac the whole step takes about a second, so this is a suite that hangs or a machine"
+      echo "far busier than its cores. Run bash $_sc_sag_suite in the repository to see where it"
+      echo "stops, or push again when the machine is quieter."
+      echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    } >&2
+    exit 2
+  elif [ "$_sc_sag_rc" = unread ]; then
     {
       echo "PUSH BLOCKED: this push changes the Slack alert guard, and $_sc_sag_suite could not be"
       echo "written out from the tree the push delivers, so the guard's reading of its own source was"
