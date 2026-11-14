@@ -105,7 +105,10 @@ _kept_output_stamp(){
 # top. One pass over the named copies, newest first by the time in the name; the label is the name
 # between the stamp and the random suffix. <spare>, the copy just written, is never removed.
 kept_output_prune_by_age(){
-  local dir="$1" per="$2" days="$3" maxkb="$4" spare="${5##*/}" now cutoff f
+  local dir="$1" per="$2" days="$3" maxkb="$4" spare="${5##*/}" now cutoff f spare_size
+  # The copy just written counts against the cap from the start, wherever its name sorts.
+  spare_size="$(wc -c < "$5" 2>/dev/null | tr -d ' ')" || spare_size=0
+  [ -n "$spare_size" ] || spare_size=0
   # A clock that is not a whole number cannot be aged from: everything counts as young.
   cutoff="00000000T000000Z"
   if now="$(whole_above_zero "${KEPT_OUTPUT_NOW_EPOCH:-$(date -u +%s)}")"; then
@@ -115,12 +118,13 @@ kept_output_prune_by_age(){
     | LC_ALL=C sort -r | while IFS= read -r f; do
       printf '%s\t%s\n' "$f" "$(wc -c < "$dir/$f" 2>/dev/null | tr -d ' ' || true)"
     done \
-    | awk -F'\t' -v per="$per" -v cutoff="$cutoff" -v maxb="$(( maxkb * 1024 ))" -v spare="$spare" '
+    | awk -F'\t' -v per="$per" -v cutoff="$cutoff" -v maxb="$(( maxkb * 1024 ))" -v spare="$spare" -v spare_size="$spare_size" '
+        BEGIN { total = spare_size + 0 }
         {
           name = $1; size = $2 + 0; stamp = substr(name, 1, 16)
           label = substr(name, 18); sub(/\.[^.]+\.log$/, "", label)
           seen[label]++
-          if (name == spare) { total += size; next }
+          if (name == spare) next
           if (seen[label] > per && stamp < cutoff) { print name; next }
           # Oldest first: once one copy does not fit, every older one goes too, never kept in its place.
           if (full || total + size > maxb) { full = 1; print name; next }

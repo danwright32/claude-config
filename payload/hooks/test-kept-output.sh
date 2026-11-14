@@ -182,6 +182,17 @@ KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3
   && check "#2895 once a copy does not fit the size cap, every older copy goes too" ok \
   || check "#2895 once a copy does not fit the size cap, every older copy goes too" "$(ls "$D7b")"
 
+# The copy just written counts against the cap from the start, even when a clock behind the seeded
+# names sorts it after them, so the folder still ends under the cap.
+D7c="$TMPROOT/seven-c"; mkdir -p "$D7c"
+for d in 01 02 03; do printf '%s\n' "$blob" > "$D7c/209901${d}T000000Z-test-ahead${d}.sh.Ah${d}xx.log"; done
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=10 \
+  kept_output_save "$D7c" "test-new.sh" <<< "$blob"
+total7c="$(cat "$D7c"/*.log 2>/dev/null | wc -c | tr -d ' ')"
+{ [ -f "$KEPT_OUTPUT_PATH" ] && [ "$total7c" -le 10240 ]; } \
+  && check "#2895 the copy just written counts against the cap even when it sorts last" ok \
+  || check "#2895 the copy just written counts against the cap even when it sorts last" "$total7c bytes: $(ls "$D7c")"
+
 # 8. A clock that cannot be turned into a date keeps everything by age (the harmless side) and still
 #    holds the size cap; a policy setting that is not a whole number above zero is refused unwritten.
 D8="$TMPROOT/eight"; mkdir -p "$D8"
