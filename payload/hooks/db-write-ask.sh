@@ -69,9 +69,10 @@
 # The list counts only as git has committed it, and an Edit, Write or MultiEdit of it is asked about
 # like a database write, which is why the hook is registered for those three tools too.
 #
-# THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
-# unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
-# about holds (test-db-write-ask.sh checks that), or names a Salesforce write tool.
+# THE SCREEN. The hook now runs on every Bash and MCP call, and since #2643 every Edit, Write and
+# MultiEdit, so it leaves before python3 starts unless the payload holds one of DB_SCREEN_WORDS, which
+# every word lib/db-write-calls.py can ask about holds (test-db-write-ask.sh checks that), as does the
+# name of the test project list, or names a Salesforce write tool.
 #
 # THE SALESFORCE NOTICE. On the work MacBook ~/.claude/settings.local.json pre-allowed the writable
 # Salesforce connection's createSobjectRecord, updateSobjectRecord and deleteSobjectRecord, which let

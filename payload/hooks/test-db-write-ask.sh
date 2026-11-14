@@ -1206,7 +1206,7 @@ case "$(field "$r" reason)" in *db-apply-approval.py*) check "the question names
 expect "apply_migration is still asked about" ask "$(payload "$MIG_TOOL" "alter table a add column note text")"
 expect "merge_branch is still asked about" ask "$(tool_payload "${SB}merge_branch" '{"branch_id": "b9"}')"
 
-# --- the settings run it for Bash and every MCP tool, and refuse the call if it fails -----------
+# --- the settings run it for Bash, Edit, Write, MultiEdit and every MCP tool, and refuse on failure
 wiring="$(python3 - "$SETTINGS" <<'PY'
 import json, re, sys
 d = json.load(open(sys.argv[1]))
@@ -1234,7 +1234,7 @@ if h.get("onFailure") != "block":
 print("ok" if not bad else "matcher %s: %s" % (m, ", ".join(bad)))
 PY
 )"
-check "the settings run the hook for Bash and every MCP tool, blocking on failure" "$wiring"
+check "the settings run the hook for Bash, Edit, Write, MultiEdit and every MCP tool, blocking on failure" "$wiring"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
