@@ -5323,6 +5323,8 @@ run_bash "CURL_HOME=$CH/home curl -s https://example.com/status"
 read_refused "#2893 a CURL_HOME set on the command itself is read"
 run_bash "export CURL_HOME=$CH/home; curl -s https://example.com/status"
 read_refused "#2893 a CURL_HOME exported earlier in the command is read"
+CURL_HOME="$CH/empty" HOME="$CH/home" run_bash "curl -s -d HOME=$CH/quiet https://example.com/status"
+read_refused "#2893 a HOME= that is only curl's data does not stop ~/.curlrc being read"
 run_bash "CURL_HOME=\"\$(mktemp -d)\" curl -s https://example.com/status"
 read_refused "#2893 a CURL_HOME the gate cannot work out is refused as unread"
 # A write that leaves a default config naming an endpoint is refused, so a later call cannot post.
@@ -5357,6 +5359,10 @@ lacks "#2893 not for a script it does not run" "which perl may run as its script
 run_at "perl -i.bak -pe s/a/b/ post.sh" "$CH"
 read_refused "#2893 perl -i.bak -pe editing a file is refused"
 lacks "#2893 not for a script it does not run, with a suffix either" "which perl may run as its script"
+# ruby's -i is the same (ruby -i[ext]), so the word after it is not its value either.
+run_at "ruby -i -pe 'x' post.sh" "$CH"
+read_refused "#2893 ruby -i -pe editing a file is refused"
+lacks "#2893 not for a script it does not run" "which ruby may run as its script"
 
 echo "slack drafts only: a type only import of a file that is there is not followed (claude-config#2890)"
 

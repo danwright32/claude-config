@@ -134,7 +134,7 @@ OPTIONS = {
     "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
     "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED),
     "deno": ({"eval"}, "", VALUED),
-    "ruby": ({"-e"}, "e", VALUED),
+    "ruby": ({"-e"}, "e", VALUED - {"-i"}),  # ruby -i[ext] as perl's: no separate value (#2893)
     # perl's -i takes its backup suffix glued (-i.bak) or none, never the next word: `perl -i -pe
     # s/a/b/ post.sh` read -pe as its value and s/a/b/ as the script (claude-config#2893).
     "perl": ({"-e", "-E"}, "eE", VALUED - {"-i"}),
@@ -2110,22 +2110,26 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         gate cannot work out (claude-config#2893). curl reads $CURL_HOME/.curlrc, then
         $XDG_CONFIG_HOME/curlrc, then ~/.curlrc, the first it finds; every one of those places is
         read here, each by both names and with ~/.config standing for an unset XDG_CONFIG_HOME,
-        since reading one curl skips refuses only more. A variable set on the command itself, or
-        earlier in the text, is read as the command sees it."""
-        env = {"CURL_HOME": os.environ.get("CURL_HOME"), "XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME"),
-               "HOME": os.environ.get("HOME") or os.path.expanduser("~")}
-        for var in env:
+        since reading one curl skips refuses only more. A variable the text seems to set, on the
+        command itself or earlier, adds the places its value names, and never takes away the
+        session's own: `NAME=` is matched anywhere in the text, so it can be a curl argument
+        (`-d HOME=x`) rather than an assignment, and reading both refuses only more."""
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        env = {"CURL_HOME": [os.environ.get("CURL_HOME")], "XDG_CONFIG_HOME": [os.environ.get("XDG_CONFIG_HOME")],
+               "HOME": [home]}
+        for var, values in env.items():
             set_here = re.search(rf"(?<![\w$]){var}=", text)
             if set_here:
-                env[var] = self.sh_value(text[set_here.end():self.sh_word_end(text, set_here.end())], d)
+                value = self.sh_value(text[set_here.end():self.sh_word_end(text, set_here.end())], d)
             elif re.search(rf"(?<![\w$]){var}=", whole or ""):
-                env[var] = self.sh_var(var)
+                value = self.sh_var(var)
             else:
                 continue
-            if env[var] is None:
+            if value is None:
                 return [(None, var)]
-        dirs = [env["CURL_HOME"], env["XDG_CONFIG_HOME"], env["HOME"]]
-        dirs.append(os.path.join(env["HOME"], ".config") if env["HOME"] else None)
+            values.append(value)
+        dirs = env["CURL_HOME"] + env["XDG_CONFIG_HOME"] + env["HOME"]
+        dirs += [os.path.join(h, ".config") for h in env["HOME"] if h]
         out = []
         for folder in dirs:
             for base in (".curlrc", "curlrc"):
