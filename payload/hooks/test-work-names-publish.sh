@@ -483,6 +483,12 @@ EOF
 check "#2961 (control) a quoted heredoc body is text, however many dollars it holds: $out" passed
 run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/body.md"
 check "#2961 (control) a cd's directory is where the command runs, not posted: $out" passed
+# Unless something reads the directory back, when the cd's own variable is posted after all (the
+# lessons review of 1029c9f).
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title \"\$(basename \$(pwd))\" --body x"
+check "#2961 a cd into a variable's folder, read back by pwd, is judged by the variable's value: $out" refused
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title \"\$_\" --body x"
+check "#2961 and so is one read back by \$_: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title x --body-file \"\$WN_TEST_NOTES/body.md\""
 check "#2961 (control) nor is the path of a body file: $out" passed
 run "gh issue create --repo danwright-test/private-notes --title \"from \$WN_TEST_NOT_SET \$WN_TEST_DIR\" --body x"

@@ -1180,13 +1180,24 @@ def expansions(text):
     return out
 
 
+# What, besides a plain variable this check judges by its value ($PWD and $OLDPWD by the directory),
+# can read back the directory a cd entered: $_ (the cd's own argument), a substitution or backquote
+# (pwd, basename ., anything run there), pwd, dirs and the tilde forms. READS_DIR, less the plain $.
+READS_BACK = re.compile(r"\$_\b|\$\{_\}|\$\(|`|\bpwd\b|\bdirs\b|~[-+0-9]")
+
+
 def variables_posted(text, place):
     """The variables text expands, judged where the command runs: [(shown, value, None)] for a value
-    this check can read, [(shown, None, why not)] for one it cannot. A cd and a body file's path are
-    not posted (posted_text), so their variables are left out whatever else the command expands."""
+    this check can read, [(shown, None, why not)] for one it cannot. A body file's path is not posted
+    (posted_text), so its variables are left out. Neither is a cd's directory, unless something in
+    the rest of the command can read it back (READS_BACK), when the cd's own variables are judged too:
+    `cd "$X" && gh issue create --title "$(pwd)"` posts X's value (the lessons review of 1029c9f)."""
     place = place if place is not None else scan.Place(None, dict(os.environ))
     out, seen = [], set()
-    for name, shown in expansions(posted_text(text, keep_cds=False)):
+    judged = posted_text(text, keep_cds=False)
+    if READS_BACK.search(judged):
+        judged = posted_text(text, keep_cds=True)
+    for name, shown in expansions(judged):
         if shown in seen or name == "":
             continue
         seen.add(shown)
