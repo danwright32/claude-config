@@ -21,8 +21,10 @@
 #
 # --source-backfill files ONLY in the repo each lesson came from, for lessons fanned out before
 # #2945 gave the source repo its own sweep. With no numbers it takes every lesson in the ledger,
-# baseline entries included. A lesson citing no digest repo costs no GitHub call at all; one that
-# does is read and filed exactly as a fan out reads and files it, with the source wording. Before
+# baseline entries included. A lesson citing no repo at all costs no GitHub call. The accounts and
+# the digest list are read once per run, at the first lesson citing any repo, and a lesson whose
+# cited repos are not in the digest costs nothing after that. One citing a digest repo is read and
+# filed exactly as a fan out reads and files it, with the source wording. Before
 # each sourced lesson it reads `gh api rate_limit` (which costs nothing) as each account it will
 # file with, and stops cleanly, exit 3, when either the REST or the GraphQL allowance is under
 # LESSON_FANOUT_RATE_FLOOR (500, a reserve for the other sessions sharing the account), when that

@@ -536,7 +536,7 @@ echo '{"resources":{"core":{"remaining":4000,"reset":1794697200},"graphql":{"rem
 backfill L903 L900 L902
 check_eq "bf-low: exits 3, stopped early" "3" "$rc"
 check "bf-low: says it stopped on the allowance" "STOPPED" "$out"
-check "bf-low: names the remaining allowance" "12" "$out"
+check "bf-low: names the remaining allowance" "has 12 GitHub API requests left" "$out"
 check "bf-low: says when it resets, in ET" "6:00 PM ET" "$out"
 check "bf-low: says how many are left" "Lessons left to check: 2" "$out"
 check_eq "bf-low: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
