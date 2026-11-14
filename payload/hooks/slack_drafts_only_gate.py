@@ -5064,7 +5064,7 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         sourced (verb) by a path the gate cannot work out: the word in slot of the command as written
         ("operand", the program's script by its option table; or a position), where it is built from a
         variable or a substitution whose value is not certain. That file is never read, so one that
-        posts could hide behind it. None with the switch off, for a word with no variable or
+        posts could hide behind it. None for a file run with the switch off, for a word with no variable or
         substitution in it (read as written, as before), and for one whose value is worked out. Says
         which path, in which script and on which line, and what the gate could not follow, so whoever
         wrote the script can tell which line to make plain (the wording #2538's measurement used for a

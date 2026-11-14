@@ -24448,9 +24448,18 @@ fn_drive 'set -eo pipefail; . "$1"; . "$2"; tree_holds_files "$3" --exclude=/rea
   "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$TS17_FN_OK" "$TS17_SYN" >/dev/null 2>&1 || ts17_rc_held=$?
 check "#2017 and a skill the caller holds back is still left out" "[ \"\$ts17_rc_held\" -eq 1 ]"
 # Those calls hand fn_drive the checkout's own library first, so its driver must land in scratch,
-# never beside that library in the payload the sync carries (#2538).
-check "#2538 fn_drive writes no driver into the payload it is handed" \
-  "! ls -A '${SCRIPT%/*}/payload/hooks/lib' | grep -q '\\.drive\$'"
+# never beside that library in the payload the sync carries (#2538). The driver prints its own path
+# and lists the library's folder while it runs, so a driver written beside the library shows up in
+# that listing, and one written outside scratch shows in its path.
+ts2538_lib="${SCRIPT%/*}/payload/hooks/lib"
+ts2538_before="$(ls -A "$ts2538_lib")"
+ts2538_out="$(fn_drive 'printf "%s\n" "$0"; ls -A "${1%/*}"' "$ts2538_lib/unmanaged-skills.sh" 2>/dev/null)"
+ts2538_drv="${ts2538_out%%$'\n'*}"
+ts2538_during="${ts2538_out#*$'\n'}"
+check "#2538 fn_drive writes no driver into the payload folder it is handed" \
+  "[ -n \"\$ts2538_before\" ] && [ \"\$ts2538_during\" = \"\$ts2538_before\" ]"
+check "#2538 and runs its driver from the suite's scratch" \
+  "case \"\$ts2538_drv\" in \"\$SUITE_SCRATCH_HOME\"/*) true ;; *) false ;; esac"
 
 section "== a watcher stops when it has been replaced or orphaned, and a tick is one watcher (#604) =="
 # 2026-10-03: status reported 5 claude-sync watch processes, nested up to 4 deep, one of them a root
