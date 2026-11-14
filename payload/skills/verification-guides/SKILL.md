@@ -32,6 +32,7 @@ starts and stops serve is [scripts/run_session.py](scripts/run_session.py). Both
 | `commands.stop` | The project's own cleanup (containers, a seeded database). Run before serve's process group is stopped. |
 | `commands.drive` | The project's drive helper. Called with the arguments the runner passes, and with `VERIFICATION_URL`, `VERIFICATION_AREA`, `VERIFICATION_WORKTREE` and `VERIFICATION_RECEIPT_DIR` set; it saves screenshots into `VERIFICATION_RECEIPT_DIR`. |
 | `commands.stamp` | Optional. Prints the commit the SERVED build reports (a `/__build` route, a footer). Recorded as the receipt's `build_stamp`; the merge check wants it to equal the head SHA. |
+| `commands.native_shot` | Required when any screen is native, else absent. Runs the offscreen test that photographs one native screen, from the checkout root, with the shot named in `VERIFICATION_SHOT_*` (below). |
 | `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long the egress monitor's canary may take to show up, at the start and at the end). |
 | `egress` | Optional `{"allow": [<host>, ...]}`: the hosts serve and the drive helper may reach during a run, as bare host names or IP addresses (no scheme, port, path or wildcard). `127.0.0.1`, `localhost` and `::1` are always allowed, and by default nothing else is. A run's egress verdict is `clean` only when nothing outside this list was reached. |
 | `areas` | A list of `{"name", "guide", "owns", "screens"}`: a lower case hyphenated name, the guide's repository path, the glob patterns of the files the area owns, and optionally the screens its pull requests are pictured at (below). |
@@ -43,8 +44,15 @@ A screen is `{"name", "path", "seed", "rows", "min_rows"}`: a name, the route on
 (starting with `/`), a seed from `seeds`, and optionally a CSS selector and the count of matches the
 screen must show before it is shot, so it is pictured at the production count (L606). A pull request
 is UI when it touches an area with screens; each such screen is shot on the base build and the head
-build, at 1440 and 1280 wide, in light and dark: eight pictures (claude-config#2516). Web apps only;
-native apps are claude-config#2696. No area declaring screens is reported as unmeasured, never as passed.
+build, at 1440 and 1280 wide, in light and dark: eight pictures (claude-config#2516). No area
+declaring screens is reported as unmeasured, never as passed.
+
+A native screen (claude-config#2696) is `{"name", "test", "frame", "seed", "min_rows"}`: in place of
+a route, the offscreen test that photographs it (`Target`, `Target/Suite` or
+`Target/Suite/function()`) and the name of the frame that test draws, with optionally the count of
+rows the frame must report drawing. A screen gives a `path` or a `test`, never both, and a native
+one has no CSS selector. Its pictures are the same eight under the same names, so publish, render
+and the merge check treat the two alike. What the native app's test must do is under Screenshots.
 
 Ownership: every file in the repository lands in EXACTLY one bucket, an area or `exempt`. A file
 in none is unowned and a file in two is ambiguous, and both are refusals, never guesses. Patterns
@@ -220,7 +228,18 @@ this in the same run, before step 5 stops the head run:
    `screenshot <path> <width> <light|dark> <file.png> <rows selector or -> <min rows>`, through
    `run_session.py drive`, and the helper saves the file into `VERIFICATION_RECEIPT_DIR`.
    [scripts/shoot_web.mjs](scripts/shoot_web.mjs) is a helper that does exactly that with the
-   Playwright library, so a web project's helper can hand `screenshot` to it.
+   Playwright library, so a web project's helper can hand `screenshot` to it. A native screen is
+   called as `screenshot-native <test> <frame> <width> <light|dark> <file.png> <min rows>`, and
+   [scripts/shoot_native.py](scripts/shoot_native.py) does exactly that: it runs
+   `commands.native_shot` in the worktree with `VERIFICATION_SHOT_TEST`, `_FRAME`, `_WIDTH`,
+   `_HEIGHT` (900), `_THEME`, `_FILE`, `_ROWS_FILE` and `_MIN_ROWS` set, each also with the
+   `TEST_RUNNER_` prefix xcodebuild passes into a test. The app's test draws that frame offscreen
+   (a window ordered back outside every display, never front, as Ovation's `OffscreenShot.swift`
+   does), writes the PNG to `_FILE` and the rows it drew to `_ROWS_FILE`, and FAILS on a frame it
+   does not know. The picture is kept only when the test exited 0, wrote a PNG the asked width at a
+   scale of 1, 2 or 3, and reported at least the minimum rows; a run of zero tests passes, so the
+   picture is the proof. A SwiftPM command needs `--disable-sandbox`, since the run's own sandbox
+   already wraps it.
 2. Shoot the base: `run_session.py start` at the PR's `baseRefOid` (fetch it first), `shoot ... --side base`,
    then `run_session.py stop`. One run at a time per project, so the base run follows the head run's stop.
 3. Publish: `screenshots.py publish --areas-file <scratch>/areas.json --repo <owner/repo> --pr <n> --base-receipt <id> --head-receipt <id> > <scratchpad>/verify-<n>/shots.json`.
@@ -278,8 +297,11 @@ These are what the merge check expects that nothing here can supply yet, said ra
 
 - **Build stamp.** Recorded only when the project's `stamp` command prints one; otherwise
   `build_stamp_source` is `none`.
-- **Drive helpers.** Each project supplies its own; only the screenshot verb ships here (shoot_web.mjs).
+- **Drive helpers.** Each project supplies its own; only the screenshot verbs ship here
+  (shoot_web.mjs for a route, shoot_native.py for a native screen).
 - **Inline pictures in a private repository.** Unmeasured, so private repositories get the private
   link until it is measured (claude-config#2699).
-- **Native apps.** Screens are routes on a served web app; a native app's pictures need an offscreen
-  test of its own (claude-config#2696).
+- **The native app's camera.** Each native app's test supplies its own offscreen camera and frame
+  list; none ships here. A run also still needs `url`, `serve` and `ready`, which a native app has
+  nothing to fill with: serve can build the test target and then wait, ready check the build
+  finished, and the url name a local port nothing listens on, said in the project's areas.json.

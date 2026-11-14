@@ -75,10 +75,15 @@ CHECK_ID_RE = re.compile(r"^C[1-9][0-9]?$")
 DONE_ID_RE = re.compile(r"^D[1-9][0-9]?$")
 SHOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.(png|jpg|jpeg)$")
 NONCE_RE = re.compile(r"^vg-[0-9a-f]{16}$")
+# A native screen's test, as xcodebuild's -only-testing names one (Target, Target/Class, or
+# Target/Suite/function() in Swift Testing) and swift test's --filter accepts: segments of
+# identifier characters joined by single slashes, the last optionally ending in (). Nothing a
+# shell would read as anything but text (claude-config#2696).
+NATIVE_TEST_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_][A-Za-z0-9_.]{0,99}){0,2}(\(\))?$")
 LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$")
 
 COMMANDS_REQUIRED = ("serve", "ready", "stop", "drive")
-COMMANDS_OPTIONAL = ("stamp",)
+COMMANDS_OPTIONAL = ("stamp", "native_shot")
 TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "stop_s": 60, "egress_s": 30}
 # The hosts a served app may always reach: this machine. areas.json's egress.allow adds to them,
 # and a run's egress verdict is clean only when nothing outside the combined list was reached.
@@ -259,6 +264,7 @@ def parse_areas(text, root=None):
         p.append(("areas-bad-screenshots-mode", "screenshots.mode %r is not one of %s" % (shots.get("mode"), ", ".join(MODES))))
 
     names = set()
+    native = False
     for i, area in enumerate(doc.get("areas") if isinstance(doc.get("areas"), list) else []):
         where = "areas[%d]" % i
         if not isinstance(area, dict):
@@ -284,7 +290,11 @@ def parse_areas(text, root=None):
                 why = _glob_problem(g)
                 if why:
                     p.append(("areas-bad-glob", "%s owns %s" % (where, why)))
-        _check_screens(p, where, area.get("screens", []), seeds)
+        native |= _check_screens(p, where, area.get("screens", []), seeds)
+
+    if native and isinstance(cmds, dict) and "native_shot" not in cmds:
+        p.append(("areas-native-no-shot-command", "a screen is a native one (a test and a frame), and"
+                  " commands.native_shot, the command that runs the offscreen test photographing it, is missing"))
 
     exempt = doc.get("exempt", [])
     if not isinstance(exempt, list):
@@ -350,11 +360,17 @@ def _parse_seeds(p, seeds):
 
 
 def _check_screens(p, where, screens, seeds):
-    """An area's screens: the routes its pull requests are pictured at (claude-config#2516)."""
+    """An area's screens: what its pull requests are pictured at (claude-config#2516, #2696).
+
+    A web screen is a route on the served app, `path`, with an optional CSS selector `rows` and its
+    `min_rows`. A native screen is an offscreen test, `test`, and the `frame` it draws, with an
+    optional `min_rows` the test reports it drew. Returns whether any screen is native.
+    """
     if not isinstance(screens, list):
         p.append(("areas-wrong-type", "%s screens must be a list" % where))
-        return
+        return False
     seen = set()
+    native = False
     for j, sc in enumerate(screens):
         at = "%s screens[%d]" % (where, j)
         if not isinstance(sc, dict):
@@ -367,18 +383,49 @@ def _check_screens(p, where, screens, seeds):
             p.append(("areas-bad-screen", "%s name %r is used twice in this area" % (at, name)))
         else:
             seen.add(name)
-        path = sc.get("path")
-        if not isinstance(path, str) or not path.startswith("/") or not one_line(path) or " " in path:
-            p.append(("areas-bad-screen", "%s path %r must be a route on the served app, starting with /" % (at, path)))
         seed = sc.get("seed")
         if not isinstance(seed, str) or seed not in seeds:
             p.append(("areas-unknown-seed", "%s seed %r is not declared in seeds" % (at, seed)))
-        rows, minimum = sc.get("rows"), sc.get("min_rows")
-        if (rows is None) != (minimum is None):
-            p.append(("areas-bad-screen", "%s gives rows and min_rows together or neither" % at))
-        elif rows is not None and (not one_line(rows) or isinstance(minimum, bool) or not isinstance(minimum, int)
-                                   or minimum < 1):
-            p.append(("areas-bad-screen", "%s rows must be a CSS selector and min_rows a whole number of at least 1" % at))
+        if "path" in sc and "test" in sc:
+            p.append(("areas-bad-screen", "%s gives a path and a test: a screen is a route or a test, not both" % at))
+        elif "test" in sc:
+            native = True
+            _check_native_screen(p, at, sc)
+        else:
+            _check_web_screen(p, at, sc)
+    return native
+
+
+def _check_web_screen(p, at, sc):
+    path = sc.get("path")
+    if not isinstance(path, str) or not path.startswith("/") or not one_line(path) or " " in path:
+        p.append(("areas-bad-screen", "%s path %r must be a route on the served app, starting with /" % (at, path)))
+    rows, minimum = sc.get("rows"), sc.get("min_rows")
+    if (rows is None) != (minimum is None):
+        p.append(("areas-bad-screen", "%s gives rows and min_rows together or neither" % at))
+    elif rows is not None and (not one_line(rows) or not _whole_at_least_one(minimum)):
+        p.append(("areas-bad-screen", "%s rows must be a CSS selector and min_rows a whole number of at least 1" % at))
+
+
+def _check_native_screen(p, at, sc):
+    """A native screen (claude-config#2696): the offscreen test that photographs it, and its frame."""
+    test = sc.get("test")
+    if not isinstance(test, str) or not NATIVE_TEST_RE.match(test):
+        p.append(("areas-bad-screen", "%s test %r must name the offscreen test that photographs it, as"
+                  " Target, Target/Suite or Target/Suite/function()" % (at, test)))
+    frame = sc.get("frame")
+    if not isinstance(frame, str) or not AREA_NAME.match(frame) or "__" in frame:
+        p.append(("areas-bad-screen", "%s frame %r must be the name the test draws it by, in lower case"
+                  " letters, digits and single hyphens" % (at, frame)))
+    if "rows" in sc:
+        p.append(("areas-bad-screen", "%s is a native screen, which has no CSS selector: give min_rows alone,"
+                  " and the test reports how many rows it drew" % at))
+    elif "min_rows" in sc and not _whole_at_least_one(sc["min_rows"]):
+        p.append(("areas-bad-screen", "%s min_rows %r must be a whole number of at least 1" % (at, sc["min_rows"])))
+
+
+def _whole_at_least_one(n):
+    return isinstance(n, int) and not isinstance(n, bool) and n >= 1
 
 
 def egress_host_ok(host):

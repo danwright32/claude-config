@@ -8,7 +8,9 @@ them back.
 
 A pull request is UI when it touches an area of `.claude/verification/areas.json` that declares
 `screens` (verification.py validates them). Each screen is shot on the BASE build and the HEAD
-build, at WIDTHS and in THEMES: eight pictures a screen.
+build, at WIDTHS and in THEMES: eight pictures a screen. A screen is a route on a served web app
+or, for a native app, an offscreen test and the frame it draws (claude-config#2696); both give the
+same pictures under the same names, so nothing after shoot tells them apart.
 
 Where the pictures live:
   images  each picture is a blob on the orphan branch `pr-screenshots`, written through GitHub's git
@@ -120,6 +122,8 @@ def shoot(receipt_id, side, areas, run=subprocess.run, home=None):
     The helper is called as `screenshot <path> <width> <theme> <file> <rows selector or -> <min rows>`
     through run_session.py drive, so the call is logged and sandboxed like every other drive call,
     and saves <file> into VERIFICATION_RECEIPT_DIR. shoot_web.mjs is a helper that does exactly this.
+    A native screen (claude-config#2696) is called as
+    `screenshot-native <test> <frame> <width> <theme> <file> <min rows>`, which shoot_native.py takes.
     """
     if side not in SIDES:
         v.fail("usage", "--side is base or head, not %r" % side)
@@ -128,8 +132,12 @@ def shoot(receipt_id, side, areas, run=subprocess.run, home=None):
     failed = []
     for shot in [s for s in required_shots(areas, rec.get("areas", [])) if s["side"] == side]:
         sc = _screen(areas, shot["area"], shot["screen"])
-        args = ["screenshot", sc["path"], str(shot["width"]), shot["theme"], shot["name"],
-                sc.get("rows") or "-", str(sc.get("min_rows") or 0)]
+        if "test" in sc:
+            args = ["screenshot-native", sc["test"], sc["frame"], str(shot["width"]), shot["theme"], shot["name"],
+                    str(sc.get("min_rows") or 0)]
+        else:
+            args = ["screenshot", sc["path"], str(shot["width"]), shot["theme"], shot["name"],
+                    sc.get("rows") or "-", str(sc.get("min_rows") or 0)]
         r = run([sys.executable, script, "drive", receipt_id, "--area", shot["area"], "--"] + args)
         if r.returncode != 0 or not os.path.isfile(os.path.join(v.receipt_dir(receipt_id, home), shot["name"])):
             failed.append(shot)
@@ -276,8 +284,9 @@ def publish(areas, slug, pr, base_rid, head_rid, gh=_gh, home=None, link=None):
     screens = []
     for a in ui_areas(areas, head.get("areas", [])):
         for sc in a["screens"]:
-            screens.append({"area": a["name"], "screen": sc["name"], "path": sc["path"], "seed": sc["seed"],
-                            "synthetic": areas["seeds"][sc["seed"]]["synthetic"]})
+            where = {"test": sc["test"], "frame": sc["frame"]} if "test" in sc else {"path": sc["path"]}
+            screens.append(dict(where, area=a["name"], screen=sc["name"], seed=sc["seed"],
+                                synthetic=areas["seeds"][sc["seed"]]["synthetic"]))
     return {"schema": SCHEMA, "repo": slug, "pr": pr, "head_sha": head["head_sha"], "base_sha": base["head_sha"],
             "head_receipt": head_rid, "base_receipt": base_rid, "mode": "link" if link else "images",
             "link": link, "commit": commit, "folder": folder, "screens": screens, "shots": shots,
@@ -303,7 +312,8 @@ def render_block(m):
         lines += ["", "The pictures are on a private page, since they may not be shown in this repository: %s" % m["link"]]
     by = {(s["area"], s["screen"], s["side"], s["width"], s["theme"]): s for s in m["shots"]}
     for sc in m["screens"]:
-        lines += ["", "### %s: %s (`%s`, seed %s)" % (sc["area"], sc["screen"], sc["path"], sc["seed"])]
+        where = ("test `%s`, frame `%s`" % (sc["test"], sc["frame"]) if "test" in sc else "`%s`" % sc["path"])
+        lines += ["", "### %s: %s (%s, seed %s)" % (sc["area"], sc["screen"], where, sc["seed"])]
         if m["mode"] != "images":
             continue
         lines += ["", "| | Before | After |", "|---|---|---|"]
