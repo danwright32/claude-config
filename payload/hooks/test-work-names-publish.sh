@@ -423,6 +423,12 @@ run "cd $WORKCO && echo \"\$PWD\" > made.md && gh issue create --repo danwright-
 check "#2909 and a body file written from \$PWD: $out" refused
 run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title ~+ --body-file clean.md"
 check "#2909 and a title of ~+, which the shell expands to the directory: $out" refused
+run "cd $WORKCO && cd /tmp && gh issue create --repo danwright-test/public-notes --title \"\$OLDPWD\" --body-file $NOTES/body.md"
+check "#2909 and \$OLDPWD after a second cd: $out" refused
+run "cd $WORKCO && cd /tmp && gh issue create --repo danwright-test/public-notes --title ~- --body-file $NOTES/body.md"
+check "#2909 and ~- after a second cd: $out" refused
+run "cd $WORKCO && gh issue create --repo danwright-test/public-notes --title \"\`basename .\`\" --body-file clean.md"
+check "#2909 and a backquoted command: $out" refused
 run "cd $WORKCO && pwd | gh issue create --repo danwright-test/public-notes --title x --body-file -"
 check "#2909 (control) a body piped from pwd is refused, as any unshown standard input is: $out" refused
 run "gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/nowhere.md"
