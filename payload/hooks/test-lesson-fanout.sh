@@ -7,6 +7,7 @@
 #   LESSON_FANOUT_SYNC_TOOL    a fake claude-sync answering `lesson Lnnn` from fixtures
 #   LESSON_FANOUT_HELPERS_DIR  fake ensure-priority-labels.sh and ensure-milestone.sh
 #   CLAUDE_HOME                a temp dir, so the ledger it writes is this suite's own
+#   LESSON_FANOUT_RATE_FLOOR and LESSON_FANOUT_LIST_LIMIT  unset, so the script's defaults apply
 # The fake gh records every call with the token it was given, so the tests can assert which
 # account each write went out as and that no write happened on the paths that must refuse.
 set -uo pipefail
@@ -139,7 +140,9 @@ done
 export PATH="$TMP/bin:$PATH"
 export LESSON_FANOUT_SYNC_TOOL="$TMP/bin/claude-sync"
 export LESSON_FANOUT_HELPERS_DIR="$TMP/helpers"
-unset GH_TOKEN GITHUB_TOKEN CLAUDE_DETACHED_RUN
+# The script's own defaults are what these cases assert against, so a value left in the caller's
+# environment must not move them; the cases that need another value set it on that one run.
+unset GH_TOKEN GITHUB_TOKEN CLAUDE_DETACHED_RUN LESSON_FANOUT_RATE_FLOOR LESSON_FANOUT_LIST_LIMIT
 
 # The structural guard: if the fake is not the gh this suite will run, stop before anything does.
 if [ "$(command -v gh)" != "$TMP/bin/gh" ]; then
