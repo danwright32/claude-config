@@ -516,18 +516,21 @@ def _file_bodies(args, command, place, flags, shown_as):
     (`-dF body.md`) is read too (claude-config#2412)."""
     bodies, unseen = [], []
     for word, state, detail in _body_files(args, command, place, flags, clustered=True):
+        # The guard withholds the path as it withholds the name: a script's error output can land in a
+        # log, and the path can hold the name (a notes folder named after a work project, #2909).
+        label = ("the file %s names" % shown_as) if _WITHHOLD else "%s %s" % (shown_as, word)
         if state == "hidden":
-            bodies.append(("%s %s" % (shown_as, word), None))
+            bodies.append((label, None))
         elif state == "text":
-            bodies.append(("%s %s" % (shown_as, word), detail))
+            bodies.append((label, detail))
         elif state == "mixed":
-            unseen.append(MIXED_INPUT % ("%s %s" % (shown_as, word)))
+            unseen.append(MIXED_INPUT % label)
         elif state in ("missing", "unreadable"):
             # A file that cannot be read is refused here, in a message of its own, never passed as clean
             # (claude-config#2909): a gh pr or issue body file's path is no longer judged (posted_text),
             # so this is what stops one that is not there. A release notes file's path is still judged.
-            unseen.append(UNREAD_FILE % (("the file %s names" % shown_as, "it is missing or empty, or its path cannot be worked out")
-                                         if _WITHHOLD else ("%s %s" % (shown_as, word), detail)))
+            unseen.append(UNREAD_FILE % (label, "it is missing or empty, or its path cannot be worked out"
+                                         if _WITHHOLD else detail))
     return bodies, unseen
 
 

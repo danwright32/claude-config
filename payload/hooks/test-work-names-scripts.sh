@@ -199,6 +199,7 @@ r = subprocess.run(["gh", "issue", "create", "--repo", "danwright-test/public-no
 sys.exit(r.returncode)'
 check "#2909 the same folder with a body naming one is refused: rc=$rc $out" [ "$rc" -ne 0 ]
 check "#2909 and never posted" not_posted
+check "#2909 withholding the file's path, which names one too: $out" lacks "$out" "acme-widgets"
 guard 'import subprocess, sys
 r = subprocess.run(["gh", "issue", "create", "--repo", "danwright-test/public-notes", "--title", "x", "--body-file", "notes/acme-widgets/nowhere.md"])
 sys.exit(r.returncode)'
