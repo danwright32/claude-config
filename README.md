@@ -7173,8 +7173,17 @@ before the last of them at every stop for over half an hour): those are read aft
 so the looks go first to what can still finish, are still read whenever a look is spare, so a reopen
 or push from outside is seen, and keep their reading only while the look is held and only when it
 was read after the session or its agents last ran a `git push` or a `gh` reopen. A PR never read is
-never kept that way. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for
-another issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
+never kept that way. A PR a turn end cannot read only because this session's own loops used the
+minute's looks (never a rate limit pause) is in hand while a merge-when-ready run of the session's
+is merging it (#2901, after six merging PRs had a session refused four stops running): its run
+listed as running in the `background_tasks` Claude Code sends with the stop, and a process running
+the helper for that PR and repository on this Mac now (`pgrep -lf`), both read through mod-kit's
+reader of the helper's words, never a log file. A run naming no repository counts as the session's
+own only when its command moves to no other folder first. With nothing else outstanding the turn
+ends, winding down stays on and the next stop reads again; with something else, the refusal names
+the PRs in hand apart. Anything unreadable, a PR without such a run, or a run on one side only still
+refuses. New work (the next-issue skill, a new branch, `gh issue develop`, an agent for another
+issue) is refused, while an agent named after this PR or an issue it closes goes ahead;
 checked each minute, it ends itself with a "safe to close" toast. `/build` or "go ahead and build"
 turns either off, and "stop winding down", "exit no build mode" or "turn read only off" turn off
 only the mode they name. A message Dan types while a turn runs is read the same way, at Enter, as

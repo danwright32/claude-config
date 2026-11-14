@@ -1,7 +1,7 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { stringsOf } from '../hooks/rules.ts'
-import { jsSpans, pySpans, readingOf, sentAt, trace, type Reading } from '../hooks/sends.ts'
+import { consoleArgs, jsSpans, pySpans, readingOf, sentAt, trace, type Reading } from '../hooks/sends.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // Which strings reach a Slack send (claude-config#2570): only those are Slack wording. Each case
@@ -160,4 +160,25 @@ test('a call to a function imported from another file is no send of the file cal
   const text = "import { postAlert } from './post'\nexport const GET = async () => { console.log('cron started'); await postAlert('The nightly job is late') }\n"
   expect(reached(js(text))['The nightly job is late']).toBe('')
   expect(trace(js(text)).sends).toEqual([])
+})
+
+test('a string is a console log line only as a whole argument of console.log, info, warn, error or debug (#2907)', () => {
+  // Each string, and whether consoleArgs reads it as a whole argument of a console call.
+  const logs = (text: string): Record<string, boolean> => {
+    const r = js(text)
+    const at = consoleArgs(r, jsSpans(text).strings)
+    return Object.fromEntries(stringsOf(text, false, true).map(s => [s.text, at.has(s.start)]))
+  }
+  expect(logs("p.catch((err) => console.error('[alert] report failed', err))\n")).toEqual({ '[alert] report failed': true })
+  expect(logs("console.warn(\n  'slow',\n  ms,\n)\nconsole.debug(a, `took ${ms}`)\nconsole.info(f(a, b), 'after a call')\n")).toEqual({ slow: true, 'took ${ms}': true, 'after a call': true })
+  expect(logs("console.log('part of ' + id)\nconsole.log(post('handed on'))\nconsole.log(post(hook, 'deeper', id))\nconsole.error({ msg: 'in an object' })\nlogger.error('another logger')\nconsole.table('a table')\n")).toEqual({
+    'part of ': false,
+    'handed on': false,
+    deeper: false,
+    'in an object': false,
+    'another logger': false,
+    'a table': false,
+  })
+  // A python file has no console.
+  expect(consoleArgs(py("print('x')\n"), [])).toEqual(new Set())
 })

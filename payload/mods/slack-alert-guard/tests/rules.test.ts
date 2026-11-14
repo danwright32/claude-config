@@ -28,6 +28,7 @@ import {
   isProseFile,
   literalsOf,
   mentionsStore,
+  writesOwnRecord,
   plainYamlValues,
   question,
   refusal,
@@ -295,6 +296,26 @@ test("the guard's own record is recognised in the store, by name, and in a shell
   expect(isOwnRecord('/w/a/slack-alert-guard/hooks/rules.ts')).toBe(false)
   expect(mentionsStore('cat > ~/.claude/plugins/store/x.json')).toBe(true)
   expect(mentionsStore('echo hi')).toBe(false)
+})
+
+test('a command writes the own record when a place it reaches is the record, or, naming the store, the store or a folder holding it, or a place it cannot name (#2904)', () => {
+  const home = `${'/Users'}/dan`
+  const none = { files: [], changes: [], unnamed: [] }
+  const rec = `${home}/.claude/plugins/store/slack-alert-guard_inline-ab12.json`
+  // The record itself, in any command, whichever list it is in.
+  expect(writesOwnRecord({ ...none, changes: [{ path: rec }] }, home, false)).toBe(true)
+  expect(writesOwnRecord({ ...none, byGit: [{ path: rec }] }, home, false)).toBe(true)
+  // Writing nothing, or another mod's store file, passes even naming the store.
+  expect(writesOwnRecord(none, home, true)).toBe(false)
+  expect(writesOwnRecord({ ...none, files: [{ path: `${home}/.claude/plugins/store/status-bar_x.json` }] }, home, true)).toBe(false)
+  expect(writesOwnRecord({ ...none, files: [{ path: `${home}/.claude/plugins/storefront` }] }, home, true)).toBe(false)
+  // Naming the store: the store, a folder holding it, a place with no path, a program, a script.
+  for (const path of [`${home}/.claude/plugins/store/`, `${home}/.claude/plugins`, `${home}/.claude`, home]) expect([path, writesOwnRecord({ ...none, changes: [{ path }] }, home, true)]).toEqual([path, true])
+  expect(writesOwnRecord({ ...none, files: [{}] }, home, true)).toBe(true)
+  expect(writesOwnRecord({ ...none, unnamed: [{}] }, home, true)).toBe(true)
+  expect(writesOwnRecord({ ...none, runs: [{}] }, home, true)).toBe(true)
+  // Not naming the store, only the record itself counts, as before.
+  expect(writesOwnRecord({ ...none, files: [{}], unnamed: [{}], changes: [{ path: `${home}/.claude` }] }, home, false)).toBe(false)
 })
 
 test('a held edit names the wording it adds or takes away; a held shell command says its wording cannot be read', () => {

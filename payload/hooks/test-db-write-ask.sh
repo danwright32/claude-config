@@ -373,6 +373,10 @@ expect_bash "sqlite3 -version runs nothing" none 'sqlite3 -version'
 
 # The Supabase CLI's database subcommands (the routes /db-apply uses).
 expect_bash "supabase db query, a select" none 'supabase db query --linked "select count(*) from runs"'
+# --output-format takes a value, which is never a statement (#2952): its value was judged as SQL.
+expect_bash "supabase db query, a select, with --output-format" none 'supabase db query --linked --output-format json "select count(*) from runs"'
+expect_bash "supabase db query, a select, with --output-format=" none 'supabase db query --linked --output-format=json "select count(*) from runs"'
+expect_bash "supabase db query, an update after --output-format, still asked" ask 'supabase db query --linked --output-format json --yes "update runs set note = 1"'
 expect_bash "supabase db query, an update" ask 'supabase db query --linked --yes "update runs set note = 1"'
 expect_bash "supabase db query from a file" ask 'supabase db query --linked --yes -f change.sql'
 expect_bash "supabase db query asking only for help" none 'supabase db query --linked --file /dev/null --help'
@@ -846,6 +850,7 @@ both "a dry run is approved and never asked about" allow none "$(apply_payload '
 both "a select in a file is approved and never asked about" allow none "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
 both "a select in a file named from the directory it runs in" allow none "$(apply_payload 'supabase db query --linked -f readback.sql' "$PROJ" s1 "$NONE_T")"
 both "a select in a file, after a cd to its directory" allow none "$(apply_payload "cd $PROJ && supabase db query --linked -f readback.sql" "$APPLY/elsewhere" s1 "$NONE_T")"
+both "a select in a file with --output-format is approved (#2952)" allow none "$(apply_payload "supabase db query --linked --output-format json -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")"
 both "a write in a file is asked about" none ask "$(apply_payload "supabase db query --linked --yes -f $APPLY/write.sql" "$PROJ" s1 "$NONE_T")"
 both "a push with no Apply on record is asked about" none ask "$(apply_payload "$PUSH" "$PROJ" s1 "$NONE_T")"
 both "a push of the migration Dan applied, to his project, is let through" none allow "$(apply_payload "$PUSH" "$PROJ" s1 "$GOOD_T")"
