@@ -386,7 +386,9 @@ allowance_ok(){   # $1 = token -> 0 when both allowances are at or above the flo
   when="at its hourly reset"
   case "$reset" in
     ''|*[!0-9]*) ;;
-    *) when="at $(TZ=America/New_York date -r "$reset" '+%-I:%M %p') ET" ;;
+    # BSD date (macOS) reads seconds with -r; GNU date (CI's Linux) reads -r as a file, so -d @.
+    *) when="at $(TZ=America/New_York date -r "$reset" '+%-I:%M %p' 2>/dev/null \
+         || TZ=America/New_York date -d "@$reset" '+%-I:%M %p') ET" ;;
   esac
   RATE_WHY="the account that files in the next lesson's repo has $rem GitHub API requests left this hour, under the $RATE_FLOOR this run leaves for the other sessions using it; GitHub restores the allowance $when"
   return 1
