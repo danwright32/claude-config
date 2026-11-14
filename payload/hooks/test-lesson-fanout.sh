@@ -69,12 +69,23 @@ case "$1 $2" in
       prev="$a"
     done
     [ -f "$FAKE/createfail-$(key "$repo")" ] && { echo "gh: simulated create failure" >&2; exit 1; }
+    # GitHub's own wording for a spent allowance, so the classifier meets the text it will meet.
+    [ -f "$FAKE/createlimited-$(key "$repo")" ] && { echo "GraphQL: API rate limit exceeded for user ID 1." >&2; exit 1; }
     printf '%s\n' "$*" >>"$FAKE/created"
     [ -n "$body" ] && cat "$body" >>"$FAKE/bodies" && cp "$body" "$FAKE/body-$(key "$repo")"
     echo "https://github.com/$repo/issues/77"; exit 0 ;;
   "label create")
     exit 0 ;;
 esac
+if [ "$1 $2" = "api rate_limit" ]; then
+  # Per account: $FAKE/rate-<token>.json when a case sets one, else a full allowance. Reset is
+  # 1794697200, 2026-11-14 6:00 PM ET.
+  f="$FAKE/rate-${GH_TOKEN:-none}.json"
+  [ -f "$FAKE/ratefail" ] && { echo "gh: simulated rate_limit failure" >&2; exit 1; }
+  [ -f "$f" ] && { cat "$f"; exit 0; }
+  echo '{"resources":{"core":{"remaining":5000,"reset":1794697200},"graphql":{"remaining":5000,"reset":1794697200}}}'
+  exit 0
+fi
 if [ "$1" = "api" ]; then
   path=""
   for a in "$@"; do case "$a" in repos/*) path="$a" ;; esac; done
@@ -347,6 +358,13 @@ check "many: L900 filed" "Lesson L900 sweep" "$(cat "$FAKE/created")"
 check "many: L901 filed" "Lesson L901 sweep" "$(cat "$FAKE/created")"
 ledger="$(cat "$CLAUDE_HOME/state/lesson-fanout.done")"
 check "many: both in the ledger" "L901 def7654321" "$ledger"
+# A repo's existing sweeps are read once per run and its labels and milestone made sure of once, not
+# once per lesson: a backfill over hundreds of lessons would otherwise spend the hourly allowance on
+# rereading the same list (claude-config#2945).
+check_eq "many: storefront's issues read once for two lessons" "1" \
+  "$(grep -c "issue list --repo Acme-Corp/storefront" "$FAKE/calls")"
+check_eq "many: storefront's milestone made sure of once" "1" \
+  "$(grep -c "ensure-milestone.sh Acme-Corp/storefront" "$FAKE/calls")"
 
 # ---- 16. a number used twice is refused, before anything reaches GitHub (claude-config#1140) ----
 # On 2026-10-13 L762 named two lessons on one Mac, `claude-sync lesson L762` answered with the first,
@@ -411,6 +429,144 @@ run L900
 check_eq "lockfail: exits nonzero" "1" "$rc"
 check "lockfail: says the check could not be made" "REFUSED L900: could not check" "$out"
 check_not "lockfail: GitHub is never asked anything" "issue" "$(cat "$FAKE/calls")"
+
+# ---- 21. an issue list as long as the most one read returns cannot prove a lesson absent ----
+reset_world listcap
+echo '[{"number":1,"title":"Lesson L1 sweep: a","body":"x"},{"number":2,"title":"Lesson L2 sweep: b","body":"y"}]' \
+  >"$FAKE/issues-Acme-Corp_storefront.json"
+out="$(LESSON_FANOUT_LIST_LIMIT=2 bash "$SCRIPT" L900 2>&1)"; rc=$?
+check_eq "listcap: exits nonzero" "1" "$rc"
+check_not "listcap: nothing filed blind in storefront" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
+check "listcap: says why" "FAILED L900 Acme-Corp/storefront: it holds 2 or more" "$out"
+check "listcap: other repos are still filed" "danwright32/overture" "$(cat "$FAKE/created")"
+
+# ==== source backfill (claude-config#2945) ====
+# Lessons fanned out before #2945 never got a sweep in the repo they came from. The backfill files
+# only that one, and only for lessons that cite a digest repo, so the hundreds of lessons without
+# one cost nothing at GitHub.
+add_uncited() {
+  cat >"$FAKE/lessons/L903.txt" <<'TXT'
+id: ccc0000003 (this survives a renumber; L903 may not)
+- **L903. A rule whose evidence cites no repository at all.** Why.
+  (2026-10-02: evidence with no issue reference.)
+TXT
+}
+backfill() { out="$(bash "$SCRIPT" --source-backfill "$@" 2>&1)"; rc=$?; }
+
+# ---- 22. a lesson citing no digest repo makes no GitHub call ----
+reset_world bf-nosource
+add_uncited
+backfill L903
+check_eq "bf-nosource: exits 0" "0" "$rc"
+check_eq "bf-nosource: GitHub is never asked anything" "" "$(cat "$FAKE/calls")"
+check "bf-nosource: summary counts it as checked with no source" \
+  "SUMMARY: checked 1, with a source 0, CREATED 0, EXISTS 0, FAILED 0" "$out"
+reset_world bf-outside
+backfill L901
+check_eq "bf-outside: a source outside the digest exits 0" "0" "$rc"
+check_not "bf-outside: no issue is read or filed" "issue" "$(cat "$FAKE/calls")"
+check_not "bf-outside: no allowance is spent asking" "rate_limit" "$(cat "$FAKE/calls")"
+check_not "bf-outside: no repo's permissions are asked" "api repos/Acme-Corp" "$(cat "$FAKE/calls")"
+check "bf-outside: summary" "SUMMARY: checked 1, with a source 0" "$out"
+
+# ---- 23. a sourced lesson is filed only in its source repo, with the source wording ----
+reset_world bf-sourced
+echo "L900 abc1234567" >"$CLAUDE_HOME/state/lesson-fanout.done"
+backfill L900
+check_eq "bf-sourced: exits 0" "0" "$rc"
+created="$(cat "$FAKE/created" 2>/dev/null)"
+check "bf-sourced: files in the source repo" "--repo Acme-Corp/bidboard" "$created"
+check_not "bf-sourced: not in storefront" "Acme-Corp/storefront" "$created"
+check_not "bf-sourced: not in overture" "danwright32/overture" "$created"
+check_not "bf-sourced: never reads another repo's issues" "issue list --repo Acme-Corp/storefront" "$(cat "$FAKE/calls")"
+check "bf-sourced: the source wording" "This lesson was recorded from a defect found in this project" \
+  "$(cat "$FAKE/body-Acme-Corp_bidboard" 2>/dev/null)"
+check "bf-sourced: the same title as a fan out" \
+  "Lesson L900 sweep: A clock bounded partitioned query locks every partition; pass literal bounds." "$created"
+check "bf-sourced: the allowance is read as the account that writes" "tok-work api rate_limit" "$(cat "$FAKE/calls")"
+check "bf-sourced: says what it made" "CREATED L900 Acme-Corp/bidboard" "$out"
+check "bf-sourced: summary" "SUMMARY: checked 1, with a source 1, CREATED 1, EXISTS 0, FAILED 0" "$out"
+check_eq "bf-sourced: the ledger is left exactly as it was" "L900 abc1234567" "$(cat "$CLAUDE_HOME/state/lesson-fanout.done")"
+reset_world bf-label
+backfill L902
+check "bf-label: a source cited by its digest label is found" "--repo Acme-Corp/storefront" "$(cat "$FAKE/created" 2>/dev/null)"
+check_eq "bf-label: and the ledger is never written" "" "$(cat "$CLAUDE_HOME/state/lesson-fanout.done" 2>/dev/null)"
+
+# ---- 24. a source issue already there is EXISTS, by number or by id ----
+reset_world bf-exists
+echo '[{"number":12,"title":"Lesson L900 sweep: older wording","body":"x"}]' >"$FAKE/issues-Acme-Corp_bidboard.json"
+backfill L900
+check_eq "bf-exists: exits 0" "0" "$rc"
+check_eq "bf-exists: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+check "bf-exists: names it" "EXISTS L900 Acme-Corp/bidboard#12" "$out"
+check "bf-exists: summary" "SUMMARY: checked 1, with a source 1, CREATED 0, EXISTS 1, FAILED 0" "$out"
+check_not "bf-exists: no label or milestone work for an issue already there" "ensure-milestone" "$(cat "$FAKE/calls")"
+reset_world bf-exists-id
+echo '[{"number":13,"title":"Lesson L612 sweep: renumbered","body":"<!-- lesson-id: abc1234567 -->"}]' >"$FAKE/issues-Acme-Corp_bidboard.json"
+backfill L900
+check "bf-exists-id: matched by its id" "EXISTS L900 Acme-Corp/bidboard#13" "$out"
+
+# ---- 25. no numbers: every lesson in the ledger, baseline ones included ----
+reset_world bf-ledger
+add_uncited
+printf '%s\n' "L900 abc1234567" "L903 baseline" "L901 baseline" >"$CLAUDE_HOME/state/lesson-fanout.done"
+backfill
+check_eq "bf-ledger: exits 0" "0" "$rc"
+check "bf-ledger: summary covers all three" "SUMMARY: checked 3, with a source 1, CREATED 1" "$out"
+check "bf-ledger: the sourced one is filed" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created" 2>/dev/null)"
+reset_world bf-noledger
+backfill
+check_eq "bf-noledger: a missing ledger exits 1" "1" "$rc"
+check "bf-noledger: says so" "REFUSED" "$out"
+check_eq "bf-noledger: GitHub is never asked anything" "" "$(cat "$FAKE/calls")"
+
+# ---- 26. a ledger number that now names another lesson is refused, not filed ----
+reset_world bf-renum
+printf '%s\n' "L900 fff9999999" >"$CLAUDE_HOME/state/lesson-fanout.done"
+backfill
+check_eq "bf-renum: exits 1" "1" "$rc"
+check "bf-renum: says the number now names another lesson" "REFUSED L900" "$out"
+check "bf-renum: names both ids" "fff9999999" "$out"
+check_eq "bf-renum: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+
+# ---- 27. a low allowance stops the run cleanly and says how many are left ----
+reset_world bf-low
+add_uncited
+echo '{"resources":{"core":{"remaining":4000,"reset":1794697200},"graphql":{"remaining":12,"reset":1794697200}}}' >"$FAKE/rate-tok-work.json"
+backfill L903 L900 L902
+check_eq "bf-low: exits 3, stopped early" "3" "$rc"
+check "bf-low: says it stopped on the allowance" "STOPPED" "$out"
+check "bf-low: names the remaining allowance" "12" "$out"
+check "bf-low: says when it resets, in ET" "6:00 PM ET" "$out"
+check "bf-low: says how many are left" "Lessons left to check: 2" "$out"
+check_eq "bf-low: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+check_not "bf-low: no issue is read after the stop" "issue list" "$(cat "$FAKE/calls")"
+check "bf-low: still prints the summary" "SUMMARY: checked 1, with a source 0" "$out"
+
+# ---- 28. a rate limit answer mid run stops it the same way ----
+reset_world bf-limited
+touch "$FAKE/createlimited-Acme-Corp_bidboard"
+backfill L900 L902
+check_eq "bf-limited: exits 3" "3" "$rc"
+check "bf-limited: relays GitHub's words" "API rate limit exceeded" "$out"
+check "bf-limited: counts the stopped lesson as left" "Lessons left to check: 2" "$out"
+check "bf-limited: and not as checked" "SUMMARY: checked 0, with a source 0" "$out"
+check_not "bf-limited: GitHub's closing full stop is not doubled" "1.." "$out"
+check_not "bf-limited: the next lesson is not attempted" "Acme-Corp/storefront" "$(cat "$FAKE/calls")"
+
+# ---- 29. an allowance that cannot be read stops rather than spending blind ----
+reset_world bf-ratefail
+touch "$FAKE/ratefail"
+backfill L900
+check_eq "bf-ratefail: exits 3" "3" "$rc"
+check "bf-ratefail: says it could not read the allowance" "could not read GitHub's rate limit" "$out"
+check "bf-ratefail: and how many are left" "Lessons left to check: 1" "$out"
+check_eq "bf-ratefail: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+
+# ---- 30. backfill usage ----
+reset_world bf-usage
+backfill banana
+check_eq "bf-usage: a non lesson argument exits 2" "2" "$rc"
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
