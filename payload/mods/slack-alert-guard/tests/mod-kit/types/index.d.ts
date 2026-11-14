@@ -497,8 +497,12 @@ export type ModKitWrites = {
    * lines but for a last word its closing quote ends (#1165). Given only for python the shell cannot
    * have changed (from a quoted heredoc, or holding no $ or backtick, never in a substitution) that
    * runs no process and builds no code at run time; absent, data cannot be told from code, and the whole `program` is the guess.
+   * `onlyLoads`, for such a program the shell cannot have changed, says the one thing its judge could
+   * not read is a module or file it loads by a computed name (`import(x)`, `require(x)`,
+   * `importlib.import_module(x)`): its own text writes nothing, runs no process and builds no code,
+   * as a program with a static import of a local module reads (#2920).
    */
-  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; code?: string; folder?: string }[]
+  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; code?: string; folder?: string; onlyLoads?: true }[]
   /**
    * `from`, on a checkout of a path or a restore, is where git puts the file back from, spelled as
    * `git cat-file blob <from>:<path>` reads it: the ref named, '' for the index, 'HEAD' for a restore
