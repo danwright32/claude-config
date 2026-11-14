@@ -121,6 +121,110 @@ else
   check "no folder named is a failure" ok
 fi
 
+# 6. Kept by age per label, not a global count (claude-config#2895, L202). The newest 20 overall was
+#    about ten days of flakes, so the one log an issue named was gone before anyone opened it, while
+#    a suite that flakes every day filled the folder. With KEPT_OUTPUT_MAX_DAYS set, a copy stays
+#    while it is younger than that many days, OR while it is among the newest KEPT_OUTPUT_PER_LABEL
+#    of its own label, however old. The clock is injected, so the test never depends on today.
+#    Now is 2026-11-13 12:00 UTC (1794571200); 30 days back is 2026-10-14 12:00.
+D6="$TMPROOT/six"; mkdir -p "$D6"
+# 25 recent copies of a suite that flakes every day: more than the old cap of 20 on their own.
+for d in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
+  printf 'busy\n' > "$D6/202611${d}T000000Z-test-busy.sh.Bz${d}xx.log"
+done
+# The busy suite's older copies, beyond 30 days and beyond its newest 2.
+for d in 01 02 03 04; do printf 'busy old\n' > "$D6/202609${d}T000000Z-test-busy.sh.Bo${d}xx.log"; done
+# A suite that flaked once, 45 days ago: the log an issue cites. It is its suite's newest copy.
+printf 'rare\n' > "$D6/20260929T190147Z-test-rare.sh.Rare01.log"
+# The rare suite's own older copies, 3 of them, so only the newest 2 of its label (per label 2) stay.
+for d in 01 02 03; do printf 'rare old\n' > "$D6/202608${d}T000000Z-test-rare.sh.Ro${d}xx.log"; done
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=2 KEPT_OUTPUT_MAX_KB=1024 \
+  kept_output_save "$D6" "test-new.sh" <<< "new"
+new6="$KEPT_OUTPUT_PATH"
+[ -f "$D6/20260929T190147Z-test-rare.sh.Rare01.log" ] \
+  && check "#2895 a rare suite's only recent log survives a folder past the old cap of 20" ok \
+  || check "#2895 a rare suite's only recent log survives a folder past the old cap of 20" "$(ls "$D6")"
+[ "$(find "$D6" -name '2026111*-test-busy.sh.*.log' -o -name '2026110*-test-busy.sh.*.log' -o -name '2026112*-test-busy.sh.*.log' | wc -l | tr -d ' ')" = 25 ] \
+  && check "#2895 every copy younger than 30 days stays, all 25 of the busy suite" ok \
+  || check "#2895 every copy younger than 30 days stays, all 25 of the busy suite" "$(ls "$D6")"
+[ "$(find "$D6" -name '202609*-test-busy.sh.*.log' | wc -l | tr -d ' ')" = 0 ] \
+  && check "#2895 the busy suite's copies past 30 days and past its newest 2 go" ok \
+  || check "#2895 the busy suite's copies past 30 days and past its newest 2 go" "$(ls "$D6")"
+{ [ -f "$D6/20260803T000000Z-test-rare.sh.Ro03xx.log" ] && [ ! -e "$D6/20260802T000000Z-test-rare.sh.Ro02xx.log" ] \
+  && [ ! -e "$D6/20260801T000000Z-test-rare.sh.Ro01xx.log" ]; } \
+  && check "#2895 an old suite keeps its newest 2 copies and the oldest uncited ones go" ok \
+  || check "#2895 an old suite keeps its newest 2 copies and the oldest uncited ones go" "$(ls "$D6")"
+[ -f "$new6" ] && check "#2895 and the copy just written stays" ok || check "#2895 and the copy just written stays" "$(ls "$D6")"
+
+# 7. The folder's total size is bounded whatever the ages, so keeping by age cannot fill the disk.
+#    Over KEPT_OUTPUT_MAX_KB, the oldest go first, and the copy just written never does.
+D7="$TMPROOT/seven"; mkdir -p "$D7"
+blob="$(head -c 3000 /dev/zero | tr '\0' 'x')"
+for d in 01 02 03 04 05 06 07 08 09 10; do printf '%s\n' "$blob" > "$D7/202611${d}T000000Z-test-big${d}.sh.Gz${d}xx.log"; done
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=10 \
+  kept_output_save "$D7" "test-new.sh" <<< "$blob"
+new7="$KEPT_OUTPUT_PATH"
+total7="$(cat "$D7"/*.log 2>/dev/null | wc -c | tr -d ' ')"
+[ "$total7" -le 10240 ] && check "#2895 the folder is held under its size cap" ok \
+  || check "#2895 the folder is held under its size cap" "$total7 bytes: $(ls "$D7")"
+{ [ -f "$new7" ] && [ -f "$D7/20261110T000000Z-test-big10.sh.Gz10xx.log" ] && [ ! -e "$D7/20261101T000000Z-test-big01.sh.Gz01xx.log" ]; } \
+  && check "#2895 the size cap removes the oldest first and keeps the copy just written" ok \
+  || check "#2895 the size cap removes the oldest first and keeps the copy just written" "$(ls "$D7")"
+
+# Oldest first means a large newer copy that does not fit takes every older one with it: an older,
+# smaller copy is never kept in its place.
+D7b="$TMPROOT/seven-b"; mkdir -p "$D7b"
+printf 'small\n' > "$D7b/20261101T000000Z-test-old.sh.Sm01xx.log"
+printf '%s\n' "$blob" > "$D7b/20261105T000000Z-test-big.sh.Bg05xx.log"
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=4 \
+  kept_output_save "$D7b" "test-new.sh" <<< "$blob"
+{ [ -f "$KEPT_OUTPUT_PATH" ] && [ ! -e "$D7b/20261105T000000Z-test-big.sh.Bg05xx.log" ] && [ ! -e "$D7b/20261101T000000Z-test-old.sh.Sm01xx.log" ]; } \
+  && check "#2895 once a copy does not fit the size cap, every older copy goes too" ok \
+  || check "#2895 once a copy does not fit the size cap, every older copy goes too" "$(ls "$D7b")"
+
+# The copy just written counts against the cap from the start, even when a clock behind the seeded
+# names sorts it after them, so the folder still ends under the cap.
+D7c="$TMPROOT/seven-c"; mkdir -p "$D7c"
+for d in 01 02 03; do printf '%s\n' "$blob" > "$D7c/209901${d}T000000Z-test-ahead${d}.sh.Ah${d}xx.log"; done
+KEPT_OUTPUT_NOW_EPOCH=1794571200 KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=10 \
+  kept_output_save "$D7c" "test-new.sh" <<< "$blob"
+total7c="$(cat "$D7c"/*.log 2>/dev/null | wc -c | tr -d ' ')"
+{ [ -f "$KEPT_OUTPUT_PATH" ] && [ "$total7c" -le 10240 ]; } \
+  && check "#2895 the copy just written counts against the cap even when it sorts last" ok \
+  || check "#2895 the copy just written counts against the cap even when it sorts last" "$total7c bytes: $(ls "$D7c")"
+
+# 8. A clock that cannot be turned into a date keeps everything by age (the harmless side) and still
+#    holds the size cap; a policy setting that is not a whole number above zero is refused unwritten.
+D8="$TMPROOT/eight"; mkdir -p "$D8"
+printf 'x\n' > "$D8/20200101T000000Z-test-a.sh.Aa01xx.log"
+printf 'x\n' > "$D8/20200102T000000Z-test-a.sh.Aa02xx.log"
+KEPT_OUTPUT_NOW_EPOCH=notanumber KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=1 KEPT_OUTPUT_MAX_KB=1024 \
+  kept_output_save "$D8" "test-a.sh" <<< "x"
+[ -f "$D8/20200101T000000Z-test-a.sh.Aa01xx.log" ] \
+  && check "#2895 a clock that cannot be read deletes nothing by age" ok \
+  || check "#2895 a clock that cannot be read deletes nothing by age" "$(ls "$D8")"
+for bad in 0 00 x ""; do
+  if KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL="$bad" KEPT_OUTPUT_MAX_KB=1024 kept_output_save "$TMPROOT/nine" "x" <<< "x"; then
+    check "#2895 a per label count of '$bad' is refused" "it returned 0"
+  else
+    case "$KEPT_OUTPUT_WHY" in *KEPT_OUTPUT_PER_LABEL*) check "#2895 a per label count of '$bad' is refused, saying why" ok ;;
+      *) check "#2895 a per label count of '$bad' is refused, saying why" "why=$KEPT_OUTPUT_WHY" ;; esac
+  fi
+done
+if KEPT_OUTPUT_MAX_DAYS=30 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=lots kept_output_save "$TMPROOT/nine" "x" <<< "x"; then
+  check "#2895 a size cap that is not a number is refused" "it returned 0"
+else
+  case "$KEPT_OUTPUT_WHY" in *KEPT_OUTPUT_MAX_KB*) check "#2895 a size cap that is not a number is refused, saying why" ok ;;
+    *) check "#2895 a size cap that is not a number is refused, saying why" "why=$KEPT_OUTPUT_WHY" ;; esac
+fi
+if KEPT_OUTPUT_MAX_DAYS=00 KEPT_OUTPUT_PER_LABEL=3 KEPT_OUTPUT_MAX_KB=1024 kept_output_save "$TMPROOT/nine" "x" <<< "x"; then
+  check "#2895 an age of 00 days is refused" "it returned 0"
+else
+  case "$KEPT_OUTPUT_WHY" in *KEPT_OUTPUT_MAX_DAYS*) check "#2895 an age of 00 days is refused, saying why" ok ;;
+    *) check "#2895 an age of 00 days is refused, saying why" "why=$KEPT_OUTPUT_WHY" ;; esac
+fi
+[ ! -e "$TMPROOT/nine" ] && check "#2895 and a refused policy writes nothing" ok || check "#2895 and a refused policy writes nothing" "$(ls -R "$TMPROOT/nine")"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

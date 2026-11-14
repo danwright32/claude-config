@@ -24,7 +24,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 
 pass=0
 fail=0
-check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')"; fi; }
+check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')" | sed '2,$s/^/  /'; fi; }
 says() { if [[ "$2" == *"$1"* ]]; then echo yes; else echo "no: $2"; fi; }   # $1 = text  $2 = output
 
 # ---- the install ----

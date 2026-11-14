@@ -23,7 +23,7 @@ SCAN="$DIR/lib/hand-rolled-hostname.py"
 
 pass=0
 fail=0
-check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
+check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)" | sed '2,$s/^/  /'; fi; }
 check_eq() { if [[ "$3" == "$2" ]]; then check "$1" ok; else check "$1" "expected '$2', got '$3'"; fi; }
 
 for f in "$HELPER" "$SCAN"; do

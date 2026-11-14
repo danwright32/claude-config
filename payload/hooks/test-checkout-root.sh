@@ -20,7 +20,7 @@ trap 'rm -rf "$TMPROOT"' EXIT
 
 pass=0
 fail=0
-check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')"; fi; }
+check_eq() { if [[ "$3" == "$2" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 (expected '$2', got '$3')" | sed '2,$s/^/  /'; fi; }
 real() { (cd "$1" 2>/dev/null && pwd -P); }
 not_run() { case "$1" in "SUITE-NOT-RUN "*|*$'\n'"SUITE-NOT-RUN "*) echo yes ;; *) echo no ;; esac; }
 

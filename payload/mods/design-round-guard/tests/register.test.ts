@@ -49,7 +49,10 @@ const modKit: { name: string; register: Register } = {
         pipeline: async (input: { command: string }) => ask('pipeline', input),
         workingTree: async ({ path }: { path: string }) => {
           if (path.startsWith('/w/locked/')) throw new Error('EACCES: /w/locked')
-          for (const root of ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
+          // #2792: and three throwaway copies of slate, each a checkout of its own: in this session's
+          // notes folder, in its scratchpad, and in a folder shaped like the notes folder inside slate.
+          const copies = ['/Users' + '/dan/.claude/state/session-notes/-w-slate/s1/review/slate-copy', '/private/tmp/claude-501/-w-slate/s1/scratchpad/slate-copy', '/w/slate/.claude/state/session-notes/-w-slate/s1/review/slate-copy']
+          for (const root of [...copies, '/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop']) if (path === root || path.startsWith(root + '/')) return root
           return null
         },
         branch: async (input: { path: string }) => ask('branch', input),
@@ -116,6 +119,14 @@ const HOME = `${'/Users'}/dan`
 // The moment every test's clock starts at.
 const T0 = Date.UTC(2026, 9, 9, 15, 0, 0)
 const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34ef56.json`
+// #2792: three throwaway copies of slate, each a checkout of its own, as the stand-in's walk finds
+// them: in this session's notes folder, in its scratchpad, and in a folder shaped like the notes
+// folder inside slate itself.
+const NOTES_FOLDER = `${HOME}/.claude/state/session-notes/-w-slate/s1`
+const COPY_IN_NOTES = `${NOTES_FOLDER}/review/slate-copy`
+const COPY_IN_SCRATCH = '/private/tmp/claude-501/-w-slate/s1/scratchpad/slate-copy'
+const COPY_IN_SLATE = '/w/slate/.claude/state/session-notes/-w-slate/s1/review/slate-copy'
+const COPIES = [COPY_IN_NOTES, COPY_IN_SCRATCH, COPY_IN_SLATE]
 
 type Dialog = { answer?: string; afk?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
@@ -133,7 +144,7 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isSt
 // as `dialog` says), every call that ran, every card drawn and every git command asked.
 const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
-  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
+  const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/slate-wt2': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop', ...Object.fromEntries(COPIES.map(c => [c, 'main'])) }
   const store: Record<string, unknown> = {}
   // `shell`: what a Bash command writes when it runs, by path (#1296); `writeFails`: the paths
   // $.fs.write refuses; `afterWrite`: run once a write lands (another writer arriving, say);
@@ -239,7 +250,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (cmd === '__modkit' && args[0] === 'branch') {
       if (ctl.branchFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit: the branch reader failed', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const { path } = JSON.parse(String(args[1])) as { path: string }
-      const root = ['/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
+      const root = [...COPIES, '/w/slate-wt2', '/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
     }
     if (cmd === '__modkit' && args[0] === 'repo') {
@@ -949,6 +960,41 @@ test('#2395: a whole folder whose files git cannot list is held, saying so; one 
   // A folder in no checkout, written from one in no checkout, is in no project.
   expect(refusalOf(await call($, { tool: 'Bash', command: 'cp -R /tmp/kit/ /tmp/out/' }))).toBe('')
   expect(w.ran.length).toBe(1)
+})
+
+// #2792: on 2026-11-11 a read only review agent cloned a repository into the session's notes folder
+// to read it, and `rm -rf` of that copy was held as an unsettled design change, twice, so two copies
+// (about 4 GB) were left behind. Taking away a throwaway copy there, or in the session's scratchpad,
+// changes no screen of any product.
+test("#2792: taking away a throwaway copy of a repository in the session notes folder, or in the session's scratchpad, runs unasked; a write there, and a delete anywhere else, is held as before", withKit, async ($, on) => {
+  const copy = (root: string) => ({ [`${root}/app/page.tsx`]: 'export default function Page() { return <main /> }\n', [`${root}/app/globals.css`]: 'a{}\n' })
+  const w = world($, on, { files: { ...copy(COPY_IN_NOTES), ...copy(COPY_IN_SCRATCH), ...copy(COPY_IN_SLATE), ...copy('/w/slate') } })
+  const passes = [
+    `rm -rf ${COPY_IN_NOTES}`,
+    'rm -rf ~/.claude/state/session-notes/-w-slate/s1/review/slate-copy',
+    `cd ${NOTES_FOLDER}/review && rm -rf slate-copy`,
+    `rm -f ${COPY_IN_NOTES}/app/page.tsx`,
+    `rm -rf ${NOTES_FOLDER}/review/slate-*`,
+    `rm -rf ${COPY_IN_SCRATCH}`,
+    `rm ${COPY_IN_SCRATCH}/app/globals.css`,
+  ]
+  for (const command of passes) expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  expect(w.ran.length).toBe(passes.length)
+  // Listing the copy's files is what a busy Mac is slowest at, so a copy being taken away is never listed.
+  expect(w.gitRuns.filter(g => g.includes('ls-files'))).toEqual([])
+  // Still held: a write into the copy, which a push could carry to the product; a delete in a folder
+  // only shaped like the notes folder; one reaching out of it; and one in the project itself.
+  for (const [command, shown] of [
+    [`printf 'a{color:red}' > ${COPY_IN_NOTES}/app/globals.css`, 'app/globals.css'],
+    [`rm -rf ${COPY_IN_SLATE}`, 'app/page.tsx'],
+    [`rm -rf ${NOTES_FOLDER}/../../../../../../../w/slate/app`, 'app/page.tsx'],
+    [`rm -rf ${COPY_IN_NOTES} /w/slate/app`, 'app/page.tsx'],
+    ['cd /w/slate && rm -rf app', 'app/page.tsx'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes(shown)]).toEqual([command, true])
+  }
+  expect(w.ran.length).toBe(passes.length)
 })
 
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {

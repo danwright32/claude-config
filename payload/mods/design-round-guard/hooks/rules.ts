@@ -96,6 +96,19 @@ export const inScratchpad = (path: string, session: string, roots: readonly stri
 export const namesScratchpad = (text: string, session: string, roots: readonly string[]): boolean =>
   session !== '' && roots.length > 0 && new RegExp(`(?<![^\\s'"=(:])${scratchpadAt(session, roots)}(?![\\w.-])`).test(text)
 
+/**
+ * Whether an absolute path is inside the session notes folder (#2792), where every session and its
+ * agents keep their working files (`<home>/.claude/state/session-notes/<project>/<session>/...`): on
+ * this Mac only, never synced, and no project's own checkout. Known by the home folder, so a folder
+ * shaped like it anywhere else, a checkout included, is any folder; the notes folder itself, a climb
+ * out of it and a path under no home folder are not in it. Any session's notes count, since a copy an
+ * earlier session left behind is as much a throwaway as this session's.
+ */
+export const inSessionNotes = (path: string, home: string): boolean => {
+  const root = `${home.replace(/\/+$/, '')}/.claude/state/session-notes`
+  return home.startsWith('/') && !/(^|\/)\.\.(\/|$)/.test(path) && path.startsWith(`${root}/`) && /^\/+[^/]/.test(path.slice(root.length))
+}
+
 // Whether the text just before a name's `/` adds the name onto a folder held in a variable (#1194):
 // an f-string's or a template's brace (`f"{root}/app/page.tsx"`) or a string added onto one
 // (`root + "/app/page.tsx"`). The shell's `${R}/screen.css` is not: its folder is R's value, read by
