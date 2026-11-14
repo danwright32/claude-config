@@ -52,8 +52,9 @@ import {
   wordingChange,
   wordingKey,
   wordingOf,
+  writesOwnRecord,
 } from './rules.ts'
-import { type Reading, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
+import { type Reading, consoleArgs, docstrings, jsSpans, pySpans, readingOf, scanWork, sentAt, trace } from './sends.ts'
 import { errorText, missingOf } from './mod-kit/skew.ts'
 import { neverThrows } from './mod-kit/hold.ts'
 import { CHOOSE_DESCRIPTION, CHOOSE_NAME, CHOOSE_SCHEMA, CHOOSE_TOOL, CHOSEN_PREFIX, MORNING_OPTIONS, asleepRefusal, carried, choicesOf, chosenKey, isOverdue, mergeOf, mergeRefusal, morningLines, morningQuestion } from './night.ts'
@@ -523,17 +524,28 @@ const ownWording = async ($: EngineInterface, { path, current, edited, before, a
     }
     if (!(python || (lang === 'c' && isJs(path)))) return holdFor(change, untraced(UNTRACED_LANGUAGE))
     const [rBefore, rAfter] = [await readFor($, before, python), await readFor($, after, python)]
+    // Wording only a console call logs is left out (#2907), wherever the call stands: a string every
+    // place of which is a whole argument of console.log, info, warn, error or debug.
+    const consoleOnly = (r: Reading, lits: Lit[]): Set<string> => {
+      const at = consoleArgs(r, jsSpans(r.text).strings)
+      const out = new Set(lits.filter(l => at.has(l.start)).map(l => l.text))
+      for (const l of lits) if (!at.has(l.start)) out.delete(l.text)
+      return out
+    }
+    const [logBefore, logAfter] = [consoleOnly(rBefore, beforeLits), consoleOnly(rAfter, afterLits)]
+    const sent: Part = { added: change.added.filter(s => !logAfter.has(s)), removed: change.removed.filter(s => !logBefore.has(s)) }
+    if (!sent.added.length && !sent.removed.length) return PASS
     const was = scanWork()
     const [tBefore, tAfter] = [trace(rBefore), trace(rAfter)]
     // The searching tracing did (#2719), where a test reads it: its cost on any machine, however loaded.
     $.ui.log(`slack-alert-guard: traced ${path}: searched ${scanWork() - was}`, { to: 'debug' })
     // A file that posts to Slack by a send the guard cannot find is held for all of it.
-    if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(change, untraced(UNTRACED_NONE))
+    if (!tBefore.sends.length && !tAfter.sends.length) return holdFor(sent, untraced(UNTRACED_NONE))
     // Only wording one of its own sends carries is held (#2570): a log line, an error or a route's
     // answer beside the alert passes.
     const here: Part = {
-      added: change.added.filter(s => afterLits.some(l => l.text === s && l.start >= 0 && sentAt(tAfter, l.start))),
-      removed: change.removed.filter(s => beforeLits.some(l => l.text === s && l.start >= 0 && sentAt(tBefore, l.start))),
+      added: sent.added.filter(s => afterLits.some(l => l.text === s && l.start >= 0 && sentAt(tAfter, l.start))),
+      removed: sent.removed.filter(s => beforeLits.some(l => l.text === s && l.start >= 0 && sentAt(tBefore, l.start))),
     }
     // The sends the held text reaches, each once: added text in the file as the edit leaves it, text
     // taken away in the file as it was.
@@ -585,17 +597,18 @@ const isFolder = async ($: EngineInterface, f: { path?: string; sources?: string
 const judgeShell = async ($: EngineInterface, input: Record<string, unknown>): Promise<Verdict> => {
   const command = typeof input.command === 'string' ? input.command : ''
   if (!command) return PASS
-  if (mentionsStore(command)) return { own: true }
   try {
-    const merging = await judgeMerge($, command)
-    if (!('pass' in merging)) return merging
     const cwd = await $.session.cwd()
     const home = (await $.env.get('HOME')) ?? ''
     const w = await $.modkit.writes({ command, cwd, home })
+    // Only a command that can write the guard's own record is refused (#2904), never one that
+    // only lists, searches or reads the store.
+    if (writesOwnRecord(w, home, mentionsStore(command))) return { own: true }
+    const merging = await judgeMerge($, command)
+    if (!('pass' in merging)) return merging
     const key = shellKey(command, w.files.flatMap(f => (f.path === undefined ? [] : [f.path])))
     for (const f of w.files) {
       if (f.path === undefined) continue
-      if (isOwnRecord(f.path)) return { own: true }
       const exists = await $.fs.exists(f.path)
       if (await isFolder($, f, exists)) continue
       // Only a file the guard reads as code: a code file, or a script with no extension.
