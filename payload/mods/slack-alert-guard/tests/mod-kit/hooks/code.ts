@@ -225,13 +225,27 @@ const pyModule = (m: string) => SAME_MODULE.get(m) ?? m
 // where awk expects an operand, after anything but a name, a number, a closing bracket or a string,
 // and after the keywords that take one (print, printf, return). Where that cannot be told (a / after
 // ++ or --), or a string or a regex is never closed on its line, the program is read as written.
-const AWK_TAKES_OPERAND = /(?:^|[^\w$])(?:print|printf|return)$/
+// A line continued by a backslash is one line with the next, as awk reads it (#2974): the backslash
+// and its line break become spaces, so what came before still decides what a / after it is, and a
+// print continued onto the line holding its redirect or pipe is read whole. The keywords are known by
+// the name being read alone, so the reading takes time in step with the program's length (#2974: it
+// asked of the whole output so far at every name, about 1.5 s for 92,000 characters).
+const AWK_TAKES_OPERAND = /^(?:print|printf|return)$/
 const awkCanonical = (code: string): string => {
   let out = ''
   // Whether what came last ends an operand, so a / after it divides: 'no', 'yes', or 'unsure'.
   let operand: 'no' | 'yes' | 'unsure' = 'no'
+  // The run of name characters ending at what came last, empty after anything else.
+  let word = ''
   for (let i = 0; i < code.length; ) {
     const c = code[i] as string
+    const joined = c === '\\' ? (code[i + 1] === '\n' ? 2 : code[i + 1] === '\r' && code[i + 2] === '\n' ? 3 : 0) : 0
+    if (joined > 0) {
+      out += ' '.repeat(joined)
+      i += joined
+      word = ''
+      continue
+    }
     if (c === '"' || (c === '/' && operand !== 'yes')) {
       if (c === '/' && operand === 'unsure') return code
       let j = i + 1
@@ -246,22 +260,26 @@ const awkCanonical = (code: string): string => {
       out += c === '"' ? `"${' '.repeat(j - i - 1)}"` : code.slice(i, j + 1)
       i = j + 1
       operand = 'yes'
+      word = ''
       continue
     }
+    // A comment runs to its line break, a backslash before that included: awk continues no comment.
     if (c === '#') {
       const end = code.indexOf('\n', i)
       out += code.slice(i, end < 0 ? code.length : end)
       i = end < 0 ? code.length : end
+      word = ''
       continue
     }
     out += c
     i++
+    word = /[\w$]/.test(c) ? word + c : ''
     // A newline ends a statement, as ; does, so what follows starts afresh and a / there is a regex
-    // (lessons review at a08a0f6). A line continued by a backslash runs on, and so does its operand.
-    if (c === '\n' && code[i - 2] !== '\\') operand = 'no'
+    // (lessons review at a08a0f6). A continued one never reaches here: it was joined above.
+    if (c === '\n') operand = 'no'
     if (/\s/.test(c)) continue
     if ((c === '+' || c === '-') && code[i - 2] === c) operand = 'unsure'
-    else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(out) ? 'no' : 'yes'
+    else if (/[\w$)\]]/.test(c)) operand = /\w/.test(c) && AWK_TAKES_OPERAND.test(word) ? 'no' : 'yes'
     else operand = 'no'
   }
   return out
@@ -314,28 +332,56 @@ const pythonCanonical = (code: string): string => {
   return text
 }
 
-// node binds fs under any name, by require or import, or takes its functions out by destructuring;
-// each is rewritten to fs. so the rules see `fs.rm(` however it was reached (#724).
-const NODE_FS = /^(?:node:)?fs(?:\/promises)?$/
+// node binds a module under any name, by require or import, or takes its functions out by
+// destructuring, or calls a member of the module straight from the require or import that loaded
+// it; each is rewritten to the module's own name, so the rules see `fs.rm(` and `vm.runInThisContext(`
+// however they were reached (#724, and #2925 for vm and for a member taken where it is loaded).
+const NODE_MODULES: [RegExp, string][] = [
+  [/^(?:node:)?fs(?:\/promises)?$/, 'fs'],
+  [/^(?:node:)?vm$/, 'vm'],
+]
 const nodeCanonical = (code: string): string => {
-  const aliases: string[] = []
+  const aliases = new Map<string, string>()
   const names = new Map<string, string>()
   // require('fs') or import('fs'), and its .promises, the module's name in the group `mod`.
   const from = `(?:await\\s+)?(?:require|import)\\s*\\(\\s*(?<q>['"\`])(?<mod>[^'"\`]+)\\k<q>\\s*\\)(?:\\s*\\.\\s*promises)?`
-  const isFs = (m: RegExpMatchArray) => NODE_FS.test(m.groups?.mod ?? m[3] ?? '')
-  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([\\w$]+)\\s*=\\s*${from}`, 'g'))) if (isFs(m)) aliases.push(m[1] as string)
-  for (const m of code.matchAll(/\bimport\s+(?:\*\s+as\s+)?([\w$]+)\s+from\s+(['"])([^'"]+)\2/g)) if (isFs(m)) aliases.push(m[1] as string)
-  const parts = (list: string, sep: RegExp) => {
+  const moduleOf = (m: RegExpMatchArray) => {
+    const mod = m.groups?.mod ?? m[3] ?? ''
+    return NODE_MODULES.find(([re]) => re.test(mod))?.[1]
+  }
+  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([\\w$]+)\\s*=\\s*${from}`, 'g'))) {
+    const mod = moduleOf(m)
+    if (mod) aliases.set(m[1] as string, mod)
+  }
+  for (const m of code.matchAll(/\bimport\s+(?:\*\s+as\s+)?([\w$]+)\s+from\s+(['"])([^'"]+)\2/g)) {
+    const mod = moduleOf(m)
+    if (mod) aliases.set(m[1] as string, mod)
+  }
+  const parts = (list: string, sep: RegExp, mod: string) => {
     for (const part of list.split(',')) {
       const [orig, bound] = part.split(sep).map(s => s.trim())
-      if (orig && /^[\w$]+$/.test(orig)) names.set(bound && /^[\w$]+$/.test(bound) ? bound : orig, orig)
+      if (orig && /^[\w$]+$/.test(orig)) names.set(bound && /^[\w$]+$/.test(bound) ? bound : orig, `${mod}.${orig}`)
     }
   }
-  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${from}`, 'g'))) if (isFs(m)) parts(m[1] as string, /:/)
-  for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g)) if (isFs(m)) parts(m[1] as string, /\s+as\s+/)
-  let text = code
-  for (const alias of aliases) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(alias)}\\s*\\.`, 'g'), 'fs.')
-  for (const [name, orig] of names) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(name)}(?![\\w$])`, 'g'), `fs.${orig}`)
+  for (const m of code.matchAll(new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${from}`, 'g'))) {
+    const mod = moduleOf(m)
+    if (mod) parts(m[1] as string, /:/, mod)
+  }
+  for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*(['"])([^'"]+)\2/g)) {
+    const mod = moduleOf(m)
+    if (mod) parts(m[1] as string, /\s+as\s+/, mod)
+  }
+  // A member taken where the module is loaded: require('vm').runInThisContext(x), and
+  // (await import('node:vm')).runInThisContext(x). Only a member access is rewritten, so a require
+  // passed on whole (`f(require('vm'))`) is left as written.
+  const loaded = (m: string, ...rest: unknown[]) => {
+    const groups = rest[rest.length - 1] as { mod?: string } | undefined
+    const mod = NODE_MODULES.find(([re]) => re.test(groups?.mod ?? ''))?.[1]
+    return mod ? `${mod}.` : m
+  }
+  let text = code.replace(new RegExp(`\\(\\s*${from}\\s*\\)\\s*\\.`, 'g'), loaded).replace(new RegExp(`${from}\\s*\\.`, 'g'), loaded)
+  for (const [alias, mod] of aliases) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(alias)}\\s*\\.`, 'g'), `${mod}.`)
+  for (const [name, full] of names) text = text.replace(new RegExp(`(?<![\\w$.])${escaped(name)}(?![\\w$])`, 'g'), full)
   return text
 }
 
