@@ -52,6 +52,8 @@ const screenFailed = (why: string): { deny: string } => ({
 
 // The band's rows, in $.state so a reload of this module keeps them (a module variable would not).
 const band = { plugin: 'mod-kit', key: 'band' } as const
+/** The band's arrangement of its rows, one for each plugin that drew one (Claude Code 2.1.323 on, #2903). */
+type BandList = { props: { rows: readonly { plugin: string }[] } }
 // What each mod's side pane shows (#690), there for the same reason.
 const panes = { plugin: 'mod-kit', key: 'panes' } as const
 // When this mod last started in this session (#960), there for the same reason: a reload reads it.
@@ -753,6 +755,18 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
     const { Box } = $.ui.resolve(e)
     return <Box flexDirection="column">{rows.map(row => drawCard($, e, e.props.bodyColumns, row, isClickable))}</Box>
   })
+  // #2903: since Claude Code 2.1.323 the band asks every plugin that hooks AbovePrompt for a row of
+  // its own and stacks the rows, so a row drawn beside mod-kit's no longer depends on the hook above
+  // passing. Dan, 2026-11-14: while mod-kit draws a row, every other row is left out, so the mods'
+  // band looks as it did; with no row of mod-kit's the band is left as it came. The rows kept are
+  // the ones handed in, since the engine fails a hook that passes on a changed copy. The types the
+  // mods are checked against (tools/typescript, 2.1.310) predate AbovePromptList, so its event is
+  // typed here as BandList.
+  on('ui.render', { component: 'AbovePromptList' } as never, (async (_$: unknown, e: BandList, next: (e: BandList) => Promise<unknown>) => {
+    const ours = e.props.rows.filter(r => r.plugin === 'mod-kit')
+    if (ours.length === 0 || ours.length === e.props.rows.length) return next(e)
+    return next({ ...e, props: { ...e.props, rows: ours } })
+  }) as never)
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     const pane = ((await read($, panes)) ?? []).find(p => p.id === e.requestId)
     if (!pane) return next(e)

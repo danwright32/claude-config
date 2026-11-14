@@ -130,6 +130,12 @@ const modKit: { name: string; register: Register } = {
         </Box>
       )
     })
+    // As mod-kit does since Claude Code 2.1.323 (#2903): while it draws a row, every other row is
+    // left out of the stacked band.
+    on('ui.render', { component: 'AbovePromptList' } as never, (async (_$: unknown, e: { props: { rows: readonly { plugin: string }[] } }, next: (e: unknown) => Promise<unknown>) => {
+      const ours = e.props.rows.filter(r => r.plugin === 'mod-kit')
+      return next(ours.length === 0 || ours.length === e.props.rows.length ? e : { ...e, props: { ...e.props, rows: ours } })
+    }) as never)
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
       const rows = ((await $.state.get({ plugin: 'mod-kit', key: 'band' } as never)) as { value?: Row[] }).value ?? []
       if (!rows.length) return next(e)

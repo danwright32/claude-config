@@ -2244,7 +2244,11 @@ How it is built (#610): mod-kit holds the band's one hook, and `tools/check-mod-
 fails any other mod that hooks `AbovePrompt`: any line of its hooks naming it as a string, in any
 quotes, since the engine takes a filter however it is spelled and an unfiltered `ui.render` hook
 that tests `e.component` (#698; a line that is only a comment is not read). The same goes for a
-result row, `ToolResult`. A mod publishes a row with
+result row, `ToolResult`. Since Claude Code 2.1.323 the band asks every plugin that hooks
+`AbovePrompt` for a row of its own and stacks them (`AbovePromptList`), so a row drawn beside
+mod-kit's no longer waits on mod-kit's hook passing; mod-kit also hooks `AbovePromptList` and, while
+it draws a row, leaves every other row out, so the band looks as it did (#2903, Dan, 2026-11-14).
+With no row of its own it leaves the band as it came. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with
 `$.modkit.clearBandRow({ mod, id })`. The slots, drawn top to bottom, are `needs-a-look`,
 `compact`, `room` (the account room card, #659), `handoff`, `held`, `steps` and `message` (a
