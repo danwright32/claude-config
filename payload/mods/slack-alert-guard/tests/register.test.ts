@@ -2178,10 +2178,10 @@ test('a string only a console call logs is not Slack wording, inside a .catch, a
 // seven files under docs/design was held five times as "the Slack alert guard could not check this
 // call (no answer to a heartbeat within 5000ms: the hooks worker is wedged ...)". The guard's check of
 // a git apply is its command, read once: it had passed the call on, and the hook that stopped
-// answering was one beneath it. Its catch read any failure after that as its own, so the guard that
-// was named was not the one that wedged. It now replays what the call settled to beneath it, as the
-// secret guard, ask before saving, the design round guard and the area check do (#2039), so the
-// failure reaches Claude in the words of the hook that failed.
+// answering was one beneath it. Its tool.call catch read any failure after that as its own, so the
+// guard that was named was not the one that wedged. That catch now replays what the call settled to
+// beneath it, as the secret guard, ask before saving, the design round guard and the area check do
+// (#2039), so the failure reaches Claude in the words of the hook that failed.
 const WEDGED = 'no answer to a heartbeat within 5000ms: the hooks worker is wedged (a hook spinning without yielding)'
 const DESIGN_PATCH = '/w/app/design.patch'
 // Seven files under docs/design: three 720 line HTML captures and four edits, as in the report.
@@ -2196,7 +2196,9 @@ const designPatch = (): string => {
   }
   return `${out.join('\n')}\n`
 }
-test('a git apply of a 2,000 line patch across seven files is checked and passed on, and a hook beneath the guard that stops answering is never reported as the Slack alert guard (#2948)', withKit, async ($, on) => {
+// Only the tool.call hook replays: the tool.check hook still holds on any failure beneath it, and says
+// it as the guard's, since a call it holds has called next too (register.ts).
+test('a git apply of a 2,000 line patch across seven files is checked and passed on, and a hook beneath the tool.call hook that stops answering is not reported as the Slack alert guard (#2948)', withKit, async ($, on) => {
   const patch = designPatch()
   expect(patch.split('\n').length).toBeGreaterThanOrEqual(2000)
   expect(patch.match(/^diff --git /gm)?.length).toBe(7)
