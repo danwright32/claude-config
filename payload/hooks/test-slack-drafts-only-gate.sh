@@ -4945,6 +4945,18 @@ run_y "python3 helper.py names.py"
 read_refused "#2913 a helper that runs code, handed a Python file naming an endpoint in code, is still refused"
 run_y "python3 usesdoc.py"
 read_refused "#2913 a docstring the script reads back through __doc__ is still read"
+# What this gives up, recorded so it is a decision (lessons review at f99a36f): a script that reads
+# its own source (open(__file__), inspect.getsource) and posts to an address in a comment passes.
+# That is the boundary the gate already had for a script reading any file the command does not name:
+# poster.py, posting to the address in cfg.txt, passed before this change too (measured on main).
+printf '%s\n' 'https://slack.com/api/chat.postMessage' > "$Y/cfg.txt"
+printf '%s\n' 'import urllib.request' 'urllib.request.urlopen(open("cfg.txt").read().strip())' > "$Y/poster.py"
+printf '%s\n' '# https://slack.com/api/chat.postMessage' 'import urllib.request' \
+  'urllib.request.urlopen(open(__file__).read().split()[1])' > "$Y/self.py"
+run_y "python3 poster.py"
+allowed "#2913 the boundary as it was: a script posting to an address in a file the command does not name passes"
+run_y "python3 self.py"
+allowed "#2913 the same boundary: a script posting to an address in its own comment, read from its file, passes"
 printf '%s\n' '"""https://slack.com/api/chat.postMessage"""' > "$Y/docmod.py"
 printf '%s\n' 'import urllib.request, docmod' 'urllib.request.urlopen(docmod.__doc__)' > "$Y/readsdoc.py"
 run_y "python3 readsdoc.py"
