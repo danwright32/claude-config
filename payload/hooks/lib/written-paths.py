@@ -18,10 +18,13 @@ replay of real sessions, every one false. The word is now read for what it does 
     set in any other way (read, printf -v, ${L:=x}, let, a nameref, eval, source) is unknown, and so
     is one it never sets: #2721 decided a path from the environment alone cannot be read, and a test
     holds it.
-  * A loop variable over `$(git diff --name-only ...)` holds a path inside the repository, which git
-    never prints with a .. part, so "$S/$f" stays inside $S (Dan, 2026-11-14, claude-config#2910).
-    That is read only for git diff itself with options that cannot change what it prints (not
-    --no-index, --line-prefix or -z), and never for a path list from any other source.
+  * A loop variable over `$(git diff --name-only ...)` is read as a path with no .. part, so
+    "$S/$f" stays inside $S: Dan's decision of 2026-11-14 (claude-config#2910). git never prints a ..
+    part, but the unquoted list is split on spaces and, in bash, matched as globs, so a tracked name
+    holding a space can become a word that starts with .. (`x ../y` splits into `x` and `../y`) or a
+    glob that matches it. The gate cannot see file names, so the decision accepts that; it is read
+    only for git diff itself with options that cannot change what it prints (not --no-index,
+    --line-prefix or -z, nor a path outside the tree), and never for a list from any other source.
   * Where an unknown part is unquoted in a word the shell splits (any word but a redirection's target,
     where more than one word is an error), the words it becomes can end anywhere, so that write can be
     any file.
@@ -246,8 +249,9 @@ def make(param_re, unknown_dir):
         def git_diff_names(self, t, text):
             """Whether the loop word t is `$(git diff --name-only ...)` (claude-config#2910): git run
             by name, not a function or alias of the text, with only plain words (revisions, ranges,
-            pathspecs) and options that cannot change what it prints, so each word it splits into is
-            a path inside the repository."""
+            pathspecs) and options that cannot change what it prints. What git prints holds no ..
+            part; a tracked name with a space can still split into a word that does, which Dan's
+            decision accepts (see the module docstring)."""
             m = re.fullmatch(r'"?\$\((.*)\)"?', t, re.S)
             if not m or t.count('"') % 2:
                 return False
