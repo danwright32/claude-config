@@ -261,9 +261,14 @@ def make(interpreter, shells, awks, senders):
                 except self.sw.Unreadable:
                     cmds, parts = [], []
                 memo["parts"] = parts
-                memo["struct"] = self.sh_struct(list(zip(cmds, parts)), ctx["text"]) if parts else None
+                memo["struct"] = self.sh_struct_of(ctx["text"], ctx["cwd"], list(zip(cmds, parts))) if parts else None
+                # Which command starts where, found once: looked for from the first command on each
+                # time, it was a twentieth of judging the claude-sync suite (claude-config#2918).
+                memo["at"] = {}
+                for i, p in enumerate(parts):
+                    memo["at"].setdefault(p["start"], i)
             parts, struct = memo["parts"], memo["struct"]
-            k = next((i for i, p in enumerate(parts) if p["start"] == at), None)
+            k = memo["at"].get(at)
             if k is None or not struct or len(parts[k]["scope"]) > 1 or parts[k]["how"] in ("|", "&"):
                 return None
             if k and parts[k - 1]["how"] in ("&&", "||", "|"):

@@ -1125,7 +1125,7 @@ fi
 # fourth element is protected by the code that already exists.
 
 ids_from() { # ids_from <page text> -> the names the tool derives from it
-  python3 - "$DIR" "$1" <<'IDSPY'
+  python3 -B - "$DIR" "$1" <<'IDSPY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ms", sys.argv[1] + "/make-switcher.py")
 mod = importlib.util.module_from_spec(spec)
@@ -1135,7 +1135,7 @@ IDSPY
 }
 
 check_eq "the names are read out of the real template" "readout,stage,tabs" \
-  "$(ids_from "$(python3 -c "
+  "$(ids_from "$(python3 -B -c "
 import importlib.util
 spec = importlib.util.spec_from_file_location('ms', '$DIR/make-switcher.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
@@ -1154,7 +1154,7 @@ check_eq "a template with no namespaced ids derives nothing" "" "$(ids_from '<di
 # with nothing would leave the refusal protecting nothing while every case above still
 # passed (L98). Read from the constant the refusal reads, not from a fresh derivation, so
 # this is about what ships rather than about the function in isolation.
-live_ids="$(python3 -c "
+live_ids="$(python3 -B -c "
 import importlib.util
 spec = importlib.util.spec_from_file_location('ms', '$DIR/make-switcher.py')
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
@@ -1363,7 +1363,7 @@ check_not "a round that names no screen carries no terminal" "${lib_line:-NO-LIB
 # So the library owns ONE top level name, read out of the file, and every class it styles
 # carries one prefix.
 
-term_globals="$(python3 - "$DIR" <<'TGPY'
+term_globals="$(python3 -B - "$DIR" <<'TGPY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ms", sys.argv[1] + "/make-switcher.py")
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)

@@ -13,6 +13,7 @@ import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.dont_write_bytecode = True  # a module beside this one is carried by the sync: leave no cache (#2919)
 sys.path.insert(0, HERE)
 
 import verification as v  # noqa: E402
@@ -530,6 +531,159 @@ class Judging(Base):
     def test_two_blocks_are_malformed(self):
         body, _ = self.good_body()
         self.assertEqual(self.kinds(self.judge(body + "\n" + body)), ["screenshots-malformed"])
+
+
+NATIVE_SCREEN = {"name": "list", "test": "AppHostedTests/VerificationScreens", "frame": "invoice-list",
+                 "seed": "demo-136", "min_rows": 13}
+
+
+def native_doc(screen=None, command="xcodebuild test -only-testing:\"$VERIFICATION_SHOT_TEST\""):
+    """areas.json for a native app: its screen is an offscreen test and a frame, not a route (#2696)."""
+    doc = json.loads(json.dumps(areas_doc(screens=False)))
+    doc["areas"][0]["screens"] = [dict(NATIVE_SCREEN, **(screen or {}))]
+    if command is not None:
+        doc["commands"]["native_shot"] = command
+    for k in ("timeouts", "egress"):
+        doc.pop(k, None)
+    return doc
+
+
+class NativeScreens(Base):
+    """A native screen (claude-config#2696): the same eight pictures, taken by an offscreen test."""
+
+    def refused(self, doc):
+        with self.assertRaises(v.VerificationError) as e:
+            v.parse_areas(json.dumps(doc))
+        return [k for k, _ in e.exception.problems], " ".join(m for _, m in e.exception.problems)
+
+    def test_a_native_screen_is_read_with_its_test_frame_and_shot_command(self):
+        areas = v.parse_areas(json.dumps(native_doc()))
+        sc = areas["areas"][0]["screens"][0]
+        self.assertEqual((sc["test"], sc["frame"], sc["min_rows"]), ("AppHostedTests/VerificationScreens", "invoice-list", 13))
+        self.assertIn("native_shot", areas["commands"])
+
+    def test_a_native_screen_still_needs_its_eight_pictures(self):
+        areas = v.parse_areas(json.dumps(native_doc()))
+        self.assertEqual(len(s.required_shots(areas, ["invoices"])), 8)
+
+    def test_a_native_screen_with_no_shot_command_is_refused(self):
+        kinds, why = self.refused(native_doc(command=None))
+        self.assertEqual(kinds, ["areas-native-no-shot-command"])
+        self.assertIn("commands.native_shot", why)
+
+    def test_a_screen_giving_both_a_route_and_a_test_is_refused(self):
+        kinds, why = self.refused(native_doc({"path": "/invoices"}))
+        self.assertEqual(kinds, ["areas-bad-screen"])
+        self.assertIn("a route or a test, not both", why)
+
+    def test_a_native_screen_with_a_css_selector_is_refused(self):
+        kinds, why = self.refused(native_doc({"rows": "[data-row]"}))
+        self.assertEqual(kinds, ["areas-bad-screen"])
+        self.assertIn("no CSS selector", why)
+
+    def test_a_native_screen_with_no_frame_or_a_bad_one_is_refused(self):
+        for frame in (None, "Invoice List", "a__b", "x" * 80, "invoice-list\n"):
+            screen = dict(NATIVE_SCREEN, frame=frame)
+            if frame is None:
+                del screen["frame"]
+            doc = native_doc()
+            doc["areas"][0]["screens"] = [screen]
+            kinds, why = self.refused(doc)
+            self.assertEqual(kinds, ["areas-bad-screen"], frame)
+            self.assertIn("frame", why)
+
+    def test_a_test_identifier_that_is_not_one_is_refused(self):
+        for test in ("", "Target/$(rm -rf ~)", "Target Name", "/Leading", "Target//Double", 7, "Target/Suite\n"):
+            kinds, why = self.refused(native_doc({"test": test}))
+            self.assertEqual(kinds, ["areas-bad-screen"], test)
+            self.assertIn("test", why)
+
+    def test_a_swift_testing_function_identifier_is_accepted(self):
+        areas = v.parse_areas(json.dumps(native_doc({"test": "AppHostedTests/VerificationScreens/shoot()"})))
+        self.assertEqual(areas["areas"][0]["screens"][0]["test"], "AppHostedTests/VerificationScreens/shoot()")
+
+    def test_a_native_min_rows_must_be_a_whole_number_of_at_least_one(self):
+        for bad in (0, "13", True, 1.5):
+            kinds, _ = self.refused(native_doc({"min_rows": bad}))
+            self.assertEqual(kinds, ["areas-bad-screen"], bad)
+
+    def test_a_native_screen_without_min_rows_is_read(self):
+        screen = dict(NATIVE_SCREEN)
+        del screen["min_rows"]
+        doc = native_doc()
+        doc["areas"][0]["screens"] = [screen]
+        self.assertNotIn("min_rows", v.parse_areas(json.dumps(doc))["areas"][0]["screens"][0])
+
+    def test_an_empty_shot_command_is_refused(self):
+        kinds, _ = self.refused(native_doc(command="  "))
+        self.assertEqual(kinds, ["areas-empty-command"])
+
+    def test_each_native_shot_goes_through_the_drive_call_with_the_native_contract(self):
+        self.areas = v.parse_areas(json.dumps(native_doc()))
+        self.receipt(RID_H, HEAD)
+        calls = []
+
+        class Done:
+            returncode = 0
+
+        def run(argv):
+            calls.append(argv)
+            write(os.path.join(self.home, "receipts", RID_H, argv[argv.index("--") + 6]), PNG)
+            return Done()
+        self.assertEqual(s.shoot(RID_H, "head", self.areas, run=run, home=self.home), [])
+        self.assertEqual(len(calls), 4)
+        first = calls[0]
+        self.assertEqual(first[2:6], ["drive", RID_H, "--area", "invoices"])
+        self.assertEqual(first[first.index("--") + 1:],
+                         ["screenshot-native", "AppHostedTests/VerificationScreens", "invoice-list", "1440", "light",
+                          "invoices__list__head__1440__light.png", "13"])
+
+    def test_a_native_screen_without_min_rows_passes_zero(self):
+        doc = native_doc()
+        del doc["areas"][0]["screens"][0]["min_rows"]
+        self.areas = v.parse_areas(json.dumps(doc))
+        self.receipt(RID_H, HEAD)
+        calls = []
+
+        class Done:
+            returncode = 0
+
+        def run(argv):
+            calls.append(argv)
+            return Done()
+        failed = s.shoot(RID_H, "head", self.areas, run=run, home=self.home)
+        self.assertEqual(calls[0][-1], "0")
+        self.assertEqual(len(failed), 4, "a helper that saved nothing failed every shot")
+
+    def test_a_native_screen_publishes_and_renders_naming_its_test_and_frame(self):
+        self.areas = v.parse_areas(json.dumps(native_doc()))
+        self.shoot_all()
+        gh = FakeGitHub()
+        m = self.publish(gh)
+        self.assertEqual(m["screens"][0]["test"], "AppHostedTests/VerificationScreens")
+        self.assertEqual(m["screens"][0]["frame"], "invoice-list")
+        self.assertNotIn("path", m["screens"][0])
+        block = s.render_block(m)
+        self.assertIn("### invoices: list (test `AppHostedTests/VerificationScreens`, frame `invoice-list`, seed demo-136)",
+                      block)
+        self.assertEqual(block.count("![invoices list"), 8)
+
+    def test_the_merge_check_judges_a_native_block_unchanged(self):
+        self.areas = v.parse_areas(json.dumps(native_doc()))
+        self.shoot_all()
+        self.gh = FakeGitHub()
+        body = s.render_into_body(self.publish(self.gh), "Fixes the list.\n", home=self.home)
+        listings = {c: [p.split("/")[-1] for p in self.gh.files_at(c) if p.startswith("pr-7/%s/" % HEAD)]
+                    for c in self.gh.commits}
+        out = s.judge(self.areas, ["invoices"], body, HEAD, private=False, listings=listings, changed_since=None,
+                      home=self.home)
+        self.assertEqual(out["problems"], [])
+
+    def test_a_web_screen_still_publishes_its_route(self):
+        self.shoot_all()
+        m = self.publish(FakeGitHub())
+        self.assertEqual(m["screens"][0]["path"], "/invoices")
+        self.assertIn("### invoices: list (`/invoices`, seed demo-136)", s.render_block(m))
 
 
 class BadBytes(unittest.TestCase):

@@ -30,6 +30,9 @@ export type AreaCheckHeld = {
   /** The branch and merge base the edit was held on (#1510); absent in entries held before them. */
   branch?: string | null
   mergeBase?: string | null
+  /** A command reaching a whole folder, held once for it (#2920): the other held files there, and the folder as the command names it. */
+  more?: AreaCheckHeld
+  under?: string
 }[]
 
 declare module 'claude-code' {

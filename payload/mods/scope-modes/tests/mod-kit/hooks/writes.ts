@@ -1,6 +1,6 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
 import { git, pipeline, placed, readLine, type Command, type Line } from './commands.ts'
-import { codeOnly, codeTargets } from './code.ts'
+import { codeOnly, codeTargets, codeVerdict } from './code.ts'
 import { kindOf, readProgram, splitsWords } from './program.ts'
 import { isDevice } from './inputs.ts'
 
@@ -1155,7 +1155,12 @@ const readWrites = (cmds: readonly Command[], cwd: string | undefined, home: str
       // so a guard reads the names it can open, never those a block it puts in a file quotes. Only
       // for a program the shell cannot have changed, as ask before saving reads one (#940).
       const code = !('targets' in known) && asWritten && c.language && p && 'text' in p ? codeOnly(c.language, p.text) : undefined
-      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(code === undefined ? {} : { code }), ...(dir ? { folder: dir } : {}) })
+      // A program the judge reads as unreadable only for a module or file it loads by a computed name
+      // (#2920), with no write, process or code built at run time in its own text: a guard asking only
+      // what the text itself writes reads it as a static import, whose module no reader follows.
+      // Only for a program the shell cannot have changed, as `code` is.
+      const onlyLoads = c.verdict.does === 'unreadable' && asWritten && c.language && p && 'text' in p && codeVerdict(c.language, p.text, { besideLoads: true }) === undefined
+      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(code === undefined ? {} : { code }), ...(dir ? { folder: dir } : {}), ...(onlyLoads ? { onlyLoads: true as const } : {}) })
     }
     else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
     // A command given its operands by xargs changes files no word names (#730).

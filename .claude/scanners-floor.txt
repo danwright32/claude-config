@@ -12,6 +12,7 @@ payload/hooks/test-branch-issue-reader.sh
 payload/hooks/test-check-home-paths.sh
 payload/hooks/test-check-root-guard.sh
 payload/hooks/test-checkout-root.sh
+payload/hooks/test-fail-margin.sh
 payload/hooks/test-hand-rolled-heredoc-marker.sh
 payload/hooks/test-hand-written-lib-list.sh
 payload/hooks/test-hand-rolled-wait.sh

@@ -213,7 +213,7 @@ body_files=("$FAKE"/body-*)
 check_eq "happy: one body judged per issue created" "2" "${#body_files[@]}"
 for b in "${body_files[@]}"; do
   check_eq "happy: the filing gate's own reader finds the section in ${b##*/}" "True" \
-    "$(python3 -c 'import importlib.util, sys
+    "$(python3 -B -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/issue_field_gate.py")
 g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
 print(g.has_open_questions(["--body-file", sys.argv[2]], "gh issue create --body-file " + sys.argv[2]))' "$DIR" "$b" 2>&1)"
