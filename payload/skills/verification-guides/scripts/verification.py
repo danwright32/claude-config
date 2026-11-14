@@ -79,7 +79,7 @@ NONCE_RE = re.compile(r"^vg-[0-9a-f]{16}$")
 # Target/Suite/function() in Swift Testing) and swift test's --filter accepts: segments of
 # identifier characters joined by single slashes, the last optionally ending in (). Nothing a
 # shell would read as anything but text (claude-config#2696).
-NATIVE_TEST_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_][A-Za-z0-9_.]{0,99}){0,2}(\(\))?$")
+NATIVE_TEST_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,99}(/[A-Za-z_][A-Za-z0-9_.]{0,99}){0,2}(\(\))?\Z")
 LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$")
 
 COMMANDS_REQUIRED = ("serve", "ready", "stop", "drive")
@@ -410,11 +410,11 @@ def _check_web_screen(p, at, sc):
 def _check_native_screen(p, at, sc):
     """A native screen (claude-config#2696): the offscreen test that photographs it, and its frame."""
     test = sc.get("test")
-    if not isinstance(test, str) or not NATIVE_TEST_RE.match(test):
+    if not isinstance(test, str) or not NATIVE_TEST_RE.fullmatch(test):
         p.append(("areas-bad-screen", "%s test %r must name the offscreen test that photographs it, as"
                   " Target, Target/Suite or Target/Suite/function()" % (at, test)))
     frame = sc.get("frame")
-    if not isinstance(frame, str) or not AREA_NAME.match(frame) or "__" in frame:
+    if not isinstance(frame, str) or not AREA_NAME.fullmatch(frame) or "__" in frame:
         p.append(("areas-bad-screen", "%s frame %r must be the name the test draws it by, in lower case"
                   " letters, digits and single hyphens" % (at, frame)))
     if "rows" in sc:

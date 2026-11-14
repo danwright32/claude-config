@@ -581,7 +581,7 @@ class NativeScreens(Base):
         self.assertIn("no CSS selector", why)
 
     def test_a_native_screen_with_no_frame_or_a_bad_one_is_refused(self):
-        for frame in (None, "Invoice List", "a__b", "x" * 80):
+        for frame in (None, "Invoice List", "a__b", "x" * 80, "invoice-list\n"):
             screen = dict(NATIVE_SCREEN, frame=frame)
             if frame is None:
                 del screen["frame"]
@@ -592,7 +592,7 @@ class NativeScreens(Base):
             self.assertIn("frame", why)
 
     def test_a_test_identifier_that_is_not_one_is_refused(self):
-        for test in ("", "Target/$(rm -rf ~)", "Target Name", "/Leading", "Target//Double", 7):
+        for test in ("", "Target/$(rm -rf ~)", "Target Name", "/Leading", "Target//Double", 7, "Target/Suite\n"):
             kinds, why = self.refused(native_doc({"test": test}))
             self.assertEqual(kinds, ["areas-bad-screen"], test)
             self.assertIn("test", why)

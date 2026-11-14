@@ -64,7 +64,7 @@ LOG_TAIL = 15
 FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.png$")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # ASCII digits only: str.isdigit() is also true for a superscript, which int() then refuses.
-WHOLE_RE = re.compile(r"^[0-9]{1,9}$")
+WHOLE_RE = re.compile(r"[0-9]{1,9}")
 
 
 class Usage(Exception):
@@ -79,17 +79,17 @@ def parse_shot(argv, env):
     if len(argv) != 7:
         raise Usage("usage: shoot_native.py %s <test> <frame> <width> <light|dark> <file.png> <min rows>" % VERB)
     _, test, frame, width, theme, name, min_rows = argv
-    if not v.NATIVE_TEST_RE.match(test):
+    if not v.NATIVE_TEST_RE.fullmatch(test):
         raise Usage("the test %r is not a test identifier (Target, Target/Suite or Target/Suite/function())" % test)
-    if not v.AREA_NAME.match(frame) or "__" in frame:
+    if not v.AREA_NAME.fullmatch(frame) or "__" in frame:
         raise Usage("the frame %r is not a frame name (lower case letters, digits and single hyphens)" % frame)
-    if not WHOLE_RE.match(width) or int(width) < 320:
+    if not WHOLE_RE.fullmatch(width) or int(width) < 320:
         raise Usage("the width %r is not a whole number of points, 320 or more" % width)
     if theme not in ("light", "dark"):
         raise Usage("the theme is light or dark, not %r" % theme)
     if not FILE_RE.match(name):
         raise Usage("%r is not a picture name this run can keep" % name)
-    if not WHOLE_RE.match(min_rows):
+    if not WHOLE_RE.fullmatch(min_rows):
         raise Usage("the minimum row count %r is not a whole number" % min_rows)
     rdir, wt = env.get("VERIFICATION_RECEIPT_DIR"), env.get("VERIFICATION_WORKTREE")
     if not rdir or not wt:
@@ -239,7 +239,7 @@ def _judge(o, rc, rows_file, log):
         except (OSError, UnicodeDecodeError):
             return ("frame %s reported no row count, and the screen is shot at %d rows or more: the test must"
                     " write the rows it drew to VERIFICATION_SHOT_ROWS_FILE" % (o["frame"], o["min_rows"]))
-        if not WHOLE_RE.match(text):
+        if not WHOLE_RE.fullmatch(text):
             return "frame %s reported %r as its row count, which is not a whole number" % (o["frame"], text[:40])
         if int(text) < o["min_rows"]:
             return "frame %s drew %s rows, and the screen is shot at %d or more (L606)" % (
