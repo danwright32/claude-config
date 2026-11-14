@@ -59,7 +59,9 @@ if [ -z "${APPLY_SOURCE_HELPERS:-}" ]; then
     grep -E '^expanded_root_name\(\)' "$SCRIPT"
     awk '/^apply_source_dir\(\)/,/^}$/' "$SCRIPT"
   } > "$LIB"
-  if ! grep -q '^apply_source_dir()' "$LIB" || ! grep -q '^COMMON_EXCLUDES=' "$LIB" || ! grep -q '^TOKEN=' "$LIB"; then
+  if grep -q '^apply_source_dir()' "$LIB" && grep -q '^COMMON_EXCLUDES=' "$LIB" && grep -q '^TOKEN=' "$LIB"; then
+    :  # all three were found; the second run below says so
+  else
     bad "claude-sync defines apply_source_dir, TOKEN and COMMON_EXCLUDES where this suite reads them" "$(head -5 "$LIB")"
     echo "SUITE-RESULT passed=$pass failed=$fail"; exit 1
   fi

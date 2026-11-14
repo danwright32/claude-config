@@ -2213,9 +2213,10 @@ if ! . "${SCRIPT%/*}/payload/hooks/lib/hang-wait.sh"; then
 fi
 # fn_drive <code> <file> [args...]: what `bash -c '<code>' _ <file> [args...]` did for a function file
 # this suite extracts from claude-sync at run time, with the code written into a driver in this suite's
-# scratch and run as its own process, $1 the file and the rest after it. Sourcing a file made at run
-# time names a path the Slack drafts gate cannot work out, and it refuses that (claude-config#2538).
-# Never beside the file: $1 can be a library in the checkout's own payload, which the sync carries.
+# scratch and run as its own process, handed that file first and the rest after it. Sourcing a file
+# made at run time names a path the Slack drafts gate cannot work out, and it refuses that
+# (claude-config#2538). Never beside the file: it can be a library in the checkout's own payload,
+# which the sync carries.
 fn_drive(){
   local code="$1" drv rc
   shift
