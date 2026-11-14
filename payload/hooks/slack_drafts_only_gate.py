@@ -1423,7 +1423,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         self.rest_memo = {}  # {a command's text: the reader's command_rest of it}, for rest_of
         self.words_memo = {}  # {a command's text from its name on: its words}, for words_of
         self.indirect_memo = {}  # {a command's text: sh_indirect's answer for it}
-        self.cwd_spans = {}  # {id of a walk's result: (it, its uncertain spans in order), for sh_cwd_at}
+        # {id of a walk's result: (that result, the starts of its uncertain spans in order, the furthest
+        # end of the spans up to each)}, for sh_cwd_at
+        self.cwd_spans = {}
         self.struct_memo = {}  # {(a text, the directory it is read from): sh_struct of it}, for sh_struct_of
         self.redir_memo = {}  # {a command's text: its words and redirections}, for redirections
         # The files and directories an earlier command of this call writes (claude-config#2525), by
