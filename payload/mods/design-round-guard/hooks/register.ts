@@ -532,8 +532,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // pathspec matched across folders (`:/x`, a pattern) has no path, so it is held as a write that
   // cannot be followed, or judged as a pattern. What a checkout or restore puts back is judged by the
   // lines it changes, as an edit is (#1158).
+  // What git takes away is a removal as rm's is, so a name the shell fills in is held the same (#2934).
   for (const g of w.byGit ?? []) {
-    targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+    targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}), ...(g.does === 'remove' ? { removes: true as const } : {}) })
     if (g.tree && g.path) trees.push({ word: g.word, path: g.path, ...(g.does === 'remove' ? { removes: true as const } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
   }
   for (const x of trees) targets.push(...(await underTargets($, x)))
@@ -1358,6 +1359,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // assignment gives bare mktemp output names a new file (#2171), and one set to a plain name has a
     // path, judged by it.
     if (t.removes && !t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
+    // What the command does to the file, as a refusal says it.
+    const does = t.removes ? 'takes away' : 'writes'
     const output = !t.path && nameFromOutput(t.word) && (t.tool === true || t.removes === true || !outputTrusted(t.word))
     // A name a shell variable fills in, handed to a script or a tool (#1953: `P='app/*push*'; python3
     // sweep.py $P`), is judged the same way, as a name no rule reads: mod-kit gives a path where the
@@ -1392,7 +1395,6 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         continue
       }
       unsureFiles.push(t.word)
-      const does = t.removes ? 'takes away' : 'writes'
       notFollowed(
         output
           ? `where the command ${does} ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
@@ -1420,13 +1422,13 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {
         unsureFiles.push(t.word)
-        notFollowed(`where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`)
+        notFollowed(`where the command ${does} ${t.word} could not be followed, and the command names ${listed(named)}`)
       }
       continue
     }
     if (!t.path) {
       unsureFiles.push(t.word)
-      notFollowed(`where the command writes ${t.word} could not be followed`)
+      notFollowed(`where the command ${does} ${t.word} could not be followed`)
       continue
     }
     let tree: string | null

@@ -1016,12 +1016,18 @@ test('#2934: a removal of a name a shell variable or a command\'s output fills i
     ['rm -rf "$(git rev-parse --show-toplevel)"', '$(git rev-parse --show-toplevel)', "a command's output"],
     [`cd ${NOTES_FOLDER} && rm -rf "$TARGET"`, '$TARGET', "a shell variable's value"],
     [`cd ${NOTES_FOLDER}/review && rm -rf $(cat list.txt)`, '$(cat list.txt)', "a command's output"],
+    // What git takes away (#1136) the same: git rm, and the source git mv moves.
+    ['cd /w/slate && git rm -r "$TARGET"', '$TARGET', "a shell variable's value"],
+    ['cd /w/slate && git rm $(cat list.txt)', '$(cat list.txt)', "a command's output"],
+    ['cd /w/slate && git mv "$FROM" docs/kept', '$FROM', "a shell variable's value"],
     // A temp variable given another value as well may hold any name.
     ['cd /w/slate && D=$(mktemp -d); D=$OTHER; rm -rf "$D"', '$D', "a shell variable's value"],
   ] as [string, string, string][]) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect({ command, held: why.includes(`where the command takes away ${word} could not be followed`) && why.includes(kind) }).toEqual({ command, held: true })
   }
+  // A screen file under a folder a variable names is said to be taken away too, never written.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f "$ROOT/app/page.tsx"' }))).toContain('where the command takes away $ROOT/app/page.tsx could not be followed')
   expect(w.ran).toEqual([])
   // Set to a plain name: judged by it, so app waits on the issue's answer as app itself does.
   const app = refusalOf(await call($, { tool: 'Bash', command: 'TARGET=app; cd /w/slate && rm -rf "$TARGET"' }))
