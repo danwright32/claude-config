@@ -129,13 +129,17 @@ VALUED = {"-m", "-W", "-X", "-r", "--require", "-I", "-i", "--import", "--loader
 # relied on as complete by empty_slot (claude-config#2786): a script word it places that names no file
 # lets the data files after it go unread as code, so a valued Python option missing here would let
 # the file after its value run unread. Any other family's table is not relied on that way.
+# -i takes no separate value in any family that has it (claude-config#2893): bash -i is interactive,
+# node -i opens the REPL, and perl and ruby take an in place edit's suffix glued (-i.bak) or none.
+# Read as taking one, `perl -i -pe s/a/b/ post.sh` took -pe for its value and s/a/b/ for the script,
+# and `node -i -e CODE` took -e, so the code was never read as code.
 OPTIONS = {
-    "shell": ({"-c"}, "c", VALUED),
+    "shell": ({"-c"}, "c", VALUED - {"-i"}),
     "py": ({"-c"}, "c", {"-W", "-X", "--check-hash-based-pycs"}),
-    "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED),
+    "js": ({"-e", "--eval", "-p", "--print"}, "ep", VALUED - {"-i"}),
     "deno": ({"eval"}, "", VALUED),
-    "ruby": ({"-e"}, "e", VALUED),
-    "perl": ({"-e", "-E"}, "eE", VALUED),
+    "ruby": ({"-e"}, "e", VALUED - {"-i"}),
+    "perl": ({"-e", "-E"}, "eE", VALUED - {"-i"}),
     "php": ({"-r", "-B", "-R", "-E"}, "", VALUED),
     "osascript": ({"-e"}, "", VALUED),
 }
@@ -955,6 +959,11 @@ CURL_WRITES_LONG = {"--output", "--cookie-jar", "--dump-header", "--trace", "--t
 CURL_REMOTE_LONG = {"--remote-name", "--remote-name-all", "--remote-header-name", "--output-dir", "--config"}
 CURL_REMOTE_VALUED = {"--output-dir", "--config"}
 CURL_VALUED = "EKCbcdDFPHhmoUQreXYytzTuAwx"
+# An assignment to the variable %s (Judge.curl_defaults, claude-config#2893): where a command starts,
+# past export, env and their kin with their options, and past other assignments.
+CURLRC_NAMES = (".curlrc", "curlrc")
+CURL_ASSIGN = (r"(?:^|[;&|(`{])\s*(?:(?:export|env|declare|typeset|local|readonly)\s+(?:-\S*\s+)*)?"
+               r"""(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"'])*\s+)*%s=""")
 # One printf conversion the gate works out exactly (claude-config#2721): flags, a width and a precision
 # written as digits, and a string, %b, a character or an integer conversion.
 PRINTF_SPEC = re.compile(r"%([-+ #0]*)(\d*)(?:\.(\d*))?([sbcdiuxXo%])")
@@ -1414,6 +1423,22 @@ class OutOfTime(BaseException):
         self.doing = doing
 
 
+class NulPath(BaseException):
+    """Raised by Judge.resolve for a word holding a NUL byte, which names no file it can work out:
+    bash drops the byte, zsh keeps it inside the word, and every program reads it as the end of the
+    name, while os.path raises on it (claude-config#2892: two real commands crashed the gate in
+    lstat). A BaseException, as OutOfTime is, so no `except ValueError` in the walk reads it as a
+    file that is not there; main() refuses the call as one it could not check."""
+
+    def __init__(self, word):
+        super().__init__(word)
+        self.word = word
+
+
+NUL_WHY = ("it names a path holding a NUL byte, which bash drops, zsh keeps inside the word and every program "
+           "reads as the end of the name, so which file it is cannot be worked out (claude-config#2892)")
+
+
 def budget_clock():
     """(clock, budget): the clock the walk is timed by and the budget it is held to. Real seconds
     (BUDGET_SECONDS on time.monotonic), except under a test run (HOOK_TESTS_RUNNING=1, the rule the
@@ -1496,6 +1521,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         # which may write any file the code names.
         self.made_maybe = []
         self.made_code = []
+        # The curl config files (CURLRC_NAMES) a command has just written by name, for record() to
+        # read once that command's writes are noted, and whether a text assigns a variable placing
+        # curl's default config, worked out once for each text (claude-config#2893).
+        self.curlrc_noted = set()
+        self.curl_assign_memo = {}
         # The git commands that write tracked files they do not name, each the ref its files are read
         # from (note_git in lib/program-writes.py, claude-config#2827).
         self.made_git = []
@@ -1614,6 +1644,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 f"Slack, call slack_send_message_draft instead.")
 
     def resolve(self, word, d):
+        if "\0" in word:
+            raise NulPath(word)  # never handed to os.path, which raises on it (claude-config#2892)
         p = os.path.expanduser(word)
         if not os.path.isabs(p):
             p = os.path.join(d or os.getcwd(), p)
@@ -1679,32 +1711,53 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         """Whether path is a file to read: on disk, or made by an earlier command of this call."""
         return os.path.isfile(path) or bool(self.made_from(path)) or bool(self.made_built and self.built_from(path))
 
-    def content(self, path, limit=MAX_FILE):
+    @staticmethod
+    def binary(data):
+        """Whether bash refuses data as a script, "cannot execute binary file": a NUL in its first
+        line, within the 80 bytes bash samples (bash's check_binary_file; measured 2026-11-14 with
+        /bin/bash 3.2 and /bin/sh, both of which run a NUL on a later line with the byte dropped).
+        A program (/usr/bin/true, /bin/bash) is binary from its first bytes (claude-config#2892)."""
+        return b"\0" in data[:80].split(b"\n", 1)[0]
+
+    def content(self, path, limit=MAX_FILE, part=None):
         """The bytes a read of path finds: what an earlier command of this call made it from, then the
         file on disk, if there is one, that the write replaces; the file on disk alone otherwise.
-        Raises OSError as open() does for a file nothing made."""
+        Raises OSError as open() does for a file nothing made. part "text" leaves out each of those
+        that is binary (Judge.binary), and "binary" gives only those, for script_body to read the
+        rest as commands and search these for an endpoint (claude-config#2892)."""
+
+        def wanted(data):
+            return part is None or (part == "binary") == self.binary(data)
+
         pieces = self.made_from(path)
         if not pieces:
             with open(path, "rb") as f:
-                return f.read(limit)
+                data = f.read(limit)
+            return data if wanted(data) else b""
         real = os.path.realpath(path)
         made = []
         for kind, value, _ in pieces:
             if kind in ("unknown", "maybe", "code"):
                 continue  # nothing to read: script() refuses a file holding one (unread, code_names)
             if kind == "text":
-                made.append(value.encode("utf-8", "replace"))
+                data = value.encode("utf-8", "replace")
+                if wanted(data):
+                    made.append(data)
                 continue
             try:
                 with open(value, "rb") as f:
-                    made.append(f.read(limit))
+                    data = f.read(limit)
             except OSError:
                 continue  # unreadable to us is unreadable to the copy that would read it
+            if wanted(data):
+                made.append(data)
         out = b"".join(made)
         if os.path.isfile(real) and not any(p[0] == "file" and p[1] == real for p in pieces):
             try:
                 with open(real, "rb") as f:
-                    out += b"\n" + f.read(limit)
+                    data = f.read(limit)
+                if wanted(data):
+                    out += b"\n" + data
             except OSError:
                 pass
         return out[:limit]
@@ -2025,6 +2078,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                         if c == "K":
                             configs.append(value)
                         break
+        # And the default config, which curl reads unless -q or --disable is its very first word
+        # (curl compares them without case): one written there earlier makes a plain curl post
+        # (claude-config#2893).
+        if not (len(words) > 1 and words[1].lower() in ("-q", "--disable")):
+            for path, var in self.curl_defaults(text, whole, d):
+                if path is None:
+                    return self.unfollow(f"{name} reads a default config file from where {var} points, which this "
+                                         f"command sets to a value the gate cannot work out, so whether that file "
+                                         f"names an endpoint cannot be checked. Make -q curl's first word to skip it")
+                configs.append(path)
 
         def read_file(path, word):
             try:
@@ -2051,6 +2114,66 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             reason = self.fed_reason(name, pieces, read_file, read_text)
             if reason:
                 return reason
+        return None
+
+    def curl_defaults(self, text, whole, d):
+        """The default config files curl may read for the command text, as (path, None), or a single
+        (None, the variable) where a variable that places them is set by this command to a value the
+        gate cannot work out (claude-config#2893). curl reads $CURL_HOME/.curlrc, then
+        $XDG_CONFIG_HOME/curlrc, then ~/.curlrc, the first it finds; every one of those places is
+        read here, each by both names and with ~/.config standing for an unset XDG_CONFIG_HOME,
+        since reading one curl skips refuses only more. A variable the text sets, on the command
+        itself or earlier, adds the places its value names, and never takes away the session's own,
+        so an assignment misread still refuses only more. Only an assignment is read as one: at a
+        command's start, past other assignments, export, env and the like (CURL_ASSIGN); a NAME=
+        inside a string or a curl argument is not (`echo "CURL_HOME=$CURL_HOME"` was refused)."""
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        env = {"CURL_HOME": [os.environ.get("CURL_HOME")], "XDG_CONFIG_HOME": [os.environ.get("XDG_CONFIG_HOME")],
+               "HOME": [home]}
+        for var, values in env.items():
+            set_here = re.search(CURL_ASSIGN % var, text, re.M)
+            key = (var, whole or "")
+            if key not in self.curl_assign_memo:
+                self.curl_assign_memo[key] = re.search(CURL_ASSIGN % var, whole or "", re.M) is not None
+            if set_here:
+                value = self.sh_value(text[set_here.end():self.sh_word_end(text, set_here.end())], d)
+            elif self.curl_assign_memo[key]:
+                value = self.sh_var(var)
+            else:
+                continue
+            if value is None:
+                return [(None, var)]
+            values.append(value)
+        dirs = env["CURL_HOME"] + env["XDG_CONFIG_HOME"] + env["HOME"]
+        dirs += [os.path.join(h, ".config") for h in env["HOME"] if h]
+        out = []
+        for folder in dirs:
+            for base in CURLRC_NAMES:
+                path = os.path.join(folder, base) if folder else None
+                if path and (path, None) not in out:
+                    out.append((path, None))
+        return out
+
+    def curlrc_written(self, by_code):
+        """The reason a write the command just read makes leaves a config file curl reads by default
+        naming an endpoint, or None (claude-config#2893): every later curl call without -q first
+        would post there, and those calls name no endpoint for this gate to find. Read as the write
+        leaves it: each curl config file written by name (note_file), and, where the command handed
+        a program code that may write files it names (by_code), every default place curl reads one
+        from. Asked only after a command that wrote one of those, never of every command: a scan per
+        command of a long script's whole text was the cost of the first version."""
+        places = set(self.curlrc_noted)
+        self.curlrc_noted.clear()
+        if by_code:
+            places.update(p for p, _ in self.curl_defaults("", "", None) if p)
+        for path in sorted(places):
+            if not self.made_from(path):
+                continue
+            hit = MARKER.search(self.content(path).decode("utf-8", "replace"))
+            named = hit.group(0) if hit else (self.code_names(path, MARKER) or (None, None))[1]
+            if named:
+                return (f"it writes {path}, a config file curl reads by default, naming {named}, so a later "
+                        f"curl call that names no endpoint would post there")
         return None
 
     def note_output(self, raw, value, d, pieces, label, append=False, redirect=False):
@@ -2159,6 +2282,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         if append:
             pieces = self.pieces_of(target, d) + pieces
         self.made[real] = pieces
+        if os.path.basename(real) in CURLRC_NAMES:
+            self.curlrc_noted.add(real)
 
     def is_dir(self, word, d):
         real = os.path.realpath(self.resolve(word, d))
@@ -2365,6 +2490,23 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         hit = MARKER.search(body)
         first = body.split("\n", 1)[0]
         is_shell = shell_hint or real.endswith(SHELL_EXT) or bool(SHELL_BANG.match(first))
+        if is_shell and depth < MAX_DEPTH and "\0" in body:
+            # A binary file, or what code naming one wrote (/usr/bin/true in a python3 heredoc's
+            # string, read as a file the code may copy in, #2772), is no text a shell reads as
+            # commands: bash refuses it, and its bytes read as commands put a NUL in a word, which
+            # crashed the gate (claude-config#2892). So each binary part is searched for an endpoint,
+            # as any file run that is not a script is, and only the rest is read as commands. A NUL
+            # left in that rest is past a first line: bash drops it and runs the word without it,
+            # zsh keeps it, so the commands cannot be worked out.
+            binary_hit = MARKER.search(self.content(real, part="binary").decode("utf-8", "replace"))
+            if binary_hit:
+                return f"{label} posts to Slack (it names {binary_hit.group(0)})"
+            body = self.content(real, part="text").decode("utf-8", "replace")
+            if "\0" in body:
+                return self.unfollow(f"{label} holds a NUL byte after its first line, which bash drops and zsh "
+                                     "keeps inside a word, so the commands it runs cannot be worked out "
+                                     "(claude-config#2892)")
+            hit = MARKER.search(body)
         if is_shell and depth < MAX_DEPTH:
             # Read as commands even with no endpoint in it: it can run another script that posts.
             # Only a text the reader itself says it cannot read (its Unreadable) is judged by what
@@ -2415,8 +2557,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         run what the gate never saw; so is a script reaching more than IMPORT_MAX_FILES modules, unless
         it and every module it reaches are inside one repository, where they are all read (beyond). An
         import whose path is assembled at run time (a template holding ${...}, importlib) is not
-        followed: no file is named to read. Nor is a type only import statement of a declaration
-        file that is not there, which loads nothing whatever resolves it (erased_import, #2526)."""
+        followed: no file is named to read. Nor is a type only import statement of a file that is
+        there, or of a declaration file that is not, which loads nothing whatever resolves it
+        (erased_import, #2526, #2890)."""
         for why, via, target, found in self.modules(start, origin, root, body, kind):
             if why:
                 return why
@@ -2585,8 +2728,9 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         """(the import as written, the files it runs, or False when it names a local file not there,
         or a Python module placed nowhere), for each import in text; a package or a builtin gives an
         empty list. Without strings, a JavaScript import whose keyword sits inside a string literal
-        or a template's text is left out (claude-config#2484). A type only import statement of a
-        missing declaration file is left out too (erased_import, claude-config#2526)."""
+        or a template's text is left out (claude-config#2484). A type only import statement of a file
+        that is there, or of a missing declaration file, is left out too (erased_import,
+        claude-config#2526, #2890)."""
         if kind == "js":
             code, quoted = js_scan(text)
             for m in IMPORT_SPEC.finditer(code):
@@ -2596,8 +2740,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
                 if "${" in spec:
                     continue
                 target = self.resolve_import(spec, cur_dir)
-                if target is False and self.erased_import(code, m):
-                    continue  # a type only import of a missing declaration file loads nothing (#2526)
+                if target is not None and self.erased_import(code, m, target):
+                    continue  # a type only import loads nothing (#2526, #2890)
                 if target is not None:
                     yield spec, ([target] if target else False)
             return
@@ -2606,16 +2750,20 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             yield spec, self.resolve_py(level, module, names, cur_dir, root, inserts)
 
     @staticmethod
-    def erased_import(code, m):
+    def erased_import(code, m, target):
         """Whether m, an IMPORT_SPEC match in a JavaScript or TypeScript file's code, is the from of a
-        type only import statement naming a declaration file (claude-config#2526): an import that is
-        erased whole, so no module is loaded for it. Asked only of an import whose file is not there;
-        one that is there is read and judged like any module. Both halves are required: the path as
-        written ends .d.ts, and everything from the statement's import to this from is
+        type only import statement: an import that is erased whole, so no module is loaded for it,
+        whether its file is there or not (measured for claude-config#2526). target is what
+        resolve_import found for it. Everything from the statement's import to this from must be
         TYPE_ONLY_IMPORT, so a value import, a mixed one, `import { type A }`, a bare import, a
-        require, an import() and a re-export of the same missing file are each still refused."""
-        return (m.group(0).startswith("from") and m.group(2).split("?", 1)[0].endswith(DECLARATION_EXT)
-                and TYPE_ONLY_IMPORT.search(code, 0, m.start()) is not None)
+        require, an import() and a re-export of the same file are each still followed. A file that is
+        there is not read for it (claude-config#2890: a test in a work repository was refused because
+        its only route to a module that posts was `import type { T } from "./b.ts"`). A file that is
+        not there is left out only where the path as written ends .d.ts (#2526); a missing module of
+        any other name is refused as it was."""
+        if not (m.group(0).startswith("from") and TYPE_ONLY_IMPORT.search(code, 0, m.start()) is not None):
+            return False
+        return bool(target) or m.group(2).split("?", 1)[0].endswith(DECLARATION_EXT)
 
     @staticmethod
     def py_imports(text):
@@ -4836,6 +4984,16 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def line(self, s, cwd, depth, whole):
         """The reason a command line posts, or None. Its shell variables are its own: a script read
         here starts with none, and the caller's are back once it is read."""
+        if "\0" in s:
+            # Read as commands, a NUL is read three ways: bash drops it and runs the rest (`bash
+            # po<NUL>st.sh` runs post.sh), zsh keeps it inside the word, and every program it reaches
+            # ends the word there. So none of its words can be worked out, and before this the shared
+            # reader's words reached os.path and crashed the gate (claude-config#2892). Unfollowed:
+            # no finding that it posts. A file bash refuses as binary never gets here (script_body).
+            self.next_script, self.next_cwd_known, self.next_on_disk = None, True, False
+            return self.unfollow("it holds a NUL byte, which bash drops, zsh keeps inside a word and every "
+                                 "program reads as the end of one, so what it runs cannot be worked out "
+                                 "(claude-config#2892)")
         saved, self.shell = self.shell, self.shell_scope(s, cwd, self.next_script, self.next_cwd_known)
         self.shell["on_disk"] = self.next_on_disk
         self.next_script, self.next_cwd_known, self.next_on_disk = None, True, False
@@ -4954,7 +5112,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
         try:
             reason = self.judge(d, text, wrapper, why, depth, whole)
             if not reason:
+                codes = len(self.made_code)
                 self.note_writes(d, text, whole)  # for a later command that runs what it wrote (#2525, #2721)
+                if self.curlrc_noted or len(self.made_code) != codes:
+                    # A curl config left naming an endpoint, for a later call judged alone (#2893).
+                    reason = self.curlrc_written(len(self.made_code) != codes)
             return reason
         finally:
             self.py_cmd = saved
@@ -5759,7 +5921,8 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
     def js_acts(text, writes=True):
         """acts() for one JavaScript or TypeScript file's text: how it can act on what it is handed, as
         a phrase, or None when it is seen unable to. It is unable to only when every module it imports
-        that is not one of its own files is in JS_INERT, and it names none of JS_RUNS, JS_DYNAMIC,
+        that is not one of its own files is in JS_INERT (a type only import, which loads nothing, is
+        not counted), and it names none of JS_RUNS, JS_DYNAMIC,
         JS_ACTS (the old hand list, so nothing it refused passes) or JS_WRITES. A local module it imports is not judged here: modules() reaches it and acts()
         judges it with this same reading, and one that is not there is refused there. writes is False
         for code a shell script writes inline, where JS_WRITES is not counted (claude-config#2446)."""
@@ -5769,6 +5932,11 @@ class Judge(WrittenPaths, ProgramWrites, ProgramRuns):
             if quoted[m.start()]:
                 # The keyword is inside a string ('--files-from', ', '), which loads nothing; a string
                 # run as code is JS_RUNS and JS_DYNAMIC's, below (claude-config#2844, as #2484 for the walk).
+                continue
+            if m.group(0).startswith("from") and TYPE_ONLY_IMPORT.search(code, 0, m.start()) is not None:
+                # `import type { X } from "some-pkg"` is erased before anything runs, so it loads nothing
+                # (as the walk reads it, erased_import, #2526, #2890); every other import of a package
+                # the gate does not know, `import { type X }` among them, still counts as acting.
                 continue
             spec = m.group(2)
             bare = spec.split("?", 1)[0]
@@ -6510,6 +6678,8 @@ def main():
         judge.watch()
         try:
             reason = judge.line(cmd, cwd, 0, cmd)
+        except NulPath:
+            reason = judge.unfollow(NUL_WHY)  # never kept: only an allowed judgement is
         finally:
             judge.unwatch()
         if judge.overran:

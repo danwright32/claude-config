@@ -1104,6 +1104,30 @@ describe('writes: changes that put no content in, carried over from the collisio
       `mode ${CWD}/c`,
     ])
   })
+  // The names a find -delete is limited to: a guard read `find tools tests -name "lr_history*.pyc"
+  // -delete` as taking away every file under both folders, a page among them (seen 2026-11-13). Given
+  // only where every test before -delete narrows the same entries (-name and -iname, -type, -mtime and
+  // the like, joined by -a or nothing); an -o, a !, a bracket, -path, -regex or anything else leaves
+  // it unlimited, and so does a name a variable or a command's output fills in.
+  test('find -delete carries the -name and -iname patterns it is limited to, only where nothing else can widen it', () => {
+    const only = (command: string) => read(command).changes.map(c => c.names)
+    expect(only(`find tools tests -name "lr_history*.pyc" -delete`)).toEqual([['lr_history*.pyc'], ['lr_history*.pyc']])
+    expect(only(`find . -type f -iname '*.PYC' -mtime +3 -a -name 'x*' -delete`)).toEqual([['*.PYC', 'x*']])
+    for (const command of [
+      `find build -delete`,
+      `find build -type f -delete`,
+      `find app -name x -o -name '*.pyc' -delete`,
+      `find app ! -name '*.pyc' -delete`,
+      `find app -not -name '*.pyc' -delete`,
+      `find app \\( -name '*.pyc' \\) -delete`,
+      `find app -path '*/cache/*' -name '*.pyc' -delete`,
+      `find app -regex '.*pyc' -delete`,
+      `find app -name "$P" -delete`,
+      `find app -name "$(cat p)" -delete`,
+      `find app -name '*.pyc' -delete -name x -delete`,
+    ])
+      expect([command, only(command)]).toEqual([command, [undefined]])
+  })
   test('find -delete removes what it finds under each folder it starts from, and -fprint writes a file', () => {
     expect(changes(`find build -name '*.o' -delete`)).toEqual([`remove ${CWD}/build tree`])
     expect(changes('find -delete')).toEqual([`remove ${CWD} tree`])
@@ -1199,6 +1223,39 @@ describe('writes: what a program can do, judged by mod-kit\'s per language judge
     expect(read(`python3 -c "print(open('CLAUDE.md').read())"`).unnamed).toEqual([])
     expect(read(`node -e "console.log(require('fs').readFileSync('a','utf8'))"`).unnamed).toEqual([])
     expect(read(`awk '{print $1}' in.txt`).unnamed).toEqual([])
+  })
+  // #2727: an awk program printing a string that holds a > or a | (`print "88 -> " h`) was read as
+  // printing to a file or a pipe, so a command only reading a component file was held as writing it.
+  // What a string holds is text; a redirect or a pipe after the string still is one.
+  test('a > or a | inside an awk string is text, never a redirect or a pipe', () => {
+    for (const program of [
+      `NR<=130 { if ($0 ~ /^(export )?(function|const) /) h=NR": "$0 } NR==88 { print "88 -> " h }`,
+      `{ print "a | b", $1 }`,
+      `{ printf "%s >> %s\\n", $1, "x \\" > y" }`,
+      // A quote in a regex literal is the regex's, and the string after it is still a string.
+      `/"/ { print "a -> b" }`,
+      `$0 ~ /["]/ { n = n / 2; print "half -> " n }`,
+    ])
+      expect([program, read(`awk '${program}' app/Panel.tsx`).unnamed]).toEqual([program, []])
+    // Lessons review of 68267d7: a quote in a regex literal paired with the next string's opening
+    // quote blanked the code between them, a redirect or system() included. A regex, a comment and a
+    // / after ++ (a division or a regex, which cannot be told) keep every redirect after them seen.
+    for (const program of [
+      `{ print "88 -> " h > "out.txt" }`,
+      `{ print "x" | "sort" }`,
+      `{ print h > out }`,
+      `{ print "unclosed > x }`,
+      `/"/ { print > "out.txt" }`,
+      `$0 ~ /"/ { system("rm x") }`,
+      `{ x++ / 2; s = "a/b"; print > "f" }`,
+      `# say "hi\n{ print > "f" }`,
+      `{ print /"/ > "f" }`,
+      // Lessons review at a08a0f6: a newline ends a statement, so a regex starting the next line is
+      // one, never a division after the name or number the line before ended in.
+      `NR == 2\n/"/ { print > "out.txt"; if ($0 ~ /"/) n++ }`,
+      `{ n = 1 } END\n/"/ { system("rm x"); if ($0 ~ /"/) n++ }`,
+    ])
+      expect([program, read(`awk '${program}' in.txt`).unnamed.map(u => u.what)]).toEqual([program, ['an inline awk script']])
   })
   // #730: a heredoc or here-string feeding a shell's -c feeds the commands it runs.
   test("a heredoc feeding a shell's -c is read as the program of the command there", () => {
@@ -1306,6 +1363,27 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nq = Path('b.md')\ns = open('a.md').read()\nq.write_text(s.replace('x', 'y'))\nEOF")).toEqual([[`${CWD}/b.md`]])
     // A cd before it moves where a relative path lands.
     expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
+  })
+  // #2924: a program tidying a test file replaced one block of the test's code with another, and a
+  // block it only held as text (`open(os.path.join(self.out, "img", name), "w")`) was read as the
+  // program's own open of a path it could not name, so its files went unnamed and a guard read every
+  // name its text quoted (`page.html`) as one it writes. A call inside a string or a comment is text.
+  test("a write call a string or a comment only holds is text, and the program's own writes are still named", () => {
+    const tidy = [
+      "p = 'tests/test_gallery.py'",
+      's = open(p).read()',
+      `s = s.replace('''        page = open(os.path.join(self.out, "page.html")).read()\n''', '''        with open(os.path.join(self.out, "page.html")) as fh:\n            page = fh.read()\n''')`,
+      `s = s.replace('''            open(os.path.join(self.out, "img", name), "w").write("old")\n''', '''            x\n''')`,
+      '# open(q, "w") would write the other one',
+      "open(p, 'w').write(s)",
+    ].join('\n')
+    expect(targets(`python3 - <<'EOF'\n${tidy}\nEOF`)).toEqual([[`${CWD}/tests/test_gallery.py`]])
+    // The same open in the program's own code still leaves its files unnamed, as does a write in an
+    // f-string's braces, which are code.
+    expect(targets(`python3 - <<'EOF'\n${tidy}\nopen(os.path.join(d, "img", n), "w").write("old")\nEOF`)).toEqual([undefined])
+    expect(targets(`python3 - <<'EOF'\n${tidy}\nx = f"{open(os.path.join(d, 'n'), 'w')}"\nEOF`)).toEqual([undefined])
+    // A program whose text runs what a string holds is never named, however it quotes the write.
+    expect(targets(`python3 - <<'EOF'\n${tidy}\nexec('open(q, "w")')\nEOF`)).toEqual([undefined])
   })
   // #1171: a $ or a backtick anywhere in the text left the files unnamed, even under a quoted
   // delimiter, where the shell expands nothing, so a heredoc editing a TypeScript test (template

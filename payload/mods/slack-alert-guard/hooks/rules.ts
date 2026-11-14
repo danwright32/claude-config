@@ -865,6 +865,17 @@ export const modelLiteral = (r: ModelReading, only: Set<Decl>, start: number): b
   return modelInput(r.code, i)
 }
 
+/**
+ * Whether the string whose text starts at `start` is handed to a model in this file at all (#2529):
+ * itself a model key's value, or in a declaration a model's input names. Cheap, and wide: only a
+ * string this says yes to can have been read only by a model, which modelOnlyDecls then settles.
+ */
+export const modelFed = (r: ModelReading, start: number): boolean => {
+  if (modelLiteral(r, new Set(), start)) return true
+  const d = hostOf(r, start)
+  return d !== undefined && usesOf(r.code, d.name).some(at => at !== d.at && modelInput(r.code, at))
+}
+
 // cyrb53, as the design round guard keys a call: the hash finds the record, and the record keeps the text.
 const hash = (text: string): string => {
   let h1 = 0xdeadbeef
