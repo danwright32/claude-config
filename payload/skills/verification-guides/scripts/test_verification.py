@@ -843,6 +843,47 @@ class WrongTypeSweepTests(unittest.TestCase):
             self.assertEqual(found, [])
 
 
+class TrailingNewlineTests(unittest.TestCase):
+    """A Python `$` also matches just before a final newline, so a name such as "invoices\\n" passed
+    a pattern ending in `$` and reached paths and file names with the newline in it
+    (claude-config#2957)."""
+
+    def test_no_module_pattern_ends_in_a_dollar(self):
+        import re
+        loose = sorted(name for name, val in vars(v).items()
+                       if isinstance(val, re.Pattern) and val.pattern.endswith("$")
+                       and not val.pattern.endswith("\\$"))
+        self.assertEqual(loose, [], "these patterns accept a trailing newline; end them with \\Z")
+        self.assertFalse(v.glob_to_regex("src/*.ts").pattern.endswith("$"))
+
+    def test_names_with_a_trailing_newline_are_refused(self):
+        for rx, good in ((v.AREA_NAME, "invoices"), (v.SHA_RE, SHA), (v.RECEIPT_ID_RE, RECEIPT_ID),
+                         (v.AGENT_ID_RE, "agent-1"), (v.CHECK_ID_RE, "C1"), (v.DONE_ID_RE, "D1"),
+                         (v.SHOT_RE, "list.png"), (v.NONCE_RE, "vg-0123456789abcdef"),
+                         (v.LOCAL_URL, "http://127.0.0.1:4173"), (v.EGRESS_HOST, "api.example.com"),
+                         (v.SLUG_RE, "owner/name")):
+            self.assertTrue(rx.match(good), (rx.pattern, good))
+            self.assertIsNone(rx.match(good + "\n"), (rx.pattern, good))
+
+    def test_an_area_named_with_a_newline_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            write(os.path.join(root, ".claude/verification/guides/invoices.md"), GUIDE)
+            write(os.path.join(root, ".claude/verification/guides/clients.md"), GUIDE)
+            doc = areas_doc()
+            doc["areas"][0]["name"] = "invoices\n"
+            with self.assertRaises(v.VerificationError):
+                v.parse_areas(json.dumps(doc), root=root)
+
+    def test_a_glob_does_not_match_a_path_with_a_trailing_newline(self):
+        self.assertTrue(v.glob_matches("src/a.ts", "src/a.ts"))
+        self.assertFalse(v.glob_matches("src/a.ts", "src/a.ts\n"))
+        self.assertFalse(v.glob_matches("src/**", "src/a.ts\n"))
+
+    def test_a_tally_repository_with_a_trailing_newline_is_refused(self):
+        with self.assertRaises(v.VerificationError):
+            v.tally_file("owner/name\n", home="/nonexistent")
+
+
 class SkillDocTests(unittest.TestCase):
     """The rules the RUN brief must carry, read from SKILL.md itself."""
 
