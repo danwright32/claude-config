@@ -507,7 +507,8 @@ CARRIERS = {
     "su": None, "runuser": None, "chroot": None, "nsenter": None,
 }
 # The Supabase CLI's flags that take the next word, so that word is no subcommand.
-SUPABASE_VALUED = {"--workdir", "--profile", "--output", "-o", "--dns-resolver", "--network-id",
+# --output-format is db query's own (#2952): its value was being judged as a statement.
+SUPABASE_VALUED = {"--workdir", "--profile", "--output", "-o", "--output-format", "--dns-resolver", "--network-id",
                    "--db-url", "--password", "-p", "--schema", "-s", "--project-ref", "--version",
                    "--file", "-f"}
 SUPABASE_DB_READS = {"pull", "diff", "dump", "lint", "start", "stop", "test"}
@@ -984,7 +985,7 @@ def plain_supabase(command, sw, cwd):
 # The flags a CLI read may carry and still be approved by read-only-query-allow.sh (#2763): where to
 # send it, how to print it, and the confirmation a hosted database asks for. Any other (a password,
 # a connection string, a support ticket) leaves it to the usual check.
-READ_QUERY_FLAGS = {"--linked", "--remote", "--local", "--yes", "-f", "--file", "-o", "--output",
+READ_QUERY_FLAGS = {"--linked", "--remote", "--local", "--yes", "-f", "--file", "-o", "--output", "--output-format",
                     "--workdir", "--debug", "--read-only"}
 DRY_PUSH_FLAGS = {"--dry-run", "--linked", "--local", "--yes", "--workdir", "--debug", "--include-all",
                   "--include-roles", "--include-seed"}
