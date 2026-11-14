@@ -99,7 +99,7 @@ requirement the list does not hold (check-decision-map.py's UNLISTED), an except
 words, a date and where he said them, and, for a design frozen from a settled one, a "frozenFrom" that is
 not a settled design, a source exception still covering this design that is neither carried nor in
 "notCarried", a carried exception whose words, date, source or region are not the source's, or that goes
-onto a frame of another width, and a "carriedFrom" or "notCarried" naming an exception the source does
+onto a frame of another width or a decision of that id saying something else, and a "carriedFrom" or "notCarried" naming an exception the source does
 not hold, or given with no "frozenFrom". Exit 2 with the reason.
 """
 import html
