@@ -1085,11 +1085,12 @@ def _python_reads_only(code):
         for child in ast.iter_child_nodes(node):
             parent[child] = node
         if isinstance(node, ast.Import):
-            if any(a.name not in PY_MODULES or a.asname for a in node.names):
+            # A name on PY_MODULES missing from real fails closed (test-db-write-ask.sh checks they agree).
+            if any(a.name not in PY_MODULES or a.name not in real or a.asname for a in node.names):
                 return False
             modules.update(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in PY_MODULES:
+            if node.level or node.module not in PY_MODULES or node.module not in real:
                 return False
             found = real[node.module]
             for a in node.names:

@@ -1092,6 +1092,15 @@ both "python taking a module from an allowed one by import is asked about" none 
 both "python calling type on a stream is asked about" none ask "$(apply_payload "$(scripted $'cat > @NOTES@/seventeen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/seventeen.sql | python3 -c "import sys; type(sys.stdin.buffer.raw)"')" "$PROJ" s1 "$NONE_T")"
 both "a proxy setting assigned by the command is asked about" none ask "$(apply_payload "$(scripted $'HTTPS_PROXY=http://127.0.0.1:9; cat > @NOTES@/eighteen.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/eighteen.sql')" "$PROJ" s1 "$NONE_T")"
 both "a query with its statement in its words, piped, is still left to the usual check" none none "$(apply_payload 'supabase db query --linked "select 1" 2>&1 | head -5' "$PROJ" s1 "$NONE_T")"
+# Every module PY_MODULES allows must be one the python check can look chains up on, or a program
+# importing it is refused (or, before, crashed) while the list says it is allowed.
+agree="$(python3 -I -B -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("calls", sys.argv[1])
+lib = importlib.util.module_from_spec(spec); spec.loader.exec_module(lib)
+bad = [m for m in sorted(lib.PY_MODULES) if not lib._python_reads_only("import " + m + "\nprint(1)")]
+print("ok" if not bad else "refused: " + ", ".join(bad))' "$DIR/lib/db-write-calls.py" 2>&1)"
+check "every module the python check allows can be imported by a program it passes" "$agree"
 both "PATH set by the command is asked about" none ask "$(apply_payload "$(scripted $'PATH=@NOTES@; cat > @NOTES@/twelve.sql <<EOF\nselect 1;\nEOF\nsupabase db query --linked -f @NOTES@/twelve.sql')" "$PROJ" s1 "$NONE_T")"
 # With the predicate missing, a read from a file is asked about too.
 r="$(run "$WORK/nolib/hooks/db-write-ask.sh" "$EMPTY_HOME" "$(apply_payload "supabase db query --linked -f $APPLY/readback.sql" "$PROJ" s1 "$NONE_T")")"
