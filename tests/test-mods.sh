@@ -209,6 +209,13 @@ nnoisy="$(find "$K3R" -name '*-noisy-plugin-test.*.log' -type f | wc -l | tr -d 
   || check "#2959 the folder is held under its size cap, oldest first" "$(ls "$K3R")"
 [ -f "$K3R/notes.txt" ] && check "#1788 and a file the record did not write is left alone" ok \
   || check "#1788 and a file the record did not write is left alone" "$(ls "$K3R")"
+# check-mods.sh and the runner keep by the same three numbers, each written in its own file, so a
+# change to one alone is caught here (the lessons review of 1029c9f).
+policy_of(){ grep -E '^KEPT_OUTPUT_(MAX_DAYS|PER_LABEL|MAX_KB)=' "$1" | sort; }
+mods_policy="$(policy_of "$CHECK")"; runner_policy="$(policy_of "$ROOT/payload/hooks/run-all-tests.sh")"
+[ "$(printf '%s\n' "$mods_policy" | wc -l | tr -d ' ')" = 3 ] && [ "$mods_policy" = "$runner_policy" ] \
+  && check "#2959 check-mods.sh keeps by the runner's three numbers" ok \
+  || check "#2959 check-mods.sh keeps by the runner's three numbers" "check-mods: $mods_policy; runner: $runner_policy"
 # A folder that cannot be written is said on the line, never a silent loss, and the mod still fails
 # with its reason.
 run3c "$M3R" "/dev/null/kept"
