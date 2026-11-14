@@ -32,7 +32,7 @@
 # ghp_rate_limited, the one reading of that text). It then says how many lessons are left and when
 # the allowance resets, in ET; the same command run again continues, since everything already filed
 # is found as EXISTS. It never writes the ledger: a lesson there means every repo has its sweep,
-# and the backfill only files in one. It ends with one line:
+# and the backfill only files in one. Once past the duplicate check below, it ends with one line:
 #   SUMMARY: checked N, with a source N, CREATED N, EXISTS N, FAILED N
 #
 # THE REPO LIST is read live from dwright-pennie/repo-digest (repos.json and repos-weekly.json),
@@ -282,27 +282,35 @@ write_bodies(){   # $1 = Lnnn
 # issue, 1 when it does not, and 3, printing nothing, when GitHub answered with a rate limit:
 # STOP_WHY then says so in GitHub's words, and the caller decides what a rate limit means for it.
 file_in(){   # $1 = Lnnn, $2 = owner/name, $3 = token or "-", $4 = body file
-  local num="$1" r="$2" tok="$3" body="$4" key cache existing n hit url err
+  local num="$1" r="$2" tok="$3" body="$4" key cache unusable why existing n hit url err
   OUTCOME=FAILED
   if [ "$tok" = "-" ]; then
     echo "FAILED $num $r: no signed in account can write to it"; return 1
   fi
   key="$(repo_key "$r")"
   cache="$RUN_DIR/issues-$key.json"
+  # A list that could not be used is not read again this run: each read can be fifty pages, and the
+  # answer would be the same. The reason is kept and given for every later lesson in that repo.
+  unusable="$RUN_DIR/unusable-$key"
+  if [ -f "$unusable" ]; then
+    echo "FAILED $num $r: $(cat "$unusable")"; return 1
+  fi
   if [ ! -f "$cache" ]; then
+    why=""
     if ! existing="$(GH_TOKEN="$tok" gh issue list --repo "$r" --label "$LABEL" --state all --limit "$LIST_LIMIT" \
         --json number,title,body 2>&1)"; then
       if ghp_rate_limited "$existing"; then
         OUTCOME=STOPPED; STOP_WHY="GitHub answered the read of $r's issues with a rate limit: $existing"; return 3
       fi
-      echo "FAILED $num $r: could not read its existing issues, so nothing was filed blind: $existing"; return 1
+      why="could not read its existing issues, so nothing was filed blind: $existing"
+    elif ! n="$(printf '%s' "$existing" | jq -er 'length' 2>/dev/null)"; then
+      why="its existing issues came back in a form that could not be read, so nothing was filed blind: $existing"
+    elif [ "$n" -ge "$LIST_LIMIT" ]; then
+      why="it holds $LIST_LIMIT or more $LABEL issues, the most one read asks for, so whether a lesson is already there cannot be known and nothing was filed blind. Run again with a higher LESSON_FANOUT_LIST_LIMIT."
     fi
-    if ! n="$(printf '%s' "$existing" | jq -er 'length' 2>/dev/null)"; then
-      echo "FAILED $num $r: its existing issues came back in a form that could not be read, so nothing was filed blind: $existing"; return 1
-    fi
-    if [ "$n" -ge "$LIST_LIMIT" ]; then
-      echo "FAILED $num $r: it holds $LIST_LIMIT or more $LABEL issues, the most one read asks for, so whether $num is already there cannot be known and nothing was filed blind. Run again with a higher LESSON_FANOUT_LIST_LIMIT."
-      return 1
+    if [ -n "$why" ]; then
+      printf '%s' "$why" >"$unusable"
+      echo "FAILED $num $r: $why"; return 1
     fi
     printf '%s' "$existing" >"$cache"
   fi

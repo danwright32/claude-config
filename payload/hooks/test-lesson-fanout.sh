@@ -289,6 +289,13 @@ run L900
 check_eq "listfail: exits nonzero" "1" "$rc"
 check_not "listfail: nothing created where the list could not be read" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
 check "listfail: names it" "Acme-Corp/storefront" "$out"
+# A list that could not be read is not reread for every later lesson in the run.
+reset_world listfail-many
+touch "$FAKE/listfail-Acme-Corp_storefront"
+run L900 L901
+check_eq "listfail-many: storefront's list is asked for once" "1" \
+  "$(grep -c "issue list --repo Acme-Corp/storefront" "$FAKE/calls")"
+check "listfail-many: and the second lesson still says why" "FAILED L901 Acme-Corp/storefront: could not read" "$out"
 
 # ---- 8. a failing create is reported ----
 reset_world createfail
