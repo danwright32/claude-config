@@ -779,17 +779,25 @@ def api_writes(command, cwd):
     return out
 
 
-def _api_place(args, command, cwd):
-    """Where the gh api write with these words runs (scan_gh_in_context's Place, with the variables the
-    command set before it and its cd), so its variables are judged by their values. A bare Place, which
-    knows only the environment, when the two readers do not agree on the command: its variables are
-    then refused as unset rather than judged from the wrong place."""
+def _api_places(command, cwd):
+    """Each gh api command scan_gh_in_context reads, in order, as [words, Place, taken], so a write's
+    variables are judged with what the command set before it and its cd. Empty when it cannot read."""
     try:
-        for _kind, found, _envs, place in scan.scan_gh_in_context(command, cwd, dict(os.environ), {("api", "")}):
-            if found == args:
-                return place
+        return [[found, place, False] for _kind, found, _envs, place
+                in scan.scan_gh_in_context(command, cwd, dict(os.environ), {("api", "")})]
     except scan.Unreadable:
-        pass
+        return []
+
+
+def _api_place(args, places, cwd):
+    """Where the next gh api write with these words runs: the first of places not yet taken with the same
+    words, so two writes worded alike each get their own (the lessons review of ce9f5b1). A bare Place,
+    which knows only the environment, when the two readers do not agree on the command: its variables
+    are then refused as unset rather than judged from the wrong place."""
+    for entry in places:
+        if not entry[2] and entry[0] == args:
+            entry[2] = True
+            return entry[1]
     return scan.Place(cwd, dict(os.environ))
 
 
@@ -1300,10 +1308,11 @@ def evaluate(command, cwd, depth=0):
             why = "%s: %s." % (what, e)
         if why and why not in reasons:
             reasons.append(why)
+    places = _api_places(command, cwd) if apis else []
     for slug, files, args in apis:
         try:
             bodies = [("the file %s" % p, _read(p, cwd)) for p in files]
-            why = judge("gh api", slug, cwd, None, posted, bodies, place=_api_place(args, command, cwd))
+            why = judge("gh api", slug, cwd, None, posted, bodies, place=_api_place(args, places, cwd))
         except CannotTell as e:
             why = "gh api: %s." % e
         if why and why not in reasons:

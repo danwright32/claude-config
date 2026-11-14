@@ -523,6 +523,8 @@ run "gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"see \$
 check "#2961 a gh api write posting a variable whose value names a work repository is refused: $out" refused
 run "T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
 check "#2961 and one set from a substitution is refused: $out" refused
+run "T='clean words'; gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\"; T=\$(date); gh api repos/danwright-test/public-notes/issues/5/comments -f body=\"\$T\""
+check "#2961 two api writes in the same words are each judged where they run (the lessons review of ce9f5b1): $out" refused
 unset WN_TEST_DIR WN_TEST_CLEAN WN_TEST_NOTES
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
