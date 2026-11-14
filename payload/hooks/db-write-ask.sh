@@ -58,6 +58,9 @@
 # push or write is asked about, the question saying why no Apply covers it. In
 # the same kind of command a `db query -f` file is read and judged by the one predicate, so a
 # read back from a file is not asked about either (lib/db-write-calls.py, "ONE SUPABASE RUN").
+# Since #2952 neither is a command that writes its own -f files from heredocs and then runs them,
+# when every text each file can hold is a read and the command does nothing else
+# (lib/db-write-calls.py, "A COMMAND THAT WRITES ITS OWN FILES").
 #
 # THE SCREEN. The hook now runs on every Bash and MCP call, so it leaves before python3 starts
 # unless the payload holds one of DB_SCREEN_WORDS, which every word lib/db-write-calls.py can ask
