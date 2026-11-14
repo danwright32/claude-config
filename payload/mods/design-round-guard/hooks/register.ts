@@ -78,6 +78,9 @@ import {
   patternMayBeLook,
   nameFromOutput,
   nameFromVariable,
+  removalFilledIn,
+  leadingVariable,
+  findNamesReachNoLook,
   outputTrusted,
   freshTemp,
   relTo,
@@ -489,11 +492,13 @@ const underTargets = async ($: EngineInterface, x: { word: string; path: string;
 // #2934: mod-kit gives a removal no `values`, as it gives a write, so what a variable alone that it
 // could not follow may hold is read by the same reader from a write of that variable appended to the
 // command. Only where the command runs mktemp, the one value a removal is let through on (freshTemp,
-// #2171); anything the appended line cannot be read from gives none, and the removal is held.
+// #2171); anything the appended line cannot be read from gives none, and the removal is held. Since
+// #2960 the variable a name starts from too (`$D/sub`), where the rest stays inside it.
 const removalValues = async ($: EngineInterface, command: string, word: string, at: Where): Promise<string[] | undefined> => {
-  if (!/^\$(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)$/.test(word) || !command.includes('mktemp')) return undefined
-  const probe = await $.modkit.writes({ command: `${command}\n: > ${word}`, cwd: at.cwd, home: at.home })
-  return [...probe.files].reverse().find(f => f.word === word)?.values
+  const lead = leadingVariable(word)
+  if (lead === undefined || !command.includes('mktemp')) return undefined
+  const probe = await $.modkit.writes({ command: `${command}\n: > ${lead}`, cwd: at.cwd, home: at.home })
+  return [...probe.files].reverse().find(f => f.word === lead)?.values
 }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
@@ -521,6 +526,10 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes)
     if (c.does === 'remove' || c.does === 'truncate') {
+      // A find -delete limited to a name no look changing file can have (`-name "*.pyc"`) takes no
+      // such file away, wherever it runs (seen 2026-11-13: one clearing bytecode was held for a page
+      // under the folder). One whose names may be one is judged by every file under it, as before.
+      if (c.names && findNamesReachNoLook(c.names)) continue
       // A removal of a variable mod-kit could not follow carries what it may hold, for freshTemp (#2934).
       const values = c.does === 'remove' && !c.path && !c.folder ? await removalValues($, command, c.word, at) : undefined
       targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}), ...(c.does === 'remove' ? { removes: true as const } : {}), ...(values ? { values } : {}) })
@@ -570,6 +579,12 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     }
   }
   for (const u of w.unnamed) {
+    // #2727: a program whose judge could not read it only for a module or file it loads by a name
+    // built at run time (`require(process.argv[1])`), with no write, process or code built at run
+    // time in its own text, writes nothing of its own: a node script printing a JSON file's keys was
+    // held as writing the file it read. Judged as one loading a local module by a fixed name is,
+    // whose module no reader follows, as the area check reads it since #2920.
+    if (u.onlyLoads) continue
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {
       for (const t of u.targets) targets.push({ path: t, word: t })
@@ -1358,18 +1373,24 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // folder, and the rev-parse Dan trusts names the checkout itself to rm. A variable every
     // assignment gives bare mktemp output names a new file (#2171), and one set to a plain name has a
     // path, judged by it.
-    if (t.removes && !t.path && tool === 'Bash' && t.values && freshTemp(t.word, t.values, String(input.command ?? ''))) continue
+    // #2960: and one the variable it starts from names a folder in (`$D/sub`), where the rest stays in it.
+    if (t.removes && !t.path && tool === 'Bash' && t.values && freshTemp(leadingVariable(t.word) ?? t.word, t.values, String(input.command ?? ''))) continue
     // What the command does to the file, as a refusal says it.
     const does = t.removes ? 'takes away' : 'writes'
-    const output = !t.path && nameFromOutput(t.word) && (t.tool === true || t.removes === true || !outputTrusted(t.word))
+    // #2960: a removal under a folder such a name fills in (`rm -rf "$ROOT/app"`) may take a screen
+    // folder away whatever its last part is called, so it is held the same, wherever it runs. Only
+    // where mod-kit gave no folder: a pattern in a folder it follows is judged by that folder below.
+    const filled = t.removes && !t.path && t.folder === undefined && tool === 'Bash' ? removalFilledIn(t.word) : null
+    const folderFilled = filled !== null && !nameFromOutput(t.word) && !nameFromVariable(t.word)
+    const output = (!t.path && nameFromOutput(t.word) && (t.tool === true || t.removes === true || !outputTrusted(t.word))) || filled === 'output'
     // A name a shell variable fills in, handed to a script or a tool (#1953: `P='app/*push*'; python3
     // sweep.py $P`), is judged the same way, as a name no rule reads: mod-kit gives a path where the
     // command sets it to a plain name, and judged by that path it is any file; otherwise its value is
     // a glob the shell expands (placed in its folder by mod-kit), a loop's words or what a read takes
     // in, none of which the guard reads. A folder variable ($PWD, $HOME) names no file.
     // One whose every $ is quoted or escaped (a regex 'x$', prose 'costs $5') holds no value at all.
-    const variable = !output && !t.path && (t.run !== undefined || t.removes === true) && !t.unexpanded && nameFromVariable(t.word)
-    if (tool === 'Bash' && (output || variable || (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
+    const variable = !output && ((!t.path && (t.run !== undefined || t.removes === true) && !t.unexpanded && nameFromVariable(t.word)) || filled === 'variable')
+    if (tool === 'Bash' && (output || variable ||(t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word)))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
       if (folder !== undefined) {
@@ -1382,7 +1403,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
         }
         if (tree === null) continue
       }
-      const may = variable ? 'unread' : patternMayBeLook(t.word)
+      const may = variable || folderFilled ? 'unread' : patternMayBeLook(t.word)
       if (may === 'not') continue
       const shown = t.path ?? (folder === undefined ? t.word : `${folder}/${t.word.split('/').pop() ?? ''}`)
       // In a checkout, a pattern there waits on that issue's answer as a named file does, and one in a
@@ -1396,7 +1417,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       }
       unsureFiles.push(t.word)
       notFollowed(
-        output
+        folderFilled
+          ? `where the command ${does} ${t.word} could not be followed, and the folder it names is ${output ? "a command's output" : "a shell variable's value"}, which the design round guard cannot read before it runs, so it may hold look changing files`
+          : output
           ? `where the command ${does} ${t.word} could not be followed, and its name is a command's output, which the design round guard cannot read before it runs, so it may name a look changing file`
           : variable
           ? `where the command ${does} ${t.word} could not be followed, and its name is a shell variable's value, which the design round guard cannot read before it runs, so it may name a look changing file`
