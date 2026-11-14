@@ -444,5 +444,50 @@ check "#2909 not that the text names a work repository: $out" lacks "$out" 'name
 run "gh issue create --repo danwright-test/private-notes --title x --body-file $NOTES/nowhere.md"
 check "#2909 (control) a private repository is not asked about its body file: $out" passed
 
+# ---------------------------------------------------------------- a variable in posted text (claude-config#2961)
+# A variable was judged by its spelling, so a title built from $CLAUDE_PROJECT_DIR, or any variable
+# holding a work checkout's path, passed while the shell posted the path. A variable the shell expands
+# in what is posted is judged by its value where that is known (the environment every Bash call
+# starts from, or an assignment earlier in the command), and refused as unreadable where it is not.
+export WN_TEST_DIR="$WORKCO" WN_TEST_CLEAN="nothing to see" WN_TEST_NOTES="$NOTES"
+unset WN_TEST_NOT_SET
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_DIR\" --body x"
+check "#2961 a title expanding a variable whose value names a work repository is refused: $out" refused
+check "#2961 and says the name: $out" has "$out" "acme-widgets"
+run "gh issue create --repo danwright-test/public-notes --title x --body \"see \${WN_TEST_DIR}/notes\""
+check "#2961 and so is a body writing it in braces: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_NOT_SET\" --body x"
+check "#2961 a variable set nowhere this check can read is refused: $out" refused
+check "#2961 saying its value cannot be told: $out" has "$out" "cannot be told"
+run "gh issue create --repo danwright-test/public-notes --title \"from \${WN_TEST_CLEAN:-x}\" --body x"
+check "#2961 an expansion past a plain name is refused as unreadable: $out" refused
+run "T=\$(date); gh issue create --repo danwright-test/public-notes --title \"\$T\" --body x"
+check "#2961 a variable this command sets from a substitution is refused: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<EOF
+seen in \$WN_TEST_DIR
+EOF
+)\""
+check "#2961 a variable in an unquoted heredoc body is expanded, so judged: $out" refused
+run "gh issue create --repo danwright-test/public-notes --title \"from \$WN_TEST_CLEAN\" --body x"
+check "#2961 (control) a variable whose value names nothing passes: $out" passed
+run "T='clean words'; gh issue create --repo danwright-test/public-notes --title \"\$T\" --body x"
+check "#2961 (control) and so does one this command sets to clean text: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title 'from \$WN_TEST_DIR' --body x"
+check "#2961 (control) a single quoted dollar is text, not a variable: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title \"cost \\\$WN_TEST_NOT_SET\" --body x"
+check "#2961 (control) and so is an escaped one: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title x --body \"\$(cat <<'EOF'
+Use \$WN_TEST_NOT_SET and \$WN_TEST_DIR here.
+EOF
+)\""
+check "#2961 (control) a quoted heredoc body is text, however many dollars it holds: $out" passed
+run "cd \"\$WN_TEST_DIR\" && gh issue create --repo danwright-test/public-notes --title x --body-file $NOTES/body.md"
+check "#2961 (control) a cd's directory is where the command runs, not posted: $out" passed
+run "gh issue create --repo danwright-test/public-notes --title x --body-file \"\$WN_TEST_NOTES/body.md\""
+check "#2961 (control) nor is the path of a body file: $out" passed
+run "gh issue create --repo danwright-test/private-notes --title \"from \$WN_TEST_NOT_SET \$WN_TEST_DIR\" --body x"
+check "#2961 (control) a private repository is not asked about its variables: $out" passed
+unset WN_TEST_DIR WN_TEST_CLEAN WN_TEST_NOTES
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
