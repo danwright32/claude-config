@@ -14,9 +14,9 @@ import { browserRefusal, type Browser } from './browser.ts'
 //   and labels on this checkout's repository (Dan, 2026-11-09, #2581); any other GitHub write (a comment, which
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
-//   whose repository cannot be resolved is refused (L75); a gh or git that `rtk proxy` runs is
-//   judged as the same command written plainly, and a gh's output there may be redirected only
-//   into the session notes folder or the scratchpad (#2937, recorded on its PR);
+//   whose repository cannot be resolved is refused (L75); whatever `rtk proxy` runs is judged as
+//   the same command written plainly, and a line running gh that way may write files only into
+//   the session notes folder or the scratchpad (#2937, recorded on its PR);
 // - LESSONS.md written by any route in command position, a script file handed it as its argument
 //   included (#1592);
 // - every write tool under mcp__claude_ai_* and mcp__posthog__*, and Supabase and psql writes;
@@ -588,76 +588,50 @@ const writeTarget = async (target: string | null | undefined, dir: string | null
 // its proxy, so `rtk proxy gh issue view 5` reached this judge as a command named proxy, and its gh
 // as a word of another command, refused as a write to a repository that could not be resolved: on
 // the night of 13 to 14 November 2026 that refused a builder's reads of its own issue. Its git was
-// judged by nothing at all (`rtk proxy git push --force` went ahead). So a gh or git that rtk's
-// proxy runs is read again as a command line of its own, by the same reader, and judged exactly as
-// written plainly. Only those two: anything else proxy runs is judged as before, since reading it
-// again would drop what the first reading held (a heredoc feeding it). A word the shell would change
-// ($, a backtick) is not quoted back as text: those are judged as before, which refuses gh.
+// judged by nothing at all (`rtk proxy git push --force` went ahead). So whatever rtk's proxy runs
+// is judged exactly as the same command written plainly.
 //
-// Which commands rtk itself runs is asked of the same reader, never of the line's text: the line is
-// read again with every word rtk renamed to a program no reader passes over, and a command that
-// then comes back named so, with proxy after rtk's own options, is the one rtk's proxy runs. So a
-// program of its own named proxy is no proxy, even beside `echo rtk proxy` (lessons review of
-// 1346447: the text of the line could not tell the two apart).
+// Everything here is asked of mod-kit's own reader, never worked out from the words or the line's
+// text by this judge (three lessons reviews, of 7cb8876, 1346447 and c6efef7: a text match took a
+// program named proxy for rtk's beside `echo rtk proxy`, and words quoted back as text lost which of
+// them were quoted, so `--body '> x'` read as a redirection). The line is read twice more:
+// - with every word rtk renamed to a program no reader passes over, so a command that comes back
+//   named so, with proxy after rtk's own options, is one rtk's proxy runs, and a program of its own
+//   named proxy is no proxy;
+// - with `rtk` and its options kept and `proxy` left out after them, so the reader reads what proxy
+//   runs past rtk exactly as it reads `rtk gh ...`: quotes, heredocs, redirections and all.
+// The command at the same place in the second reading then stands for the proxy command. When the
+// readings do not line up command for command, or `proxy` was spelled so this cannot leave it out
+// (quoted), nothing is swapped, and the command is judged as before, which refuses a gh in it.
 const RTK_WORD = /(^|[\s;&|(`'"/])rtk(?=[\s;&|)`'"]|$)/g
 const RTK_RENAMED = 'rtk-read-as-a-program'
-const PROXY_OPTIONS = /^(?:-v+|--verbose|-u|--ultra-compact|--skip-env)$/
-// The places in call.commands of each command rtk's proxy runs; none where the second reading does
-// not line up with the first, command for command.
-const rtkProxied = async (call: OvernightCall): Promise<ReadonlySet<number>> => {
-  const at = new Set<number>()
-  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return at
+const RTK_THEN_PROXY = /(^|[\s;&|(`'"/])rtk((?:[ \t]+-[A-Za-z-]+)*)[ \t]+proxy(?=[ \t])/g
+// Each command rtk's proxy runs, by its place in call.commands, read as written without the proxy.
+const rtkProxied = async (call: OvernightCall): Promise<ReadonlyMap<number, Cmd>> => {
+  const out = new Map<number, Cmd>()
+  if (!call.commands.some(c => name(c.words[0]) === 'proxy')) return out
   const renamed = await call.read(call.raw.replace(RTK_WORD, `$1${RTK_RENAMED}`))
-  if (renamed.length !== call.commands.length) return at
+  const unproxied = await call.read(call.raw.replace(RTK_THEN_PROXY, '$1rtk$2'))
+  if (renamed.length !== call.commands.length || unproxied.length !== call.commands.length) return out
   renamed.forEach((r, i) => {
     if (name(r.words[0]) !== RTK_RENAMED || name(call.commands[i]?.words[0]) !== 'proxy') return
     let k = 1
     while (k < r.words.length && (r.words[k] as string).startsWith('-')) k++
-    if (r.words[k] === 'proxy') at.add(i)
+    const plain = unproxied[i]
+    if (r.words[k] === 'proxy' && plain && name(plain.words[0]) !== 'proxy') out.set(i, plain)
   })
-  return at
+  return out
 }
-// A redirection among a command's words, as mod-kit's reader leaves them: an operator whose target
-// is the next word, or one with its target joined on. An input redirection is taken out too.
-const REDIRECT_OP = /^(?:\d*|&)(?:>>?|>\||<)$/
-const REDIRECT_JOINED = /^(?:\d*|&)(?:>>?|>\||<)(.+)$/
-type Proxied = { cmd: Cmd; targets: string[] }
-const throughProxy = async (c: Cmd, call: OvernightCall): Promise<Proxied | undefined> => {
-  if (name(c.words[0]) !== 'proxy' || c.heredocs?.length) return undefined
-  let i = 1
-  while (i < c.words.length && PROXY_OPTIONS.test(c.words[i] as string)) i++
-  if (c.words[i] === '--') i++
-  const inner = c.words.slice(i)
-  if (!['gh', 'git'].includes(name(inner[0])) || inner.some(w => w.startsWith('<<'))) return undefined
-  // Its redirections, kept to judge where the output goes, and the words gh or git is handed.
-  const words: string[] = []
-  const targets: string[] = []
-  for (let k = 0; k < inner.length; k++) {
-    const w = inner[k] as string
-    const op = REDIRECT_OP.test(w)
-    const joined = op ? undefined : REDIRECT_JOINED.exec(w)?.[1]
-    if (!op && joined === undefined) {
-      words.push(w)
-      continue
-    }
-    const target = op ? inner[++k] : joined
-    if (target !== undefined && !w.includes('<')) targets.push(target)
-  }
-  if (words.some(w => /[$`]/.test(w))) return undefined
-  const again = await call.read(words.map(w => `'${w.replace(/'/g, `'\\''`)}'`).join(' '))
-  if (again.length !== 1) return undefined
-  return { cmd: again[0] as Cmd, targets }
-}
-// Where the output of a gh run through rtk proxy may be written (Dan's standing rule for this
-// repository, recorded on the PR for #2937's open question): the null device and the descriptors,
-// the session notes folder and the scratchpad, never any other path. `targets` are the redirections
-// as written; one the shell would decide ($) cannot be placed, so it is refused.
-const proxiedOutputRefusal = (targets: readonly string[], dir: string | null, home: string): string | undefined => {
-  for (const t of targets) {
-    if (/^&\d*-?$/.test(t) || ['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty'].includes(t)) continue
-    const p = resolveDir(t, dir, home)
-    if (p !== null && (inScratch(p) || p.startsWith(`${home}/.claude/state/session-notes/`))) continue
-    return `write the output of gh run through rtk proxy to ${p ?? t}, outside the session notes folder and the scratchpad`
+// Where the files a line writes may be, when a gh in it runs through rtk proxy (Dan's standing rule
+// for this repository, recorded on the PR for #2937's open question): the null device, the session
+// notes folder and the scratchpad, never any other path. Taken from mod-kit's write reader, which
+// does not say which command of the line writes a file, so it holds for every file the line writes;
+// one whose path the reader cannot give (a variable) cannot be placed, and is refused.
+const proxiedOutputRefusal = (writes: ModKitWrites, home: string): string | undefined => {
+  for (const f of writes.files) {
+    const p = f.path
+    if (p !== undefined && (['/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty'].includes(p) || inScratch(p) || (!p.split('/').includes('..') && p.startsWith(`${home}/.claude/state/session-notes/`)))) continue
+    return `write the output of gh run through rtk proxy to ${p ?? f.word}, outside the session notes folder and the scratchpad`
   }
   return undefined
 }
@@ -760,9 +734,9 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
   const byProxy = await rtkProxied(call)
   for (const [at, written] of call.commands.entries()) {
-    // A gh or git rtk's proxy runs is judged as that gh or git (#2937); its redirections are its own.
-    const proxied = byProxy.has(at) ? await throughProxy(written, call) : undefined
-    const c = proxied?.cmd ?? written
+    // What rtk's proxy runs is judged as that command written plainly (#2937).
+    const proxied = byProxy.get(at)
+    const c = proxied ?? written
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
     const cmd = name(words[0])
@@ -806,7 +780,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     if (cmd === 'gh') {
       const v = ghVerdict(c.gh)
       if (v && 'refuse' in v) return v.refuse
-      const out = proxied && proxiedOutputRefusal(proxied.targets, dir, call.home)
+      const out = proxied && proxiedOutputRefusal(call.writes, call.home)
       if (out) return out
       if (v && 'write' in v) {
         const to = await writeTarget(v.write, dir, call, look)

@@ -839,6 +839,15 @@ describe('gh and git run through rtk proxy are judged as written plainly (#2937)
     expect(await bash('rtk proxy gh issue comment 7 -R other/x --body x')).toBe('write to other/x from a checkout of o/r')
     expect(await bash(`rtk proxy gh issue comment 7 --body "$(cat ${notes}/c.md)"`, { look: nowhere })).toBe(unresolved)
   })
+  test('quoted words keep their quotes: a body that starts like a redirection is a body (lessons review of c6efef7)', async () => {
+    expect(await bash(`rtk proxy gh issue comment 7 --body '> quoted' -R other/x`)).toBe('write to other/x from a checkout of o/r')
+    expect(await bash(`rtk proxy gh issue comment 7 --body '<details>x</details>' -R other/x`)).toBe('write to other/x from a checkout of o/r')
+    expect(await bash(`rtk proxy gh issue comment 7 --body '<details>x</details>'`)).toBeUndefined()
+    expect(await bash(`rtk proxy gh issue comment 7 --body-file - <<'EOF'\n> a quoted line\nEOF`)).toBeUndefined()
+  })
+  test('every file a line running gh through rtk proxy writes is held to the same folders', async () => {
+    expect(await bash(`rtk proxy gh issue view 7 -R other/x > ${notes}/i7.txt && npm test > out.txt`)).toBe(outside(`${CWD}/out.txt`))
+  })
   test('git through rtk proxy is judged too, where before nothing judged it', async () => {
     expect(await bash('rtk proxy git push --force origin main')).toBe('force push')
     expect(await bash('rtk proxy git status')).toBeUndefined()
