@@ -1,4 +1,4 @@
-import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import type { ModKitGh, ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesLeftAsIs, ScopeModesLeftBranch, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
 import { EDITORS, type Cmd } from './nobuild.ts'
 
@@ -231,6 +231,13 @@ export type Reading = {
       }
     | null
     | Unreadable
+  /**
+   * The PR, unread only because this session's own loops used the minute's looks, named as one a
+   * merge run of this session's is merging now (#2901): its run listed in flight by Claude Code and
+   * its process running. In hand rather than outstanding, until the next turn end reads it again.
+   * Set only on that measurement, beside an unreadable PR; absent holds as before.
+   */
+  inHand?: string
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
   /**
@@ -464,6 +471,8 @@ export const outstanding = (r: Reading): string[] => {
   const out: string[] = []
   const unread = (what: string, v: Unreadable) => out.push(`${what} could not be read (${v.unreadable})`)
   if (isUnreadable(r.pr)) {
+    // In hand (#2901): the finish check says it apart and lets the turn end on it alone.
+    if (r.inHand) return out
     unread('the PR', r.pr)
     return out
   }
@@ -556,6 +565,63 @@ export const leftByChoice = (pr: { state: string; head?: string }, d: LeftAsIs |
  * outstanding with it than without it. Only then is the branch said to be left as it is by his choice.
  */
 export const settledByBranchChoice = (r: Reading): boolean => !!r.branchLeft && outstanding({ ...r, branchLeft: undefined }).length > outstanding(r).length
+
+// MERGE RUNS IN HAND (#2901). On 2026-11-13 a session with six PRs merging through merge-when-ready
+// was refused its turn end four times running, each only because its own merge runs held every look
+// of the minute, so the finish check read no PR at all. A PR the minute's looks hold is in hand while
+// a run of this session's is merging it, and a run is alive only where two readings agree: Claude
+// Code's own list of the session's work in flight, sent with the stop (background_tasks: running or
+// pending work only, each shell task with its command line), and a process running the helper for
+// that PR on this Mac now (pgrep -lf). Never a log file, which outlives its run (L98). Both are read
+// through mod-kit's one reader of the helper's words (#1251), so a line that only names the helper
+// (a cat, a grep) runs nothing. A run naming no repository works in the folder its command starts
+// in, the session's own unless the line moves first, which cannot be told, so it counts for nothing.
+
+/** A merge-when-ready run: the PR it merges, and the repository it names in lower case, undefined for none. */
+export type MergeRun = { number: number; repo: string | undefined }
+
+/** The run mod-kit's reading of the helper's words gives: one PR number, its repository readable. */
+export const mergeRunOf = (h: ModKitGh | undefined, moved = false): MergeRun | undefined => {
+  if (!h || h.unreadable || h.named === null) return undefined
+  const numbers = h.positionals.filter(p => /^\d+$/.test(p))
+  if (numbers.length !== 1) return undefined
+  if (h.named === undefined && moved) return undefined
+  return { number: Number(numbers[0]), repo: h.named }
+}
+
+const MOVES_FOLDER = new Set(['cd', 'pushd'])
+/** The merge runs one command line starts, from mod-kit's reading of each of its commands. */
+export const mergeRunsIn = (cmds: readonly Pick<Cmd, 'words' | 'mergeHelper'>[]): MergeRun[] => {
+  const moved = cmds.some(c => MOVES_FOLDER.has(c.words[0] ?? ''))
+  return cmds.flatMap(c => {
+    const run = mergeRunOf(c.mergeHelper, moved)
+    return run ? [run] : []
+  })
+}
+
+/** The command lines of the shell work Claude Code lists as running (#2901), or undefined when its list is not a list. */
+export const runningCommands = (raw: unknown): string[] | undefined => {
+  if (!Array.isArray(raw)) return undefined
+  return raw.flatMap(t => {
+    const e = typeof t === 'object' && t !== null ? (t as Record<string, unknown>) : {}
+    return e.status === 'running' && typeof e.command === 'string' && e.command ? [e.command] : []
+  })
+}
+
+/** Each process `pgrep -lf` printed, as its words with its pid taken off. */
+export const pgrepWords = (stdout: string): string[][] =>
+  stdout.split('\n').flatMap(line => {
+    const words = line.trim().split(/\s+/).slice(1)
+    return words.length ? [words] : []
+  })
+
+/** The listed runs a running process confirms: the same PR, and the same repository named or none. */
+export const liveRuns = (listed: readonly MergeRun[], running: readonly MergeRun[]): MergeRun[] =>
+  listed.filter(l => running.some(r => r.number === l.number && r.repo === l.repo))
+
+/** How the PRs in hand are said beside what is still outstanding. */
+export const inHandSaid = (inHand: readonly string[]): string =>
+  inHand.length ? ` Being merged by this session's own merge runs, so not read while the looks are in use: ${inHand.join('; ')}.` : ''
 
 const ISSUE_REF = /(?:#|\bissue\s+)(\d+)\b/gi
 

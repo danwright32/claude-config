@@ -387,6 +387,12 @@ type Opts = {
   linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
   psArgs?: string
+  /**
+   * What `pgrep -lf merge-when-ready` prints (#2901): one line per process on this Mac running the
+   * merge helper, its pid and its words. None running unless said (pgrep's exit 1); `{ fails }` is
+   * pgrep failing some other way.
+   */
+  helpers?: string | { fails: string }
   /** Held until the test lets it go: the next `sleep-queue.sh claims` waits on it (#844, a Stop and a failure at once). */
   claimsGate?: Promise<void>
   /** Which writes of the driver's counter fail, counted from 1 (#844). */
@@ -553,6 +559,8 @@ const world = (on: On, o: Opts = {}) => {
     refusing: false,
     /** Each device or fifo a hook opened (#1765), which should stay empty. */
     devicesOpened: [] as string[],
+    /** Every pgrep the mod ran, its arguments (#2901). */
+    pgreps: [] as string[][],
   }
   // The engine's refusal, which reaches the mod as the call failing with these words.
   const refused = (call: string) => ({ deny: `$.${call} aborted` }) as never
@@ -849,6 +857,13 @@ const world = (on: On, o: Opts = {}) => {
       return ok('4242\n')
     }
     if (cmd === 'ps') return ok(`${o.psArgs ?? `caffeinate -i -t ${w.caffeinated[0] ?? ''}`}\n`)
+    // The merge helpers running on this Mac (#2901), as pgrep -lf prints them.
+    if (cmd === 'pgrep') {
+      w.pgreps.push(a)
+      const h = o.helpers
+      if (typeof h === 'object') return fail(2, h.fails)
+      return h ? ok(h) : fail(1)
+    }
     if (cmd === 'kill') {
       w.killed.push(a[0] as string)
       return ok()
@@ -7441,6 +7456,89 @@ const foldedTrain = async ($: $T, on: On, o: { unreadable?: number } = {}) => {
   return { w, clock }
 }
 const UNREAD = /the PR could not be read \(GitHub is not being asked: this session's loops have used their looks for this minute/
+
+// ---- A PR this session's own merge runs are merging, past the look budget (#2901) ----
+// On 2026-11-13, with six of a session's PRs merging through merge-when-ready, the turn end was
+// refused four times running with only "the PR could not be read (GitHub is not being asked: this
+// session's loops have used their looks for this minute ...)": the session's own merge runs held
+// every look the check draws on. A PR the budget holds while a merge run of this session's is alive
+// for it is in hand: the turn ends, winding down stays on, and the next stop reads again. Alive is
+// both halves at once: Claude Code lists the run as this session's work in flight (background_tasks),
+// and a process running the helper for that PR is on this Mac now (pgrep). Anything less holds.
+const HELPER = `${'/Users'}/x/.claude/hooks/lib/merge-when-ready.sh`
+const mergeTask = (id: string, n: number, args = '--repo o/r --squash', before = '') => ({
+  id,
+  type: 'shell',
+  status: 'running',
+  description: `merge #${n}`,
+  command: `${before}bash ~/.claude/hooks/lib/merge-when-ready.sh ${n} ${args} --log=/notes/merge-${n}.log`,
+})
+const helperRunning = (pid: number, n: number, args = '--repo o/r --squash') => `${pid} /bin/bash ${HELPER} ${n} ${args} --log=/notes/merge-${n}.log\n`
+const stopWith = async ($: $T, tasks: unknown) => (await $.classic.Stop({ stop_hook_active: false, background_tasks: tasks } as never)) as { block?: string }
+const mergingTwo = async ($: $T, on: On) => {
+  const { w, clock } = world(on, { gh: { ...merged('OPEN'), others: [openPr(40, 'eee5555')] }, created: 'https://github.com/o/r/pull/40\n' })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --title other', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  // Read with looks to spare: both open, so both outstanding.
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: PR #12 is not merged yet; PR #40 is not merged yet\./)
+  // From here the session's own merge runs use every look.
+  w.o.poll = { budget: 0 }
+  return { w, clock }
+}
+const BOTH_TASKS = [mergeTask('b1', 12), mergeTask('b2', 40)]
+const BOTH_RUNNING = helperRunning(4101, 12) + helperRunning(4102, 40)
+
+test('a turn end whose every PR the look budget holds ends while a live merge run of this session is merging each, and winding down stays on (#2901)', withDeps, async ($, on) => {
+  const { w } = await mergingTwo($, on)
+  w.o.helpers = BOTH_RUNNING
+  expect((await stopWith($, BOTH_TASKS)).block).toBeUndefined()
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  expect(w.toasts).toEqual([])
+  expect(w.pgreps).toContainEqual(['-lf', 'merge-when-ready'])
+  // The next stop reads again: with looks to spare it sees both still open.
+  w.o.poll = {}
+  expect((await stopWith($, BOTH_TASKS)).block).toMatch(/^Winding down is not finished: PR #12 is not merged yet; PR #40 is not merged yet\./)
+})
+
+test('a turn end the look budget holds is still refused when a PR has no merge run of this session, and names the one that has (#2901)', withDeps, async ($, on) => {
+  const { w } = await mergingTwo($, on)
+  w.o.helpers = BOTH_RUNNING
+  const block = (await stopWith($, [mergeTask('b1', 12)])).block ?? ''
+  expect(block).toMatch(UNREAD)
+  expect(block).toMatch(/ Being merged by this session's own merge runs, so not read while the looks are in use: PR #12 in o\/r\./)
+  expect(block).not.toMatch(/PR #40 in o\/r/)
+})
+
+for (const [what, tasks, helpers] of [
+  ['no work of this session is in flight', [], BOTH_RUNNING],
+  ["the merge runs this session lists are not running on this Mac (only another session's would be)", BOTH_TASKS, helperRunning(4101, 12)],
+  ['a merge run is listed as finished', [mergeTask('b1', 12), { ...mergeTask('b2', 40), status: 'completed' }], BOTH_RUNNING],
+  ['a merge run is for the same number in another repository', [mergeTask('b1', 12), mergeTask('b2', 40, '--repo o/other --squash')], BOTH_RUNNING],
+  ["Claude Code's list of work in flight cannot be read", 'not a list', BOTH_RUNNING],
+  ['which processes run the helper cannot be read', BOTH_TASKS, { fails: 'pgrep: cannot get process list' }],
+] as const)
+  test(`a turn end the look budget holds is still refused when ${what} (#2901)`, withDeps, async ($, on) => {
+    const { w } = await mergingTwo($, on)
+    w.o.helpers = helpers
+    expect((await stopWith($, tasks)).block).toMatch(UNREAD)
+    expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  })
+
+test('a rate limit pause is not the look budget: a turn end is still refused while merge runs are alive (#2901)', withDeps, async ($, on) => {
+  const { w } = await mergingTwo($, on)
+  w.o.poll = { take: 'wait\tpause\t300\tGitHub said to wait 300s (Retry-After)' }
+  w.o.helpers = BOTH_RUNNING
+  expect((await stopWith($, BOTH_TASKS)).block).toMatch(/rate limit/)
+})
+
+test("a merge run naming no repository is the session's own repository's, unless its command moves to another folder first (#2901)", withDeps, async ($, on) => {
+  const { w } = await mergingTwo($, on)
+  w.o.helpers = helperRunning(4101, 12, '--squash') + helperRunning(4102, 40, '--squash')
+  expect((await stopWith($, [mergeTask('b1', 12, '--squash'), mergeTask('b2', 40, '--squash')])).block).toBeUndefined()
+  expect((await stopWith($, [mergeTask('b1', 12, '--squash'), mergeTask('b2', 40, '--squash', 'cd /elsewhere && ')])).block).toMatch(UNREAD)
+})
 
 test('twenty PRs left closed on Dan\'s choice, with fewer looks a minute than that, finish winding down once each has been read (#2433)', withDeps, async ($, on) => {
   const { w, clock } = await foldedTrain($, on)
