@@ -4073,7 +4073,9 @@ about as before. The list is trusted only as git has committed it: its bytes mus
 HEAD:` gives for it, so an uncommitted or untracked edit (a live ref added by a shell command
 included) is asked about until it is committed, and an Edit, Write or MultiEdit of the list is
 itself asked about, which is why the hook's registration now takes those three tools. Still open: a
-session that edits the list and commits it in one shell command is trusted once the commit lands.
+session that edits the list with a shell command and then commits it, in one call or several, is
+trusted once the commit lands; the commit check stops an edit left uncommitted, not a deliberate
+edit and commit.
 
 What it does not cover: the commands inside a script file (`bash change.sh`); a client run by a name
 held in a variable; a program that opens a database itself (python, node, an ORM's own CLI such as

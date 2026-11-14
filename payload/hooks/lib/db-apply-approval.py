@@ -86,7 +86,8 @@ The list is trusted only as git has committed it (the coordinator's review of #2
 be what `git show HEAD:<it>` gives, so an uncommitted or untracked edit, a live ref added by any shell
 command included, is asked about until it is committed. And db-write-ask.sh holds an Edit, Write or
 MultiEdit of the list (is_test_list) as it holds a database write. Still open: a session that edits
-the list and commits it in one command is trusted once the commit lands.
+the list with a shell command and then commits it, in one call or several, is trusted once the
+commit lands. The commit check stops an edit left uncommitted, not a deliberate edit and commit.
 
   on_test_project(workdir, flags)
       (True, the ref) or (False, why the run's project is not one its checkout marks as test).

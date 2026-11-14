@@ -584,8 +584,9 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
   )
 }
 
-// The band above the prompt: every mod's rows, in the settled order (hooks/band.ts). The one hook on
-// it in any mod (tools/check-mod-shared-parts.sh). A survey holds the band, and the rows yield to it.
+// The band above the prompt: every mod's rows, in the settled order (hooks/band.ts). The one
+// AbovePrompt hook in any mod (tools/check-mod-shared-parts.sh), with the AbovePromptList hook
+// below it, which that guard does not yet look for (#2903). A survey holds the band, and the rows yield to it.
 // A side pane a mod published through $.modkit.pane is drawn here too, as the same card; one it did
 // not publish is left to whoever draws it.
 // Whether a click on a Button drawn at `site` reaches the mod (#939), for mod-kit's own drawing and

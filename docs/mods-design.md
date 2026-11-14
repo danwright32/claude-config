@@ -2246,7 +2246,8 @@ quotes, since the engine takes a filter however it is spelled and an unfiltered 
 that tests `e.component` (#698; a line that is only a comment is not read). The same goes for a
 result row, `ToolResult`. Since Claude Code 2.1.323 the band asks every plugin that hooks
 `AbovePrompt` for a row of its own and stacks them (`AbovePromptList`), so a row drawn beside
-mod-kit's no longer waits on mod-kit's hook passing; mod-kit also hooks `AbovePromptList` and, while
+mod-kit's no longer waits on mod-kit's hook passing; mod-kit also hooks `AbovePromptList` (a second
+hook on the band, which `tools/check-mod-shared-parts.sh` does not yet refuse in another mod) and, while
 it draws a row, leaves every other row out, so the band looks as it did (#2903, Dan, 2026-11-14).
 With no row of its own it leaves the band as it came. A mod publishes a row with
 `$.modkit.bandRow({ mod, id, slot, lines })` and takes it away with

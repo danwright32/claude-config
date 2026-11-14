@@ -334,7 +334,7 @@ if tool == "Bash":
     pushes = [f for f in found if calls.is_applicable(f)]
     if pushes:
         ap, ap_why = part("db_apply_approval_shared", "db-apply-approval.py")
-        kept, released, tested = [], [], 0
+        kept, released = [], []
         for f in found:
             if not calls.is_applicable(f):
                 kept.append(f)
@@ -352,7 +352,6 @@ if tool == "Bash":
                     except Exception as e:
                         is_test, test_why = False, "whether its project is a test one could not be checked (" + type(e).__name__ + ")"
                     if is_test:
-                        tested += 1
                         continue
             if ap is None:
                 ok, why = False, ap_why
