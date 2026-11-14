@@ -151,6 +151,7 @@ class RunFixture(unittest.TestCase):
                        "owns": ["src/**"]}],
         }
         doc.update(self.doc_over)
+        doc = {k: val for k, val in doc.items() if val is not None}  # None in doc_over removes a key
         files = {
             ".claude/verification/areas.json": json.dumps(doc, indent=2),
             ".claude/verification/guides/invoices.md": GUIDE,
@@ -545,6 +546,84 @@ def fail_guides_dir(path, *args, **kwargs):
     if path.endswith(os.sep + "guides"):
         raise OSError(errno.ENOSPC, "No space left on device")
     return REAL_MAKEDIRS(path, *args, **kwargs)
+
+
+NATIVE_AREAS = [{"name": "invoices", "guide": ".claude/verification/guides/invoices.md", "owns": ["src/**"],
+                 "screens": [{"name": "list", "test": "AppHostedTests/VerificationScreens",
+                              "frame": "invoice-list", "seed": "demo"}]}]
+
+
+class NativeRunTests(RunFixture):
+    """A project whose areas are all native runs with no url, serve or ready (claude-config#2951).
+
+    The supervisor still owns the run: it holds the project's lock, runs the egress monitor around
+    every drive call, and stops on `stop` or the deadline, running the project's stop command and
+    removing the worktree. There is simply no serve process for it to start or stop.
+    """
+
+    doc_over = {"url": None, "seeds": {"demo": {"synthetic": True, "why": "made up for the fixture"}},
+                "areas": NATIVE_AREAS}
+    native = dict(serve=None, ready=None, native_shot="true")
+
+    def test_start_drive_stop_with_nothing_served(self):
+        sha = self.commit(**self.native)
+        r = self.start(sha)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertIsNone(out["url"])
+        rid = out["receipt_id"]
+        rec = self.receipt(rid)
+        self.assertIsNone(rec["url"])
+        self.assertIsNone(rec["serve_pid"])
+        self.assertIsNone(rec["serve_pgid"])
+        self.assertTrue(rec["supervisor_pid"])
+        self.assertTrue(rec["ready_at"])
+        self.assertEqual(rec["build_stamp"], sha)
+        self.assertIsNone(rec["stopped_at"])
+        self.assertTrue(os.path.isdir(rec["worktree"]))
+        self.assertFalse(os.path.exists(os.path.join(self.home, "receipts", rid, "serve.log")))
+
+        # A VERIFICATION_URL inherited from the caller must not reach the helper as if it were served.
+        self.extra_env = {"VERIFICATION_URL": "http://127.0.0.1:9"}
+        d = self.run_cli("drive", rid, "--area", "invoices", "--", "screenshot-native", "x")
+        self.assertEqual(d.returncode, 0, d.stderr)
+        with open(os.path.join(self.fake, "drive-url")) as f:
+            self.assertEqual(f.read(), "")
+
+        s = self.run_cli("stop", rid)
+        self.assertEqual(s.returncode, 0, s.stderr)
+        rec = self.receipt(rid)
+        self.assertEqual(rec["stopped_by"], "stop", rec)
+        self.assertIsNone(rec["serve_exit"])
+        self.assertTrue(rec["worktree_removed"])
+        self.assertFalse(os.path.exists(rec["worktree"]))
+        self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")), "project stop never ran")
+
+    def test_a_second_start_is_still_refused_while_a_native_run_is_live(self):
+        sha = self.commit(**self.native)
+        self.assertEqual(self.start(sha).returncode, 0)
+        again = self.start(sha)
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("run-busy", again.stderr)
+
+    def test_the_deadline_still_ends_a_native_run(self):
+        self.start(self.commit(**self.native), deadline="0")
+        rid = self.only_receipt_id()
+        run_session.wait_for_supervisor(os.path.join(self.home, "receipts", rid), timeout_s=30)
+        rec = self.receipt(rid)
+        self.assertEqual(rec["stopped_by"], "deadline", rec)
+        self.assertTrue(rec["worktree_removed"])
+        self.assertTrue(os.path.exists(os.path.join(self.fake, "stop-ran")))
+
+    def test_a_mixed_project_without_serve_is_refused_before_anything_starts(self):
+        areas = NATIVE_AREAS + [{"name": "clients", "guide": ".claude/verification/guides/invoices.md",
+                                 "owns": ["web/**"], "screens": [{"name": "list", "path": "/clients", "seed": "demo"}]}]
+        self.doc_over = dict(self.doc_over, areas=areas)
+        r = self.start(self.commit(**self.native))
+        self.assertEqual(r.returncode, 4, r.stderr)
+        self.assertIn("areas-web-needs-serve", r.stderr)
+        self.assertIn("url, commands.serve, commands.ready", r.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "receipts")), "a refused start made a receipt")
 
 
 class StartSetupFailureTests(RunFixture):
